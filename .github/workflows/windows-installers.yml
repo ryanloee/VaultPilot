@@ -10,7 +10,78 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create log directory
+        shell: powershell
+        run: New-Item -ItemType Directory -Force -Path artifacts/logs | Out-Null
+
+      - name: Run tests
+        shell: powershell
+        run: cargo test --workspace --all-targets
+
+      - name: Run clippy
+        shell: powershell
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Build WinUI validation target
+        shell: powershell
+        run: >
+          MSBuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj
+          /restore
+          /t:Build
+          /p:Configuration=Debug
+          /p:Platform=x64
+          /bl:artifacts/logs/release-validate-winui-debug-x64.binlog
+
+      - name: Verify validation outputs
+        shell: powershell
+        run: |
+          $required = @(
+            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe",
+            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/vaultpilot-agent.exe",
+            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/vaultpilot-cli.exe"
+          )
+
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Expected validation output not found: $path"
+            }
+          }
+
+      - name: Upload validation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validate-logs
+          path: artifacts/logs
+          if-no-files-found: warn
+          retention-days: 7
+
   build:
+    needs: validate
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -76,6 +147,7 @@ jobs:
           name: windows-package-${{ matrix.platform }}
           path: artifacts/velopack/packages/${{ matrix.channel }}
           if-no-files-found: error
+          retention-days: 7
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

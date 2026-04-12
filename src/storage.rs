@@ -349,7 +349,7 @@ pub fn search_notes_with_context(
     query: SearchQuery,
 ) -> Result<SearchResult> {
     let (connection, _) = open_connection(context)?;
-    let limit = query.limit.unwrap_or(50).max(1).min(200);
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let mut notes = if query.text.trim().is_empty() {
         query_recent_note_metas(&connection, limit)?
     } else {
@@ -1585,7 +1585,7 @@ fn query_attachment_semantic_scores(
     connection: &Connection,
     query_text: &str,
 ) -> Result<HashMap<String, i64>> {
-    let Some(query_vector) = build_text_semantic_vector(&query_text) else {
+    let Some(query_vector) = build_text_semantic_vector(query_text) else {
         return Ok(HashMap::new());
     };
 
@@ -1775,8 +1775,8 @@ fn attachment_text_relevance_score(query_text: &str, attachments: &[AttachmentEn
         return 0;
     }
 
-    let normalized_query = normalize_query_for_search(&query_text);
-    let terms = extract_search_terms(&query_text);
+    let normalized_query = normalize_query_for_search(query_text);
+    let terms = extract_search_terms(query_text);
     if normalized_query.is_empty() && terms.is_empty() {
         return 0;
     }

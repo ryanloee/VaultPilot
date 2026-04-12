@@ -105,7 +105,11 @@ pub async fn chat_with_ai_with_context(
         context,
         prompt,
         Some(history),
-        if images.is_empty() { None } else { Some(images) },
+        if images.is_empty() {
+            None
+        } else {
+            Some(images)
+        },
         |stage, detail| emit_status(stage, detail),
     )
     .await?;
@@ -390,6 +394,7 @@ Saved summary: {}",
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finalize_grounded_answer(
     settings: &AppSettings,
     question: &str,
@@ -920,7 +925,11 @@ fn resolve_or_create_chat_session(
     }
 
     if let Some(session_id) = requested_session_id.filter(|value| !value.trim().is_empty()) {
-        if state.sessions.iter().any(|session| session.id == session_id) {
+        if state
+            .sessions
+            .iter()
+            .any(|session| session.id == session_id)
+        {
             state.current_session_id = session_id.to_string();
             return Ok((session_id.to_string(), false));
         }
@@ -962,7 +971,8 @@ fn new_chat_session(title: Option<&str>) -> ChatSession {
 }
 
 fn build_chat_attachments(paths: &[String]) -> Vec<ChatAttachment> {
-    paths.iter()
+    paths
+        .iter()
         .map(|path| ChatAttachment {
             path: path.clone(),
             name: Path::new(path)
@@ -984,7 +994,9 @@ fn build_chat_turn(
         id: Uuid::new_v4().to_string(),
         role: role.to_string(),
         text: text.to_string(),
-        citations: answer.map(|item| item.citations.clone()).unwrap_or_default(),
+        citations: answer
+            .map(|item| item.citations.clone())
+            .unwrap_or_default(),
         saved_note: answer.and_then(|item| item.saved_note.clone()),
         thinking_trace: answer.and_then(|item| item.thinking_trace.clone()),
         attachments: attachments.to_vec(),
@@ -1035,14 +1047,24 @@ fn replace_chat_session(state: &mut ChatState, updated_session: ChatSession) -> 
 }
 
 fn find_chat_session<'a>(state: &'a ChatState, session_id: &str) -> Option<&'a ChatSession> {
-    state.sessions.iter().find(|session| session.id == session_id)
+    state
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
 }
 
-fn current_session_history(state: &ChatState, session_id: &str) -> Result<Vec<ConversationTurn>, String> {
+fn current_session_history(
+    state: &ChatState,
+    session_id: &str,
+) -> Result<Vec<ConversationTurn>, String> {
     let session = find_chat_session(state, session_id)
         .ok_or_else(|| format!("chat session not found: {}", session_id))?;
     let mut history = Vec::new();
-    if let Some(summary) = session.summary.as_ref().filter(|summary| !summary.text.trim().is_empty()) {
+    if let Some(summary) = session
+        .summary
+        .as_ref()
+        .filter(|summary| !summary.text.trim().is_empty())
+    {
         history.push(ConversationTurn {
             role: "system".to_string(),
             text: format!("此前对话摘要：{}", summary.text),
@@ -1078,8 +1100,8 @@ async fn compress_chat_session_if_needed(
         return Ok(());
     }
 
-    let projected_tokens = estimate_session_tokens(&session)
-        + estimate_turn_tokens(pending_text, pending_attachments);
+    let projected_tokens =
+        estimate_session_tokens(&session) + estimate_turn_tokens(pending_text, pending_attachments);
     if projected_tokens < ((context_window_tokens as f64) * CONTEXT_COMPRESSION_THRESHOLD) as u64 {
         return Ok(());
     }
@@ -1126,7 +1148,12 @@ async fn compress_chat_session_if_needed(
 }
 
 fn estimate_session_tokens(session: &ChatSession) -> u64 {
-    let mut total = estimate_tokens_for_text(session.summary.as_ref().map(|summary| summary.text.as_str()));
+    let mut total = estimate_tokens_for_text(
+        session
+            .summary
+            .as_ref()
+            .map(|summary| summary.text.as_str()),
+    );
     for turn in &session.turns {
         total += estimate_turn_tokens(&turn.text, &turn.attachments);
     }
@@ -1159,7 +1186,7 @@ fn estimate_tokens_for_text(text: Option<&str>) -> u64 {
         }
     }
 
-    non_ascii + ((ascii + 3) / 4)
+    non_ascii + ascii.div_ceil(4)
 }
 
 fn build_chat_session_title(text: &str) -> String {
@@ -1168,13 +1195,11 @@ fn build_chat_session_title(text: &str) -> String {
         return "新对话".to_string();
     }
     let mut title = String::new();
-    let mut length = 0usize;
-    for ch in normalized.chars() {
+    for (length, ch) in normalized.chars().enumerate() {
         if length >= 28 {
             break;
         }
         title.push(ch);
-        length += 1;
     }
     if normalized.chars().count() > 28 {
         format!("{title}...")

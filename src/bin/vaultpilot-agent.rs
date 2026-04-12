@@ -4,6 +4,9 @@ use std::path::Path;
 use std::process::Command;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
     import_markdown_with_context, initialize_storage_with_context, list_notes_with_context,
@@ -11,9 +14,6 @@ use vaultpilot_lib::storage::{
     save_settings_with_context, StorageContext,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, compress_chat_history_with_context};
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -739,7 +739,9 @@ fn openai_request_to_dialog(
     let question = question
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty() || !image_paths.is_empty())
-        .ok_or_else(|| "the final user message must include text or supported local image paths".to_string())?;
+        .ok_or_else(|| {
+            "the final user message must include text or supported local image paths".to_string()
+        })?;
     let question = if question.is_empty() && !image_paths.is_empty() {
         "请结合我发送的图片理解并回复。".to_string()
     } else {
@@ -749,7 +751,9 @@ fn openai_request_to_dialog(
     Ok((question, history, image_paths))
 }
 
-fn render_openai_message_content(content: OpenAiMessageContent) -> Result<(String, Vec<String>), String> {
+fn render_openai_message_content(
+    content: OpenAiMessageContent,
+) -> Result<(String, Vec<String>), String> {
     match content {
         OpenAiMessageContent::Text(text) => Ok((text, Vec::new())),
         OpenAiMessageContent::Parts(parts) => {
@@ -953,15 +957,20 @@ async fn handle_mcp_request(
 
             Some(McpResponse::ok(id, result))
         }
-        "resources/list" => request.id.map(|id| {
-            McpResponse::ok(id, serde_json::json!({ "resources": [] }))
-        }),
-        "prompts/list" => request.id.map(|id| {
-            McpResponse::ok(id, serde_json::json!({ "prompts": [] }))
-        }),
+        "resources/list" => request
+            .id
+            .map(|id| McpResponse::ok(id, serde_json::json!({ "resources": [] }))),
+        "prompts/list" => request
+            .id
+            .map(|id| McpResponse::ok(id, serde_json::json!({ "prompts": [] }))),
         method if method.starts_with("notifications/") => None,
         _ => request.id.map(|id| {
-            McpResponse::error(id, -32601, format!("method not found: {}", request.method), None)
+            McpResponse::error(
+                id,
+                -32601,
+                format!("method not found: {}", request.method),
+                None,
+            )
         }),
     }
 }
@@ -1151,7 +1160,10 @@ fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
     match load_chat_state_with_context(context) {
         Ok(state) => {
             let structured = serde_json::to_value(state).unwrap_or_else(|_| serde_json::json!({}));
-            mcp_tool_success("Loaded persisted VaultPilot chat state.".to_string(), structured)
+            mcp_tool_success(
+                "Loaded persisted VaultPilot chat state.".to_string(),
+                structured,
+            )
         }
         Err(error) => mcp_tool_error(error.to_string()),
     }

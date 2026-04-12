@@ -1,0 +1,1281 @@
+use std::io::{self, BufRead, Read, Write};
+use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
+use std::process;
+use std::sync::Arc;
+
+use anyhow::Result;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use chrono::Utc;
+use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::runtime::Runtime;
+use uuid::Uuid;
+
+use vaultpilot_lib::models::*;
+use vaultpilot_lib::storage::*;
+use vaultpilot_lib::{
+    ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
+};
+
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const MCP_FALLBACK_PROTOCOL_VERSION: &str = "2024-11-05";
+
+#[derive(Parser)]
+#[command(name = "vaultpilot-cli")]
+#[command(about = "VaultPilot knowledge base management CLI")]
+#[command(version)]
+struct Cli {
+    /// Override the vault directory
+    #[arg(long, global = true)]
+    vault_dir: Option<PathBuf>,
+
+    /// Pretty-print JSON output
+    #[arg(long, global = true)]
+    pretty: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Initialize storage and show resolved settings
+    Init,
+
+    /// Start a local chat-completions bridge so external agents talk to VaultPilot as a model endpoint
+    Serve {
+        /// Bind host, for example 127.0.0.1
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Bind port
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+    },
+
+    /// Talk to VaultPilot's built-in model with persisted chat sessions
+    Chat {
+        #[command(subcommand)]
+        action: ChatActions,
+    },
+
+    /// View or update settings
+    Settings {
+        #[command(subcommand)]
+        action: SettingsActions,
+    },
+
+    /// Manage notes
+    Notes {
+        #[command(subcommand)]
+        action: NotesActions,
+    },
+
+    /// Manage the search index
+    Index {
+        #[command(subcommand)]
+        action: IndexActions,
+    },
+
+    /// Ask a question against the knowledge base without persisting chat state
+    Ask {
+        /// The question to ask
+        question: String,
+
+        /// Image paths to include
+        #[arg(long)]
+        image: Vec<String>,
+
+        /// Chat history as JSON (array of {role, text})
+        #[arg(long)]
+        history: Option<String>,
+    },
+
+    /// Compress chat history into a summary
+    Compress {
+        /// JSON array of conversation turns
+        #[arg(long)]
+        history: String,
+
+        /// Existing summary JSON (optional)
+        #[arg(long)]
+        summary: Option<String>,
+    },
+
+    /// Start an MCP stdio server for VaultPilot's built-in model chat interface
+    Mcp,
+}
+
+#[derive(Subcommand)]
+enum ChatActions {
+    /// Send a message through VaultPilot's built-in model and persisted session state
+    Send {
+        /// The message to send. Can be omitted when only sending images.
+        message: Option<String>,
+
+        /// Image paths to include
+        #[arg(long)]
+        image: Vec<String>,
+
+        /// Target session ID. Defaults to the current session.
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Create a new session before sending this message
+        #[arg(long)]
+        new_session: bool,
+    },
+
+    /// List saved chat sessions
+    Sessions,
+
+    /// Print full chat state
+    State,
+
+    /// Create a new empty session
+    New {
+        /// Optional session title
+        #[arg(long)]
+        title: Option<String>,
+    },
+
+    /// Delete a session by ID
+    Delete {
+        /// Session ID
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SettingsActions {
+    /// Print current settings
+    Get,
+
+    /// Update settings from JSON on stdin
+    Set,
+}
+
+#[derive(Subcommand)]
+enum NotesActions {
+    /// List all notes
+    List {
+        /// Maximum notes to return
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+
+    /// Get a single note by ID or path
+    Get {
+        /// Note ID or file path
+        id: String,
+    },
+
+    /// Create or update a note (JSON on stdin)
+    Create,
+
+    /// Delete a note by ID
+    Delete {
+        /// Note ID
+        id: String,
+    },
+
+    /// Search notes
+    Search {
+        /// Search text
+        #[arg(long)]
+        query: String,
+
+        /// Filter by tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
+
+        /// Filter by keywords (comma-separated)
+        #[arg(long)]
+        keywords: Option<String>,
+
+        /// Maximum results
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Import markdown files
+    Import {
+        /// File or directory paths to import
+        paths: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum IndexActions {
+    /// Rebuild the search index from vault files
+    Rebuild,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpRequest {
+    #[serde(default)]
+    jsonrpc: String,
+    #[serde(default)]
+    id: Option<Value>,
+    method: String,
+    #[serde(default)]
+    params: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct McpResponse {
+    jsonrpc: &'static str,
+    id: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<McpError>,
+}
+
+#[derive(Debug, Serialize)]
+struct McpError {
+    code: i32,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+}
+
+#[derive(Debug, Default)]
+struct McpServerState {
+    initialized: bool,
+    protocol_version: String,
+}
+
+#[derive(Clone)]
+struct HttpBridgeState {
+    context: StorageContext,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatCompletionsRequest {
+    #[serde(default)]
+    model: String,
+    messages: Vec<OpenAiChatMessage>,
+    #[serde(default)]
+    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatMessage {
+    role: String,
+    content: OpenAiMessageContent,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OpenAiMessageContent {
+    Text(String),
+    Parts(Vec<OpenAiContentPart>),
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiContentPart {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    image_url: Option<OpenAiImageUrl>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiImageUrl {
+    url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiModelsResponse {
+    object: &'static str,
+    data: Vec<OpenAiModel>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiModel {
+    id: String,
+    object: &'static str,
+    created: i64,
+    owned_by: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiChatCompletionsResponse {
+    id: String,
+    object: &'static str,
+    created: i64,
+    model: String,
+    choices: Vec<OpenAiChoice>,
+    usage: OpenAiUsage,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiChoice {
+    index: usize,
+    message: OpenAiAssistantMessage,
+    finish_reason: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiAssistantMessage {
+    role: &'static str,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiUsage {
+    prompt_tokens: usize,
+    completion_tokens: usize,
+    total_tokens: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiErrorEnvelope {
+    error: OpenAiError,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiError {
+    message: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let is_mcp = matches!(cli.command, Commands::Mcp);
+    let serve_target = match &cli.command {
+        Commands::Serve { host, port } => Some((host.clone(), *port)),
+        _ => None,
+    };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to initialize async runtime");
+
+    let context = match StorageContext::for_cli(cli.vault_dir.clone()) {
+        Ok(ctx) => ctx,
+        Err(err) => exit_error(&cli.pretty, "context_error", err.to_string()),
+    };
+
+    if let Some((host, port)) = serve_target {
+        if let Err(err) = runtime.block_on(run_http_bridge(context, host, port)) {
+            eprintln!("HTTP bridge failed: {err}");
+            process::exit(1);
+        }
+        return;
+    }
+
+    if is_mcp {
+        if let Err(err) = run_mcp_server(&context, &runtime) {
+            eprintln!("MCP server failed: {err}");
+            process::exit(1);
+        }
+        return;
+    }
+
+    let result = runtime.block_on(handle_command(&context, &cli));
+    match result {
+        Ok(value) => exit_ok(&cli.pretty, value),
+        Err(err) => exit_error(&cli.pretty, "command_failed", err.to_string()),
+    }
+}
+
+async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
+    match &cli.command {
+        Commands::Init => {
+            let settings = initialize_storage_with_context(context)?;
+            to_json(&settings)
+        }
+        Commands::Serve { .. } => Ok(serde_json::json!({
+            "message": "The HTTP bridge is started by running `vaultpilot-cli serve` directly."
+        })),
+        Commands::Chat { action } => handle_chat(context, action).await,
+        Commands::Settings { action } => handle_settings(context, action),
+        Commands::Notes { action } => handle_notes(context, action),
+        Commands::Index { action } => handle_index(context, action),
+        Commands::Ask {
+            question,
+            image,
+            history,
+        } => {
+            let parsed_history: Option<Vec<ConversationTurn>> = history
+                .as_ref()
+                .map(|h| serde_json::from_str(h))
+                .transpose()?;
+            let images = if image.is_empty() {
+                None
+            } else {
+                Some(image.clone())
+            };
+            let result = ask_with_ai_with_context(
+                context,
+                question.clone(),
+                parsed_history,
+                images,
+                |_, _| (),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&result)
+        }
+        Commands::Compress { history, summary } => {
+            let parsed_history: Vec<ConversationTurn> = serde_json::from_str(history)?;
+            let parsed_summary: Option<ConversationSummary> = summary
+                .as_ref()
+                .map(|s| serde_json::from_str(s))
+                .transpose()?;
+            let result = compress_chat_history_with_context(
+                context,
+                parsed_summary,
+                parsed_history,
+                |_, _| (),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&result)
+        }
+        Commands::Mcp => Ok(serde_json::json!({
+            "message": "The MCP server is started by running `vaultpilot-cli mcp` directly."
+        })),
+    }
+}
+
+async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<Value> {
+    match action {
+        ChatActions::Send {
+            message,
+            image,
+            session,
+            new_session,
+        } => {
+            let result = chat_with_ai_with_context(
+                context,
+                session.clone(),
+                message.clone().unwrap_or_default(),
+                if image.is_empty() {
+                    None
+                } else {
+                    Some(image.clone())
+                },
+                *new_session,
+                |_, _| (),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&result)
+        }
+        ChatActions::Sessions => {
+            let state = load_chat_state_with_context(context)?;
+            let sessions = state
+                .sessions
+                .iter()
+                .map(chat_session_overview)
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({
+                "currentSessionId": state.current_session_id,
+                "sessions": sessions
+            }))
+        }
+        ChatActions::State => {
+            let state = load_chat_state_with_context(context)?;
+            to_json(&state)
+        }
+        ChatActions::New { title } => {
+            let mut state = load_chat_state_with_context(context)?;
+            let session = new_cli_chat_session(title.as_deref());
+            state.current_session_id = session.id.clone();
+            state.sessions.insert(0, session.clone());
+            let saved = save_chat_state_with_context(context, &state)?;
+            Ok(serde_json::json!({
+                "session": session,
+                "state": saved
+            }))
+        }
+        ChatActions::Delete { id } => {
+            let mut state = load_chat_state_with_context(context)?;
+            let original_len = state.sessions.len();
+            state.sessions.retain(|session| session.id != *id);
+            let deleted = state.sessions.len() != original_len;
+            let saved = save_chat_state_with_context(context, &state)?;
+            Ok(serde_json::json!({
+                "deleted": deleted,
+                "id": id,
+                "state": saved
+            }))
+        }
+    }
+}
+
+fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result<Value> {
+    match action {
+        SettingsActions::Get => {
+            let settings = load_settings_with_context(context)?;
+            to_json(&settings)
+        }
+        SettingsActions::Set => {
+            let input = read_stdin_json()?;
+            let settings: AppSettings = serde_json::from_value(input)?;
+            let saved = save_settings_with_context(context, settings)?;
+            to_json(&saved)
+        }
+    }
+}
+
+fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value> {
+    match action {
+        NotesActions::List { limit } => {
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    text: String::new(),
+                    tags: Vec::new(),
+                    keywords: Vec::new(),
+                    limit: Some(*limit),
+                },
+            )?;
+            to_json(&result)
+        }
+        NotesActions::Get { id } => {
+            let note = load_note_with_context(context, id)?;
+            to_json(&note)
+        }
+        NotesActions::Create => {
+            let input = read_stdin_json()?;
+            let note: NoteDocument = serde_json::from_value(input)?;
+            let saved = save_note_with_context(context, note)?;
+            to_json(&saved)
+        }
+        NotesActions::Delete { id } => {
+            let deleted = delete_note_with_context(context, id)?;
+            Ok(serde_json::json!({ "deleted": deleted, "id": id }))
+        }
+        NotesActions::Search {
+            query,
+            tags,
+            keywords,
+            limit,
+        } => {
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    text: query.clone(),
+                    tags: parse_comma_list(tags),
+                    keywords: parse_comma_list(keywords),
+                    limit: Some(*limit),
+                },
+            )?;
+            to_json(&result)
+        }
+        NotesActions::Import { paths } => {
+            let result = import_markdown_with_context(context, paths)?;
+            to_json(&result)
+        }
+    }
+}
+
+fn handle_index(context: &StorageContext, action: &IndexActions) -> Result<Value> {
+    match action {
+        IndexActions::Rebuild => {
+            let stats = rebuild_index_with_context(context)?;
+            to_json(&stats)
+        }
+    }
+}
+
+async fn run_http_bridge(context: StorageContext, host: String, port: u16) -> Result<()> {
+    let ip: IpAddr = host
+        .parse()
+        .map_err(|error| anyhow::anyhow!("invalid host '{}': {}", host, error))?;
+    let address = SocketAddr::new(ip, port);
+    let state = Arc::new(HttpBridgeState { context });
+
+    let app = Router::new()
+        .route("/health", get(http_health))
+        .route("/v1/models", get(http_models))
+        .route("/v1/chat/completions", post(http_chat_completions))
+        .with_state(state);
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "status": "listening",
+            "baseUrl": format!("http://{}:{}", ip, port),
+            "chatCompletions": format!("http://{}:{}/v1/chat/completions", ip, port),
+            "models": format!("http://{}:{}/v1/models", ip, port)
+        })
+    );
+
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn http_health() -> Json<Value> {
+    Json(serde_json::json!({
+        "status": "ok"
+    }))
+}
+
+async fn http_models(State(state): State<Arc<HttpBridgeState>>) -> Json<OpenAiModelsResponse> {
+    let settings = load_settings_with_context(&state.context).unwrap_or_default();
+    let now = Utc::now().timestamp();
+    Json(OpenAiModelsResponse {
+        object: "list",
+        data: vec![OpenAiModel {
+            id: bridge_model_id(&settings),
+            object: "model",
+            created: now,
+            owned_by: "vaultpilot",
+        }],
+    })
+}
+
+async fn http_chat_completions(
+    State(state): State<Arc<HttpBridgeState>>,
+    Json(request): Json<OpenAiChatCompletionsRequest>,
+) -> Result<Json<OpenAiChatCompletionsResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    if request.stream {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "stream=true is not supported by VaultPilot yet",
+        ));
+    }
+
+    let settings = load_settings_with_context(&state.context)
+        .map_err(|error| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+    let requested_model = request.model.trim().to_string();
+    let (question, history, image_paths) = openai_request_to_dialog(request)
+        .map_err(|message| openai_error(StatusCode::BAD_REQUEST, &message))?;
+
+    let answer = ask_with_ai_with_context(
+        &state.context,
+        question,
+        Some(history),
+        if image_paths.is_empty() {
+            None
+        } else {
+            Some(image_paths)
+        },
+        |_, _| (),
+    )
+    .await
+    .map_err(|error| openai_error(StatusCode::BAD_GATEWAY, &error))?;
+
+    let prompt_tokens = answer
+        .context_status
+        .as_ref()
+        .and_then(|status| status.last_request_input_tokens)
+        .unwrap_or_default();
+    let completion_tokens = answer
+        .context_status
+        .as_ref()
+        .and_then(|status| status.last_request_output_tokens)
+        .unwrap_or_default();
+
+    Ok(Json(OpenAiChatCompletionsResponse {
+        id: format!("chatcmpl-{}", Uuid::new_v4().simple()),
+        object: "chat.completion",
+        created: Utc::now().timestamp(),
+        model: if requested_model.is_empty() {
+            bridge_model_id(&settings)
+        } else {
+            requested_model
+        },
+        choices: vec![OpenAiChoice {
+            index: 0,
+            message: OpenAiAssistantMessage {
+                role: "assistant",
+                content: answer.answer,
+            },
+            finish_reason: "stop",
+        }],
+        usage: OpenAiUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens + completion_tokens,
+        },
+    }))
+}
+
+fn openai_request_to_dialog(
+    request: OpenAiChatCompletionsRequest,
+) -> Result<(String, Vec<ConversationTurn>, Vec<String>), String> {
+    let total_messages = request.messages.len();
+    if total_messages == 0 {
+        return Err("messages must not be empty".to_string());
+    }
+
+    let mut history = Vec::new();
+    let mut question = None;
+    let mut image_paths = Vec::new();
+
+    for (index, message) in request.messages.into_iter().enumerate() {
+        let is_last = index + 1 == total_messages;
+        let (text, images) = render_openai_message_content(message.content)?;
+        if is_last {
+            if message.role != "user" {
+                return Err("the final message must have role=user".to_string());
+            }
+            question = Some(text);
+            image_paths = images;
+        } else if !text.trim().is_empty() {
+            history.push(ConversationTurn {
+                role: message.role,
+                text,
+            });
+        }
+    }
+
+    let question = question
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() || !image_paths.is_empty())
+        .ok_or_else(|| "the final user message must include text or supported local image paths".to_string())?;
+    let question = if question.is_empty() && !image_paths.is_empty() {
+        "请结合我发送的图片理解并回复。".to_string()
+    } else {
+        question
+    };
+
+    Ok((question, history, image_paths))
+}
+
+fn render_openai_message_content(content: OpenAiMessageContent) -> Result<(String, Vec<String>), String> {
+    match content {
+        OpenAiMessageContent::Text(text) => Ok((text, Vec::new())),
+        OpenAiMessageContent::Parts(parts) => {
+            let mut segments = Vec::new();
+            let mut image_paths = Vec::new();
+            for part in parts {
+                match part.kind.as_str() {
+                    "text" => {
+                        if let Some(text) = part.text.filter(|value| !value.trim().is_empty()) {
+                            segments.push(text);
+                        }
+                    }
+                    "image_url" => {
+                        let url = part
+                            .image_url
+                            .map(|item| item.url)
+                            .ok_or_else(|| "image_url part is missing url".to_string())?;
+                        image_paths.push(resolve_local_image_url(&url)?);
+                    }
+                    _ => {}
+                }
+            }
+            Ok((segments.join("\n"), image_paths))
+        }
+    }
+}
+
+fn resolve_local_image_url(url: &str) -> Result<String, String> {
+    if url.starts_with("file://") {
+        let trimmed = url.trim_start_matches("file://").trim_start_matches('/');
+        return Ok(trimmed.replace('/', "\\"));
+    }
+
+    let path = PathBuf::from(url);
+    if path.exists() {
+        return Ok(path.to_string_lossy().to_string());
+    }
+
+    Err("only local file image URLs are supported".to_string())
+}
+
+fn bridge_model_id(settings: &AppSettings) -> String {
+    let underlying = settings.provider.model.trim();
+    if underlying.is_empty() {
+        "vaultpilot-chat".to_string()
+    } else {
+        format!("vaultpilot-chat:{}", underlying)
+    }
+}
+
+fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiErrorEnvelope>) {
+    (
+        status,
+        Json(OpenAiErrorEnvelope {
+            error: OpenAiError {
+                message: message.to_string(),
+                kind: "invalid_request_error",
+            },
+        }),
+    )
+}
+
+fn run_mcp_server(context: &StorageContext, runtime: &Runtime) -> Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    let mut state = McpServerState {
+        initialized: false,
+        protocol_version: MCP_PROTOCOL_VERSION.to_string(),
+    };
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let response = match serde_json::from_str::<McpRequest>(&line) {
+            Ok(request) => runtime.block_on(handle_mcp_request(context, &mut state, request)),
+            Err(error) => Some(McpResponse::error(
+                Value::Null,
+                -32700,
+                format!("failed to parse JSON-RPC request: {error}"),
+                None,
+            )),
+        };
+
+        if let Some(response) = response {
+            writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
+            stdout.flush()?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_mcp_request(
+    context: &StorageContext,
+    state: &mut McpServerState,
+    request: McpRequest,
+) -> Option<McpResponse> {
+    if request.jsonrpc != "2.0" {
+        return Some(McpResponse::error(
+            request.id.unwrap_or(Value::Null),
+            -32600,
+            "jsonrpc must be \"2.0\"".to_string(),
+            None,
+        ));
+    }
+
+    match request.method.as_str() {
+        "initialize" => {
+            let id = request.id.unwrap_or(Value::Null);
+            let requested_version = request
+                .params
+                .get("protocolVersion")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            state.initialized = true;
+            state.protocol_version = negotiate_mcp_protocol_version(requested_version).to_string();
+
+            Some(McpResponse::ok(
+                id,
+                serde_json::json!({
+                    "protocolVersion": state.protocol_version,
+                    "capabilities": {
+                        "tools": {
+                            "listChanged": false
+                        }
+                    },
+                    "serverInfo": {
+                        "name": "vaultpilot",
+                        "title": "VaultPilot MCP",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
+                }),
+            ))
+        }
+        "notifications/initialized" => None,
+        "ping" => request
+            .id
+            .map(|id| McpResponse::ok(id, serde_json::json!({}))),
+        "tools/list" => {
+            let id = request.id?;
+            if !state.initialized {
+                return Some(McpResponse::error(
+                    id,
+                    -32002,
+                    "server not initialized".to_string(),
+                    None,
+                ));
+            }
+            Some(McpResponse::ok(
+                id,
+                serde_json::json!({
+                    "tools": mcp_tools()
+                }),
+            ))
+        }
+        "tools/call" => {
+            let id = request.id?;
+            if !state.initialized {
+                return Some(McpResponse::error(
+                    id,
+                    -32002,
+                    "server not initialized".to_string(),
+                    None,
+                ));
+            }
+
+            let tool_name = match request.params.get("name").and_then(Value::as_str) {
+                Some(name) => name,
+                None => {
+                    return Some(McpResponse::error(
+                        id,
+                        -32602,
+                        "tools/call requires a string params.name".to_string(),
+                        None,
+                    ))
+                }
+            };
+            let arguments = request
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            let result = match tool_name {
+                "chat.send" => mcp_call_chat_send(context, arguments).await,
+                "chat.list_sessions" => mcp_call_chat_list_sessions(context),
+                "chat.get_state" => mcp_call_chat_get_state(context),
+                _ => {
+                    return Some(McpResponse::error(
+                        id,
+                        -32601,
+                        format!("unknown tool: {tool_name}"),
+                        None,
+                    ))
+                }
+            };
+
+            Some(McpResponse::ok(id, result))
+        }
+        "resources/list" => request.id.map(|id| {
+            McpResponse::ok(id, serde_json::json!({ "resources": [] }))
+        }),
+        "prompts/list" => request.id.map(|id| {
+            McpResponse::ok(id, serde_json::json!({ "prompts": [] }))
+        }),
+        method if method.starts_with("notifications/") => None,
+        _ => request.id.map(|id| {
+            McpResponse::error(id, -32601, format!("method not found: {}", request.method), None)
+        }),
+    }
+}
+
+fn negotiate_mcp_protocol_version(requested: &str) -> &'static str {
+    match requested {
+        MCP_PROTOCOL_VERSION => MCP_PROTOCOL_VERSION,
+        MCP_FALLBACK_PROTOCOL_VERSION => MCP_FALLBACK_PROTOCOL_VERSION,
+        _ => MCP_PROTOCOL_VERSION,
+    }
+}
+
+fn mcp_tools() -> Vec<Value> {
+    vec![
+        serde_json::json!({
+            "name": "chat.send",
+            "title": "Send Chat Message",
+            "description": "Send a message to VaultPilot's built-in model. VaultPilot retrieves local knowledge, calls the configured model provider, and persists the conversation session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "User message to send. May be omitted when sending only images."
+                    },
+                    "imagePaths": {
+                        "type": "array",
+                        "description": "Optional local image paths to include with the message.",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "sessionId": {
+                        "type": "string",
+                        "description": "Existing VaultPilot chat session ID. If omitted, the current session is used."
+                    },
+                    "createNewSession": {
+                        "type": "boolean",
+                        "description": "If true, create a new session before sending the message.",
+                        "default": false
+                    }
+                },
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "sessionId": { "type": "string" },
+                    "sessionTitle": { "type": "string" },
+                    "createdSession": { "type": "boolean" },
+                    "answer": { "type": "object" },
+                    "state": { "type": "object" }
+                }
+            },
+            "annotations": {
+                "title": "Send Chat Message",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "chat.list_sessions",
+            "title": "List Chat Sessions",
+            "description": "List saved VaultPilot chat sessions without exposing raw note-management tools.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "currentSessionId": { "type": "string" },
+                    "sessions": { "type": "array" }
+                }
+            },
+            "annotations": {
+                "title": "List Chat Sessions",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "chat.get_state",
+            "title": "Get Chat State",
+            "description": "Return the full persisted chat state managed by VaultPilot.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "currentSessionId": { "type": "string" },
+                    "sessions": { "type": "array" }
+                }
+            },
+            "annotations": {
+                "title": "Get Chat State",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+    ]
+}
+
+async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ChatSendArgs {
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        image_paths: Vec<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+        #[serde(default)]
+        create_new_session: bool,
+    }
+
+    let args: ChatSendArgs = match serde_json::from_value(arguments) {
+        Ok(args) => args,
+        Err(error) => {
+            return mcp_tool_error(format!("invalid chat.send arguments: {error}"));
+        }
+    };
+
+    match chat_with_ai_with_context(
+        context,
+        args.session_id,
+        args.message,
+        if args.image_paths.is_empty() {
+            None
+        } else {
+            Some(args.image_paths)
+        },
+        args.create_new_session,
+        |_, _| (),
+    )
+    .await
+    {
+        Ok(result) => {
+            let summary = format!(
+                "Assistant reply from session \"{}\":\n{}",
+                result.session_title, result.answer.answer
+            );
+            let structured = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
+            mcp_tool_success(summary, structured)
+        }
+        Err(error) => mcp_tool_error(error),
+    }
+}
+
+fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
+    match load_chat_state_with_context(context) {
+        Ok(state) => {
+            let sessions = state
+                .sessions
+                .iter()
+                .map(chat_session_overview)
+                .collect::<Vec<_>>();
+            let structured = serde_json::json!({
+                "currentSessionId": state.current_session_id,
+                "sessions": sessions
+            });
+            let count = structured["sessions"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0);
+            mcp_tool_success(
+                format!("Loaded {count} VaultPilot chat session(s)."),
+                structured,
+            )
+        }
+        Err(error) => mcp_tool_error(error.to_string()),
+    }
+}
+
+fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
+    match load_chat_state_with_context(context) {
+        Ok(state) => {
+            let structured = serde_json::to_value(state).unwrap_or_else(|_| serde_json::json!({}));
+            mcp_tool_success("Loaded persisted VaultPilot chat state.".to_string(), structured)
+        }
+        Err(error) => mcp_tool_error(error.to_string()),
+    }
+}
+
+fn mcp_tool_success(summary: String, structured: Value) -> Value {
+    serde_json::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": summary
+            }
+        ],
+        "structuredContent": structured
+    })
+}
+
+fn mcp_tool_error(message: String) -> Value {
+    let structured_message = message.clone();
+    serde_json::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": message
+            }
+        ],
+        "structuredContent": {
+            "error": structured_message
+        },
+        "isError": true
+    })
+}
+
+fn read_stdin_json() -> Result<Value> {
+    let mut buffer = String::new();
+    io::stdin().read_to_string(&mut buffer)?;
+    let value: Value = serde_json::from_str(&buffer)?;
+    Ok(value)
+}
+
+fn to_json<T: Serialize>(value: &T) -> Result<Value> {
+    Ok(serde_json::to_value(value)?)
+}
+
+fn parse_comma_list(input: &Option<String>) -> Vec<String> {
+    input
+        .as_ref()
+        .map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn new_cli_chat_session(title: Option<&str>) -> ChatSession {
+    let now = Utc::now().to_rfc3339();
+    ChatSession {
+        id: Uuid::new_v4().to_string(),
+        title: title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("New Chat")
+            .to_string(),
+        turns: Vec::new(),
+        summary: None,
+        created_at: now.clone(),
+        updated_at: now,
+    }
+}
+
+fn chat_session_overview(session: &ChatSession) -> ChatSessionOverview {
+    ChatSessionOverview {
+        id: session.id.clone(),
+        title: session.title.clone(),
+        turn_count: session.turns.len(),
+        has_summary: session.summary.is_some(),
+        created_at: session.created_at.clone(),
+        updated_at: session.updated_at.clone(),
+    }
+}
+
+impl McpResponse {
+    fn ok(id: Value, result: Value) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    fn error(id: Value, code: i32, message: String, data: Option<Value>) -> Self {
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(McpError {
+                code,
+                message,
+                data,
+            }),
+        }
+    }
+}
+
+fn exit_ok(pretty: &bool, value: Value) -> ! {
+    let output = if *pretty {
+        serde_json::to_string_pretty(&value).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    } else {
+        serde_json::to_string(&value).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    };
+    println!("{output}");
+    process::exit(0);
+}
+
+fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
+    let error = serde_json::json!({ "error": { "code": code, "message": message } });
+    let output = if *pretty {
+        serde_json::to_string_pretty(&error).unwrap_or_else(|e| e.to_string())
+    } else {
+        serde_json::to_string(&error).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+    };
+    eprintln!("{output}");
+    process::exit(1);
+}

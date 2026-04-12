@@ -1,0 +1,79 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.vaultpilot/contracts/vaultpilot-agent.v1.json",
+  "title": "VaultPilot Agent Protocol",
+  "description": "Line-delimited JSON RPC messages exchanged between the WinUI frontend and the Rust sidecar.",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/event" }
+  ],
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["id", "method"],
+      "properties": {
+        "id": { "type": "string" },
+        "method": {
+          "type": "string",
+          "enum": [
+            "ping",
+            "getSettings",
+            "saveSettings",
+            "loadChatState",
+            "saveChatState",
+            "listNotes",
+            "importMarkdown",
+            "rebuildIndex",
+            "readImagePreview",
+            "askWithAi",
+            "compressChatHistory",
+            "openVaultDirectory"
+          ]
+        },
+        "params": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "response": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "result": true,
+        "error": {
+          "type": "object",
+          "required": ["message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "detail": true
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": ["event", "payload"],
+      "properties": {
+        "event": {
+          "type": "string",
+          "enum": ["agentStatus"]
+        },
+        "payload": {
+          "type": "object",
+          "required": ["stage", "detail", "timestamp"],
+          "properties": {
+            "stage": { "type": "string" },
+            "detail": { "type": "string" },
+            "timestamp": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,55 +1,211 @@
-# VaultPilot
+<p align="center">
+  <img src="assets/icon.png" alt="VaultPilot" width="96" height="96" />
+</p>
 
-Local knowledge base assistant for recording, searching, and organizing engineering notes.
+<h1 align="center">VaultPilot</h1>
 
-[中文说明](#中文说明)
+<p align="center">
+  <strong>Local-first AI knowledge assistant for engineers</strong>
+</p>
 
-## What VaultPilot Can Do
+<p align="center">
+  Record, search, and organize engineering notes — powered by local indexing and grounded AI Q&A.
+</p>
 
-- **Grounded Q&A**: Ask questions in natural language. VaultPilot searches your local notes, uses AI to generate evidence-based answers, and includes source references.
-- **Note Management**: Store engineering notes as Markdown files with metadata such as tags, keywords, platform, board, and kernel for easier retrieval later.
-- **Knowledge Indexing**: Build a full-text search index for your notes automatically, with support for rebuilding the index when needed.
-- **Conversation Memory**: Keep full chat history and summarize long conversations so context remains usable over time.
-- **File and Command Operations**: Let AI read local files, list directories, and run command-line operations, then fold the results into answers.
-- **Image Support**: Copy related images automatically when importing notes, and attach screenshots in chat.
-- **Markdown Import**: Import existing Markdown files into the knowledge base in bulk.
-
-## Data Storage
-
-All data stays on your local machine. Note management and search work offline. AI-powered Q&A requires an API key.
-
-- **Notes**: Stored as Markdown files in your selected vault directory.
-- **Indexes and State**: Stored in the local application data directory.
-
-## System Requirements
-
-- Windows 10 version 1809 or later
-- For AI features: an Anthropic API key
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%2B-0078D4" alt="Windows" />
+  <img src="https://img.shields.io/badge/rust-2021-orange" alt="Rust" />
+  <img src="https://img.shields.io/badge/.NET-8-512BD4" alt=".NET 8" />
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" />
+</p>
 
 ---
 
-## 中文说明
+## Why VaultPilot?
 
-本地知识库助手，用于记录、检索和整理工程笔记。
+Engineering teams accumulate scattered notes — boot logs, pin mux tables, flash commands, board bring-up checklists. Traditional wikis are too heavy. Plain folders lack search. VaultPilot gives you a lightweight, offline-first vault where every note is a Markdown file, and every question gets an answer backed by your own data.
 
-## VaultPilot 能做什么
+## Key Features
 
-- **智能问答**：用自然语言提问，VaultPilot 会在你的本地笔记库中搜索相关内容，结合 AI 生成有据可依的回答，并附上引用来源。
-- **笔记管理**：以 Markdown 文件保存工程笔记，支持标签、关键词、平台、板卡、内核等元数据分类，方便后续检索。
-- **知识索引**：自动对笔记建立全文搜索索引，并支持在需要时重建索引以保持搜索结果准确。
-- **会话记忆**：保留完整聊天历史，并支持对长对话进行摘要，确保长期使用后仍能追溯上下文。
-- **文件与命令操作**：AI 可以读取本地文件、列出目录内容、执行命令行操作，并将结果直接整合到回答中。
-- **图片支持**：导入笔记时自动复制关联图片，聊天中也可以附带截图提问。
-- **Markdown 导入**：支持批量导入已有的 Markdown 文件到知识库中。
+| Feature | Description |
+|---------|-------------|
+| **Grounded Q&A** | Ask in natural language. VaultPilot searches your vault, feeds context to AI, and returns answers with source citations. |
+| **Full-Text Search** | SQLite FTS5 index with CJK-aware tokenization, synonym expansion, and multi-signal ranking. |
+| **Note Management** | Markdown notes with structured frontmatter: tags, keywords, platform, board, kernel, status. |
+| **Image Intelligence** | OCR text extraction, perceptual hashing for near-duplicate detection, and semantic similarity for image-based search. |
+| **Conversation Memory** | Multi-session chat with automatic context compression when conversations get long. |
+| **AI Tool Use** | The agent can search notes, read files, list directories, run commands, and save notes — all grounded in your local vault. |
+| **Markdown Import** | Bulk-import existing `.md` files into the indexed vault. |
+| **Offline-First** | Notes and search work without a network. AI features only need an API key. |
 
-## 数据存储
+## Architecture
 
-所有数据都保存在本地机器上。笔记管理和搜索功能无需联网即可使用，AI 问答功能需要配置 API 密钥。
+```
+┌──────────────────────────────┐
+│  VaultPilot.WinUI.exe (C#)   │  WinUI 3 desktop shell
+│  ┌──────────┐ ┌────────────┐ │
+│  │ Chat UI  │ │ Settings   │ │
+│  └────┬─────┘ └────────────┘ │
+│       │ JSON-RPC (stdin/out) │
+│  ┌────▼──────────────────┐   │
+│  │  BackendClient.cs     │   │
+│  └────┬──────────────────┘   │
+└───────┼──────────────────────┘
+        │
+┌───────▼──────────────────────┐
+│  vaultpilot-agent.exe (Rust) │
+│  ┌────────┐ ┌──────┐        │
+│  │ ai.rs  │ │storage│        │
+│  └────────┘ └──┬───┘        │
+│  ┌────────┐    │             │
+│  │prompt. │    │             │
+│  │  rs    │    ▼             │
+│  └────────┘  SQLite + .md   │
+└──────────────────────────────┘
+```
 
-- **笔记文件**：以 Markdown 格式存放在你指定的 Vault 目录中。
-- **索引与状态**：保存在本地应用数据目录中。
+## Quick Start
 
-## 系统要求
+### Prerequisites
+
+- Windows 10 version 1809+ (10.0.17763+)
+- For AI features: an API key (Anthropic, OpenAI-compatible, or any provider you configure)
+
+### Install
+
+Download the latest installer from [Releases](https://github.com/ryanloee/VaultPilot/releases):
+
+- `VaultPilot-win-x64-Setup.exe` — installer with auto-update
+- `VaultPilot-win-x64-Portable.zip` — portable, no install needed
+
+### First Run
+
+1. Launch VaultPilot
+2. Open **Settings** and configure your vault directory and API key
+3. Import existing Markdown notes or start writing new ones
+4. Ask questions in the chat
+
+### Build from Source
+
+See [docs/build.md](docs/build.md) for detailed build instructions.
+
+```powershell
+# Quick build (requires Rust + .NET 8 SDK + VS Build Tools)
+dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
+```
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | WinUI 3 / .NET 8 |
+| Backend | Rust (Tokio, Axum, Reqwest) |
+| Storage | SQLite (FTS5) + Markdown files |
+| AI | Anthropic Messages API with tool use |
+| Packaging | Velopack (auto-update, x86/x64) |
+
+## Documentation
+
+- [Usage Guide](docs/usage.md)
+- [Build Guide](docs/build.md)
+
+## Contributing
+
+Contributions are welcome! Feel free to open issues or pull requests.
+
+1. Fork the repository
+2. Create your feature branch
+3. Make your changes
+4. Submit a pull request
+
+## License
+
+This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for details.
+
+### Third-Party Licenses
+
+VaultPilot uses the following open-source libraries:
+
+| Library | License |
+|---------|---------|
+| anyhow | MIT / Apache-2.0 |
+| axum | MIT |
+| base64 | MIT / Apache-2.0 |
+| chrono | MIT / Apache-2.0 |
+| clap | MIT / Apache-2.0 |
+| deunicode | BSD-3-Clause |
+| image | MIT / Apache-2.0 |
+| reqwest | MIT / Apache-2.0 |
+| rusqlite | MIT |
+| serde / serde_json | MIT / Apache-2.0 |
+| serde_yaml | MIT / Apache-2.0 |
+| sha2 | MIT / Apache-2.0 |
+| tokio | MIT |
+| uuid | MIT / Apache-2.0 |
+| walkdir | MIT / Unlicense |
+| Microsoft.WindowsAppSDK | MIT |
+| Velopack | MIT |
+
+---
+
+<p align="center">
+  <strong>中文说明</strong>
+</p>
+
+## VaultPilot 是什么？
+
+VaultPilot 是一个面向工程师的**本地优先 AI 知识助手**。帮助你把散落在各处的工程笔记（启动日志、引脚配置、刷机命令、板卡调试记录...）统一管理，并通过自然语言提问获得有据可依的 AI 回答。
+
+## 核心功能
+
+- **有据可依的 AI 问答** — 用自然语言提问，VaultPilot 会先检索你的本地笔记库，再让 AI 基于这些笔记生成回答，并附上引用来源
+- **全文搜索** — SQLite FTS5 索引，支持中文分词、同义词扩展和多信号排序
+- **结构化笔记管理** — Markdown 文件 + 元数据（标签、关键词、平台、板卡、内核、状态）
+- **图片智能检索** — OCR 文字提取、感知哈希去重、语义相似度匹配
+- **多会话记忆** — 支持多个独立聊天会话，长对话自动压缩上下文
+- **AI 工具调用** — AI 可以搜索笔记、读取文件、列出目录、执行命令、保存笔记
+- **Markdown 批量导入** — 一键导入现有 `.md` 文件到知识库
+- **离线可用** — 笔记管理和搜索完全离线，AI 功能仅需配置 API Key
+
+## 快速开始
+
+### 系统要求
 
 - Windows 10 1809 及以上版本
-- 使用 AI 功能时需要一个 Anthropic API 密钥
+- AI 功能需要配置 API Key（支持 Anthropic、OpenAI 兼容等）
+
+### 安装
+
+从 [Releases](https://github.com/ryanloee/VaultPilot/releases) 下载最新版本：
+
+- `VaultPilot-win-x64-Setup.exe` — 安装版，支持自动更新
+- `VaultPilot-win-x64-Portable.zip` — 便携版，解压即用
+
+### 使用流程
+
+1. 启动 VaultPilot
+2. 在设置中配置知识库目录和 API Key
+3. 导入现有 Markdown 笔记，或直接开始记录
+4. 在聊天框中提问
+
+### 从源码构建
+
+详细说明请参考 [构建指南](docs/build.md)。
+
+```powershell
+dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
+```
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 前端 | WinUI 3 / .NET 8 |
+| 后端 | Rust (Tokio, Axum, Reqwest) |
+| 存储 | SQLite (FTS5) + Markdown 文件 |
+| AI | Anthropic Messages API (工具调用) |
+| 打包 | Velopack (自动更新, x86/x64) |
+
+## 许可证
+
+本项目基于 **MIT 许可证** 开源，详见 [LICENSE](LICENSE)。

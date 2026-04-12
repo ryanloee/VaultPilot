@@ -904,7 +904,7 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_image_media_type, dedupe_terms, extract_json, fallback_answer,
+        dedupe_terms, detect_image_media_type, extract_json, fallback_answer,
         heuristic_note_from_input, is_retryable_provider_error, normalize_draft,
         normalize_messages_endpoint, parse_or_fallback_answer, parse_or_fallback_note,
         parse_record_response, parse_tool_call, resolve_context_window, AssistantToolCall,
@@ -983,13 +983,22 @@ mod tests {
 
     #[test]
     fn detects_jpeg_and_webp_and_gif() {
-        assert_eq!(detect_image_media_type("photo.jpg").expect("jpg"), "image/jpeg");
-        assert_eq!(detect_image_media_type("img.jpeg").expect("jpeg"), "image/jpeg");
+        assert_eq!(
+            detect_image_media_type("photo.jpg").expect("jpg"),
+            "image/jpeg"
+        );
+        assert_eq!(
+            detect_image_media_type("img.jpeg").expect("jpeg"),
+            "image/jpeg"
+        );
         assert_eq!(
             detect_image_media_type("pic.webp").expect("webp"),
             "image/webp"
         );
-        assert_eq!(detect_image_media_type("anim.gif").expect("gif"), "image/gif");
+        assert_eq!(
+            detect_image_media_type("anim.gif").expect("gif"),
+            "image/gif"
+        );
     }
 
     #[test]
@@ -1045,9 +1054,7 @@ mod tests {
             "看下日志",
         )
         .expect("tool");
-        assert!(
-            matches!(tool, AssistantToolCall::ReadFile { path } if path.contains("log.txt"))
-        );
+        assert!(matches!(tool, AssistantToolCall::ReadFile { path } if path.contains("log.txt")));
     }
 
     #[test]
@@ -1057,9 +1064,7 @@ mod tests {
             "列出文件",
         )
         .expect("tool");
-        assert!(
-            matches!(tool, AssistantToolCall::RunCommand { command, .. } if command == "dir")
-        );
+        assert!(matches!(tool, AssistantToolCall::RunCommand { command, .. } if command == "dir"));
     }
 
     #[test]
@@ -1083,10 +1088,7 @@ mod tests {
 
     #[test]
     fn parse_or_fallback_note_uses_heuristic_on_plain_text() {
-        let draft = parse_or_fallback_note(
-            "这不是JSON，只是一段话",
-            "帮我记录一下mmc超时的问题",
-        );
+        let draft = parse_or_fallback_note("这不是JSON，只是一段话", "帮我记录一下mmc超时的问题");
         assert!(!draft.body.is_empty());
     }
 

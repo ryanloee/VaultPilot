@@ -1218,13 +1218,13 @@ mod tests {
 
     use super::{
         append_turn_to_session, build_agent_trace, build_chat_session_title,
-        current_session_history, display_path, draft_to_note_document,
-        estimate_session_tokens, estimate_tokens_for_text, estimate_turn_tokens,
-        extract_explicit_local_path, has_matching_tool_execution, looks_like_dangerous_command,
-        looks_like_record_request, looks_like_session_memory_question, looks_like_small_talk,
-        merge_usage, planned_tool_identity, resolve_or_create_chat_session,
-        summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession,
-        ChatState, ChatTurn, ConversationSummary, ToolExecution,
+        current_session_history, display_path, draft_to_note_document, estimate_session_tokens,
+        estimate_tokens_for_text, estimate_turn_tokens, extract_explicit_local_path,
+        has_matching_tool_execution, looks_like_dangerous_command, looks_like_record_request,
+        looks_like_session_memory_question, looks_like_small_talk, merge_usage,
+        planned_tool_identity, resolve_or_create_chat_session, summarize_docs_for_tool_result,
+        truncate_for_trace, ChatAttachment, ChatSession, ChatState, ChatTurn, ConversationSummary,
+        ToolExecution,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
     use crate::models::{AppSettings, NoteDocument, NoteMeta, StructuredNoteDraft};
@@ -1324,7 +1324,10 @@ mod tests {
     fn agent_trace_empty_tools_shows_no_tools_message() {
         let trace = build_agent_trace(&[], false);
         assert!(trace.summary.contains("没有触发额外工具"));
-        assert!(trace.steps.iter().any(|s| s.detail.contains("没有执行额外工具")));
+        assert!(trace
+            .steps
+            .iter()
+            .any(|s| s.detail.contains("没有执行额外工具")));
     }
 
     #[test]
@@ -1449,8 +1452,7 @@ mod tests {
     #[test]
     fn resolve_creates_new_session_when_requested() {
         let mut state = make_state_with_session();
-        let (id, created) =
-            resolve_or_create_chat_session(&mut state, None, true).expect("create");
+        let (id, created) = resolve_or_create_chat_session(&mut state, None, true).expect("create");
         assert!(created);
         assert_ne!(id, "existing-id");
         assert_eq!(state.sessions.len(), 2);
@@ -1459,8 +1461,8 @@ mod tests {
     #[test]
     fn resolve_finds_existing_session() {
         let mut state = make_state_with_session();
-        let (id, created) = resolve_or_create_chat_session(&mut state, Some("existing-id"), false)
-            .expect("find");
+        let (id, created) =
+            resolve_or_create_chat_session(&mut state, Some("existing-id"), false).expect("find");
         assert!(!created);
         assert_eq!(id, "existing-id");
     }
@@ -1486,8 +1488,7 @@ mod tests {
     fn resolve_fixes_invalid_current_session_id() {
         let mut state = make_state_with_session();
         state.current_session_id = "ghost-id".to_string();
-        let (id, _) =
-            resolve_or_create_chat_session(&mut state, None, false).expect("fix");
+        let (id, _) = resolve_or_create_chat_session(&mut state, None, false).expect("fix");
         assert_eq!(id, "existing-id");
         assert_eq!(state.current_session_id, "existing-id");
     }
@@ -1658,7 +1659,11 @@ mod tests {
             limit: 6,
         };
         let settings = AppSettings::default();
-        assert!(has_matching_tool_execution(&tool_results, &tool_call, &settings));
+        assert!(has_matching_tool_execution(
+            &tool_results,
+            &tool_call,
+            &settings
+        ));
     }
 
     #[test]
@@ -1666,7 +1671,11 @@ mod tests {
         let tool_results = vec![ToolExecution::new("search_notes", "q=mmc", "3", false)];
         let tool_call = AssistantToolCall::ListNotes { limit: 5 };
         let settings = AppSettings::default();
-        assert!(!has_matching_tool_execution(&tool_results, &tool_call, &settings));
+        assert!(!has_matching_tool_execution(
+            &tool_results,
+            &tool_call,
+            &settings
+        ));
     }
 
     #[test]
@@ -1674,7 +1683,11 @@ mod tests {
         let tool_results = vec![ToolExecution::new("search_notes", "q=x", "1", false)];
         let tool_call = AssistantToolCall::None;
         let settings = AppSettings::default();
-        assert!(!has_matching_tool_execution(&tool_results, &tool_call, &settings));
+        assert!(!has_matching_tool_execution(
+            &tool_results,
+            &tool_call,
+            &settings
+        ));
     }
 
     #[test]

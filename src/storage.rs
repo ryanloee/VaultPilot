@@ -2691,7 +2691,10 @@ mod tests {
 
     #[test]
     fn detect_title_from_h1() {
-        assert_eq!(detect_title("# My Title\nBody", Path::new("x.md")), "My Title");
+        assert_eq!(
+            detect_title("# My Title\nBody", Path::new("x.md")),
+            "My Title"
+        );
     }
 
     #[test]
@@ -2802,10 +2805,7 @@ mod tests {
 
     #[test]
     fn append_image_creates_section() {
-        let result = append_image_markdown(
-            "body text",
-            &["assets/photo.png".to_string()],
-        );
+        let result = append_image_markdown("body text", &["assets/photo.png".to_string()]);
         assert!(result.contains("## 图片记录"));
         assert!(result.contains("![photo.png](assets/photo.png)"));
     }
@@ -3122,7 +3122,9 @@ mod tests {
 
     #[test]
     fn semantic_vector_round_trip() {
-        let v: Vec<f32> = (0..ATTACHMENT_VECTOR_DIM).map(|i| i as f32 * 0.01).collect();
+        let v: Vec<f32> = (0..ATTACHMENT_VECTOR_DIM)
+            .map(|i| i as f32 * 0.01)
+            .collect();
         let serialized = serialize_semantic_vector(&v);
         let deserialized = deserialize_semantic_vector(&serialized).expect("deserialize");
         assert_eq!(deserialized.len(), ATTACHMENT_VECTOR_DIM);
@@ -3346,7 +3348,10 @@ mod tests {
             ..Default::default()
         };
         normalize_settings(&mut settings, &paths);
-        assert_eq!(settings.provider.request_timeout_ms, crate::models::default_timeout_ms());
+        assert_eq!(
+            settings.provider.request_timeout_ms,
+            crate::models::default_timeout_ms()
+        );
         assert!(settings.provider.context_window_tokens.is_none());
     }
 
@@ -3369,12 +3374,7 @@ mod tests {
 
     #[test]
     fn build_note_path_invalid_date_uses_current() {
-        let path = build_note_path(
-            "D:\\Vault",
-            "Test",
-            "invalid-date",
-            "abc12345-6789-def0",
-        );
+        let path = build_note_path("D:\\Vault", "Test", "invalid-date", "abc12345-6789-def0");
         // Should not panic, uses current date as fallback
         assert!(path.to_string_lossy().ends_with(".md"));
     }
@@ -3522,7 +3522,10 @@ mod tests {
             },
         )
         .expect("search by tag");
-        assert!(results.notes.iter().any(|n| n.tags.contains(&"kernel".to_string())));
+        assert!(results
+            .notes
+            .iter()
+            .any(|n| n.tags.contains(&"kernel".to_string())));
     }
 
     #[test]
@@ -3539,11 +3542,8 @@ mod tests {
         )
         .expect("write md");
 
-        let result = import_markdown_with_context(
-            &ctx,
-            &[md_file.to_string_lossy().to_string()],
-        )
-        .expect("import");
+        let result = import_markdown_with_context(&ctx, &[md_file.to_string_lossy().to_string()])
+            .expect("import");
         assert_eq!(result.imported, 1);
         assert!(result.errors.is_empty());
     }

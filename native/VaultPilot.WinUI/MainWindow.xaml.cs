@@ -26,10 +26,10 @@ public sealed partial class MainWindow : Window
     private const double ContextCompressionThreshold = 0.95;
     private const int RecentTurnsAfterCompression = 8;
     private const ulong ImageAttachmentTokenEstimate = 1200;
-    private const int DefaultWindowWidth = 800;
-    private const int DefaultWindowHeight = 800;
-    private const int MinimumWindowWidth = 800;
-    private const int MinimumWindowHeight = 620;
+    private const int DefaultWindowWidth = 960;
+    private const int DefaultWindowHeight = 760;
+    private const int MinimumWindowWidth = 640;
+    private const int MinimumWindowHeight = 520;
     private const double AutoCollapseSidebarWidth = 1040;
     private const double SettingsDialogWidth = 520;
     private readonly BackendClient _backendClient;
@@ -39,8 +39,8 @@ public sealed partial class MainWindow : Window
     private AppSettings? _settings;
     private int _noteCount;
     private readonly List<ChatAttachment> _attachments = [];
-    private bool _sidebarCollapsed;
-    private bool _sidebarAutoCollapsed;
+    private bool _sidebarCollapsed = true;
+    private bool _sidebarAutoCollapsed = true;
     private string _startupStep = "初始化";
 
     public MainWindow()
@@ -97,6 +97,7 @@ public sealed partial class MainWindow : Window
 
             RefreshVaultSummary();
             RefreshSessions();
+            SetSidebarCollapsed(collapsed: true, autoCollapsed: true);
             RenderCurrentSession();
             ScrollToLatest();
 
@@ -240,8 +241,8 @@ public sealed partial class MainWindow : Window
             projectLinkButton.Click += async (_, _) => await OpenProjectHomepageAsync();
             var versionLabel = new TextBlock
             {
-                Text = $"版本 {ResolveDisplayVersion()}",
-                Opacity = 0.7,
+                Text = string.Empty,
+                Opacity = 0.0,
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Right
             };

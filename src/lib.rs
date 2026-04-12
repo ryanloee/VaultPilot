@@ -1217,9 +1217,19 @@ mod tests {
     };
 
     use super::{
-        extract_explicit_local_path, looks_like_record_request, looks_like_session_memory_question,
-        looks_like_small_talk,
+        append_turn_to_session, build_agent_trace, build_chat_session_title,
+        current_session_history, display_path, draft_to_note_document,
+        estimate_session_tokens, estimate_tokens_for_text, estimate_turn_tokens,
+        extract_explicit_local_path, has_matching_tool_execution, looks_like_dangerous_command,
+        looks_like_record_request, looks_like_session_memory_question, looks_like_small_talk,
+        merge_usage, planned_tool_identity, resolve_or_create_chat_session,
+        summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession,
+        ChatState, ChatTurn, ConversationSummary, ToolExecution,
     };
+    use crate::ai::{AssistantToolCall, RequestUsage};
+    use crate::models::{AppSettings, NoteDocument, NoteMeta, StructuredNoteDraft};
+
+    // ── existing tests ──
 
     #[test]
     fn detects_session_memory_question() {
@@ -1251,5 +1261,481 @@ mod tests {
 
         let extracted = extract_explicit_local_path(&question).expect("path");
         assert_eq!(Path::new(&extracted), path.as_path());
+    }
+
+    // ── 2.1 dangerous command detection ──
+
+    #[test]
+    fn blocks_dangerous_commands() {
+        assert!(looks_like_dangerous_command("del /s C:\\stuff"));
+        assert!(looks_like_dangerous_command("Remove-Item -Recurse stuff"));
+        assert!(looks_like_dangerous_command("rm -rf /tmp/test"));
+        assert!(looks_like_dangerous_command("shutdown /s"));
+        assert!(looks_like_dangerous_command("format disk"));
+        assert!(looks_like_dangerous_command("rd /s /q dir"));
+        assert!(looks_like_dangerous_command("rmdir /s dir"));
+        assert!(looks_like_dangerous_command("mkfs.ext4 /dev/sda"));
+        assert!(looks_like_dangerous_command("reboot now"));
+        assert!(looks_like_dangerous_command("halt"));
+        assert!(looks_like_dangerous_command("poweroff"));
+    }
+
+    #[test]
+    fn allows_safe_commands() {
+        assert!(!looks_like_dangerous_command("Get-ChildItem"));
+        assert!(!looks_like_dangerous_command("echo hello"));
+        assert!(!looks_like_dangerous_command("dir"));
+        assert!(!looks_like_dangerous_command("cat log.txt"));
+        assert!(!looks_like_dangerous_command("type build.log"));
+    }
+
+    #[test]
+    fn dangerous_command_detection_is_case_insensitive() {
+        assert!(looks_like_dangerous_command("DEL /S C:\\stuff"));
+        assert!(looks_like_dangerous_command("Format C:"));
+        assert!(looks_like_dangerous_command("RM -RF /"));
+    }
+
+    // ── 2.3 build_chat_session_title ──
+
+    #[test]
+    fn session_title_short_text_passes_through() {
+        let title = build_chat_session_title("mmc timeout issue");
+        assert_eq!(title, "mmc timeout issue");
+    }
+
+    #[test]
+    fn session_title_truncates_long_text() {
+        let long_text = "这是一段非常长的文本用来测试会话标题截断功能是否正常工作超出限制";
+        let title = build_chat_session_title(long_text);
+        assert!(title.ends_with("..."));
+        assert!(title.chars().count() <= 31); // 28 + "..."
+    }
+
+    #[test]
+    fn session_title_empty_returns_default() {
+        assert_eq!(build_chat_session_title(""), "新对话");
+        assert_eq!(build_chat_session_title("   "), "新对话");
+    }
+
+    // ── 2.4 build_agent_trace ──
+
+    #[test]
+    fn agent_trace_empty_tools_shows_no_tools_message() {
+        let trace = build_agent_trace(&[], false);
+        assert!(trace.summary.contains("没有触发额外工具"));
+        assert!(trace.steps.iter().any(|s| s.detail.contains("没有执行额外工具")));
+    }
+
+    #[test]
+    fn agent_trace_with_forced_search_adds_step() {
+        let trace = build_agent_trace(&[], true);
+        assert!(trace.steps[0].detail.contains("检索优先策略"));
+    }
+
+    #[test]
+    fn agent_trace_with_tools_shows_numbered_steps() {
+        let tools = vec![
+            ToolExecution::new("search_notes", "q=test", "found 3", false),
+            ToolExecution::new("run_command", "cmd=dir", "output", false),
+        ];
+        let trace = build_agent_trace(&tools, false);
+        assert!(trace.summary.contains("2 个工具步骤"));
+        assert!(trace.steps[0].title.contains("工具步骤 1"));
+        assert!(trace.steps[1].title.contains("工具步骤 2"));
+    }
+
+    // ── 2.5 truncate_for_trace ──
+
+    #[test]
+    fn truncate_short_text_unchanged() {
+        assert_eq!(truncate_for_trace("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_text_appends_ellipsis() {
+        let long = "abcdefghij";
+        assert_eq!(truncate_for_trace(long, 5), "abcde...");
+    }
+
+    #[test]
+    fn truncate_exact_length_unchanged() {
+        assert_eq!(truncate_for_trace("abc", 3), "abc");
+    }
+
+    // ── 2.6 token estimation ──
+
+    #[test]
+    fn estimate_tokens_none_returns_zero() {
+        assert_eq!(estimate_tokens_for_text(None), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_empty_returns_zero() {
+        assert_eq!(estimate_tokens_for_text(Some("")), 0);
+        assert_eq!(estimate_tokens_for_text(Some("   ")), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_ascii_divides_by_four() {
+        let tokens = estimate_tokens_for_text(Some("abcdefgh"));
+        assert_eq!(tokens, 2); // 8 non-whitespace ASCII / 4
+    }
+
+    #[test]
+    fn estimate_tokens_cjk_counts_each_char() {
+        let tokens = estimate_tokens_for_text(Some("测试一下"));
+        assert_eq!(tokens, 4); // 4 CJK chars, each = 1 token
+    }
+
+    #[test]
+    fn estimate_turn_tokens_adds_image_overhead() {
+        let attachments = vec![
+            ChatAttachment {
+                path: "a.png".to_string(),
+                name: "a.png".to_string(),
+            },
+            ChatAttachment {
+                path: "b.png".to_string(),
+                name: "b.png".to_string(),
+            },
+        ];
+        let tokens = estimate_turn_tokens("test", &attachments);
+        assert_eq!(tokens, estimate_tokens_for_text(Some("test")) + 2 * 1200);
+    }
+
+    #[test]
+    fn estimate_session_tokens_sums_all_parts() {
+        let session = ChatSession {
+            id: "s1".to_string(),
+            title: "test".to_string(),
+            turns: vec![
+                ChatTurn {
+                    text: "hello world".to_string(),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    text: "测试一下".to_string(),
+                    ..Default::default()
+                },
+            ],
+            summary: Some(ConversationSummary {
+                text: "summary text here".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let tokens = estimate_session_tokens(&session);
+        assert!(tokens > 0);
+    }
+
+    // ── 2.7 resolve_or_create_chat_session ──
+
+    fn make_state_with_session() -> ChatState {
+        let session = ChatSession {
+            id: "existing-id".to_string(),
+            title: "Test Session".to_string(),
+            turns: vec![],
+            summary: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        ChatState {
+            current_session_id: "existing-id".to_string(),
+            sessions: vec![session],
+        }
+    }
+
+    #[test]
+    fn resolve_creates_new_session_when_requested() {
+        let mut state = make_state_with_session();
+        let (id, created) =
+            resolve_or_create_chat_session(&mut state, None, true).expect("create");
+        assert!(created);
+        assert_ne!(id, "existing-id");
+        assert_eq!(state.sessions.len(), 2);
+    }
+
+    #[test]
+    fn resolve_finds_existing_session() {
+        let mut state = make_state_with_session();
+        let (id, created) = resolve_or_create_chat_session(&mut state, Some("existing-id"), false)
+            .expect("find");
+        assert!(!created);
+        assert_eq!(id, "existing-id");
+    }
+
+    #[test]
+    fn resolve_rejects_nonexistent_session_id() {
+        let mut state = make_state_with_session();
+        assert!(resolve_or_create_chat_session(&mut state, Some("no-such-id"), false).is_err());
+    }
+
+    #[test]
+    fn resolve_creates_session_when_list_empty() {
+        let mut state = ChatState {
+            current_session_id: String::new(),
+            sessions: vec![],
+        };
+        let (_, created) =
+            resolve_or_create_chat_session(&mut state, None, false).expect("auto-create");
+        assert!(created);
+    }
+
+    #[test]
+    fn resolve_fixes_invalid_current_session_id() {
+        let mut state = make_state_with_session();
+        state.current_session_id = "ghost-id".to_string();
+        let (id, _) =
+            resolve_or_create_chat_session(&mut state, None, false).expect("fix");
+        assert_eq!(id, "existing-id");
+        assert_eq!(state.current_session_id, "existing-id");
+    }
+
+    // ── 2.8 append_turn_to_session ──
+
+    #[test]
+    fn append_turn_renames_new_dialog_session() {
+        let mut state = make_state_with_session();
+        state.sessions[0].title = "新对话".to_string();
+        let turn = ChatTurn {
+            id: "t1".to_string(),
+            role: "user".to_string(),
+            text: "mmc超时怎么处理".to_string(),
+            ..Default::default()
+        };
+        append_turn_to_session(&mut state, "existing-id", turn).expect("append");
+        assert_ne!(state.sessions[0].title, "新对话");
+        assert!(state.sessions[0].title.contains("mmc"));
+    }
+
+    #[test]
+    fn append_turn_keeps_custom_title() {
+        let mut state = make_state_with_session();
+        state.sessions[0].title = "Custom Title".to_string();
+        let turn = ChatTurn {
+            id: "t2".to_string(),
+            role: "user".to_string(),
+            text: "another question".to_string(),
+            ..Default::default()
+        };
+        append_turn_to_session(&mut state, "existing-id", turn).expect("append");
+        assert_eq!(state.sessions[0].title, "Custom Title");
+    }
+
+    #[test]
+    fn append_turn_rejects_invalid_session() {
+        let mut state = make_state_with_session();
+        let turn = ChatTurn {
+            id: "t3".to_string(),
+            role: "user".to_string(),
+            text: "hello".to_string(),
+            ..Default::default()
+        };
+        assert!(append_turn_to_session(&mut state, "no-such-id", turn).is_err());
+    }
+
+    // ── 2.9 current_session_history ──
+
+    #[test]
+    fn session_history_includes_summary_as_system_turn() {
+        let state = ChatState {
+            current_session_id: "s1".to_string(),
+            sessions: vec![ChatSession {
+                id: "s1".to_string(),
+                summary: Some(ConversationSummary {
+                    text: "此前讨论了mmc".to_string(),
+                    ..Default::default()
+                }),
+                turns: vec![ChatTurn {
+                    role: "user".to_string(),
+                    text: "继续聊".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        let history = current_session_history(&state, "s1").expect("history");
+        assert!(history[0].role == "system");
+        assert!(history[0].text.contains("此前讨论了mmc"));
+    }
+
+    #[test]
+    fn session_history_filters_empty_text_turns() {
+        let state = ChatState {
+            current_session_id: "s1".to_string(),
+            sessions: vec![ChatSession {
+                id: "s1".to_string(),
+                turns: vec![
+                    ChatTurn {
+                        role: "user".to_string(),
+                        text: "hello".to_string(),
+                        ..Default::default()
+                    },
+                    ChatTurn {
+                        role: "assistant".to_string(),
+                        text: "   ".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+        };
+        let history = current_session_history(&state, "s1").expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].text, "hello");
+    }
+
+    // ── 2.10 summarize_docs_for_tool_result ──
+
+    #[test]
+    fn summarize_empty_docs_returns_zero() {
+        assert_eq!(
+            summarize_docs_for_tool_result("search_notes", &[]),
+            "search_notes returned 0 notes."
+        );
+    }
+
+    #[test]
+    fn summarize_docs_formats_each_doc() {
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                title: "T1".to_string(),
+                path: "/p1.md".to_string(),
+                summary: "S1".to_string(),
+                ..Default::default()
+            },
+            body: String::new(),
+        }];
+        let result = summarize_docs_for_tool_result("list_notes", &docs);
+        assert!(result.contains("list_notes returned 1 notes"));
+        assert!(result.contains("T1"));
+        assert!(result.contains("/p1.md"));
+    }
+
+    // ── 2.11 draft_to_note_document ──
+
+    #[test]
+    fn draft_converts_all_fields() {
+        let draft = StructuredNoteDraft {
+            title: "Title".to_string(),
+            summary: "Summary".to_string(),
+            tags: vec!["tag".to_string()],
+            keywords: vec!["kw".to_string()],
+            body: "Body".to_string(),
+            ..Default::default()
+        };
+        let doc = draft_to_note_document(draft);
+        assert_eq!(doc.meta.title, "Title");
+        assert_eq!(doc.body, "Body");
+        assert!(doc.meta.id.is_empty());
+        assert!(doc.meta.created_at.is_empty());
+        assert!(doc.meta.path.is_empty());
+    }
+
+    #[test]
+    fn draft_empty_source_defaults_to_captured() {
+        let draft = StructuredNoteDraft {
+            source: String::new(),
+            ..Default::default()
+        };
+        let doc = draft_to_note_document(draft);
+        assert_eq!(doc.meta.source, "captured");
+    }
+
+    // ── 2.12 tool dedup ──
+
+    #[test]
+    fn matching_tool_execution_detected() {
+        let tool_results = vec![ToolExecution::new(
+            "search_notes",
+            "query=mmc limit=6",
+            "found 3",
+            false,
+        )];
+        let tool_call = AssistantToolCall::SearchNotes {
+            query: "mmc".to_string(),
+            limit: 6,
+        };
+        let settings = AppSettings::default();
+        assert!(has_matching_tool_execution(&tool_results, &tool_call, &settings));
+    }
+
+    #[test]
+    fn different_tool_not_matched() {
+        let tool_results = vec![ToolExecution::new("search_notes", "q=mmc", "3", false)];
+        let tool_call = AssistantToolCall::ListNotes { limit: 5 };
+        let settings = AppSettings::default();
+        assert!(!has_matching_tool_execution(&tool_results, &tool_call, &settings));
+    }
+
+    #[test]
+    fn none_tool_never_matches() {
+        let tool_results = vec![ToolExecution::new("search_notes", "q=x", "1", false)];
+        let tool_call = AssistantToolCall::None;
+        let settings = AppSettings::default();
+        assert!(!has_matching_tool_execution(&tool_results, &tool_call, &settings));
+    }
+
+    #[test]
+    fn planned_tool_identity_for_run_command_includes_vault_dir() {
+        let settings = AppSettings {
+            vault_dir: "D:\\Vault".to_string(),
+            ..Default::default()
+        };
+        let tool_call = AssistantToolCall::RunCommand {
+            command: "dir".to_string(),
+            cwd: None,
+        };
+        let result = planned_tool_identity(&tool_call, &settings);
+        assert!(result.is_some());
+        let (name, input) = result.unwrap();
+        assert_eq!(name, "run_command");
+        assert!(input.contains("cwd=D:\\Vault"));
+    }
+
+    // ── 2.13 display_path ──
+
+    #[test]
+    fn display_path_shows_placeholder_for_empty() {
+        assert_eq!(display_path(""), "(empty path)");
+        assert_eq!(display_path("  "), "(empty path)");
+    }
+
+    #[test]
+    fn display_path_passes_through_nonempty() {
+        assert_eq!(display_path("C:\\Users\\test"), "C:\\Users\\test");
+    }
+
+    // ── merge_usage ──
+
+    #[test]
+    fn merge_usage_prefers_newer_values() {
+        let current = RequestUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+        };
+        let next = RequestUsage {
+            input_tokens: Some(200),
+            output_tokens: None,
+        };
+        let merged = merge_usage(current, next);
+        assert_eq!(merged.input_tokens, Some(200));
+        assert_eq!(merged.output_tokens, Some(50));
+    }
+
+    #[test]
+    fn merge_usage_fills_none_from_current() {
+        let current = RequestUsage {
+            input_tokens: Some(100),
+            output_tokens: None,
+        };
+        let next = RequestUsage {
+            input_tokens: None,
+            output_tokens: Some(50),
+        };
+        let merged = merge_usage(current, next);
+        assert_eq!(merged.input_tokens, Some(100));
+        assert_eq!(merged.output_tokens, Some(50));
     }
 }

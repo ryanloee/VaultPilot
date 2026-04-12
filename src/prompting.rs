@@ -491,6 +491,7 @@ fn render_manual_for_model() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{ConversationTurn, NoteDocument, NoteMeta};
 
     #[test]
     fn workflow_manual_contains_tool_selection() {
@@ -532,5 +533,111 @@ mod tests {
         );
         assert!(prompt.contains("tool_results"));
         assert!(prompt.contains("list_directory"));
+    }
+
+    #[test]
+    fn render_history_empty_returns_none() {
+        assert_eq!(render_history(&[]), "(none)");
+    }
+
+    #[test]
+    fn render_history_formats_turns() {
+        let turns = vec![
+            ConversationTurn {
+                role: "user".to_string(),
+                text: "hello".to_string(),
+            },
+            ConversationTurn {
+                role: "assistant".to_string(),
+                text: "hi there".to_string(),
+            },
+        ];
+        let rendered = render_history(&turns);
+        assert!(rendered.contains("user: hello"));
+        assert!(rendered.contains("assistant: hi there"));
+        assert!(!rendered.contains("(none)"));
+    }
+
+    #[test]
+    fn render_notes_empty_returns_none() {
+        assert_eq!(render_notes(&[]), "(none)");
+    }
+
+    #[test]
+    fn render_notes_formats_documents() {
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                id: "n1".to_string(),
+                title: "Test".to_string(),
+                path: "/vault/test.md".to_string(),
+                tags: vec!["tag1".to_string()],
+                keywords: vec!["kw1".to_string()],
+                ..Default::default()
+            },
+            body: "body text".to_string(),
+        }];
+        let rendered = render_notes(&docs);
+        assert!(rendered.contains("NOTE_ID: n1"));
+        assert!(rendered.contains("TITLE: Test"));
+        assert!(rendered.contains("PATH: /vault/test.md"));
+        assert!(rendered.contains("TAGS: tag1"));
+        assert!(rendered.contains("KEYWORDS: kw1"));
+        assert!(rendered.contains("CONTENT:\nbody text"));
+    }
+
+    #[test]
+    fn render_candidate_notes_empty_returns_none() {
+        assert_eq!(render_candidate_notes(&[]), "(none)");
+    }
+
+    #[test]
+    fn render_candidate_notes_formats_metadata() {
+        let candidates = vec![NoteMeta {
+            id: "n2".to_string(),
+            title: "Candidate".to_string(),
+            summary: "A summary".to_string(),
+            keywords: vec!["kw".to_string()],
+            path: "/vault/c2.md".to_string(),
+            ..Default::default()
+        }];
+        let rendered = render_candidate_notes(&candidates);
+        assert!(rendered.contains("NOTE_ID: n2"));
+        assert!(rendered.contains("TITLE: Candidate"));
+        assert!(rendered.contains("SUMMARY: A summary"));
+        assert!(rendered.contains("KEYWORDS: kw"));
+    }
+
+    #[test]
+    fn render_tool_results_joins_with_separator() {
+        let results = vec!["result1".to_string(), "result2".to_string()];
+        let rendered = render_tool_results(&results);
+        assert!(rendered.contains("result1"));
+        assert!(rendered.contains("result2"));
+        assert!(rendered.contains("---"));
+    }
+
+    #[test]
+    fn render_tool_results_empty_returns_none() {
+        assert_eq!(render_tool_results(&[]), "(none)");
+    }
+
+    #[test]
+    fn system_prompts_contain_date_and_manual() {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert!(ingest_system_prompt().contains(&today));
+        assert!(answer_system_prompt().contains(&today));
+        assert!(record_system_prompt().contains(&today));
+        assert!(compression_system_prompt().contains(&today));
+
+        assert!(ingest_system_prompt().contains("ai_workflow_manual"));
+        assert!(answer_system_prompt().contains("ai_workflow_manual"));
+        assert!(record_system_prompt().contains("ai_workflow_manual"));
+    }
+
+    #[test]
+    fn compression_prompt_does_not_include_manual() {
+        let prompt = compression_system_prompt();
+        assert!(!prompt.contains("ai_workflow_manual"));
+        assert!(prompt.contains("compactor"));
     }
 }

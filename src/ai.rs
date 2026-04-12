@@ -904,16 +904,45 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_image_media_type, extract_json, fallback_answer, heuristic_note_from_input,
-        normalize_messages_endpoint, parse_or_fallback_answer, parse_record_response,
-        parse_tool_call, AssistantToolCall, RequestUsage,
+        detect_image_media_type, dedupe_terms, extract_json, fallback_answer,
+        heuristic_note_from_input, is_retryable_provider_error, normalize_draft,
+        normalize_messages_endpoint, parse_or_fallback_answer, parse_or_fallback_note,
+        parse_record_response, parse_tool_call, resolve_context_window, AssistantToolCall,
+        RequestUsage,
     };
+    use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
     #[test]
     fn extracts_json_from_code_fence_like_payload() {
         let raw = "```json\n{\"answer\":\"ok\"}\n```";
         let extracted = extract_json(raw).expect("json extracted");
         assert_eq!(extracted, "{\"answer\":\"ok\"}");
+    }
+
+    #[test]
+    fn extracts_clean_json_directly() {
+        let raw = r#"{"answer":"hello","citations":[]}"#;
+        assert_eq!(extract_json(raw).expect("extract"), raw);
+    }
+
+    #[test]
+    fn extracts_json_from_surrounding_prose() {
+        let raw = r#"The result is {"answer":"ok"} great"#;
+        let extracted = extract_json(raw).expect("extract");
+        assert!(extracted.contains("answer"));
+    }
+
+    #[test]
+    fn extract_json_returns_err_without_braces() {
+        assert!(extract_json("no json here").is_err());
+    }
+
+    #[test]
+    fn extract_json_handles_nested_objects() {
+        let raw = r#"{"a":{"b":1},"c":2}"#;
+        let extracted = extract_json(raw).expect("extract nested");
+        assert!(extracted.contains("\"a\""));
+        assert!(extracted.contains("\"b\""));
     }
 
     #[test]
@@ -929,6 +958,18 @@ mod tests {
     }
 
     #[test]
+    fn normalize_endpoint_preserves_trailing_slash_url() {
+        let result = normalize_messages_endpoint("https://api.example.com/v1/messages/");
+        assert!(result.contains("/v1/messages"));
+    }
+
+    #[test]
+    fn normalize_endpoint_appends_for_bare_host() {
+        let result = normalize_messages_endpoint("https://api.example.com");
+        assert_eq!(result, "https://api.example.com/v1/messages");
+    }
+
+    #[test]
     fn fallback_mentions_direct_answer_when_no_context() {
         let text = fallback_answer("我之前怎么做的", true);
         assert!(text.contains("直接回答"));
@@ -938,6 +979,17 @@ mod tests {
     fn detects_supported_image_types() {
         assert_eq!(detect_image_media_type("a.png").expect("png"), "image/png");
         assert!(detect_image_media_type("a.bmp").is_err());
+    }
+
+    #[test]
+    fn detects_jpeg_and_webp_and_gif() {
+        assert_eq!(detect_image_media_type("photo.jpg").expect("jpg"), "image/jpeg");
+        assert_eq!(detect_image_media_type("img.jpeg").expect("jpeg"), "image/jpeg");
+        assert_eq!(
+            detect_image_media_type("pic.webp").expect("webp"),
+            "image/webp"
+        );
+        assert_eq!(detect_image_media_type("anim.gif").expect("gif"), "image/gif");
     }
 
     #[test]
@@ -972,5 +1024,163 @@ mod tests {
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
+    }
+
+    #[test]
+    fn parses_search_notes_tool_call() {
+        let tool = parse_tool_call(
+            "{\"tool\":\"search_notes\",\"query\":\"mmc timeout\",\"limit\":6,\"noteDraft\":null}",
+            "mmc超时",
+        )
+        .expect("tool");
+        assert!(
+            matches!(tool, AssistantToolCall::SearchNotes { query, limit } if query == "mmc timeout" && limit == 6)
+        );
+    }
+
+    #[test]
+    fn parses_read_file_tool_call() {
+        let tool = parse_tool_call(
+            "{\"tool\":\"read_file\",\"path\":\"C:\\\\Users\\\\test\\\\log.txt\",\"noteDraft\":null}",
+            "看下日志",
+        )
+        .expect("tool");
+        assert!(
+            matches!(tool, AssistantToolCall::ReadFile { path } if path.contains("log.txt"))
+        );
+    }
+
+    #[test]
+    fn parses_run_command_tool_call() {
+        let tool = parse_tool_call(
+            "{\"tool\":\"run_command\",\"command\":\"dir\",\"cwd\":\"\",\"noteDraft\":null}",
+            "列出文件",
+        )
+        .expect("tool");
+        assert!(
+            matches!(tool, AssistantToolCall::RunCommand { command, .. } if command == "dir")
+        );
+    }
+
+    #[test]
+    fn parses_none_tool_call() {
+        let tool = parse_tool_call(
+            "{\"tool\":\"none\",\"query\":\"\",\"limit\":0,\"noteDraft\":null}",
+            "你好",
+        )
+        .expect("tool");
+        assert!(matches!(tool, AssistantToolCall::None));
+    }
+
+    #[test]
+    fn parse_tool_call_returns_err_for_unknown_tool() {
+        assert!(parse_tool_call(
+            "{\"tool\":\"fly_to_moon\",\"query\":\"\",\"limit\":0,\"noteDraft\":null}",
+            "去月球",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parse_or_fallback_note_uses_heuristic_on_plain_text() {
+        let draft = parse_or_fallback_note(
+            "这不是JSON，只是一段话",
+            "帮我记录一下mmc超时的问题",
+        );
+        assert!(!draft.body.is_empty());
+    }
+
+    #[test]
+    fn parse_or_fallback_answer_extracts_citations() {
+        let json = r#"{"answer":"参见笔记","citations":[{"noteId":"n1","title":"T","path":"/p.md","snippet":"s"}]}"#;
+        let parsed = parse_or_fallback_answer(json, "问题", true);
+        assert_eq!(parsed.answer, "参见笔记");
+        assert_eq!(parsed.citations.len(), 1);
+        assert_eq!(parsed.citations[0].note_id, "n1");
+    }
+
+    #[test]
+    fn dedupe_terms_removes_duplicates_case_insensitive() {
+        let result = dedupe_terms(vec![
+            "Kernel".to_string(),
+            "kernel".to_string(),
+            "KERNEL".to_string(),
+        ]);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn dedupe_terms_removes_empty_strings() {
+        let result = dedupe_terms(vec!["a".to_string(), "".to_string(), "  ".to_string()]);
+        assert_eq!(result, vec!["a"]);
+    }
+
+    #[test]
+    fn normalize_draft_fills_empty_fields_from_heuristic() {
+        let draft = StructuredNoteDraft {
+            title: String::new(),
+            body: "wboot -w update zboot.img 刷机命令".to_string(),
+            ..Default::default()
+        };
+        let normalized = normalize_draft(draft);
+        assert!(!normalized.title.is_empty());
+    }
+
+    #[test]
+    fn resolve_context_window_uses_manual_override() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                context_window_tokens: Some(999_999),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (tokens, source) = resolve_context_window(&settings);
+        assert_eq!(tokens, 999_999);
+        assert_eq!(source, "manual_override");
+    }
+
+    #[test]
+    fn resolve_context_window_recognizes_claude_models() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                model: "claude-3-5-sonnet-latest".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (tokens, _) = resolve_context_window(&settings);
+        assert_eq!(tokens, 200_000);
+    }
+
+    #[test]
+    fn resolve_context_window_defaults_for_unknown_model() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                model: "unknown-model-xyz".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (tokens, source) = resolve_context_window(&settings);
+        assert_eq!(tokens, 128_000);
+        assert_eq!(source, "heuristic_default");
+    }
+
+    #[test]
+    fn is_retryable_detects_429_and_5xx() {
+        assert!(is_retryable_provider_error(429, ""));
+        assert!(is_retryable_provider_error(500, ""));
+        assert!(is_retryable_provider_error(503, ""));
+        assert!(!is_retryable_provider_error(400, ""));
+        assert!(!is_retryable_provider_error(401, ""));
+    }
+
+    #[test]
+    fn is_retryable_detects_rate_limit_in_detail() {
+        assert!(is_retryable_provider_error(400, "rate limit exceeded"));
+        assert!(is_retryable_provider_error(400, "Too Many Requests"));
+        assert!(is_retryable_provider_error(400, "访问量过大"));
+        assert!(!is_retryable_provider_error(400, "bad request"));
     }
 }

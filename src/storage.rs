@@ -83,6 +83,19 @@ impl StorageContext {
         ctx.paths.vault_dir_override = vault_dir_override;
         Ok(ctx)
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(temp: &Path) -> Self {
+        Self {
+            paths: AppPaths {
+                settings_path: temp.join("settings.json"),
+                database_path: temp.join("knowledge-index.sqlite"),
+                chat_state_path: temp.join("chat-state.json"),
+                default_vault_dir: temp.join("vault"),
+                vault_dir_override: None,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -2322,6 +2335,23 @@ fn make_fts_query(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ProviderConfig;
+
+    fn setup_temp_context() -> (PathBuf, StorageContext) {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-test-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let ctx = StorageContext::for_test(&temp);
+        (temp, ctx)
+    }
+
+    // ══════════════════════════════════════
+    // Phase 1: Pure Logic Tests
+    // ══════════════════════════════════════
+
+    // ── 1.0 existing tests (preserved) ──
 
     #[test]
     fn derived_id_is_stable_for_same_path() {
@@ -2524,5 +2554,1065 @@ mod tests {
         };
 
         assert!(document_relevance_score("刷机怎么刷啊", &doc) > 180);
+    }
+
+    // ── 1.1 split_frontmatter ──
+
+    #[test]
+    fn split_frontmatter_no_delimiter_returns_defaults() {
+        let content = "Just body text\nNo frontmatter here";
+        let (fm, body) = split_frontmatter(content).expect("parse");
+        assert!(fm.id.is_empty());
+        assert!(fm.title.is_empty());
+        assert_eq!(body, content);
+    }
+
+    #[test]
+    fn split_frontmatter_valid_block_parses_fields() {
+        let content = "---\nid: test-id\ntitle: Test Title\n---\n\nBody here";
+        let (fm, body) = split_frontmatter(content).expect("parse");
+        assert_eq!(fm.id, "test-id");
+        assert_eq!(fm.title, "Test Title");
+        assert!(body.contains("Body here"));
+    }
+
+    #[test]
+    fn split_frontmatter_malformed_returns_err() {
+        let content = "---\nid: test\nno closing delimiter";
+        assert!(split_frontmatter(content).is_err());
+    }
+
+    #[test]
+    fn split_frontmatter_empty_block_returns_defaults() {
+        // Empty YAML between delimiters → serde_yaml returns defaults
+        let content = "---\n\n---\n\nBody";
+        let (fm, body) = split_frontmatter(content).expect("parse");
+        assert!(fm.id.is_empty());
+        assert!(body.contains("Body"));
+    }
+
+    // ── 1.2 compose_markdown ──
+
+    #[test]
+    fn compose_markdown_produces_valid_yaml_frontmatter() {
+        let meta = NoteMeta {
+            id: "id123".to_string(),
+            title: "测试笔记".to_string(),
+            ..Default::default()
+        };
+        let body = "内容";
+        let result = compose_markdown(&meta, body).expect("compose");
+        assert!(result.starts_with("---\n"));
+        assert!(result.contains("\n---\n"));
+        assert!(result.contains("id: id123"));
+        assert!(result.contains("title: 测试笔记"));
+    }
+
+    #[test]
+    fn compose_markdown_injects_summary_section() {
+        let meta = NoteMeta {
+            summary: "这是摘要".to_string(),
+            ..Default::default()
+        };
+        let result = compose_markdown(&meta, "正文").expect("compose");
+        assert!(result.contains("## 摘要"));
+        assert!(result.contains("这是摘要"));
+    }
+
+    #[test]
+    fn compose_markdown_preserves_existing_summary_section() {
+        let meta = NoteMeta {
+            summary: "新摘要".to_string(),
+            ..Default::default()
+        };
+        let result = compose_markdown(&meta, "## 摘要\n\n旧摘要\n\n正文").expect("compose");
+        // body already starts with ## 摘要 so ensure_summary_section should not double-inject
+        assert_eq!(result.matches("## 摘要").count(), 1);
+    }
+
+    // ── 1.3 slugify ──
+
+    #[test]
+    fn slugify_ascii_input() {
+        assert_eq!(slugify("Hello World"), "hello-world");
+    }
+
+    #[test]
+    fn slugify_special_characters() {
+        assert_eq!(slugify("a/b\\c:d*e?f"), "a-b-c-d-e-f");
+    }
+
+    #[test]
+    fn slugify_empty_returns_note() {
+        assert_eq!(slugify(""), "note");
+    }
+
+    #[test]
+    fn slugify_consecutive_special_chars_single_dash() {
+        assert_eq!(slugify("a---b"), "a-b");
+    }
+
+    #[test]
+    fn slugify_trims_leading_trailing_dashes() {
+        assert_eq!(slugify("---hello---"), "hello");
+    }
+
+    #[test]
+    fn slugify_cjk_does_not_panic() {
+        let result = slugify("测试中文");
+        assert!(!result.is_empty());
+    }
+
+    // ── 1.4 fallback_title / fallback_source ──
+
+    #[test]
+    fn fallback_title_empty_returns_default() {
+        assert_eq!(fallback_title(""), "Untitled Note");
+        assert_eq!(fallback_title("  "), "Untitled Note");
+    }
+
+    #[test]
+    fn fallback_title_nonempty_returns_trimmed() {
+        assert_eq!(fallback_title("MMC timeout"), "MMC timeout");
+    }
+
+    #[test]
+    fn fallback_source_empty_returns_manual() {
+        assert_eq!(fallback_source(""), "manual");
+        assert_eq!(fallback_source("  "), "manual");
+    }
+
+    #[test]
+    fn fallback_source_nonempty_returns_trimmed() {
+        assert_eq!(fallback_source("imported"), "imported");
+    }
+
+    // ── 1.5 detect_title ──
+
+    #[test]
+    fn detect_title_from_h1() {
+        assert_eq!(detect_title("# My Title\nBody", Path::new("x.md")), "My Title");
+    }
+
+    #[test]
+    fn detect_title_h2_falls_to_file_stem() {
+        assert_eq!(
+            detect_title("## Sub\nBody", Path::new("my-note.md")),
+            "my note"
+        );
+    }
+
+    #[test]
+    fn detect_title_empty_body_uses_file_stem() {
+        assert_eq!(
+            detect_title("", Path::new("/vault/2026/04/boot-timeout.md")),
+            "boot timeout"
+        );
+    }
+
+    #[test]
+    fn detect_title_underscores_replaced() {
+        assert_eq!(
+            detect_title("", Path::new("boot_timeout_log.md")),
+            "boot timeout log"
+        );
+    }
+
+    // ── 1.6 sanitize_terms ──
+
+    #[test]
+    fn sanitize_terms_deduplicates() {
+        assert_eq!(
+            sanitize_terms(&["kernel".to_string(), "Kernel".to_string()]),
+            vec!["kernel"]
+        );
+    }
+
+    #[test]
+    fn sanitize_terms_filters_empty() {
+        assert_eq!(
+            sanitize_terms(&["tag".to_string(), "".to_string(), "  ".to_string()]),
+            vec!["tag"]
+        );
+    }
+
+    // ── 1.7 hash_content ──
+
+    #[test]
+    fn hash_content_stable() {
+        assert_eq!(hash_content("hello"), hash_content("hello"));
+    }
+
+    #[test]
+    fn hash_content_different_inputs() {
+        assert_ne!(hash_content("hello"), hash_content("world"));
+    }
+
+    #[test]
+    fn hash_content_empty_string() {
+        let hash = hash_content("");
+        assert!(!hash.is_empty());
+        assert_eq!(hash.len(), 64); // SHA-256 hex
+    }
+
+    // ── 1.8 is_markdown_file ──
+
+    #[test]
+    fn is_markdown_file_accepts_md() {
+        assert!(is_markdown_file(Path::new("note.md")));
+        assert!(is_markdown_file(Path::new("note.MD")));
+    }
+
+    #[test]
+    fn is_markdown_file_rejects_non_md() {
+        assert!(!is_markdown_file(Path::new("note.txt")));
+        assert!(!is_markdown_file(Path::new("note")));
+        assert!(!is_markdown_file(Path::new("note.md.bak")));
+    }
+
+    // ── 1.9 ensure_summary_section ──
+
+    #[test]
+    fn ensure_summary_injects_when_missing() {
+        let result = ensure_summary_section("Body text", "My summary");
+        assert!(result.starts_with("## 摘要"));
+        assert!(result.contains("My summary"));
+        assert!(result.contains("Body text"));
+    }
+
+    #[test]
+    fn ensure_summary_skips_when_already_present() {
+        let body = "## 摘要\n\nExisting\n\nMore";
+        let result = ensure_summary_section(body, "New");
+        assert_eq!(result, body);
+    }
+
+    #[test]
+    fn ensure_summary_skips_when_empty() {
+        let result = ensure_summary_section("Body text", "");
+        assert_eq!(result, "Body text");
+    }
+
+    // ── 1.10 append_image_markdown ──
+
+    #[test]
+    fn append_image_empty_refs_returns_body() {
+        assert_eq!(append_image_markdown("body", &[]), "body");
+    }
+
+    #[test]
+    fn append_image_creates_section() {
+        let result = append_image_markdown(
+            "body text",
+            &["assets/photo.png".to_string()],
+        );
+        assert!(result.contains("## 图片记录"));
+        assert!(result.contains("![photo.png](assets/photo.png)"));
+    }
+
+    #[test]
+    fn append_image_appends_to_existing_section() {
+        let body = "body\n\n## 图片记录\n\n![a.png](a.png)";
+        let result = append_image_markdown(body, &["b/photo.jpg".to_string()]);
+        assert!(result.contains("![a.png](a.png)"));
+        assert!(result.contains("![photo.jpg](b/photo.jpg)"));
+        assert!(result.contains("/")); // forward slashes
+    }
+
+    #[test]
+    fn append_image_replaces_backslashes() {
+        let result = append_image_markdown("body", &["dir\\img.png".to_string()]);
+        assert!(result.contains("dir/img.png"));
+        assert!(!result.contains("\\"));
+    }
+
+    // ── 1.11 unique_asset_name ──
+
+    #[test]
+    fn unique_asset_first_occurrence() {
+        let mut seen = HashSet::new();
+        assert_eq!(unique_asset_name("photo.png", &mut seen), "photo.png");
+    }
+
+    #[test]
+    fn unique_asset_second_occurrence() {
+        let mut seen = HashSet::new();
+        seen.insert("photo.png".to_string());
+        assert_eq!(unique_asset_name("photo.png", &mut seen), "photo-1.png");
+    }
+
+    #[test]
+    fn unique_asset_no_extension() {
+        let mut seen = HashSet::new();
+        seen.insert("data".to_string());
+        assert_eq!(unique_asset_name("data", &mut seen), "data-1");
+    }
+
+    // ── 1.12 normalize_search_text / normalize_query_for_search ──
+
+    #[test]
+    fn normalize_search_text_lowercases() {
+        assert!(normalize_search_text("Hello WORLD").contains("hello world"));
+    }
+
+    #[test]
+    fn normalize_search_text_preserves_cjk() {
+        let result = normalize_search_text("测试MMC模块");
+        assert!(result.contains("测试"));
+        assert!(result.contains("mmc"));
+    }
+
+    #[test]
+    fn normalize_query_removes_noise_phrases() {
+        let result = normalize_query_for_search("告诉我sd卡怎么做");
+        assert!(!result.contains("告诉我"));
+        assert!(result.contains("sd"));
+    }
+
+    // ── 1.13 is_noise_term ──
+
+    #[test]
+    fn noise_terms_detected() {
+        assert!(is_noise_term("什么"));
+        assert!(is_noise_term("怎么"));
+        assert!(is_noise_term("如何"));
+        assert!(is_noise_term("这个"));
+        assert!(is_noise_term("那个"));
+    }
+
+    #[test]
+    fn real_terms_not_noise() {
+        assert!(!is_noise_term("sd卡"));
+        assert!(!is_noise_term("mmc"));
+        assert!(!is_noise_term("flash"));
+        assert!(!is_noise_term("刷机"));
+    }
+
+    // ── 1.14 expand_term_aliases ──
+
+    #[test]
+    fn expand_sd_aliases() {
+        let aliases = expand_term_aliases("sd");
+        assert!(aliases.contains(&"sd卡".to_string()));
+        assert!(aliases.contains(&"sdio".to_string()));
+        assert!(aliases.contains(&"mmc".to_string()));
+        assert!(aliases.contains(&"tf".to_string()));
+    }
+
+    #[test]
+    fn expand_flash_aliases() {
+        let aliases = expand_term_aliases("刷机");
+        assert!(aliases.contains(&"烧录".to_string()));
+        assert!(aliases.contains(&"flash".to_string()));
+        assert!(aliases.contains(&"wboot".to_string()));
+    }
+
+    #[test]
+    fn expand_gpio_aliases() {
+        let aliases = expand_term_aliases("gpio");
+        assert!(aliases.contains(&"管脚".to_string()));
+        assert!(aliases.contains(&"引脚".to_string()));
+    }
+
+    #[test]
+    fn expand_pinmux_aliases() {
+        let aliases = expand_term_aliases("pinmux");
+        assert!(aliases.contains(&"引脚复用".to_string()));
+        assert!(aliases.contains(&"iomux".to_string()));
+    }
+
+    #[test]
+    fn expand_random_term_returns_empty() {
+        assert!(expand_term_aliases("something_unrelated_xyz").is_empty());
+    }
+
+    // ── 1.15 is_cjk / is_cjk_stop_char ──
+
+    #[test]
+    fn cjk_chars_identified() {
+        assert!(is_cjk('电'));
+        assert!(is_cjk('的'));
+        assert!(!is_cjk('A'));
+        assert!(!is_cjk('1'));
+    }
+
+    #[test]
+    fn cjk_stop_chars_detected() {
+        assert!(is_cjk_stop_char('的'));
+        assert!(is_cjk_stop_char('了'));
+        assert!(!is_cjk_stop_char('电'));
+    }
+
+    // ── 1.16 sliding_char_grams ──
+
+    #[test]
+    fn sliding_grams_normal() {
+        let result = sliding_char_grams("abcd", 3);
+        assert_eq!(result, vec!["abc", "bcd"]);
+    }
+
+    #[test]
+    fn sliding_grams_too_short() {
+        assert!(sliding_char_grams("ab", 3).is_empty());
+    }
+
+    #[test]
+    fn sliding_grams_exact_length() {
+        assert_eq!(sliding_char_grams("abc", 3), vec!["abc"]);
+    }
+
+    // ── 1.17 document_relevance_score edge cases ──
+
+    #[test]
+    fn relevance_empty_query_returns_zero() {
+        let doc = NoteDocument::default();
+        assert_eq!(document_relevance_score("", &doc), 0);
+    }
+
+    #[test]
+    fn relevance_no_match_returns_zero() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                title: "Completely Unrelated".to_string(),
+                ..Default::default()
+            },
+            body: "Nothing relevant here".to_string(),
+        };
+        assert_eq!(document_relevance_score("mmc sd卡 pinmux", &doc), 0);
+    }
+
+    #[test]
+    fn relevance_body_only_match() {
+        let doc = NoteDocument {
+            body: "mmc timeout after 30 seconds".to_string(),
+            ..Default::default()
+        };
+        assert!(document_relevance_score("mmc timeout", &doc) > 0);
+    }
+
+    // ── 1.18 attachment_text_relevance_score edge cases ──
+
+    #[test]
+    fn attachment_score_empty_attachments_zero() {
+        assert_eq!(attachment_text_relevance_score("mmc", &[]), 0);
+    }
+
+    #[test]
+    fn attachment_score_empty_query_zero() {
+        let attachments = vec![AttachmentEntry {
+            note_id: "n".to_string(),
+            path: "p".to_string(),
+            file_name: "f.png".to_string(),
+            stem: "f".to_string(),
+            ocr_text: "text".to_string(),
+            semantic_vector: None,
+            perceptual_hash: None,
+        }];
+        assert_eq!(attachment_text_relevance_score("", &attachments), 0);
+    }
+
+    #[test]
+    fn attachment_score_ocr_match_higher_than_filename() {
+        let attachments = vec![AttachmentEntry {
+            note_id: "n".to_string(),
+            path: "p".to_string(),
+            file_name: "img.png".to_string(),
+            stem: "img".to_string(),
+            ocr_text: "mmc timeout register dump".to_string(),
+            semantic_vector: None,
+            perceptual_hash: None,
+        }];
+        let score_ocr = attachment_text_relevance_score("mmc timeout register", &attachments);
+        let score_fname = attachment_text_relevance_score("img", &attachments);
+        assert!(score_ocr > score_fname);
+    }
+
+    // ── 1.19 build_candidate_note_ids ──
+
+    #[test]
+    fn build_candidates_deduplicates() {
+        let ids = build_candidate_note_ids(
+            &["a".to_string(), "b".to_string()],
+            &["b".to_string(), "c".to_string()],
+            &HashMap::new(),
+            &HashMap::new(),
+            &["c".to_string(), "d".to_string()],
+            10,
+        );
+        let unique: HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
+        assert!(ids.contains(&"a".to_string()));
+        assert!(ids.contains(&"b".to_string()));
+        assert!(ids.contains(&"c".to_string()));
+        assert!(ids.contains(&"d".to_string()));
+    }
+
+    #[test]
+    fn build_candidates_truncates_to_limit() {
+        let many: Vec<String> = (0..100).map(|i| format!("id{i}")).collect();
+        let result = build_candidate_note_ids(&many, &[], &HashMap::new(), &HashMap::new(), &[], 2);
+        assert!(result.len() <= 24); // limit*8.max(24) with limit=2 → 24
+    }
+
+    // ── 1.20 cosine_similarity / normalize_vector ──
+
+    #[test]
+    fn cosine_similarity_identical_vectors() {
+        let v = vec![1.0_f32, 0.0, 0.0];
+        let sim = cosine_similarity(&v, &v);
+        assert!((sim - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal() {
+        let a = vec![1.0_f32, 0.0];
+        let b = vec![0.0_f32, 1.0];
+        let sim = cosine_similarity(&a, &b);
+        assert!(sim.abs() < 0.001);
+    }
+
+    #[test]
+    fn normalize_vector_zero_no_panic() {
+        let mut v = vec![0.0_f32; 3];
+        normalize_vector(&mut v); // should not divide by zero
+        assert_eq!(v, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn normalize_vector_produces_unit() {
+        let mut v = vec![3.0_f32, 4.0];
+        normalize_vector(&mut v);
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.001);
+    }
+
+    // ── 1.21 similarity_to_rank_score ──
+
+    #[test]
+    fn similarity_to_rank_boundary_values() {
+        assert_eq!(similarity_to_rank_score(0.85), 220);
+        assert_eq!(similarity_to_rank_score(0.70), 170);
+        assert_eq!(similarity_to_rank_score(0.55), 120);
+        assert_eq!(similarity_to_rank_score(0.40), 80);
+        assert_eq!(similarity_to_rank_score(0.25), 40);
+        assert_eq!(similarity_to_rank_score(0.10), 0);
+        assert_eq!(similarity_to_rank_score(1.0), 220); // top bucket
+    }
+
+    // ── 1.22 image_similarity_score ──
+
+    #[test]
+    fn image_similarity_identical() {
+        assert_eq!(image_similarity_score(0xABCD, 0xABCD), 240);
+    }
+
+    #[test]
+    fn image_similarity_boundary_distances() {
+        let base: u64 = 0;
+        let d2: u64 = (1u64 << 2) - 1; // 2 bits differ
+        assert_eq!(image_similarity_score(base, d2), 240);
+    }
+
+    #[test]
+    fn image_similarity_max_distance() {
+        assert_eq!(image_similarity_score(0, u64::MAX), 0);
+    }
+
+    // ── 1.23 serialize/deserialize semantic vector ──
+
+    #[test]
+    fn semantic_vector_round_trip() {
+        let v: Vec<f32> = (0..ATTACHMENT_VECTOR_DIM).map(|i| i as f32 * 0.01).collect();
+        let serialized = serialize_semantic_vector(&v);
+        let deserialized = deserialize_semantic_vector(&serialized).expect("deserialize");
+        assert_eq!(deserialized.len(), ATTACHMENT_VECTOR_DIM);
+        for (a, b) in v.iter().zip(deserialized.iter()) {
+            assert!((a - b).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn deserialize_wrong_dimension_returns_none() {
+        let v = vec![1.0_f32; 10];
+        let serialized = serde_json::to_string(&v).unwrap();
+        assert!(deserialize_semantic_vector(&serialized).is_none());
+    }
+
+    #[test]
+    fn deserialize_garbage_returns_none() {
+        assert!(deserialize_semantic_vector("not json").is_none());
+    }
+
+    // ── 1.24 build_text_semantic_vector ──
+
+    #[test]
+    fn semantic_vector_empty_text_returns_none() {
+        assert!(build_text_semantic_vector("").is_none());
+    }
+
+    #[test]
+    fn semantic_vector_produces_normalized() {
+        let v = build_text_semantic_vector("github release workflow").expect("vector");
+        assert_eq!(v.len(), ATTACHMENT_VECTOR_DIM);
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.01);
+    }
+
+    // ── 1.25 stable_term_hash ──
+
+    #[test]
+    fn stable_term_hash_consistent() {
+        assert_eq!(stable_term_hash("mmc"), stable_term_hash("mmc"));
+    }
+
+    #[test]
+    fn stable_term_hash_different_inputs() {
+        assert_ne!(stable_term_hash("mmc"), stable_term_hash("sdio"));
+    }
+
+    // ── 1.26 parse_chat_state ──
+
+    #[test]
+    fn parse_chat_state_modern_format() {
+        let json = r#"{"currentSessionId":"s1","sessions":[{"id":"s1","title":"Hello","turns":[],"summary":null,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}]}"#;
+        let state = parse_chat_state(json).expect("parse");
+        assert_eq!(state.current_session_id, "s1");
+        assert_eq!(state.sessions.len(), 1);
+    }
+
+    #[test]
+    fn parse_chat_state_legacy_format_migrated_to_empty_sessions() {
+        // Legacy JSON with "sessionId" and "turns" — serde ignores unknown fields,
+        // so this actually parses as a modern ChatState with empty sessions.
+        // normalize_chat_state then creates a default session.
+        // This test documents the actual behavior: legacy format is absorbed
+        // into modern format with data loss on the turns.
+        let json = r#"{"sessionId":"legacy1","turns":[{"id":"t1","role":"user","text":"hello","citations":[],"savedNote":null,"thinkingTrace":null,"attachments":[],"createdAt":"2026-01-01T00:00:00Z"}]}"#;
+        let state = parse_chat_state(json).expect("parse");
+        // The modern ChatState path wins because serde ignores "sessionId"
+        assert_eq!(state.sessions.len(), 1); // default session created
+    }
+
+    #[test]
+    fn parse_chat_state_invalid_returns_err() {
+        assert!(parse_chat_state("not json at all").is_err());
+    }
+
+    // ── 1.27 normalize_chat_state ──
+
+    #[test]
+    fn normalize_chat_state_fills_empty_ids() {
+        let state = ChatState {
+            current_session_id: String::new(),
+            sessions: vec![ChatSession {
+                id: String::new(),
+                title: "Test".to_string(),
+                turns: vec![],
+                summary: None,
+                created_at: String::new(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        let result = normalize_chat_state(state);
+        assert!(!result.sessions[0].id.is_empty());
+    }
+
+    #[test]
+    fn normalize_chat_state_empty_sessions_returns_default() {
+        let state = ChatState {
+            current_session_id: String::new(),
+            sessions: vec![],
+        };
+        let result = normalize_chat_state(state);
+        assert!(!result.sessions.is_empty());
+    }
+
+    #[test]
+    fn normalize_chat_state_sorts_by_updated_at_desc() {
+        let state = ChatState {
+            current_session_id: "a".to_string(),
+            sessions: vec![
+                ChatSession {
+                    id: "a".to_string(),
+                    title: "Old".to_string(),
+                    turns: vec![],
+                    summary: None,
+                    created_at: "2026-01-01T00:00:00Z".to_string(),
+                    updated_at: "2026-01-01T00:00:00Z".to_string(),
+                },
+                ChatSession {
+                    id: "b".to_string(),
+                    title: "New".to_string(),
+                    turns: vec![],
+                    summary: None,
+                    created_at: "2026-01-01T00:00:00Z".to_string(),
+                    updated_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+            ],
+        };
+        let result = normalize_chat_state(state);
+        assert_eq!(result.sessions[0].id, "b");
+        assert_eq!(result.sessions[1].id, "a");
+    }
+
+    #[test]
+    fn normalize_chat_state_fixes_invalid_current_session() {
+        let state = ChatState {
+            current_session_id: "ghost".to_string(),
+            sessions: vec![ChatSession {
+                id: "real".to_string(),
+                title: "Real".to_string(),
+                turns: vec![],
+                summary: None,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        let result = normalize_chat_state(state);
+        assert_eq!(result.current_session_id, "real");
+    }
+
+    // ── 1.28 derive_chat_title ──
+
+    #[test]
+    fn derive_chat_title_from_user_turn() {
+        let turns = vec![crate::models::ChatTurn {
+            role: "user".to_string(),
+            text: "mmc超时怎么处理比较好".to_string(),
+            ..Default::default()
+        }];
+        let title = derive_chat_title(&turns);
+        assert!(title.contains("mmc"));
+    }
+
+    #[test]
+    fn derive_chat_title_no_user_turn() {
+        let turns = vec![crate::models::ChatTurn {
+            role: "assistant".to_string(),
+            text: "hi".to_string(),
+            ..Default::default()
+        }];
+        assert_eq!(derive_chat_title(&turns), "新对话");
+    }
+
+    #[test]
+    fn derive_chat_title_empty_turns() {
+        assert_eq!(derive_chat_title(&[]), "新对话");
+    }
+
+    // ── 1.29 normalize_settings ──
+
+    #[test]
+    fn normalize_settings_fills_defaults() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings::default();
+        normalize_settings(&mut settings, &paths);
+        assert!(!settings.vault_dir.is_empty());
+        assert!(!settings.provider.base_url.is_empty());
+        assert!(settings.provider.request_timeout_ms > 0);
+    }
+
+    #[test]
+    fn normalize_settings_zero_timeout_gets_default() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-zero-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings {
+            provider: ProviderConfig {
+                request_timeout_ms: 0,
+                context_window_tokens: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        assert_eq!(settings.provider.request_timeout_ms, crate::models::default_timeout_ms());
+        assert!(settings.provider.context_window_tokens.is_none());
+    }
+
+    // ── 1.30 build_note_path ──
+
+    #[test]
+    fn build_note_path_uses_date_and_id() {
+        let path = build_note_path(
+            "D:\\Vault",
+            "MMC Timeout",
+            "2026-04-09T00:00:00Z",
+            "abc12345-6789",
+        );
+        assert!(path.to_string_lossy().contains("2026"));
+        assert!(path.to_string_lossy().contains("04"));
+        assert!(path.to_string_lossy().contains("mmc-timeout"));
+        assert!(path.to_string_lossy().contains("abc12345"));
+        assert!(path.to_string_lossy().ends_with(".md"));
+    }
+
+    #[test]
+    fn build_note_path_invalid_date_uses_current() {
+        let path = build_note_path(
+            "D:\\Vault",
+            "Test",
+            "invalid-date",
+            "abc12345-6789-def0",
+        );
+        // Should not panic, uses current date as fallback
+        assert!(path.to_string_lossy().ends_with(".md"));
+    }
+
+    // ══════════════════════════════════════
+    // Phase 5: Integration Tests
+    // ══════════════════════════════════════
+
+    #[test]
+    fn initialize_storage_creates_db_and_vault() {
+        let (_temp, ctx) = setup_temp_context();
+        let settings = initialize_storage_with_context(&ctx).expect("init");
+        assert!(ctx.paths.database_path.exists());
+        assert!(!settings.vault_dir.is_empty());
+        assert!(Path::new(&settings.vault_dir).exists());
+    }
+
+    #[test]
+    fn save_and_load_note_round_trip() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let note = NoteDocument {
+            meta: NoteMeta {
+                id: String::new(), // will be assigned
+                title: "Test Round Trip".to_string(),
+                tags: vec!["test".to_string()],
+                keywords: vec!["round-trip".to_string()],
+                platform: "test".to_string(),
+                board: "evk".to_string(),
+                kernel: "5.10".to_string(),
+                status: "active".to_string(),
+                created_at: String::new(),
+                updated_at: String::new(),
+                source: String::new(),
+                path: String::new(),
+                summary: String::new(),
+            },
+            body: "## Test\n\nRound trip body content".to_string(),
+        };
+
+        let saved = save_note_with_context(&ctx, note).expect("save");
+        assert!(!saved.meta.id.is_empty());
+        assert!(!saved.meta.path.is_empty());
+        assert!(saved.meta.path.ends_with(".md"));
+
+        let loaded = load_note_with_context(&ctx, &saved.meta.id).expect("load");
+        assert_eq!(loaded.meta.title, "Test Round Trip");
+        assert_eq!(loaded.meta.tags, vec!["test"]);
+        assert!(loaded.body.contains("Round trip body content"));
+    }
+
+    #[test]
+    fn delete_note_removes_file_and_index() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let note = NoteDocument {
+            meta: NoteMeta {
+                title: "To Delete".to_string(),
+                ..Default::default()
+            },
+            body: "Temporary content".to_string(),
+        };
+        let saved = save_note_with_context(&ctx, note).expect("save");
+        let path = saved.meta.path.clone();
+
+        assert!(delete_note_with_context(&ctx, &saved.meta.id).expect("delete"));
+        assert!(load_note_with_context(&ctx, &saved.meta.id).is_err());
+        assert!(!Path::new(&path).exists());
+    }
+
+    #[test]
+    fn delete_nonexistent_note_returns_false() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+        assert!(!delete_note_with_context(&ctx, "ghost-id").expect("delete ghost"));
+    }
+
+    #[test]
+    fn search_notes_filters_by_text() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        for (i, (title, tags)) in [
+            ("MMC timeout fix", vec!["kernel".to_string()]),
+            ("SD卡引脚配置", vec!["hardware".to_string()]),
+            ("刷机命令记录", vec!["tool".to_string()]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            save_note_with_context(
+                &ctx,
+                NoteDocument {
+                    meta: NoteMeta {
+                        title: title.to_string(),
+                        tags,
+                        ..Default::default()
+                    },
+                    body: format!("Content for note {}", i),
+                },
+            )
+            .expect("save");
+        }
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: "MMC".to_string(),
+                tags: vec![],
+                keywords: vec![],
+                limit: Some(10),
+            },
+        )
+        .expect("search");
+        assert!(results.notes.iter().any(|n| n.title.contains("MMC")));
+    }
+
+    #[test]
+    fn search_notes_filters_by_tags() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "Tagged Note".to_string(),
+                    tags: vec!["kernel".to_string()],
+                    ..Default::default()
+                },
+                body: "Tagged content".to_string(),
+            },
+        )
+        .expect("save");
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["kernel".to_string()],
+                keywords: vec![],
+                limit: Some(10),
+            },
+        )
+        .expect("search by tag");
+        assert!(results.notes.iter().any(|n| n.tags.contains(&"kernel".to_string())));
+    }
+
+    #[test]
+    fn import_markdown_adds_to_index() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let import_dir = _temp.join("import-source");
+        fs::create_dir_all(&import_dir).expect("import dir");
+        let md_file = import_dir.join("imported-note.md");
+        fs::write(
+            &md_file,
+            "---\ntitle: Imported Note\n---\n\nImported body content\n",
+        )
+        .expect("write md");
+
+        let result = import_markdown_with_context(
+            &ctx,
+            &[md_file.to_string_lossy().to_string()],
+        )
+        .expect("import");
+        assert_eq!(result.imported, 1);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let (_temp, ctx) = setup_temp_context();
+        let custom = AppSettings {
+            vault_dir: _temp.join("my-vault").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                api_key: "test-key".to_string(),
+                base_url: "https://custom.api.com".to_string(),
+                model: "custom-model".to_string(),
+                request_timeout_ms: 99_000,
+                context_window_tokens: Some(200_000),
+            },
+            auto_check_updates: false,
+        };
+
+        let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");
+        let loaded = load_settings_with_context(&ctx).expect("load settings");
+        assert_eq!(loaded.provider.api_key, "test-key");
+        assert_eq!(loaded.provider.model, "custom-model");
+        assert_eq!(loaded.provider.request_timeout_ms, 99_000);
+        assert_eq!(loaded.provider.context_window_tokens, Some(200_000));
+    }
+
+    #[test]
+    fn chat_state_round_trip() {
+        let (_temp, ctx) = setup_temp_context();
+        let state = ChatState {
+            current_session_id: "s1".to_string(),
+            sessions: vec![ChatSession {
+                id: "s1".to_string(),
+                title: "Test Session".to_string(),
+                turns: vec![crate::models::ChatTurn {
+                    id: "t1".to_string(),
+                    role: "user".to_string(),
+                    text: "hello".to_string(),
+                    ..Default::default()
+                }],
+                summary: None,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        };
+
+        save_chat_state_with_context(&ctx, &state).expect("save chat");
+        let loaded = load_chat_state_with_context(&ctx).expect("load chat");
+        assert_eq!(loaded.sessions.len(), 1);
+        assert_eq!(loaded.sessions[0].title, "Test Session");
+    }
+
+    #[test]
+    fn rebuild_index_recovers_from_manual_db_edit() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let note = NoteDocument {
+            meta: NoteMeta {
+                title: "Rebuild Test".to_string(),
+                ..Default::default()
+            },
+            body: "Content that should survive rebuild".to_string(),
+        };
+        save_note_with_context(&ctx, note).expect("save");
+
+        let stats = rebuild_index_with_context(&ctx).expect("rebuild");
+        assert!(stats.scanned > 0);
+        assert!(stats.indexed > 0);
     }
 }

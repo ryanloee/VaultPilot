@@ -392,3 +392,231 @@ pub fn default_ai_source() -> String {
 pub fn default_auto_check_updates() -> bool {
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_settings_round_trips_with_camel_case() {
+        let settings = AppSettings {
+            vault_dir: "D:\\Vault".to_string(),
+            provider: ProviderConfig {
+                api_key: "test-key".to_string(),
+                base_url: "https://api.example.com".to_string(),
+                model: "test-model".to_string(),
+                request_timeout_ms: 30_000,
+                context_window_tokens: Some(128_000),
+            },
+            auto_check_updates: false,
+        };
+        let json = serde_json::to_string(&settings).expect("serialize");
+        assert!(json.contains("\"vaultDir\""));
+        assert!(json.contains("\"apiKey\""));
+        assert!(json.contains("\"baseUrl\""));
+        assert!(json.contains("\"requestTimeoutMs\""));
+        assert!(json.contains("\"contextWindowTokens\""));
+        assert!(json.contains("\"autoCheckUpdates\""));
+
+        let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.vault_dir, settings.vault_dir);
+        assert_eq!(parsed.provider.api_key, settings.provider.api_key);
+        assert_eq!(parsed.provider.context_window_tokens, Some(128_000));
+    }
+
+    #[test]
+    fn note_document_round_trips_all_fields() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                id: "n1".to_string(),
+                title: "Test Note".to_string(),
+                tags: vec!["tag1".to_string()],
+                keywords: vec!["kw1".to_string()],
+                platform: "arm".to_string(),
+                board: "evk".to_string(),
+                kernel: "5.10".to_string(),
+                status: "active".to_string(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-02T00:00:00Z".to_string(),
+                source: "manual".to_string(),
+                path: "/vault/note.md".to_string(),
+                summary: "A test note".to_string(),
+            },
+            body: "Some content".to_string(),
+        };
+        let json = serde_json::to_string(&doc).expect("serialize");
+        let parsed: NoteDocument = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.meta.id, "n1");
+        assert_eq!(parsed.meta.tags, vec!["tag1"]);
+        assert_eq!(parsed.body, "Some content");
+    }
+
+    #[test]
+    fn chat_state_round_trips_with_nested_sessions() {
+        let state = ChatState {
+            current_session_id: "s1".to_string(),
+            sessions: vec![ChatSession {
+                id: "s1".to_string(),
+                title: "Session One".to_string(),
+                turns: vec![ChatTurn {
+                    id: "t1".to_string(),
+                    role: "user".to_string(),
+                    text: "hello".to_string(),
+                    citations: vec![AnswerCitation {
+                        note_id: "n1".to_string(),
+                        title: "Note".to_string(),
+                        path: "/n.md".to_string(),
+                        snippet: "snippet".to_string(),
+                    }],
+                    saved_note: None,
+                    thinking_trace: Some(ThinkingTrace {
+                        summary: "thought".to_string(),
+                        steps: vec![ThinkingTraceStep {
+                            title: "step".to_string(),
+                            detail: "detail".to_string(),
+                        }],
+                    }),
+                    attachments: vec![],
+                    created_at: "2026-01-01T00:00:00Z".to_string(),
+                }],
+                summary: Some(ConversationSummary {
+                    text: "summary".to_string(),
+                    generated_at: "2026-01-01T00:00:00Z".to_string(),
+                    covered_turn_count: 2,
+                    compression_count: 1,
+                }),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&state).expect("serialize");
+        assert!(json.contains("\"currentSessionId\""));
+        assert!(json.contains("\"thinkingTrace\""));
+        assert!(json.contains("\"coveredTurnCount\""));
+
+        let parsed: ChatState = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.current_session_id, "s1");
+        assert_eq!(parsed.sessions[0].turns[0].citations.len(), 1);
+        assert!(parsed.sessions[0].summary.is_some());
+    }
+
+    #[test]
+    fn grounded_answer_handles_optional_fields() {
+        let with_none = GroundedAnswer {
+            answer: "ok".to_string(),
+            citations: vec![],
+            saved_note: None,
+            thinking_trace: None,
+            context_status: None,
+            used_context_count: 0,
+        };
+        let json = serde_json::to_string(&with_none).expect("serialize");
+        let parsed: GroundedAnswer = serde_json::from_str(&json).expect("deserialize");
+        assert!(parsed.saved_note.is_none());
+        assert!(parsed.thinking_trace.is_none());
+
+        let with_some = GroundedAnswer {
+            answer: "ok".to_string(),
+            citations: vec![],
+            saved_note: Some(NoteMeta::default()),
+            thinking_trace: Some(ThinkingTrace {
+                summary: "s".to_string(),
+                steps: vec![],
+            }),
+            context_status: Some(ContextStatus {
+                model: "m".to_string(),
+                context_window_tokens: 100,
+                live_tokens: 50,
+                threshold_tokens: 95,
+                threshold_percent: 95,
+                usage_percent: 50.0,
+                source: "test".to_string(),
+                precise: true,
+                last_request_input_tokens: Some(50),
+                last_request_output_tokens: Some(100),
+            }),
+            used_context_count: 3,
+        };
+        let json2 = serde_json::to_string(&with_some).expect("serialize");
+        let parsed2: GroundedAnswer = serde_json::from_str(&json2).expect("deserialize");
+        assert!(parsed2.saved_note.is_some());
+        assert!(parsed2.thinking_trace.is_some());
+        assert_eq!(parsed2.used_context_count, 3);
+    }
+
+    #[test]
+    fn search_query_handles_optional_limit() {
+        let no_limit = SearchQuery {
+            text: "test".to_string(),
+            tags: vec![],
+            keywords: vec![],
+            limit: None,
+        };
+        let json = serde_json::to_string(&no_limit).expect("serialize");
+        // serde serializes Option<T> as null when None
+        assert!(json.contains("\"limit\":null"));
+
+        let with_limit = SearchQuery {
+            text: "test".to_string(),
+            tags: vec![],
+            keywords: vec![],
+            limit: Some(10),
+        };
+        let json2 = serde_json::to_string(&with_limit).expect("serialize");
+        assert!(json2.contains("\"limit\":10"));
+
+        // Round-trip both
+        let parsed_none: SearchQuery = serde_json::from_str(&json).expect("deserialize none");
+        assert!(parsed_none.limit.is_none());
+        let parsed_some: SearchQuery = serde_json::from_str(&json2).expect("deserialize some");
+        assert_eq!(parsed_some.limit, Some(10));
+    }
+
+    #[test]
+    fn structured_note_draft_default_source_is_empty() {
+        let draft = StructuredNoteDraft::default();
+        // Default trait gives empty string; "captured" comes from serde default
+        assert!(draft.source.is_empty());
+        // Verify serde default when deserializing
+        let json = "{}";
+        let from_json: StructuredNoteDraft = serde_json::from_str(json).expect("parse");
+        assert_eq!(from_json.source, "captured");
+    }
+
+    #[test]
+    fn default_values_are_correct() {
+        let settings = AppSettings::default();
+        assert!(settings.vault_dir.is_empty());
+        assert_eq!(settings.provider.base_url, default_base_url());
+        assert_eq!(settings.provider.model, default_model());
+        assert_eq!(settings.provider.request_timeout_ms, default_timeout_ms());
+        assert!(settings.provider.context_window_tokens.is_none());
+        assert!(settings.auto_check_updates);
+
+        assert_eq!(default_base_url(), "https://api.anthropic.com/v1/messages");
+        assert_eq!(default_model(), "claude-3-5-sonnet-latest");
+        assert_eq!(default_timeout_ms(), 60_000);
+        assert_eq!(default_ai_source(), "captured");
+        assert!(default_auto_check_updates());
+    }
+
+    #[test]
+    fn import_result_and_index_stats_serialize() {
+        let import = ImportResult {
+            imported: 3,
+            skipped: 1,
+            errors: vec!["err".to_string()],
+        };
+        let json = serde_json::to_string(&import).expect("serialize");
+        assert!(json.contains("\"imported\":3"));
+        assert!(json.contains("\"skipped\":1"));
+
+        let stats = IndexStats {
+            scanned: 10,
+            indexed: 8,
+            removed: 2,
+        };
+        let json2 = serde_json::to_string(&stats).expect("serialize");
+        assert!(json2.contains("\"indexed\":8"));
+    }
+}

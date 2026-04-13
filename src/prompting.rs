@@ -229,7 +229,6 @@ pub fn tool_call_system_prompt() -> String {
          - list_notes: inspect recent notes to answer overview-style questions about the library.\n\
          - list_directory: inspect a local directory on the machine.\n\
          - read_file: read a local file on the machine.\n\
-         - run_command: run a local shell command when system inspection is needed.\n\
          - save_note: store the user's content as a normalized note draft.\n\
          You may be called repeatedly after prior tool executions, so use the tool history to decide the next step.\n\
          Return strict JSON only, with no markdown fence.",
@@ -246,23 +245,20 @@ pub fn tool_call_user_prompt(
 ) -> String {
     format!(
         "Return strict JSON in this exact shape:\n\
-         {{\"tool\":\"none|search_notes|list_notes|list_directory|read_file|run_command|save_note\",\"query\":\"\",\"path\":\"\",\"command\":\"\",\"cwd\":\"\",\"limit\":6,\"noteDraft\":null}}\n\
+         {{\"tool\":\"none|search_notes|list_notes|list_directory|read_file|save_note\",\"query\":\"\",\"path\":\"\",\"limit\":6,\"noteDraft\":null}}\n\
          Decision order:\n\
          1. If the user's primary intent is to store, remember, log, or add content to the knowledge base, use save_note.\n\
          2. If the user provides a concrete local path and asks to inspect, check, list, read, verify, or see what is under it, use list_directory for a directory or read_file for a file.\n\
          3. If the user asks what is in the library or what notes exist, use list_notes.\n\
          4. If the user asks about previous fixes, commands, similar cases, procedures, or prior recorded work, use search_notes.\n\
-         5. If the user needs live machine inspection that is better served by a shell command, use run_command.\n\
-         6. Use none only for obvious greetings, thanks, identity questions, or turns answerable from recent conversation alone.\n\
+         5. Use none only for obvious greetings, thanks, identity questions, or turns answerable from recent conversation alone.\n\
          Rules:\n\
          - Choose exactly one next action.\n\
          - When the user asks about a specific local path, prefer path inspection tools over search_notes.\n\
          - Use save_note only when the user explicitly wants content stored; do not save just because the message contains commands or steps.\n\
          - Use list_directory to inspect local folders when the user asks about files, directories, projects, logs, or a specific path.\n\
          - Use read_file after you already know a concrete file path and need the file contents.\n\
-         - Use run_command only when filesystem tools are insufficient.\n\
          - Never select list_directory or read_file with an empty path.\n\
-         - Never select run_command with an empty command.\n\
          - Avoid repeating the same tool with the same arguments if the prior tool results already answered the question.\n\
          - If prior tool results already contain save_note, do not call save_note again in the same turn. Choose none.\n\
          - If prior tool results already contain the same successful tool call with the same arguments, choose none.\n\
@@ -272,8 +268,6 @@ pub fn tool_call_user_prompt(
          - Use search_notes for previous fixes, commands, similar cases, technical operations, troubleshooting, procedures, and retrieval from past work.\n\
          - query should be filled only for search_notes.\n\
          - path should be filled only for list_directory or read_file.\n\
-         - command should be filled only for run_command.\n\
-         - cwd is optional and used only for run_command.\n\
          - limit should be between 3 and 8.\n\
          - Do not answer the user yet.\n\n\
          Recent conversation:\n{}\n\n\
@@ -511,7 +505,7 @@ mod tests {
         assert!(prompt.contains("search_notes"));
         assert!(prompt.contains("list_notes"));
         assert!(prompt.contains("save_note"));
-        assert!(prompt.contains("run_command"));
+        assert!(!prompt.contains("run_command"));
         assert!(prompt.contains("specific local path"));
         assert!(prompt.contains("\"source\":\"captured\""));
     }

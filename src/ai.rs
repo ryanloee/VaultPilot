@@ -42,26 +42,11 @@ struct ModelResponse {
 #[derive(Debug, Clone)]
 pub enum AssistantToolCall {
     None,
-    SearchNotes {
-        query: String,
-        limit: usize,
-    },
-    ListNotes {
-        limit: usize,
-    },
-    ListDirectory {
-        path: String,
-    },
-    ReadFile {
-        path: String,
-    },
-    RunCommand {
-        command: String,
-        cwd: Option<String>,
-    },
-    SaveNote {
-        draft: StructuredNoteDraft,
-    },
+    SearchNotes { query: String, limit: usize },
+    ListNotes { limit: usize },
+    ListDirectory { path: String },
+    ReadFile { path: String },
+    SaveNote { draft: Box<StructuredNoteDraft> },
 }
 
 #[derive(Debug, Serialize)]
@@ -175,10 +160,6 @@ struct ToolCallResponse {
     query: String,
     #[serde(default)]
     path: String,
-    #[serde(default)]
-    command: String,
-    #[serde(default)]
-    cwd: String,
     #[serde(default = "default_limit")]
     limit: usize,
     #[serde(default)]
@@ -536,20 +517,14 @@ fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToolCall> {
         "read_file" => Ok(AssistantToolCall::ReadFile {
             path: parsed.path.trim().to_string(),
         }),
-        "run_command" => Ok(AssistantToolCall::RunCommand {
-            command: parsed.command.trim().to_string(),
-            cwd: if parsed.cwd.trim().is_empty() {
-                None
-            } else {
-                Some(parsed.cwd.trim().to_string())
-            },
-        }),
         "save_note" => {
             let draft = parsed
                 .note_draft
                 .map(normalize_draft)
                 .ok_or_else(|| anyhow!("save_note was selected but noteDraft is missing"))?;
-            Ok(AssistantToolCall::SaveNote { draft })
+            Ok(AssistantToolCall::SaveNote {
+                draft: Box::new(draft),
+            })
         }
         other => Err(anyhow!("unknown tool selected by model: {other}")),
     }
@@ -741,7 +716,7 @@ async fn send_request_with_temperature(
     for attempt in 0..3 {
         let payload = AnthropicRequest {
             model: &provider.model,
-            max_tokens: 1800,
+            max_tokens: 8192,
             temperature,
             system,
             messages: vec![AnthropicMessage {
@@ -1027,9 +1002,17 @@ mod tests {
 
     #[test]
     fn parses_list_notes_tool_call() {
+        /*
         let tool = parse_tool_call(
             "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
             "资料库里有什么",
+        )
+        .expect("tool");
+        assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
+        */
+        let tool = parse_tool_call(
+            "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
+            "list notes",
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
@@ -1058,13 +1041,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_run_command_tool_call() {
-        let tool = parse_tool_call(
+    fn rejects_run_command_tool_call() {
+        assert!(parse_tool_call(
             "{\"tool\":\"run_command\",\"command\":\"dir\",\"cwd\":\"\",\"noteDraft\":null}",
             "列出文件",
         )
-        .expect("tool");
-        assert!(matches!(tool, AssistantToolCall::RunCommand { command, .. } if command == "dir"));
+        .is_err());
     }
 
     #[test]

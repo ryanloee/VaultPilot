@@ -5,8 +5,6 @@ pub mod storage;
 
 use std::fs;
 use std::path::Path;
-use std::process::Stdio;
-use std::time::Duration;
 
 use ai::AssistantToolCall;
 use chrono::Utc;
@@ -17,11 +15,9 @@ use models::{
 };
 use storage::{
     initialize_storage_with_context, list_notes_with_context, load_chat_state_with_context,
-    load_context_notes_with_context, load_note_with_context, save_chat_state_with_context,
-    save_note_with_images_with_context, StorageContext,
+    load_context_notes_with_context, load_note_with_context, ocr_image_text,
+    save_chat_state_with_context, save_note_with_images_with_context, StorageContext,
 };
-use tokio::process::Command as TokioCommand;
-use tokio::time::timeout;
 use uuid::Uuid;
 
 pub async fn compress_chat_history_with_context(
@@ -54,6 +50,48 @@ pub async fn compress_chat_history_with_context(
 const CONTEXT_COMPRESSION_THRESHOLD: f64 = 0.95;
 const RECENT_TURNS_AFTER_COMPRESSION: usize = 8;
 const IMAGE_ATTACHMENT_TOKEN_ESTIMATE: u64 = 1_200;
+const IMAGE_ONLY_PROMPT: &str = "请结合我发送的图片理解并回复。";
+const OCR_SECTION_HEADER: &str = "[图片文字识别结果]:";
+
+fn build_effective_question(question: &str, image_paths: &[String]) -> String {
+    let mut prompt = if question.trim().is_empty() {
+        IMAGE_ONLY_PROMPT.to_string()
+    } else {
+        question.trim().to_string()
+    };
+
+    if image_paths.is_empty() || prompt.contains(OCR_SECTION_HEADER) {
+        return prompt;
+    }
+
+    let mut ocr_parts = Vec::new();
+    for image_path in image_paths {
+        if let Ok(text) = ocr_image_text(Path::new(image_path)) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                ocr_parts.push(trimmed.to_string());
+            }
+        }
+    }
+
+    if !ocr_parts.is_empty() {
+        prompt = append_ocr_text_to_prompt(prompt, &ocr_parts);
+    }
+
+    prompt
+}
+
+fn append_ocr_text_to_prompt(mut prompt: String, ocr_parts: &[String]) -> String {
+    if ocr_parts.is_empty() {
+        return prompt;
+    }
+
+    prompt.push_str("\n\n");
+    prompt.push_str(OCR_SECTION_HEADER);
+    prompt.push('\n');
+    prompt.push_str(&ocr_parts.join("\n"));
+    prompt
+}
 
 pub async fn chat_with_ai_with_context(
     context: &StorageContext,
@@ -71,11 +109,7 @@ pub async fn chat_with_ai_with_context(
         return Err("question is empty".to_string());
     }
 
-    let prompt = if trimmed_question.is_empty() {
-        "请结合我发送的图片理解并回复。".to_string()
-    } else {
-        trimmed_question.clone()
-    };
+    let prompt = build_effective_question(&trimmed_question, &images);
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {
@@ -139,8 +173,14 @@ pub async fn ask_with_ai_with_context(
 ) -> Result<GroundedAnswer, String> {
     let settings = initialize_storage_with_context(context).map_err(|error| error.to_string())?;
     let images = image_paths.unwrap_or_default();
+    let raw_question = question.trim().to_string();
+    if raw_question.is_empty() && images.is_empty() {
+        return Err("question is empty".to_string());
+    }
+
+    let effective_question = build_effective_question(&raw_question, &images);
     let history = history.unwrap_or_default();
-    let session_memory_question = looks_like_session_memory_question(&question);
+    let session_memory_question = looks_like_session_memory_question(&raw_question);
     let has_local_notes = !list_notes_with_context(context)
         .map_err(|error| error.to_string())?
         .is_empty();
@@ -157,15 +197,20 @@ pub async fn ask_with_ai_with_context(
             .map(ToolExecution::render_for_model)
             .collect::<Vec<_>>();
 
-        let selection =
-            ai::select_tool_call(&settings, &question, &images, &history, &tool_history)
-                .await
-                .map_err(|error| error.to_string())?;
+        let selection = ai::select_tool_call(
+            &settings,
+            &effective_question,
+            &images,
+            &history,
+            &tool_history,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         usage = merge_usage(usage, selection.usage);
 
         let forced_local_path_tool =
-            if round == 0 && tool_results.is_empty() && !looks_like_record_request(&question) {
-                preferred_explicit_path_tool(&question)
+            if round == 0 && tool_results.is_empty() && !looks_like_record_request(&raw_question) {
+                preferred_explicit_path_tool(&raw_question)
             } else {
                 None
             };
@@ -174,25 +219,26 @@ pub async fn ask_with_ai_with_context(
             && round == 0
             && matches!(selection.tool_call, AssistantToolCall::None)
             && has_local_notes
-            && !looks_like_small_talk(&question)
+            && !looks_like_small_talk(&raw_question)
             && !session_memory_question;
 
         let tool_call = if let Some(path_tool) = forced_local_path_tool {
             path_tool
         } else if forced_search {
             AssistantToolCall::SearchNotes {
-                query: question.clone(),
+                query: effective_question.clone(),
                 limit: 6,
             }
         } else {
             selection.tool_call
         };
 
-        if has_matching_tool_execution(&tool_results, &tool_call, &settings) {
+        if has_matching_tool_execution(&tool_results, &tool_call) {
             emit_status("responding", "Reusing previous tool result".to_string());
-            return finalize_grounded_answer(
+            return finalize_checked_grounded_answer(
                 &settings,
-                &question,
+                &raw_question,
+                &effective_question,
                 &history,
                 &images,
                 &docs,
@@ -207,9 +253,10 @@ pub async fn ask_with_ai_with_context(
         match tool_call {
             AssistantToolCall::None => {
                 emit_status("responding", "Preparing answer".to_string());
-                return finalize_grounded_answer(
+                return finalize_checked_grounded_answer(
                     &settings,
-                    &question,
+                    &raw_question,
+                    &effective_question,
                     &history,
                     &images,
                     &docs,
@@ -310,40 +357,11 @@ pub async fn ask_with_ai_with_context(
                     is_error,
                 ));
             }
-            AssistantToolCall::RunCommand { command, cwd } => {
-                let effective_cwd = cwd.or_else(|| {
-                    if settings.vault_dir.trim().is_empty() {
-                        None
-                    } else {
-                        Some(settings.vault_dir.clone())
-                    }
-                });
-                emit_status("executing", format!("Running command: {}", command));
-                let result = run_command_result(&command, effective_cwd.as_deref()).await;
-                let is_error = result.is_err();
-                let output = match result {
-                    Ok(output) => output,
-                    Err(error) => format!("tool error: {}", error),
-                };
-                tool_results.push(ToolExecution::new(
-                    "run_command",
-                    match &effective_cwd {
-                        Some(dir) => format!(
-                            "command={}
-cwd={}",
-                            command, dir
-                        ),
-                        None => format!("command={}", command),
-                    },
-                    output,
-                    is_error,
-                ));
-            }
             AssistantToolCall::SaveNote { draft } => {
                 emit_status("saving", "Saving generated note".to_string());
                 let saved = save_note_with_images_with_context(
                     context,
-                    draft_to_note_document(draft),
+                    draft_to_note_document(*draft),
                     &images,
                 )
                 .map_err(|error| error.to_string())?;
@@ -363,9 +381,10 @@ Saved summary: {}",
                 ));
 
                 emit_status("responding", "Preparing final answer".to_string());
-                return finalize_grounded_answer(
+                return finalize_checked_grounded_answer(
                     &settings,
-                    &question,
+                    &raw_question,
+                    &effective_question,
                     &history,
                     &images,
                     &docs,
@@ -380,9 +399,10 @@ Saved summary: {}",
     }
 
     emit_status("responding", "Preparing final answer".to_string());
-    finalize_grounded_answer(
+    finalize_checked_grounded_answer(
         &settings,
-        &question,
+        &raw_question,
+        &effective_question,
         &history,
         &images,
         &docs,
@@ -434,12 +454,51 @@ async fn finalize_grounded_answer(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn finalize_checked_grounded_answer(
+    settings: &AppSettings,
+    raw_question: &str,
+    effective_question: &str,
+    history: &[ConversationTurn],
+    images: &[String],
+    docs: &[NoteDocument],
+    tool_results: &[ToolExecution],
+    saved_note: Option<NoteMeta>,
+    usage: ai::RequestUsage,
+    forced_search: bool,
+) -> Result<GroundedAnswer, String> {
+    let answer = finalize_grounded_answer(
+        settings,
+        effective_question,
+        history,
+        images,
+        docs,
+        tool_results,
+        saved_note,
+        usage,
+        forced_search,
+    )
+    .await?;
+
+    require_saved_note_for_record_request(raw_question, answer)
+}
+
+fn require_saved_note_for_record_request(
+    question: &str,
+    answer: GroundedAnswer,
+) -> Result<GroundedAnswer, String> {
+    if looks_like_record_request(question) && answer.saved_note.is_none() {
+        return Err("record request did not produce a saved note".to_string());
+    }
+
+    Ok(answer)
+}
+
 fn has_matching_tool_execution(
     tool_results: &[ToolExecution],
     tool_call: &AssistantToolCall,
-    settings: &AppSettings,
 ) -> bool {
-    let Some((name, input)) = planned_tool_identity(tool_call, settings) else {
+    let Some((name, input)) = planned_tool_identity(tool_call) else {
         return false;
     };
 
@@ -448,10 +507,7 @@ fn has_matching_tool_execution(
         .any(|item| item.name == name && item.input == input)
 }
 
-fn planned_tool_identity(
-    tool_call: &AssistantToolCall,
-    settings: &AppSettings,
-) -> Option<(&'static str, String)> {
+fn planned_tool_identity(tool_call: &AssistantToolCall) -> Option<(&'static str, String)> {
     match tool_call {
         AssistantToolCall::None => None,
         AssistantToolCall::SearchNotes { query, limit } => {
@@ -463,22 +519,6 @@ fn planned_tool_identity(
         }
         AssistantToolCall::ReadFile { path } => {
             Some(("read_file", format!("path={}", path.trim())))
-        }
-        AssistantToolCall::RunCommand { command, cwd } => {
-            let effective_cwd = cwd.as_deref().or_else(|| {
-                if settings.vault_dir.trim().is_empty() {
-                    None
-                } else {
-                    Some(settings.vault_dir.as_str())
-                }
-            });
-            Some((
-                "run_command",
-                match effective_cwd {
-                    Some(dir) => format!("command={}\ncwd={}", command, dir),
-                    None => format!("command={}", command),
-                },
-            ))
         }
         AssistantToolCall::SaveNote { .. } => {
             Some(("save_note", "model_generated_note_draft".to_string()))
@@ -706,67 +746,6 @@ fn read_file_result(path: &str) -> Result<String, String> {
         "read_file returned content for {}:\n{}",
         trimmed, clipped
     ))
-}
-
-async fn run_command_result(command: &str, cwd: Option<&str>) -> Result<String, String> {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return Err("command is empty".to_string());
-    }
-    if looks_like_dangerous_command(trimmed) {
-        return Err(format!("blocked dangerous command: {}", trimmed));
-    }
-
-    let mut process = if cfg!(target_os = "windows") {
-        let mut cmd = TokioCommand::new("powershell");
-        cmd.arg("-NoProfile").arg("-Command").arg(trimmed);
-        cmd
-    } else {
-        let mut cmd = TokioCommand::new("sh");
-        cmd.arg("-lc").arg(trimmed);
-        cmd
-    };
-
-    if let Some(dir) = cwd.filter(|value| !value.trim().is_empty()) {
-        process.current_dir(dir);
-    }
-
-    process.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let output = timeout(Duration::from_secs(20), process.output())
-        .await
-        .map_err(|_| format!("command timed out after 20 seconds: {}", trimmed))?
-        .map_err(|error| error.to_string())?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!(
-        "exit_code: {:?}\nstdout:\n{}\nstderr:\n{}",
-        output.status.code(),
-        truncate_for_trace(&stdout, 12_000),
-        truncate_for_trace(&stderr, 8_000)
-    );
-
-    Ok(combined)
-}
-
-fn looks_like_dangerous_command(command: &str) -> bool {
-    let normalized = command.to_ascii_lowercase();
-    [
-        "del /",
-        "remove-item",
-        "rd /s",
-        "rmdir /s",
-        "rm -rf",
-        "format ",
-        "mkfs",
-        "shutdown",
-        "reboot",
-        "halt",
-        "poweroff",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
 }
 
 fn load_recent_notes_for_overview(
@@ -1217,17 +1196,18 @@ mod tests {
     };
 
     use super::{
-        append_turn_to_session, build_agent_trace, build_chat_session_title,
-        current_session_history, display_path, draft_to_note_document, estimate_session_tokens,
-        estimate_tokens_for_text, estimate_turn_tokens, extract_explicit_local_path,
-        has_matching_tool_execution, looks_like_dangerous_command, looks_like_record_request,
-        looks_like_session_memory_question, looks_like_small_talk, merge_usage,
-        planned_tool_identity, resolve_or_create_chat_session, summarize_docs_for_tool_result,
-        truncate_for_trace, ChatAttachment, ChatSession, ChatState, ChatTurn, ConversationSummary,
-        ToolExecution,
+        append_ocr_text_to_prompt, append_turn_to_session, build_agent_trace,
+        build_chat_session_title, build_effective_question, current_session_history, display_path,
+        draft_to_note_document, estimate_session_tokens, estimate_tokens_for_text,
+        estimate_turn_tokens, extract_explicit_local_path, has_matching_tool_execution,
+        looks_like_record_request, looks_like_session_memory_question, looks_like_small_talk,
+        merge_usage, planned_tool_identity, require_saved_note_for_record_request,
+        resolve_or_create_chat_session, summarize_docs_for_tool_result, truncate_for_trace,
+        ChatAttachment, ChatSession, ChatState, ChatTurn, ConversationSummary, ToolExecution,
+        IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
-    use crate::models::{AppSettings, NoteDocument, NoteMeta, StructuredNoteDraft};
+    use crate::models::{GroundedAnswer, NoteDocument, NoteMeta, StructuredNoteDraft};
 
     // ── existing tests ──
 
@@ -1266,34 +1246,31 @@ mod tests {
     // ── 2.1 dangerous command detection ──
 
     #[test]
-    fn blocks_dangerous_commands() {
-        assert!(looks_like_dangerous_command("del /s C:\\stuff"));
-        assert!(looks_like_dangerous_command("Remove-Item -Recurse stuff"));
-        assert!(looks_like_dangerous_command("rm -rf /tmp/test"));
-        assert!(looks_like_dangerous_command("shutdown /s"));
-        assert!(looks_like_dangerous_command("format disk"));
-        assert!(looks_like_dangerous_command("rd /s /q dir"));
-        assert!(looks_like_dangerous_command("rmdir /s dir"));
-        assert!(looks_like_dangerous_command("mkfs.ext4 /dev/sda"));
-        assert!(looks_like_dangerous_command("reboot now"));
-        assert!(looks_like_dangerous_command("halt"));
-        assert!(looks_like_dangerous_command("poweroff"));
+    fn build_effective_question_without_images_uses_trimmed_text() {
+        assert_eq!(build_effective_question("  hello  ", &[]), "hello");
     }
 
     #[test]
-    fn allows_safe_commands() {
-        assert!(!looks_like_dangerous_command("Get-ChildItem"));
-        assert!(!looks_like_dangerous_command("echo hello"));
-        assert!(!looks_like_dangerous_command("dir"));
-        assert!(!looks_like_dangerous_command("cat log.txt"));
-        assert!(!looks_like_dangerous_command("type build.log"));
+    fn build_effective_question_for_image_only_uses_default_prompt() {
+        assert_eq!(build_effective_question("", &[]), IMAGE_ONLY_PROMPT);
     }
 
     #[test]
-    fn dangerous_command_detection_is_case_insensitive() {
-        assert!(looks_like_dangerous_command("DEL /S C:\\stuff"));
-        assert!(looks_like_dangerous_command("Format C:"));
-        assert!(looks_like_dangerous_command("RM -RF /"));
+    fn append_ocr_text_to_prompt_formats_marker_block() {
+        let prompt = append_ocr_text_to_prompt(
+            "hello".to_string(),
+            &["line1".to_string(), "line2".to_string()],
+        );
+        assert!(prompt.contains(OCR_SECTION_HEADER));
+        assert!(prompt.ends_with("line1\nline2"));
+    }
+
+    #[test]
+    fn record_request_requires_saved_note() {
+        let error =
+            require_saved_note_for_record_request("please save this", GroundedAnswer::default())
+                .expect_err("missing saved note should fail");
+        assert!(error.contains("saved note"));
     }
 
     // ── 2.3 build_chat_session_title ──
@@ -1340,7 +1317,7 @@ mod tests {
     fn agent_trace_with_tools_shows_numbered_steps() {
         let tools = vec![
             ToolExecution::new("search_notes", "q=test", "found 3", false),
-            ToolExecution::new("run_command", "cmd=dir", "output", false),
+            ToolExecution::new("list_directory", "path=C:\\Vault", "output", false),
         ];
         let trace = build_agent_trace(&tools, false);
         assert!(trace.summary.contains("2 个工具步骤"));
@@ -1658,53 +1635,33 @@ mod tests {
             query: "mmc".to_string(),
             limit: 6,
         };
-        let settings = AppSettings::default();
-        assert!(has_matching_tool_execution(
-            &tool_results,
-            &tool_call,
-            &settings
-        ));
+        assert!(has_matching_tool_execution(&tool_results, &tool_call));
     }
 
     #[test]
     fn different_tool_not_matched() {
         let tool_results = vec![ToolExecution::new("search_notes", "q=mmc", "3", false)];
         let tool_call = AssistantToolCall::ListNotes { limit: 5 };
-        let settings = AppSettings::default();
-        assert!(!has_matching_tool_execution(
-            &tool_results,
-            &tool_call,
-            &settings
-        ));
+        assert!(!has_matching_tool_execution(&tool_results, &tool_call));
     }
 
     #[test]
     fn none_tool_never_matches() {
         let tool_results = vec![ToolExecution::new("search_notes", "q=x", "1", false)];
         let tool_call = AssistantToolCall::None;
-        let settings = AppSettings::default();
-        assert!(!has_matching_tool_execution(
-            &tool_results,
-            &tool_call,
-            &settings
-        ));
+        assert!(!has_matching_tool_execution(&tool_results, &tool_call));
     }
 
     #[test]
-    fn planned_tool_identity_for_run_command_includes_vault_dir() {
-        let settings = AppSettings {
-            vault_dir: "D:\\Vault".to_string(),
-            ..Default::default()
+    fn planned_tool_identity_for_read_file_uses_trimmed_path() {
+        let tool_call = AssistantToolCall::ReadFile {
+            path: "  D:\\Vault\\note.md  ".to_string(),
         };
-        let tool_call = AssistantToolCall::RunCommand {
-            command: "dir".to_string(),
-            cwd: None,
-        };
-        let result = planned_tool_identity(&tool_call, &settings);
+        let result = planned_tool_identity(&tool_call);
         assert!(result.is_some());
         let (name, input) = result.unwrap();
-        assert_eq!(name, "run_command");
-        assert!(input.contains("cwd=D:\\Vault"));
+        assert_eq!(name, "read_file");
+        assert_eq!(input, "path=D:\\Vault\\note.md");
     }
 
     // ── 2.13 display_path ──

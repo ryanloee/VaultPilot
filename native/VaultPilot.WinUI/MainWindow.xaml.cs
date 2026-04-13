@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices.WindowsRuntime;
@@ -52,6 +53,7 @@ public sealed partial class MainWindow : Window
         RootGrid.Loaded += OnLoaded;
         Closed += OnClosed;
         SendButton.Click += OnSendClicked;
+        RecordButton.Click += OnRecordClicked;
         SettingsButton.Click += OnSettingsClicked;
         RebuildButton.Click += OnRebuildClicked;
         ImportButton.Click += OnImportClicked;
@@ -401,6 +403,11 @@ public sealed partial class MainWindow : Window
         await SendCurrentMessageAsync();
     }
 
+    private async void OnRecordClicked(object sender, RoutedEventArgs e)
+    {
+        await RecordCurrentMessageAsync();
+    }
+
     private void OnSessionSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SessionList.SelectedItem is not SessionListItem item)
@@ -535,22 +542,40 @@ public sealed partial class MainWindow : Window
         UpdateStatusBar("success", "已新建对话", "可以开始新的提问。");
     }
 
-    private async Task OpenVaultDirectoryAsync()
+    private Task OpenVaultDirectoryAsync()
     {
-        if (string.IsNullOrWhiteSpace(_settings?.VaultDir))
+        var vaultDir = _settings?.VaultDir?.Trim();
+        if (string.IsNullOrWhiteSpace(vaultDir))
         {
             ShowError("打开目录失败", new InvalidOperationException("尚未配置知识库目录。"), addMessage: false);
-            return;
+            return Task.CompletedTask;
+        }
+
+        if (!Directory.Exists(vaultDir))
+        {
+            ShowError("打开目录失败", new DirectoryNotFoundException("知识库目录不存在。"), addMessage: false);
+            return Task.CompletedTask;
         }
 
         try
         {
-            await _backendClient.SendAsync("openVaultDirectory", new { path = _settings.VaultDir });
+            var launched = Process.Start(new ProcessStartInfo
+            {
+                FileName = vaultDir,
+                UseShellExecute = true,
+                Verb = "open"
+            });
+            if (launched is null)
+            {
+                throw new InvalidOperationException("系统未能打开知识库目录。");
+            }
         }
         catch (Exception error)
         {
             ShowError("打开目录失败", error);
         }
+
+        return Task.CompletedTask;
     }
 
     private async Task OpenProjectHomepageAsync()
@@ -711,6 +736,96 @@ public sealed partial class MainWindow : Window
         finally
         {
             SendButton.IsEnabled = true;
+            AddImageButton.IsEnabled = true;
+            RefreshSessions();
+        }
+    }
+
+    private async Task RecordCurrentMessageAsync()
+    {
+        if (!SendButton.IsEnabled)
+        {
+            return;
+        }
+
+        var text = ComposerBox.Text.Trim();
+        var pendingAttachments = _attachments.ToArray();
+
+        if (string.IsNullOrEmpty(text) && pendingAttachments.Length == 0)
+        {
+            var session = CurrentSession();
+            var lastAssistantTurn = session?.Turns.LastOrDefault(t => t.Role == "assistant");
+            if (lastAssistantTurn is null)
+            {
+                return;
+            }
+
+            text = $"请将刚才讨论的内容整理记录到知识库";
+        }
+
+        var prompt = $"请将以下内容记录到知识库：{text}";
+        var userDisplay = string.IsNullOrWhiteSpace(ComposerBox.Text)
+            ? "（记录了当前对话内容）"
+            : ComposerBox.Text.Trim();
+
+        ComposerBox.Text = string.Empty;
+        _attachments.Clear();
+        RefreshAttachments();
+
+        try
+        {
+            SendButton.IsEnabled = false;
+            RecordButton.IsEnabled = false;
+            AddImageButton.IsEnabled = false;
+            UpdateStatusBar("info", "正在记录知识", "正在整理并保存...");
+
+            await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
+            var history = GetConversationHistory();
+            AddTurn("user", userDisplay, attachments: pendingAttachments);
+            RenderCurrentSession();
+            ScrollToLatest();
+            await SaveChatStateAsync();
+
+            var answer = await _backendClient.SendAsync<GroundedAnswer>(
+                "askWithAi",
+                new
+                {
+                    question = prompt,
+                    history,
+                    imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
+                });
+            if (answer?.SavedNote is null)
+            {
+                throw new InvalidOperationException("知识库写入未完成，模型未返回已保存笔记。");
+            }
+            var savedNote = answer.SavedNote;
+
+            AddTurn("assistant", answer?.Answer ?? string.Empty, answer);
+            RenderCurrentSession();
+            ScrollToLatest();
+            await SaveChatStateAsync();
+
+            AppendMessage("系统", $"已保存笔记：{savedNote.Title}");
+            ScrollToLatest();
+            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { });
+            _noteCount = notes?.Count ?? 0;
+            RefreshVaultSummary();
+
+            UpdateStatusBar("success", "知识已记录", $"已保存为笔记：{savedNote.Title}");
+        }
+        catch (Exception error)
+        {
+            var message = LocalizeError(error.Message);
+            AddTurn("assistant", message);
+            RenderCurrentSession();
+            ScrollToLatest();
+            await SaveChatStateAsync();
+            ShowError("记录失败", error, addMessage: false);
+        }
+        finally
+        {
+            SendButton.IsEnabled = true;
+            RecordButton.IsEnabled = true;
             AddImageButton.IsEnabled = true;
             RefreshSessions();
         }

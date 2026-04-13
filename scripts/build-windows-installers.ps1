@@ -12,10 +12,8 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 $cargoToml = Join-Path $repoRoot "Cargo.toml"
 $projectFile = Join-Path $repoRoot "native\VaultPilot.WinUI\VaultPilot.WinUI.csproj"
-$projectDir = Split-Path -Parent $projectFile
 $iconPath = Join-Path $repoRoot "native\VaultPilot.WinUI\icon.ico"
 $artifactsRoot = Join-Path $repoRoot "artifacts\velopack"
-$targetFramework = "net8.0-windows10.0.19041.0"
 
 function Get-VersionFromCargoToml {
     param([string]$Path)
@@ -147,14 +145,8 @@ foreach ($platform in $Platforms) {
 
     $publishDir = Join-Path $artifactsRoot "publish\$($build.RuntimeId)"
     $packageDir = Join-Path $artifactsRoot "packages\$($build.Channel)"
-    $buildOutputDir = Join-Path $projectDir "bin\$platform\Release\$targetFramework\$($build.RuntimeId)"
-
     if (Test-Path $publishDir) {
         Remove-Item -LiteralPath $publishDir -Recurse -Force
-    }
-
-    if (Test-Path $buildOutputDir) {
-        Remove-Item -LiteralPath $buildOutputDir -Recurse -Force
     }
 
     if (-not $FetchReleaseHistory -and (Test-Path $packageDir)) {
@@ -167,22 +159,23 @@ foreach ($platform in $Platforms) {
         Download-ReleaseHistory -Vpk $vpk -OutputDir $packageDir -Channel $build.Channel
     }
 
-    Write-Host "Building WinUI application for $platform..."
+    Write-Host "Publishing self-contained WinUI application for $platform..."
     & $msbuild $projectFile `
         /restore `
-        /t:Build `
+        /t:Publish `
         /p:Configuration=Release `
         /p:Platform=$platform `
-        /p:RuntimeIdentifier=$($build.RuntimeId)
+        /p:RuntimeIdentifier=$($build.RuntimeId) `
+        /p:SelfContained=true `
+        /p:WindowsAppSDKSelfContained=true `
+        /p:PublishDir=$publishDir
     if ($LASTEXITCODE -ne 0) {
-        throw "MSBuild build failed for $platform."
+        throw "MSBuild publish failed for $platform."
     }
 
-    if (-not (Test-Path $buildOutputDir)) {
-        throw "Build output directory not found for ${platform}: $buildOutputDir"
+    if (-not (Test-Path $publishDir)) {
+        throw "Publish output directory not found for ${platform}: $publishDir"
     }
-
-    Copy-Item -Path (Join-Path $buildOutputDir "*") -Destination $publishDir -Recurse -Force
 
     Write-Host "Packing Velopack release for $platform..."
     & $vpk pack `

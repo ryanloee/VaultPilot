@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
@@ -56,6 +56,10 @@ enum Commands {
         /// Bind port
         #[arg(long, default_value_t = 8765)]
         port: u16,
+
+        /// Require this bearer token for non-loopback listeners
+        #[arg(long)]
+        token: Option<String>,
     },
 
     /// Talk to VaultPilot's built-in model with persisted chat sessions
@@ -254,6 +258,7 @@ struct McpServerState {
 #[derive(Clone)]
 struct HttpBridgeState {
     context: StorageContext,
+    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -353,7 +358,7 @@ fn main() {
     let cli = Cli::parse();
     let is_mcp = matches!(cli.command, Commands::Mcp);
     let serve_target = match &cli.command {
-        Commands::Serve { host, port } => Some((host.clone(), *port)),
+        Commands::Serve { host, port, token } => Some((host.clone(), *port, token.clone())),
         _ => None,
     };
 
@@ -367,8 +372,8 @@ fn main() {
         Err(err) => exit_error(&cli.pretty, "context_error", err.to_string()),
     };
 
-    if let Some((host, port)) = serve_target {
-        if let Err(err) = runtime.block_on(run_http_bridge(context, host, port)) {
+    if let Some((host, port, token)) = serve_target {
+        if let Err(err) = runtime.block_on(run_http_bridge(context, host, port, token)) {
             eprintln!("HTTP bridge failed: {err}");
             process::exit(1);
         }
@@ -592,12 +597,20 @@ fn handle_index(context: &StorageContext, action: &IndexActions) -> Result<Value
     }
 }
 
-async fn run_http_bridge(context: StorageContext, host: String, port: u16) -> Result<()> {
+async fn run_http_bridge(
+    context: StorageContext,
+    host: String,
+    port: u16,
+    token: Option<String>,
+) -> Result<()> {
     let ip: IpAddr = host
         .parse()
         .map_err(|error| anyhow::anyhow!("invalid host '{}': {}", host, error))?;
+    let token = normalize_bridge_token(token);
+    validate_http_bridge_binding(ip, token.as_deref())?;
     let address = SocketAddr::new(ip, port);
-    let state = Arc::new(HttpBridgeState { context });
+    let requires_token = token.is_some();
+    let state = Arc::new(HttpBridgeState { context, token });
 
     let app = Router::new()
         .route("/health", get(http_health))
@@ -611,7 +624,8 @@ async fn run_http_bridge(context: StorageContext, host: String, port: u16) -> Re
             "status": "listening",
             "baseUrl": format!("http://{}:{}", ip, port),
             "chatCompletions": format!("http://{}:{}/v1/chat/completions", ip, port),
-            "models": format!("http://{}:{}/v1/models", ip, port)
+            "models": format!("http://{}:{}/v1/models", ip, port),
+            "requiresToken": requires_token
         })
     );
 
@@ -626,10 +640,14 @@ async fn http_health() -> Json<Value> {
     }))
 }
 
-async fn http_models(State(state): State<Arc<HttpBridgeState>>) -> Json<OpenAiModelsResponse> {
+async fn http_models(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+) -> Result<Json<OpenAiModelsResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
     let settings = load_settings_with_context(&state.context).unwrap_or_default();
     let now = Utc::now().timestamp();
-    Json(OpenAiModelsResponse {
+    Ok(Json(OpenAiModelsResponse {
         object: "list",
         data: vec![OpenAiModel {
             id: bridge_model_id(&settings),
@@ -637,13 +655,15 @@ async fn http_models(State(state): State<Arc<HttpBridgeState>>) -> Json<OpenAiMo
             created: now,
             owned_by: "vaultpilot",
         }],
-    })
+    }))
 }
 
 async fn http_chat_completions(
     State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
     Json(request): Json<OpenAiChatCompletionsRequest>,
 ) -> Result<Json<OpenAiChatCompletionsResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
     if request.stream {
         return Err(openai_error(
             StatusCode::BAD_REQUEST,
@@ -802,6 +822,70 @@ fn bridge_model_id(settings: &AppSettings) -> String {
     } else {
         format!("vaultpilot-chat:{}", underlying)
     }
+}
+
+fn normalize_bridge_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn validate_http_bridge_binding(ip: IpAddr, token: Option<&str>) -> Result<()> {
+    if ip.is_loopback() || token.is_some() {
+        return Ok(());
+    }
+
+    Err(anyhow::anyhow!(
+        "non-loopback host '{}' requires --token",
+        ip
+    ))
+}
+
+fn require_bridge_token(
+    state: &HttpBridgeState,
+    headers: &HeaderMap,
+) -> Result<(), (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    let Some(expected) = state.token.as_deref() else {
+        return Ok(());
+    };
+
+    let Some(actual) = bridge_token_from_headers(headers) else {
+        return Err(openai_error(
+            StatusCode::UNAUTHORIZED,
+            "missing authorization token",
+        ));
+    };
+
+    if actual != expected {
+        return Err(openai_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid authorization token",
+        ));
+    }
+
+    Ok(())
+}
+
+fn bridge_token_from_headers(headers: &HeaderMap) -> Option<&str> {
+    if let Some(value) = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some((scheme, token)) = value.split_once(' ') {
+            if scheme.eq_ignore_ascii_case("bearer") {
+                let token = token.trim();
+                if !token.is_empty() {
+                    return Some(token);
+                }
+            }
+        }
+    }
+
+    headers
+        .get("x-vaultpilot-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiErrorEnvelope>) {
@@ -1290,4 +1374,44 @@ fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
     };
     eprintln!("{output}");
     process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bridge_token_from_headers, normalize_bridge_token, validate_http_bridge_binding};
+    use axum::http::{HeaderMap, HeaderValue};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn normalize_bridge_token_trims_and_drops_empty_values() {
+        assert_eq!(
+            normalize_bridge_token(Some("  secret  ".to_string())),
+            Some("secret".to_string())
+        );
+        assert_eq!(normalize_bridge_token(Some("   ".to_string())), None);
+        assert_eq!(normalize_bridge_token(None), None);
+    }
+
+    #[test]
+    fn non_loopback_binding_requires_token() {
+        let remote = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+        let local = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        assert!(validate_http_bridge_binding(remote, None).is_err());
+        assert!(validate_http_bridge_binding(remote, Some("secret")).is_ok());
+        assert!(validate_http_bridge_binding(local, None).is_ok());
+    }
+
+    #[test]
+    fn bridge_token_reads_bearer_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
+        assert_eq!(bridge_token_from_headers(&headers), Some("secret"));
+    }
+
+    #[test]
+    fn bridge_token_reads_custom_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-vaultpilot-token", HeaderValue::from_static("secret"));
+        assert_eq!(bridge_token_from_headers(&headers), Some("secret"));
+    }
 }

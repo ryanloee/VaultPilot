@@ -1140,6 +1140,10 @@ fn extract_image_text(path: &Path) -> Result<String> {
     }
 }
 
+pub fn ocr_image_text(path: &Path) -> Result<String> {
+    extract_image_text(path)
+}
+
 #[cfg(target_os = "windows")]
 fn extract_image_text_with_windows_ocr(path: &Path) -> Result<String> {
     let script = r#"
@@ -1171,7 +1175,8 @@ if ($null -ne $result -and $null -ne $result.Text) {
 }
 "#;
 
-    let output = Command::new("powershell")
+    let mut command = Command::new("powershell");
+    command
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -1180,6 +1185,15 @@ if ($null -ne $result -and $null -ne $result.Text) {
             script,
         ])
         .arg(path.as_os_str())
+        .stdin(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+
+    let output = command
         .output()
         .with_context(|| format!("failed to run Windows OCR for {}", path.display()))?;
 

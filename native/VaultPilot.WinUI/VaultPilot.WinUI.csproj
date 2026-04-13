@@ -87,4 +87,19 @@
       SkipUnchangedFiles="true"
       Condition="'@(RustPublishFiles)' != ''" />
   </Target>
+
+  <Target
+    Name="CopyWinUIResourcesToPublish"
+    AfterTargets="Publish"
+    Condition="'$(PublishDir)' != ''">
+    <ItemGroup>
+      <WinUIPublishResources Include="$(OutputPath)*.pri" />
+      <WinUIPublishResources Include="$(OutputPath)*.xbf" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(WinUIPublishResources)"
+      DestinationFolder="$(PublishDir)"
+      SkipUnchangedFiles="true"
+      Condition="'@(WinUIPublishResources)' != ''" />
+  </Target>
 </Project>

@@ -45,17 +45,33 @@ public sealed partial class MainWindow
 
             var version = update.TargetFullRelease.Version.ToFullString();
             LogStartup($"Update available: {version}");
-            UpdateStatusBar("info", "\u53d1\u73b0\u65b0\u7248\u672c", $"\u6b63\u5728\u4e0b\u8f7d {version}...");
-            await _updateManager.DownloadUpdatesAsync(update);
+            _updateDownloadVersion = version;
+            _updateDownloadPercent = 0;
+            UpdateStatusBar("info", "\u6b63\u5728\u4e0b\u8f7d\u66f4\u65b0", $"\u6b63\u5728\u4e0b\u8f7d {version}... 0%");
+            await _updateManager.DownloadUpdatesAsync(update, OnUpdateDownloadProgress);
+            _updateDownloadPercent = -1;
 
             UpdateStatusBar("warning", "\u66f4\u65b0\u5df2\u4e0b\u8f7d", $"\u7248\u672c {version} \u5df2\u51c6\u5907\u5c31\u7eea\u3002");
             await PromptToInstallUpdateAsync(update.TargetFullRelease);
         }
         catch (Exception error)
         {
+            _updateDownloadPercent = -1;
             LogStartup($"Update check failed: {error}");
             UpdateStatusBar("warning", "\u66f4\u65b0\u68c0\u67e5\u5931\u8d25", LocalizeError(error.Message));
         }
+    }
+
+    private void OnUpdateDownloadProgress(int percent)
+    {
+        _updateDownloadPercent = percent;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_updateDownloadPercent >= 0 && SendButton.IsEnabled)
+            {
+                UpdateStatusBar("info", "\u6b63\u5728\u4e0b\u8f7d\u66f4\u65b0", $"\u6b63\u5728\u4e0b\u8f7d {_updateDownloadVersion}... {percent}%");
+            }
+        });
     }
 
     private async Task PromptToInstallUpdateAsync(VelopackAsset update)

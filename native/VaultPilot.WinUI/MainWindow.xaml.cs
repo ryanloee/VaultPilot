@@ -43,6 +43,8 @@ public sealed partial class MainWindow : Window
     private bool _sidebarCollapsed = true;
     private bool _sidebarAutoCollapsed = true;
     private string _startupStep = "初始化";
+    private volatile int _updateDownloadPercent = -1;
+    private string _updateDownloadVersion = string.Empty;
 
     public MainWindow()
     {
@@ -722,7 +724,7 @@ public sealed partial class MainWindow : Window
                 ScrollToLatest();
             }
 
-            UpdateStatusBar("success", "就绪", "已收到回复");
+            RestoreIdleStatus();
         }
         catch (Exception error)
         {
@@ -811,7 +813,7 @@ public sealed partial class MainWindow : Window
             _noteCount = notes?.Count ?? 0;
             RefreshVaultSummary();
 
-            UpdateStatusBar("success", "知识已记录", $"已保存为笔记：{savedNote.Title}");
+            RestoreIdleStatus("知识已记录", $"已保存为笔记：{savedNote.Title}");
         }
         catch (Exception error)
         {
@@ -1269,6 +1271,18 @@ public sealed partial class MainWindow : Window
             "success" => "\uE73E",
             _ => "\uE946"
         };
+    }
+
+    private void RestoreIdleStatus(string title = "就绪", string message = "已收到回复")
+    {
+        if (_updateDownloadPercent >= 0)
+        {
+            UpdateStatusBar("info", "正在下载更新", $"正在下载 {_updateDownloadVersion}... {_updateDownloadPercent}%");
+        }
+        else
+        {
+            UpdateStatusBar("success", title, message);
+        }
     }
 
     private static string StartupLogPath()

@@ -211,9 +211,33 @@ pub async fn select_tool_call(
     );
     let response =
         send_request_with_temperature(settings, &system, &prompt, image_paths, 0.1).await?;
+
+    let (tool_call, usage) = match parse_tool_call(&response.text, question) {
+        Ok(tool_call) => (tool_call, response.usage),
+        Err(_) => {
+            let retry_prompt = prompting::tool_call_retry_user_prompt(
+                question,
+                !image_paths.is_empty(),
+                history,
+                prior_tool_results,
+                &response.text,
+            );
+            let retry_response =
+                send_request_with_temperature(settings, &system, &retry_prompt, image_paths, 0.1)
+                    .await?;
+            let tool_call = parse_tool_call(&retry_response.text, question).with_context(|| {
+                format!(
+                    "model did not return a valid tool call after retry; last response: {}",
+                    retry_response.text.trim()
+                )
+            })?;
+            (tool_call, retry_response.usage)
+        }
+    };
+
     Ok(ToolSelectionResult {
-        tool_call: parse_tool_call(&response.text, question)?,
-        usage: response.usage,
+        tool_call,
+        usage,
     })
 }
 

@@ -12,9 +12,13 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Foundation;
 using Windows.Graphics;
+using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.Storage.Streams;
 using Windows.System;
@@ -33,6 +37,14 @@ public sealed partial class MainWindow : Window
     private const int MinimumWindowHeight = 520;
     private const double AutoCollapseSidebarWidth = 1040;
     private const double SettingsDialogWidth = 520;
+    private const int WindowMessageDropFiles = 0x0233;
+    private const int WindowLongPtrWndProc = -4;
+    private static readonly string ClipboardAttachmentDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "com.local.vaultpilot",
+        "clipboard-images");
+    private const string MarkdownOpenTag = "<vp-markdown>";
+    private const string MarkdownCloseTag = "</vp-markdown>";
     private readonly BackendClient _backendClient;
     private AppWindow? _appWindow;
     private ChatState _chatState = new(string.Empty, Array.Empty<ChatSession>());
@@ -42,9 +54,13 @@ public sealed partial class MainWindow : Window
     private readonly List<ChatAttachment> _attachments = [];
     private bool _sidebarCollapsed = true;
     private bool _sidebarAutoCollapsed = true;
+    private double _contextUsagePercent;
     private string _startupStep = "初始化";
     private volatile int _updateDownloadPercent = -1;
     private string _updateDownloadVersion = string.Empty;
+    private nint _windowHandle;
+    private nint _originalWindowProc;
+    private WindowProcDelegate? _windowProcDelegate;
 
     public MainWindow()
     {
@@ -64,7 +80,6 @@ public sealed partial class MainWindow : Window
         SessionList.SelectionChanged += OnSessionSelectionChanged;
         DeleteSessionButton.Click += OnDeleteSessionClicked;
         NewSessionButton.Click += OnNewSessionClicked;
-        AddImageButton.Click += OnAddImageClicked;
         ToggleSidebarButton.Click += OnToggleSidebarClicked;
         ChatScrollViewer.ViewChanged += OnChatScrollViewerViewChanged;
         JumpLatestButton.Click += OnJumpLatestClicked;
@@ -128,6 +143,8 @@ public sealed partial class MainWindow : Window
         try
         {
             var hwnd = WindowNative.GetWindowHandle(this);
+            _windowHandle = hwnd;
+            EnsureWindowFileDropHook(hwnd);
             var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
             _appWindow = AppWindow.GetFromWindowId(windowId);
             _appWindow.Resize(new SizeInt32(DefaultWindowWidth, DefaultWindowHeight));
@@ -596,48 +613,59 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnAddImageClicked(object sender, RoutedEventArgs e)
+    private void OnComposerDropZoneDragOver(object sender, DragEventArgs e)
+    {
+        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = DataPackageOperation.None;
+            return;
+        }
+
+        e.AcceptedOperation = DataPackageOperation.Copy;
+    }
+
+    private async void OnComposerDropZoneDrop(object sender, DragEventArgs e)
     {
         try
         {
-            var picker = new FileOpenPicker
-            {
-                SuggestedStartLocation = PickerLocationId.PicturesLibrary
-            };
-            picker.FileTypeFilter.Add(".png");
-            picker.FileTypeFilter.Add(".jpg");
-            picker.FileTypeFilter.Add(".jpeg");
-            picker.FileTypeFilter.Add(".webp");
-            picker.FileTypeFilter.Add(".gif");
-            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
-
-            var files = await picker.PickMultipleFilesAsync();
-            if (files.Count == 0)
+            if (!e.DataView.Contains(StandardDataFormats.StorageItems))
             {
                 return;
             }
 
-            foreach (var file in files)
-            {
-                if (_attachments.Any(item => item.Path == file.Path))
-                {
-                    continue;
-                }
+            var items = await e.DataView.GetStorageItemsAsync();
+            var files = items
+                .OfType<StorageFile>()
+                .Where(IsSupportedImageFile)
+                .ToArray();
 
-                _attachments.Add(new ChatAttachment(file.Path, file.Name));
+            if (files.Length == 0)
+            {
+                UpdateStatusBar("warning", "未添加图片", "拖入的文件里没有可用的图片。");
+                return;
             }
 
-            RefreshAttachments();
-            UpdateStatusBar("success", "图片已添加", $"当前已附加 {_attachments.Count} 张图片。");
+            AddImageAttachments(files);
         }
         catch (Exception error)
         {
-            ShowError("添加图片失败", error);
+            ShowError("拖放图片失败", error);
         }
     }
 
     private async void OnComposerKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        if (e.Key == VirtualKey.V)
+        {
+            var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
+            if (controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down)
+                && await TryHandleClipboardImagePasteAsync())
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (e.Key != VirtualKey.Enter)
         {
             return;
@@ -695,7 +723,6 @@ public sealed partial class MainWindow : Window
         try
         {
             SendButton.IsEnabled = false;
-            AddImageButton.IsEnabled = false;
             UpdateStatusBar("info", "助手处理中", "正在准备请求...");
 
             await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
@@ -738,7 +765,6 @@ public sealed partial class MainWindow : Window
         finally
         {
             SendButton.IsEnabled = true;
-            AddImageButton.IsEnabled = true;
             RefreshSessions();
         }
     }
@@ -778,7 +804,6 @@ public sealed partial class MainWindow : Window
         {
             SendButton.IsEnabled = false;
             RecordButton.IsEnabled = false;
-            AddImageButton.IsEnabled = false;
             UpdateStatusBar("info", "正在记录知识", "正在整理并保存...");
 
             await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
@@ -828,13 +853,13 @@ public sealed partial class MainWindow : Window
         {
             SendButton.IsEnabled = true;
             RecordButton.IsEnabled = true;
-            AddImageButton.IsEnabled = true;
             RefreshSessions();
         }
     }
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        TryReleaseWindowFileDropHook();
         await _backendClient.DisposeAsync();
     }
 
@@ -876,6 +901,9 @@ public sealed partial class MainWindow : Window
     {
         var isUser = author == "你";
         var isAssistant = author == "助手";
+        var bubbleText = isUser || isAssistant ? text : $"{author}: {text}";
+        var bubbleContent = CreateMessageContent(bubbleText, isAssistant, isUser);
+
         var bubble = new Border
         {
             MaxWidth = 680,
@@ -889,15 +917,7 @@ public sealed partial class MainWindow : Window
                 : (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
             BorderThickness = isUser ? new Thickness(0) : new Thickness(1),
             HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-            Child = new TextBlock
-            {
-                Text = isUser || isAssistant ? text : $"{author}: {text}",
-                TextWrapping = TextWrapping.Wrap,
-                IsTextSelectionEnabled = !isUser,
-                Foreground = isUser
-                    ? (Brush)Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"]
-                    : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
-            }
+            Child = bubbleContent
         };
 
         var label = new TextBlock
@@ -921,6 +941,292 @@ public sealed partial class MainWindow : Window
         }
 
         MessagesPanel.Children.Add(stack);
+    }
+
+    private FrameworkElement CreateMessageContent(string text, bool isAssistant, bool isUser)
+    {
+        if (isAssistant && TryExtractMarkdownPayload(text, out var markdown))
+        {
+            return CreateMarkdownContent(markdown);
+        }
+
+        return new TextBlock
+        {
+            Text = text,
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+            Foreground = isUser
+                ? (Brush)Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"]
+                : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+        };
+    }
+
+    private FrameworkElement CreateMarkdownContent(string markdown)
+    {
+        var stack = new StackPanel
+        {
+            Spacing = 10
+        };
+
+        var copyButton = new Button
+        {
+            Content = "复制 Markdown",
+            Padding = new Thickness(8, 4, 8, 4),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            MinWidth = 0
+        };
+        copyButton.Click += (_, _) => CopyTextToClipboard(markdown);
+        stack.Children.Add(copyButton);
+
+        foreach (var block in ParseMarkdownBlocks(markdown))
+        {
+            if (block.IsCode)
+            {
+                stack.Children.Add(CreateCodeBlock(block.Text, block.Language));
+                continue;
+            }
+
+            foreach (var element in CreateMarkdownTextElements(block.Text))
+            {
+                stack.Children.Add(element);
+            }
+        }
+
+        return stack;
+    }
+
+    private IEnumerable<FrameworkElement> CreateMarkdownTextElements(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.TrimEnd();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                yield return new Border { Height = 4, Opacity = 0 };
+                continue;
+            }
+
+            var textBlock = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+            };
+
+            if (line.StartsWith("# "))
+            {
+                textBlock.Text = line[2..].Trim();
+                textBlock.FontSize = 20;
+                textBlock.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+            }
+            else if (line.StartsWith("## "))
+            {
+                textBlock.Text = line[3..].Trim();
+                textBlock.FontSize = 18;
+                textBlock.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+            }
+            else if (line.StartsWith("### "))
+            {
+                textBlock.Text = line[4..].Trim();
+                textBlock.FontSize = 16;
+                textBlock.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+            }
+            else if (line.StartsWith("- ") || line.StartsWith("* "))
+            {
+                textBlock.Text = $"• {line[2..].Trim()}";
+            }
+            else if (char.IsDigit(line[0]) && line.Contains(". "))
+            {
+                textBlock.Text = line;
+            }
+            else
+            {
+                textBlock.Text = line;
+            }
+
+            yield return textBlock;
+        }
+    }
+
+    private FrameworkElement CreateCodeBlock(string code, string? language)
+    {
+        var header = new Grid();
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var label = new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(language) ? "code" : language.Trim(),
+            Opacity = 0.72,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var copyButton = new Button
+        {
+            Content = "复制代码",
+            Padding = new Thickness(8, 4, 8, 4),
+            MinWidth = 0,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        copyButton.Click += (_, _) => CopyTextToClipboard(code);
+
+        Grid.SetColumn(label, 0);
+        Grid.SetColumn(copyButton, 1);
+        header.Children.Add(label);
+        header.Children.Add(copyButton);
+
+        var codeText = new TextBlock
+        {
+            Text = code,
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White)
+        };
+
+        return new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10),
+            Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 24, 28, 34)),
+            Child = new StackPanel
+            {
+                Spacing = 8,
+                Children =
+                {
+                    header,
+                    codeText
+                }
+            }
+        };
+    }
+
+    private IEnumerable<(bool IsCode, string Text, string? Language)> ParseMarkdownBlocks(string markdown)
+    {
+        var normalized = markdown.Replace("\r\n", "\n");
+        var parts = normalized.Split("```");
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (i % 2 == 0)
+            {
+                if (!string.IsNullOrWhiteSpace(parts[i]))
+                {
+                    yield return (false, parts[i].Trim(), null);
+                }
+
+                continue;
+            }
+
+            var block = parts[i];
+            var firstNewline = block.IndexOf('\n');
+            if (firstNewline < 0)
+            {
+                yield return (true, block.Trim(), null);
+                continue;
+            }
+
+            var language = block[..firstNewline].Trim();
+            var code = block[(firstNewline + 1)..].TrimEnd();
+            yield return (true, code, string.IsNullOrWhiteSpace(language) ? null : language);
+        }
+    }
+
+    private static bool TryExtractMarkdownPayload(string text, out string markdown)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith(MarkdownOpenTag, StringComparison.OrdinalIgnoreCase)
+            && trimmed.EndsWith(MarkdownCloseTag, StringComparison.OrdinalIgnoreCase))
+        {
+            markdown = trimmed[MarkdownOpenTag.Length..^MarkdownCloseTag.Length].Trim();
+            return true;
+        }
+
+        if (LooksLikeMarkdownPayload(trimmed))
+        {
+            markdown = trimmed;
+            return true;
+        }
+
+        markdown = string.Empty;
+        return false;
+    }
+
+    private static bool LooksLikeMarkdownPayload(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        if (text.Contains("```", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var bulletLines = 0;
+        var numberedLines = 0;
+        var headingLines = 0;
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            if (line.StartsWith("# "))
+            {
+                headingLines++;
+                continue;
+            }
+
+            if (line.StartsWith("## ") || line.StartsWith("### "))
+            {
+                headingLines++;
+                continue;
+            }
+
+            if (line.StartsWith("- ") || line.StartsWith("* "))
+            {
+                bulletLines++;
+                continue;
+            }
+
+            var dotIndex = line.IndexOf(". ", StringComparison.Ordinal);
+            if (dotIndex > 0 && line.Take(dotIndex).All(char.IsDigit))
+            {
+                numberedLines++;
+            }
+        }
+
+        if (headingLines > 0)
+        {
+            return true;
+        }
+
+        if (bulletLines >= 2 || numberedLines >= 2)
+        {
+            return true;
+        }
+
+        if ((bulletLines + numberedLines) >= 1 && lines.Length >= 4)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private void CopyTextToClipboard(string text)
+    {
+        var package = new DataPackage();
+        package.SetText(text);
+        Clipboard.SetContent(package);
+        Clipboard.Flush();
+        UpdateStatusBar("success", "已复制", "消息内容已复制到剪贴板。");
     }
 
     private void AppendAttachmentPreviews(IReadOnlyList<ChatAttachment> attachments, string role)
@@ -958,66 +1264,75 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void AddImageAttachments(IEnumerable<StorageFile> files)
+    {
+        var added = 0;
+        foreach (var file in files)
+        {
+            if (_attachments.Any(item => item.Path == file.Path))
+            {
+                continue;
+            }
+
+            _attachments.Add(new ChatAttachment(file.Path, file.Name));
+            added++;
+        }
+
+        if (added == 0)
+        {
+            UpdateStatusBar("info", "图片已存在", $"当前已附加 {_attachments.Count} 张图片。");
+            return;
+        }
+
+        RefreshAttachments();
+        UpdateStatusBar("success", "图片已添加", $"本次添加 {added} 张，当前共 {_attachments.Count} 张图片。");
+    }
+
+    private static bool IsSupportedImageFile(StorageFile file)
+    {
+        var extension = Path.GetExtension(file.Name);
+        return IsSupportedImageExtension(extension);
+    }
+
+    private static bool IsSupportedImagePath(string path)
+    {
+        return IsSupportedImageExtension(Path.GetExtension(path));
+    }
+
+    private static bool IsSupportedImageExtension(string? extension)
+    {
+        extension ??= string.Empty;
+        return extension.Equals(".png", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".gif", StringComparison.OrdinalIgnoreCase);
+    }
+
     private FrameworkElement CreateAttachmentChip(ChatAttachment attachment)
     {
-        var preview = new Image
+        var dot = new Border
         {
-            Width = 44,
-            Height = 44,
-            Stretch = Stretch.UniformToFill,
-            Opacity = 0.2
+            Width = 10,
+            Height = 10,
+            CornerRadius = new CornerRadius(999),
+            Background = new SolidColorBrush(ColorHelper.FromArgb(255, 47, 224, 111)),
+            BorderBrush = new SolidColorBrush(ColorHelper.FromArgb(255, 140, 255, 176)),
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(0, 0, 2, 0)
         };
-        _ = LoadImagePreviewAsync(preview, attachment.Path);
 
-        var imageButton = new Button
-        {
-            Padding = new Thickness(0),
-            MinWidth = 0,
-            MinHeight = 0,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Content = preview
-        };
-        imageButton.Click += async (_, _) => await ShowImagePreviewDialogAsync(attachment);
-
-        var label = new Button
-        {
-            Content = ShortenPath(attachment.Path),
-            Padding = new Thickness(8, 4, 8, 4),
-            HorizontalAlignment = HorizontalAlignment.Left
-        };
-        label.Click += async (_, _) => await ShowImagePreviewDialogAsync(attachment);
-
-        var remove = new Button
-        {
-            Content = "移除",
-            Padding = new Thickness(6, 4, 6, 4),
-            HorizontalAlignment = HorizontalAlignment.Left
-        };
-        remove.Click += (_, _) =>
+        ToolTipService.SetToolTip(dot, $"{attachment.Name}\n单击预览，右键移除");
+        dot.Tapped += async (_, _) => await ShowImagePreviewDialogAsync(attachment, removable: true);
+        dot.RightTapped += (_, _) =>
         {
             _attachments.RemoveAll(item => item.Path == attachment.Path);
             RefreshAttachments();
+            UpdateStatusBar("info", "图片已移除", $"当前还剩 {_attachments.Count} 张图片。");
         };
 
-        var stack = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        stack.Children.Add(imageButton);
-        stack.Children.Add(label);
-        stack.Children.Add(remove);
-
-        return new Border
-        {
-            CornerRadius = new CornerRadius(8),
-            BorderThickness = new Thickness(1),
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
-            Padding = new Thickness(6),
-            Child = stack
-        };
+        return dot;
     }
 
     private FrameworkElement CreateChatAttachmentPreview(ChatAttachment attachment, bool removable)
@@ -1086,7 +1401,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task ShowImagePreviewDialogAsync(ChatAttachment attachment)
+    private async Task ShowImagePreviewDialogAsync(ChatAttachment attachment, bool removable = false)
     {
         var image = new Image
         {
@@ -1114,9 +1429,16 @@ public sealed partial class MainWindow : Window
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Content = image
             },
-            CloseButtonText = "关闭"
+            CloseButtonText = "关闭",
+            SecondaryButtonText = removable ? "移除" : string.Empty
         };
-        await dialog.ShowAsync();
+        var result = await dialog.ShowAsync();
+        if (removable && result == ContentDialogResult.Secondary)
+        {
+            _attachments.RemoveAll(item => item.Path == attachment.Path);
+            RefreshAttachments();
+            UpdateStatusBar("info", "图片已移除", $"当前还剩 {_attachments.Count} 张图片。");
+        }
     }
 
     private async Task<BitmapImage?> LoadPreviewBitmapAsync(string path)
@@ -1158,6 +1480,195 @@ public sealed partial class MainWindow : Window
             : $"{directoryName}\\{fileName}";
         return label.Length <= 34 ? label : $"...{label[^31..]}";
     }
+
+    private async Task<bool> TryHandleClipboardImagePasteAsync()
+    {
+        try
+        {
+            var dataView = Clipboard.GetContent();
+            if (dataView is null)
+            {
+                return false;
+            }
+
+            if (dataView.Contains(StandardDataFormats.StorageItems))
+            {
+                var items = await dataView.GetStorageItemsAsync();
+                var files = items
+                    .OfType<StorageFile>()
+                    .Where(IsSupportedImageFile)
+                    .ToArray();
+                if (files.Length > 0)
+                {
+                    AddImageAttachments(files);
+                    return true;
+                }
+            }
+
+            if (!dataView.Contains(StandardDataFormats.Bitmap))
+            {
+                return false;
+            }
+
+            var bitmapReference = await dataView.GetBitmapAsync();
+            if (bitmapReference is null)
+            {
+                return false;
+            }
+
+            var file = await SaveClipboardBitmapAsync(bitmapReference);
+            AddImageAttachments(new[] { file });
+            return true;
+        }
+        catch (Exception error)
+        {
+            ShowError("粘贴图片失败", error);
+            return true;
+        }
+    }
+
+    private static async Task<StorageFile> SaveClipboardBitmapAsync(RandomAccessStreamReference bitmapReference)
+    {
+        Directory.CreateDirectory(ClipboardAttachmentDirectory);
+
+        using var sourceStream = await bitmapReference.OpenReadAsync();
+        using var memoryStream = sourceStream.AsStreamForRead();
+        using var buffer = new MemoryStream();
+        await memoryStream.CopyToAsync(buffer);
+
+        var fileName = $"clipboard-{DateTimeOffset.Now:yyyyMMdd-HHmmssfff}.png";
+        var filePath = Path.Combine(ClipboardAttachmentDirectory, fileName);
+        await File.WriteAllBytesAsync(filePath, buffer.ToArray());
+        return await StorageFile.GetFileFromPathAsync(filePath);
+    }
+
+    private void EnsureWindowFileDropHook(nint hwnd)
+    {
+        if (hwnd == 0 || _windowProcDelegate is not null)
+        {
+            return;
+        }
+
+        _windowProcDelegate = WindowProc;
+        var newWindowProc = Marshal.GetFunctionPointerForDelegate(_windowProcDelegate);
+        _originalWindowProc = SetWindowLongPtr(hwnd, WindowLongPtrWndProc, newWindowProc);
+        DragAcceptFiles(hwnd, true);
+    }
+
+    private void TryReleaseWindowFileDropHook()
+    {
+        if (_windowHandle == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            DragAcceptFiles(_windowHandle, false);
+            if (_originalWindowProc != 0)
+            {
+                SetWindowLongPtr(_windowHandle, WindowLongPtrWndProc, _originalWindowProc);
+            }
+        }
+        catch
+        {
+            // Ignore teardown failures.
+        }
+        finally
+        {
+            _windowHandle = 0;
+            _originalWindowProc = 0;
+            _windowProcDelegate = null;
+        }
+    }
+
+    private nint WindowProc(nint hwnd, uint msg, nint wParam, nint lParam)
+    {
+        if (msg == WindowMessageDropFiles)
+        {
+            var paths = ReadDroppedPaths(wParam);
+            DragFinish(wParam);
+            if (paths.Count > 0)
+            {
+                DispatcherQueue.TryEnqueue(async () => await HandleWindowFileDropAsync(paths));
+            }
+
+            return 0;
+        }
+
+        return CallWindowProc(_originalWindowProc, hwnd, msg, wParam, lParam);
+    }
+
+    private async Task HandleWindowFileDropAsync(IReadOnlyList<string> paths)
+    {
+        try
+        {
+            var imagePaths = paths
+                .Where(IsSupportedImagePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (imagePaths.Length == 0)
+            {
+                UpdateStatusBar("warning", "未添加图片", "拖入的文件里没有可用的图片。");
+                return;
+            }
+
+            var files = new List<StorageFile>(imagePaths.Length);
+            foreach (var path in imagePaths)
+            {
+                files.Add(await StorageFile.GetFileFromPathAsync(path));
+            }
+
+            AddImageAttachments(files);
+        }
+        catch (Exception error)
+        {
+            ShowError("拖放图片失败", error);
+        }
+    }
+
+    private static IReadOnlyList<string> ReadDroppedPaths(nint dropHandle)
+    {
+        var count = DragQueryFile(dropHandle, 0xFFFFFFFF, null, 0);
+        if (count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var result = new List<string>((int)count);
+        for (uint index = 0; index < count; index++)
+        {
+            var length = DragQueryFile(dropHandle, index, null, 0);
+            if (length == 0)
+            {
+                continue;
+            }
+
+            var buffer = new StringBuilder((int)length + 1);
+            _ = DragQueryFile(dropHandle, index, buffer, (uint)buffer.Capacity);
+            result.Add(buffer.ToString());
+        }
+
+        return result;
+    }
+
+    private delegate nint WindowProcDelegate(nint hwnd, uint msg, nint wParam, nint lParam);
+
+    [DllImport("shell32.dll")]
+    private static extern void DragAcceptFiles(nint hwnd, bool accept);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint DragQueryFile(nint hDrop, uint iFile, StringBuilder? lpszFile, uint cch);
+
+    [DllImport("shell32.dll")]
+    private static extern void DragFinish(nint hDrop);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtr(nint hWnd, int nIndex, nint dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "CallWindowProcW")]
+    private static extern nint CallWindowProc(nint lpPrevWndFunc, nint hWnd, uint msg, nint wParam, nint lParam);
 
     private void ScrollToLatest()
     {
@@ -1454,16 +1965,38 @@ public sealed partial class MainWindow : Window
         var remainingPercent = contextWindow == 0
             ? 100.0
             : Math.Clamp((double)remainingTokens / contextWindow * 100.0, 0.0, 100.0);
-
-        ContextRing.Stroke = remainingPercent switch
+        var usedPercent = Math.Clamp(100.0 - remainingPercent, 0.0, 100.0);
+        var usageBrush = new SolidColorBrush(remainingPercent switch
         {
-            > 50 => new SolidColorBrush(Microsoft.UI.Colors.ForestGreen),
-            > 20 => new SolidColorBrush(Microsoft.UI.Colors.Orange),
-            _ => new SolidColorBrush(Microsoft.UI.Colors.Red)
-        };
+            > 50 => Microsoft.UI.Colors.LimeGreen,
+            > 20 => Microsoft.UI.Colors.Orange,
+            _ => Microsoft.UI.Colors.Red
+        });
+        _contextUsagePercent = usedPercent;
 
-        ToolTipService.SetToolTip(ContextRing,
-            $"上下文剩余：{remainingPercent:0.#}%（约 {FormatTokenCount(remainingTokens)} / {FormatTokenCount(contextWindow)}）");
+        ContextUsageFill.Background = usageBrush;
+        UpdateContextUsageBarVisual();
+
+        var tooltip = $"上下文已用：{usedPercent:0.#}%；剩余：{remainingPercent:0.#}%（约 {FormatTokenCount(usedTokens)} / {FormatTokenCount(contextWindow)}）";
+        ToolTipService.SetToolTip(ContextUsageBarHost, tooltip);
+        ToolTipService.SetToolTip(ContextUsageTrack, tooltip);
+        ToolTipService.SetToolTip(ContextUsageFill, tooltip);
+    }
+
+    private void OnContextUsageBarHostSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateContextUsageBarVisual();
+    }
+
+    private void UpdateContextUsageBarVisual()
+    {
+        var width = ContextUsageBarHost.ActualWidth;
+        if (width <= 0)
+        {
+            return;
+        }
+
+        ContextUsageFill.Width = width * (_contextUsagePercent / 100.0);
     }
 
     private ulong EstimateSessionTokens(ChatSession session)

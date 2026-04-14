@@ -37,20 +37,20 @@ Main local output:
 This is the normal packaging flow for installers and release artifacts.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x64 -Version 0.1.2
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x64 -Version 0.1.3
 ```
 
 You can also build both `x86` and `x64`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x86,x64 -Version 0.1.2
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x86,x64 -Version 0.1.3
 ```
 
 Main package outputs:
 
 - `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Setup.exe`
 - `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Portable.zip`
-- `artifacts/velopack/packages/win-x64/VaultPilot-0.1.2-win-x64-full.nupkg`
+- `artifacts/velopack/packages/win-x64/VaultPilot-0.1.3-win-x64-full.nupkg`
 
 Intermediate publish directory:
 
@@ -113,20 +113,20 @@ These directories are build outputs and should not be committed:
 这是正常的打包流程，会输出安装包和 Release 产物。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x64 -Version 0.1.2
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x64 -Version 0.1.3
 ```
 
 如果要同时打 `x86` 和 `x64`：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x86,x64 -Version 0.1.2
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x86,x64 -Version 0.1.3
 ```
 
 主要打包产物：
 
 - `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Setup.exe`
 - `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Portable.zip`
-- `artifacts/velopack/packages/win-x64/VaultPilot-0.1.2-win-x64-full.nupkg`
+- `artifacts/velopack/packages/win-x64/VaultPilot-0.1.3-win-x64-full.nupkg`
 
 打包前的发布目录：
 

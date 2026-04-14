@@ -105,6 +105,10 @@ pub fn answer_system_prompt() -> String {
          - Use retrieved local notes when they help answer the question.\n\
          - Cite only notes that were actually provided.\n\
          - Answer naturally in the user's language.\n\
+         - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\n\
+         - Structured answer means any response with steps, lists, multiple sections, headings, comparisons, examples, or code.\n\
+         - If the answer is longer than 3 short sentences, default to <vp-markdown>...</vp-markdown>.\n\
+         - Use standard Markdown with fenced code blocks when code is present.\n\
          - Return strict JSON only, with no markdown fence.",
         Utc::now().format("%Y-%m-%d"),
         render_manual_for_model()
@@ -136,6 +140,10 @@ pub fn general_chat_system_prompt() -> String {
          Rules:\n\
          - No useful local notes are available for this turn.\n\
          - Answer directly and naturally in the user's language.\n\
+         - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\n\
+         - Structured answer means any response with steps, lists, multiple sections, headings, comparisons, examples, or code.\n\
+         - If the answer is longer than 3 short sentences, default to <vp-markdown>...</vp-markdown>.\n\
+         - Use standard Markdown with fenced code blocks when code is present.\n\
          - Return strict JSON only, with no markdown fence.",
         Utc::now().format("%Y-%m-%d"),
         render_manual_for_model()
@@ -281,6 +289,30 @@ pub fn tool_call_user_prompt(
     )
 }
 
+pub fn tool_call_retry_user_prompt(
+    question: &str,
+    has_images: bool,
+    history: &[ConversationTurn],
+    prior_tool_results: &[String],
+    invalid_response: &str,
+) -> String {
+    format!(
+        "{}\n\n\
+         Your previous response was invalid and could not be parsed as a tool call.\n\
+         Previous invalid response:\n{}\n\n\
+         Fix it now.\n\
+         Rules for this retry:\n\
+         - Return only one valid JSON object.\n\
+         - Do not include markdown fences, explanations, comments, or extra text.\n\
+         - tool must be exactly one of: none, search_notes, list_notes, list_directory, read_file, save_note.\n\
+         - If tool is list_directory or read_file, path must be non-empty.\n\
+         - If tool is save_note, noteDraft must be a full object.\n\
+         - If you are unsure, return {{\"tool\":\"none\",\"query\":\"\",\"path\":\"\",\"limit\":6,\"noteDraft\":null}}.",
+        tool_call_user_prompt(question, has_images, history, prior_tool_results),
+        invalid_response.trim()
+    )
+}
+
 pub fn tool_result_system_prompt() -> String {
     format!(
         "You are the final-response stage of a local AI knowledge assistant.\n\
@@ -288,6 +320,10 @@ pub fn tool_result_system_prompt() -> String {
          {}\n\
          You have already received the result of a tool execution.\n\
          Use that result to answer the user naturally.\n\
+         - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\n\
+         - Structured answer means any response with steps, lists, multiple sections, headings, comparisons, examples, or code.\n\
+         - If the answer is longer than 3 short sentences, default to <vp-markdown>...</vp-markdown>.\n\
+         - Use standard Markdown with fenced code blocks when code is present.\n\
          Return strict JSON only, with no markdown fence.",
         Utc::now().format("%Y-%m-%d"),
         render_manual_for_model()

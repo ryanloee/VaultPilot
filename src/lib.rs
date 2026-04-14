@@ -4,7 +4,7 @@ pub mod prompting;
 pub mod storage;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ai::AssistantToolCall;
 use chrono::Utc;
@@ -690,16 +690,13 @@ fn display_path(path: &str) -> &str {
 }
 
 fn list_directory_result(path: &str) -> Result<String, String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Err("path is empty".to_string());
-    }
-    let directory = Path::new(trimmed);
+    let directory = normalize_tool_path(path)?;
+    let display = directory.display().to_string();
     if !directory.exists() {
-        return Err(format!("path does not exist: {}", trimmed));
+        return Err(format!("path does not exist: {}", display));
     }
     if !directory.is_dir() {
-        return Err(format!("path is not a directory: {}", trimmed));
+        return Err(format!("path is not a directory: {}", display));
     }
 
     let mut entries = fs::read_dir(directory)
@@ -728,24 +725,38 @@ fn list_directory_result(path: &str) -> Result<String, String> {
 }
 
 fn read_file_result(path: &str) -> Result<String, String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Err("path is empty".to_string());
-    }
-    let file_path = Path::new(trimmed);
+    let file_path = normalize_tool_path(path)?;
+    let display = file_path.display().to_string();
     if !file_path.exists() {
-        return Err(format!("path does not exist: {}", trimmed));
+        return Err(format!("path does not exist: {}", display));
     }
     if !file_path.is_file() {
-        return Err(format!("path is not a file: {}", trimmed));
+        return Err(format!("path is not a file: {}", display));
     }
 
-    let content = fs::read_to_string(file_path).map_err(|error| error.to_string())?;
+    let content = fs::read_to_string(&file_path).map_err(|error| error.to_string())?;
     let clipped = truncate_for_trace(&content, 12_000);
     Ok(format!(
         "read_file returned content for {}:\n{}",
-        trimmed, clipped
+        display, clipped
     ))
+}
+
+fn normalize_tool_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim().trim_matches('"').trim_matches('`');
+    if trimmed.is_empty() {
+        return Err("path is empty".to_string());
+    }
+
+    let normalized = if let Some(stripped) = trimmed.strip_prefix(r"\?\") {
+        format!(r"\\?\{}", stripped)
+    } else if let Some(stripped) = trimmed.strip_prefix("//?/") {
+        format!(r"\\?\{}", stripped.replace('/', "\\"))
+    } else {
+        trimmed.to_string()
+    };
+
+    Ok(PathBuf::from(normalized))
 }
 
 fn load_recent_notes_for_overview(
@@ -823,8 +834,30 @@ fn looks_like_small_talk(input: &str) -> bool {
     .any(|needle| normalized == *needle || normalized.starts_with(&format!("{needle} ")))
 }
 
+#[allow(unreachable_code)]
 fn looks_like_record_request(input: &str) -> bool {
     let normalized = input.trim().to_lowercase();
+    let direct_phrases = [
+        "帮我记录",
+        "请记录",
+        "记录这个",
+        "记录一下",
+        "帮我保存",
+        "请保存",
+        "保存这个",
+        "存到知识库",
+        "加入知识库",
+        "写入知识库",
+        "record this",
+        "save this",
+        "remember this",
+        "store this",
+        "capture this",
+        "add to the knowledge base",
+    ];
+    return direct_phrases
+        .iter()
+        .any(|needle| normalized.contains(needle));
     [
         "记录",
         "记一下",
@@ -1191,7 +1224,7 @@ fn build_chat_session_title(text: &str) -> String {
 mod tests {
     use std::{
         env, fs,
-        path::Path,
+        path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -1201,10 +1234,10 @@ mod tests {
         draft_to_note_document, estimate_session_tokens, estimate_tokens_for_text,
         estimate_turn_tokens, extract_explicit_local_path, has_matching_tool_execution,
         looks_like_record_request, looks_like_session_memory_question, looks_like_small_talk,
-        merge_usage, planned_tool_identity, require_saved_note_for_record_request,
-        resolve_or_create_chat_session, summarize_docs_for_tool_result, truncate_for_trace,
-        ChatAttachment, ChatSession, ChatState, ChatTurn, ConversationSummary, ToolExecution,
-        IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
+        merge_usage, normalize_tool_path, planned_tool_identity,
+        require_saved_note_for_record_request, resolve_or_create_chat_session,
+        summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession, ChatState,
+        ChatTurn, ConversationSummary, ToolExecution, IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
     use crate::models::{GroundedAnswer, NoteDocument, NoteMeta, StructuredNoteDraft};
@@ -1227,6 +1260,15 @@ mod tests {
     fn detects_record_request() {
         assert!(looks_like_record_request("帮我记录这个命令"));
         assert!(looks_like_record_request("please save this"));
+        assert!(!looks_like_record_request(
+            "根据本地笔记，目前记录的 FFmpeg 版本是多少？"
+        ));
+    }
+
+    #[test]
+    fn normalizes_single_slash_verbatim_windows_path() {
+        let path = normalize_tool_path(r"\?\C:\Users\test\note.md").expect("path");
+        assert_eq!(path, PathBuf::from(r"\\?\C:\Users\test\note.md"));
     }
 
     #[test]

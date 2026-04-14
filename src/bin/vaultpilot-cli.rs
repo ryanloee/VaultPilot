@@ -24,6 +24,8 @@ use vaultpilot_lib::{
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const MCP_FALLBACK_PROTOCOL_VERSION: &str = "2024-11-05";
+const MARKDOWN_OPEN_TAG: &str = "<vp-markdown>";
+const MARKDOWN_CLOSE_TAG: &str = "</vp-markdown>";
 
 #[derive(Parser)]
 #[command(name = "vaultpilot-cli")]
@@ -431,7 +433,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-            to_json(&result)
+            to_json(&strip_cli_markdown_from_grounded_answer(result))
         }
         Commands::Compress { history, summary } => {
             let parsed_history: Vec<ConversationTurn> = serde_json::from_str(history)?;
@@ -477,7 +479,7 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
-            to_json(&result)
+            to_json(&strip_cli_markdown_from_chat_result(result))
         }
         ChatActions::Sessions => {
             let state = load_chat_state_with_context(context)?;
@@ -493,7 +495,7 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
         }
         ChatActions::State => {
             let state = load_chat_state_with_context(context)?;
-            to_json(&state)
+            to_json(&strip_cli_markdown_from_chat_state(state))
         }
         ChatActions::New { title } => {
             let mut state = load_chat_state_with_context(context)?;
@@ -503,7 +505,7 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             let saved = save_chat_state_with_context(context, &state)?;
             Ok(serde_json::json!({
                 "session": session,
-                "state": saved
+                "state": strip_cli_markdown_from_chat_state(saved)
             }))
         }
         ChatActions::Delete { id } => {
@@ -515,10 +517,118 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             Ok(serde_json::json!({
                 "deleted": deleted,
                 "id": id,
-                "state": saved
+                "state": strip_cli_markdown_from_chat_state(saved)
             }))
         }
     }
+}
+
+fn strip_cli_markdown_from_chat_result(mut result: ChatExchangeResult) -> ChatExchangeResult {
+    result.answer = strip_cli_markdown_from_grounded_answer(result.answer);
+    result.state = strip_cli_markdown_from_chat_state(result.state);
+    result
+}
+
+fn strip_cli_markdown_from_grounded_answer(mut answer: GroundedAnswer) -> GroundedAnswer {
+    answer.answer = simplify_cli_text(&answer.answer);
+    answer.thinking_trace = None;
+    answer
+}
+
+fn strip_cli_markdown_from_chat_state(mut state: ChatState) -> ChatState {
+    for session in &mut state.sessions {
+        for turn in &mut session.turns {
+            if turn.role.eq_ignore_ascii_case("assistant") {
+                turn.text = simplify_cli_text(&turn.text);
+                turn.thinking_trace = None;
+            }
+        }
+    }
+    state
+}
+
+fn strip_markdown_wrapper_tags(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.starts_with(MARKDOWN_OPEN_TAG) && trimmed.ends_with(MARKDOWN_CLOSE_TAG) {
+        return trimmed[MARKDOWN_OPEN_TAG.len()..trimmed.len() - MARKDOWN_CLOSE_TAG.len()]
+            .trim()
+            .to_string();
+    }
+
+    text.to_string()
+}
+
+fn simplify_cli_text(text: &str) -> String {
+    let text = strip_markdown_wrapper_tags(text);
+    let mut simplified = Vec::new();
+    let mut in_code_block = false;
+
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+
+        let line = if in_code_block {
+            trimmed.to_string()
+        } else {
+            simplify_markdown_line(trimmed)
+        };
+
+        if line.is_empty() {
+            if simplified
+                .last()
+                .is_some_and(|item: &String| !item.is_empty())
+            {
+                simplified.push(String::new());
+            }
+        } else {
+            simplified.push(line);
+        }
+    }
+
+    while simplified.last().is_some_and(|item| item.is_empty()) {
+        simplified.pop();
+    }
+
+    simplified.join("\n")
+}
+
+fn simplify_markdown_line(line: &str) -> String {
+    let without_heading = line.trim_start_matches('#').trim();
+    let without_bullet = strip_markdown_list_marker(without_heading);
+    strip_inline_markdown(without_bullet)
+}
+
+fn strip_markdown_list_marker(line: &str) -> &str {
+    if let Some(rest) = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("+ "))
+    {
+        return rest.trim();
+    }
+
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() && bytes[index].is_ascii_digit() {
+        index += 1;
+    }
+    if index > 0 && index + 1 < bytes.len() && bytes[index] == b'.' && bytes[index + 1] == b' ' {
+        return line[index + 2..].trim();
+    }
+
+    line
+}
+
+fn strip_inline_markdown(line: &str) -> String {
+    line.replace("**", "")
+        .replace("__", "")
+        .replace(['`', '*', '_'], "")
+        .replace("~~", "")
+        .trim()
+        .to_string()
 }
 
 fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result<Value> {
@@ -1378,9 +1488,14 @@ fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{bridge_token_from_headers, normalize_bridge_token, validate_http_bridge_binding};
+    use super::{
+        bridge_token_from_headers, normalize_bridge_token, simplify_cli_text,
+        strip_cli_markdown_from_chat_state, strip_markdown_wrapper_tags,
+        validate_http_bridge_binding,
+    };
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
+    use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
 
     #[test]
     fn normalize_bridge_token_trims_and_drops_empty_values() {
@@ -1413,5 +1528,56 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-vaultpilot-token", HeaderValue::from_static("secret"));
         assert_eq!(bridge_token_from_headers(&headers), Some("secret"));
+    }
+
+    #[test]
+    fn strip_markdown_wrapper_tags_removes_wrapper_only() {
+        let text = "<vp-markdown>\n## Title\n- item\n</vp-markdown>";
+        assert_eq!(strip_markdown_wrapper_tags(text), "## Title\n- item");
+    }
+
+    #[test]
+    fn strip_markdown_wrapper_tags_keeps_plain_text() {
+        let text = "plain text";
+        assert_eq!(strip_markdown_wrapper_tags(text), "plain text");
+    }
+
+    #[test]
+    fn simplify_cli_text_removes_common_markdown_noise() {
+        let text = "<vp-markdown>\n### 标题\n1. **第一步**\n- `git fetch`\n```bash\ngit pull\n```\n</vp-markdown>";
+        assert_eq!(simplify_cli_text(text), "标题\n第一步\ngit fetch\ngit pull");
+    }
+
+    #[test]
+    fn strip_cli_markdown_from_chat_state_updates_assistant_turns_only() {
+        let state = ChatState {
+            current_session_id: "s1".to_string(),
+            sessions: vec![ChatSession {
+                id: "s1".to_string(),
+                title: "Test".to_string(),
+                turns: vec![
+                    ChatTurn {
+                        role: "user".to_string(),
+                        text: "<vp-markdown>keep me</vp-markdown>".to_string(),
+                        ..Default::default()
+                    },
+                    ChatTurn {
+                        role: "assistant".to_string(),
+                        text: "<vp-markdown>**bold**</vp-markdown>".to_string(),
+                        thinking_trace: Some(ThinkingTrace::default()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+        };
+
+        let stripped = strip_cli_markdown_from_chat_state(state);
+        assert_eq!(
+            stripped.sessions[0].turns[0].text,
+            "<vp-markdown>keep me</vp-markdown>"
+        );
+        assert_eq!(stripped.sessions[0].turns[1].text, "bold");
+        assert!(stripped.sessions[0].turns[1].thinking_trace.is_none());
     }
 }

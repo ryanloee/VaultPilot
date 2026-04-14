@@ -235,10 +235,7 @@ pub async fn select_tool_call(
         }
     };
 
-    Ok(ToolSelectionResult {
-        tool_call,
-        usage,
-    })
+    Ok(ToolSelectionResult { tool_call, usage })
 }
 
 pub async fn answer_question(
@@ -519,7 +516,7 @@ fn parse_record_response(
 fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToolCall> {
     let parsed = extract_json(text)
         .ok()
-        .and_then(|json| serde_json::from_str::<ToolCallResponse>(&json).ok())
+        .and_then(|json| parse_tool_call_response(&json))
         .ok_or_else(|| anyhow!("model did not return a valid tool call"))?;
 
     let limit = parsed.limit.clamp(3, 8);
@@ -552,6 +549,64 @@ fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToolCall> {
         }
         other => Err(anyhow!("unknown tool selected by model: {other}")),
     }
+}
+
+fn parse_tool_call_response(json: &str) -> Option<ToolCallResponse> {
+    serde_json::from_str::<ToolCallResponse>(json)
+        .ok()
+        .or_else(|| {
+            let repaired = repair_json_string_escapes(json)?;
+            serde_json::from_str::<ToolCallResponse>(&repaired).ok()
+        })
+}
+
+#[allow(clippy::while_let_on_iterator)]
+fn repair_json_string_escapes(input: &str) -> Option<String> {
+    let mut repaired = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaping = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            if escaping {
+                if matches!(ch, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') {
+                    repaired.push(ch);
+                } else {
+                    repaired.push('\\');
+                    repaired.push(ch);
+                }
+                escaping = false;
+                continue;
+            }
+
+            match ch {
+                '\\' => {
+                    repaired.push('\\');
+                    escaping = true;
+                }
+                '"' => {
+                    repaired.push('"');
+                    in_string = false;
+                }
+                '\n' => repaired.push_str("\\n"),
+                '\r' => repaired.push_str("\\r"),
+                '\t' => repaired.push_str("\\t"),
+                _ => repaired.push(ch),
+            }
+        } else {
+            repaired.push(ch);
+            if ch == '"' {
+                in_string = true;
+            }
+        }
+    }
+
+    if escaping {
+        repaired.push('\\');
+    }
+
+    Some(repaired)
 }
 
 fn normalize_draft(draft: StructuredNoteDraft) -> StructuredNoteDraft {
@@ -1059,6 +1114,16 @@ mod tests {
         let tool = parse_tool_call(
             "{\"tool\":\"read_file\",\"path\":\"C:\\\\Users\\\\test\\\\log.txt\",\"noteDraft\":null}",
             "看下日志",
+        )
+        .expect("tool");
+        assert!(matches!(tool, AssistantToolCall::ReadFile { path } if path.contains("log.txt")));
+    }
+
+    #[test]
+    fn parses_read_file_tool_call_with_unescaped_windows_path() {
+        let tool = parse_tool_call(
+            r#"{"tool":"read_file","query":"","path":"\\?\C:\Users\test\log.txt","limit":6,"noteDraft":null}"#,
+            "read the file",
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ReadFile { path } if path.contains("log.txt")));

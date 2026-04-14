@@ -6,6 +6,7 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -1016,37 +1017,137 @@ public sealed partial class MainWindow : Window
 
             if (line.StartsWith("# "))
             {
-                textBlock.Text = line[2..].Trim();
+                ApplyInlineMarkdown(textBlock, line[2..].Trim());
                 textBlock.FontSize = 20;
                 textBlock.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
             }
             else if (line.StartsWith("## "))
             {
-                textBlock.Text = line[3..].Trim();
+                ApplyInlineMarkdown(textBlock, line[3..].Trim());
                 textBlock.FontSize = 18;
                 textBlock.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
             }
             else if (line.StartsWith("### "))
             {
-                textBlock.Text = line[4..].Trim();
+                ApplyInlineMarkdown(textBlock, line[4..].Trim());
                 textBlock.FontSize = 16;
                 textBlock.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
             }
             else if (line.StartsWith("- ") || line.StartsWith("* "))
             {
-                textBlock.Text = $"• {line[2..].Trim()}";
+                textBlock.Inlines.Add(new Run { Text = "• " });
+                AppendInlineMarkdown(textBlock.Inlines, line[2..].Trim());
             }
             else if (char.IsDigit(line[0]) && line.Contains(". "))
             {
-                textBlock.Text = line;
+                var dotIndex = line.IndexOf(". ", StringComparison.Ordinal);
+                if (dotIndex > 0 && line.Take(dotIndex).All(char.IsDigit))
+                {
+                    textBlock.Inlines.Add(new Run { Text = line[..(dotIndex + 2)] });
+                    AppendInlineMarkdown(textBlock.Inlines, line[(dotIndex + 2)..].Trim());
+                }
+                else
+                {
+                    ApplyInlineMarkdown(textBlock, line);
+                }
             }
             else
             {
-                textBlock.Text = line;
+                ApplyInlineMarkdown(textBlock, line);
             }
 
             yield return textBlock;
         }
+    }
+
+    private static void ApplyInlineMarkdown(TextBlock textBlock, string text)
+    {
+        textBlock.Inlines.Clear();
+        AppendInlineMarkdown(textBlock.Inlines, text);
+    }
+
+    private static void AppendInlineMarkdown(InlineCollection inlines, string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        var index = 0;
+        while (index < text.Length)
+        {
+            if (index + 1 < text.Length
+                && text[index] == '*'
+                && text[index + 1] == '*')
+            {
+                var closeIndex = text.IndexOf("**", index + 2, StringComparison.Ordinal);
+                if (closeIndex > index + 1)
+                {
+                    var span = new Span
+                    {
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+                    };
+                    AppendInlineMarkdown(span.Inlines, text[(index + 2)..closeIndex]);
+                    inlines.Add(span);
+                    index = closeIndex + 2;
+                    continue;
+                }
+            }
+
+            if (text[index] == '`')
+            {
+                var closeIndex = text.IndexOf('`', index + 1);
+                if (closeIndex > index)
+                {
+                    var span = new Span
+                    {
+                        FontFamily = new FontFamily("Consolas")
+                    };
+                    span.Inlines.Add(new Run { Text = text[(index + 1)..closeIndex] });
+                    inlines.Add(span);
+                    index = closeIndex + 1;
+                    continue;
+                }
+            }
+
+            if (text[index] == '*')
+            {
+                var closeIndex = text.IndexOf('*', index + 1);
+                if (closeIndex > index + 1)
+                {
+                    var span = new Span
+                    {
+                        FontStyle = Windows.UI.Text.FontStyle.Italic
+                    };
+                    AppendInlineMarkdown(span.Inlines, text[(index + 1)..closeIndex]);
+                    inlines.Add(span);
+                    index = closeIndex + 1;
+                    continue;
+                }
+            }
+
+            var nextIndex = FindNextInlineMarker(text, index);
+            inlines.Add(new Run
+            {
+                Text = text[index..nextIndex]
+            });
+            index = nextIndex;
+        }
+    }
+
+    private static int FindNextInlineMarker(string text, int startIndex)
+    {
+        var nextIndex = text.Length;
+        foreach (var marker in new[] { "**", "*", "`" })
+        {
+            var index = text.IndexOf(marker, startIndex, StringComparison.Ordinal);
+            if (index >= 0 && index < nextIndex)
+            {
+                nextIndex = index;
+            }
+        }
+
+        return nextIndex;
     }
 
     private FrameworkElement CreateCodeBlock(string code, string? language)
@@ -1164,6 +1265,13 @@ public sealed partial class MainWindow : Window
             return true;
         }
 
+        if (text.Contains("**", StringComparison.Ordinal)
+            || text.Contains('`')
+            || HasStandaloneItalicMarker(text))
+        {
+            return true;
+        }
+
         var lines = text.Replace("\r\n", "\n").Split('\n');
         var bulletLines = 0;
         var numberedLines = 0;
@@ -1218,6 +1326,18 @@ public sealed partial class MainWindow : Window
         }
 
         return false;
+    }
+
+    private static bool HasStandaloneItalicMarker(string text)
+    {
+        var first = text.IndexOf('*');
+        if (first < 0 || first + 1 >= text.Length)
+        {
+            return false;
+        }
+
+        var second = text.IndexOf('*', first + 1);
+        return second > first + 1;
     }
 
     private void CopyTextToClipboard(string text)

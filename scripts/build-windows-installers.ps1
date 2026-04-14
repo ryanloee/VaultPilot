@@ -128,6 +128,65 @@ function Download-ReleaseHistory {
     }
 }
 
+function Remove-CurrentVersionRelease {
+    param(
+        [string]$PackageDir,
+        [string]$Channel,
+        [string]$Version
+    )
+
+    if (-not (Test-Path $PackageDir)) {
+        return
+    }
+
+    $escapedVersion = [regex]::Escape($Version)
+    $escapedChannel = [regex]::Escape($Channel)
+    $packagePattern = "^VaultPilot-$escapedVersion-$escapedChannel-(full|delta)\.nupkg$"
+
+    Get-ChildItem -LiteralPath $PackageDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match $packagePattern } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+
+    $releasesFile = Join-Path $PackageDir "RELEASES-$Channel"
+    if (Test-Path $releasesFile) {
+        $remainingLines = @(Get-Content $releasesFile | Where-Object {
+            $_ -notmatch " VaultPilot-$escapedVersion-$escapedChannel-(full|delta)\.nupkg "
+        })
+        if ($remainingLines.Count -gt 0) {
+            Set-Content -LiteralPath $releasesFile -Value $remainingLines
+        }
+        else {
+            Remove-Item -LiteralPath $releasesFile -Force
+        }
+    }
+
+    $releasesJsonFile = Join-Path $PackageDir "releases.$Channel.json"
+    if (Test-Path $releasesJsonFile) {
+        $releasesJson = Get-Content $releasesJsonFile -Raw | ConvertFrom-Json
+        $remainingAssets = @($releasesJson.Assets | Where-Object { $_.Version -ne $Version })
+        if ($remainingAssets.Count -gt 0) {
+            @{ Assets = $remainingAssets } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $releasesJsonFile
+        }
+        else {
+            Remove-Item -LiteralPath $releasesJsonFile -Force
+        }
+    }
+
+    $assetsJsonFile = Join-Path $PackageDir "assets.$Channel.json"
+    if (Test-Path $assetsJsonFile) {
+        $assetsJson = @(Get-Content $assetsJsonFile -Raw | ConvertFrom-Json)
+        $remainingAssets = @($assetsJson | Where-Object {
+            $_.RelativeFileName -notmatch $packagePattern
+        })
+        if ($remainingAssets.Count -gt 0) {
+            $remainingAssets | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $assetsJsonFile
+        }
+        else {
+            Remove-Item -LiteralPath $assetsJsonFile -Force
+        }
+    }
+}
+
 if (-not (Test-Path $cargoToml)) {
     throw "Cargo.toml not found at $cargoToml"
 }
@@ -157,6 +216,7 @@ foreach ($platform in $Platforms) {
 
     if ($FetchReleaseHistory) {
         Download-ReleaseHistory -Vpk $vpk -OutputDir $packageDir -Channel $build.Channel
+        Remove-CurrentVersionRelease -PackageDir $packageDir -Channel $build.Channel -Version $resolvedVersion
     }
 
     Write-Host "Publishing self-contained WinUI application for $platform..."

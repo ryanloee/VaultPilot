@@ -1,0 +1,54 @@
+name: Linux CLI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils dpkg-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Zig
+        run: |
+          mkdir -p "$HOME/.local/zig"
+          cd "$HOME/.local/zig"
+          curl -L https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$HOME/.local/zig/zig-linux-x86_64-0.14.0" >> "$GITHUB_PATH"
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+
+      - name: Build Linux CLI artifacts
+        run: |
+          chmod +x scripts/build-linux-cli.sh
+          ./scripts/build-linux-cli.sh --platforms x64 --format all
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vaultpilot-cli-linux-x64
+          path: |
+            artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
+            artifacts/linux-cli/packages/linux-x64/*.deb
+          if-no-files-found: error
+          retention-days: 7

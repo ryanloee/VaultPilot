@@ -2,9 +2,11 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::SystemTime,
 };
+
+#[cfg(target_os = "windows")]
+use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Datelike, Utc};
@@ -80,7 +82,16 @@ impl StorageContext {
 
     pub fn for_cli(vault_dir_override: Option<PathBuf>) -> Result<Self> {
         let mut ctx = Self::for_sidecar()?;
-        ctx.paths.vault_dir_override = vault_dir_override;
+        if let Some(vault_dir) = vault_dir_override {
+            let cli_state_dir = vault_dir.join(".vaultpilot");
+            ctx.paths.settings_path = cli_state_dir.join("settings.json");
+            ctx.paths.database_path = cli_state_dir.join("knowledge-index.sqlite");
+            ctx.paths.chat_state_path = cli_state_dir.join("chat-state.json");
+            ctx.paths.default_vault_dir = vault_dir.clone();
+            ctx.paths.vault_dir_override = Some(vault_dir);
+        } else {
+            ctx.paths.vault_dir_override = None;
+        }
         Ok(ctx)
     }
 
@@ -3367,6 +3378,32 @@ mod tests {
             crate::models::default_timeout_ms()
         );
         assert!(settings.provider.context_window_tokens.is_none());
+    }
+
+    #[test]
+    fn for_cli_uses_vault_local_state_paths_when_override_is_provided() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-cli-paths-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let vault_dir = temp.join("vault");
+
+        let ctx = StorageContext::for_cli(Some(vault_dir.clone())).expect("cli context");
+
+        assert_eq!(ctx.paths.default_vault_dir, vault_dir);
+        assert_eq!(ctx.paths.vault_dir_override, Some(vault_dir.clone()));
+        assert_eq!(
+            ctx.paths.settings_path,
+            vault_dir.join(".vaultpilot").join("settings.json")
+        );
+        assert_eq!(
+            ctx.paths.database_path,
+            vault_dir.join(".vaultpilot").join("knowledge-index.sqlite")
+        );
+        assert_eq!(
+            ctx.paths.chat_state_path,
+            vault_dir.join(".vaultpilot").join("chat-state.json")
+        );
     }
 
     // ── 1.30 build_note_path ──

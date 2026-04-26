@@ -14,6 +14,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2B-0078D4" alt="Windows" />
+  <img src="https://img.shields.io/badge/linux-CLI%20only-FCC624" alt="Linux CLI" />
   <img src="https://img.shields.io/badge/rust-2021-orange" alt="Rust" />
   <img src="https://img.shields.io/badge/.NET-8-512BD4" alt=".NET 8" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" />
@@ -70,6 +71,20 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 
 - Windows 10 version 1809+ (10.0.17763+)
 - For AI features: an API key (Anthropic, OpenAI-compatible, or any provider you configure)
+
+### Linux CLI
+
+The Linux build is CLI-only and does not include the WinUI desktop frontend.
+
+```bash
+chmod +x ./scripts/build-linux-cli.sh
+./scripts/build-linux-cli.sh --platforms x64 --format all
+```
+
+Main outputs:
+
+- `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
+- `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
 
 ### Install
 
@@ -173,6 +188,20 @@ VaultPilot 是一个面向工程师的**本地优先 AI 知识助手**。帮助�
 
 - Windows 10 1809 及以上版本
 - AI 功能需要配置 API Key（支持 Anthropic、OpenAI 兼容等）
+
+### Linux CLI
+
+Linux 版本只包含 CLI，不包含 WinUI 图形界面。
+
+```bash
+chmod +x ./scripts/build-linux-cli.sh
+./scripts/build-linux-cli.sh --platforms x64 --format all
+```
+
+主要产物：
+
+- `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
+- `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
 
 ### 安装
 

@@ -149,9 +149,61 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  linux_build:
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux packaging prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils dpkg-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Zig
+        run: |
+          mkdir -p "$HOME/.local/zig"
+          cd "$HOME/.local/zig"
+          curl -L https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$HOME/.local/zig/zig-linux-x86_64-0.14.0" >> "$GITHUB_PATH"
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
+
+      - name: Build Linux CLI artifacts
+        run: |
+          chmod +x scripts/build-linux-cli.sh
+          ./scripts/build-linux-cli.sh --platforms x64 --format all
+
+      - name: Verify Linux CLI outputs
+        run: |
+          test -f artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
+          compgen -G "artifacts/linux-cli/packages/linux-x64/*.deb" > /dev/null
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package-x64
+          path: |
+            artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
+            artifacts/linux-cli/packages/linux-x64/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, linux_build]
     runs-on: windows-latest
 
     steps:
@@ -175,6 +227,12 @@ jobs:
           name: windows-package-x64
           path: release-assets/win-x64
 
+      - name: Download Linux x64 package
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-package-x64
+          path: release-assets/linux-x64
+
       - name: Inspect downloaded assets
         shell: powershell
         run: |
@@ -182,6 +240,8 @@ jobs:
           Get-ChildItem release-assets/win-x86 -File -Recurse | Sort-Object FullName | ForEach-Object { Write-Host " - $($_.FullName)" }
           Write-Host "x64 assets:"
           Get-ChildItem release-assets/win-x64 -File -Recurse | Sort-Object FullName | ForEach-Object { Write-Host " - $($_.FullName)" }
+          Write-Host "linux-x64 assets:"
+          Get-ChildItem release-assets/linux-x64 -File -Recurse | Sort-Object FullName | ForEach-Object { Write-Host " - $($_.FullName)" }
 
       - name: Publish release assets
         env:
@@ -250,6 +310,7 @@ jobs:
             $assets = Get-ChildItem $Directory -File -Recurse | Where-Object {
               $_.Name -match 'Setup\.exe$' -or
               $_.Name -match '-full\.nupkg$' -or
+              $_.Name -match '\.deb$' -or
               $_.Name -match '^releases\..+\.json$' -or
               $_.Name -match '^RELEASES-.+$'
             } | Sort-Object Name
@@ -276,3 +337,4 @@ jobs:
 
           Upload-ReleaseAssets -Directory "release-assets/win-x86" -KnownAssets $existingAssetNames
           Upload-ReleaseAssets -Directory "release-assets/win-x64" -KnownAssets $existingAssetNames
+          Upload-ReleaseAssets -Directory "release-assets/linux-x64" -KnownAssets $existingAssetNames

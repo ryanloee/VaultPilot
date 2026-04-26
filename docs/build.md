@@ -2,10 +2,11 @@
 
 ## English
 
-This project currently targets Windows and has two main build paths:
+This project currently has:
 
-- local development build
-- release package build
+- Windows desktop app build
+- Windows installer package build
+- Linux CLI build
 
 ### Prerequisites
 
@@ -76,12 +77,51 @@ These directories are build outputs and should not be committed:
 - `native/**/bin/`
 - `native/**/obj/`
 
+### Build the Linux CLI
+
+The Linux build is CLI-only. It does not include the WinUI frontend.
+
+Prerequisites:
+
+- Linux with `bash`
+- Rust toolchain with `rustup`
+- for `x86` builds: either Zig + `cargo-zigbuild`, or a 32-bit GNU linker toolchain such as `gcc-multilib`
+- for `.deb` packaging: `dpkg-deb` from `dpkg-dev`
+
+Build an `x64` Linux executable and `.deb` package:
+
+```bash
+chmod +x ./scripts/build-linux-cli.sh
+./scripts/build-linux-cli.sh --platforms x64 --format all
+```
+
+If your machine does not have `gcc-multilib`, install Zig and `cargo-zigbuild` instead.  
+When both `zig` and `cargo-zigbuild` are present in `PATH`, the script uses Zig automatically.
+
+Build only the executable:
+
+```bash
+./scripts/build-linux-cli.sh --platforms x64 --format bin
+```
+
+Optional `x86` build:
+
+```bash
+./scripts/build-linux-cli.sh --platforms x86 --format all
+```
+
+Main outputs:
+
+- `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
+- `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
+
 ## 中文
 
-当前项目主要面向 Windows，构建分成两种：
+当前项目现在包含三条构建路径：
 
-- 本地开发构建
-- 正式安装包构建
+- Windows 桌面应用构建
+- Windows 安装包构建
+- Linux CLI 构建
 
 ### 环境要求
 
@@ -151,3 +191,41 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 
 - `artifacts/`
 - `native/**/bin/`
 - `native/**/obj/`
+
+### 构建 Linux CLI
+
+Linux 版本只包含 CLI，不包含 WinUI 图形界面。
+
+环境要求：
+
+- Linux + `bash`
+- Rust 工具链和 `rustup`
+- 若构建 `x86`：可使用 Zig + `cargo-zigbuild`，或者安装 32 位 GNU 链接工具链（如 `gcc-multilib`）
+- 若输出 `.deb`：需要 `dpkg-deb`，通常来自 `dpkg-dev`
+
+构建 `x64 Linux` 可执行文件和 `.deb` 包：
+
+```bash
+chmod +x ./scripts/build-linux-cli.sh
+./scripts/build-linux-cli.sh --platforms x64 --format all
+```
+
+如果本机没有 `gcc-multilib`，也可以安装 Zig 和 `cargo-zigbuild`。  
+当 `PATH` 中同时存在 `zig` 和 `cargo-zigbuild` 时，脚本会自动走 Zig 交叉编译。
+
+只构建可执行文件：
+
+```bash
+./scripts/build-linux-cli.sh --platforms x64 --format bin
+```
+
+可选的 `x86` 构建：
+
+```bash
+./scripts/build-linux-cli.sh --platforms x86 --format all
+```
+
+主要产物：
+
+- `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
+- `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`

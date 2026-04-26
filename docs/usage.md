@@ -2,8 +2,8 @@
 
 ## English
 
-VaultPilot is a local knowledge-base assistant for Windows.  
-It combines a WinUI desktop app, a Rust sidecar, local note indexing, and an AI-backed chat flow.
+VaultPilot includes a Windows desktop app and a cross-platform CLI.  
+The Linux build is CLI-only and does not include the WinUI frontend.
 
 ### Main usage modes
 
@@ -61,10 +61,14 @@ This project also includes:
 
 The CLI can be used for local integration scenarios, and the app can expose a local chat bridge for agent-style access.
 
+For Linux CLI builds, the main binary is:
+
+- `vaultpilot-cli`
+
 ## 中文
 
-VaultPilot 是一个运行在 Windows 上的本地知识库助手。  
-它由 WinUI 桌面界面、Rust sidecar、本地笔记索引和 AI 对话流程组成。
+VaultPilot 包含 Windows 桌面应用和跨平台 CLI。  
+Linux 版本只包含 CLI，不包含 WinUI 图形界面。
 
 ### 主要使用方式
 
@@ -121,3 +125,7 @@ VaultPilot 是一个运行在 Windows 上的本地知识库助手。
 - `vaultpilot-cli.exe`
 
 其中 CLI 可用于本地集成场景，软件也可以提供本地对话桥，供外部 Agent 通过对话方式接入。
+
+对于 Linux CLI 构建，主要可执行文件是：
+
+- `vaultpilot-cli`

@@ -69,6 +69,11 @@ public partial class App : Application
         (sender as MainWindow)?.Hide();
     }
 
+    public void BeginExitForUpdate()
+    {
+        _isExiting = true;
+    }
+
     private async void ExitApplication()
     {
         _isExiting = true;

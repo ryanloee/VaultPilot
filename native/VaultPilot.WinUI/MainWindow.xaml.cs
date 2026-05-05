@@ -1894,7 +1894,7 @@ public sealed partial class MainWindow : Window
         var now = DateTime.Now;
         var candidate = _lastAutoWakeTime.HasValue
             ? _lastAutoWakeTime.Value + interval
-            : now;
+            : now + interval;
 
         // If no time window, just return the candidate
         if (string.IsNullOrEmpty(settings.AutoWakeStartTime) && string.IsNullOrEmpty(settings.AutoWakeEndTime))

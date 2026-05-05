@@ -1,3 +1,4 @@
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Velopack;
 using Velopack.Sources;
@@ -95,6 +96,7 @@ public sealed partial class MainWindow
         try
         {
             UpdateStatusBar("info", "\u6b63\u5728\u51c6\u5907\u66f4\u65b0", "\u5173\u95ed\u5e94\u7528\u540e\u4f1a\u81ea\u52a8\u5b89\u88c5\u65b0\u7248\u672c\u3002");
+            (Application.Current as App)?.BeginExitForUpdate();
             _updateManager?.WaitExitThenApplyUpdates(update, silent: false, restart: true);
             Close();
         }

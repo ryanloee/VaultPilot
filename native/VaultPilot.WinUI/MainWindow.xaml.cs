@@ -1890,48 +1890,56 @@ public sealed partial class MainWindow : Window
         var settings = _settings;
         if (settings == null || !settings.AutoWakeEnabled) return null;
 
-        var interval = TimeSpan.FromMinutes(Math.Max(1, (int)settings.AutoWakeIntervalMinutes));
+        var intervalMinutes = Math.Max(1, (int)settings.AutoWakeIntervalMinutes);
+        var interval = TimeSpan.FromMinutes(intervalMinutes);
         var now = DateTime.Now;
-        var candidate = _lastAutoWakeTime.HasValue
-            ? _lastAutoWakeTime.Value + interval
-            : now + interval;
 
-        // If no time window, just return the candidate
+        // No time window: simple interval
         if (string.IsNullOrEmpty(settings.AutoWakeStartTime) && string.IsNullOrEmpty(settings.AutoWakeEndTime))
         {
-            return candidate;
+            return _lastAutoWakeTime.HasValue
+                ? _lastAutoWakeTime.Value + interval
+                : now + interval;
         }
 
         if (!TimeSpan.TryParse(settings.AutoWakeStartTime, out var startTime)) startTime = TimeSpan.Zero;
         if (!TimeSpan.TryParse(settings.AutoWakeEndTime, out var endTime)) endTime = TimeSpan.FromHours(24);
 
-        // Walk forward day by day (max 2 days) to find next in-window time
-        for (var day = 0; day <= 2; day++)
+        // If last wake is known, next is last + interval (if still in window)
+        if (_lastAutoWakeTime.HasValue)
         {
-            var baseDate = now.Date.AddDays(day);
-            if (startTime <= endTime)
+            var candidate = _lastAutoWakeTime.Value + interval;
+            if (IsTimeInWindow(candidate.TimeOfDay, startTime, endTime))
+                return candidate;
+            // Past today's window, restart from start_time tomorrow
+            return now.Date.AddDays(1) + startTime;
+        }
+
+        // No last wake yet: find next slot anchored to start_time
+        // Schedule for today: start, start+interval, start+2*interval, ...
+        for (var day = 0; day <= 1; day++)
+        {
+            var baseTime = now.Date.AddDays(day) + startTime;
+            for (int i = 0; i < 200; i++)
             {
-                // Same-day window: start to end
-                var windowStart = baseDate + startTime;
-                var windowEnd = baseDate + endTime;
-                if (candidate < windowStart && windowStart >= now) return windowStart;
-                if (candidate >= windowStart && candidate <= windowEnd) return candidate;
-                // Candidate is past this window, try next day
-            }
-            else
-            {
-                // Cross-midnight window
-                var windowStart = baseDate + startTime;
-                var windowEnd = baseDate.AddDays(1) + endTime;
-                if (candidate >= windowStart && candidate <= windowEnd) return candidate;
-                if (candidate < windowStart && windowStart >= now) return windowStart;
-                // Also check if now is in the "end" portion (before endTime today)
-                var earlyEnd = baseDate + endTime;
-                if (now.TimeOfDay <= endTime && candidate <= earlyEnd) return candidate;
+                var slot = baseTime + TimeSpan.FromTicks(interval.Ticks * i);
+                var slotTime = slot.TimeOfDay;
+
+                // Check if still in window
+                if (!IsTimeInWindow(slotTime, startTime, endTime)) break;
+                if (slot > now) return slot;
             }
         }
 
-        return candidate;
+        // Fallback: start_time tomorrow
+        return now.Date.AddDays(1) + startTime;
+    }
+
+    private static bool IsTimeInWindow(TimeSpan time, TimeSpan start, TimeSpan end)
+    {
+        if (start <= end)
+            return time >= start && time <= end;
+        return time >= start || time <= end;
     }
 
     private void ShowNextWakeTime()

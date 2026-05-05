@@ -125,6 +125,7 @@ public sealed partial class MainWindow : Window
             UpdateStatusBar("success", "后端已连接", "就绪");
             LogStartup("Startup complete");
             ApplyAutoWakeSettings();
+            ShowNextWakeTime();
             if (_settings?.AutoCheckUpdates ?? true)
             {
                 _ = CheckForAppUpdatesAsync();
@@ -432,6 +433,7 @@ public sealed partial class MainWindow : Window
             RefreshContextStatus();
             ApplyAutoWakeSettings();
             UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
+            ShowNextWakeTime();
         }
         catch (Exception error)
         {
@@ -1862,6 +1864,68 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
+        }
+        ShowNextWakeTime();
+    }
+
+    private DateTime? GetNextAutoWakeTime()
+    {
+        var settings = _settings;
+        if (settings == null || !settings.AutoWakeEnabled) return null;
+
+        var interval = TimeSpan.FromMinutes(Math.Max(1, (int)settings.AutoWakeIntervalMinutes));
+        var now = DateTime.Now;
+        var candidate = _lastAutoWakeTime.HasValue
+            ? _lastAutoWakeTime.Value + interval
+            : now;
+
+        // If no time window, just return the candidate
+        if (string.IsNullOrEmpty(settings.AutoWakeStartTime) && string.IsNullOrEmpty(settings.AutoWakeEndTime))
+        {
+            return candidate;
+        }
+
+        if (!TimeSpan.TryParse(settings.AutoWakeStartTime, out var startTime)) startTime = TimeSpan.Zero;
+        if (!TimeSpan.TryParse(settings.AutoWakeEndTime, out var endTime)) endTime = TimeSpan.FromHours(24);
+
+        // Walk forward day by day (max 2 days) to find next in-window time
+        for (var day = 0; day <= 2; day++)
+        {
+            var baseDate = now.Date.AddDays(day);
+            if (startTime <= endTime)
+            {
+                // Same-day window: start to end
+                var windowStart = baseDate + startTime;
+                var windowEnd = baseDate + endTime;
+                if (candidate < windowStart && windowStart >= now) return windowStart;
+                if (candidate >= windowStart && candidate <= windowEnd) return candidate;
+                // Candidate is past this window, try next day
+            }
+            else
+            {
+                // Cross-midnight window
+                var windowStart = baseDate + startTime;
+                var windowEnd = baseDate.AddDays(1) + endTime;
+                if (candidate >= windowStart && candidate <= windowEnd) return candidate;
+                if (candidate < windowStart && windowStart >= now) return windowStart;
+                // Also check if now is in the "end" portion (before endTime today)
+                var earlyEnd = baseDate + endTime;
+                if (now.TimeOfDay <= endTime && candidate <= earlyEnd) return candidate;
+            }
+        }
+
+        return candidate;
+    }
+
+    private void ShowNextWakeTime()
+    {
+        var next = GetNextAutoWakeTime();
+        if (next.HasValue)
+        {
+            var label = next.Value.Date == DateTime.Today
+                ? $"下次唤醒: {next.Value:HH:mm}"
+                : $"下次唤醒: {next.Value:MM/dd HH:mm}";
+            LogStartup(label);
         }
     }
 

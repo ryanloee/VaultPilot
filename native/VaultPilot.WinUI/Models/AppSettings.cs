@@ -13,4 +13,6 @@ public sealed record AppSettings(
     bool AutoCheckUpdates,
     bool AutoWakeEnabled,
     ulong AutoWakeIntervalMinutes,
-    string AutoWakeModel);
+    string AutoWakeModel,
+    string AutoWakeStartTime,
+    string AutoWakeEndTime);

@@ -302,6 +302,20 @@ public sealed partial class MainWindow : Window
             {
                 autoWakeModelBox.Text = _settings.AutoWakeModel;
             }
+            var autoWakeStartTimeBox = new TextBox
+            {
+                Header = "开始时间（HH:mm，留空不限）",
+                Text = _settings?.AutoWakeStartTime ?? string.Empty,
+                PlaceholderText = "05:00",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
+            var autoWakeEndTimeBox = new TextBox
+            {
+                Header = "结束时间（HH:mm，留空不限）",
+                Text = _settings?.AutoWakeEndTime ?? string.Empty,
+                PlaceholderText = "23:00",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
 
             var projectLinkButton = new Button
             {
@@ -348,6 +362,8 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(autoWakeEnabledBox);
             panel.Children.Add(autoWakeIntervalBox);
             panel.Children.Add(autoWakeModelBox);
+            panel.Children.Add(autoWakeStartTimeBox);
+            panel.Children.Add(autoWakeEndTimeBox);
             panel.Children.Add(footerRow);
 
             var dialog = new ContentDialog
@@ -393,6 +409,8 @@ public sealed partial class MainWindow : Window
             }
 
             var autoWakeModel = (autoWakeModelBox.SelectedItem as string ?? autoWakeModelBox.Text ?? string.Empty).Trim();
+            var autoWakeStartTime = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
+            var autoWakeEndTime = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
 
             var updated = new AppSettings(
                 vaultBox.Text.Trim(),
@@ -405,7 +423,9 @@ public sealed partial class MainWindow : Window
                 autoCheckUpdatesBox.IsChecked ?? true,
                 autoWakeEnabledBox.IsChecked ?? false,
                 autoWakeInterval,
-                autoWakeModel);
+                autoWakeModel,
+                autoWakeStartTime,
+                autoWakeEndTime);
 
             _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated });
             RefreshVaultSummary();
@@ -1763,6 +1783,8 @@ public sealed partial class MainWindow : Window
 
     #region Auto-wake timer
 
+    private DateTime? _lastAutoWakeTime;
+
     private void ApplyAutoWakeSettings()
     {
         StopAutoWakeTimer();
@@ -1772,10 +1794,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var intervalMinutes = Math.Max(1, (int)_settings.AutoWakeIntervalMinutes);
+        _lastAutoWakeTime = null;
         _autoWakeTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMinutes(intervalMinutes),
+            Interval = TimeSpan.FromMinutes(1),
         };
         _autoWakeTimer.Tick += OnAutoWakeTimerTick;
         _autoWakeTimer.Start();
@@ -1789,10 +1811,40 @@ public sealed partial class MainWindow : Window
             _autoWakeTimer.Tick -= OnAutoWakeTimerTick;
             _autoWakeTimer = null;
         }
+        _lastAutoWakeTime = null;
+    }
+
+    private bool IsInAutoWakeWindow()
+    {
+        var settings = _settings;
+        if (settings == null) return false;
+
+        if (string.IsNullOrEmpty(settings.AutoWakeStartTime) && string.IsNullOrEmpty(settings.AutoWakeEndTime))
+        {
+            return true;
+        }
+
+        var now = DateTime.Now.TimeOfDay;
+        if (!TimeSpan.TryParse(settings.AutoWakeStartTime, out var startTime)) startTime = TimeSpan.Zero;
+        if (!TimeSpan.TryParse(settings.AutoWakeEndTime, out var endTime)) endTime = TimeSpan.FromHours(24);
+
+        if (startTime <= endTime)
+        {
+            return now >= startTime && now <= endTime;
+        }
+        // Cross-midnight: e.g. 22:00 to 06:00
+        return now >= startTime || now <= endTime;
     }
 
     private async void OnAutoWakeTimerTick(object? sender, object e)
     {
+        if (!IsInAutoWakeWindow()) return;
+
+        var interval = TimeSpan.FromMinutes(Math.Max(1, (int)(_settings?.AutoWakeIntervalMinutes ?? 30)));
+        var now = DateTime.Now;
+        if (_lastAutoWakeTime.HasValue && (now - _lastAutoWakeTime.Value) < interval) return;
+
+        _lastAutoWakeTime = now;
         try
         {
             var model = _settings?.AutoWakeModel?.Trim();

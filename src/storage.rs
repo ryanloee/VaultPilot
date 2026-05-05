@@ -3615,6 +3615,8 @@ mod tests {
             auto_wake_enabled: true,
             auto_wake_interval_minutes: 60,
             auto_wake_model: "claude-3-5-haiku-latest".to_string(),
+            auto_wake_start_time: "05:00".to_string(),
+            auto_wake_end_time: "23:00".to_string(),
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

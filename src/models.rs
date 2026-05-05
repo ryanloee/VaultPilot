@@ -42,6 +42,10 @@ pub struct AppSettings {
     pub auto_wake_interval_minutes: u64,
     #[serde(default = "default_auto_wake_model")]
     pub auto_wake_model: String,
+    #[serde(default = "default_auto_wake_start_time")]
+    pub auto_wake_start_time: String,
+    #[serde(default = "default_auto_wake_end_time")]
+    pub auto_wake_end_time: String,
 }
 
 impl Default for AppSettings {
@@ -53,6 +57,8 @@ impl Default for AppSettings {
             auto_wake_enabled: default_auto_wake_enabled(),
             auto_wake_interval_minutes: default_auto_wake_interval_minutes(),
             auto_wake_model: default_auto_wake_model(),
+            auto_wake_start_time: default_auto_wake_start_time(),
+            auto_wake_end_time: default_auto_wake_end_time(),
         }
     }
 }
@@ -414,6 +420,14 @@ pub fn default_auto_wake_model() -> String {
     String::new()
 }
 
+pub fn default_auto_wake_start_time() -> String {
+    String::new()
+}
+
+pub fn default_auto_wake_end_time() -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +447,8 @@ mod tests {
             auto_wake_enabled: true,
             auto_wake_interval_minutes: 60,
             auto_wake_model: "claude-3-5-haiku-latest".to_string(),
+            auto_wake_start_time: "05:00".to_string(),
+            auto_wake_end_time: "23:00".to_string(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -444,6 +460,8 @@ mod tests {
         assert!(json.contains("\"autoWakeEnabled\""));
         assert!(json.contains("\"autoWakeIntervalMinutes\""));
         assert!(json.contains("\"autoWakeModel\""));
+        assert!(json.contains("\"autoWakeStartTime\""));
+        assert!(json.contains("\"autoWakeEndTime\""));
 
         let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.vault_dir, settings.vault_dir);
@@ -622,6 +640,8 @@ mod tests {
         assert!(!settings.auto_wake_enabled);
         assert_eq!(settings.auto_wake_interval_minutes, 30);
         assert!(settings.auto_wake_model.is_empty());
+        assert!(settings.auto_wake_start_time.is_empty());
+        assert!(settings.auto_wake_end_time.is_empty());
         assert_eq!(default_model(), "claude-3-5-sonnet-latest");
         assert_eq!(default_timeout_ms(), 60_000);
         assert_eq!(default_ai_source(), "captured");

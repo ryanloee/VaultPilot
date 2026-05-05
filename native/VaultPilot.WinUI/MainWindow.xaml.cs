@@ -326,8 +326,8 @@ public sealed partial class MainWindow : Window
             projectLinkButton.Click += async (_, _) => await OpenProjectHomepageAsync();
             var versionLabel = new TextBlock
             {
-                Text = string.Empty,
-                Opacity = 0.0,
+                Text = ResolveDisplayVersion(),
+                Opacity = 0.6,
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Right
             };

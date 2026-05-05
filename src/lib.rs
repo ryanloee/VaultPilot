@@ -173,7 +173,8 @@ pub async fn ask_with_ai_with_context(
     model_override: Option<String>,
     mut emit_status: impl FnMut(&str, String),
 ) -> Result<GroundedAnswer, String> {
-    let mut settings = initialize_storage_with_context(context).map_err(|error| error.to_string())?;
+    let mut settings =
+        initialize_storage_with_context(context).map_err(|error| error.to_string())?;
     if let Some(model) = model_override.filter(|m| !m.trim().is_empty()) {
         settings.provider.model = model;
     }

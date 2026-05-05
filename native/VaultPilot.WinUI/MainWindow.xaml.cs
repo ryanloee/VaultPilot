@@ -365,6 +365,23 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(autoWakeModelBox);
             panel.Children.Add(autoWakeStartTimeBox);
             panel.Children.Add(autoWakeEndTimeBox);
+
+            var nextWakeLabel = new TextBlock
+            {
+                Opacity = 0.7,
+            };
+            if (_settings?.AutoWakeEnabled == true)
+            {
+                var next = GetNextAutoWakeTime();
+                if (next.HasValue)
+                {
+                    nextWakeLabel.Text = next.Value.Date == DateTime.Today
+                        ? $"下次唤醒: {next.Value:HH:mm}"
+                        : $"下次唤醒: {next.Value:MM/dd HH:mm}";
+                }
+            }
+            panel.Children.Add(nextWakeLabel);
+
             panel.Children.Add(footerRow);
 
             var dialog = new ContentDialog
@@ -1925,7 +1942,7 @@ public sealed partial class MainWindow : Window
             var label = next.Value.Date == DateTime.Today
                 ? $"下次唤醒: {next.Value:HH:mm}"
                 : $"下次唤醒: {next.Value:MM/dd HH:mm}";
-            LogStartup(label);
+            UpdateStatusBar("info", "自动唤醒已启用", label);
         }
     }
 

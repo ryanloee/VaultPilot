@@ -429,6 +429,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 question.clone(),
                 parsed_history,
                 images,
+                None,
                 |_, _| (),
             )
             .await
@@ -796,6 +797,7 @@ async fn http_chat_completions(
         } else {
             Some(image_paths)
         },
+        None,
         |_, _| (),
     )
     .await

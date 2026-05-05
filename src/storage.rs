@@ -3612,6 +3612,9 @@ mod tests {
                 context_window_tokens: Some(200_000),
             },
             auto_check_updates: false,
+            auto_wake_enabled: true,
+            auto_wake_interval_minutes: 60,
+            auto_wake_model: "claude-3-5-haiku-latest".to_string(),
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

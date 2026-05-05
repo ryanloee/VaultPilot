@@ -59,6 +59,7 @@ public sealed partial class MainWindow : Window
     private string _startupStep = "初始化";
     private volatile int _updateDownloadPercent = -1;
     private string _updateDownloadVersion = string.Empty;
+    private DispatcherTimer? _autoWakeTimer;
     private nint _windowHandle;
     private nint _originalWindowProc;
     private WindowProcDelegate? _windowProcDelegate;
@@ -123,6 +124,7 @@ public sealed partial class MainWindow : Window
 
             UpdateStatusBar("success", "后端已连接", "就绪");
             LogStartup("Startup complete");
+            ApplyAutoWakeSettings();
             if (_settings?.AutoCheckUpdates ?? true)
             {
                 _ = CheckForAppUpdatesAsync();
@@ -255,6 +257,52 @@ public sealed partial class MainWindow : Window
                 IsChecked = _settings.AutoCheckUpdates,
                 HorizontalAlignment = HorizontalAlignment.Left
             };
+
+            // Auto-wake section.
+            var autoWakeSeparator = new Border
+            {
+                Height = 1,
+                Background = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                Margin = new Thickness(0, 4, 0, 4),
+            };
+            var autoWakeHeader = new TextBlock
+            {
+                Text = "自动唤醒",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            };
+            var autoWakeEnabledBox = new CheckBox
+            {
+                Content = "启用自动唤醒（定时调用 API 保持会话活跃）",
+                IsChecked = _settings.AutoWakeEnabled,
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            var autoWakeIntervalBox = new TextBox
+            {
+                Header = "唤醒间隔（分钟）",
+                Text = _settings.AutoWakeIntervalMinutes.ToString(),
+                PlaceholderText = "30",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
+            var autoWakeModelBox = new ComboBox
+            {
+                Header = "唤醒使用的模型（留空使用默认模型）",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                IsEditable = true,
+                PlaceholderText = _settings.Provider.Model,
+            };
+            autoWakeModelBox.Items.Add(string.Empty);
+            autoWakeModelBox.Items.Add("claude-3-5-haiku-latest");
+            autoWakeModelBox.Items.Add("claude-3-5-sonnet-latest");
+            autoWakeModelBox.Items.Add("claude-sonnet-4-20250514");
+            if (string.IsNullOrEmpty(_settings.AutoWakeModel))
+            {
+                autoWakeModelBox.SelectedIndex = 0;
+            }
+            else
+            {
+                autoWakeModelBox.Text = _settings.AutoWakeModel;
+            }
+
             var projectLinkButton = new Button
             {
                 Content = "项目地址",
@@ -295,6 +343,11 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(modelBox);
             panel.Children.Add(timeoutBox);
             panel.Children.Add(contextWindowBox);
+            panel.Children.Add(autoWakeSeparator);
+            panel.Children.Add(autoWakeHeader);
+            panel.Children.Add(autoWakeEnabledBox);
+            panel.Children.Add(autoWakeIntervalBox);
+            panel.Children.Add(autoWakeModelBox);
             panel.Children.Add(footerRow);
 
             var dialog = new ContentDialog
@@ -334,6 +387,13 @@ public sealed partial class MainWindow : Window
                 contextWindowTokens = parsedContextWindow;
             }
 
+            if (!ulong.TryParse(autoWakeIntervalBox.Text?.Trim() ?? "30", out var autoWakeInterval) || autoWakeInterval == 0)
+            {
+                autoWakeInterval = 30;
+            }
+
+            var autoWakeModel = (autoWakeModelBox.SelectedItem as string ?? autoWakeModelBox.Text ?? string.Empty).Trim();
+
             var updated = new AppSettings(
                 vaultBox.Text.Trim(),
                 new ProviderConfig(
@@ -342,11 +402,15 @@ public sealed partial class MainWindow : Window
                     modelBox.Text.Trim(),
                     timeoutMs,
                     contextWindowTokens),
-                autoCheckUpdatesBox.IsChecked ?? true);
+                autoCheckUpdatesBox.IsChecked ?? true,
+                autoWakeEnabledBox.IsChecked ?? false,
+                autoWakeInterval,
+                autoWakeModel);
 
             _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated });
             RefreshVaultSummary();
             RefreshContextStatus();
+            ApplyAutoWakeSettings();
             UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
         }
         catch (Exception error)
@@ -860,6 +924,28 @@ public sealed partial class MainWindow : Window
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        TryReleaseWindowFileDropHook();
+        await _backendClient.DisposeAsync();
+    }
+
+    public void Hide()
+    {
+        _appWindow?.Hide();
+    }
+
+    public void ShowAndActivate()
+    {
+        if (_appWindow != null)
+        {
+            _appWindow.Show();
+        }
+
+        Activate();
+    }
+
+    public async Task PrepareExitAsync()
+    {
+        StopAutoWakeTimer();
         TryReleaseWindowFileDropHook();
         await _backendClient.DisposeAsync();
     }
@@ -1674,6 +1760,60 @@ public sealed partial class MainWindow : Window
         _originalWindowProc = SetWindowLongPtr(hwnd, WindowLongPtrWndProc, newWindowProc);
         DragAcceptFiles(hwnd, true);
     }
+
+    #region Auto-wake timer
+
+    private void ApplyAutoWakeSettings()
+    {
+        StopAutoWakeTimer();
+
+        if (_settings is null || !_settings.AutoWakeEnabled)
+        {
+            return;
+        }
+
+        var intervalMinutes = Math.Max(1, (int)_settings.AutoWakeIntervalMinutes);
+        _autoWakeTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMinutes(intervalMinutes),
+        };
+        _autoWakeTimer.Tick += OnAutoWakeTimerTick;
+        _autoWakeTimer.Start();
+    }
+
+    private void StopAutoWakeTimer()
+    {
+        if (_autoWakeTimer != null)
+        {
+            _autoWakeTimer.Stop();
+            _autoWakeTimer.Tick -= OnAutoWakeTimerTick;
+            _autoWakeTimer = null;
+        }
+    }
+
+    private async void OnAutoWakeTimerTick(object? sender, object e)
+    {
+        try
+        {
+            var model = _settings?.AutoWakeModel?.Trim();
+            var answer = await _backendClient.SendAsync<GroundedAnswer>(
+                "askWithAi",
+                new
+                {
+                    question = "你好",
+                    history = Array.Empty<object>(),
+                    imagePaths = Array.Empty<string>(),
+                    modelOverride = string.IsNullOrEmpty(model) ? (string?)null : model,
+                });
+            LogStartup($"自动唤醒完成: {(answer?.Answer?.Length ?? 0)} 字符");
+        }
+        catch (Exception error)
+        {
+            LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
+        }
+    }
+
+    #endregion
 
     private void TryReleaseWindowFileDropHook()
     {

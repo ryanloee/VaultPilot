@@ -71,6 +71,12 @@ jobs:
             }
           }
 
+          $binDir = "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0"
+          $notifyIconDll = Get-ChildItem $binDir -Filter "H.NotifyIcon.WinUI.dll" -Recurse -ErrorAction SilentlyContinue
+          if (-not $notifyIconDll) {
+            throw "H.NotifyIcon.WinUI.dll not found in build output"
+          }
+
       - name: Upload validation diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

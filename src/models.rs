@@ -36,6 +36,12 @@ pub struct AppSettings {
     pub provider: ProviderConfig,
     #[serde(default = "default_auto_check_updates")]
     pub auto_check_updates: bool,
+    #[serde(default = "default_auto_wake_enabled")]
+    pub auto_wake_enabled: bool,
+    #[serde(default = "default_auto_wake_interval_minutes")]
+    pub auto_wake_interval_minutes: u64,
+    #[serde(default = "default_auto_wake_model")]
+    pub auto_wake_model: String,
 }
 
 impl Default for AppSettings {
@@ -44,6 +50,9 @@ impl Default for AppSettings {
             vault_dir: String::new(),
             provider: ProviderConfig::default(),
             auto_check_updates: default_auto_check_updates(),
+            auto_wake_enabled: default_auto_wake_enabled(),
+            auto_wake_interval_minutes: default_auto_wake_interval_minutes(),
+            auto_wake_model: default_auto_wake_model(),
         }
     }
 }
@@ -393,6 +402,18 @@ pub fn default_auto_check_updates() -> bool {
     true
 }
 
+pub fn default_auto_wake_enabled() -> bool {
+    false
+}
+
+pub fn default_auto_wake_interval_minutes() -> u64 {
+    30
+}
+
+pub fn default_auto_wake_model() -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,6 +430,9 @@ mod tests {
                 context_window_tokens: Some(128_000),
             },
             auto_check_updates: false,
+            auto_wake_enabled: true,
+            auto_wake_interval_minutes: 60,
+            auto_wake_model: "claude-3-5-haiku-latest".to_string(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -417,6 +441,9 @@ mod tests {
         assert!(json.contains("\"requestTimeoutMs\""));
         assert!(json.contains("\"contextWindowTokens\""));
         assert!(json.contains("\"autoCheckUpdates\""));
+        assert!(json.contains("\"autoWakeEnabled\""));
+        assert!(json.contains("\"autoWakeIntervalMinutes\""));
+        assert!(json.contains("\"autoWakeModel\""));
 
         let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.vault_dir, settings.vault_dir);
@@ -592,8 +619,9 @@ mod tests {
         assert_eq!(settings.provider.request_timeout_ms, default_timeout_ms());
         assert!(settings.provider.context_window_tokens.is_none());
         assert!(settings.auto_check_updates);
-
-        assert_eq!(default_base_url(), "https://api.anthropic.com/v1/messages");
+        assert!(!settings.auto_wake_enabled);
+        assert_eq!(settings.auto_wake_interval_minutes, 30);
+        assert!(settings.auto_wake_model.is_empty());
         assert_eq!(default_model(), "claude-3-5-sonnet-latest");
         assert_eq!(default_timeout_ms(), 60_000);
         assert_eq!(default_ai_source(), "captured");

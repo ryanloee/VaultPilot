@@ -10,4 +10,7 @@ public sealed record ProviderConfig(
 public sealed record AppSettings(
     string VaultDir,
     ProviderConfig Provider,
-    bool AutoCheckUpdates);
+    bool AutoCheckUpdates,
+    bool AutoWakeEnabled,
+    ulong AutoWakeIntervalMinutes,
+    string AutoWakeModel);

@@ -144,6 +144,7 @@ pub async fn chat_with_ai_with_context(
         } else {
             Some(images)
         },
+        None,
         |stage, detail| emit_status(stage, detail),
     )
     .await?;
@@ -169,9 +170,13 @@ pub async fn ask_with_ai_with_context(
     question: String,
     history: Option<Vec<ConversationTurn>>,
     image_paths: Option<Vec<String>>,
+    model_override: Option<String>,
     mut emit_status: impl FnMut(&str, String),
 ) -> Result<GroundedAnswer, String> {
-    let settings = initialize_storage_with_context(context).map_err(|error| error.to_string())?;
+    let mut settings = initialize_storage_with_context(context).map_err(|error| error.to_string())?;
+    if let Some(model) = model_override.filter(|m| !m.trim().is_empty()) {
+        settings.provider.model = model;
+    }
     let images = image_paths.unwrap_or_default();
     let raw_question = question.trim().to_string();
     if raw_question.is_empty() && images.is_empty() {

@@ -149,6 +149,7 @@ async fn handle_request(
                 params.question,
                 params.history,
                 params.image_paths,
+                params.model_override,
                 |stage, detail| emit_agent_status(stdout, stage, detail),
             )
             .await;
@@ -299,6 +300,8 @@ struct AskWithAiParams {
     history: Option<Vec<ConversationTurn>>,
     #[serde(default)]
     image_paths: Option<Vec<String>>,
+    #[serde(default)]
+    model_override: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

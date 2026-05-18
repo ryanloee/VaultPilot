@@ -11,6 +11,9 @@ namespace VaultPilot.WinUI.Backend;
 public sealed class BackendClient : IAsyncDisposable
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+    private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(2);
+    private const int MaxReconnectAttempts = 3;
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -23,9 +26,15 @@ public sealed class BackendClient : IAsyncDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement>> _pending = new();
     private CancellationTokenSource? _readerCts;
+    private string? _executablePath;
+    private Timer? _healthCheckTimer;
+    private int _reconnectAttempts;
+    private bool _isDisposed;
+    private readonly object _reconnectLock = new();
 
     public bool IsConnected => _process is { HasExited: false };
     public event Action<AgentStatusEvent>? AgentStatusReceived;
+    public event Action<bool>? ConnectionStateChanged;
 
     public void Start(string executablePath)
     {
@@ -34,12 +43,21 @@ public sealed class BackendClient : IAsyncDisposable
             return;
         }
 
+        _executablePath = executablePath;
+        StartProcess();
+        StartHealthCheck();
+    }
+
+    private void StartProcess()
+    {
+        if (_isDisposed) return;
+
         _process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = executablePath,
-                WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory,
+                FileName = _executablePath,
+                WorkingDirectory = Path.GetDirectoryName(_executablePath) ?? AppContext.BaseDirectory,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = false,
@@ -53,6 +71,74 @@ public sealed class BackendClient : IAsyncDisposable
         _process.Start();
         _readerCts = new CancellationTokenSource();
         _ = Task.Run(() => PumpStdoutAsync(_readerCts.Token));
+        _reconnectAttempts = 0;
+        ConnectionStateChanged?.Invoke(true);
+    }
+
+    private void StartHealthCheck()
+    {
+        _healthCheckTimer?.Dispose();
+        _healthCheckTimer = new Timer(OnHealthCheckTick, null, HealthCheckInterval, HealthCheckInterval);
+    }
+
+    private async void OnHealthCheckTick(object? state)
+    {
+        if (_isDisposed || !IsConnected)
+        {
+            if (!_isDisposed && _executablePath != null)
+            {
+                await TryReconnectAsync();
+            }
+            return;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await SendAsync("ping", new { }, cts.Token);
+            _reconnectAttempts = 0;
+        }
+        catch
+        {
+            // Ping failed, connection may be dead
+            if (!_isDisposed)
+            {
+                await TryReconnectAsync();
+            }
+        }
+    }
+
+    private async Task TryReconnectAsync()
+    {
+        if (_isDisposed || _executablePath == null) return;
+
+        lock (_reconnectLock)
+        {
+            if (_reconnectAttempts >= MaxReconnectAttempts) return;
+            _reconnectAttempts++;
+        }
+
+        try
+        {
+            // Clean up old process
+            await DisposeProcessAsync();
+
+            // Wait before reconnect
+            await Task.Delay(ReconnectDelay);
+
+            if (!_isDisposed)
+            {
+                StartProcess();
+
+                // Verify connection with ping
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await SendAsync("ping", new { }, cts.Token);
+            }
+        }
+        catch
+        {
+            // Reconnect failed, will retry on next health check
+        }
     }
 
     public async Task<T?> SendAsync<T>(string method, object? parameters, CancellationToken cancellationToken = default)
@@ -113,6 +199,17 @@ public sealed class BackendClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (_isDisposed) return;
+        _isDisposed = true;
+
+        _healthCheckTimer?.Dispose();
+        _healthCheckTimer = null;
+
+        await DisposeProcessAsync();
+    }
+
+    private async Task DisposeProcessAsync()
+    {
         if (_process is null)
         {
             return;
@@ -127,11 +224,16 @@ public sealed class BackendClient : IAsyncDisposable
 
             await _process.WaitForExitAsync();
         }
+        catch
+        {
+            // Ignore errors during cleanup
+        }
         finally
         {
             _readerCts?.Cancel();
             _process.Dispose();
             _process = null;
+            ConnectionStateChanged?.Invoke(false);
         }
     }
 
@@ -152,6 +254,11 @@ public sealed class BackendClient : IAsyncDisposable
                 if (line is null)
                 {
                     FailPending("Rust 后端已关闭输出通道。");
+                    // Trigger reconnect on next health check
+                    if (!_isDisposed)
+                    {
+                        _ = Task.Run(TryReconnectAsync);
+                    }
                     return;
                 }
 
@@ -193,6 +300,11 @@ public sealed class BackendClient : IAsyncDisposable
         catch (Exception error)
         {
             FailPending($"后端响应读取失败：{error.Message}");
+            // Trigger reconnect on next health check
+            if (!_isDisposed)
+            {
+                _ = Task.Run(TryReconnectAsync);
+            }
         }
     }
 

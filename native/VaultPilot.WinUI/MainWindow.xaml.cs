@@ -70,6 +70,7 @@ public sealed partial class MainWindow : Window
         ConfigureWindowBounds();
         _backendClient = new BackendClient();
         _backendClient.AgentStatusReceived += OnAgentStatusReceived;
+        _backendClient.ConnectionStateChanged += OnConnectionStateChanged;
         RootGrid.Loaded += OnLoaded;
         Closed += OnClosed;
         SendButton.Click += OnSendClicked;
@@ -994,6 +995,21 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(() =>
         {
             UpdateStatusBar("info", LocalizeStage(status.Stage), LocalizeStatusDetail(status.Detail));
+        });
+    }
+
+    private void OnConnectionStateChanged(bool connected)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (connected)
+            {
+                UpdateStatusBar("success", "后端已连接", "连接已恢复");
+            }
+            else
+            {
+                UpdateStatusBar("warning", "后端断开", "正在尝试重新连接...");
+            }
         });
     }
 

@@ -1819,6 +1819,7 @@ public sealed partial class MainWindow : Window
     #region Auto-wake timer
 
     private DateTime? _lastAutoWakeTime;
+    private bool _autoWakeInProgress;
 
     private void ApplyAutoWakeSettings()
     {
@@ -1873,15 +1874,17 @@ public sealed partial class MainWindow : Window
 
     private async void OnAutoWakeTimerTick(object? sender, object e)
     {
+        if (_autoWakeInProgress) return;
         if (!IsInAutoWakeWindow()) return;
 
         var interval = TimeSpan.FromMinutes(Math.Max(1, (int)(_settings?.AutoWakeIntervalMinutes ?? 30)));
         var now = DateTime.Now;
         if (_lastAutoWakeTime.HasValue && (now - _lastAutoWakeTime.Value) < interval) return;
 
-        _lastAutoWakeTime = now;
+        _autoWakeInProgress = true;
         try
         {
+            await _backendClient.EnsureConnectedAsync();
             var model = _settings?.AutoWakeModel?.Trim();
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                 "askWithAi",
@@ -1892,13 +1895,18 @@ public sealed partial class MainWindow : Window
                     imagePaths = Array.Empty<string>(),
                     modelOverride = string.IsNullOrEmpty(model) ? (string?)null : model,
                 });
+            _lastAutoWakeTime = DateTime.Now;
             LogStartup($"自动唤醒完成: {(answer?.Answer?.Length ?? 0)} 字符");
         }
         catch (Exception error)
         {
             LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
         }
-        ShowNextWakeTime();
+        finally
+        {
+            _autoWakeInProgress = false;
+            ShowNextWakeTime();
+        }
     }
 
     private DateTime? GetNextAutoWakeTime()

@@ -13,7 +13,6 @@ public sealed class BackendClient : IAsyncDisposable
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(2);
-    private const int MaxReconnectAttempts = 3;
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -28,9 +27,8 @@ public sealed class BackendClient : IAsyncDisposable
     private CancellationTokenSource? _readerCts;
     private string? _executablePath;
     private Timer? _healthCheckTimer;
-    private int _reconnectAttempts;
     private bool _isDisposed;
-    private readonly object _reconnectLock = new();
+    private readonly SemaphoreSlim _reconnectLock = new(1, 1);
 
     public bool IsConnected => _process is { HasExited: false };
     public event Action<AgentStatusEvent>? AgentStatusReceived;
@@ -51,6 +49,10 @@ public sealed class BackendClient : IAsyncDisposable
     private void StartProcess()
     {
         if (_isDisposed) return;
+        if (string.IsNullOrWhiteSpace(_executablePath))
+        {
+            throw new InvalidOperationException("Rust 后端路径尚未设置。");
+        }
 
         _process = new Process
         {
@@ -71,7 +73,6 @@ public sealed class BackendClient : IAsyncDisposable
         _process.Start();
         _readerCts = new CancellationTokenSource();
         _ = Task.Run(() => PumpStdoutAsync(_readerCts.Token));
-        _reconnectAttempts = 0;
         ConnectionStateChanged?.Invoke(true);
     }
 
@@ -96,49 +97,56 @@ public sealed class BackendClient : IAsyncDisposable
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await SendAsync("ping", new { }, cts.Token);
-            _reconnectAttempts = 0;
         }
         catch
         {
             // Ping failed, connection may be dead
             if (!_isDisposed)
             {
-                await TryReconnectAsync();
+                await TryReconnectAsync(forceRestart: true);
             }
         }
     }
 
-    private async Task TryReconnectAsync()
+    public Task<bool> EnsureConnectedAsync(CancellationToken cancellationToken = default)
     {
-        if (_isDisposed || _executablePath == null) return;
+        return IsConnected
+            ? Task.FromResult(true)
+            : TryReconnectAsync(cancellationToken);
+    }
 
-        lock (_reconnectLock)
-        {
-            if (_reconnectAttempts >= MaxReconnectAttempts) return;
-            _reconnectAttempts++;
-        }
+    private async Task<bool> TryReconnectAsync(
+        CancellationToken cancellationToken = default,
+        bool forceRestart = false)
+    {
+        if (_isDisposed || _executablePath == null) return false;
+        if (IsConnected && !forceRestart) return true;
 
+        await _reconnectLock.WaitAsync(cancellationToken);
         try
         {
-            // Clean up old process
-            await DisposeProcessAsync();
+            if (_isDisposed || _executablePath == null) return false;
+            if (IsConnected && !forceRestart) return true;
 
-            // Wait before reconnect
-            await Task.Delay(ReconnectDelay);
+            await DisposeProcessAsync();
+            await Task.Delay(ReconnectDelay, cancellationToken);
 
             if (!_isDisposed)
             {
                 StartProcess();
-
-                // Verify connection with ping
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await SendAsync("ping", new { }, cts.Token);
+                return true;
             }
         }
         catch
         {
-            // Reconnect failed, will retry on next health check
+            // Reconnect failed; health checks and future requests can retry.
         }
+        finally
+        {
+            _reconnectLock.Release();
+        }
+
+        return false;
     }
 
     public async Task<T?> SendAsync<T>(string method, object? parameters, CancellationToken cancellationToken = default)
@@ -152,6 +160,16 @@ public sealed class BackendClient : IAsyncDisposable
     public async Task<JsonElement> SendAsync(string method, object? parameters, CancellationToken cancellationToken = default)
     {
         if (!IsConnected || _process?.StandardInput is null || _process.StandardOutput is null)
+        {
+            var reconnected = await EnsureConnectedAsync(cancellationToken);
+            if (!reconnected || _process?.StandardInput is null || _process.StandardOutput is null)
+            {
+                throw new InvalidOperationException("Rust 后端尚未连接。");
+            }
+        }
+
+        var process = _process;
+        if (process is null)
         {
             throw new InvalidOperationException("Rust 后端尚未连接。");
         }
@@ -170,8 +188,14 @@ public sealed class BackendClient : IAsyncDisposable
             await _writeLock.WaitAsync(cancellationToken);
             try
             {
-                await _process.StandardInput.WriteLineAsync(payload.AsMemory(), cancellationToken);
-                await _process.StandardInput.FlushAsync(cancellationToken);
+                await process.StandardInput.WriteLineAsync(payload.AsMemory(), cancellationToken);
+                await process.StandardInput.FlushAsync(cancellationToken);
+            }
+            catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException)
+            {
+                completion.TrySetException(new InvalidOperationException("Rust 后端尚未连接。", error));
+                _ = TryReconnectAsync(CancellationToken.None, forceRestart: true);
+                throw new InvalidOperationException("Rust 后端尚未连接。", error);
             }
             finally
             {
@@ -257,7 +281,7 @@ public sealed class BackendClient : IAsyncDisposable
                     // Trigger reconnect on next health check
                     if (!_isDisposed)
                     {
-                        _ = Task.Run(TryReconnectAsync);
+                        _ = TryReconnectAsync(CancellationToken.None, forceRestart: true);
                     }
                     return;
                 }
@@ -303,7 +327,7 @@ public sealed class BackendClient : IAsyncDisposable
             // Trigger reconnect on next health check
             if (!_isDisposed)
             {
-                _ = Task.Run(TryReconnectAsync);
+                _ = TryReconnectAsync(CancellationToken.None, forceRestart: true);
             }
         }
     }

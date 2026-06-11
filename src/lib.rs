@@ -740,6 +740,17 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, String> {
         return Err(format!("path is not a file: {}", display));
     }
 
+    const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1 MB
+    let metadata = fs::metadata(&file_path).map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err(format!(
+            "file too large ({} bytes, limit is {} bytes): {}",
+            metadata.len(),
+            MAX_FILE_SIZE,
+            display
+        ));
+    }
+
     let content = fs::read_to_string(&file_path).map_err(|error| error.to_string())?;
     let clipped = truncate_for_trace(&content, 12_000);
     Ok(format!(

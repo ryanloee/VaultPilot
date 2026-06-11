@@ -266,6 +266,17 @@ fn emit_agent_status(stdout: &mut impl Write, stage: &str, detail: String) {
 }
 
 fn read_image_preview(path: &str) -> Result<String, String> {
+    const MAX_IMAGE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_IMAGE_SIZE {
+        return Err(format!(
+            "image too large ({} bytes, limit is {} bytes): {}",
+            metadata.len(),
+            MAX_IMAGE_SIZE,
+            path
+        ));
+    }
+
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     let media_type = match Path::new(path)
         .extension()

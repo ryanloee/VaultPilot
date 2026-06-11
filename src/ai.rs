@@ -937,6 +937,17 @@ fn build_input_blocks(prompt: &str, image_paths: &[String]) -> Result<Vec<Anthro
 
     for path in image_paths {
         let media_type = detect_image_media_type(path)?;
+        // Guard against OOM from excessively large image files (issue #141)
+        const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
+        let metadata =
+            fs::metadata(path).with_context(|| format!("failed to stat image: {path}"))?;
+        if metadata.len() > MAX_IMAGE_SIZE {
+            return Err(anyhow!(
+                "image file too large: {} ({} MB > 20 MB limit)",
+                path,
+                metadata.len() / (1024 * 1024)
+            ));
+        }
         let data = fs::read(path).with_context(|| format!("failed to read image: {path}"))?;
         blocks.push(AnthropicInputBlock::Image {
             source: AnthropicImageSource {

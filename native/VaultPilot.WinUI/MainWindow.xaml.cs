@@ -1872,7 +1872,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             ShowError("粘贴图片失败", error);
-            return true;
+            return false;
         }
     }
 

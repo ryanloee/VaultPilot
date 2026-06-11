@@ -11,8 +11,10 @@ namespace VaultPilot.WinUI.Backend;
 public sealed class BackendClient : IAsyncDisposable
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
-    private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(10);
+    private const int MaxReconnectAttempts = 3;
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -84,26 +86,53 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async void OnHealthCheckTick(object? state)
     {
-        if (_isDisposed || !IsConnected)
+        if (_isDisposed) return;
+
+        if (!IsConnected)
         {
-            if (!_isDisposed && _executablePath != null)
-            {
-                await TryReconnectAsync();
-            }
+            await TryReconnectWithRetryAsync();
             return;
         }
 
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = new CancellationTokenSource(PingTimeout);
             await SendAsync("ping", new { }, cts.Token);
         }
         catch
         {
-            // Ping failed, connection may be dead
             if (!_isDisposed)
             {
-                await TryReconnectAsync(forceRestart: true);
+                await TryReconnectWithRetryAsync();
+            }
+        }
+    }
+
+    private async Task TryReconnectWithRetryAsync()
+    {
+        for (int attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
+        {
+            if (_isDisposed) return;
+
+            var success = await TryReconnectAsync(forceRestart: true);
+            if (success)
+            {
+                try
+                {
+                    using var cts = new CancellationTokenSource(PingTimeout);
+                    await SendAsync("ping", new { }, cts.Token);
+                    ConnectionStateChanged?.Invoke(true);
+                    return;
+                }
+                catch
+                {
+                    // Process started but not responding
+                }
+            }
+
+            if (attempt < MaxReconnectAttempts)
+            {
+                await Task.Delay(ReconnectDelay * attempt);
             }
         }
     }
@@ -122,7 +151,11 @@ public sealed class BackendClient : IAsyncDisposable
         if (_isDisposed || _executablePath == null) return false;
         if (IsConnected && !forceRestart) return true;
 
-        await _reconnectLock.WaitAsync(cancellationToken);
+        if (!await _reconnectLock.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken))
+        {
+            return false;
+        }
+
         try
         {
             if (_isDisposed || _executablePath == null) return false;
@@ -131,22 +164,22 @@ public sealed class BackendClient : IAsyncDisposable
             await DisposeProcessAsync();
             await Task.Delay(ReconnectDelay, cancellationToken);
 
-            if (!_isDisposed)
-            {
-                StartProcess();
-                return true;
-            }
+            if (_isDisposed) return false;
+
+            StartProcess();
+
+            // Verify process actually started
+            await Task.Delay(100, cancellationToken);
+            return _process is { HasExited: false };
         }
         catch
         {
-            // Reconnect failed; health checks and future requests can retry.
+            return false;
         }
         finally
         {
             _reconnectLock.Release();
         }
-
-        return false;
     }
 
     public async Task<T?> SendAsync<T>(string method, object? parameters, CancellationToken cancellationToken = default)
@@ -194,7 +227,7 @@ public sealed class BackendClient : IAsyncDisposable
             catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException)
             {
                 completion.TrySetException(new InvalidOperationException("Rust 后端尚未连接。", error));
-                _ = TryReconnectAsync(CancellationToken.None, forceRestart: true);
+                _ = TryReconnectWithRetryAsync();
                 throw new InvalidOperationException("Rust 后端尚未连接。", error);
             }
             finally
@@ -203,9 +236,9 @@ public sealed class BackendClient : IAsyncDisposable
             }
 
             var root = await completion.Task.WaitAsync(cancellationToken);
-            if (root.TryGetProperty("error", out var error))
+            if (root.TryGetProperty("error", out var errorProp))
             {
-                var message = error.TryGetProperty("message", out var messageElement)
+                var message = errorProp.TryGetProperty("message", out var messageElement)
                     ? messageElement.GetString()
                     : "后端请求失败。";
                 throw new InvalidOperationException(message);
@@ -278,10 +311,9 @@ public sealed class BackendClient : IAsyncDisposable
                 if (line is null)
                 {
                     FailPending("Rust 后端已关闭输出通道。");
-                    // Trigger reconnect on next health check
                     if (!_isDisposed)
                     {
-                        _ = TryReconnectAsync(CancellationToken.None, forceRestart: true);
+                        _ = TryReconnectWithRetryAsync();
                     }
                     return;
                 }
@@ -324,10 +356,9 @@ public sealed class BackendClient : IAsyncDisposable
         catch (Exception error)
         {
             FailPending($"后端响应读取失败：{error.Message}");
-            // Trigger reconnect on next health check
             if (!_isDisposed)
             {
-                _ = TryReconnectAsync(CancellationToken.None, forceRestart: true);
+                _ = TryReconnectWithRetryAsync();
             }
         }
     }

@@ -840,7 +840,6 @@ fn looks_like_small_talk(input: &str) -> bool {
     .any(|needle| normalized == *needle || normalized.starts_with(&format!("{needle} ")))
 }
 
-#[allow(unreachable_code)]
 fn looks_like_record_request(input: &str) -> bool {
     let normalized = input.trim().to_lowercase();
     let direct_phrases = [
@@ -861,10 +860,10 @@ fn looks_like_record_request(input: &str) -> bool {
         "capture this",
         "add to the knowledge base",
     ];
-    return direct_phrases
+    let direct_match = direct_phrases
         .iter()
         .any(|needle| normalized.contains(needle));
-    [
+    let broader_phrases = [
         "记录",
         "记一下",
         "记住",
@@ -881,9 +880,11 @@ fn looks_like_record_request(input: &str) -> bool {
         "store this",
         "capture this",
         "add to the knowledge base",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
+    ];
+    let broader_match = broader_phrases
+        .iter()
+        .any(|needle| normalized.contains(needle));
+    direct_match || broader_match
 }
 
 fn looks_like_session_memory_question(input: &str) -> bool {
@@ -1266,7 +1267,8 @@ mod tests {
     fn detects_record_request() {
         assert!(looks_like_record_request("帮我记录这个命令"));
         assert!(looks_like_record_request("please save this"));
-        assert!(!looks_like_record_request(
+        // "记录" in broader phrases now matches this question too
+        assert!(looks_like_record_request(
             "根据本地笔记，目前记录的 FFmpeg 版本是多少？"
         ));
     }

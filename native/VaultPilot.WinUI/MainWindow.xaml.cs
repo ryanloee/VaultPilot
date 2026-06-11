@@ -63,6 +63,9 @@ public sealed partial class MainWindow : Window
     private nint _windowHandle;
     private nint _originalWindowProc;
     private WindowProcDelegate? _windowProcDelegate;
+    private FrameworkElement? _thinkingIndicator;
+    private DispatcherTimer? _thinkingDotsTimer;
+    private int _thinkingDotStep;
 
     public MainWindow()
     {
@@ -837,6 +840,9 @@ public sealed partial class MainWindow : Window
             ScrollToLatest();
             await SaveChatStateAsync();
 
+            ShowThinkingIndicator();
+            ScrollToLatest();
+
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                 "askWithAi",
                 new
@@ -845,6 +851,7 @@ public sealed partial class MainWindow : Window
                     history,
                     imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
                 });
+            RemoveThinkingIndicator();
             AddTurn("assistant", answer?.Answer ?? string.Empty, answer);
             RenderCurrentSession();
             ScrollToLatest();
@@ -860,6 +867,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error)
         {
+            RemoveThinkingIndicator();
             var message = LocalizeError(error.Message);
             AddTurn("assistant", message);
             RenderCurrentSession();
@@ -918,6 +926,9 @@ public sealed partial class MainWindow : Window
             ScrollToLatest();
             await SaveChatStateAsync();
 
+            ShowThinkingIndicator();
+            ScrollToLatest();
+
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                 "askWithAi",
                 new
@@ -926,6 +937,7 @@ public sealed partial class MainWindow : Window
                     history,
                     imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
                 });
+            RemoveThinkingIndicator();
             if (answer?.SavedNote is null)
             {
                 throw new InvalidOperationException("知识库写入未完成，模型未返回已保存笔记。");
@@ -947,6 +959,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error)
         {
+            RemoveThinkingIndicator();
             var message = LocalizeError(error.Message);
             AddTurn("assistant", message);
             RenderCurrentSession();
@@ -964,6 +977,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        RemoveThinkingIndicator();
         TryReleaseWindowFileDropHook();
         await _backendClient.DisposeAsync();
     }
@@ -985,6 +999,7 @@ public sealed partial class MainWindow : Window
 
     public async Task PrepareExitAsync()
     {
+        RemoveThinkingIndicator();
         StopAutoWakeTimer();
         TryReleaseWindowFileDropHook();
         await _backendClient.DisposeAsync();
@@ -1083,6 +1098,94 @@ public sealed partial class MainWindow : Window
         }
 
         MessagesPanel.Children.Add(stack);
+    }
+
+    private void ShowThinkingIndicator()
+    {
+        RemoveThinkingIndicator();
+
+        _thinkingDotStep = 0;
+
+        var dotBrush = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+        var dots = new TextBlock[3];
+        for (var i = 0; i < 3; i++)
+        {
+            dots[i] = new TextBlock
+            {
+                Text = "●",
+                Opacity = 0.25,
+                FontSize = 12,
+                Foreground = dotBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+        }
+
+        var dotsPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Padding = new Thickness(2, 2, 2, 2),
+        };
+        foreach (var dot in dots)
+        {
+            dotsPanel.Children.Add(dot);
+        }
+
+        var bubble = new Border
+        {
+            MaxWidth = 680,
+            Padding = new Thickness(14, 10, 14, 10),
+            CornerRadius = new CornerRadius(8),
+            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = dotsPanel,
+        };
+
+        var label = new TextBlock
+        {
+            Text = "助手",
+            Opacity = 0.72,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+
+        var stack = new StackPanel
+        {
+            Spacing = 4,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        stack.Children.Add(label);
+        stack.Children.Add(bubble);
+
+        _thinkingIndicator = stack;
+        MessagesPanel.Children.Add(stack);
+
+        _thinkingDotsTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(350),
+        };
+        _thinkingDotsTimer.Tick += (_, _) =>
+        {
+            _thinkingDotStep = (_thinkingDotStep + 1) % 4;
+            for (var i = 0; i < 3; i++)
+            {
+                dots[i].Opacity = i < _thinkingDotStep ? 1.0 : 0.25;
+            }
+        };
+        _thinkingDotsTimer.Start();
+    }
+
+    private void RemoveThinkingIndicator()
+    {
+        _thinkingDotsTimer?.Stop();
+        _thinkingDotsTimer = null;
+        _thinkingDotStep = 0;
+        if (_thinkingIndicator is not null)
+        {
+            MessagesPanel.Children.Remove(_thinkingIndicator);
+            _thinkingIndicator = null;
+        }
     }
 
     private FrameworkElement CreateMessageContent(string text, bool isAssistant, bool isUser)

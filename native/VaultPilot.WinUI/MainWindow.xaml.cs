@@ -82,7 +82,6 @@ public sealed partial class MainWindow : Window
         RebuildButton.Click += OnRebuildClicked;
         ImportButton.Click += OnImportClicked;
         ComposerBox.KeyDown += OnComposerKeyDown;
-        ComposerSendAccelerator.Invoked += OnComposerSendAcceleratorInvoked;
         SessionList.SelectionChanged += OnSessionSelectionChanged;
         DeleteSessionButton.Click += OnDeleteSessionClicked;
         NewSessionButton.Click += OnNewSessionClicked;
@@ -787,20 +786,6 @@ public sealed partial class MainWindow : Window
 
         e.Handled = true;
         await SendCurrentMessageAsync();
-    }
-
-    private void OnComposerSendAcceleratorInvoked(
-        KeyboardAccelerator sender,
-        KeyboardAcceleratorInvokedEventArgs args)
-    {
-        var shiftState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
-        if (shiftState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
-        {
-            return;
-        }
-
-        args.Handled = true;
-        _ = SendCurrentMessageAsync();
     }
 
     private async Task SendCurrentMessageAsync()

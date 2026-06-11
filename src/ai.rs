@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::{collections::HashSet, fs, path::Path, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
@@ -10,6 +11,47 @@ use crate::models::{
     AnswerCitation, AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft,
 };
 use crate::prompting;
+
+/// Cached HTTP client, rebuilt only when provider config changes.
+struct CachedClient {
+    client: reqwest::Client,
+    // Fingerprint of the config used to build this client.
+    api_key: String,
+    timeout_ms: u64,
+}
+
+static CACHED_CLIENT: Mutex<Option<CachedClient>> = Mutex::new(None);
+
+fn get_or_build_client(api_key: &str, timeout_ms: u64) -> Result<reqwest::Client> {
+    let mut cache = CACHED_CLIENT
+        .lock()
+        .map_err(|e| anyhow!("lock poisoned: {e}"))?;
+    if let Some(ref cached) = *cache {
+        if cached.api_key == api_key && cached.timeout_ms == timeout_ms {
+            return Ok(cached.client.clone());
+        }
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+        "x-api-key",
+        HeaderValue::from_str(api_key).context("invalid API key")?,
+    );
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .default_headers(headers)
+        .build()?;
+
+    *cache = Some(CachedClient {
+        client: client.clone(),
+        api_key: api_key.to_string(),
+        timeout_ms,
+    });
+    Ok(client)
+}
 
 pub struct ChatAnswerResult {
     pub answer: String,
@@ -776,18 +818,7 @@ async fn send_request_with_temperature(
         return Err(anyhow!("API key is empty"));
     }
 
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        "x-api-key",
-        HeaderValue::from_str(&provider.api_key).context("invalid API key")?,
-    );
-    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(provider.request_timeout_ms))
-        .default_headers(headers)
-        .build()?;
+    let client = get_or_build_client(&provider.api_key, provider.request_timeout_ms)?;
 
     let endpoint = normalize_messages_endpoint(&provider.base_url);
     let content_blocks = build_input_blocks(prompt, image_paths)?;

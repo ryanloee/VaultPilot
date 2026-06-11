@@ -1101,7 +1101,17 @@ async fn handle_mcp_request(
             .id
             .map(|id| McpResponse::ok(id, serde_json::json!({}))),
         "tools/list" => {
-            let id = request.id?;
+            let id = match request.id {
+                Some(id) => id,
+                None => {
+                    return Some(McpResponse::error(
+                        Value::Null,
+                        -32600,
+                        "tools/list requires a request id".to_string(),
+                        None,
+                    ))
+                }
+            };
             if !state.initialized {
                 return Some(McpResponse::error(
                     id,
@@ -1118,7 +1128,17 @@ async fn handle_mcp_request(
             ))
         }
         "tools/call" => {
-            let id = request.id?;
+            let id = match request.id {
+                Some(id) => id,
+                None => {
+                    return Some(McpResponse::error(
+                        Value::Null,
+                        -32600,
+                        "tools/call requires a request id".to_string(),
+                        None,
+                    ))
+                }
+            };
             if !state.initialized {
                 return Some(McpResponse::error(
                     id,

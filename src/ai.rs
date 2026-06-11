@@ -437,6 +437,21 @@ pub async fn select_relevant_note_ids(
         .collect())
 }
 
+/// Check if a model name refers to an OpenAI reasoning model (o1, o3, o4 series).
+/// Uses word-boundary-aware matching to avoid false positives like "phi-1", "co1der".
+fn is_openai_reasoning_model(model: &str) -> bool {
+    // Known reasoning model prefixes: o1, o3, o4 (with optional suffixes like -mini, -preview)
+    for prefix in &["o1", "o3", "o4"] {
+        if let Some(rest) = model.strip_prefix(prefix) {
+            // Exact match or followed by a separator (not a letter)
+            if rest.is_empty() || !rest.as_bytes()[0].is_ascii_alphabetic() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
     if let Some(explicit) = settings
         .provider
@@ -462,7 +477,7 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
     if model.contains("gpt-4o") {
         return (128_000, "model_registry".to_string());
     }
-    if model.contains("o1") || model.contains("o3") || model.contains("o4") {
+    if is_openai_reasoning_model(&model) {
         return (200_000, "model_registry".to_string());
     }
     if model.contains("gemini") {
@@ -1011,10 +1026,10 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 mod tests {
     use super::{
         dedupe_terms, detect_image_media_type, extract_json, fallback_answer,
-        heuristic_note_from_input, is_retryable_provider_error, normalize_draft,
-        normalize_messages_endpoint, parse_or_fallback_answer, parse_or_fallback_note,
-        parse_record_response, parse_tool_call, resolve_context_window, AssistantToolCall,
-        RequestUsage,
+        heuristic_note_from_input, is_openai_reasoning_model, is_retryable_provider_error,
+        normalize_draft, normalize_messages_endpoint, parse_or_fallback_answer,
+        parse_or_fallback_note, parse_record_response, parse_tool_call, resolve_context_window,
+        AssistantToolCall, RequestUsage,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -1315,5 +1330,30 @@ mod tests {
         assert!(is_retryable_provider_error(400, "Too Many Requests"));
         assert!(is_retryable_provider_error(400, "访问量过大"));
         assert!(!is_retryable_provider_error(400, "bad request"));
+    }
+
+    #[test]
+    fn is_openai_reasoning_model_matches_exact_prefix() {
+        assert!(is_openai_reasoning_model("o1"));
+        assert!(is_openai_reasoning_model("o3"));
+        assert!(is_openai_reasoning_model("o4"));
+    }
+
+    #[test]
+    fn is_openai_reasoning_model_matches_with_suffix() {
+        assert!(is_openai_reasoning_model("o1-mini"));
+        assert!(is_openai_reasoning_model("o1-preview"));
+        assert!(is_openai_reasoning_model("o3-mini"));
+        assert!(is_openai_reasoning_model("o4-mini"));
+    }
+
+    #[test]
+    fn is_openai_reasoning_model_rejects_false_positives() {
+        // These should NOT match — "o1"/"o3"/"o4" appear as substrings of longer tokens
+        assert!(!is_openai_reasoning_model("phi-1"));
+        assert!(!is_openai_reasoning_model("co1der"));
+        assert!(!is_openai_reasoning_model("pro1"));
+        assert!(!is_openai_reasoning_model("some-o3thing"));
+        assert!(!is_openai_reasoning_model("mo4del"));
     }
 }

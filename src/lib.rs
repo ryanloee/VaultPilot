@@ -840,7 +840,6 @@ fn looks_like_small_talk(input: &str) -> bool {
     .any(|needle| normalized == *needle || normalized.starts_with(&format!("{needle} ")))
 }
 
-#[allow(unreachable_code)]
 fn looks_like_record_request(input: &str) -> bool {
     let normalized = input.trim().to_lowercase();
     let direct_phrases = [
@@ -861,29 +860,14 @@ fn looks_like_record_request(input: &str) -> bool {
         "capture this",
         "add to the knowledge base",
     ];
-    return direct_phrases
+    let direct_match = direct_phrases
         .iter()
         .any(|needle| normalized.contains(needle));
-    [
-        "记录",
-        "记一下",
-        "记住",
-        "保存",
-        "存一下",
-        "存到知识库",
-        "加入知识库",
-        "写入知识库",
-        "帮我记",
-        "帮我存",
-        "record this",
-        "save this",
-        "remember this",
-        "store this",
-        "capture this",
-        "add to the knowledge base",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
+    let broader_phrases = ["记一下", "记住", "帮我记", "帮我存"];
+    let broader_match = broader_phrases
+        .iter()
+        .any(|needle| normalized.contains(needle));
+    direct_match || broader_match
 }
 
 fn looks_like_session_memory_question(input: &str) -> bool {

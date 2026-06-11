@@ -157,9 +157,6 @@
                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                             TextWrapping="Wrap"
                             PlaceholderText="输入问题，或记录一条知识...">
-                            <TextBox.KeyboardAccelerators>
-                                <KeyboardAccelerator x:Name="ComposerSendAccelerator" Key="Enter" />
-                            </TextBox.KeyboardAccelerators>
                         </TextBox>
                         <Grid
                             x:Name="ContextUsageBarHost"

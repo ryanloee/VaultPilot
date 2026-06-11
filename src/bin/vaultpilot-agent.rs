@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::panic;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -57,6 +58,8 @@ struct AgentStatusPayload {
 }
 
 fn main() {
+    install_panic_hook();
+
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -67,11 +70,10 @@ fn main() {
     for line in stdin.lock().lines() {
         let response = match line {
             Ok(line) => runtime.block_on(handle_line(&line, &mut stdout)),
-            Err(error) => AgentResponse::error(
-                String::new(),
-                "read_error",
-                format!("failed to read request: {error}"),
-            ),
+            Err(error) => {
+                log_agent_event("stdin_error", &format!("{error}"));
+                break;
+            }
         };
 
         if let Ok(serialized) = serde_json::to_string(&response) {
@@ -79,6 +81,50 @@ fn main() {
             let _ = stdout.flush();
         }
     }
+}
+
+fn install_panic_hook() {
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>");
+
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+
+        let location = info
+            .location()
+            .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+
+        let message = format!("panic on thread '{thread_name}': {payload} at {location}");
+        log_agent_event("panic", &message);
+
+        default_hook(info);
+    }));
+}
+
+fn log_agent_event(event: &str, detail: &str) {
+    let log_dir = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("com.local.vaultpilot");
+    let _ = fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("agent-crash.log");
+
+    let timestamp = Utc::now().to_rfc3339();
+    let entry = format!("[{timestamp}] {event}: {detail}\n");
+    let _ = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .and_then(|mut f| f.write_all(entry.as_bytes()));
 }
 
 async fn handle_line(line: &str, stdout: &mut impl Write) -> AgentResponse {

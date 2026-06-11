@@ -1349,10 +1349,11 @@ fn build_note_path(vault_dir: &str, title: &str, created_at: &str, id: &str) -> 
     let year = created.year().to_string();
     let month = format!("{:02}", created.month());
     let slug = slugify(title);
+    let suffix = if id.len() >= 8 { &id[..8] } else { id };
     PathBuf::from(vault_dir)
         .join(year)
         .join(month)
-        .join(format!("{slug}-{}.md", &id[..8]))
+        .join(format!("{slug}-{suffix}.md"))
 }
 
 fn collect_markdown_files(paths: &[String]) -> Vec<PathBuf> {

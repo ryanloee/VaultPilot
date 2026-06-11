@@ -79,8 +79,10 @@ fn main() {
         };
 
         if let Ok(serialized) = serde_json::to_string(&response) {
-            let _ = writeln!(stdout, "{serialized}");
-            let _ = stdout.flush();
+            if writeln!(stdout, "{serialized}").is_err() || stdout.flush().is_err() {
+                log_agent_event("stdout_error", "stdout write failed, exiting agent loop");
+                break;
+            }
         }
     }
 }
@@ -263,7 +265,9 @@ fn emit_agent_status(stdout: &mut impl Write, stage: &str, detail: String) {
     };
 
     if let Ok(serialized) = serde_json::to_string(&event) {
-        let _ = writeln!(stdout, "{serialized}");
+        if writeln!(stdout, "{serialized}").is_err() {
+            return;
+        }
         let _ = stdout.flush();
     }
 }

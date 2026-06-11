@@ -426,7 +426,7 @@ pub fn save_note_with_images_with_context(
     note: NoteDocument,
     image_paths: &[String],
 ) -> Result<NoteDocument> {
-    let (_, settings) = open_connection(context)?;
+    let (connection, settings) = open_connection(context)?;
     let now = Utc::now().to_rfc3339();
     let title = fallback_title(&note.meta.title);
     let is_new = note.meta.id.trim().is_empty();
@@ -481,7 +481,7 @@ pub fn save_note_with_images_with_context(
 
     let serialized = compose_markdown(&meta, &body_with_images)?;
     fs::write(&path, serialized).with_context(|| format!("failed to write {}", path.display()))?;
-    index_note_file(context, &path)?;
+    index_note_file_with_connection(&connection, &path)?;
     load_note_with_context(context, &meta.id)
 }
 
@@ -526,9 +526,10 @@ pub fn import_markdown_with_context(
     context: &StorageContext,
     paths: &[String],
 ) -> Result<ImportResult> {
+    let (connection, _) = open_connection(context)?;
     let mut result = ImportResult::default();
     for file in collect_markdown_files(paths) {
-        match import_single_markdown(context, &file) {
+        match import_single_markdown(context, &connection, &file) {
             Ok(imported) => {
                 if imported {
                     result.imported += 1;
@@ -805,19 +806,18 @@ fn index_note_file_with_connection(connection: &Connection, path: &Path) -> Resu
     Ok(())
 }
 
-fn index_note_file(context: &StorageContext, path: &Path) -> Result<()> {
-    let (connection, _) = open_connection(context)?;
-    index_note_file_with_connection(&connection, path)
-}
-
-fn import_single_markdown(context: &StorageContext, file: &Path) -> Result<bool> {
+fn import_single_markdown(
+    context: &StorageContext,
+    connection: &Connection,
+    file: &Path,
+) -> Result<bool> {
     let settings = load_settings_with_context(context)?;
     let vault_dir = PathBuf::from(&settings.vault_dir)
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(&settings.vault_dir));
     let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     if canonical.starts_with(&vault_dir) {
-        index_note_file(context, &canonical)?;
+        index_note_file_with_connection(connection, &canonical)?;
         return Ok(true);
     }
 

@@ -767,45 +767,50 @@ fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, String>
     // Confinement check: resolved path must stay within the vault directory.
     // Try canonicalize first (requires the path to exist). If it doesn't,
     // walk up to the nearest existing ancestor and verify the prefix.
-    if let Ok(vault_canonical) = vault_root.canonicalize() {
-        if let Ok(canonical) = candidate.canonicalize() {
-            if !canonical.starts_with(&vault_canonical) {
-                return Err(format!(
-                    "access denied: path '{}' is outside the vault directory",
-                    trimmed
-                ));
+    // Confinement check is fail-closed: if vault_root cannot be resolved,
+    // reject the operation rather than silently skipping the security check.
+    let vault_canonical = vault_root.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve vault directory '{}': {error}",
+            vault_root.display()
+        )
+    })?;
+
+    if let Ok(canonical) = candidate.canonicalize() {
+        if !canonical.starts_with(&vault_canonical) {
+            return Err(format!(
+                "access denied: path '{}' is outside the vault directory",
+                trimmed
+            ));
+        }
+    } else {
+        // Path doesn't exist — verify nearest existing ancestor is in-vault.
+        let mut probe = candidate.as_path();
+        let mut confined = false;
+        while let Some(parent) = probe.parent() {
+            if parent.as_os_str().is_empty() {
+                break;
             }
-        } else {
-            // Path doesn't exist — verify nearest existing ancestor is in-vault.
-            let mut probe = candidate.as_path();
-            let mut confined = false;
-            while let Some(parent) = probe.parent() {
-                if parent.as_os_str().is_empty() {
-                    break;
-                }
-                if parent.exists() {
-                    if let Ok(pc) = parent.canonicalize() {
-                        if !pc.starts_with(&vault_canonical) {
-                            return Err(format!(
-                                "access denied: path '{}' is outside the vault directory",
-                                trimmed
-                            ));
-                        }
-                        confined = true;
+            if parent.exists() {
+                if let Ok(pc) = parent.canonicalize() {
+                    if !pc.starts_with(&vault_canonical) {
+                        return Err(format!(
+                            "access denied: path '{}' is outside the vault directory",
+                            trimmed
+                        ));
                     }
-                    break;
+                    confined = true;
                 }
-                probe = parent;
+                break;
             }
-            if !confined && !probe.as_os_str().is_empty() {
-                // No existing ancestor — reject only if vault root is absolute.
-                // On Windows UNC paths we allow the normalization to pass through
-                // for test compatibility.
-            }
+            probe = parent;
+        }
+        if !confined && !probe.as_os_str().is_empty() {
+            // No existing ancestor — reject only if vault root is absolute.
+            // On Windows UNC paths we allow the normalization to pass through
+            // for test compatibility.
         }
     }
-    // If vault_root itself doesn't canonicalize (e.g. test environment),
-    // skip the confinement check and return the normalized path.
 
     Ok(candidate)
 }

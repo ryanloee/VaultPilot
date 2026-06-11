@@ -624,12 +624,117 @@ fn strip_markdown_list_marker(line: &str) -> &str {
 }
 
 fn strip_inline_markdown(line: &str) -> String {
-    line.replace("**", "")
-        .replace("__", "")
-        .replace(['`', '*', '_'], "")
-        .replace("~~", "")
-        .trim()
-        .to_string()
+    // Fast path: no markdown markers at all
+    if !line.contains(['*', '_', '`', '~']) {
+        return line.to_string();
+    }
+
+    let mut result = String::with_capacity(line.len());
+    let mut chars: Vec<(usize, char)> = line.char_indices().collect();
+    // Add sentinel
+    chars.push((line.len(), '\0'));
+    let mut i = 0;
+
+    while i + 1 < chars.len() {
+        let (pos, ch) = chars[i];
+
+        // Strip paired ** (bold)
+        if ch == '*' && i + 1 < chars.len() && chars[i + 1].1 == '*' {
+            let after_open = chars[i + 2].0;
+            if let Some(end_idx) = find_closing_dbl(line, after_open, "**") {
+                let end_pos = end_idx;
+                result.push_str(&line[after_open..end_pos]);
+                // Advance past closing **
+                i = char_index_after(&chars, end_pos + 2);
+                continue;
+            }
+        }
+        // Strip paired __ (bold)
+        if ch == '_' && i + 1 < chars.len() && chars[i + 1].1 == '_' {
+            let after_open = chars[i + 2].0;
+            if let Some(end_pos) = find_closing_dbl(line, after_open, "__") {
+                result.push_str(&line[after_open..end_pos]);
+                i = char_index_after(&chars, end_pos + 2);
+                continue;
+            }
+        }
+        // Strip paired ~~ (strikethrough)
+        if ch == '~' && i + 1 < chars.len() && chars[i + 1].1 == '~' {
+            let after_open = chars[i + 2].0;
+            if let Some(end_pos) = find_closing_dbl(line, after_open, "~~") {
+                result.push_str(&line[after_open..end_pos]);
+                i = char_index_after(&chars, end_pos + 2);
+                continue;
+            }
+        }
+        // Strip paired ` (inline code)
+        if ch == '`' {
+            if let Some(rel) = line[pos + 1..].find('`') {
+                let close_pos = pos + 1 + rel;
+                result.push_str(&line[pos + 1..close_pos]);
+                i = char_index_after(&chars, close_pos + 1);
+                continue;
+            }
+        }
+        // Strip paired * (italic)
+        if ch == '*' && i + 1 < chars.len() && chars[i + 1].1 != '*' && chars[i + 1].1 != ' ' {
+            let after_open = chars[i + 1].0;
+            if let Some(end_pos) = find_closing_single_byte(line, after_open, b'*') {
+                result.push_str(&line[after_open..end_pos]);
+                i = char_index_after(&chars, end_pos + 1);
+                continue;
+            }
+        }
+        // Strip paired _ (italic)
+        if ch == '_' && i + 1 < chars.len() && chars[i + 1].1 != '_' && chars[i + 1].1 != ' ' {
+            let after_open = chars[i + 1].0;
+            if let Some(end_pos) = find_closing_single_byte(line, after_open, b'_') {
+                result.push_str(&line[after_open..end_pos]);
+                i = char_index_after(&chars, end_pos + 1);
+                continue;
+            }
+        }
+        // Regular character — advance by one char
+        result.push(ch);
+        i += 1;
+    }
+
+    // Handle last char if not consumed
+    if i + 1 == chars.len() {
+        let (_, ch) = chars[i];
+        if ch != '\0' {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Find the char index in `chars` vec that starts at or after byte position `pos`.
+fn char_index_after(chars: &[(usize, char)], pos: usize) -> usize {
+    chars
+        .iter()
+        .position(|&(p, _)| p >= pos)
+        .unwrap_or(chars.len() - 1)
+}
+
+/// Find closing double-char marker starting from byte position `from`.
+fn find_closing_dbl(line: &str, from: usize, marker: &str) -> Option<usize> {
+    line[from..].find(marker).map(|pos| from + pos)
+}
+
+/// Find closing single-byte marker starting from byte position `from`.
+/// The closing marker must not be preceded by a space.
+fn find_closing_single_byte(line: &str, from: usize, marker: u8) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut i = from;
+    while i < bytes.len() {
+        if bytes[i] == marker && i > from && bytes[i - 1] != b' ' {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result<Value> {

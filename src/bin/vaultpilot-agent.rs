@@ -163,7 +163,12 @@ async fn handle_request(
 ) -> Result<Value, String> {
     match request.method.as_str() {
         "ping" => Ok(serde_json::json!({ "ok": true })),
-        "getSettings" => serialize_result(initialize_storage_with_context(context)),
+        "getSettings" => {
+            let mut settings =
+                initialize_storage_with_context(context).map_err(|e| e.to_string())?;
+            settings.provider = settings.provider.masked();
+            serde_json::to_value(&settings).map_err(|e| e.to_string())
+        }
         "saveSettings" => {
             let params: SaveSettingsParams = parse_params(&request.params)?;
             serialize_result(save_settings_with_context(context, params.settings))

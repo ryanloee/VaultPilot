@@ -15,6 +15,19 @@ pub struct ProviderConfig {
     pub context_window_tokens: Option<usize>,
 }
 
+impl ProviderConfig {
+    /// Return a clone with the API key masked for safe serialization.
+    pub fn masked(&self) -> Self {
+        Self {
+            api_key: mask_secret(&self.api_key),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            request_timeout_ms: self.request_timeout_ms,
+            context_window_tokens: self.context_window_tokens,
+        }
+    }
+}
+
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
@@ -386,6 +399,17 @@ pub struct AiWorkflowManual {
     pub summary: String,
     #[serde(default)]
     pub skills: Vec<AiSkill>,
+}
+
+/// Mask a secret string for safe display: show first 4 and last 4 chars.
+fn mask_secret(s: &str) -> String {
+    if s.len() <= 12 {
+        if s.is_empty() {
+            return String::new();
+        }
+        return "*".repeat(s.len());
+    }
+    format!("{}…{}", &s[..4], &s[s.len() - 4..])
 }
 
 pub fn default_base_url() -> String {

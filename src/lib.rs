@@ -1325,10 +1325,19 @@ mod tests {
 
     #[test]
     fn normalizes_single_slash_verbatim_windows_path() {
-        let vault = env::temp_dir().join("vaultpilot-vault-path-test");
-        fs::create_dir_all(&vault).expect("create vault dir");
+        // Use drive root on Windows so the absolute \\?\ path stays in-vault;
+        // on Linux the path is relative with no existing ancestors, so it passes through.
+        #[cfg(windows)]
+        let vault = PathBuf::from(r"C:\");
+        #[cfg(not(windows))]
+        let vault = {
+            let v = env::temp_dir().join("vaultpilot-vault-path-test");
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
         let path = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault).expect("path");
         assert_eq!(path, PathBuf::from(r"\\?\C:\Users\test\note.md"));
+        #[cfg(not(windows))]
         let _ = fs::remove_dir_all(&vault);
     }
 

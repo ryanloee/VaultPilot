@@ -476,7 +476,7 @@ pub fn save_note_with_images_with_context(
 }
 
 pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Result<bool> {
-    let (connection, _) = open_connection(context)?;
+    let (mut connection, _) = open_connection(context)?;
     let row: Option<(String, String)> = connection
         .query_row(
             "SELECT id, path FROM notes WHERE id = ?1 OR path = ?1 LIMIT 1",
@@ -487,22 +487,24 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     let Some((resolved_note_id, note_path)) = row else {
         return Ok(false);
     };
-    connection.execute(
+    let tx = connection.transaction()?;
+    tx.execute(
         "DELETE FROM note_fts WHERE note_id = ?1",
         [resolved_note_id.as_str()],
     )?;
-    connection.execute(
+    tx.execute(
         "DELETE FROM attachment_fts WHERE note_id = ?1",
         [resolved_note_id.as_str()],
     )?;
-    connection.execute(
+    tx.execute(
         "DELETE FROM attachments WHERE note_id = ?1",
         [resolved_note_id.as_str()],
     )?;
-    connection.execute(
+    tx.execute(
         "DELETE FROM notes WHERE id = ?1",
         [resolved_note_id.as_str()],
     )?;
+    tx.commit()?;
     let file = PathBuf::from(&note_path);
     if file.exists() {
         fs::remove_file(&file)?;
@@ -531,10 +533,11 @@ pub fn import_markdown_with_context(
 }
 
 pub fn rebuild_index_with_context(context: &StorageContext) -> Result<IndexStats> {
-    let (connection, settings) = open_connection(context)?;
+    let (mut connection, settings) = open_connection(context)?;
     let vault_dir = PathBuf::from(&settings.vault_dir);
     fs::create_dir_all(&vault_dir)?;
 
+    let tx = connection.transaction()?;
     let mut indexed_paths = HashSet::new();
     let mut stats = IndexStats::default();
     for entry in WalkDir::new(&vault_dir)
@@ -548,30 +551,31 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<IndexStats
                 .canonicalize()
                 .unwrap_or_else(|_| entry.path().to_path_buf());
             indexed_paths.insert(canonical.to_string_lossy().to_string());
-            if index_note_file(context, entry.path()).is_ok() {
+            if index_note_file_with_connection(&tx, entry.path()).is_ok() {
                 stats.indexed += 1;
             }
         }
     }
 
-    let mut statement = connection.prepare("SELECT path FROM notes")?;
+    let mut statement = tx.prepare("SELECT path FROM notes")?;
     let existing_paths = statement
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
     for existing in existing_paths {
         if !indexed_paths.contains(&existing) {
-            connection.execute(
+            tx.execute(
                 "DELETE FROM note_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
                 [&existing],
             )?;
-            connection.execute(
+            tx.execute(
                 "DELETE FROM attachment_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
                 [&existing],
             )?;
-            stats.removed +=
-                connection.execute("DELETE FROM notes WHERE path = ?1", [&existing])?;
+            stats.removed += tx.execute("DELETE FROM notes WHERE path = ?1", [&existing])?;
         }
     }
+    tx.commit()?;
 
     Ok(stats)
 }
@@ -731,10 +735,9 @@ fn ensure_attachment_columns(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn index_note_file(context: &StorageContext, path: &Path) -> Result<()> {
+fn index_note_file_with_connection(connection: &Connection, path: &Path) -> Result<()> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let document = parse_markdown_note(&canonical, "manual")?;
-    let (connection, _) = open_connection(context)?;
     let body_hash = hash_content(&document.body);
     connection.execute(
         "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
@@ -784,12 +787,17 @@ fn index_note_file(context: &StorageContext, path: &Path) -> Result<()> {
         ],
     )?;
     sync_note_attachments_with_connection(
-        &connection,
+        connection,
         &document.meta.id,
         &canonical.to_string_lossy(),
         &extract_note_image_refs(&document.body),
     )?;
     Ok(())
+}
+
+fn index_note_file(context: &StorageContext, path: &Path) -> Result<()> {
+    let (connection, _) = open_connection(context)?;
+    index_note_file_with_connection(&connection, path)
 }
 
 fn import_single_markdown(context: &StorageContext, file: &Path) -> Result<bool> {

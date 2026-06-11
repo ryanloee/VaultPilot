@@ -628,6 +628,15 @@ fn open_connection(context: &StorageContext) -> Result<(Connection, AppSettings)
 }
 
 fn ensure_schema(connection: &Connection) -> Result<()> {
+    // Fast path: skip schema creation if already initialized in this process.
+    // PRAGMA user_version is a lightweight integer stored in the database header.
+    let version: i32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version >= 1 {
+        // Schema already exists; just enable foreign keys and return.
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        return Ok(());
+    }
+
     connection.execute_batch(
         r#"
         PRAGMA foreign_keys = ON;
@@ -682,6 +691,7 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
         "#,
     )?;
     ensure_attachment_columns(connection)?;
+    connection.execute_batch("PRAGMA user_version = 1;")?;
     Ok(())
 }
 

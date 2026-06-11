@@ -968,11 +968,31 @@ fn detect_image_media_type(path: &str) -> Result<&'static str> {
 
 fn extract_json(text: &str) -> Result<String> {
     let trimmed = text.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+
+    // Fast path: the entire trimmed text is already valid JSON
+    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
         return Ok(trimmed.to_string());
     }
-    if let Some(start) = trimmed.find('{') {
-        let mut depth = 0;
+
+    // Search for the first `{` or `[` and try to extract a balanced JSON block
+    let first_brace = trimmed.find('{');
+    let first_bracket = trimmed.find('[');
+
+    // Pick whichever opening delimiter appears first
+    let start = match (first_brace, first_bracket) {
+        (Some(b), Some(k)) => Some(b.min(k)),
+        (Some(b), None) => Some(b),
+        (None, Some(k)) => Some(k),
+        (None, None) => None,
+    };
+
+    if let Some(start) = start {
+        let open_char = trimmed.as_bytes()[start] as char;
+        let close_char = if open_char == '{' { '}' } else { ']' };
+
+        let mut depth: u32 = 0;
         let mut in_string = false;
         let mut prev_char = '\0';
         for (i, c) in trimmed[start..].char_indices() {
@@ -985,8 +1005,8 @@ fn extract_json(text: &str) -> Result<String> {
             }
             match c {
                 '"' => in_string = true,
-                '{' => depth += 1,
-                '}' => {
+                '{' | '[' if c == open_char => depth += 1,
+                '}' | ']' if c == close_char => {
                     depth -= 1;
                     if depth == 0 {
                         return Ok(trimmed[start..=start + i].to_string());
@@ -1067,6 +1087,27 @@ mod tests {
         let extracted = extract_json(raw).expect("extract with braces in string");
         assert!(extracted.contains("{var}"));
         assert!(extracted.contains("\"ok\": true"));
+    }
+
+    #[test]
+    fn extract_json_handles_toplevel_array() {
+        let raw = r#"[{"id":1},{"id":2}]"#;
+        let extracted = extract_json(raw).expect("extract array");
+        assert_eq!(extracted, raw);
+    }
+
+    #[test]
+    fn extract_json_handles_array_from_prose() {
+        let raw = r#"Here are the results: [{"id":1},{"id":2}] done"#;
+        let extracted = extract_json(raw).expect("extract array from prose");
+        assert_eq!(extracted, r#"[{"id":1},{"id":2}]"#);
+    }
+
+    #[test]
+    fn extract_json_handles_nested_array_in_code_fence() {
+        let raw = "```json\n[{\"name\":\"a\"},{\"name\":\"b\"}]\n```";
+        let extracted = extract_json(raw).expect("extract array from fence");
+        assert_eq!(extracted, r#"[{"name":"a"},{"name":"b"}]"#);
     }
 
     #[test]

@@ -400,6 +400,47 @@ public sealed partial class MainWindow : Window
                 }
             };
 
+            var validationError = new TextBlock
+            {
+                Foreground = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0),
+                Visibility = Visibility.Collapsed
+            };
+            panel.Children.Add(validationError);
+
+            dialog.PrimaryButtonClick += (_, args) =>
+            {
+                var deferral = args.GetDeferral();
+                try
+                {
+                    if (!ulong.TryParse(timeoutBox.Text.Trim(), out var tv) || tv == 0)
+                    {
+                        validationError.Text = "请求超时必须是大于 0 的数字。";
+                        validationError.Visibility = Visibility.Visible;
+                        args.Cancel = true;
+                        return;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(contextWindowBox.Text))
+                    {
+                        if (!ulong.TryParse(contextWindowBox.Text.Trim(), out _))
+                        {
+                            validationError.Text = "上下文窗口 Token 数必须是数字。";
+                            validationError.Visibility = Visibility.Visible;
+                            args.Cancel = true;
+                            return;
+                        }
+                    }
+
+                    validationError.Visibility = Visibility.Collapsed;
+                }
+                finally
+                {
+                    deferral.Complete();
+                }
+            };
+
             var result = await dialog.ShowAsync();
             if (result != ContentDialogResult.Primary)
             {

@@ -931,8 +931,18 @@ fn extract_json(text: &str) -> Result<String> {
         return Ok(trimmed.to_string());
     }
     if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return Ok(trimmed[start..=end].to_string());
+        let mut depth = 0;
+        for (i, c) in trimmed[start..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(trimmed[start..=start + i].to_string());
+                    }
+                }
+                _ => {}
+            }
         }
     }
     Err(anyhow!("AI response does not contain JSON"))

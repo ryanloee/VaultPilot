@@ -27,8 +27,16 @@ use crate::models::{
 /// Write `data` to `path` atomically by writing to a temporary file first, then
 /// renaming.  On the same filesystem `rename` is guaranteed to be atomic, so a
 /// crash mid-write will never leave a truncated/corrupt file behind.
+///
+/// Uses a random UUID suffix for the temp file to prevent concurrent writers
+/// from racing on the same deterministic temp filename.
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-    let tmp_path = path.with_extension("json.tmp");
+    let tmp_name = format!(
+        "{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp"),
+        Uuid::new_v4()
+    );
+    let tmp_path = path.with_file_name(tmp_name);
     fs::write(&tmp_path, data)?;
     fs::rename(&tmp_path, path)?;
     Ok(())

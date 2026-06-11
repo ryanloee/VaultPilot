@@ -915,8 +915,16 @@ fn render_openai_message_content(
 
 fn resolve_local_image_url(url: &str) -> Result<String, String> {
     if url.starts_with("file://") {
-        let trimmed = url.trim_start_matches("file://").trim_start_matches('/');
-        return Ok(trimmed.replace('/', "\\"));
+        let path = url.trim_start_matches("file://");
+        #[cfg(target_os = "windows")]
+        {
+            let trimmed = path.trim_start_matches('/');
+            return Ok(trimmed.replace('/', "\\"));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Ok(path.to_string());
+        }
     }
 
     let path = PathBuf::from(url);

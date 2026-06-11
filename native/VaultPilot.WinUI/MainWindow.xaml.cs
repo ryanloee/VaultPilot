@@ -2286,6 +2286,17 @@ public sealed partial class MainWindow : Window
             {
                 AppendAttachmentPreviews(turn.Attachments, turn.Role);
             }
+            if (turn.Role != "user")
+            {
+                if (turn.ThinkingTrace is { Steps.Count: > 0 })
+                {
+                    AppendThinkingTrace(turn.ThinkingTrace);
+                }
+                if (turn.Citations is { Count: > 0 })
+                {
+                    AppendCitations(turn.Citations);
+                }
+            }
         }
         RefreshContextStatus();
     }
@@ -2294,6 +2305,97 @@ public sealed partial class MainWindow : Window
     {
         return _chatState.Sessions.FirstOrDefault(session => session.Id == _currentSessionId)
             ?? _chatState.Sessions.FirstOrDefault();
+    }
+
+    private void AppendThinkingTrace(ThinkingTrace trace)
+    {
+        var header = new TextBlock
+        {
+            Text = "💭 思考过程",
+            FontSize = 12,
+            Opacity = 0.65,
+            Margin = new Thickness(0, 4, 0, 2)
+        };
+
+        var content = new StackPanel { Spacing = 2 };
+        foreach (var step in trace.Steps)
+        {
+            var stepText = string.IsNullOrWhiteSpace(step.Detail)
+                ? step.Title
+                : $"{step.Title}: {step.Detail}";
+            content.Children.Add(new TextBlock
+            {
+                Text = stepText,
+                FontSize = 12,
+                Opacity = 0.55,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(8, 0, 0, 0)
+            });
+        }
+
+        var expander = new Expander
+        {
+            Header = header,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxWidth = 680,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Content = content
+        };
+
+        MessagesPanel.Children.Add(expander);
+    }
+
+    private void AppendCitations(IReadOnlyList<AnswerCitation> citations)
+    {
+        var header = new TextBlock
+        {
+            Text = $"📎 参考来源 ({citations.Count})",
+            FontSize = 12,
+            Opacity = 0.65,
+            Margin = new Thickness(0, 4, 0, 2)
+        };
+
+        var content = new StackPanel { Spacing = 4 };
+        foreach (var citation in citations)
+        {
+            var citationBlock = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+
+            var titleRun = new Run { Text = citation.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
+            var titleBlock = new TextBlock { FontSize = 12, Opacity = 0.7 };
+            titleBlock.Inlines.Add(titleRun);
+
+            citationBlock.Children.Add(titleBlock);
+
+            if (!string.IsNullOrWhiteSpace(citation.Snippet))
+            {
+                citationBlock.Children.Add(new TextBlock
+                {
+                    Text = citation.Snippet,
+                    FontSize = 11,
+                    Opacity = 0.5,
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxLines = 2
+                });
+            }
+
+            content.Children.Add(citationBlock);
+        }
+
+        var expander = new Expander
+        {
+            Header = header,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxWidth = 680,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Content = content
+        };
+
+        MessagesPanel.Children.Add(expander);
     }
 
     private ConversationTurn[] GetConversationHistory()

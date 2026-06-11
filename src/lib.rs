@@ -1325,9 +1325,11 @@ mod tests {
 
     #[test]
     fn normalizes_single_slash_verbatim_windows_path() {
-        let path =
-            normalize_tool_path(r"\\?\C:\Users\test\note.md", Path::new("/tmp")).expect("path");
+        let vault = env::temp_dir().join("vaultpilot-vault-path-test");
+        fs::create_dir_all(&vault).expect("create vault dir");
+        let path = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault).expect("path");
         assert_eq!(path, PathBuf::from(r"\\?\C:\Users\test\note.md"));
+        let _ = fs::remove_dir_all(&vault);
     }
 
     #[test]

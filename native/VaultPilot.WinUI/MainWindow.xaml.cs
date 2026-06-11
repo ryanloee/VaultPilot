@@ -1988,18 +1988,10 @@ public sealed partial class MainWindow : Window
         try
         {
             await _backendClient.EnsureConnectedAsync();
-            var model = _settings?.AutoWakeModel?.Trim();
-            var answer = await _backendClient.SendAsync<GroundedAnswer>(
-                "askWithAi",
-                new
-                {
-                    question = "你好",
-                    history = Array.Empty<object>(),
-                    imagePaths = Array.Empty<string>(),
-                    modelOverride = string.IsNullOrEmpty(model) ? (string?)null : model,
-                });
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await _backendClient.SendAsync("ping", new { }, cts.Token);
             _lastAutoWakeTime = DateTime.Now;
-            LogStartup($"自动唤醒完成: {(answer?.Answer?.Length ?? 0)} 字符");
+            LogStartup("自动唤醒完成: ping ok");
         }
         catch (Exception error)
         {

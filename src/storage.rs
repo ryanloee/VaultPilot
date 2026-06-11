@@ -23,6 +23,16 @@ use crate::models::{
     SearchQuery, SearchResult,
 };
 
+/// Write `data` to `path` atomically by writing to a temporary file first, then
+/// renaming.  On the same filesystem `rename` is guaranteed to be atomic, so a
+/// crash mid-write will never leave a truncated/corrupt file behind.
+fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+    let tmp_path = path.with_extension("json.tmp");
+    fs::write(&tmp_path, data)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct AppPaths {
     settings_path: PathBuf,
@@ -196,7 +206,7 @@ pub fn save_settings_with_context(
     }
     fs::create_dir_all(&settings.vault_dir)?;
     let content = serde_json::to_string_pretty(&settings)?;
-    fs::write(&paths.settings_path, content)
+    atomic_write(&paths.settings_path, content.as_bytes())
         .with_context(|| format!("failed to write {}", paths.settings_path.display()))?;
     let connection = Connection::open(&paths.database_path)?;
     ensure_schema(&connection)?;
@@ -235,7 +245,7 @@ pub fn save_chat_state_with_context(
     let normalized = normalize_chat_state(state.clone());
 
     let content = serde_json::to_string_pretty(&normalized)?;
-    fs::write(&paths.chat_state_path, content)
+    atomic_write(&paths.chat_state_path, content.as_bytes())
         .with_context(|| format!("failed to write {}", paths.chat_state_path.display()))?;
     Ok(normalized)
 }

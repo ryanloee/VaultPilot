@@ -15,6 +15,9 @@ public sealed class BackendClient : IAsyncDisposable
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(10);
     private const int MaxReconnectAttempts = 3;
+    private const int MaxStderrLines = 50;
+
+    private readonly ConcurrentQueue<string> _stderrLines = new();
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -64,7 +67,7 @@ public sealed class BackendClient : IAsyncDisposable
                 WorkingDirectory = Path.GetDirectoryName(_executablePath) ?? AppContext.BaseDirectory,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = false,
+                RedirectStandardError = true,
                 StandardInputEncoding = Utf8NoBom,
                 StandardOutputEncoding = Utf8NoBom,
                 UseShellExecute = false,
@@ -75,6 +78,7 @@ public sealed class BackendClient : IAsyncDisposable
         _process.Start();
         _readerCts = new CancellationTokenSource();
         _ = Task.Run(() => PumpStdoutAsync(_readerCts.Token));
+        _ = Task.Run(() => PumpStderrAsync(_readerCts.Token));
         ConnectionStateChanged?.Invoke(true);
     }
 
@@ -399,6 +403,43 @@ public sealed class BackendClient : IAsyncDisposable
 
     public string GetStderrTail(int maxLines = 10)
     {
-        return string.Empty;
+        var lines = _stderrLines.ToArray();
+        var start = Math.Max(0, lines.Length - maxLines);
+        return string.Join(Environment.NewLine, lines[start..]);
+    }
+
+    private async Task PumpStderrAsync(CancellationToken token)
+    {
+        if (_process?.StandardError is null)
+        {
+            return;
+        }
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var line = await _process.StandardError.ReadLineAsync(token);
+                if (line is null)
+                {
+                    return;
+                }
+
+                _stderrLines.Enqueue(line);
+
+                // Trim the buffer to keep only the most recent lines.
+                while (_stderrLines.Count > MaxStderrLines)
+                {
+                    _stderrLines.TryDequeue(out _);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
+            // Swallow stderr read errors — they should not crash the client.
+        }
     }
 }

@@ -961,6 +961,19 @@ fn validate_http_bridge_binding(ip: IpAddr, token: Option<&str>) -> Result<()> {
     ))
 }
 
+/// Constant-time byte-slice comparison to prevent timing side-channel attacks.
+/// Returns `true` if `a` and `b` have the same length and contents.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 fn require_bridge_token(
     state: &HttpBridgeState,
     headers: &HeaderMap,
@@ -976,7 +989,7 @@ fn require_bridge_token(
         ));
     };
 
-    if actual != expected {
+    if !constant_time_eq(actual.as_bytes(), expected.as_bytes()) {
         return Err(openai_error(
             StatusCode::UNAUTHORIZED,
             "invalid authorization token",
@@ -1519,7 +1532,7 @@ fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_token_from_headers, normalize_bridge_token, simplify_cli_text,
+        bridge_token_from_headers, constant_time_eq, normalize_bridge_token, simplify_cli_text,
         strip_cli_markdown_from_chat_state, strip_markdown_wrapper_tags,
         validate_http_bridge_binding,
     };
@@ -1609,5 +1622,14 @@ mod tests {
         );
         assert_eq!(stripped.sessions[0].turns[1].text, "bold");
         assert!(stripped.sessions[0].turns[1].thinking_trace.is_none());
+    }
+
+    #[test]
+    fn constant_time_eq_matches_and_rejects() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"secret", b"Secret"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"short", b"longer"));
     }
 }

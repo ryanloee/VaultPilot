@@ -1,6 +1,10 @@
-﻿use chrono::Utc;
+﻿use std::sync::OnceLock;
+
+use chrono::Utc;
 
 use crate::models::{AiSkill, AiWorkflowManual, ConversationTurn, NoteDocument, NoteMeta};
+
+static CACHED_MANUAL: OnceLock<String> = OnceLock::new();
 
 pub fn workflow_manual() -> AiWorkflowManual {
     AiWorkflowManual {
@@ -495,27 +499,29 @@ fn render_tool_results(tool_results: &[String]) -> String {
     tool_results.join("\n\n---\n\n")
 }
 
-fn render_manual_for_model() -> String {
-    let manual = workflow_manual();
-    let mut text = format!(
-        "<ai_workflow_manual title=\"{}\" version=\"{}\">\n{}\n",
-        manual.title, manual.version, manual.summary
-    );
+fn render_manual_for_model() -> &'static str {
+    CACHED_MANUAL.get_or_init(|| {
+        let manual = workflow_manual();
+        let mut text = format!(
+            "<ai_workflow_manual title=\"{}\" version=\"{}\">\n{}\n",
+            manual.title, manual.version, manual.summary
+        );
 
-    for skill in manual.skills {
-        text.push_str(&format!(
-            "\n<skill id=\"{}\">\nTitle: {}\nPurpose: {}\nSteps:\n- {}\nOutputs:\n- {}\nGuardrails:\n- {}\n</skill>\n",
-            skill.id,
-            skill.title,
-            skill.purpose,
-            skill.steps.join("\n- "),
-            skill.outputs.join("\n- "),
-            skill.guardrails.join("\n- "),
-        ));
-    }
+        for skill in manual.skills {
+            text.push_str(&format!(
+                "\n<skill id=\"{}\">\nTitle: {}\nPurpose: {}\nSteps:\n- {}\nOutputs:\n- {}\nGuardrails:\n- {}\n</skill>\n",
+                skill.id,
+                skill.title,
+                skill.purpose,
+                skill.steps.join("\n- "),
+                skill.outputs.join("\n- "),
+                skill.guardrails.join("\n- "),
+            ));
+        }
 
-    text.push_str("</ai_workflow_manual>");
-    text
+        text.push_str("</ai_workflow_manual>");
+        text
+    })
 }
 
 #[cfg(test)]

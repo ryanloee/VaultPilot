@@ -984,11 +984,12 @@ fn append_image_markdown(body: &str, image_refs: &[String]) -> String {
     let image_block = image_refs
         .iter()
         .map(|path| {
-            let name = Path::new(path)
+            let normalized = path.replace('\\', "/");
+            let name = Path::new(&normalized)
                 .file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or("image");
-            format!("![{}]({})", name, path.replace('\\', "/"))
+            format!("![{}]({})", name, normalized)
         })
         .collect::<Vec<_>>()
         .join("\n\n");

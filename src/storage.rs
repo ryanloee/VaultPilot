@@ -487,6 +487,12 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     let Some((resolved_note_id, note_path)) = row else {
         return Ok(false);
     };
+    // Delete the file first so that if it fails (permissions, locks),
+    // the database entry is preserved and the note is not orphaned.
+    let file = PathBuf::from(&note_path);
+    if file.exists() {
+        fs::remove_file(&file)?;
+    }
     connection.execute(
         "DELETE FROM note_fts WHERE note_id = ?1",
         [resolved_note_id.as_str()],
@@ -503,10 +509,6 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
         "DELETE FROM notes WHERE id = ?1",
         [resolved_note_id.as_str()],
     )?;
-    let file = PathBuf::from(&note_path);
-    if file.exists() {
-        fs::remove_file(&file)?;
-    }
     Ok(true)
 }
 

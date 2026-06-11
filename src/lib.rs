@@ -887,28 +887,7 @@ fn looks_like_small_talk(input: &str) -> bool {
 
 fn looks_like_record_request(input: &str) -> bool {
     let normalized = input.trim().to_lowercase();
-    let direct_phrases = [
-        "帮我记录",
-        "请记录",
-        "记录这个",
-        "记录一下",
-        "帮我保存",
-        "请保存",
-        "保存这个",
-        "存到知识库",
-        "加入知识库",
-        "写入知识库",
-        "record this",
-        "save this",
-        "remember this",
-        "store this",
-        "capture this",
-        "add to the knowledge base",
-    ];
-    let direct_match = direct_phrases
-        .iter()
-        .any(|needle| normalized.contains(needle));
-    let broader_phrases = [
+    let phrases = [
         "记录",
         "记一下",
         "记住",
@@ -926,10 +905,7 @@ fn looks_like_record_request(input: &str) -> bool {
         "capture this",
         "add to the knowledge base",
     ];
-    let broader_match = broader_phrases
-        .iter()
-        .any(|needle| normalized.contains(needle));
-    direct_match || broader_match
+    phrases.iter().any(|needle| normalized.contains(needle))
 }
 
 fn looks_like_session_memory_question(input: &str) -> bool {

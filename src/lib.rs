@@ -903,11 +903,10 @@ fn looks_like_small_talk(input: &str) -> bool {
 
 fn looks_like_record_request(input: &str) -> bool {
     let normalized = input.trim().to_lowercase();
-    let phrases = [
-        "记录",
+    // Specific command phrases — these always indicate a record/save intent.
+    let command_phrases = [
+        "记录一下",
         "记一下",
-        "记住",
-        "保存",
         "存一下",
         "存到知识库",
         "加入知识库",
@@ -921,7 +920,39 @@ fn looks_like_record_request(input: &str) -> bool {
         "capture this",
         "add to the knowledge base",
     ];
-    phrases.iter().any(|needle| normalized.contains(needle))
+    if command_phrases.iter().any(|p| normalized.contains(p)) {
+        return true;
+    }
+    // Short generic verbs (记录, 保存, 记住) are only treated as record
+    // requests when the input is NOT a question — otherwise phrases like
+    // "目前记录的版本是多少" would false-positive.
+    if looks_like_a_question(&normalized) {
+        return false;
+    }
+    let generic_verbs = ["记录", "保存", "记住"];
+    generic_verbs.iter().any(|p| normalized.contains(p))
+}
+
+/// Lightweight heuristic: does `input` look like a question rather than a
+/// command?  Used to avoid false-positive matches on short verbs.
+fn looks_like_a_question(input: &str) -> bool {
+    // Question punctuation
+    if input.contains('?') || input.contains('？') {
+        return true;
+    }
+    // Common Chinese question words
+    let question_words = [
+        "什么",
+        "多少",
+        "怎么",
+        "如何",
+        "哪个",
+        "哪些",
+        "为什么",
+        "是不是",
+        "有没有",
+    ];
+    question_words.iter().any(|w| input.contains(w))
 }
 
 fn looks_like_session_memory_question(input: &str) -> bool {
@@ -1356,10 +1387,16 @@ mod tests {
     fn detects_record_request() {
         assert!(looks_like_record_request("帮我记录这个命令"));
         assert!(looks_like_record_request("please save this"));
-        // "记录" in broader phrases now matches this question too
-        assert!(looks_like_record_request(
+        assert!(looks_like_record_request("帮我保存一下"));
+        assert!(looks_like_record_request("记录一下这个"));
+        // Questions containing generic verbs should NOT be classified as record requests
+        assert!(!looks_like_record_request(
             "根据本地笔记，目前记录的 FFmpeg 版本是多少？"
         ));
+        assert!(!looks_like_record_request(
+            "What version of FFmpeg is currently recorded in the notes?"
+        ));
+        assert!(!looks_like_record_request("这个文件保存在哪里？"));
     }
 
     #[test]

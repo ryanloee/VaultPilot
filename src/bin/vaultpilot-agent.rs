@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
@@ -69,9 +70,32 @@ fn main() {
         .build()
         .expect("failed to initialize async runtime");
 
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
     for line in stdin.lock().lines() {
         let response = match line {
-            Ok(line) => runtime.block_on(handle_line(&line, &mut stdout)),
+            Ok(line) => {
+                match runtime.block_on(tokio::time::timeout(
+                    REQUEST_TIMEOUT,
+                    handle_line(&line, &mut stdout),
+                )) {
+                    Ok(response) => response,
+                    Err(_elapsed) => {
+                        log_agent_event(
+                            "request_timeout",
+                            &format!("request timed out after {}s", REQUEST_TIMEOUT.as_secs()),
+                        );
+                        // We don't have the request id here, so use an empty string.
+                        // The client matches on the sequential id from stdin, so this
+                        // is acceptable — the client knows which request it sent last.
+                        AgentResponse::error(
+                            String::new(),
+                            "timeout",
+                            format!("request timed out after {}s", REQUEST_TIMEOUT.as_secs()),
+                        )
+                    }
+                }
+            }
             Err(error) => {
                 log_agent_event("stdin_error", &format!("{error}"));
                 break;

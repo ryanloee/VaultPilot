@@ -963,8 +963,18 @@ fn extract_json(text: &str) -> Result<String> {
     }
     if let Some(start) = trimmed.find('{') {
         let mut depth = 0;
+        let mut in_string = false;
+        let mut prev_char = '\0';
         for (i, c) in trimmed[start..].char_indices() {
+            if in_string {
+                if c == '"' && prev_char != '\\' {
+                    in_string = false;
+                }
+                prev_char = c;
+                continue;
+            }
             match c {
+                '"' => in_string = true,
                 '{' => depth += 1,
                 '}' => {
                     depth -= 1;
@@ -974,6 +984,7 @@ fn extract_json(text: &str) -> Result<String> {
                 }
                 _ => {}
             }
+            prev_char = c;
         }
     }
     Err(anyhow!("AI response does not contain JSON"))
@@ -1038,6 +1049,14 @@ mod tests {
         let extracted = extract_json(raw).expect("extract nested");
         assert!(extracted.contains("\"a\""));
         assert!(extracted.contains("\"b\""));
+    }
+
+    #[test]
+    fn extract_json_handles_braces_inside_strings() {
+        let raw = r#"Here is the result: {"answer": "use {var} syntax", "ok": true} done"#;
+        let extracted = extract_json(raw).expect("extract with braces in string");
+        assert!(extracted.contains("{var}"));
+        assert!(extracted.contains("\"ok\": true"));
     }
 
     #[test]

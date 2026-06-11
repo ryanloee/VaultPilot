@@ -88,14 +88,18 @@ public sealed class BackendClient : IAsyncDisposable
     {
         if (_isDisposed) return;
 
-        if (!IsConnected)
-        {
-            await TryReconnectWithRetryAsync();
-            return;
-        }
-
         try
         {
+            if (!IsConnected)
+            {
+                var reconnected = await TryReconnectWithRetryAsync();
+                if (!reconnected && !_isDisposed)
+                {
+                    ConnectionStateChanged?.Invoke(false);
+                }
+                return;
+            }
+
             using var cts = new CancellationTokenSource(PingTimeout);
             await SendAsync("ping", new { }, cts.Token);
         }
@@ -103,16 +107,20 @@ public sealed class BackendClient : IAsyncDisposable
         {
             if (!_isDisposed)
             {
-                await TryReconnectWithRetryAsync();
+                var reconnected = await TryReconnectWithRetryAsync();
+                if (!reconnected)
+                {
+                    ConnectionStateChanged?.Invoke(false);
+                }
             }
         }
     }
 
-    private async Task TryReconnectWithRetryAsync()
+    private async Task<bool> TryReconnectWithRetryAsync()
     {
         for (int attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
         {
-            if (_isDisposed) return;
+            if (_isDisposed) return false;
 
             var success = await TryReconnectAsync(forceRestart: true);
             if (success)
@@ -122,7 +130,7 @@ public sealed class BackendClient : IAsyncDisposable
                     using var cts = new CancellationTokenSource(PingTimeout);
                     await SendAsync("ping", new { }, cts.Token);
                     ConnectionStateChanged?.Invoke(true);
-                    return;
+                    return true;
                 }
                 catch
                 {
@@ -135,6 +143,8 @@ public sealed class BackendClient : IAsyncDisposable
                 await Task.Delay(ReconnectDelay * attempt);
             }
         }
+
+        return false;
     }
 
     public Task<bool> EnsureConnectedAsync(CancellationToken cancellationToken = default)

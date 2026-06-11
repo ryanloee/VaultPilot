@@ -865,7 +865,7 @@ fn context_status_from_usage(
     output_tokens: Option<usize>,
 ) -> ContextStatus {
     let (context_window_tokens, source) = ai::resolve_context_window(settings);
-    let live_tokens = input_tokens.unwrap_or_default();
+    let live_tokens = input_tokens.unwrap_or_default() + output_tokens.unwrap_or_default();
     ContextStatus {
         model: settings.provider.model.clone(),
         context_window_tokens,
@@ -878,7 +878,7 @@ fn context_status_from_usage(
             (live_tokens as f64 / context_window_tokens as f64) * 100.0
         },
         source,
-        precise: input_tokens.is_some(),
+        precise: input_tokens.is_some() || output_tokens.is_some(),
         last_request_input_tokens: input_tokens,
         last_request_output_tokens: output_tokens,
     }

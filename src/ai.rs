@@ -382,20 +382,15 @@ pub async fn compress_conversation(
     let prompt = prompting::compression_user_prompt(existing_summary, history);
     let response = send_request(settings, &system, &prompt, &[]).await?;
 
-    if let Ok(json) = extract_json(&response.text) {
-        if let Ok(parsed) = serde_json::from_str::<CompressionResponse>(&json) {
-            let summary = parsed.summary.trim();
-            if !summary.is_empty() {
-                return Ok(summary.to_string());
-            }
-        }
-    }
-
-    let fallback = response.text.trim();
-    if fallback.is_empty() {
+    let json = extract_json(&response.text)
+        .map_err(|_| anyhow!("model did not return valid JSON for conversation compression"))?;
+    let parsed: CompressionResponse = serde_json::from_str(&json)
+        .map_err(|e| anyhow!("failed to parse conversation compression response: {e}"))?;
+    let summary = parsed.summary.trim();
+    if summary.is_empty() {
         return Err(anyhow!("model returned an empty conversation summary"));
     }
-    Ok(fallback.to_string())
+    Ok(summary.to_string())
 }
 
 pub async fn select_relevant_note_ids(

@@ -816,10 +816,13 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, Str
             }
             probe = parent;
         }
-        if !confined && !probe.as_os_str().is_empty() {
-            // No existing ancestor — reject only if vault root is absolute.
-            // On Windows UNC paths we allow the normalization to pass through
-            // for test compatibility.
+        if !confined {
+            // No existing ancestor found — fail closed to prevent bypassing
+            // vault confinement with crafted non-existent paths.
+            return Err(format!(
+                "access denied: cannot verify confinement for path '{}'",
+                trimmed
+            ));
         }
     }
 
@@ -1402,7 +1405,8 @@ mod tests {
     #[test]
     fn normalizes_single_slash_verbatim_windows_path() {
         // Use drive root on Windows so the absolute \\?\ path stays in-vault;
-        // on Linux the path is relative with no existing ancestors, so it passes through.
+        // on Linux the path is relative with no existing ancestors, so it is
+        // rejected as fail-closed confinement.
         #[cfg(windows)]
         let vault = PathBuf::from(r"C:\");
         #[cfg(not(windows))]
@@ -1411,8 +1415,17 @@ mod tests {
             fs::create_dir_all(&v).expect("create vault dir");
             v
         };
-        let path = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault).expect("path");
-        assert_eq!(path, PathBuf::from(r"\\?\C:\Users\test\note.md"));
+        #[cfg(windows)]
+        {
+            let path = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault).expect("path");
+            assert_eq!(path, PathBuf::from(r"\\?\C:\Users\test\note.md"));
+        }
+        #[cfg(not(windows))]
+        {
+            let err = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault)
+                .expect_err("non-existent path with no ancestors should be rejected");
+            assert!(err.contains("cannot verify confinement"));
+        }
         #[cfg(not(windows))]
         let _ = fs::remove_dir_all(&vault);
     }
@@ -1429,6 +1442,47 @@ mod tests {
 
         let extracted = extract_explicit_local_path(&question).expect("path");
         assert_eq!(Path::new(&extracted), path.as_path());
+    }
+
+    #[test]
+    fn normalize_tool_path_nonexistent_inside_vault_accepted() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-confine-ok-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let result = normalize_tool_path("subfolder/new-note.md", &vault);
+        assert!(
+            result.is_ok(),
+            "non-existent path inside vault should be accepted"
+        );
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_nonexistent_outside_vault_rejected() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-confine-reject-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let outside = PathBuf::from("/tmp/vaultpilot-outside-test-dir/note.md");
+        let err = normalize_tool_path(&outside.to_string_lossy(), &vault)
+            .expect_err("non-existent path outside vault should be rejected");
+        assert!(err.contains("access denied") || err.contains("outside the vault"));
+        let _ = fs::remove_dir_all(&vault);
     }
 
     // ── 2.1 dangerous command detection ──

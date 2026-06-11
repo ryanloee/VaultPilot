@@ -682,8 +682,8 @@ fn truncate_for_trace(value: &str, max_chars: usize) -> String {
 
 fn merge_usage(current: ai::RequestUsage, next: ai::RequestUsage) -> ai::RequestUsage {
     ai::RequestUsage {
-        input_tokens: next.input_tokens.or(current.input_tokens),
-        output_tokens: next.output_tokens.or(current.output_tokens),
+        input_tokens: Some(current.input_tokens.unwrap_or(0) + next.input_tokens.unwrap_or(0)),
+        output_tokens: Some(current.output_tokens.unwrap_or(0) + next.output_tokens.unwrap_or(0)),
     }
 }
 
@@ -1728,22 +1728,22 @@ mod tests {
     // ── merge_usage ──
 
     #[test]
-    fn merge_usage_prefers_newer_values() {
+    fn merge_usage_sums_token_counts() {
         let current = RequestUsage {
             input_tokens: Some(100),
             output_tokens: Some(50),
         };
         let next = RequestUsage {
             input_tokens: Some(200),
-            output_tokens: None,
+            output_tokens: Some(75),
         };
         let merged = merge_usage(current, next);
-        assert_eq!(merged.input_tokens, Some(200));
-        assert_eq!(merged.output_tokens, Some(50));
+        assert_eq!(merged.input_tokens, Some(300));
+        assert_eq!(merged.output_tokens, Some(125));
     }
 
     #[test]
-    fn merge_usage_fills_none_from_current() {
+    fn merge_usage_treats_none_as_zero() {
         let current = RequestUsage {
             input_tokens: Some(100),
             output_tokens: None,

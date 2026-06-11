@@ -1177,7 +1177,7 @@ async fn compress_chat_session_if_needed(
         .filter(|turn| !turn.text.trim().is_empty())
         .map(|turn| ConversationTurn {
             role: turn.role.clone(),
-            text: turn.text.clone(),
+            text: enrich_turn_for_compression(turn),
         })
         .collect::<Vec<_>>();
     if compressible_turns.len() < 2 {
@@ -1214,6 +1214,57 @@ fn estimate_session_tokens(session: &ChatSession) -> u64 {
         total += estimate_turn_tokens(&turn.text, &turn.attachments);
     }
     total
+}
+
+/// Enrich a ChatTurn's text with metadata annotations before compression,
+/// so citations, attachments, thinking traces, and saved notes are
+/// preserved in the compressed summary rather than silently dropped.
+fn enrich_turn_for_compression(turn: &ChatTurn) -> String {
+    let mut text = turn.text.clone();
+
+    if !turn.attachments.is_empty() {
+        let names: Vec<&str> = turn
+            .attachments
+            .iter()
+            .map(|a| a.name.as_str())
+            .filter(|n| !n.is_empty())
+            .collect();
+        if !names.is_empty() {
+            text.push_str(&format!("\n[Attachments: {}]", names.join(", ")));
+        }
+    }
+
+    if !turn.citations.is_empty() {
+        let sources: Vec<String> = turn
+            .citations
+            .iter()
+            .map(|c| {
+                if !c.title.is_empty() {
+                    c.title.clone()
+                } else {
+                    c.path.clone()
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !sources.is_empty() {
+            text.push_str(&format!("\n[Citations: {}]", sources.join(", ")));
+        }
+    }
+
+    if let Some(note) = &turn.saved_note {
+        if !note.title.is_empty() {
+            text.push_str(&format!("\n[Saved note: {}]", note.title));
+        }
+    }
+
+    if let Some(trace) = &turn.thinking_trace {
+        if !trace.summary.is_empty() {
+            text.push_str(&format!("\n[Thinking trace summary: {}]", trace.summary));
+        }
+    }
+
+    text
 }
 
 fn estimate_turn_tokens(text: &str, attachments: &[ChatAttachment]) -> u64 {
@@ -1275,13 +1326,14 @@ mod tests {
     use super::{
         append_ocr_text_to_prompt, append_turn_to_session, build_agent_trace,
         build_chat_session_title, build_effective_question, current_session_history, display_path,
-        draft_to_note_document, estimate_session_tokens, estimate_tokens_for_text,
-        estimate_turn_tokens, extract_explicit_local_path, has_matching_tool_execution,
-        looks_like_record_request, looks_like_session_memory_question, looks_like_small_talk,
-        merge_usage, normalize_tool_path, planned_tool_identity,
+        draft_to_note_document, enrich_turn_for_compression, estimate_session_tokens,
+        estimate_tokens_for_text, estimate_turn_tokens, extract_explicit_local_path,
+        has_matching_tool_execution, looks_like_record_request, looks_like_session_memory_question,
+        looks_like_small_talk, merge_usage, normalize_tool_path, planned_tool_identity,
         require_saved_note_for_record_request, resolve_or_create_chat_session,
         summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession, ChatState,
-        ChatTurn, ConversationSummary, ToolExecution, IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
+        ChatTurn, ConversationSummary, ThinkingTrace, ToolExecution, IMAGE_ONLY_PROMPT,
+        OCR_SECTION_HEADER,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
     use crate::models::{GroundedAnswer, NoteDocument, NoteMeta, StructuredNoteDraft};
@@ -1481,6 +1533,45 @@ mod tests {
         ];
         let tokens = estimate_turn_tokens("test", &attachments);
         assert_eq!(tokens, estimate_tokens_for_text(Some("test")) + 2 * 1200);
+    }
+
+    #[test]
+    fn enrich_turn_preserves_plain_text_unchanged() {
+        let turn = ChatTurn {
+            text: "hello world".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(enrich_turn_for_compression(&turn), "hello world");
+    }
+
+    #[test]
+    fn enrich_turn_appends_attachments_and_citations() {
+        use crate::models::{AnswerCitation, NoteMeta};
+        let turn = ChatTurn {
+            text: "Here is the result".to_string(),
+            attachments: vec![ChatAttachment {
+                path: "/tmp/x.png".to_string(),
+                name: "x.png".to_string(),
+            }],
+            citations: vec![AnswerCitation {
+                title: "My Note".to_string(),
+                ..Default::default()
+            }],
+            saved_note: Some(NoteMeta {
+                title: "Saved Title".to_string(),
+                ..Default::default()
+            }),
+            thinking_trace: Some(ThinkingTrace {
+                summary: "analyzed 3 docs".to_string(),
+                steps: vec![],
+            }),
+            ..Default::default()
+        };
+        let enriched = enrich_turn_for_compression(&turn);
+        assert!(enriched.contains("[Attachments: x.png]"));
+        assert!(enriched.contains("[Citations: My Note]"));
+        assert!(enriched.contains("[Saved note: Saved Title]"));
+        assert!(enriched.contains("[Thinking trace summary: analyzed 3 docs]"));
     }
 
     #[test]

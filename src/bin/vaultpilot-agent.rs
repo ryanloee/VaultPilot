@@ -195,7 +195,10 @@ async fn handle_request(
         }
         "openVaultDirectory" => {
             let params: PathParams = parse_params(&request.params)?;
-            open_vault_directory(&params.path)?;
+            let settings = initialize_storage_with_context(context).map_err(|e| e.to_string())?;
+            let vault_root = Path::new(&settings.vault_dir);
+            let confined = normalize_tool_path(&params.path, vault_root)?;
+            open_vault_directory(&confined.to_string_lossy())?;
             Ok(serde_json::json!({ "ok": true }))
         }
         "askWithAi" => {

@@ -6,11 +6,10 @@ on:
       - "v*"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   validate:
+    permissions:
+      contents: read
     runs-on: windows-latest
 
     steps:
@@ -87,6 +86,8 @@ jobs:
           retention-days: 7
 
   build:
+    permissions:
+      contents: read
     needs: validate
     runs-on: windows-latest
     strategy:
@@ -138,13 +139,15 @@ jobs:
 
       - name: Build Velopack package
         shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $fetchReleaseHistory = "${{ startsWith(github.ref, 'refs/tags/v') }}" -eq "true"
           ./scripts/build-windows-installers.ps1 `
             -Platforms "${{ matrix.platform }}" `
             -Version "${{ steps.version.outputs.value }}" `
             -RepoUrl "https://github.com/${{ github.repository }}" `
-            -GitHubToken "${{ github.token }}" `
+            -GitHubToken "$env:GITHUB_TOKEN" `
             -FetchReleaseHistory:$fetchReleaseHistory
 
       - name: Upload workflow artifact
@@ -156,6 +159,8 @@ jobs:
           retention-days: 7
 
   linux_build:
+    permissions:
+      contents: read
     needs: validate
     runs-on: ubuntu-latest
 
@@ -208,6 +213,8 @@ jobs:
           retention-days: 7
 
   release:
+    permissions:
+      contents: write
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, linux_build]
     runs-on: windows-latest

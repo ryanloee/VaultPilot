@@ -672,9 +672,19 @@ fn build_agent_trace(tool_results: &[ToolExecution], forced_search: bool) -> Thi
     }
 }
 
+/// Clip a string to at most `max_chars` characters in a single pass.
+/// Returns the clipped string and whether it was shortened.
+pub fn truncate_text(value: &str, max_chars: usize) -> (String, bool) {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= max_chars {
+        return (value.to_string(), false);
+    }
+    (chars[..max_chars].iter().collect(), true)
+}
+
 fn truncate_for_trace(value: &str, max_chars: usize) -> String {
-    let mut output = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars {
+    let (mut output, clipped) = truncate_text(value, max_chars);
+    if clipped {
         output.push_str("...");
     }
     output
@@ -1280,8 +1290,9 @@ mod tests {
         looks_like_record_request, looks_like_session_memory_question, looks_like_small_talk,
         merge_usage, normalize_tool_path, planned_tool_identity,
         require_saved_note_for_record_request, resolve_or_create_chat_session,
-        summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession, ChatState,
-        ChatTurn, ConversationSummary, ToolExecution, IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
+        summarize_docs_for_tool_result, truncate_for_trace, truncate_text, ChatAttachment,
+        ChatSession, ChatState, ChatTurn, ConversationSummary, ToolExecution, IMAGE_ONLY_PROMPT,
+        OCR_SECTION_HEADER,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
     use crate::models::{GroundedAnswer, NoteDocument, NoteMeta, StructuredNoteDraft};
@@ -1440,6 +1451,29 @@ mod tests {
     #[test]
     fn truncate_exact_length_unchanged() {
         assert_eq!(truncate_for_trace("abc", 3), "abc");
+    }
+
+    // ── 2.5b truncate_text ──
+
+    #[test]
+    fn truncate_text_short_unchanged() {
+        let (text, clipped) = truncate_text("hello", 10);
+        assert_eq!(text, "hello");
+        assert!(!clipped);
+    }
+
+    #[test]
+    fn truncate_text_long_clips() {
+        let (text, clipped) = truncate_text("abcdefghij", 5);
+        assert_eq!(text, "abcde");
+        assert!(clipped);
+    }
+
+    #[test]
+    fn truncate_text_exact_length_unchanged() {
+        let (text, clipped) = truncate_text("abc", 3);
+        assert_eq!(text, "abc");
+        assert!(!clipped);
     }
 
     // ── 2.6 token estimation ──

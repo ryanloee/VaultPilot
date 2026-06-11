@@ -809,7 +809,7 @@ fn dedupe_terms(values: Vec<String>) -> Vec<String> {
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
+    crate::truncate_text(value, max_chars).0
 }
 
 async fn send_request(

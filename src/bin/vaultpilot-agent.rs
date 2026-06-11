@@ -114,6 +114,8 @@ fn install_panic_hook() {
 }
 
 fn log_agent_event(event: &str, detail: &str) {
+    const MAX_LOG_SIZE: u64 = 512 * 1024; // 512 KB
+
     let log_dir = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
@@ -121,6 +123,23 @@ fn log_agent_event(event: &str, detail: &str) {
         .join("com.local.vaultpilot");
     let _ = fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("agent-crash.log");
+
+    // Rotate log if it exceeds the size limit — keep the last 256 KB
+    if let Ok(metadata) = fs::metadata(&log_path) {
+        if metadata.len() > MAX_LOG_SIZE {
+            let keep = 256 * 1024usize;
+            if let Ok(data) = fs::read(&log_path) {
+                let start = data.len().saturating_sub(keep);
+                // Find the next newline so we start at a complete line boundary
+                let start = data[start..]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map(|p| start + p + 1)
+                    .unwrap_or(start);
+                let _ = fs::write(&log_path, &data[start..]);
+            }
+        }
+    }
 
     let timestamp = Utc::now().to_rfc3339();
     let entry = format!("[{timestamp}] {event}: {detail}\n");

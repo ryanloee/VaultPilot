@@ -1,6 +1,6 @@
 use std::io::{self, BufRead, Read, Write};
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
 
@@ -20,6 +20,7 @@ use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::*;
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
+    normalize_tool_path,
 };
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -785,7 +786,8 @@ async fn http_chat_completions(
     let settings = load_settings_with_context(&state.context)
         .map_err(|error| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
     let requested_model = request.model.trim().to_string();
-    let (question, history, image_paths) = openai_request_to_dialog(request)
+    let vault_root = PathBuf::from(&settings.vault_dir);
+    let (question, history, image_paths) = openai_request_to_dialog(request, &vault_root)
         .map_err(|message| openai_error(StatusCode::BAD_REQUEST, &message))?;
 
     let answer = ask_with_ai_with_context(
@@ -841,6 +843,7 @@ async fn http_chat_completions(
 
 fn openai_request_to_dialog(
     request: OpenAiChatCompletionsRequest,
+    vault_root: &Path,
 ) -> Result<(String, Vec<ConversationTurn>, Vec<String>), String> {
     let total_messages = request.messages.len();
     if total_messages == 0 {
@@ -853,7 +856,7 @@ fn openai_request_to_dialog(
 
     for (index, message) in request.messages.into_iter().enumerate() {
         let is_last = index + 1 == total_messages;
-        let (text, images) = render_openai_message_content(message.content)?;
+        let (text, images) = render_openai_message_content(message.content, vault_root)?;
         if is_last {
             if message.role != "user" {
                 return Err("the final message must have role=user".to_string());
@@ -885,6 +888,7 @@ fn openai_request_to_dialog(
 
 fn render_openai_message_content(
     content: OpenAiMessageContent,
+    vault_root: &Path,
 ) -> Result<(String, Vec<String>), String> {
     match content {
         OpenAiMessageContent::Text(text) => Ok((text, Vec::new())),
@@ -903,7 +907,7 @@ fn render_openai_message_content(
                             .image_url
                             .map(|item| item.url)
                             .ok_or_else(|| "image_url part is missing url".to_string())?;
-                        image_paths.push(resolve_local_image_url(&url)?);
+                        image_paths.push(resolve_local_image_url(&url, vault_root)?);
                     }
                     _ => {}
                 }
@@ -913,23 +917,20 @@ fn render_openai_message_content(
     }
 }
 
-fn resolve_local_image_url(url: &str) -> Result<String, String> {
+fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, String> {
     if url.starts_with("file://") {
         let path = url.trim_start_matches("file://");
-        #[cfg(target_os = "windows")]
-        {
-            let trimmed = path.trim_start_matches('/');
-            return Ok(trimmed.replace('/', "\\"));
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            return Ok(path.to_string());
-        }
+        // Validate path is within the vault directory
+        let resolved = normalize_tool_path(path, vault_root)?;
+        return Ok(resolved.to_string_lossy().to_string());
     }
 
-    let path = PathBuf::from(url);
+    let path_str = url;
+    let path = PathBuf::from(path_str);
     if path.exists() {
-        return Ok(path.to_string_lossy().to_string());
+        // Validate path is within the vault directory
+        let resolved = normalize_tool_path(path_str, vault_root)?;
+        return Ok(resolved.to_string_lossy().to_string());
     }
 
     Err("only local file image URLs are supported".to_string())

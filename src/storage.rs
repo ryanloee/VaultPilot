@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
 
@@ -45,6 +46,17 @@ struct AppPaths {
 #[derive(Debug, Clone)]
 pub struct StorageContext {
     paths: AppPaths,
+    /// Cached SQLite connection, shared across clones of the same context.
+    cached_conn: Arc<Mutex<Option<Connection>>>,
+}
+
+impl StorageContext {
+    fn with_cached_conn(paths: AppPaths) -> Self {
+        Self {
+            paths,
+            cached_conn: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,15 +91,13 @@ impl StorageContext {
             .join("Documents")
             .join("VaultPilotVault");
 
-        Ok(Self {
-            paths: AppPaths {
-                settings_path: config_root.join("settings.json"),
-                database_path: data_root.join("knowledge-index.sqlite"),
-                chat_state_path: data_root.join("chat-state.json"),
-                default_vault_dir,
-                vault_dir_override: None,
-            },
-        })
+        Ok(Self::with_cached_conn(AppPaths {
+            settings_path: config_root.join("settings.json"),
+            database_path: data_root.join("knowledge-index.sqlite"),
+            chat_state_path: data_root.join("chat-state.json"),
+            default_vault_dir,
+            vault_dir_override: None,
+        }))
     }
 
     pub fn for_cli(vault_dir_override: Option<PathBuf>) -> Result<Self> {
@@ -107,15 +117,13 @@ impl StorageContext {
 
     #[cfg(test)]
     pub(crate) fn for_test(temp: &Path) -> Self {
-        Self {
-            paths: AppPaths {
-                settings_path: temp.join("settings.json"),
-                database_path: temp.join("knowledge-index.sqlite"),
-                chat_state_path: temp.join("chat-state.json"),
-                default_vault_dir: temp.join("vault"),
-                vault_dir_override: None,
-            },
-        }
+        Self::with_cached_conn(AppPaths {
+            settings_path: temp.join("settings.json"),
+            database_path: temp.join("knowledge-index.sqlite"),
+            chat_state_path: temp.join("chat-state.json"),
+            default_vault_dir: temp.join("vault"),
+            vault_dir_override: None,
+        })
     }
 }
 
@@ -633,15 +641,76 @@ fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     }
 }
 
-fn open_connection(context: &StorageContext) -> Result<(Connection, AppSettings)> {
+/// RAII guard that returns a SQLite connection to the StorageContext cache on drop.
+/// Implements Deref/DerefMut to Connection so callers can use it transparently.
+struct CachedConnection {
+    conn: Option<Connection>,
+    cache: Arc<Mutex<Option<Connection>>>,
+}
+
+impl Drop for CachedConnection {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            if let Ok(mut cache) = self.cache.lock() {
+                *cache = Some(conn);
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for CachedConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Self::Target {
+        self.conn.as_ref().expect("CachedConnection conn taken")
+    }
+}
+
+impl std::ops::DerefMut for CachedConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.conn.as_mut().expect("CachedConnection conn taken")
+    }
+}
+
+/// Get a database connection, preferring the cached one in the StorageContext.
+/// Returns a `CachedConnection` guard that returns the connection to the cache on drop.
+fn open_connection(context: &StorageContext) -> Result<(CachedConnection, AppSettings)> {
     let settings = load_settings_with_context(context)?;
+
+    // Try to reuse a cached connection
+    if let Ok(mut cache) = context.cached_conn.lock() {
+        if let Some(conn) = cache.take() {
+            // Verify the cached connection is still usable with a cheap query
+            if conn
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+                .is_ok()
+            {
+                return Ok((
+                    CachedConnection {
+                        conn: Some(conn),
+                        cache: Arc::clone(&context.cached_conn),
+                    },
+                    settings,
+                ));
+            }
+            // Connection stale/corrupt — fall through to create a new one
+        }
+    }
+
+    // Create a fresh connection
     let database_path = context.paths.database_path.clone();
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)?;
     }
     let connection = Connection::open(database_path)?;
     ensure_schema(&connection)?;
-    Ok((connection, settings))
+
+    Ok((
+        CachedConnection {
+            conn: Some(connection),
+            cache: Arc::clone(&context.cached_conn),
+        },
+        settings,
+    ))
 }
 
 fn ensure_schema(connection: &Connection) -> Result<()> {

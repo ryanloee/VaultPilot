@@ -14,7 +14,9 @@ use vaultpilot_lib::storage::{
     load_chat_state_with_context, rebuild_index_with_context, save_chat_state_with_context,
     save_settings_with_context, StorageContext,
 };
-use vaultpilot_lib::{ask_with_ai_with_context, compress_chat_history_with_context};
+use vaultpilot_lib::{
+    ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,7 +188,10 @@ async fn handle_request(
         "rebuildIndex" => serialize_result(rebuild_index_with_context(context)),
         "readImagePreview" => {
             let params: PathParams = parse_params(&request.params)?;
-            read_image_preview(&params.path).map(Value::String)
+            let settings = initialize_storage_with_context(context).map_err(|e| e.to_string())?;
+            let vault_root = Path::new(&settings.vault_dir);
+            let confined = normalize_tool_path(&params.path, vault_root)?;
+            read_image_preview(&confined.to_string_lossy()).map(Value::String)
         }
         "openVaultDirectory" => {
             let params: PathParams = parse_params(&request.params)?;

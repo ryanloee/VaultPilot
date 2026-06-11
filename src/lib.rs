@@ -748,7 +748,7 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, String> {
     ))
 }
 
-fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, String> {
+pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, String> {
     let trimmed = path.trim().trim_matches('\"').trim_matches('`');
     if trimmed.is_empty() {
         return Err("path is empty".to_string());

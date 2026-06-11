@@ -487,6 +487,11 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     let Some((resolved_note_id, note_path)) = row else {
         return Ok(false);
     };
+    let file = PathBuf::from(&note_path);
+    if file.exists() {
+        fs::remove_file(&file)?;
+    }
+
     let tx = connection.transaction()?;
     tx.execute(
         "DELETE FROM note_fts WHERE note_id = ?1",
@@ -505,10 +510,7 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
         [resolved_note_id.as_str()],
     )?;
     tx.commit()?;
-    let file = PathBuf::from(&note_path);
-    if file.exists() {
-        fs::remove_file(&file)?;
-    }
+
     Ok(true)
 }
 

@@ -1453,6 +1453,25 @@ public sealed partial class MainWindow : Window
                     ApplyInlineMarkdown(textBlock, line);
                 }
             }
+            else if (line.StartsWith("> ") || line.StartsWith(">"))
+            {
+                // Blockquote: left border + muted italic text
+                var quoteText = line.StartsWith("> ") ? line[2..] : line[1..];
+                textBlock.FontStyle = Windows.UI.Text.FontStyle.Italic;
+                textBlock.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                textBlock.Padding = new Thickness(12, 4, 4, 4);
+                ApplyInlineMarkdown(textBlock, quoteText.Trim());
+
+                var border = new Border
+                {
+                    BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
+                    BorderThickness = new Thickness(3, 0, 0, 0),
+                    Child = textBlock,
+                    Margin = new Thickness(0, 2, 0, 2)
+                };
+                yield return border;
+                continue;
+            }
             else
             {
                 ApplyInlineMarkdown(textBlock, line);
@@ -1680,6 +1699,7 @@ public sealed partial class MainWindow : Window
         var bulletLines = 0;
         var numberedLines = 0;
         var headingLines = 0;
+        var blockquoteLines = 0;
 
         foreach (var rawLine in lines)
         {
@@ -1707,6 +1727,12 @@ public sealed partial class MainWindow : Window
                 continue;
             }
 
+            if (line.StartsWith("> ") || (line.Length > 1 && line.StartsWith(">")))
+            {
+                blockquoteLines++;
+                continue;
+            }
+
             var dotIndex = line.IndexOf(". ", StringComparison.Ordinal);
             if (dotIndex > 0 && line.Take(dotIndex).All(char.IsDigit))
             {
@@ -1715,6 +1741,11 @@ public sealed partial class MainWindow : Window
         }
 
         if (headingLines > 0)
+        {
+            return true;
+        }
+
+        if (blockquoteLines > 0)
         {
             return true;
         }

@@ -1009,7 +1009,7 @@ fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
             if c == '\\' {
                 backslash_count += 1;
             } else {
-                if c == '"' && backslash_count % 2 == 0 {
+                if c == '"' && backslash_count.is_multiple_of(2) {
                     in_string = false;
                 }
                 backslash_count = 0;
@@ -1051,7 +1051,7 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        dedupe_terms, detect_image_media_type, extract_json, fallback_answer,
+        dedupe_terms, detect_image_media_type, extract_json, extract_json_block, fallback_answer,
         heuristic_note_from_input, is_openai_reasoning_model, is_retryable_provider_error,
         normalize_draft, normalize_messages_endpoint, parse_or_fallback_answer,
         parse_or_fallback_note, parse_record_response, parse_tool_call, resolve_context_window,

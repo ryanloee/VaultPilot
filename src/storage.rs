@@ -504,7 +504,8 @@ pub fn save_note_with_images_with_context(
     };
 
     let serialized = compose_markdown(&meta, &body_with_images)?;
-    atomic_write(&path, serialized.as_bytes()).with_context(|| format!("failed to write {}", path.display()))?;
+    atomic_write(&path, serialized.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
     index_note_file_with_connection(&connection, &path)?;
     load_note_with_context(context, &meta.id)
 }

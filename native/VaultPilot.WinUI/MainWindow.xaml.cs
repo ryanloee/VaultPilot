@@ -78,6 +78,7 @@ public sealed partial class MainWindow : Window
     private FrameworkElement? _thinkingIndicator;
     private DispatcherTimer? _thinkingDotsTimer;
     private int _thinkingDotStep;
+    private CancellationTokenSource? _activeRequestCts;
 
     public MainWindow()
     {
@@ -928,6 +929,10 @@ public sealed partial class MainWindow : Window
         _attachments.Clear();
         RefreshAttachments();
 
+        _activeRequestCts?.Dispose();
+        _activeRequestCts = new CancellationTokenSource();
+        var cancellationToken = _activeRequestCts.Token;
+
         try
         {
             SendButton.IsEnabled = false;
@@ -977,6 +982,8 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            _activeRequestCts?.Dispose();
+            _activeRequestCts = null;
             SendButton.IsEnabled = true;
             RefreshSessions();
         }
@@ -1013,6 +1020,10 @@ public sealed partial class MainWindow : Window
         _attachments.Clear();
         RefreshAttachments();
 
+        _activeRequestCts?.Dispose();
+        _activeRequestCts = new CancellationTokenSource();
+        var cancellationToken = _activeRequestCts.Token;
+
         try
         {
             SendButton.IsEnabled = false;
@@ -1036,7 +1047,8 @@ public sealed partial class MainWindow : Window
                     question = prompt,
                     history,
                     imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
-                });
+                },
+                cancellationToken);
             RemoveThinkingIndicator();
             if (answer?.SavedNote is null)
             {
@@ -1069,6 +1081,8 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            _activeRequestCts?.Dispose();
+            _activeRequestCts = null;
             SendButton.IsEnabled = true;
             RecordButton.IsEnabled = true;
             RefreshSessions();
@@ -1079,6 +1093,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            _activeRequestCts?.Cancel();
+            _activeRequestCts?.Dispose();
+            _activeRequestCts = null;
             RemoveThinkingIndicator();
             TryReleaseWindowFileDropHook();
             await _backendClient.DisposeAsync();
@@ -1087,6 +1104,15 @@ public sealed partial class MainWindow : Window
         {
             ShowError("关闭窗口失败", error);
         }
+    }
+
+    /// <summary>
+    /// Cancels the currently active AI request, if any.
+    /// Safe to call when no request is in progress.
+    /// </summary>
+    public void CancelActiveRequest()
+    {
+        _activeRequestCts?.Cancel();
     }
 
     public void Hide()

@@ -1160,6 +1160,10 @@ mod tests {
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
+    /// Serialise tests that mutate the VAULTPILOT_ALLOW_LOCAL_ENDPOINT env-var
+    /// to prevent parallel race conditions in CI.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn extracts_json_from_code_fence_like_payload() {
         let raw = "```json\n{\"answer\":\"ok\"}\n```";
@@ -1520,21 +1524,26 @@ mod tests {
     }
 
     #[test]
-    fn validate_base_url_rejects_localhost_without_env() {
-        // Ensure env var is NOT set for this test.
+    fn validate_base_url_localhost_env_guard() {
+        // Combines "rejects localhost without env" and "allows with env" into one
+        // test to avoid parallel env-var race conditions (flaky in CI).
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Without env var → reject localhost
         std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
         assert!(validate_base_url("http://localhost:8080").is_err());
-    }
 
-    #[test]
-    fn validate_base_url_allows_localhost_with_env() {
+        // With env var → allow localhost
         std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
         assert!(validate_base_url("http://localhost:8080").is_ok());
+
+        // Cleanup
         std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
     }
 
     #[test]
     fn validate_base_url_rejects_private_ip() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
         assert!(validate_base_url("http://192.168.1.1/api").is_err());
         assert!(validate_base_url("http://10.0.0.1/api").is_err());

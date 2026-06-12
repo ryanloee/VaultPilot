@@ -15,6 +15,7 @@ use crate::models::{
     AnswerCitation, AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft,
 };
 use crate::prompting;
+use tracing::{info, instrument, warn};
 
 const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024; // 50MB
 
@@ -231,6 +232,7 @@ fn default_limit() -> usize {
     6
 }
 
+#[instrument(skip(settings, raw_input, image_paths), fields(input_len = raw_input.len()))]
 pub async fn organize_note(
     settings: &AppSettings,
     raw_input: &str,
@@ -243,6 +245,7 @@ pub async fn organize_note(
     Ok(parse_or_fallback_note(&response.text, raw_input))
 }
 
+#[instrument(skip(settings, question, image_paths, history, prior_tool_results))]
 pub async fn select_tool_call(
     settings: &AppSettings,
     question: &str,
@@ -286,6 +289,7 @@ pub async fn select_tool_call(
     Ok(ToolSelectionResult { tool_call, usage })
 }
 
+#[instrument(skip(settings, question, docs, image_paths, history))]
 pub async fn answer_question(
     settings: &AppSettings,
     question: &str,
@@ -319,6 +323,7 @@ pub async fn answer_question(
     })
 }
 
+#[instrument(skip(settings, question, tool_name, tool_result, docs, history))]
 pub async fn answer_after_tool(
     settings: &AppSettings,
     question: &str,
@@ -344,6 +349,7 @@ pub async fn answer_after_tool(
     })
 }
 
+#[instrument(skip(settings, question, tool_results, docs, history))]
 pub async fn answer_after_tools(
     settings: &AppSettings,
     question: &str,
@@ -367,6 +373,7 @@ pub async fn answer_after_tools(
     })
 }
 
+#[instrument(skip(settings, raw_input, docs, image_paths))]
 pub async fn record_note_interaction(
     settings: &AppSettings,
     raw_input: &str,
@@ -379,6 +386,7 @@ pub async fn record_note_interaction(
     parse_record_response(&response.text, raw_input, response.usage)
 }
 
+#[instrument(skip(settings, existing_summary, history))]
 pub async fn compress_conversation(
     settings: &AppSettings,
     existing_summary: &str,
@@ -399,6 +407,7 @@ pub async fn compress_conversation(
     Ok(summary.to_string())
 }
 
+#[instrument(skip(settings, question, candidates, history))]
 pub async fn select_relevant_note_ids(
     settings: &AppSettings,
     question: &str,
@@ -898,6 +907,7 @@ async fn send_request(
     send_request_with_temperature(settings, system, prompt, image_paths, 0.2).await
 }
 
+#[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.provider.model, temperature))]
 async fn send_request_with_temperature(
     settings: &AppSettings,
     system: &str,
@@ -939,6 +949,7 @@ async fn send_request_with_temperature(
             Ok(response) => response,
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
+                    warn!(attempt = attempt + 1, error = %error, "transport error, retrying");
                     sleep(Duration::from_secs((attempt + 1) as u64 * 2)).await;
                     continue;
                 }
@@ -969,6 +980,11 @@ async fn send_request_with_temperature(
                 .unwrap_or(text);
 
             if is_retryable_provider_error(status.as_u16(), &detail) && attempt < 2 {
+                warn!(
+                    attempt = attempt + 1,
+                    status = status.as_u16(),
+                    "retryable API error, retrying"
+                );
                 sleep(Duration::from_secs((attempt + 1) as u64 * 2)).await;
                 continue;
             }
@@ -986,6 +1002,11 @@ async fn send_request_with_temperature(
             input_tokens: Some(parsed.usage.input_tokens),
             output_tokens: Some(parsed.usage.output_tokens),
         };
+        info!(
+            input_tokens = parsed.usage.input_tokens,
+            output_tokens = parsed.usage.output_tokens,
+            "API request completed"
+        );
         let joined = parsed
             .content
             .into_iter()

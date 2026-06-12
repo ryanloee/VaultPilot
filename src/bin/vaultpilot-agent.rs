@@ -9,6 +9,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
     import_markdown_with_context, initialize_storage_with_context, list_notes_with_context,
@@ -62,6 +63,15 @@ struct AgentStatusPayload {
 
 fn main() {
     install_panic_hook();
+
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    tracing::info!("vaultpilot-agent starting");
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();

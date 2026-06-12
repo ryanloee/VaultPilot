@@ -1062,7 +1062,7 @@ fn compose_markdown(meta: &NoteMeta, body: &str) -> Result<String> {
         updated_at: meta.updated_at.clone(),
         source: meta.source.clone(),
     };
-    let yaml = serde_yaml::to_string(&frontmatter)?;
+    let yaml = serde_yml::to_string(&frontmatter)?;
     Ok(format!(
         "---\n{}---\n\n{}\n",
         yaml,
@@ -1508,7 +1508,7 @@ fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     if let Some(end_index) = content[4..].find("\n---\n") {
         let yaml = &content[4..4 + end_index];
         let body = &content[4 + end_index + 5..];
-        let frontmatter = serde_yaml::from_str::<Frontmatter>(yaml).unwrap_or_default();
+        let frontmatter = serde_yml::from_str::<Frontmatter>(yaml).unwrap_or_default();
         return Ok((frontmatter, body));
     }
     Err(anyhow!("invalid frontmatter"))
@@ -2886,7 +2886,7 @@ mod tests {
 
     #[test]
     fn split_frontmatter_empty_block_returns_defaults() {
-        // Empty YAML between delimiters → serde_yaml returns defaults
+        // Empty YAML between delimiters → serde_yml returns defaults
         let content = "---\n\n---\n\nBody";
         let (fm, body) = split_frontmatter(content).expect("parse");
         assert!(fm.id.is_empty());

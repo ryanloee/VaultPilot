@@ -153,7 +153,7 @@ VaultPilot uses the following open-source libraries:
 | reqwest | MIT / Apache-2.0 |
 | rusqlite | MIT |
 | serde / serde_json | MIT / Apache-2.0 |
-| serde_yaml | MIT / Apache-2.0 |
+| serde_yml | MIT / Apache-2.0 |
 | sha2 | MIT / Apache-2.0 |
 | tokio | MIT |
 | uuid | MIT / Apache-2.0 |

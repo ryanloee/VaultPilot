@@ -30,8 +30,11 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         InitializeTrayIcon();
-        _window = new MainWindow();
-        _window.Closed += OnWindowClosed;
+        if (_window == null)
+        {
+            _window = new MainWindow();
+            _window.Closed += OnWindowClosed;
+        }
         _window.Activate();
     }
 

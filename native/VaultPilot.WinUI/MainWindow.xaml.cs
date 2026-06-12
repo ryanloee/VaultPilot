@@ -1953,27 +1953,71 @@ public sealed partial class MainWindow : Window
 
     private FrameworkElement CreateAttachmentChip(ChatAttachment attachment)
     {
-        var dot = new Border
+        // File icon
+        var icon = new FontIcon
         {
-            Width = 10,
-            Height = 10,
-            CornerRadius = new CornerRadius(999),
-            Background = GetThemeBrush("AttachmentDotBrush"),
-            BorderBrush = GetThemeBrush("AttachmentBorderBrush"),
-            BorderThickness = new Thickness(1),
-            Margin = new Thickness(0, 0, 2, 0)
+            Glyph = "\uE7C3", // Photo icon
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 4, 0)
         };
 
-        ToolTipService.SetToolTip(dot, $"{attachment.Name}\n单击预览，右键移除");
-        dot.Tapped += async (_, _) => await ShowImagePreviewDialogAsync(attachment, removable: true);
-        dot.RightTapped += (_, _) =>
+        // Filename text (truncated)
+        var nameText = new TextBlock
+        {
+            Text = attachment.Name,
+            MaxWidth = 120,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 12
+        };
+
+        // Remove button (X)
+        var removeButton = new Button
+        {
+            Content = "\uE711", // Cancel icon
+            Padding = new Thickness(2),
+            MinWidth = 0,
+            MinHeight = 0,
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)
+        };
+        removeButton.Click += (_, _) =>
         {
             _attachments.RemoveAll(item => item.Path == attachment.Path);
             RefreshAttachments();
             UpdateStatusBar("info", "图片已移除", $"当前还剩 {_attachments.Count} 张图片。");
         };
 
-        return dot;
+        var chip = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Padding = new Thickness(8, 4, 4, 4),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        chip.Children.Add(icon);
+        chip.Children.Add(nameText);
+        chip.Children.Add(removeButton);
+
+        var chipBorder = new Border
+        {
+            MinWidth = 120,
+            MaxWidth = 200,
+            CornerRadius = new CornerRadius(4),
+            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+            BorderBrush = GetThemeBrush("AttachmentBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(0, 0, 2, 0),
+            Child = chip
+        };
+
+        ToolTipService.SetToolTip(chipBorder, $"{attachment.Name}\n单击预览，右键移除");
+        chipBorder.Tapped += async (_, _) => await ShowImagePreviewDialogAsync(attachment, removable: true);
+
+        return chipBorder;
     }
 
     private FrameworkElement CreateChatAttachmentPreview(ChatAttachment attachment, bool removable)

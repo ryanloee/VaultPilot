@@ -816,10 +816,11 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, Str
             }
             probe = parent;
         }
-        if !confined && !probe.as_os_str().is_empty() {
-            // No existing ancestor — reject only if vault root is absolute.
-            // On Windows UNC paths we allow the normalization to pass through
-            // for test compatibility.
+        if !confined {
+            return Err(format!(
+                "access denied: cannot verify path '{}' is inside the vault directory",
+                trimmed
+            ));
         }
     }
 
@@ -1350,7 +1351,7 @@ fn build_chat_session_title(text: &str) -> String {
 mod tests {
     use std::{
         env, fs,
-        path::{Path, PathBuf},
+        path::Path,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -1401,20 +1402,28 @@ mod tests {
 
     #[test]
     fn normalizes_single_slash_verbatim_windows_path() {
-        // Use drive root on Windows so the absolute \\?\ path stays in-vault;
-        // on Linux the path is relative with no existing ancestors, so it passes through.
+        // On Windows the UNC path resolves within the drive root vault.
+        // On Linux backslash is not a path separator, so the UNC path has no
+        // existing ancestor and cannot be verified in-vault — fail-closed.
         #[cfg(windows)]
-        let vault = PathBuf::from(r"C:\");
+        {
+            use std::path::PathBuf;
+            let vault = PathBuf::from(r"C:\");
+            let path = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault).expect("path");
+            assert_eq!(path, PathBuf::from(r"\\?\C:\Users\test\note.md"));
+        }
         #[cfg(not(windows))]
-        let vault = {
-            let v = env::temp_dir().join("vaultpilot-vault-path-test");
-            fs::create_dir_all(&v).expect("create vault dir");
-            v
-        };
-        let path = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault).expect("path");
-        assert_eq!(path, PathBuf::from(r"\\?\C:\Users\test\note.md"));
-        #[cfg(not(windows))]
-        let _ = fs::remove_dir_all(&vault);
+        {
+            let vault = {
+                let v = env::temp_dir().join("vaultpilot-vault-path-test");
+                fs::create_dir_all(&v).expect("create vault dir");
+                v
+            };
+            let err = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault)
+                .expect_err("non-verifiable path should be rejected");
+            assert!(err.contains("cannot verify"), "error: {err}");
+            let _ = fs::remove_dir_all(&vault);
+        }
     }
 
     #[test]

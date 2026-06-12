@@ -473,7 +473,8 @@ pub fn save_note_with_images_with_context(
     let path = if note.meta.path.trim().is_empty() {
         build_note_path(&settings.vault_dir, &title, &created_at, &id)
     } else {
-        PathBuf::from(&note.meta.path)
+        crate::normalize_tool_path(&note.meta.path, Path::new(&settings.vault_dir))
+            .map_err(|e| anyhow::anyhow!("invalid note path: {e}"))?
     };
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

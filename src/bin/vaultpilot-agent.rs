@@ -187,7 +187,11 @@ fn log_agent_event(event: &str, detail: &str) {
         .and_then(|mut f| f.write_all(entry.as_bytes()));
 }
 
-async fn handle_line(context: &StorageContext, line: &str, stdout: &mut impl Write) -> AgentResponse {
+async fn handle_line(
+    context: &StorageContext,
+    line: &str,
+    stdout: &mut impl Write,
+) -> AgentResponse {
     let request = match serde_json::from_str::<AgentRequest>(line) {
         Ok(request) => request,
         Err(error) => {

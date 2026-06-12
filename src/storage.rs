@@ -38,15 +38,17 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         Uuid::new_v4()
     );
     let tmp_path = path.with_file_name(tmp_name);
-    fs::write(&tmp_path, data)?;
-    // Restrict temp file permissions before rename to prevent other users
-    // from reading sensitive data (e.g. settings.json with API keys).
+    // Create the temp file, then restrict permissions *before* writing any
+    // sensitive data so that other users can never read the contents, even
+    // in the brief window between file creation and rename (issue #186).
+    fs::File::create(&tmp_path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         fs::set_permissions(&tmp_path, perms)?;
     }
+    fs::write(&tmp_path, data)?;
     fs::rename(&tmp_path, path)?;
     Ok(())
 }

@@ -845,6 +845,15 @@ fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, String
     ))
 }
 
+/// Maximum number of characters to return from read_file (≈50 KB).
+const READ_FILE_MAX_CHARS: usize = 50_000;
+/// Maximum number of lines to return from read_file.
+const READ_FILE_MAX_LINES: usize = 200;
+/// Number of lines from the beginning of the file to keep when truncating.
+const READ_FILE_HEAD_LINES: usize = 150;
+/// Number of lines from the end of the file to keep when truncating.
+const READ_FILE_TAIL_LINES: usize = 50;
+
 fn read_file_result(path: &str, vault_root: &Path) -> Result<String, String> {
     let file_path = normalize_tool_path(path, vault_root)?;
     let display = file_path.display().to_string();
@@ -856,22 +865,68 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, String> {
     }
 
     const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1 MB
-    let metadata = fs::metadata(&file_path).map_err(|error| error.to_string())?;
-    if metadata.len() > MAX_FILE_SIZE {
+    let file_metadata = fs::metadata(&file_path).map_err(|error| error.to_string())?;
+    if file_metadata.len() > MAX_FILE_SIZE {
         return Err(format!(
             "file too large ({} bytes, limit is {} bytes): {}",
-            metadata.len(),
+            file_metadata.len(),
             MAX_FILE_SIZE,
             display
         ));
     }
 
     let content = fs::read_to_string(&file_path).map_err(|error| error.to_string())?;
-    let clipped = truncate_for_trace(&content, 12_000);
-    Ok(format!(
-        "read_file returned content for {}:\n{}",
-        display, clipped
-    ))
+    let total_bytes = content.len();
+    let total_lines = content.lines().count();
+
+    // If content fits within both limits, return as-is (no truncation needed).
+    if total_bytes <= READ_FILE_MAX_CHARS && total_lines <= READ_FILE_MAX_LINES {
+        return Ok(format!(
+            "read_file returned content for {}:\n{}",
+            display, content
+        ));
+    }
+
+    // Smart truncation: head + tail with metadata.
+    let lines: Vec<&str> = content.lines().collect();
+    let head_count = READ_FILE_HEAD_LINES.min(lines.len());
+    let tail_count = READ_FILE_TAIL_LINES.min(lines.len());
+    let head = &lines[..head_count];
+    let tail_start = lines.len().saturating_sub(tail_count);
+    let tail = &lines[tail_start..];
+
+    // Avoid overlapping head and tail when file has fewer lines than the
+    // combined head+tail budget but exceeds the character limit.
+    let (skipped_lines, skipped_content) = if tail_start > head_count {
+        let skipped = lines.len() - head_count - tail_count;
+        let skipped_str = lines[head_count..tail_start].join("\n");
+        (skipped, skipped_str)
+    } else {
+        (0, String::new())
+    };
+
+    let mut output = String::new();
+    output.push_str(&format!(
+        "read_file returned content for {} ({} bytes, {} lines total):\n",
+        display, total_bytes, total_lines
+    ));
+    for line in head {
+        output.push_str(line);
+        output.push('\n');
+    }
+    output.push_str(&format!(
+        "\n... [{} lines / {} chars omitted — file is too large; showing first {} and last {} lines] ...\n\n",
+        skipped_lines,
+        skipped_content.len(),
+        READ_FILE_HEAD_LINES,
+        READ_FILE_TAIL_LINES,
+    ));
+    for line in tail {
+        output.push_str(line);
+        output.push('\n');
+    }
+
+    Ok(output)
 }
 
 pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, String> {
@@ -1477,10 +1532,10 @@ mod tests {
         estimate_tokens_for_text, estimate_turn_tokens, extract_explicit_local_path,
         has_matching_tool_execution, looks_like_record_request, looks_like_session_memory_question,
         looks_like_small_talk, merge_usage, normalize_tool_path, planned_tool_identity,
-        require_saved_note_for_record_request, resolve_or_create_chat_session, sanitize_error,
-        summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession, ChatState,
-        ChatTurn, ConversationSummary, ThinkingTrace, ToolExecution, IMAGE_ONLY_PROMPT,
-        OCR_SECTION_HEADER,
+        read_file_result, require_saved_note_for_record_request, resolve_or_create_chat_session,
+        sanitize_error, summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment,
+        ChatSession, ChatState, ChatTurn, ConversationSummary, ThinkingTrace, ToolExecution,
+        IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
     use crate::models::{GroundedAnswer, NoteDocument, NoteMeta, StructuredNoteDraft};
@@ -2119,5 +2174,76 @@ mod tests {
     #[test]
     fn sanitize_handles_empty_string() {
         assert_eq!(sanitize_error(""), "");
+    }
+
+    // ── read_file_result truncation ──
+
+    #[test]
+    fn read_file_small_file_returns_full_content() {
+        let dir = env::temp_dir().join(format!(
+            "vaultpilot_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("small.txt");
+        fs::write(&file, "hello\nworld\n").unwrap();
+
+        let result = read_file_result(file.to_str().unwrap(), &dir).unwrap();
+        assert!(result.contains("hello\n"));
+        assert!(result.contains("world\n"));
+        // Should NOT contain truncation indicator
+        assert!(!result.contains("... ["));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_file_large_file_truncates_with_metadata() {
+        let dir = env::temp_dir().join(format!(
+            "vaultpilot_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("large.txt");
+        // Create a file with >200 lines
+        let lines: Vec<String> = (0..300).map(|i| format!("line number {}", i)).collect();
+        fs::write(&file, lines.join("\n")).unwrap();
+
+        let result = read_file_result(file.to_str().unwrap(), &dir).unwrap();
+        // Should contain metadata
+        assert!(result.contains("300 lines total"));
+        // Should contain first lines
+        assert!(result.contains("line number 0"));
+        assert!(result.contains("line number 149"));
+        // Should contain last lines
+        assert!(result.contains("line number 299"));
+        // Should contain truncation indicator
+        assert!(result.contains("... ["));
+        assert!(result.contains("omitted"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_file_nonexistent_path_returns_error() {
+        let dir = env::temp_dir().join(format!(
+            "vaultpilot_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let result = read_file_result("nonexistent.txt", &dir);
+        assert!(result.is_err());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -1777,6 +1777,7 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "sha2",
+ "subtle",
  "tokio",
  "url",
  "uuid",

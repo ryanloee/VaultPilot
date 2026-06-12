@@ -13,6 +13,8 @@ pub struct ProviderConfig {
     pub request_timeout_ms: u64,
     #[serde(default)]
     pub context_window_tokens: Option<usize>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
 }
 
 impl ProviderConfig {
@@ -24,6 +26,7 @@ impl ProviderConfig {
             model: self.model.clone(),
             request_timeout_ms: self.request_timeout_ms,
             context_window_tokens: self.context_window_tokens,
+            max_output_tokens: self.max_output_tokens,
         }
     }
 }
@@ -36,6 +39,7 @@ impl Default for ProviderConfig {
             model: default_model(),
             request_timeout_ms: default_timeout_ms(),
             context_window_tokens: None,
+            max_output_tokens: None,
         }
     }
 }
@@ -527,6 +531,7 @@ mod tests {
                 model: "test-model".to_string(),
                 request_timeout_ms: 30_000,
                 context_window_tokens: Some(128_000),
+                max_output_tokens: Some(16384),
             },
             auto_check_updates: false,
             auto_wake_enabled: true,
@@ -541,6 +546,7 @@ mod tests {
         assert!(json.contains("\"baseUrl\""));
         assert!(json.contains("\"requestTimeoutMs\""));
         assert!(json.contains("\"contextWindowTokens\""));
+        assert!(json.contains("\"maxOutputTokens\""));
         assert!(json.contains("\"autoCheckUpdates\""));
         assert!(json.contains("\"autoWakeEnabled\""));
         assert!(json.contains("\"autoWakeIntervalMinutes\""));
@@ -552,6 +558,7 @@ mod tests {
         assert_eq!(parsed.vault_dir, settings.vault_dir);
         assert_eq!(parsed.provider.api_key, settings.provider.api_key);
         assert_eq!(parsed.provider.context_window_tokens, Some(128_000));
+        assert_eq!(parsed.provider.max_output_tokens, Some(16384));
     }
 
     #[test]

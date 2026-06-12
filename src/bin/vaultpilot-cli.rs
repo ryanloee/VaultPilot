@@ -5,7 +5,7 @@ use std::process;
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -622,12 +622,81 @@ fn strip_markdown_list_marker(line: &str) -> &str {
 }
 
 fn strip_inline_markdown(line: &str) -> String {
-    line.replace("**", "")
-        .replace("__", "")
-        .replace(['`', '*', '_'], "")
-        .replace("~~", "")
-        .trim()
-        .to_string()
+    let mut result = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            // Inline code span: preserve everything inside backticks verbatim
+            '`' => {
+                result.push('`');
+                for inner in chars.by_ref() {
+                    result.push(inner);
+                    if inner == '`' {
+                        break;
+                    }
+                }
+            }
+            // Bold marker **: skip the ** but keep the content
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next(); // consume second *
+                              // Copy until closing **
+                while let Some(inner) = chars.next() {
+                    if inner == '*' && chars.peek() == Some(&'*') {
+                        chars.next(); // consume closing *
+                        break;
+                    }
+                    result.push(inner);
+                }
+            }
+            // Strikethrough marker ~~: skip the ~~ but keep the content
+            '~' if chars.peek() == Some(&'~') => {
+                chars.next(); // consume second ~
+                while let Some(inner) = chars.next() {
+                    if inner == '~' && chars.peek() == Some(&'~') {
+                        chars.next(); // consume closing ~
+                        break;
+                    }
+                    result.push(inner);
+                }
+            }
+            // Italic *: skip the * but keep the content
+            '*' => {
+                for inner in chars.by_ref() {
+                    if inner == '*' {
+                        break;
+                    }
+                    result.push(inner);
+                }
+            }
+            // Italic/bold __: skip the __ but keep the content
+            '_' if chars.peek() == Some(&'_') => {
+                chars.next(); // consume second _
+                while let Some(inner) = chars.next() {
+                    if inner == '_' && chars.peek() == Some(&'_') {
+                        chars.next(); // consume closing _
+                        break;
+                    }
+                    result.push(inner);
+                }
+            }
+            // Italic _: skip the _ but keep the content
+            '_' => {
+                for inner in chars.by_ref() {
+                    if inner == '_' {
+                        break;
+                    }
+                    result.push(inner);
+                }
+            }
+            // Regular character: pass through
+            _ => {
+                result.push(c);
+            }
+        }
+    }
+
+    result
 }
 
 fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result<Value> {
@@ -725,6 +794,7 @@ async fn run_http_bridge(
         .route("/health", get(http_health))
         .route("/v1/models", get(http_models))
         .route("/v1/chat/completions", post(http_chat_completions))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
         .with_state(state);
 
     println!(
@@ -1586,7 +1656,7 @@ mod tests {
     #[test]
     fn simplify_cli_text_removes_common_markdown_noise() {
         let text = "<vp-markdown>\n### 标题\n1. **第一步**\n- `git fetch`\n```bash\ngit pull\n```\n</vp-markdown>";
-        assert_eq!(simplify_cli_text(text), "标题\n第一步\ngit fetch\ngit pull");
+        assert_eq!(simplify_cli_text(text), "标题\n第一步\n`git fetch`\ngit pull");
     }
 
     #[test]

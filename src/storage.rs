@@ -1716,14 +1716,20 @@ fn load_attachment_entries_by_note_ids(
     note_ids: &[String],
 ) -> Result<HashMap<String, Vec<AttachmentEntry>>> {
     let mut attachments = HashMap::<String, Vec<AttachmentEntry>>::new();
-    let mut statement = connection.prepare(
-        "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
-         FROM attachments
-         WHERE note_id = ?1",
-    )?;
+    let batch_size = 50usize;
 
-    for note_id in note_ids {
-        let rows = statement.query_map([note_id], row_to_attachment_entry)?;
+    for chunk in note_ids.chunks(batch_size) {
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
+             FROM attachments
+             WHERE note_id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            chunk.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let rows = statement.query_map(params.as_slice(), row_to_attachment_entry)?;
         for row in rows {
             let entry = row?;
             attachments
@@ -1748,33 +1754,47 @@ fn query_visual_candidate_scores(
         return Ok(HashMap::new());
     }
 
-    let mut statement = connection.prepare(
-        "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
-         FROM attachments
-         WHERE perceptual_hash <> ''",
-    )?;
-    let rows = statement.query_map([], row_to_attachment_entry)?;
     let mut scores = HashMap::new();
+    let batch_size: i64 = 500;
+    let mut offset: i64 = 0;
 
-    for row in rows {
-        let entry = row?;
-        let Some(attachment_hash) = entry.perceptual_hash else {
-            continue;
-        };
+    loop {
+        let mut count: usize = 0;
+        {
+            let mut statement = connection.prepare(
+                "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
+                 FROM attachments
+                 WHERE perceptual_hash <> ''
+                 LIMIT ?1 OFFSET ?2",
+            )?;
+            let rows = statement.query_map(params![batch_size, offset], row_to_attachment_entry)?;
+            for row in rows {
+                let entry = row?;
+                count += 1;
+                let Some(attachment_hash) = entry.perceptual_hash else {
+                    continue;
+                };
 
-        let best = query_hashes
-            .iter()
-            .map(|query_hash| image_similarity_score(*query_hash, attachment_hash))
-            .max()
-            .unwrap_or_default();
-        if best <= 0 {
-            continue;
+                let best = query_hashes
+                    .iter()
+                    .map(|query_hash| image_similarity_score(*query_hash, attachment_hash))
+                    .max()
+                    .unwrap_or_default();
+                if best <= 0 {
+                    continue;
+                }
+
+                scores
+                    .entry(entry.note_id.clone())
+                    .and_modify(|current: &mut i64| *current = (*current).max(best))
+                    .or_insert(best);
+            }
         }
 
-        scores
-            .entry(entry.note_id.clone())
-            .and_modify(|current: &mut i64| *current = (*current).max(best))
-            .or_insert(best);
+        if count < batch_size as usize {
+            break;
+        }
+        offset += batch_size;
     }
 
     Ok(scores)

@@ -14,7 +14,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 anyhow = "1"
-axum = { version = "0.7", features = ["http1", "json"] }
+axum = { version = "0.8", features = ["http1", "json"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 deunicode = "1"

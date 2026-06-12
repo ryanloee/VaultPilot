@@ -34,20 +34,28 @@
                 Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1">
-                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource StatusBarIconBrush}" />
-                    <TextBlock x:Name="StatusBarTitle" Text="正在启动" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-                    <TextBlock x:Name="StatusBarMessage" Text="正在连接 Rust 后端..." Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"
+                    AutomationProperties.Name="状态栏">
+                    <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource StatusBarIconBrush}"
+                        AutomationProperties.Name="状态图标" />
+                    <TextBlock x:Name="StatusBarTitle" Text="正在启动" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                        AutomationProperties.Name="状态标题" />
+                    <TextBlock x:Name="StatusBarMessage" Text="正在连接 Rust 后端..." Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                        AutomationProperties.Name="状态消息" />
                 </StackPanel>
             </Border>
             <CommandBar
                 Grid.Column="1"
                 DefaultLabelPosition="Right"
                 IsOpen="False">
-                <AppBarButton x:Name="ToggleSidebarButton" Icon="OpenPane" Label="收起会话" />
-                <AppBarButton x:Name="ImportButton" Icon="Import" Label="导入 Markdown" />
-                <AppBarButton x:Name="RebuildButton" Icon="Refresh" Label="重建索引" />
-                <AppBarButton x:Name="SettingsButton" Icon="Setting" Label="设置" />
+                <AppBarButton x:Name="ToggleSidebarButton" Icon="OpenPane" Label="收起会话"
+                    AutomationProperties.Name="切换侧边栏" AutomationProperties.HelpText="显示或隐藏会话列表侧边栏" />
+                <AppBarButton x:Name="ImportButton" Icon="Import" Label="导入 Markdown"
+                    AutomationProperties.Name="导入 Markdown" AutomationProperties.HelpText="从本地导入 Markdown 文件到知识库" />
+                <AppBarButton x:Name="RebuildButton" Icon="Refresh" Label="重建索引"
+                    AutomationProperties.Name="重建索引" AutomationProperties.HelpText="重建知识库搜索索引" />
+                <AppBarButton x:Name="SettingsButton" Icon="Setting" Label="设置"
+                    AutomationProperties.Name="设置" AutomationProperties.HelpText="打开应用设置对话框" />
             </CommandBar>
         </Grid>
 
@@ -76,12 +84,14 @@
                         <TextBlock Grid.Row="0" Text="会话" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <TextBlock Grid.Row="1" x:Name="NotesText" Text="笔记：正在加载..." />
                         <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="NewSessionButton" Content="新建对话">
+                            <Button x:Name="NewSessionButton" Content="新建对话"
+                                AutomationProperties.Name="新建对话" AutomationProperties.HelpText="创建一个新的聊天会话">
                                 <Button.Icon>
                                     <FontIcon Glyph="&#xE710;" FontSize="14" />
                                 </Button.Icon>
                             </Button>
-                            <Button x:Name="DeleteSessionButton" Content="删除当前会话" Foreground="{ThemeResource SystemFillColorCriticalBrush}">
+                            <Button x:Name="DeleteSessionButton" Content="删除当前会话" Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                AutomationProperties.Name="删除当前会话" AutomationProperties.HelpText="删除当前选中的聊天会话">
                                 <Button.Icon>
                                     <FontIcon Glyph="&#xE74D;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                                 </Button.Icon>
@@ -92,7 +102,8 @@
                             Grid.Row="3"
                             MinHeight="0"
                             SelectionMode="Single"
-                            ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                            AutomationProperties.Name="会话列表" AutomationProperties.HelpText="选择一个聊天会话">
                             <ListView.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Spacing="2">
@@ -135,7 +146,8 @@
                             HorizontalAlignment="Center"
                             VerticalAlignment="Top"
                             Content="回到最新对话"
-                            Visibility="Collapsed" />
+                            Visibility="Collapsed"
+                            AutomationProperties.Name="回到最新对话" AutomationProperties.HelpText="滚动到最新的聊天消息" />
                     </Grid>
                 </Border>
             </Grid>
@@ -174,7 +186,8 @@
                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                             TextWrapping="Wrap"
                             PlaceholderText="输入问题，或记录一条知识... (Enter 发送，Shift+Enter 换行)"
-                            ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行">
+                            ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
+                            AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
                         </TextBox>
                         <TextBlock
                             x:Name="ComposerHintText"
@@ -191,7 +204,8 @@
                             MinWidth="120"
                             HorizontalAlignment="Stretch"
                             VerticalAlignment="Center"
-                            SizeChanged="OnContextUsageBarHostSizeChanged">
+                            SizeChanged="OnContextUsageBarHostSizeChanged"
+                            AutomationProperties.Name="上下文使用量" AutomationProperties.HelpText="显示当前会话的上下文窗口使用百分比">
                             <Border
                                 x:Name="ContextUsageTrack"
                                 Height="4"
@@ -227,15 +241,18 @@
                     <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="8" HorizontalAlignment="Center">
                         <Button
                             x:Name="RecordButton"
-                            Content="记录" />
+                            Content="记录"
+                            AutomationProperties.Name="记录" AutomationProperties.HelpText="开始语音录音" />
                         <Button
                             x:Name="SendButton"
-                            Content="发送" />
+                            Content="发送"
+                            AutomationProperties.Name="发送" AutomationProperties.HelpText="发送消息到 AI" />
                         <Button
                             x:Name="CancelButton"
                             Content="取消"
                             Visibility="Collapsed"
-                            Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                            AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求" />
                     </StackPanel>
                 </Grid>
             </StackPanel>

@@ -845,59 +845,70 @@ fn index_note_file_with_connection(connection: &Connection, path: &Path) -> Resu
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let document = parse_markdown_note(&canonical, "manual")?;
     let body_hash = hash_content(&document.body);
-    connection.execute(
-        "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-         ON CONFLICT(id) DO UPDATE SET
-           title = excluded.title,
-           tags = excluded.tags,
-           keywords = excluded.keywords,
-           platform = excluded.platform,
-           board = excluded.board,
-           kernel = excluded.kernel,
-           status = excluded.status,
-           created_at = excluded.created_at,
-           updated_at = excluded.updated_at,
-           source = excluded.source,
-           path = excluded.path,
-           summary = excluded.summary,
-           body_hash = excluded.body_hash",
-        params![
-            document.meta.id,
-            document.meta.title,
-            serde_json::to_string(&document.meta.tags)?,
-            serde_json::to_string(&document.meta.keywords)?,
-            document.meta.platform,
-            document.meta.board,
-            document.meta.kernel,
-            document.meta.status,
-            document.meta.created_at,
-            document.meta.updated_at,
-            document.meta.source,
-            canonical.to_string_lossy().to_string(),
-            document.meta.summary,
-            body_hash
-        ],
-    )?;
-    connection.execute(
-        "DELETE FROM note_fts WHERE note_id = ?1",
-        [document.meta.id.clone()],
-    )?;
-    connection.execute(
-        "INSERT INTO note_fts (note_id, title, keywords, body) VALUES (?1, ?2, ?3, ?4)",
-        params![
-            document.meta.id,
-            document.meta.title,
-            document.meta.keywords.join(" "),
-            document.body
-        ],
-    )?;
-    sync_note_attachments_with_connection(
-        connection,
-        &document.meta.id,
-        &canonical.to_string_lossy(),
-        &extract_note_image_refs(&document.body),
-    )?;
+    connection.execute_batch("SAVEPOINT sp_index_note")?;
+    let result: Result<()> = (|| {
+        connection.execute(
+            "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(id) DO UPDATE SET
+               title = excluded.title,
+               tags = excluded.tags,
+               keywords = excluded.keywords,
+               platform = excluded.platform,
+               board = excluded.board,
+               kernel = excluded.kernel,
+               status = excluded.status,
+               created_at = excluded.created_at,
+               updated_at = excluded.updated_at,
+               source = excluded.source,
+               path = excluded.path,
+               summary = excluded.summary,
+               body_hash = excluded.body_hash",
+            params![
+                document.meta.id,
+                document.meta.title,
+                serde_json::to_string(&document.meta.tags)?,
+                serde_json::to_string(&document.meta.keywords)?,
+                document.meta.platform,
+                document.meta.board,
+                document.meta.kernel,
+                document.meta.status,
+                document.meta.created_at,
+                document.meta.updated_at,
+                document.meta.source,
+                canonical.to_string_lossy().to_string(),
+                document.meta.summary,
+                body_hash
+            ],
+        )?;
+        connection.execute(
+            "DELETE FROM note_fts WHERE note_id = ?1",
+            [document.meta.id.clone()],
+        )?;
+        connection.execute(
+            "INSERT INTO note_fts (note_id, title, keywords, body) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                document.meta.id,
+                document.meta.title,
+                document.meta.keywords.join(" "),
+                document.body
+            ],
+        )?;
+        sync_note_attachments_with_connection(
+            connection,
+            &document.meta.id,
+            &canonical.to_string_lossy(),
+            &extract_note_image_refs(&document.body),
+        )?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("RELEASE SAVEPOINT sp_index_note")?,
+        Err(e) => {
+            let _ = connection.execute_batch("ROLLBACK TO SAVEPOINT sp_index_note");
+            return Err(e);
+        }
+    }
     Ok(())
 }
 

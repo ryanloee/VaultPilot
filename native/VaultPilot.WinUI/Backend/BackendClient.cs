@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Win32;
 using VaultPilot.WinUI.Models;
 using System.Threading;
 using System.Collections.Concurrent;
@@ -12,10 +13,13 @@ public sealed class BackendClient : IAsyncDisposable
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(10);
-    private const int MaxReconnectAttempts = 3;
+    private static readonly TimeSpan DegradedHealthCheckInterval = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(30);
+    private const int MaxReconnectAttempts = 6;
     private const int MaxStderrLines = 50;
+    private const int DegradedFailureThreshold = 3; // consecutive health check cycles before switching to degraded mode
+    private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
 
     private readonly ConcurrentQueue<string> _stderrLines = new();
 
@@ -34,6 +38,8 @@ public sealed class BackendClient : IAsyncDisposable
     private Timer? _healthCheckTimer;
     private bool _isDisposed;
     private readonly SemaphoreSlim _reconnectLock = new(1, 1);
+    private int _consecutiveHealthCheckFailures;
+    private bool _degradedMode;
 
     public bool IsConnected => _process is { HasExited: false };
     public event Action<AgentStatusEvent>? AgentStatusReceived;
@@ -49,6 +55,7 @@ public sealed class BackendClient : IAsyncDisposable
         _executablePath = executablePath;
         StartProcess();
         StartHealthCheck();
+        RegisterPowerModeHandler();
     }
 
     private void StartProcess()
@@ -88,6 +95,41 @@ public sealed class BackendClient : IAsyncDisposable
         _healthCheckTimer = new Timer(OnHealthCheckTick, null, HealthCheckInterval, HealthCheckInterval);
     }
 
+    private void SetHealthCheckInterval(TimeSpan interval)
+    {
+        _healthCheckTimer?.Change(interval, interval);
+    }
+
+    private void RegisterPowerModeHandler()
+    {
+        try
+        {
+            SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        }
+        catch
+        {
+            // SystemEvents may not be available in all contexts; ignore
+        }
+    }
+
+    private async void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+    {
+        if (_isDisposed) return;
+
+        if (e.Mode == PowerModes.Resume)
+        {
+            // System just woke up — proactively trigger reconnection
+            _consecutiveHealthCheckFailures = 0;
+            _degradedMode = false;
+            SetHealthCheckInterval(HealthCheckInterval);
+
+            if (!IsConnected)
+            {
+                _ = TryReconnectWithRetryAsync();
+            }
+        }
+    }
+
     private async void OnHealthCheckTick(object? state)
     {
         if (_isDisposed) return;
@@ -97,27 +139,67 @@ public sealed class BackendClient : IAsyncDisposable
             if (!IsConnected)
             {
                 var reconnected = await TryReconnectWithRetryAsync();
-                if (!reconnected && !_isDisposed)
+                if (reconnected)
                 {
-                    ConnectionStateChanged?.Invoke(false);
+                    _consecutiveHealthCheckFailures = 0;
+                    _degradedMode = false;
+                    SetHealthCheckInterval(HealthCheckInterval);
+                }
+                else if (!_isDisposed)
+                {
+                    OnConsecutiveHealthCheckFailure();
                 }
                 return;
             }
 
             using var cts = new CancellationTokenSource(PingTimeout);
             await SendAsync("ping", new { }, cts.Token);
+
+            // Ping succeeded — reset failure tracking
+            if (_consecutiveHealthCheckFailures > 0)
+            {
+                _consecutiveHealthCheckFailures = 0;
+                _degradedMode = false;
+                SetHealthCheckInterval(HealthCheckInterval);
+            }
         }
         catch
         {
             if (!_isDisposed)
             {
                 var reconnected = await TryReconnectWithRetryAsync();
-                if (!reconnected)
+                if (reconnected)
                 {
-                    ConnectionStateChanged?.Invoke(false);
+                    _consecutiveHealthCheckFailures = 0;
+                    _degradedMode = false;
+                    SetHealthCheckInterval(HealthCheckInterval);
+                }
+                else
+                {
+                    OnConsecutiveHealthCheckFailure();
                 }
             }
         }
+    }
+
+    private void OnConsecutiveHealthCheckFailure()
+    {
+        _consecutiveHealthCheckFailures++;
+        ConnectionStateChanged?.Invoke(false);
+
+        // After repeated failures, switch to degraded mode with slower health checks
+        if (_consecutiveHealthCheckFailures >= DegradedFailureThreshold && !_degradedMode)
+        {
+            _degradedMode = true;
+            SetHealthCheckInterval(DegradedHealthCheckInterval);
+        }
+    }
+
+    private static TimeSpan GetBackoffDelay(int attempt)
+    {
+        // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s...
+        var delay = TimeSpan.FromTicks(MinBackoff.Ticks * (1L << (attempt - 1)));
+        return delay > MaxBackoff ? MaxBackoff : delay;
     }
 
     private async Task<bool> TryReconnectWithRetryAsync()
@@ -131,6 +213,8 @@ public sealed class BackendClient : IAsyncDisposable
             {
                 try
                 {
+                    // Give the process more time to initialize after restart
+                    await Task.Delay(TimeSpan.FromSeconds(2));
                     using var cts = new CancellationTokenSource(PingTimeout);
                     await SendAsync("ping", new { }, cts.Token);
                     ConnectionStateChanged?.Invoke(true);
@@ -144,11 +228,27 @@ public sealed class BackendClient : IAsyncDisposable
 
             if (attempt < MaxReconnectAttempts)
             {
-                await Task.Delay(ReconnectDelay * attempt);
+                var backoff = GetBackoffDelay(attempt);
+                await Task.Delay(backoff);
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Manually trigger a reconnection attempt. Call this from a UI "Reconnect" button.
+    /// </summary>
+    public async Task<bool> ReconnectAsync(CancellationToken cancellationToken = default)
+    {
+        if (_isDisposed) return false;
+
+        // Reset failure tracking so health check interval goes back to normal
+        _consecutiveHealthCheckFailures = 0;
+        _degradedMode = false;
+        SetHealthCheckInterval(HealthCheckInterval);
+
+        return await TryReconnectWithRetryAsync();
     }
 
     public Task<bool> EnsureConnectedAsync(CancellationToken cancellationToken = default)
@@ -176,14 +276,14 @@ public sealed class BackendClient : IAsyncDisposable
             if (IsConnected && !forceRestart) return true;
 
             await DisposeProcessAsync();
-            await Task.Delay(ReconnectDelay, cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
 
             if (_isDisposed) return false;
 
             StartProcess();
 
             // Verify process actually started
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(500, cancellationToken);
             return _process is { HasExited: false };
         }
         catch
@@ -272,6 +372,15 @@ public sealed class BackendClient : IAsyncDisposable
     {
         if (_isDisposed) return;
         _isDisposed = true;
+
+        try
+        {
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        }
+        catch
+        {
+            // Ignore if SystemEvents is not available
+        }
 
         _healthCheckTimer?.Dispose();
         _healthCheckTimer = null;

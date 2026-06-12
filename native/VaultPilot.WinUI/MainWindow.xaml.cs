@@ -1158,6 +1158,34 @@ public sealed partial class MainWindow : Window
         _activeRequestCts?.Cancel();
     }
 
+    #region Keyboard Accelerator Handlers
+
+    private void OnNewSessionAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        _ = OnNewSessionClicked(NewSessionButton, new RoutedEventArgs());
+    }
+
+    private void OnToggleSidebarAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        OnToggleSidebarClicked(ToggleSidebarButton, new RoutedEventArgs());
+    }
+
+    private void OnSettingsAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        _ = OnSettingsClicked(SettingsButton, new RoutedEventArgs());
+    }
+
+    private void OnEscapeAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        CancelActiveRequest();
+    }
+
+    #endregion
+
     public void Hide()
     {
         _appWindow?.Hide();

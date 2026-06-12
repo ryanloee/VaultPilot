@@ -446,6 +446,18 @@ pub fn search_notes_with_context(
     Ok(SearchResult { notes, total })
 }
 
+fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
+    let path = Path::new(&meta.path);
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let normalized = raw.replace("\r\n", "\n");
+    let (_, body) = split_frontmatter(&normalized)?;
+    Ok(NoteDocument {
+        meta: meta.clone(),
+        body: body.to_string(),
+    })
+}
+
 pub fn load_note_with_context(context: &StorageContext, note_id: &str) -> Result<NoteDocument> {
     let (connection, _) = open_connection(context)?;
     let path = connection
@@ -1828,7 +1840,7 @@ fn rank_note_metas(
 }
 
 fn rank_documents(
-    context: &StorageContext,
+    _context: &StorageContext,
     connection: &Connection,
     query: &str,
     image_paths: &[String],
@@ -1864,7 +1876,7 @@ fn rank_documents(
         let Some(meta) = load_note_meta_by_id(connection, &note_id)? else {
             continue;
         };
-        let Ok(doc) = load_note_with_context(context, &meta.id) else {
+        let Ok(doc) = load_note_body_from_meta(&meta) else {
             continue;
         };
         let attachments = attachment_entries

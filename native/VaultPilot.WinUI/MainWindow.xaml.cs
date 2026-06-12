@@ -5,6 +5,7 @@ using Microsoft.UI.Input;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
@@ -1402,6 +1403,8 @@ public sealed partial class MainWindow : Window
             Spacing = 4,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
+        AutomationProperties.SetLiveSetting(stack, AutomationLiveSetting.Assertive);
+        AutomationProperties.SetName(stack, "AI 正在思考");
         stack.Children.Add(label);
         stack.Children.Add(bubble);
 

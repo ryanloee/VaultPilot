@@ -100,7 +100,9 @@
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- 无待审核 PR
+- PR #324: fix: replace hardcoded dark-theme colors with ThemeResource (#57) — 待合并
+- PR #325: fix: redesign attachment chip with filename, icon, and remove button (#159) — 待合并
+- PR #326: feat: add loading overlay with ProgressRing for AI requests (#215) — 待合并
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -177,33 +179,37 @@
 - 2026-06-13 [循环#19]: 修复 PR #315 CI 失败 — SearchQuery 4 处构造缺少 ..Default::default()，rebase+push 后 CI 全通过（cargo audit 除外）已合并
 - 2026-06-13 [循环#19]: 本轮修复目标 3/3 全部完成：PR #315 ✅, PR #320 ✅, PR #321 ✅
 - 2026-06-13 [循环#19]: 23 open issue，0 open PR，2 阻塞项 (#192, #217)
+- 2026-06-13 [循环#20]: Bug/Security/Perf 可操作项全部清空（阻塞项除外），转向 UI 增强类 issue
+- 2026-06-13 [循环#20]: 选定 3 个 UI issue：#57 (主题颜色), #159 (附件 chip), #215 (loading overlay)
+- 2026-06-13 [循环#20]: 子任务并行派发因 API 限流 (429) 全部失败，改为串行直接修复
+- 2026-06-13 [循环#20]: 修复目标 3/3 全部完成：PR #324, #325, #326
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
 
-| 指标 | PR审核轮7后 | 循环#19 |
-|------|-------------|---------|
-| Open issues 总数 | ~30 | 23 |
+| 指标 | 循环#19 | 循环#20 |
+|------|---------|---------|
+| Open issues 总数 | 23 | 20 |
 | Open Bug 数 | 1 (#192 阻塞) | 1 (#192 阻塞) |
 | Open Security 数 | 0 | 0 |
 | Open Performance 数 | 1 (#217 阻塞) | 1 (#217 阻塞) |
-| Open Enhancement 数 | 7 | 5 |
-| Open UI 数 | 14 | 10 |
-| Open Feature 数 | - | 6 |
-| 已合并 PR | 80+ | 85+ |
-| 进行中 PR | 0 | 0 |
+| Open Enhancement 数 | 5 | 3 |
+| Open UI 数 | 10 | 8 |
+| Open Feature 数 | 6 | 6 |
+| 已合并 PR | 85+ | 85+ |
+| 进行中 PR | 0 | 3 (#324, #325, #326) |
 | 阻塞项 | 2 (#192, #217) | 2 (#192, #217) |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 19
-- 上次循环时间: 2026-06-13T21:30:00Z
-- 讨论重点: **Bug 修复 + PR CI 修复** — 修复 PR #315 CI 失败 + UI 功能性 Bug
+- 循环编号: 20
+- 上次循环时间: 2026-06-13T22:00:00Z
+- 讨论重点: **UI 增强修复** — Bug/Security/Perf 可操作项清空，转向 UI 类 issue
 - 本轮修复目标:
-  1. PR #315 CI 修复 — SearchQuery 4 处构造缺少 ..Default::default() → ✅ 已合并
-  2. #142 — RenderCurrentSession 重渲染丢失 Citations/ThinkingTrace/SavedNote → ✅ PR #321 已合并
-  3. #26 — Settings validation 对话框关闭后触发 → ✅ PR #320 已合并
-- 本轮修复结果: 3/3 全部完成
+  1. #57 — 硬编码暗色主题颜色破坏亮色模式 → ✅ PR #324 已创建
+  2. #159 — 附件 chip 10px 圆点无视觉内容 → ✅ PR #325 已创建
+  3. #215 — 缺少 loading overlay 和 ProgressRing 反馈 → ✅ PR #326 已创建
+- 本轮修复结果: 3/3 全部完成（PR 待合并）
 - 待重建 issue: 无
 - 阻塞 issue: #192 (双转义, 3次失败), #217 (SQLite 同步阻塞, 子任务超时)

@@ -88,6 +88,13 @@ struct AttachmentEntry {
 
 const ATTACHMENT_VECTOR_DIM: usize = 192;
 
+/// Maximum number of attachment rows to scan in visual/semantic search.
+/// Prevents full table scans when the attachment table is large.
+const MAX_ATTACHMENT_SCAN_ROWS: usize = 500;
+
+/// Number of rows to fetch per batch in visual/semantic search.
+const ATTACHMENT_SCAN_BATCH_SIZE: usize = 100;
+
 impl StorageContext {
     pub fn for_sidecar() -> Result<Self> {
         let config_root = std::env::var_os("APPDATA")
@@ -1705,33 +1712,53 @@ fn query_visual_candidate_scores(
         return Ok(HashMap::new());
     }
 
-    let mut statement = connection.prepare(
-        "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
-         FROM attachments
-         WHERE perceptual_hash <> ''",
-    )?;
-    let rows = statement.query_map([], row_to_attachment_entry)?;
     let mut scores = HashMap::new();
+    let mut total_scanned = 0_usize;
+    let mut offset = 0_usize;
 
-    for row in rows {
-        let entry = row?;
-        let Some(attachment_hash) = entry.perceptual_hash else {
-            continue;
-        };
+    loop {
+        let mut statement = connection.prepare(
+            "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
+             FROM attachments
+             WHERE perceptual_hash <> ''
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = statement.query_map(
+            [ATTACHMENT_SCAN_BATCH_SIZE as i64, offset as i64],
+            row_to_attachment_entry,
+        )?;
+        let mut batch_count = 0_usize;
 
-        let best = query_hashes
-            .iter()
-            .map(|query_hash| image_similarity_score(*query_hash, attachment_hash))
-            .max()
-            .unwrap_or_default();
-        if best <= 0 {
-            continue;
+        for row in rows {
+            let entry = row?;
+            batch_count += 1;
+            let Some(attachment_hash) = entry.perceptual_hash else {
+                continue;
+            };
+
+            let best = query_hashes
+                .iter()
+                .map(|query_hash| image_similarity_score(*query_hash, attachment_hash))
+                .max()
+                .unwrap_or_default();
+            if best <= 0 {
+                continue;
+            }
+
+            scores
+                .entry(entry.note_id.clone())
+                .and_modify(|current: &mut i64| *current = (*current).max(best))
+                .or_insert(best);
         }
 
-        scores
-            .entry(entry.note_id.clone())
-            .and_modify(|current: &mut i64| *current = (*current).max(best))
-            .or_insert(best);
+        total_scanned += batch_count;
+        offset += batch_count;
+
+        // Stop if the batch returned fewer rows than requested (no more data)
+        // or if we've scanned the maximum allowed rows.
+        if batch_count < ATTACHMENT_SCAN_BATCH_SIZE || total_scanned >= MAX_ATTACHMENT_SCAN_ROWS {
+            break;
+        }
     }
 
     Ok(scores)
@@ -1745,29 +1772,49 @@ fn query_attachment_semantic_scores(
         return Ok(HashMap::new());
     };
 
-    let mut statement = connection.prepare(
-        "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
-         FROM attachments
-         WHERE semantic_vector <> ''",
-    )?;
-    let rows = statement.query_map([], row_to_attachment_entry)?;
     let mut scores = HashMap::new();
+    let mut total_scanned = 0_usize;
+    let mut offset = 0_usize;
 
-    for row in rows {
-        let entry = row?;
-        let Some(candidate_vector) = entry.semantic_vector.as_ref() else {
-            continue;
-        };
-        let similarity = cosine_similarity(&query_vector, candidate_vector);
-        let score = similarity_to_rank_score(similarity);
-        if score <= 0 {
-            continue;
+    loop {
+        let mut statement = connection.prepare(
+            "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
+             FROM attachments
+             WHERE semantic_vector <> ''
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = statement.query_map(
+            [ATTACHMENT_SCAN_BATCH_SIZE as i64, offset as i64],
+            row_to_attachment_entry,
+        )?;
+        let mut batch_count = 0_usize;
+
+        for row in rows {
+            let entry = row?;
+            batch_count += 1;
+            let Some(candidate_vector) = entry.semantic_vector.as_ref() else {
+                continue;
+            };
+            let similarity = cosine_similarity(&query_vector, candidate_vector);
+            let score = similarity_to_rank_score(similarity);
+            if score <= 0 {
+                continue;
+            }
+
+            scores
+                .entry(entry.note_id.clone())
+                .and_modify(|current: &mut i64| *current = (*current).max(score))
+                .or_insert(score);
         }
 
-        scores
-            .entry(entry.note_id.clone())
-            .and_modify(|current: &mut i64| *current = (*current).max(score))
-            .or_insert(score);
+        total_scanned += batch_count;
+        offset += batch_count;
+
+        // Stop if the batch returned fewer rows than requested (no more data)
+        // or if we've scanned the maximum allowed rows.
+        if batch_count < ATTACHMENT_SCAN_BATCH_SIZE || total_scanned >= MAX_ATTACHMENT_SCAN_ROWS {
+            break;
+        }
     }
 
     Ok(scores)

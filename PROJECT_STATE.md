@@ -39,15 +39,17 @@
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #244: fix/issue-227-197-cjk-tokens-double-save — #227 (CJK token 估算修复) + #197 (chat 双重保存移除) ⚠️ 状态: OPEN / CONFLICTING，需作者 rebase 到最新 main 分支解决冲突
-- PR #246: fix/issue-177-response-size-limit — #177 (API 响应体 50MB 大小限制) ⚠️ 状态: OPEN / CONFLICTING，代码审查通过但需 rebase 解决冲突（main 已合并 #245, #247）
+- PR #244: fix/issue-227-197-cjk-tokens-double-save — #227 (CJK token 估算修复) + #197 (chat 双重保存移除) ⚠️ 状态: OPEN / CONFLICTING，持续 2 轮冲突
+- PR #246: fix/issue-177-response-size-limit — #177 (API 响应体 50MB 大小限制) ⚠️ 状态: OPEN / CONFLICTING，持续 2 轮冲突
+- PR #248: fix/issue-235-read-file-truncation — #235 (read_file 大文件截断) ⚠️ 状态: OPEN / CONFLICTING，新建即冲突
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
 
 - #192 (extract_json_block 双转义): 已有 2 次失败 PR 尝试 (#211, #201)，需重新分析根因后再修复，本轮暂不处理
-- PR #244 (fix/issue-227-197-cjk-tokens-double-save): 合并冲突 + CI 未触发，需作者 rebase 后重新提交
-- PR #246 (fix/issue-177-response-size-limit): 代码逻辑正确（streaming 读取 + 50MB 上限），但合并冲突需 rebase（main 已合并 WAL 和缓存相关的 storage.rs 变更）
+- PR #244 (fix/issue-227-197-cjk-tokens-double-save): 合并冲突持续 2 轮，需作者 rebase 后重新提交。建议：若下轮仍冲突则关闭并由新 agent 重建
+- PR #246 (fix/issue-177-response-size-limit): 代码逻辑正确但合并冲突持续 2 轮。建议：同上
+- PR #248 (fix/issue-235-read-file-truncation): 新建即冲突，需 rebase。#235 (read_file 1MB 上下文溢出) 与循环#2 的 #177 (API 响应 OOM) 属同类大文件防护问题
 
 ## 决策记录
 <!-- 指挥官任务的重要决策 -->
@@ -60,33 +62,37 @@
 - 2026-06-12 [循环#2]: 循环#1 修复目标 3/5 完成（#174+#186 ✅, #229 ✅, #227+#197 ⏳ PR #244 待 rebase），额外完成 7 个 issue（#226, #225, #236, #212, #205, #175, #182, #179, #188）
 - 2026-06-12 [循环#2]: 开放 Bug 仍有 16 个，但多数涉及 WinUI 前端或复杂状态管理，本轮聚焦 Rust 后端可自动化修复的问题
 - 2026-06-12 [循环#2]: 选定 3 个后端高价值 issue 作为修复目标：#177 (OOM), #230 (WAL), #157 (N+1 IO)
+- 2026-06-12 [循环#3]: 3 个 open PR 全部 CONFLICTING (#244, #246, #248)，形成系统性阻塞 — 每轮合并新 PR 后旧 PR 即冲突。建议：(1) 关闭超过 2 轮冲突的 PR 由 agent 重新创建，(2) issue-monitor 任务增加自动 rebase 能力
+- 2026-06-12 [循环#3]: #55 和 #35 是重复 issue（同一函数 read_image_preview 缺少路径限制），以 #35 为主，#55 标记 duplicate
+- 2026-06-12 [循环#3]: 安全类 issue 是当前最高价值修复方向 — #127 和 #35 都是路径穿越漏洞，且可用 #226 中已实现的 normalize_tool_path 模式快速修复
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
 
-| 指标 | 循环#1 | 循环#2 |
-|------|--------|--------|
-| Open issues 总数 | 50+ | 50+ |
-| Open Bug 数 | 16 | 16 |
-| Open Performance 数 | 8 | 8 |
-| 已合并 PR | 11 | 13 |
-| 进行中 PR | 1 (#244) | 2 (#244, #246) |
-| 阻塞项 | 2 | 3 |
+|| 指标 | 循环#1 | 循环#2 | 循环#3 |
+||------|--------|--------|--------|
+|| Open issues 总数 | 50+ | 50+ | 47 |
+|| Open Bug 数 | 16 | 16 | 16 |
+|| Open Security 数 | — | — | 8 |
+|| Open Performance 数 | 8 | 8 | 14 |
+|| 已合并 PR | 11 | 13 | 15 |
+|| 进行中 PR | 1 (#244) | 2 (#244, #246) | 3 (#244, #246, #248) |
+|| 阻塞项 | 2 | 3 | 4 |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 2
-- 上次循环时间: 2026-06-12T09:30:00Z
-- 讨论重点: Bug 修复 — 崩溃防护与并发安全
+- 循环编号: 3
+- 上次循环时间: 2026-06-12T10:15:00Z
+- 讨论重点: **安全加固** — Rust 后端路径限制与输入清理
 - 本轮修复目标:
-  1. #177 — API 响应体无大小限制，异常响应可导致 OOM 崩溃 (🟡→🔴 实际是崩溃级风险)
-  2. #230 — SQLite 未启用 WAL 模式和 busy_timeout，并发访问 SQLITE_BUSY (🔵→🟠 影响多实例场景)
-  3. #157 — open_connection 每次重读 settings.json，循环中 N+1 IO (🟡 性能)
-- 本轮审查目标: 检查 PR #244 是否已 rebase，以及循环#1 合并的 PR 是否引入回归
-- 本轮新建 issue 预算: 0（50+ open issue，远超阈值，不新建）
-- 备注: #155 (Settings 输入验证) 和 #128 (退出时丢失对话) 也是高价值 Bug，但涉及 WinUI 前端改动，留待下一轮或人工处理
-- 本轮修复结果: 3/3 完成 ✅
-  - #177 → PR #246 (response.body 50MB 大小限制，新增 reqwest stream + bytes + futures-util 依赖)
-  - #230 → PR #245 (ensure_schema 启用 WAL + busy_timeout，两个代码路径均覆盖)
-  - #157 → PR #247 (StorageContext 新增 cached_settings 字段，load/save 联动更新缓存)
+  1. #127 — CLI resolve_local_image_url 无路径限制，file:// URL 可读任意文件 (Security 🔴)
+  2. #35 + #55 — read_image_preview 无 vault 路径限制，与 #127 同类问题，一并修复 (Security 🔴)
+  3. #88 — CLI strip_inline_markdown 粗暴替换所有 backtick/asterisk/underscore，破坏代码片段和文件路径 (Bug 🟡)
+- 本轮审查目标:
+  - PR #248 (#235 read_file truncation) — 新建但冲突，审查代码逻辑
+  - PR #244 (#227+#197 CJK+双保存) — 持续冲突，评估是否需要关闭重建
+  - PR #246 (#177 response size limit) — 持续冲突，评估是否需要关闭重建
+- 本轮新建 issue 预算: 0（47+ open issue，远超阈值，不新建）
+- 备注: #55 和 #35 描述同一问题（read_image_preview 路径限制），修复时以 #35 为主 issue，#55 标记为 duplicate；#127 和 #35 可用同一 vault 路径限制模式一并解决
+- 本轮修复结果: 待执行

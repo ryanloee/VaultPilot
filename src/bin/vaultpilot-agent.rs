@@ -242,14 +242,16 @@ async fn handle_request(
             let params: PathParams = parse_params(&request.params)?;
             let settings = initialize_storage_with_context(context).map_err(|e| e.to_string())?;
             let vault_root = Path::new(&settings.vault_dir);
-            let confined = normalize_tool_path(&params.path, vault_root)?;
+            let confined =
+                normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;
             read_image_preview(&confined.to_string_lossy()).map(Value::String)
         }
         "openVaultDirectory" => {
             let params: PathParams = parse_params(&request.params)?;
             let settings = initialize_storage_with_context(context).map_err(|e| e.to_string())?;
             let vault_root = Path::new(&settings.vault_dir);
-            let confined = normalize_tool_path(&params.path, vault_root)?;
+            let confined =
+                normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;
             open_vault_directory(&confined.to_string_lossy())?;
             Ok(serde_json::json!({ "ok": true }))
         }
@@ -301,11 +303,13 @@ where
         })
 }
 
-fn serialize_string_result<T>(result: Result<T, String>) -> Result<Value, String>
+fn serialize_string_result<T>(result: Result<T, anyhow::Error>) -> Result<Value, String>
 where
     T: Serialize,
 {
-    result.and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()))
+    result
+        .map_err(|error| vaultpilot_lib::sanitize_error(&error.to_string()))
+        .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()))
 }
 
 fn emit_agent_status(stdout: &mut impl Write, stage: &str, detail: String) {

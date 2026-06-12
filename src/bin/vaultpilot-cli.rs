@@ -433,8 +433,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 None,
                 |_, _| (),
             )
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .await?;
             to_json(&strip_cli_markdown_from_grounded_answer(result))
         }
         Commands::Compress { history, summary } => {
@@ -449,8 +448,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 parsed_history,
                 |_, _| (),
             )
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .await?;
             to_json(&result)
         }
         Commands::Mcp => Ok(serde_json::json!({
@@ -479,8 +477,7 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
                 *new_session,
                 |_, _| (),
             )
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .await?;
             to_json(&strip_cli_markdown_from_chat_result(result))
         }
         ChatActions::Sessions => {
@@ -803,7 +800,7 @@ async fn http_chat_completions(
         |_, _| (),
     )
     .await
-    .map_err(|error| openai_error(StatusCode::BAD_GATEWAY, &error))?;
+    .map_err(|error| openai_error(StatusCode::BAD_GATEWAY, &error.to_string()))?;
 
     let prompt_tokens = answer
         .context_status
@@ -921,7 +918,7 @@ fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, Strin
     if url.starts_with("file://") {
         let path = url.trim_start_matches("file://");
         // Validate path is within the vault directory
-        let resolved = normalize_tool_path(path, vault_root)?;
+        let resolved = normalize_tool_path(path, vault_root).map_err(|e| e.to_string())?;
         return Ok(resolved.to_string_lossy().to_string());
     }
 
@@ -929,7 +926,7 @@ fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, Strin
     let path = PathBuf::from(path_str);
     if path.exists() {
         // Validate path is within the vault directory
-        let resolved = normalize_tool_path(path_str, vault_root)?;
+        let resolved = normalize_tool_path(path_str, vault_root).map_err(|e| e.to_string())?;
         return Ok(resolved.to_string_lossy().to_string());
     }
 
@@ -1365,7 +1362,7 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
             let structured = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
             mcp_tool_success(summary, structured)
         }
-        Err(error) => mcp_tool_error(error),
+        Err(error) => mcp_tool_error(error.to_string()),
     }
 }
 

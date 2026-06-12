@@ -8,6 +8,12 @@
     Title="VaultPilot">
 
     <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="N" Modifiers="Control" Invoked="OnNewSessionAccelerator" />
+            <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="OnToggleSidebarAccelerator" />
+            <KeyboardAccelerator Key="OemComma" Modifiers="Control" Invoked="OnSettingsAccelerator" />
+            <KeyboardAccelerator Key="Escape" Invoked="OnEscapeAccelerator" />
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />

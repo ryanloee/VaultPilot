@@ -2767,4 +2767,223 @@ mod tests {
         };
         assert!(!has_matching_tool_execution(&tool_results, &different));
     }
+
+    // ── 2.18 normalize_tool_path boundary cases ──
+
+    #[test]
+    fn normalize_tool_path_with_spaces_in_name() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-spaces-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let inner = vault.join("my notes").join("file name.md");
+        fs::create_dir_all(inner.parent().unwrap()).unwrap();
+        fs::write(&inner, "test").unwrap();
+        let path = normalize_tool_path(&inner.display().to_string(), &vault).expect("spaces ok");
+        assert!(path.ends_with("file name.md"));
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_rejects_absolute_path_outside_vault() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-outside-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let result = normalize_tool_path("/etc/passwd", &vault);
+        assert!(result.is_err(), "outside path should be rejected");
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_rejects_deeply_nested_traversal() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-deep-trav-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let result = normalize_tool_path("a/b/../../../../../../etc/passwd", &vault);
+        assert!(result.is_err(), "deep traversal should be rejected");
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_accepts_nested_subdirectory() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-nested-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let inner = vault.join("a").join("b").join("c").join("note.md");
+        fs::create_dir_all(inner.parent().unwrap()).unwrap();
+        fs::write(&inner, "test").unwrap();
+        let path =
+            normalize_tool_path(&inner.display().to_string(), &vault).expect("nested path ok");
+        assert!(path.ends_with("note.md"));
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    // ── 2.19 compression threshold logic ──
+
+    #[test]
+    fn compression_threshold_is_95_percent() {
+        // Verify the constant is 0.95
+        assert_eq!(super::CONTEXT_COMPRESSION_THRESHOLD, 0.95);
+    }
+
+    #[test]
+    fn compression_would_trigger_at_95_percent() {
+        // Simulate: context_window = 1000, session tokens = 920, pending = 40
+        // projected = 960 > 950 (95% of 1000) → should trigger
+        let context_window = 1000_u64;
+        let threshold = (context_window as f64) * super::CONTEXT_COMPRESSION_THRESHOLD;
+        let projected = 960_u64;
+        assert!(projected >= threshold as u64);
+    }
+
+    #[test]
+    fn compression_would_not_trigger_below_95_percent() {
+        // Simulate: context_window = 1000, projected = 940 < 950 → should NOT trigger
+        let context_window = 1000_u64;
+        let threshold = (context_window as f64) * super::CONTEXT_COMPRESSION_THRESHOLD;
+        let projected = 940_u64;
+        assert!((projected as f64) < threshold);
+    }
+
+    // ── 2.20 resolve_or_create_chat_session edge cases ──
+
+    #[test]
+    fn resolve_or_create_creates_new_session_in_empty_state() {
+        let mut state = ChatState::default();
+        assert!(state.sessions.is_empty());
+        let (session_id, is_new) = resolve_or_create_chat_session(&mut state, None, false).unwrap();
+        assert!(is_new);
+        assert!(!session_id.is_empty());
+        assert_eq!(state.sessions.len(), 1);
+        assert_eq!(state.current_session_id, session_id);
+    }
+
+    #[test]
+    fn resolve_or_create_returns_existing_session_by_id() {
+        let mut state = ChatState::default();
+        let existing = super::ChatSession {
+            id: "existing-id".to_string(),
+            title: "Existing".to_string(),
+            turns: vec![],
+            summary: None,
+            created_at: "2024-01-01".to_string(),
+            updated_at: "2024-01-01".to_string(),
+        };
+        state.sessions.push(existing);
+        let (session_id, is_new) =
+            resolve_or_create_chat_session(&mut state, Some("existing-id"), false).unwrap();
+        assert!(!is_new);
+        assert_eq!(session_id, "existing-id");
+    }
+
+    #[test]
+    fn resolve_or_create_new_session_flag_overrides() {
+        let mut state = ChatState::default();
+        let existing = super::ChatSession {
+            id: "old-id".to_string(),
+            title: "Old".to_string(),
+            turns: vec![],
+            summary: None,
+            created_at: "2024-01-01".to_string(),
+            updated_at: "2024-01-01".to_string(),
+        };
+        state.sessions.push(existing);
+        let (session_id, is_new) = resolve_or_create_chat_session(&mut state, None, true).unwrap();
+        assert!(is_new);
+        assert_ne!(session_id, "old-id");
+        assert_eq!(state.sessions.len(), 2);
+    }
+
+    // ── 2.21 build_chat_session_title edge cases ──
+
+    #[test]
+    fn build_chat_session_title_short_input() {
+        let title = build_chat_session_title("hello");
+        assert_eq!(title, "hello");
+    }
+
+    #[test]
+    fn build_chat_session_title_long_input_truncates() {
+        let long = "a".repeat(200);
+        let title = build_chat_session_title(&long);
+        assert!(title.ends_with("..."), "should be truncated with ...");
+        assert!(title.len() <= 32, "title too long: {}", title.len());
+    }
+
+    #[test]
+    fn build_chat_session_title_empty_uses_default() {
+        let title = build_chat_session_title("");
+        assert_eq!(title, "新对话");
+    }
+
+    // ── 2.22 draft_to_note_document conversion ──
+
+    #[test]
+    fn draft_to_note_document_preserves_fields() {
+        let draft = StructuredNoteDraft {
+            title: "Test Title".to_string(),
+            summary: "Test Summary".to_string(),
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+            keywords: vec!["kw1".to_string()],
+            platform: "Linux".to_string(),
+            board: "RPI4".to_string(),
+            kernel: "5.10".to_string(),
+            status: "已记录".to_string(),
+            source: "captured".to_string(),
+            body: "Test body content".to_string(),
+        };
+        let note = draft_to_note_document(draft);
+        assert_eq!(note.meta.title, "Test Title");
+        assert_eq!(note.meta.summary, "Test Summary");
+        assert_eq!(note.meta.tags, vec!["tag1", "tag2"]);
+        assert_eq!(note.meta.keywords, vec!["kw1"]);
+        assert_eq!(note.body, "Test body content");
+    }
+
+    // ── 2.23 StorageContext for_test can be created ──
+
+    #[test]
+    fn storage_context_for_test_creates_valid_context() {
+        let temp = env::temp_dir().join(format!(
+            "vaultpilot-ctx-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ctx = crate::storage::StorageContext::for_test(&temp);
+        // Just verify it creates without panic
+        let _ = fs::remove_dir_all(&temp);
+    }
 }

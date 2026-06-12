@@ -50,6 +50,15 @@ public sealed partial class MainWindow : Window
     private const string MarkdownCloseTag = "</vp-markdown>";
     private readonly BackendClient _backendClient;
     private AppWindow? _appWindow;
+    // Cached brushes to avoid per-call allocations (see #130)
+    private static readonly SolidColorBrush BrushRed = new(Microsoft.UI.Colors.Red);
+    private static readonly SolidColorBrush BrushOrange = new(Microsoft.UI.Colors.Orange);
+    private static readonly SolidColorBrush BrushGreen = new(Microsoft.UI.Colors.Green);
+    private static readonly SolidColorBrush BrushLimeGreen = new(Microsoft.UI.Colors.LimeGreen);
+    private static readonly SolidColorBrush BrushWhite = new(Microsoft.UI.Colors.White);
+    private static readonly SolidColorBrush BrushCodeBackground = new(Microsoft.UI.ColorHelper.FromArgb(255, 24, 28, 34));
+    private static readonly SolidColorBrush BrushAttachmentDot = new(ColorHelper.FromArgb(255, 47, 224, 111));
+    private static readonly SolidColorBrush BrushAttachmentBorder = new(ColorHelper.FromArgb(255, 140, 255, 176));
     private ChatState _chatState = new(string.Empty, Array.Empty<ChatSession>());
     private readonly SemaphoreSlim _chatStateLock = new(1, 1);
     private string _currentSessionId = string.Empty;
@@ -1538,14 +1547,14 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
             IsTextSelectionEnabled = true,
             FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White)
+            Foreground = BrushWhite
         };
 
         return new Border
         {
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(10),
-            Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 24, 28, 34)),
+            Background = BrushCodeBackground,
             Child = new StackPanel
             {
                 Spacing = 8,
@@ -1792,8 +1801,8 @@ public sealed partial class MainWindow : Window
             Width = 10,
             Height = 10,
             CornerRadius = new CornerRadius(999),
-            Background = new SolidColorBrush(ColorHelper.FromArgb(255, 47, 224, 111)),
-            BorderBrush = new SolidColorBrush(ColorHelper.FromArgb(255, 140, 255, 176)),
+            Background = BrushAttachmentDot,
+            BorderBrush = BrushAttachmentBorder,
             BorderThickness = new Thickness(1),
             Margin = new Thickness(0, 0, 2, 0)
         };
@@ -2447,9 +2456,9 @@ public sealed partial class MainWindow : Window
         StatusBarMessage.Text = message;
         StatusBarIcon.Foreground = level switch
         {
-            "error" => new SolidColorBrush(Microsoft.UI.Colors.Red),
-            "warning" => new SolidColorBrush(Microsoft.UI.Colors.Orange),
-            "success" => new SolidColorBrush(Microsoft.UI.Colors.Green),
+            "error" => BrushRed,
+            "warning" => BrushOrange,
+            "success" => BrushGreen,
             _ => (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
         };
         StatusBarIcon.Glyph = level switch
@@ -2651,12 +2660,12 @@ public sealed partial class MainWindow : Window
             ? 100.0
             : Math.Clamp((double)remainingTokens / contextWindow * 100.0, 0.0, 100.0);
         var usedPercent = Math.Clamp(100.0 - remainingPercent, 0.0, 100.0);
-        var usageBrush = new SolidColorBrush(remainingPercent switch
+        var usageBrush = remainingPercent switch
         {
-            > 50 => Microsoft.UI.Colors.LimeGreen,
-            > 20 => Microsoft.UI.Colors.Orange,
-            _ => Microsoft.UI.Colors.Red
-        });
+            > 50 => BrushLimeGreen,
+            > 20 => BrushOrange,
+            _ => BrushRed
+        };
         _contextUsagePercent = usedPercent;
 
         ContextUsageFill.Background = usageBrush;

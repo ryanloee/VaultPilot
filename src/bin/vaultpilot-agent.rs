@@ -475,3 +475,120 @@ impl AgentResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn request_deserializes_from_json() {
+        let json = json!({
+            "id": "req-001",
+            "method": "ping",
+            "params": {}
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(request.id, "req-001");
+        assert_eq!(request.method, "ping");
+    }
+
+    #[test]
+    fn request_deserializes_with_missing_params() {
+        let json = json!({
+            "id": "req-002",
+            "method": "listNotes"
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(request.params, Value::Null);
+    }
+
+    #[test]
+    fn response_ok_serializes_without_error() {
+        let response = AgentResponse::ok("req-001".into(), json!({"ok": true}));
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(serialized.contains("\"id\":\"req-001\""));
+        assert!(serialized.contains("\"result\""));
+        assert!(!serialized.contains("\"error\""));
+    }
+
+    #[test]
+    fn response_error_serializes_without_result() {
+        let response = AgentResponse::error("req-002".into(), "invalid_request", "bad input");
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(serialized.contains("\"id\":\"req-002\""));
+        assert!(serialized.contains("\"error\""));
+        assert!(!serialized.contains("\"result\""));
+    }
+
+    #[test]
+    fn response_error_contains_code_and_message() {
+        let response = AgentResponse::error("x".into(), "timeout", "timed out after 120s");
+        let value: Value = serde_json::to_value(&response).unwrap();
+        let error = &value["error"];
+        assert_eq!(error["code"], "timeout");
+        assert!(error["message"].as_str().unwrap().contains("120s"));
+    }
+
+    #[test]
+    fn agent_event_serializes_with_camel_case() {
+        let event = AgentEvent {
+            event: "agentStatus".to_string(),
+            payload: AgentStatusPayload {
+                stage: "analyzing".to_string(),
+                detail: "Analyzing request".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+            },
+        };
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert!(serialized.contains("\"agentStatus\""));
+        assert!(serialized.contains("\"stage\""));
+        assert!(serialized.contains("\"analyzing\""));
+    }
+
+    #[test]
+    fn request_with_complex_params() {
+        let json = json!({
+            "id": "req-003",
+            "method": "askWithAi",
+            "params": {
+                "question": "What is Rust?",
+                "history": [{"role": "user", "content": "hello"}],
+                "imagePaths": ["/tmp/img.png"]
+            }
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(request.method, "askWithAi");
+        assert!(request.params.is_object());
+        assert_eq!(request.params["question"], "What is Rust?");
+    }
+
+    #[test]
+    fn request_roundtrip_json() {
+        let original = json!({
+            "id": "test-123",
+            "method": "saveChatState",
+            "params": {"state": {"sessions": []}}
+        });
+        let request: AgentRequest = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(request.id, "test-123");
+        assert_eq!(request.method, "saveChatState");
+        assert!(request.params.is_object());
+    }
+
+    #[test]
+    fn invalid_json_returns_parse_error() {
+        let result = serde_json::from_str::<AgentRequest>("not valid json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_method_name_parses() {
+        let json = json!({
+            "id": "req-004",
+            "method": ""
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        assert!(request.method.is_empty());
+    }
+}

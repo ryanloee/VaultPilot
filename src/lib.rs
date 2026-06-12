@@ -2604,4 +2604,166 @@ mod tests {
         assert_eq!(Path::new(&extracted.unwrap()), dir.as_path());
         let _ = fs::remove_dir_all(&dir);
     }
+
+    // ── 2.14 ToolExecution::render_for_model ──
+
+    #[test]
+    fn render_for_model_ok_status() {
+        let tool = ToolExecution::new("search_notes", "query=test", "found 3 notes", false);
+        let rendered = tool.render_for_model();
+        assert!(rendered.contains("TOOL: search_notes"));
+        assert!(rendered.contains("STATUS: ok"));
+        assert!(rendered.contains("INPUT:\nquery=test"));
+        assert!(rendered.contains("OUTPUT:\nfound 3 notes"));
+    }
+
+    #[test]
+    fn render_for_model_error_status() {
+        let tool = ToolExecution::new("read_file", "path=/bad", "file not found", true);
+        let rendered = tool.render_for_model();
+        assert!(rendered.contains("STATUS: error"));
+        assert!(rendered.contains("file not found"));
+    }
+
+    // ── 2.15 planned_tool_identity coverage ──
+
+    #[test]
+    fn planned_identity_save_note() {
+        let draft = StructuredNoteDraft {
+            title: "My Note".to_string(),
+            body: "Content".to_string(),
+            ..Default::default()
+        };
+        let tool = AssistantToolCall::SaveNote {
+            draft: Box::new(draft),
+        };
+        let result = planned_tool_identity(&tool);
+        assert!(result.is_some());
+        let (name, input) = result.unwrap();
+        assert_eq!(name, "save_note");
+        assert_eq!(input, "model_generated_note_draft");
+    }
+
+    #[test]
+    fn planned_identity_list_directory() {
+        let tool = AssistantToolCall::ListDirectory {
+            path: "/tmp".to_string(),
+        };
+        let result = planned_tool_identity(&tool);
+        assert!(result.is_some());
+        let (name, input) = result.unwrap();
+        assert_eq!(name, "list_directory");
+        assert!(input.contains("/tmp"));
+    }
+
+    #[test]
+    fn planned_identity_search_notes() {
+        let tool = AssistantToolCall::SearchNotes {
+            query: "rust async".to_string(),
+            limit: 6,
+        };
+        let result = planned_tool_identity(&tool);
+        assert!(result.is_some());
+        let (name, input) = result.unwrap();
+        assert_eq!(name, "search_notes");
+        assert!(input.contains("rust async"));
+        assert!(input.contains("6"));
+    }
+
+    #[test]
+    fn planned_identity_list_notes() {
+        let tool = AssistantToolCall::ListNotes { limit: 10 };
+        let result = planned_tool_identity(&tool);
+        assert!(result.is_some());
+        let (name, input) = result.unwrap();
+        assert_eq!(name, "list_notes");
+        assert!(input.contains("10"));
+    }
+
+    #[test]
+    fn planned_identity_none_returns_none() {
+        let result = planned_tool_identity(&AssistantToolCall::None);
+        assert!(result.is_none());
+    }
+
+    // ── 2.16 build_agent_trace with errors ──
+
+    #[test]
+    fn agent_trace_with_error_tool_shows_error_status() {
+        let tools = vec![ToolExecution::new(
+            "read_file",
+            "path=/bad/path",
+            "permission denied",
+            true,
+        )];
+        let trace = build_agent_trace(&tools, false);
+        assert_eq!(trace.steps.len(), 1);
+        assert!(trace.steps[0].detail.contains("read_file"));
+        assert!(trace.steps[0].detail.contains("permission denied"));
+    }
+
+    #[test]
+    fn agent_trace_forced_search_with_tools_includes_both() {
+        let tools = vec![ToolExecution::new(
+            "search_notes",
+            "q=test",
+            "found 2",
+            false,
+        )];
+        let trace = build_agent_trace(&tools, true);
+        // First step is the forced search explanation
+        assert!(trace.steps[0].detail.contains("检索优先策略"));
+        // Second step is the actual tool
+        assert!(trace.steps[1].title.contains("工具步骤 1"));
+        assert!(trace.steps[1].detail.contains("search_notes"));
+    }
+
+    // ── 2.17 multi-round tool dedup ──
+
+    #[test]
+    fn multiple_tool_results_dedup_correctly() {
+        let tool_results = vec![
+            ToolExecution::new("search_notes", "query=first limit=6", "found 1", false),
+            ToolExecution::new("search_notes", "query=second limit=6", "found 2", false),
+        ];
+        // Same as the first call
+        let call1 = AssistantToolCall::SearchNotes {
+            query: "first".to_string(),
+            limit: 6,
+        };
+        assert!(has_matching_tool_execution(&tool_results, &call1));
+
+        // Same as the second call
+        let call2 = AssistantToolCall::SearchNotes {
+            query: "second".to_string(),
+            limit: 6,
+        };
+        assert!(has_matching_tool_execution(&tool_results, &call2));
+
+        // Different
+        let call3 = AssistantToolCall::SearchNotes {
+            query: "third".to_string(),
+            limit: 6,
+        };
+        assert!(!has_matching_tool_execution(&tool_results, &call3));
+    }
+
+    #[test]
+    fn read_file_tool_dedup_by_path() {
+        let tool_results = vec![ToolExecution::new(
+            "read_file",
+            "path=/tmp/test.md",
+            "file content",
+            false,
+        )];
+        let matching = AssistantToolCall::ReadFile {
+            path: "/tmp/test.md".to_string(),
+        };
+        assert!(has_matching_tool_execution(&tool_results, &matching));
+
+        let different = AssistantToolCall::ReadFile {
+            path: "/tmp/other.md".to_string(),
+        };
+        assert!(!has_matching_tool_execution(&tool_results, &different));
+    }
 }

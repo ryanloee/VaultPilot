@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fs,
+    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -2463,7 +2464,9 @@ fn slugify(value: &str) -> String {
     }
     let cleaned = slug.trim_matches('-').to_string();
     if cleaned.is_empty() {
-        "note".to_string()
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        format!("note-{:08x}", hasher.finish())
     } else {
         cleaned
     }
@@ -2833,7 +2836,15 @@ mod tests {
 
     #[test]
     fn slugify_empty_returns_note() {
-        assert_eq!(slugify(""), "note");
+        let result = slugify("");
+        assert!(
+            result.starts_with("note-"),
+            "empty input should produce note-<hash>, got: {result}"
+        );
+        assert!(
+            result.len() > "note-".len(),
+            "hash suffix should be present"
+        );
     }
 
     #[test]
@@ -2847,9 +2858,22 @@ mod tests {
     }
 
     #[test]
-    fn slugify_cjk_does_not_panic() {
+    fn slugify_cjk_transliterated() {
+        // Common CJK characters transliterate to pinyin via deunicode
         let result = slugify("测试中文");
-        assert!(!result.is_empty());
+        assert_eq!(result, "ce-shi-zhong-wen");
+    }
+
+    #[test]
+    fn slugify_cjk_fallback_with_hash() {
+        // CJK punctuation that deunicode cannot transliterate to alphanumeric
+        // should produce a distinguishable "note-<hash>" slug instead of bare "note".
+        let result = slugify("\u{3001}\u{3002}\u{300C}\u{300D}");
+        assert!(
+            result.starts_with("note-"),
+            "non-transliterable input should produce note-<hash>, got: {result}"
+        );
+        assert!(result.len() > "note-".len());
     }
 
     // ── 1.4 fallback_title / fallback_source ──

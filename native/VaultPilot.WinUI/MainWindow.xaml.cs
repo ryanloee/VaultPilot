@@ -52,10 +52,11 @@ public sealed partial class MainWindow : Window
     private readonly BackendClient _backendClient;
     private AppWindow? _appWindow;
     // Cached brushes to avoid per-call allocations (see #130)
-    private static readonly SolidColorBrush BrushRed = new(Microsoft.UI.Colors.Red);
-    private static readonly SolidColorBrush BrushOrange = new(Microsoft.UI.Colors.Orange);
-    private static readonly SolidColorBrush BrushGreen = new(Microsoft.UI.Colors.Green);
-    private static readonly SolidColorBrush BrushLimeGreen = new(Microsoft.UI.Colors.LimeGreen);
+    // Status colors now use theme-aware ThemeResource brushes (#57)
+    private static Brush BrushRed => GetThemeBrush("StatusErrorBrush");
+    private static Brush BrushOrange => GetThemeBrush("StatusWarningBrush");
+    private static Brush BrushGreen => GetThemeBrush("StatusSuccessBrush");
+    private static Brush BrushLimeGreen => GetThemeBrush("StatusSuccessBrush");
     // Code block and attachment colors now use theme-aware ThemeResource brushes
     // defined in App.xaml ThemeDictionaries (see #196)
 

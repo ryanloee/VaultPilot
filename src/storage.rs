@@ -94,6 +94,10 @@ struct AttachmentEntry {
 
 const ATTACHMENT_VECTOR_DIM: usize = 192;
 
+/// Maximum number of chat sessions to retain in the persisted state.
+/// Older sessions beyond this limit are pruned during normalization.
+const MAX_SESSIONS: usize = 50;
+
 impl StorageContext {
     pub fn for_sidecar() -> Result<Self> {
         let config_root = std::env::var_os("APPDATA")
@@ -378,6 +382,13 @@ fn normalize_chat_state(mut state: ChatState) -> ChatState {
     state
         .sessions
         .sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    // Prune the oldest sessions when the count exceeds MAX_SESSIONS to prevent
+    // unbounded growth of chat-state.json.
+    if state.sessions.len() > MAX_SESSIONS {
+        let pruned = state.sessions.len() - MAX_SESSIONS;
+        eprintln!("[vaultpilot] pruning {pruned} old chat session(s) (limit={MAX_SESSIONS})");
+        state.sessions.truncate(MAX_SESSIONS);
+    }
 
     if state.current_session_id.trim().is_empty()
         || !state
@@ -3994,5 +4005,104 @@ mod tests {
         let stats = rebuild_index_with_context(&ctx).expect("rebuild");
         assert!(stats.scanned > 0);
         assert!(stats.indexed > 0);
+    }
+
+    // ── Session pruning tests ──
+
+    fn make_session(id: &str, updated_at: &str) -> ChatSession {
+        ChatSession {
+            id: id.to_string(),
+            title: format!("Session {id}"),
+            turns: Vec::new(),
+            summary: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: updated_at.to_string(),
+        }
+    }
+
+    #[test]
+    fn normalize_prunes_sessions_beyond_limit() {
+        let sessions: Vec<ChatSession> = (0..MAX_SESSIONS + 10)
+            .map(|i| {
+                make_session(
+                    &format!("s{i}"),
+                    &format!("2026-01-{:02}T00:00:00Z", (i % 28) + 1),
+                )
+            })
+            .collect();
+        let state = ChatState {
+            current_session_id: "s0".to_string(),
+            sessions,
+        };
+        let normalized = normalize_chat_state(state);
+        assert_eq!(normalized.sessions.len(), MAX_SESSIONS);
+    }
+
+    #[test]
+    fn normalize_keeps_newest_sessions() {
+        let mut sessions: Vec<ChatSession> = Vec::new();
+        // 40 old sessions
+        for i in 0..40 {
+            sessions.push(make_session(&format!("old{i}"), "2020-01-01T00:00:00Z"));
+        }
+        // 20 new sessions
+        for i in 0..20 {
+            sessions.push(make_session(
+                &format!("new{i}"),
+                &format!("2026-06-{:02}T00:00:00Z", i + 1),
+            ));
+        }
+        let state = ChatState {
+            current_session_id: "new0".to_string(),
+            sessions,
+        };
+        let normalized = normalize_chat_state(state);
+        assert_eq!(normalized.sessions.len(), MAX_SESSIONS);
+        // All 20 new sessions must be among the kept sessions (they have the latest updated_at)
+        for i in 0..20 {
+            assert!(normalized
+                .sessions
+                .iter()
+                .any(|s| s.id == format!("new{i}")));
+        }
+    }
+
+    #[test]
+    fn normalize_does_not_prune_when_under_limit() {
+        let sessions: Vec<ChatSession> = (0..10)
+            .map(|i| make_session(&format!("s{i}"), "2026-06-01T00:00:00Z"))
+            .collect();
+        let state = ChatState {
+            current_session_id: "s0".to_string(),
+            sessions,
+        };
+        let normalized = normalize_chat_state(state);
+        assert_eq!(normalized.sessions.len(), 10);
+    }
+
+    #[test]
+    fn normalize_updates_current_session_if_pruned() {
+        let mut sessions: Vec<ChatSession> = Vec::new();
+        // Old current session that will be pruned
+        sessions.push(make_session("old-current", "2020-01-01T00:00:00Z"));
+        // Fill up with new sessions to exceed the limit
+        for i in 0..MAX_SESSIONS {
+            sessions.push(make_session(
+                &format!("s{i}"),
+                &format!("2026-06-{:02}T00:00:00Z", (i % 28) + 1),
+            ));
+        }
+        let state = ChatState {
+            current_session_id: "old-current".to_string(),
+            sessions,
+        };
+        let normalized = normalize_chat_state(state);
+        assert_eq!(normalized.sessions.len(), MAX_SESSIONS);
+        // current_session_id should have been updated to a surviving session
+        assert!(normalized.current_session_id != "old-current");
+        assert!(normalized
+            .sessions
+            .iter()
+            .any(|s| s.id == normalized.current_session_id));
     }
 }

@@ -1,6 +1,7 @@
 ﻿using VaultPilot.WinUI.Backend;
 using VaultPilot.WinUI.Controls;
 using VaultPilot.WinUI.Models;
+using VaultPilot.WinUI.Views;
 using Microsoft.UI.Input;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
@@ -80,6 +81,8 @@ public sealed partial class MainWindow : Window
     private volatile int _updateDownloadPercent = -1;
     private string _updateDownloadVersion = string.Empty;
     private DispatcherTimer? _autoWakeTimer;
+    private Views.NotesView? _notesView;
+    private bool _notesViewLoaded;
     private nint _windowHandle;
     private nint _originalWindowProc;
     private WindowProcDelegate? _windowProcDelegate;
@@ -759,6 +762,34 @@ public sealed partial class MainWindow : Window
         SetSidebarCollapsed(!_sidebarCollapsed, autoCollapsed: false);
     }
 
+    private async void OnNavigationSelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    {
+        if (args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag)
+        {
+            return;
+        }
+
+        switch (tag)
+        {
+            case "Chat":
+                ChatView.Visibility = Visibility.Visible;
+                NotesViewHost.Visibility = Visibility.Collapsed;
+                break;
+
+            case "Notes":
+                ChatView.Visibility = Visibility.Collapsed;
+                NotesViewHost.Visibility = Visibility.Visible;
+                if (!_notesViewLoaded)
+                {
+                    _notesView = new Views.NotesView(_backendClient);
+                    NotesViewHost.Children.Add(_notesView);
+                    _notesViewLoaded = true;
+                }
+                await _notesView.RefreshNotesAsync();
+                break;
+        }
+    }
+
     private void OnRootGridSizeChanged(object sender, SizeChangedEventArgs e)
     {
         EnforceMinimumWindowSize();
@@ -1295,6 +1326,18 @@ public sealed partial class MainWindow : Window
     {
         args.Handled = true;
         CancelActiveRequest();
+    }
+
+    private void OnNavChatAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        NavChat.IsSelected = true;
+    }
+
+    private void OnNavNotesAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        NavNotes.IsSelected = true;
     }
 
     #endregion

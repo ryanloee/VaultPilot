@@ -2863,7 +2863,9 @@ public sealed partial class MainWindow : Window
                 attachments ?? Array.Empty<ChatAttachment>(),
                 now);
 
-            var turns = session.Turns.Concat(new[] { turn }).ToArray();
+            var turns = new List<ChatTurn>(session.Turns.Count + 1);
+            turns.AddRange(session.Turns);
+            turns.Add(turn);
             var title = session.Title == "新对话" && role == "user"
                 ? BuildSessionTitle(text)
                 : session.Title;

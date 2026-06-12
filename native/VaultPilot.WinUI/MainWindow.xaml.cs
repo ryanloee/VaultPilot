@@ -2714,8 +2714,110 @@ public sealed partial class MainWindow : Window
             {
                 AppendAttachmentPreviews(turn.Attachments, turn.Role);
             }
+
+            if (turn.Role == "assistant")
+            {
+                if (turn.ThinkingTrace is { Steps.Count: > 0 } trace)
+                {
+                    AppendThinkingTrace(trace);
+                }
+
+                if (turn.Citations is { Count: > 0 } citations)
+                {
+                    AppendCitationCards(citations);
+                }
+
+                if (turn.SavedNote is not null)
+                {
+                    AppendMessage("系统", $"已保存笔记：{turn.SavedNote.Title}");
+                }
+            }
         }
         RefreshContextStatus();
+    }
+
+    private void AppendThinkingTrace(ThinkingTrace trace)
+    {
+        var stepsPanel = new StackPanel { Spacing = 4 };
+        foreach (var step in trace.Steps)
+        {
+            var stepBlock = new TextBlock
+            {
+                Text = $"• {step.Title}: {step.Detail}",
+                FontSize = 12,
+                Opacity = 0.7,
+                TextWrapping = TextWrapping.Wrap
+            };
+            stepsPanel.Children.Add(stepBlock);
+        }
+
+        var expander = new Expander
+        {
+            Header = $"💭 思考过程 ({trace.Steps.Count} 步){(string.IsNullOrWhiteSpace(trace.Summary) ? "" : $" — {trace.Summary}")}",
+            IsExpanded = false,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxWidth = 680,
+            Content = stepsPanel
+        };
+
+        MessagesPanel.Children.Add(expander);
+    }
+
+    private void AppendCitationCards(IReadOnlyList<AnswerCitation> citations)
+    {
+        var citationsPanel = new StackPanel
+        {
+            Spacing = 4,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxWidth = 680,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+
+        var header = new TextBlock
+        {
+            Text = $"📚 引用 ({citations.Count})",
+            FontSize = 12,
+            Opacity = 0.7,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+        };
+        citationsPanel.Children.Add(header);
+
+        foreach (var citation in citations)
+        {
+            var card = new Border
+            {
+                Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
+                BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(8, 4, 8, 4),
+                Child = new StackPanel
+                {
+                    Spacing = 2,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = citation.Title,
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                            FontSize = 12
+                        },
+                        new TextBlock
+                        {
+                            Text = citation.Snippet,
+                            FontSize = 11,
+                            Opacity = 0.8,
+                            TextWrapping = TextWrapping.Wrap,
+                            MaxLines = 3,
+                            TextTrimming = TextTrimming.CharacterEllipsis
+                        }
+                    }
+                }
+            };
+            citationsPanel.Children.Add(card);
+        }
+
+        MessagesPanel.Children.Add(citationsPanel);
     }
 
     private ChatSession? CurrentSession()

@@ -2516,14 +2516,27 @@ fn is_markdown_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Escape a single term for safe use in an FTS5 query by wrapping it in
+/// double quotes and doubling any embedded double-quote characters. This
+/// prevents FTS5 special characters (`*`, `"`, `(`, `)`, `+`, `-`, `:`, `^`,
+/// `NEAR`, `AND`, `OR`, `NOT`) from being interpreted as query operators.
+fn escape_fts5_term(term: &str) -> String {
+    let cleaned: String = term
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || is_cjk(*ch) || *ch == '_' || *ch == '-')
+        .collect();
+    if cleaned.is_empty() {
+        return String::new();
+    }
+    // Double any embedded double quotes, then wrap the whole term in double
+    // quotes so FTS5 treats it as a literal token.
+    format!("\"{}\"", cleaned.replace('"', "\"\""))
+}
+
 fn make_fts_query(text: &str) -> String {
     let terms: Vec<String> = extract_search_terms(text)
         .into_iter()
-        .map(|term| {
-            term.chars()
-                .filter(|ch| ch.is_ascii_alphanumeric() || is_cjk(*ch) || *ch == '_' || *ch == '-')
-                .collect::<String>()
-        })
+        .map(|term| escape_fts5_term(&term))
         .filter(|term| !term.is_empty())
         .take(8)
         .collect();
@@ -2620,7 +2633,8 @@ mod tests {
             !query.is_empty(),
             "CJK text should not be stripped from FTS query"
         );
-        assert!(query.contains("你好"));
+        // Terms are now wrapped in double quotes for FTS5 safety
+        assert!(query.contains("\"你好\""));
     }
 
     #[test]
@@ -2631,8 +2645,55 @@ mod tests {
             "CJK search terms should produce non-empty FTS query"
         );
         // extract_search_terms generates bigrams like "引脚" and "配置"
-        assert!(query.contains("引脚"));
-        assert!(query.contains("配置"));
+        // Terms are now wrapped in double quotes for FTS5 safety
+        assert!(query.contains("\"引脚\""));
+        assert!(query.contains("\"配置\""));
+    }
+
+    #[test]
+    fn escape_fts5_term_wraps_in_quotes() {
+        assert_eq!(escape_fts5_term("hello"), "\"hello\"");
+        assert_eq!(escape_fts5_term("test_123"), "\"test_123\"");
+        assert_eq!(escape_fts5_term("non-volatile"), "\"non-volatile\"");
+    }
+
+    #[test]
+    fn escape_fts5_term_strips_special_chars() {
+        // FTS5 operators like *, +, :, ^, (, ) are stripped by the filter
+        assert_eq!(escape_fts5_term("hello*world"), "\"helloworld\"");
+        assert_eq!(escape_fts5_term("foo+bar"), "\"foobar\"");
+        assert_eq!(escape_fts5_term("a:b"), "\"ab\"");
+        assert_eq!(escape_fts5_term("test^case"), "\"testcase\"");
+        assert_eq!(escape_fts5_term("(parens)"), "\"parens\"");
+    }
+
+    #[test]
+    fn escape_fts5_term_empty_after_filtering() {
+        assert_eq!(escape_fts5_term(""), String::new());
+        assert_eq!(escape_fts5_term("***"), String::new());
+        // Only chars that are NOT alphanumeric, CJK, '_', or '-' produce empty
+        assert_eq!(escape_fts5_term("+^:"), String::new());
+    }
+
+    #[test]
+    fn make_fts_query_escapes_special_characters() {
+        // extract_search_terms splits "hello*world" into "hello" and "world"
+        let query = make_fts_query("hello*world");
+        assert!(query.contains("\"hello\""));
+        assert!(query.contains("\"world\""));
+    }
+
+    #[test]
+    fn make_fts_query_does_not_produce_fts5_operators() {
+        // A query like "test -not" should not produce a bare minus sign
+        let query = make_fts_query("test -not");
+        // All terms should be quoted, no bare operators
+        for part in query.split_whitespace() {
+            assert!(
+                part.starts_with('"') && part.ends_with('"'),
+                "each term should be quoted: {part}"
+            );
+        }
     }
 
     #[test]

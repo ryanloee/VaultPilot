@@ -130,7 +130,8 @@ fn install_panic_hook() {
             .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
             .unwrap_or_else(|| "unknown location".to_string());
 
-        let message = format!("panic on thread '{thread_name}': {payload} at {location}");
+        let sanitized_payload = vaultpilot_lib::sanitize_error(&payload);
+        let message = format!("panic on thread '{thread_name}': {sanitized_payload} at {location}");
         log_agent_event("panic", &message);
 
         default_hook(info);
@@ -181,7 +182,10 @@ async fn handle_line(line: &str, stdout: &mut impl Write) -> AgentResponse {
             return AgentResponse::error(
                 String::new(),
                 "invalid_request",
-                format!("failed to parse request JSON: {error}"),
+                format!(
+                    "failed to parse request JSON: {}",
+                    vaultpilot_lib::sanitize_error(&error.to_string())
+                ),
             );
         }
     };
@@ -192,7 +196,10 @@ async fn handle_line(line: &str, stdout: &mut impl Write) -> AgentResponse {
             return AgentResponse::error(
                 request.id,
                 "context_error",
-                format!("failed to initialize backend context: {error}"),
+                format!(
+                    "failed to initialize backend context: {}",
+                    vaultpilot_lib::sanitize_error(&error.to_string())
+                ),
             );
         }
     };
@@ -278,7 +285,8 @@ fn parse_params<T>(params: &Value) -> Result<T, String>
 where
     T: for<'de> Deserialize<'de>,
 {
-    serde_json::from_value(params.clone()).map_err(|error| error.to_string())
+    serde_json::from_value(params.clone())
+        .map_err(|error| vaultpilot_lib::sanitize_error(&error.to_string()))
 }
 
 fn serialize_result<T>(result: anyhow::Result<T>) -> Result<Value, String>
@@ -286,8 +294,11 @@ where
     T: Serialize,
 {
     result
-        .map_err(|error| error.to_string())
-        .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()))
+        .map_err(|error| vaultpilot_lib::sanitize_error(&error.to_string()))
+        .and_then(|value| {
+            serde_json::to_value(value)
+                .map_err(|error| vaultpilot_lib::sanitize_error(&error.to_string()))
+        })
 }
 
 fn serialize_string_result<T>(result: Result<T, String>) -> Result<Value, String>

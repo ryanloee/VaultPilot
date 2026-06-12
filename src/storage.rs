@@ -224,6 +224,10 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         let mut parsed: AppSettings = serde_json::from_str(normalized)
             .with_context(|| format!("failed to parse {}", paths.settings_path.display()))?;
         normalize_settings(&mut parsed, paths);
+        let warnings = parsed.validate();
+        for w in &warnings {
+            eprintln!("settings warning: {w}");
+        }
         parsed
     } else {
         let mut defaults = AppSettings::default();

@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::sync::Mutex;
 use std::{collections::HashSet, fs, path::Path, time::Duration};
 
@@ -6,6 +7,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
+use url::Url;
 
 use crate::models::{
     AnswerCitation, AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft,
@@ -830,6 +832,7 @@ async fn send_request_with_temperature(
 
     let client = get_or_build_client(&provider.api_key, provider.request_timeout_ms)?;
 
+    validate_base_url(&provider.base_url)?;
     let endpoint = normalize_messages_endpoint(&provider.base_url);
     let content_blocks = build_input_blocks(prompt, image_paths)?;
 
@@ -1031,6 +1034,83 @@ fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
     None
 }
 
+/// Validate that a base_url is safe to use as a request endpoint.
+///
+/// Checks:
+/// 1. URL must parse as valid HTTP or HTTPS.
+/// 2. Host must be present.
+/// 3. Rejects RFC 1918 / loopback / link-local addresses (SSRF protection)
+///    unless `VAULTPILOT_ALLOW_LOCAL_ENDPOINT` env var is set.
+fn validate_base_url(base_url: &str) -> Result<()> {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("base_url is empty"));
+    }
+
+    let parsed = Url::parse(trimmed).context("base_url is not a valid URL")?;
+
+    match parsed.scheme() {
+        "https" => {}
+        "http" => {
+            eprintln!(
+                "WARNING: base_url uses HTTP (not HTTPS). \
+                 Consider using HTTPS for production endpoints."
+            );
+        }
+        other => {
+            return Err(anyhow!(
+                "base_url scheme '{}' is not supported; use http or https",
+                other
+            ));
+        }
+    }
+
+    let host_str = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("base_url has no host component"))?;
+
+    // Allow explicit opt-in to local/private endpoints via env var.
+    if std::env::var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT").is_ok() {
+        return Ok(());
+    }
+
+    if host_str == "localhost" {
+        return Err(anyhow!(
+            "base_url points to 'localhost'; set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 \
+             to allow local endpoints"
+        ));
+    }
+
+    if let Ok(ip) = host_str.parse::<IpAddr>() {
+        if is_private_ip(ip) {
+            return Err(anyhow!(
+                "base_url resolves to a private/reserved IP ({}); \
+                 set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
+                ip
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Returns `true` for RFC 1918, loopback, link-local, and other reserved IPs.
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || matches!(v4.octets()[0], 100 | 127 | 198 | 240..=255)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 fn normalize_messages_endpoint(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.ends_with("/v1/messages") || trimmed.ends_with("/messages") {
@@ -1052,10 +1132,10 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 mod tests {
     use super::{
         dedupe_terms, detect_image_media_type, extract_json, extract_json_block, fallback_answer,
-        heuristic_note_from_input, is_openai_reasoning_model, is_retryable_provider_error,
-        normalize_draft, normalize_messages_endpoint, parse_or_fallback_answer,
-        parse_or_fallback_note, parse_record_response, parse_tool_call, resolve_context_window,
-        AssistantToolCall, RequestUsage,
+        heuristic_note_from_input, is_openai_reasoning_model, is_private_ip,
+        is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
+        parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
+        resolve_context_window, validate_base_url, AssistantToolCall, RequestUsage,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -1392,5 +1472,73 @@ mod tests {
         assert!(!is_openai_reasoning_model("pro1"));
         assert!(!is_openai_reasoning_model("some-o3thing"));
         assert!(!is_openai_reasoning_model("mo4del"));
+    }
+
+    // ── validate_base_url ─────────────────────────────────────────────
+
+    #[test]
+    fn validate_base_url_accepts_https() {
+        assert!(validate_base_url("https://api.anthropic.com/v1").is_ok());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_empty() {
+        assert!(validate_base_url("").is_err());
+        assert!(validate_base_url("   ").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_invalid_url() {
+        assert!(validate_base_url("not a url").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_non_http_scheme() {
+        assert!(validate_base_url("ftp://example.com").is_err());
+        assert!(validate_base_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_localhost_without_env() {
+        // Ensure env var is NOT set for this test.
+        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+        assert!(validate_base_url("http://localhost:8080").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_allows_localhost_with_env() {
+        std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
+        assert!(validate_base_url("http://localhost:8080").is_ok());
+        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+    }
+
+    #[test]
+    fn validate_base_url_rejects_private_ip() {
+        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+        assert!(validate_base_url("http://192.168.1.1/api").is_err());
+        assert!(validate_base_url("http://10.0.0.1/api").is_err());
+        assert!(validate_base_url("http://172.16.0.1/api").is_err());
+        assert!(validate_base_url("http://127.0.0.1/api").is_err());
+    }
+
+    // ── is_private_ip ──────────────────────────────────────────────────
+
+    #[test]
+    fn is_private_ip_detects_loopback() {
+        assert!(is_private_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_private_ip("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_detects_rfc1918() {
+        assert!(is_private_ip("10.0.0.1".parse().unwrap()));
+        assert!(is_private_ip("172.16.0.1".parse().unwrap()));
+        assert!(is_private_ip("192.168.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_allows_public_ip() {
+        assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_private_ip("1.1.1.1".parse().unwrap()));
     }
 }

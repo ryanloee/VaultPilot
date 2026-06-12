@@ -1,61 +1,51 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using VaultPilot.WinUI.Models;
 
 namespace VaultPilot.WinUI.Views;
 
 /// <summary>
 /// Settings dialog extracted from MainWindow. Displays provider configuration,
-/// auto-wake options, and general preferences. Validates input before saving
-/// and delegates the actual persistence to the caller via callbacks.
+/// auto-wake options, and general preferences. Validates input before saving.
+/// After ShowAsync(), check UpdatedSettings for the validated result.
 /// </summary>
 public sealed partial class SettingsDialog : ContentDialog
 {
-    private readonly AppSettings _settings;
-    private readonly Func<string, string[]> _getModelsForProvider;
-    private readonly Func<string> _resolveDisplayVersion;
-    private readonly Func<DateTime?> _getNextAutoWakeTime;
     private readonly Func<Task> _openVaultDirectoryAsync;
     private readonly Func<Task> _openProjectHomepageAsync;
-    private readonly Action<string, Exception> _showError;
-    private readonly Func<AppSettings, Task> _saveSettingsAsync;
+
+    /// <summary>
+    /// The updated settings after successful validation, or null if the user cancelled.
+    /// </summary>
+    public AppSettings? UpdatedSettings { get; private set; }
 
     /// <summary>
     /// Creates a new settings dialog.
     /// </summary>
-    /// <param name="xamlRoot">XamlRoot from the parent window, required for ContentDialog.ShowAsync.</param>
     /// <param name="settings">Current application settings to populate the dialog.</param>
-    /// <param name="getModelsForProvider">Returns model names for the given base URL.</param>
-    /// <param name="resolveDisplayVersion">Returns the display version string.</param>
-    /// <param name="getNextAutoWakeTime">Returns the next scheduled auto-wake time, if any.</param>
+    /// <param name="models">Model names available for the current provider.</param>
+    /// <param name="nextWakeText">Pre-computed next wake time display text, or null.</param>
+    /// <param name="versionText">Display version string.</param>
+    /// <param name="xamlRoot">XamlRoot from the parent window.</param>
     /// <param name="openVaultDirectoryAsync">Opens the vault directory picker.</param>
     /// <param name="openProjectHomepageAsync">Opens the project homepage URL.</param>
-    /// <param name="showError">Shows an error dialog to the user.</param>
-    /// <param name="saveSettingsAsync">Persists the updated settings. Throws on failure.</param>
     public SettingsDialog(
-        XamlRoot xamlRoot,
         AppSettings settings,
-        Func<string, string[]> getModelsForProvider,
-        Func<string> resolveDisplayVersion,
-        Func<DateTime?> getNextAutoWakeTime,
+        string[] models,
+        string? nextWakeText,
+        string versionText,
+        XamlRoot xamlRoot,
         Func<Task> openVaultDirectoryAsync,
-        Func<Task> openProjectHomepageAsync,
-        Action<string, Exception> showError,
-        Func<AppSettings, Task> saveSettingsAsync)
+        Func<Task> openProjectHomepageAsync)
     {
-        _settings = settings;
-        _getModelsForProvider = getModelsForProvider;
-        _resolveDisplayVersion = resolveDisplayVersion;
-        _getNextAutoWakeTime = getNextAutoWakeTime;
         _openVaultDirectoryAsync = openVaultDirectoryAsync;
         _openProjectHomepageAsync = openProjectHomepageAsync;
-        _showError = showError;
-        _saveSettingsAsync = saveSettingsAsync;
 
         InitializeComponent();
         XamlRoot = xamlRoot;
 
-        LoadSettings();
+        LoadSettings(settings, models, nextWakeText, versionText);
         WireUpButtons();
     }
 
@@ -63,46 +53,46 @@ public sealed partial class SettingsDialog : ContentDialog
     //  Initialization
     // ──────────────────────────────────────────────
 
-    private void LoadSettings()
+    private void LoadSettings(AppSettings settings, string[] models, string? nextWakeText, string versionText)
     {
         // Provider section
-        VaultBox.Text = _settings.VaultDir;
-        ApiKeyBox.Password = _settings.Provider.ApiKey;
-        BaseUrlBox.Text = _settings.Provider.BaseUrl;
-        ModelBox.Text = _settings.Provider.Model;
-        TimeoutBox.Text = _settings.Provider.RequestTimeoutMs.ToString();
-        ContextWindowBox.Text = _settings.Provider.ContextWindowTokens?.ToString() ?? string.Empty;
+        VaultBox.Text = settings.VaultDir;
+        ApiKeyBox.Password = settings.Provider.ApiKey;
+        BaseUrlBox.Text = settings.Provider.BaseUrl;
+        ModelBox.Text = settings.Provider.Model;
+        TimeoutBox.Text = settings.Provider.RequestTimeoutMs.ToString();
+        ContextWindowBox.Text = settings.Provider.ContextWindowTokens?.ToString() ?? string.Empty;
 
         // General section
-        AutoCheckUpdatesBox.IsChecked = _settings.AutoCheckUpdates;
+        AutoCheckUpdatesBox.IsChecked = settings.AutoCheckUpdates;
 
         // Auto-wake section
-        AutoWakeEnabledBox.IsChecked = _settings.AutoWakeEnabled;
-        AutoWakeIntervalBox.Text = _settings.AutoWakeIntervalMinutes.ToString();
+        AutoWakeEnabledBox.IsChecked = settings.AutoWakeEnabled;
+        AutoWakeIntervalBox.Text = settings.AutoWakeIntervalMinutes.ToString();
 
         // Populate wake model ComboBox
         AutoWakeModelBox.Items.Add(string.Empty);
-        foreach (var model in _getModelsForProvider(_settings.Provider.BaseUrl))
+        foreach (var model in models)
         {
             AutoWakeModelBox.Items.Add(model);
         }
-        if (string.IsNullOrEmpty(_settings.AutoWakeModel))
+        if (string.IsNullOrEmpty(settings.AutoWakeModel))
         {
             AutoWakeModelBox.SelectedIndex = 0;
         }
         else
         {
-            AutoWakeModelBox.Text = _settings.AutoWakeModel;
+            AutoWakeModelBox.Text = settings.AutoWakeModel;
         }
 
-        AutoWakeStartTimeBox.Text = _settings.AutoWakeStartTime ?? string.Empty;
-        AutoWakeEndTimeBox.Text = _settings.AutoWakeEndTime ?? string.Empty;
+        AutoWakeStartTimeBox.Text = settings.AutoWakeStartTime ?? string.Empty;
+        AutoWakeEndTimeBox.Text = settings.AutoWakeEndTime ?? string.Empty;
 
         // Next wake label
-        UpdateNextWakeLabel();
+        NextWakeLabel.Text = nextWakeText ?? string.Empty;
 
         // Footer
-        VersionLabel.Text = _resolveDisplayVersion();
+        VersionLabel.Text = versionText;
     }
 
     private void WireUpButtons()
@@ -164,23 +154,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private void OnAutoWakeToggled(object sender, RoutedEventArgs e)
     {
-        UpdateNextWakeLabel();
-    }
-
-    private void UpdateNextWakeLabel()
-    {
-        if (AutoWakeEnabledBox.IsChecked == true)
-        {
-            var next = _getNextAutoWakeTime();
-            if (next.HasValue)
-            {
-                NextWakeLabel.Text = next.Value.Date == DateTime.Today
-                    ? $"下次唤醒: {next.Value:HH:mm}"
-                    : $"下次唤醒: {next.Value:MM/dd HH:mm}";
-                return;
-            }
-        }
-        NextWakeLabel.Text = string.Empty;
+        // Next wake label is computed by MainWindow; no-op here.
     }
 
     // ──────────────────────────────────────────────
@@ -190,9 +164,6 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private async void OnPrimaryButtonClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
-        // Validate and save BEFORE the dialog closes so the user never
-        // loses input on a validation failure.  Setting args.Cancel = true
-        // keeps the dialog open; only an error-free path lets it close.
         var deferral = args.GetDeferral();
         try
         {
@@ -268,7 +239,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
             var autoWakeModel = (AutoWakeModelBox.SelectedItem as string ?? AutoWakeModelBox.Text ?? string.Empty).Trim();
 
-            var updated = new AppSettings(
+            UpdatedSettings = new AppSettings(
                 VaultBox.Text.Trim(),
                 new ProviderConfig(
                     trimmedApiKey,
@@ -282,12 +253,12 @@ public sealed partial class SettingsDialog : ContentDialog
                 autoWakeModel,
                 trimmedWakeStart,
                 trimmedWakeEnd);
-
-            await _saveSettingsAsync(updated);
         }
         catch (Exception error)
         {
-            _showError("保存设置失败", error);
+            // Show error but let the dialog close — the caller checks UpdatedSettings == null.
+            ErrorInfoBar.Message = $"保存设置失败：{error.Message}";
+            ErrorInfoBar.IsOpen = true;
             args.Cancel = true;
         }
         finally

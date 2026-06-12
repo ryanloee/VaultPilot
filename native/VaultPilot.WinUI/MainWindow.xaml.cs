@@ -526,12 +526,26 @@ public sealed partial class MainWindow : Window
 
     private async void OnSendClicked(object sender, RoutedEventArgs e)
     {
-        await SendCurrentMessageAsync();
+        try
+        {
+            await SendCurrentMessageAsync();
+        }
+        catch (Exception error)
+        {
+            ShowError("发送消息失败", error);
+        }
     }
 
     private async void OnRecordClicked(object sender, RoutedEventArgs e)
     {
-        await RecordCurrentMessageAsync();
+        try
+        {
+            await RecordCurrentMessageAsync();
+        }
+        catch (Exception error)
+        {
+            ShowError("录音消息失败", error);
+        }
     }
 
     private void OnSessionSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -606,66 +620,80 @@ public sealed partial class MainWindow : Window
 
     private async void OnDeleteSessionClicked(object sender, RoutedEventArgs e)
     {
-        var session = CurrentSession();
-        if (session is null)
+        try
         {
-            return;
+            var session = CurrentSession();
+            if (session is null)
+            {
+                return;
+            }
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = RootGrid.XamlRoot,
+                Title = "删除会话",
+                Content = $"确认删除「{session.Title}」吗？此操作不可撤销。",
+                PrimaryButtonText = "删除",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Close
+            };
+
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            var remaining = _chatState.Sessions
+                .Where(item => item.Id != session.Id)
+                .ToArray();
+
+            _chatState = new ChatState(
+                remaining.FirstOrDefault()?.Id ?? string.Empty,
+                remaining);
+            _currentSessionId = _chatState.CurrentSessionId;
+            EnsureCurrentSession();
+            await SaveChatStateAsync();
+            RefreshSessions();
+            RenderCurrentSession();
+
+            UpdateStatusBar("success", "会话已删除", $"已删除「{session.Title}」。");
         }
-
-        var dialog = new ContentDialog
+        catch (Exception error)
         {
-            XamlRoot = RootGrid.XamlRoot,
-            Title = "删除会话",
-            Content = $"确认删除「{session.Title}」吗？此操作不可撤销。",
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close
-        };
-
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
+            ShowError("删除会话失败", error);
         }
-
-        var remaining = _chatState.Sessions
-            .Where(item => item.Id != session.Id)
-            .ToArray();
-
-        _chatState = new ChatState(
-            remaining.FirstOrDefault()?.Id ?? string.Empty,
-            remaining);
-        _currentSessionId = _chatState.CurrentSessionId;
-        EnsureCurrentSession();
-        await SaveChatStateAsync();
-        RefreshSessions();
-        RenderCurrentSession();
-
-        UpdateStatusBar("success", "会话已删除", $"已删除「{session.Title}」。");
     }
 
     private async void OnNewSessionClicked(object sender, RoutedEventArgs e)
     {
-        var now = DateTimeOffset.UtcNow.ToString("O");
-        var session = new ChatSession(
-            Guid.NewGuid().ToString("N"),
-            "新对话",
-            Array.Empty<ChatTurn>(),
-            null,
-            now,
-            now);
+        try
+        {
+            var now = DateTimeOffset.UtcNow.ToString("O");
+            var session = new ChatSession(
+                Guid.NewGuid().ToString("N"),
+                "新对话",
+                Array.Empty<ChatTurn>(),
+                null,
+                now,
+                now);
 
-        _chatState = new ChatState(
-            session.Id,
-            [session, .. _chatState.Sessions]);
-        _currentSessionId = session.Id;
-        _attachments.Clear();
-        ComposerBox.Text = string.Empty;
-        RenderCurrentSession();
-        RefreshAttachments();
-        RefreshSessions();
-        await SaveChatStateAsync();
+            _chatState = new ChatState(
+                session.Id,
+                [session, .. _chatState.Sessions]);
+            _currentSessionId = session.Id;
+            _attachments.Clear();
+            ComposerBox.Text = string.Empty;
+            RenderCurrentSession();
+            RefreshAttachments();
+            RefreshSessions();
+            await SaveChatStateAsync();
 
-        UpdateStatusBar("success", "已新建对话", "可以开始新的提问。");
+            UpdateStatusBar("success", "已新建对话", "可以开始新的提问。");
+        }
+        catch (Exception error)
+        {
+            ShowError("新建会话失败", error);
+        }
     }
 
     private Task OpenVaultDirectoryAsync()
@@ -762,30 +790,37 @@ public sealed partial class MainWindow : Window
 
     private async void OnComposerKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key == VirtualKey.V)
+        try
         {
-            var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
-            if (controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down)
-                && await TryHandleClipboardImagePasteAsync())
+            if (e.Key == VirtualKey.V)
             {
-                e.Handled = true;
+                var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
+                if (controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down)
+                    && await TryHandleClipboardImagePasteAsync())
+                {
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            if (e.Key != VirtualKey.Enter)
+            {
                 return;
             }
-        }
 
-        if (e.Key != VirtualKey.Enter)
+            var shiftState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
+            if (shiftState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+            {
+                return;
+            }
+
+            e.Handled = true;
+            await SendCurrentMessageAsync();
+        }
+        catch (Exception error)
         {
-            return;
+            ShowError("键盘事件处理失败", error);
         }
-
-        var shiftState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
-        if (shiftState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
-        {
-            return;
-        }
-
-        e.Handled = true;
-        await SendCurrentMessageAsync();
     }
 
     private async Task SendCurrentMessageAsync()
@@ -962,9 +997,16 @@ public sealed partial class MainWindow : Window
 
     private async void OnClosed(object sender, WindowEventArgs args)
     {
-        RemoveThinkingIndicator();
-        TryReleaseWindowFileDropHook();
-        await _backendClient.DisposeAsync();
+        try
+        {
+            RemoveThinkingIndicator();
+            TryReleaseWindowFileDropHook();
+            await _backendClient.DisposeAsync();
+        }
+        catch (Exception error)
+        {
+            ShowError("关闭窗口失败", error);
+        }
     }
 
     public void Hide()

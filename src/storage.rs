@@ -2178,39 +2178,8 @@ fn document_relevance_score(query: &str, doc: &NoteDocument) -> i64 {
         score += 80;
     }
 
-    if query_has_any(&terms, &["刷机", "刷写", "烧录", "flash", "update", "升级"])
-        && query_has_any(
-            &collect_document_terms(doc),
-            &["wboot", "update", "flash", "烧录", "刷机", "刷写"],
-        )
-    {
-        score += 140;
-    }
-
-    if query_has_any(&terms, &["sd卡", "sd", "sdio", "mmc", "tf"])
-        && query_has_any(
-            &collect_document_terms(doc),
-            &["sd卡", "sd", "sdio", "mmc", "tf", "sdmmc"],
-        )
-    {
-        score += 120;
-    }
-
-    if query_has_any(&terms, &["引脚复用", "复用", "pinmux", "pinctrl", "iomux"])
-        && query_has_any(
-            &collect_document_terms(doc),
-            &[
-                "引脚复用",
-                "复用",
-                "pinmux",
-                "pinctrl",
-                "iomux",
-                "pin multiplexing",
-            ],
-        )
-    {
-        score += 120;
-    }
+    score += crate::search_rules::SearchRules::global()
+        .domain_relevance_bonus(&terms, &collect_document_terms(doc));
 
     score
 }
@@ -2361,61 +2330,7 @@ fn split_search_token(token: &str) -> Vec<String> {
 }
 
 fn expand_term_aliases(term: &str) -> Vec<String> {
-    let normalized = term.trim().to_lowercase();
-    let mut aliases = Vec::new();
-
-    if normalized.contains("刷机")
-        || normalized.contains("刷写")
-        || normalized.contains("烧录")
-        || normalized.contains("flash")
-    {
-        aliases.extend(
-            [
-                "刷机", "刷写", "烧录", "升级", "flash", "wboot", "固件", "镜像", "zboot",
-            ]
-            .into_iter()
-            .map(str::to_string),
-        );
-    }
-
-    if normalized.contains("sd")
-        || normalized.contains("sd卡")
-        || normalized.contains("sdio")
-        || normalized.contains("mmc")
-        || normalized.contains("tf")
-    {
-        aliases.extend(
-            ["sd", "sd卡", "sdio", "mmc", "tf", "sdmmc"]
-                .into_iter()
-                .map(str::to_string),
-        );
-    }
-
-    if normalized.contains("引脚复用")
-        || normalized.contains("复用")
-        || normalized.contains("pinmux")
-        || normalized.contains("pinctrl")
-        || normalized.contains("iomux")
-    {
-        aliases.extend(
-            [
-                "引脚复用",
-                "复用",
-                "pinmux",
-                "pinctrl",
-                "iomux",
-                "pin multiplexing",
-            ]
-            .into_iter()
-            .map(str::to_string),
-        );
-    }
-
-    if normalized.contains("gpio") {
-        aliases.extend(["gpio", "管脚", "引脚"].into_iter().map(str::to_string));
-    }
-
-    aliases
+    crate::search_rules::SearchRules::global().expand_term_aliases(term)
 }
 
 fn collect_document_terms(doc: &NoteDocument) -> Vec<String> {
@@ -2427,14 +2342,6 @@ fn collect_document_terms(doc: &NoteDocument) -> Vec<String> {
         doc.meta.keywords.join(" "),
         doc.body
     ))
-}
-
-fn query_has_any(terms: &[String], expected: &[&str]) -> bool {
-    expected.iter().any(|needle| {
-        terms
-            .iter()
-            .any(|term| term.contains(needle) || needle.contains(term))
-    })
 }
 
 fn is_noise_term(term: &str) -> bool {

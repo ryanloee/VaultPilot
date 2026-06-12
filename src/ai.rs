@@ -812,8 +812,11 @@ fn normalize_draft(draft: StructuredNoteDraft) -> StructuredNoteDraft {
 
 fn heuristic_note_from_input(raw_input: &str) -> StructuredNoteDraft {
     let compact = raw_input.trim();
-    let title = if compact.contains("刷机") || compact.to_ascii_lowercase().contains("flash") {
-        "刷机命令记录".to_string()
+    let (heuristic_title, heuristic_tags) =
+        crate::search_rules::SearchRules::global().evaluate_heuristic(compact);
+
+    let title = if let Some(t) = heuristic_title {
+        t
     } else if let Some(first_line) = compact.lines().find(|line| !line.trim().is_empty()) {
         truncate(first_line.trim(), 40)
     } else {
@@ -822,12 +825,7 @@ fn heuristic_note_from_input(raw_input: &str) -> StructuredNoteDraft {
 
     let keywords = extract_command_keywords(compact);
     let mut tags = vec!["record".to_string()];
-    if compact.contains("刷机") || compact.to_ascii_lowercase().contains("flash") {
-        tags.push("flash".to_string());
-    }
-    if compact.to_ascii_lowercase().contains("uboot") {
-        tags.push("uboot".to_string());
-    }
+    tags.extend(heuristic_tags);
 
     StructuredNoteDraft {
         title,

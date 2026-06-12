@@ -1,0 +1,48 @@
+{
+  "synonym_groups": [
+    {
+      "triggers": ["刷机", "刷写", "烧录", "flash"],
+      "aliases": ["刷机", "刷写", "烧录", "升级", "flash", "wboot", "固件", "镜像", "zboot"]
+    },
+    {
+      "triggers": ["sd", "sd卡", "sdio", "mmc", "tf"],
+      "aliases": ["sd", "sd卡", "sdio", "mmc", "tf", "sdmmc"]
+    },
+    {
+      "triggers": ["引脚复用", "复用", "pinmux", "pinctrl", "iomux"],
+      "aliases": ["引脚复用", "复用", "pinmux", "pinctrl", "iomux", "pin multiplexing"]
+    },
+    {
+      "triggers": ["gpio"],
+      "aliases": ["gpio", "管脚", "引脚"]
+    }
+  ],
+  "relevance_bonuses": [
+    {
+      "query_terms": ["刷机", "刷写", "烧录", "flash", "update", "升级"],
+      "doc_terms": ["wboot", "update", "flash", "烧录", "刷机", "刷写"],
+      "bonus": 140
+    },
+    {
+      "query_terms": ["sd卡", "sd", "sdio", "mmc", "tf"],
+      "doc_terms": ["sd卡", "sd", "sdio", "mmc", "tf", "sdmmc"],
+      "bonus": 120
+    },
+    {
+      "query_terms": ["引脚复用", "复用", "pinmux", "pinctrl", "iomux"],
+      "doc_terms": ["引脚复用", "复用", "pinmux", "pinctrl", "iomux", "pin multiplexing"],
+      "bonus": 120
+    }
+  ],
+  "heuristic_keywords": [
+    {
+      "patterns": ["刷机", "flash"],
+      "title": "刷机命令记录",
+      "tags": ["flash"]
+    },
+    {
+      "patterns": ["uboot"],
+      "tags": ["uboot"]
+    }
+  ]
+}

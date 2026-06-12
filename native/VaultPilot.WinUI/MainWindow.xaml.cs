@@ -17,6 +17,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Linq;
 using System.Threading;
 using Windows.ApplicationModel.DataTransfer;
@@ -1563,6 +1564,12 @@ public sealed partial class MainWindow : Window
                 continue;
             }
 
+
+            if (block.IsTable)
+            {
+                stack.Children.Add(CreateMarkdownTable(block.Text));
+                continue;
+            }
             foreach (var element in CreateMarkdownTextElements(block.Text))
             {
                 stack.Children.Add(element);
@@ -1671,6 +1678,36 @@ public sealed partial class MainWindow : Window
         var index = 0;
         while (index < text.Length)
         {
+            // Check for markdown link [text](url)
+            if (text[index] == '[')
+            {
+                var closeBracket = text.IndexOf(']', index + 1);
+                if (closeBracket > index + 1
+                    && closeBracket + 1 < text.Length
+                    && text[closeBracket + 1] == '(')
+                {
+                    var closeParen = text.IndexOf(')', closeBracket + 2);
+                    if (closeParen > closeBracket + 1)
+                    {
+                        var linkText = text[(index + 1)..closeBracket];
+                        var linkUrl = text[(closeBracket + 2)..closeParen];
+                        if (Uri.TryCreate(linkUrl, UriKind.Absolute, out var uri))
+                        {
+                            var hyperlink = new Hyperlink
+                            {
+                                NavigateUri = uri,
+                                UnderlineStyle = UnderlineStyle.Single
+                            };
+                            hyperlink.Click += Hyperlink_Click;
+                            AppendInlineMarkdown(hyperlink.Inlines, linkText);
+                            inlines.Add(hyperlink);
+                            index = closeParen + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
             if (index + 1 < text.Length
                 && text[index] == '*'
                 && text[index + 1] == '*')
@@ -1735,7 +1772,7 @@ public sealed partial class MainWindow : Window
     private static int FindNextInlineMarker(string text, int startIndex)
     {
         var nextIndex = text.Length;
-        foreach (var marker in new[] { "**", "*", "`" })
+        foreach (var marker in new[] { "**", "*", "`", "[" })
         {
             var index = text.IndexOf(marker, startIndex, StringComparison.Ordinal);
             if (index >= 0 && index < nextIndex)
@@ -1745,6 +1782,14 @@ public sealed partial class MainWindow : Window
         }
 
         return nextIndex;
+    }
+
+    private static async void Hyperlink_Click(Hyperlink sender, HyperlinkClickEventArgs args)
+    {
+        if (sender.NavigateUri != null)
+        {
+            await Windows.System.Launcher.LaunchUriAsync(sender.NavigateUri);
+        }
     }
 
     private FrameworkElement CreateCodeBlock(string code, string? language)
@@ -1800,7 +1845,117 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private IEnumerable<(bool IsCode, string Text, string? Language)> ParseMarkdownBlocks(string markdown)
+    private FrameworkElement CreateMarkdownTable(string tableText)
+    {
+        var lines = tableText.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.StartsWith("|") && l.EndsWith("|") && l.Length > 2)
+            .ToList();
+
+        if (lines.Count < 2)
+        {
+            return new TextBlock
+            {
+                Text = tableText,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+            };
+        }
+
+        // Remove separator line (|---|---|)
+        if (lines[1].Contains("---"))
+        {
+            lines.RemoveAt(1);
+        }
+
+        // Parse cells from each row
+        var rows = new List<string[]>();
+        foreach (var line in lines)
+        {
+            var cells = line.Split('|')
+                .Skip(1)       // Skip empty segment before first |
+                .SkipLast(1)   // Skip empty segment after last |
+                .Select(c => c.Trim())
+                .ToArray();
+            rows.Add(cells);
+        }
+
+        if (rows.Count == 0)
+        {
+            return new TextBlock
+            {
+                Text = tableText,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+            };
+        }
+
+        var colCount = rows.Max(r => r.Length);
+        var grid = new Grid();
+
+        for (var c = 0; c < colCount; c++)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new GridLength(1, GridUnitType.Auto)
+            });
+        }
+
+        for (var r = 0; r < rows.Count; r++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition
+            {
+                Height = new GridLength(1, GridUnitType.Auto)
+            });
+
+            for (var c = 0; c < colCount; c++)
+            {
+                var cellText = c < rows[r].Length ? rows[r][c] : "";
+                var cellBlock = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                    Padding = new Thickness(8, 6, 8, 6),
+                    Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+                };
+                ApplyInlineMarkdown(cellBlock, cellText);
+
+                // Bold the header row
+                if (r == 0)
+                {
+                    cellBlock.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+                }
+
+                var cellBorder = new Border
+                {
+                    BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
+                    BorderThickness = new Thickness(
+                        c == 0 ? 0 : 0.5,
+                        r == 0 ? 0 : 0.5,
+                        0.5,
+                        0.5),
+                    Child = cellBlock
+                };
+
+                Grid.SetRow(cellBorder, r);
+                Grid.SetColumn(cellBorder, c);
+                grid.Children.Add(cellBorder);
+            }
+        }
+
+        return new Border
+        {
+            BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(0.5),
+            CornerRadius = new CornerRadius(4),
+            Margin = new Thickness(0, 4, 0, 4),
+            Child = grid
+        };
+    }
+
+    private IEnumerable<(bool IsCode, bool IsTable, string Text, string? Language)> ParseMarkdownBlocks(string markdown)
     {
         var normalized = markdown.Replace("\r\n", "\n");
         var parts = normalized.Split("```");
@@ -1810,7 +1965,10 @@ public sealed partial class MainWindow : Window
             {
                 if (!string.IsNullOrWhiteSpace(parts[i]))
                 {
-                    yield return (false, parts[i].Trim(), null);
+                    foreach (var segment in SplitTextAndTables(parts[i].Trim()))
+                    {
+                        yield return segment;
+                    }
                 }
 
                 continue;
@@ -1820,13 +1978,87 @@ public sealed partial class MainWindow : Window
             var firstNewline = block.IndexOf('\n');
             if (firstNewline < 0)
             {
-                yield return (true, block.Trim(), null);
+                yield return (true, false, block.Trim(), null);
                 continue;
             }
 
             var language = block[..firstNewline].Trim();
             var code = block[(firstNewline + 1)..].TrimEnd();
-            yield return (true, code, string.IsNullOrWhiteSpace(language) ? null : language);
+            yield return (true, false, code, string.IsNullOrWhiteSpace(language) ? null : language);
+        }
+    }
+
+    private static IEnumerable<(bool IsCode, bool IsTable, string Text, string? Language)> SplitTextAndTables(string text)
+    {
+        var lines = text.Split('\n');
+        var currentTextLines = new List<string>();
+        var tableLines = new List<string>();
+        var inTable = false;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+            var isTableRow = line.StartsWith("|") && line.EndsWith("|") && line.Length > 2;
+
+            if (isTableRow && !inTable)
+            {
+                // Check if the next line is a table separator (|---|---|)
+                if (i + 1 < lines.Length)
+                {
+                    var nextLine = lines[i + 1].Trim();
+                    if (nextLine.StartsWith("|") && nextLine.Contains("---"))
+                    {
+                        // Flush any pending text lines
+                        if (currentTextLines.Count > 0)
+                        {
+                            var textBlock = string.Join("\n", currentTextLines).Trim();
+                            if (!string.IsNullOrWhiteSpace(textBlock))
+                            {
+                                yield return (false, false, textBlock, null);
+                            }
+                            currentTextLines.Clear();
+                        }
+
+                        inTable = true;
+                        tableLines.Add(lines[i]);
+                        continue;
+                    }
+                }
+
+                // Not a recognized table, treat as regular text
+                currentTextLines.Add(lines[i]);
+            }
+            else if (isTableRow && inTable)
+            {
+                tableLines.Add(lines[i]);
+            }
+            else
+            {
+                if (inTable)
+                {
+                    yield return (false, true, string.Join("\n", tableLines).Trim(), null);
+                    tableLines.Clear();
+                    inTable = false;
+                }
+
+                currentTextLines.Add(lines[i]);
+            }
+        }
+
+        // Flush remaining table
+        if (inTable && tableLines.Count > 0)
+        {
+            yield return (false, true, string.Join("\n", tableLines).Trim(), null);
+        }
+
+        // Flush remaining text
+        if (currentTextLines.Count > 0)
+        {
+            var remaining = string.Join("\n", currentTextLines).Trim();
+            if (!string.IsNullOrWhiteSpace(remaining))
+            {
+                yield return (false, false, remaining, null);
+            }
         }
     }
 
@@ -1865,6 +2097,13 @@ public sealed partial class MainWindow : Window
         if (text.Contains("**", StringComparison.Ordinal)
             || text.Contains('`')
             || HasStandaloneItalicMarker(text))
+        {
+            return true;
+        }
+
+        // Detect markdown tables and links
+        if (text.Contains("|---", StringComparison.Ordinal)
+            || Regex.IsMatch(text, @"\[[^\]]+\]\(https?://[^)]+\)"))
         {
             return true;
         }

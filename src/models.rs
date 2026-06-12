@@ -476,6 +476,14 @@ pub struct ImportResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub exported: usize,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct IndexStats {
     pub scanned: usize,
     pub indexed: usize,

@@ -221,6 +221,24 @@ enum NotesActions {
         /// File or directory paths to import
         paths: Vec<String>,
     },
+
+    /// Export a single note to a Markdown file
+    Export {
+        /// Note ID or file path
+        #[arg(long)]
+        id: String,
+
+        /// Output file path (writes to stdout if omitted)
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Export all notes as Markdown files to a directory
+    ExportAll {
+        /// Output directory path
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -824,6 +842,29 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
         }
         NotesActions::Import { paths } => {
             let result = import_markdown_with_context(context, paths)?;
+            to_json(&result)
+        }
+        NotesActions::Export { id, output } => {
+            let (markdown, _filename) = export_note_markdown_with_context(context, id)?;
+            match output {
+                Some(path) => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(path, &markdown)?;
+                    Ok(serde_json::json!({
+                        "exported": 1,
+                        "path": path.display().to_string(),
+                    }))
+                }
+                None => {
+                    print!("{markdown}");
+                    Ok(serde_json::json!({ "exported": 1 }))
+                }
+            }
+        }
+        NotesActions::ExportAll { output } => {
+            let result = export_all_notes_with_context(context, output)?;
             to_json(&result)
         }
     }

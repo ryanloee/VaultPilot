@@ -828,10 +828,7 @@ async fn run_http_bridge(
     let address = SocketAddr::new(ip, port);
     let requires_token = token.is_some();
     let rate_limiter = Arc::new(RateLimiter::new(60, std::time::Duration::from_secs(60)));
-    let state = Arc::new(HttpBridgeState {
-        context,
-        token,
-    });
+    let state = Arc::new(HttpBridgeState { context, token });
 
     let app = Router::new()
         .route("/health", get(http_health))

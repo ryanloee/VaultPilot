@@ -735,14 +735,18 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
     // PRAGMA user_version is a lightweight integer stored in the database header.
     let version: i32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version >= 1 {
-        // Schema already exists; just enable foreign keys and return.
-        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        // Schema already exists; enable foreign keys, WAL mode, and busy timeout.
+        connection.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
+        )?;
         return Ok(());
     }
 
     connection.execute_batch(
         r#"
         PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        PRAGMA busy_timeout = 5000;
         CREATE TABLE IF NOT EXISTS notes (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,

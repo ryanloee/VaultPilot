@@ -1951,6 +1951,17 @@ public sealed partial class MainWindow : Window
 
     private DateTime? _lastAutoWakeTime;
     private bool _autoWakeInProgress;
+    private bool _isStopping;
+
+    /// <summary>
+    /// Called by App during shutdown to prevent the auto-wake timer
+    /// from firing while the app is exiting.
+    /// </summary>
+    public void SignalStopping()
+    {
+        _isStopping = true;
+        StopAutoWakeTimer();
+    }
 
     private void ApplyAutoWakeSettings()
     {
@@ -2005,6 +2016,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnAutoWakeTimerTick(object? sender, object e)
     {
+        if (_isStopping) return;
         if (_autoWakeInProgress) return;
         if (!IsInAutoWakeWindow()) return;
 

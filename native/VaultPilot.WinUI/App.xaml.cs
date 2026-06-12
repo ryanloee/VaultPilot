@@ -74,6 +74,7 @@ public partial class App : Application
 
     public void BeginExitForUpdate()
     {
+        _window?.SignalStopping();
         _isExiting = true;
     }
 

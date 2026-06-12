@@ -16,6 +16,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
+using System.Linq;
 using System.Threading;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
@@ -312,9 +313,10 @@ public sealed partial class MainWindow : Window
                 PlaceholderText = _settings.Provider.Model,
             };
             autoWakeModelBox.Items.Add(string.Empty);
-            autoWakeModelBox.Items.Add("claude-3-5-haiku-latest");
-            autoWakeModelBox.Items.Add("claude-3-5-sonnet-latest");
-            autoWakeModelBox.Items.Add("claude-sonnet-4-20250514");
+            foreach (var model in GetModelsForProvider(_settings.Provider.BaseUrl))
+            {
+                autoWakeModelBox.Items.Add(model);
+            }
             if (string.IsNullOrEmpty(_settings.AutoWakeModel))
             {
                 autoWakeModelBox.SelectedIndex = 0;
@@ -2125,6 +2127,42 @@ public sealed partial class MainWindow : Window
     {
         _isStopping = true;
         StopAutoWakeTimer();
+    }
+
+    private static bool IsAnthropicProvider(string? baseUrl)
+    {
+        if (string.IsNullOrEmpty(baseUrl)) return false;
+        return baseUrl.Contains("anthropic", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Returns a curated list of recommended models for the configured provider,
+    /// determined by inspecting the base URL. Mirrors the Rust-side
+    /// <c>ProviderType::from_base_url</c> heuristic.
+    /// </summary>
+    private static string[] GetModelsForProvider(string? baseUrl)
+    {
+        if (IsAnthropicProvider(baseUrl))
+        {
+            return new[]
+            {
+                "claude-3-5-haiku-latest",
+                "claude-3-5-sonnet-latest",
+                "claude-sonnet-4-20250514",
+            };
+        }
+
+        // Default: OpenAI-compatible provider (covers OpenAI, Azure, local
+        // servers, and third-party gateways that expose the OpenAI API).
+        return new[]
+        {
+            "gpt-4o-mini",
+            "gpt-4o",
+            "gpt-4.1-mini",
+            "gpt-4.1",
+            "o3-mini",
+            "o4-mini",
+        };
     }
 
     private void ApplyAutoWakeSettings()

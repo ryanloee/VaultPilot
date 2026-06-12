@@ -212,14 +212,16 @@
                         <ScrollViewer
                             x:Name="AttachmentScroller"
                             Grid.Row="3"
-                            Margin="0,2,0,0"
+                            Margin="0,4,0,0"
                             HorizontalScrollBarVisibility="Auto"
                             VerticalScrollBarVisibility="Disabled"
+                            VerticalAlignment="Center"
                             Visibility="Collapsed">
                             <StackPanel
                                 x:Name="AttachmentPanel"
                                 Orientation="Horizontal"
-                                Spacing="6" />
+                                Spacing="6"
+                                VerticalAlignment="Center" />
                         </ScrollViewer>
                     </Grid>
                     <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="8" HorizontalAlignment="Center">

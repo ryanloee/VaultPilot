@@ -38,6 +38,14 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     );
     let tmp_path = path.with_file_name(tmp_name);
     fs::write(&tmp_path, data)?;
+    // Restrict temp file permissions before rename to prevent other users
+    // from reading sensitive data (e.g. settings.json with API keys).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&tmp_path, perms)?;
+    }
     fs::rename(&tmp_path, path)?;
     Ok(())
 }
@@ -496,7 +504,8 @@ pub fn save_note_with_images_with_context(
     };
 
     let serialized = compose_markdown(&meta, &body_with_images)?;
-    fs::write(&path, serialized).with_context(|| format!("failed to write {}", path.display()))?;
+    atomic_write(&path, serialized.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
     index_note_file_with_connection(&connection, &path)?;
     load_note_with_context(context, &meta.id)
 }
@@ -2436,7 +2445,14 @@ fn slugify(value: &str) -> String {
     }
     let cleaned = slug.trim_matches('-').to_string();
     if cleaned.is_empty() {
-        "note".to_string()
+        // For CJK-only or other non-ASCII titles where deunicode produces
+        // nothing usable, append a short hash so different notes get distinguishable slugs.
+        if !value.is_ascii() && !value.trim().is_empty() {
+            let short_hash = &hash_content(value)[..8];
+            format!("note-{short_hash}")
+        } else {
+            "note".to_string()
+        }
     } else {
         cleaned
     }
@@ -2823,6 +2839,31 @@ mod tests {
     fn slugify_cjk_does_not_panic() {
         let result = slugify("测试中文");
         assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn slugify_cjk_includes_hash() {
+        // CJK titles get transliterated to pinyin by deunicode, producing a meaningful slug.
+        let result = slugify("测试中文");
+        assert!(
+            !result.is_empty() && result != "note",
+            "CJK title should produce a meaningful slug: {result}"
+        );
+    }
+
+    #[test]
+    fn slugify_different_nonascii_titles_get_different_slugs() {
+        let slug1 = slugify("测试中文");
+        let slug2 = slugify("另一个标题");
+        assert_ne!(
+            slug1, slug2,
+            "Different non-ASCII titles should produce different slugs"
+        );
+    }
+
+    #[test]
+    fn slugify_ascii_title_unchanged() {
+        assert_eq!(slugify("my note title"), "my-note-title");
     }
 
     // ── 1.4 fallback_title / fallback_source ──

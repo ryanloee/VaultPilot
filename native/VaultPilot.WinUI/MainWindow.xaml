@@ -107,11 +107,22 @@
                             <ListView.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Spacing="2">
-                                        <TextBlock Text="{Binding Title}" TextWrapping="WrapWholeWords" />
                                         <TextBlock
-                                            Text="{Binding Detail}"
-                                            Opacity="0.7"
-                                            Style="{ThemeResource BodyTextBlockStyle}" />
+                                            Text="{Binding Title}"
+                                            FontWeight="SemiBold"
+                                            TextWrapping="WrapWholeWords" />
+                                        <TextBlock
+                                            Style="{ThemeResource BodyTextBlockStyle}"
+                                            Opacity="0.7">
+                                            <Run Text="{Binding RelativeTime}" /><Run Text=" · " /><Run Text="{Binding Detail}" />
+                                        </TextBlock>
+                                        <TextBlock
+                                            Text="{Binding SummaryPreview}"
+                                            Style="{ThemeResource CaptionTextBlockStyle}"
+                                            Opacity="0.5"
+                                            TextTrimming="CharacterEllipsis"
+                                            MaxLines="1"
+                                            Visibility="{Binding SummaryPreview, Converter={StaticResource StringToVisibilityConverter}}" />
                                     </StackPanel>
                                 </DataTemplate>
                             </ListView.ItemTemplate>

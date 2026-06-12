@@ -102,16 +102,14 @@
 - #189: AI 请求取消按钮 + Escape 键支持 (PR #323 已合并)
 - #161 + #60: AutomationProperties 屏幕阅读器无障碍 (PR #327 已合并, #60 关闭为重复)
 - #164: 错误消息本地化扩展 (PR #328 已合并)
-- #54: 笔记导出 CLI 命令 (PR #330 待合并)
-- #29: Markdown 链接和表格渲染 (PR #331 待合并)
-- #56: 搜索结果高亮和程序化片段 (PR #332 待合并)
+- #54: 笔记导出 CLI 命令 (PR #330 已合并)
+- #29: Markdown 链接和表格渲染 (PR #331 已合并)
+- #56: 搜索结果高亮和程序化片段 (PR #332 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #330: feat: add note export CLI commands (#54) — 待合并
-- PR #331: fix: render markdown links and tables in chat (#29) — 待合并
-- PR #332: feat: search result highlighting and programmatic snippets (#56) — 待合并
+（无 — 循环#22 全部 PR 已合并）
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -219,7 +217,7 @@
 | Open UI 数 | 8 | 0 ✅ | 0 ✅ |
 | Open Feature 数 | 6 | 6 | 3 |
 | 已合并 PR | 90+ | 95+ | 100+ |
-| 进行中 PR | 5 (#324-#328) | 0 | 3 (#330-#332) |
+| 进行中 PR | 5 (#324-#328) | 0 | 0 |
 | 阻塞项 | 2 (#192, #217) | 2 (#192, #217) | 2 (#192, #217) |
 
 ## 本轮循环状态

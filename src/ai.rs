@@ -3,6 +3,8 @@ use std::{collections::HashSet, fs, path::Path, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use bytes::BytesMut;
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
@@ -11,6 +13,8 @@ use crate::models::{
     AnswerCitation, AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft,
 };
 use crate::prompting;
+
+const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024; // 50MB
 
 /// Cached HTTP client, rebuilt only when provider config changes.
 struct CachedClient {
@@ -856,10 +860,20 @@ async fn send_request_with_temperature(
             }
         };
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|error| anyhow!(format_transport_error(&error, &endpoint)))?;
+        let mut buf = BytesMut::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|error| anyhow!(format_transport_error(&error, &endpoint)))?;
+            if buf.len() + chunk.len() > MAX_RESPONSE_SIZE {
+                return Err(anyhow!(
+                    "API response body exceeds {}MB size limit, possible misconfigured endpoint",
+                    MAX_RESPONSE_SIZE / (1024 * 1024)
+                ));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        let text = String::from_utf8_lossy(&buf).to_string();
 
         if !status.is_success() {
             let detail = serde_json::from_str::<AnthropicResponse>(&text)

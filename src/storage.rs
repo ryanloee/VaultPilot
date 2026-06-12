@@ -24,8 +24,8 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::models::{
-    AppSettings, ChatSession, ChatState, ImportResult, IndexStats, NoteDocument, NoteMeta,
-    SearchQuery, SearchResult,
+    AppSettings, ChatSession, ChatState, ExportResult, ImportResult, IndexStats, NoteDocument,
+    NoteMeta, SearchQuery, SearchResult,
 };
 
 /// Type alias for a pooled SQLite connection.
@@ -692,6 +692,79 @@ pub fn import_markdown_with_context(
         }
     }
     Ok(result)
+}
+
+/// Export a single note as Markdown with frontmatter preserved.
+/// Returns the composed Markdown string and the suggested filename.
+pub fn export_note_markdown_with_context(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<(String, String)> {
+    let note = load_note_with_context(context, note_id)?;
+    let markdown = compose_markdown(&note.meta, &note.body)?;
+    let filename = sanitize_filename(&note.meta.title);
+    Ok((markdown, filename))
+}
+
+/// Export all notes as Markdown files into the given directory.
+pub fn export_all_notes_with_context(
+    context: &StorageContext,
+    output_dir: &Path,
+) -> Result<ExportResult> {
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("failed to create output directory {}", output_dir.display()))?;
+
+    let mut result = ExportResult::default();
+    // Use a large limit to get all notes
+    let all_notes = search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            limit: Some(10_000),
+            ..Default::default()
+        },
+    )?;
+
+    for meta in &all_notes.notes {
+        match export_note_markdown_with_context(context, &meta.id) {
+            Ok((markdown, filename)) => {
+                let path = output_dir.join(format!("{filename}.md"));
+                match fs::write(&path, &markdown) {
+                    Ok(()) => result.exported += 1,
+                    Err(e) => result
+                        .errors
+                        .push(format!("{}: failed to write: {e}", meta.title)),
+                }
+            }
+            Err(e) => result.errors.push(format!("{}: {e}", meta.title)),
+        }
+    }
+    Ok(result)
+}
+
+/// Produce a filesystem-safe filename from a note title.
+fn sanitize_filename(title: &str) -> String {
+    let slug = deunicode(title)
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        "untitled".to_string()
+    } else {
+        slug
+    }
 }
 
 #[instrument(skip(context))]

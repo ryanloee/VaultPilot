@@ -339,7 +339,7 @@ pub async fn answer_question(
         citations: if docs.is_empty() {
             Vec::new()
         } else {
-            parsed.citations
+            enrich_citations(parsed.citations, docs)
         },
         usage: response.usage,
     })
@@ -365,7 +365,7 @@ pub async fn answer_after_tool(
         citations: if docs.is_empty() {
             Vec::new()
         } else {
-            parsed.citations
+            enrich_citations(parsed.citations, docs)
         },
         usage: response.usage,
     })
@@ -389,7 +389,7 @@ pub async fn answer_after_tools(
         citations: if docs.is_empty() {
             Vec::new()
         } else {
-            parsed.citations
+            enrich_citations(parsed.citations, docs)
         },
         usage: response.usage,
     })
@@ -647,6 +647,117 @@ fn parse_or_fallback_answer(text: &str, question: &str, no_context: bool) -> Ask
         citations: Vec::new(),
         note_draft: None,
     }
+}
+
+/// Extract a programmatic snippet from `body` that contains the best matching
+/// paragraph for the given `query`.  Returns the first paragraph that contains
+/// at least one query term, with `==highlight==` markers around each match.
+/// Falls back to the first 280 characters if no paragraph matches.
+fn generate_programmatic_snippet(body: &str, query: &str) -> String {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(|t| t.to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    if terms.is_empty() {
+        return truncate(body, 280).to_string();
+    }
+
+    // Split body into paragraphs (separated by blank lines).
+    let paragraphs: Vec<&str> = body
+        .split("\n\n")
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+
+    // Find the first paragraph containing at least one query term.
+    let best = paragraphs
+        .iter()
+        .find(|p| {
+            let lower = p.to_lowercase();
+            terms.iter().any(|t| lower.contains(t.as_str()))
+        })
+        .copied()
+        .unwrap_or_else(|| {
+            // No paragraph matched; fall back to the first non-heading paragraph
+            // or the first paragraph overall.
+            paragraphs
+                .iter()
+                .find(|p| !p.starts_with('#'))
+                .copied()
+                .or_else(|| paragraphs.first().copied())
+                .unwrap_or(body)
+        });
+
+    // Highlight each term in the chosen paragraph (case-insensitive).
+    let mut snippet = best.to_string();
+    for term in &terms {
+        // Use a simple case-insensitive replacement to add markers.
+        let lower_snippet = snippet.to_lowercase();
+        let mut result = String::with_capacity(snippet.len());
+        let mut last_end = 0;
+        let term_lower = term.as_str();
+
+        while let Some(pos) = lower_snippet[last_end..].find(term_lower) {
+            let abs_pos = last_end + pos;
+            result.push_str(&snippet[last_end..abs_pos]);
+            result.push_str("==");
+            let match_end = abs_pos + term.len();
+            result.push_str(&snippet[abs_pos..match_end]);
+            result.push_str("==");
+            last_end = match_end;
+        }
+        result.push_str(&snippet[last_end..]);
+        snippet = result;
+    }
+
+    // Truncate if too long.
+    if snippet.len() > 500 {
+        format!(
+            "{}…",
+            &snippet[..snippet
+                .char_indices()
+                .take_while(|(i, _)| *i < 498)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(498)]
+        )
+    } else {
+        snippet
+    }
+}
+
+/// Enrich AI-generated citations with programmatic snippets from FTS5 data.
+/// For each citation, if a matching note document has an FTS5 search_snippet,
+/// use that; otherwise generate a programmatic snippet from the body.
+fn enrich_citations(citations: Vec<AnswerCitation>, docs: &[NoteDocument]) -> Vec<AnswerCitation> {
+    if citations.is_empty() || docs.is_empty() {
+        return citations;
+    }
+
+    let doc_map: std::collections::HashMap<&str, &NoteDocument> =
+        docs.iter().map(|d| (d.meta.id.as_str(), d)).collect();
+
+    citations
+        .into_iter()
+        .map(|mut citation| {
+            if let Some(doc) = doc_map.get(citation.note_id.as_str()) {
+                if let Some(ref fts_snippet) = doc.search_snippet {
+                    if !fts_snippet.trim().is_empty() && fts_snippet.contains("==") {
+                        citation.snippet = fts_snippet.clone();
+                        return citation;
+                    }
+                }
+                // No FTS5 snippet; generate one programmatically if the
+                // AI-generated snippet is empty or very short.
+                if citation.snippet.trim().len() < 20 {
+                    citation.snippet = generate_programmatic_snippet(&doc.body, &citation.title);
+                }
+            }
+            citation
+        })
+        .collect()
 }
 
 fn parse_record_response(

@@ -217,6 +217,10 @@ pub struct NoteDocument {
     pub meta: NoteMeta,
     #[serde(default)]
     pub body: String,
+    /// FTS5-generated snippet with `==highlight==` markers around matched terms.
+    /// `None` when the note was not returned from a text search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -627,6 +631,7 @@ mod tests {
                 summary: "A test note".to_string(),
             },
             body: "Some content".to_string(),
+            search_snippet: None,
         };
         let json = serde_json::to_string(&doc).expect("serialize");
         let parsed: NoteDocument = serde_json::from_str(&json).expect("deserialize");

@@ -173,7 +173,11 @@ pub fn answer_user_prompt(
 ) -> String {
     format!(
         "Return strict JSON in this shape:\n\
-         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\"}}],\"noteDraft\":null}}\n\n\
+         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\"}}],\"noteDraft\":null}}\n\
+         Rules for citation snippets:\n\
+         - If a note has a SEARCH_SNIPPET field, copy it verbatim into the citation snippet.\n\
+         - The SEARCH_SNIPPET uses ==text== markers to highlight matched terms; preserve these markers exactly.\n\
+         - Only generate your own snippet if no SEARCH_SNIPPET is provided.\n\n\
          {}\n\n\
          Recent conversation:\n{}\n\n\
          {}",
@@ -442,6 +446,8 @@ pub fn tool_result_user_prompt(
          - tool_name tells you which tool already ran.\n\
          - tool_result is the factual result of that tool.\n\
          - If docs are provided, use them for citations.\n\
+         - If a note has a SEARCH_SNIPPET field, copy it verbatim into the citation snippet.\n\
+         - The SEARCH_SNIPPET uses ==text== markers to highlight matched terms; preserve these markers exactly.\n\
          - If search_notes or list_notes returned zero results, say clearly that the local knowledge base does not currently contain a relevant note, then provide your own general suggestion.\n\
          - If notes were found, prioritize those notes in the answer and make it obvious what came from local records.\n\
          - If a retrieved note contains a concrete command or step that partially answers a broad user question, surface that command first instead of ignoring it.\n\
@@ -472,6 +478,8 @@ pub fn multi_tool_result_user_prompt(
          Rules:\n\
          - tool_results contains the factual outputs of the tools already executed in this turn.\n\
          - Use the tool results directly. Do not pretend another tool ran.\n\
+         - If a note has a SEARCH_SNIPPET field, copy it verbatim into the citation snippet.\n\
+         - The SEARCH_SNIPPET uses ==text== markers to highlight matched terms; preserve these markers exactly.\n\
          - If local notes were found, prioritize them and cite only provided notes.\n\
          - If the tool results contain a concrete command, path, or file content that answers the user, surface it directly.\n\
          - If the tool results show that nothing relevant was found locally, say so clearly before giving general advice.\n\n\
@@ -515,13 +523,20 @@ fn render_notes(docs: &[NoteDocument]) -> String {
 
     docs.iter()
         .map(|doc| {
+            let snippet_section = match &doc.search_snippet {
+                Some(snippet) if !snippet.trim().is_empty() => {
+                    format!("SEARCH_SNIPPET:\n{}\n", snippet)
+                }
+                _ => String::new(),
+            };
             format!(
-                "NOTE_ID: {}\nTITLE: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\nCONTENT:\n{}\n",
+                "NOTE_ID: {}\nTITLE: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\n{}CONTENT:\n{}\n",
                 doc.meta.id,
                 doc.meta.title,
                 doc.meta.path,
                 doc.meta.tags.join(", "),
                 doc.meta.keywords.join(", "),
+                snippet_section,
                 doc.body
             )
         })
@@ -670,6 +685,7 @@ mod tests {
                 ..Default::default()
             },
             body: "body text".to_string(),
+            search_snippet: None,
         }];
         let rendered = render_notes(&docs);
         assert!(rendered.contains("NOTE_ID: n1"));

@@ -538,6 +538,7 @@ fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
     Ok(NoteDocument {
         meta: meta.clone(),
         body: body.to_string(),
+        search_snippet: None,
     })
 }
 
@@ -1006,6 +1007,7 @@ fn import_single_markdown(
             summary: parsed.meta.summary,
         },
         body: parsed.body,
+        search_snippet: None,
     };
     save_note_with_context(context, imported)?;
     Ok(true)
@@ -1068,6 +1070,7 @@ fn parse_markdown_note(path: &Path, default_source: &str) -> Result<NoteDocument
             },
         },
         body: body.trim().to_string(),
+        search_snippet: None,
     })
 }
 
@@ -1746,6 +1749,45 @@ fn query_fts_note_ids(connection: &Connection, text: &str, limit: usize) -> Resu
     Ok(rows)
 }
 
+/// Query FTS5 for per-note body snippets with `==highlight==` markers around
+/// matched terms.  Returns a map of note_id → snippet text.
+fn query_fts_snippets(
+    connection: &Connection,
+    text: &str,
+    limit: usize,
+) -> Result<HashMap<String, String>> {
+    let fts_query = make_fts_query(text);
+    if fts_query.trim().is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // snippet() parameters: table, column_idx, open_marker, close_marker, ellipsis, max_tokens
+    // Column 3 = body (0=note_id, 1=title, 2=keywords, 3=body)
+    let mut statement = connection.prepare(
+        "SELECT note_id, snippet(note_fts, 3, '==', '==', '…', 64)
+         FROM note_fts
+         WHERE note_fts MATCH ?1
+         ORDER BY bm25(note_fts)
+         LIMIT ?2",
+    )?;
+
+    let rows = match statement.query_map(params![fts_query, limit as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return Ok(HashMap::new()),
+    };
+
+    let mut snippets = HashMap::new();
+    for row in rows {
+        let (note_id, snippet) = row?;
+        if !snippet.trim().is_empty() && snippet.contains("==") {
+            snippets.insert(note_id, snippet);
+        }
+    }
+    Ok(snippets)
+}
+
 fn query_attachment_fts_note_ids(
     connection: &Connection,
     text: &str,
@@ -1991,6 +2033,8 @@ fn rank_documents(
     limit: usize,
 ) -> Result<Vec<NoteDocument>> {
     let note_fts_ids = query_fts_note_ids(connection, query, limit.saturating_mul(6).max(18))?;
+    // Fetch FTS5 body snippets with highlight markers for matching notes.
+    let fts_snippets = query_fts_snippets(connection, query, limit.saturating_mul(6).max(18))?;
     let attachment_query = attachment_query_text(query, image_paths);
     let attachment_fts_ids = query_attachment_fts_note_ids(
         connection,
@@ -2020,9 +2064,11 @@ fn rank_documents(
         let Some(meta) = load_note_meta_by_id(connection, &note_id)? else {
             continue;
         };
-        let Ok(doc) = load_note_body_from_meta(&meta) else {
+        let Ok(mut doc) = load_note_body_from_meta(&meta) else {
             continue;
         };
+        // Attach FTS5 snippet with highlight markers when available.
+        doc.search_snippet = fts_snippets.get(&note_id).cloned();
         let attachments = attachment_entries
             .get(&note_id)
             .map(Vec::as_slice)
@@ -2862,6 +2908,7 @@ mod tests {
             body:
                 "## 概述\nSD 卡接口引脚连接定义。\n## 备注\n软件层可参考 Device Tree pinctrl 配置。"
                     .to_string(),
+            search_snippet: None,
         };
 
         assert!(document_relevance_score("sd卡的引脚复用怎么做的", &doc) > 200);
@@ -2890,6 +2937,7 @@ mod tests {
                 summary: "之前刷机时使用过的命令记录".to_string(),
             },
             body: "相关命令: wboot -w update zboot.img".to_string(),
+            search_snippet: None,
         };
 
         assert!(document_relevance_score("刷机怎么刷啊", &doc) > 180);
@@ -3341,6 +3389,7 @@ mod tests {
                 ..Default::default()
             },
             body: "Nothing relevant here".to_string(),
+            search_snippet: None,
         };
         assert_eq!(document_relevance_score("mmc sd卡 pinmux", &doc), 0);
     }
@@ -3804,6 +3853,7 @@ mod tests {
                 summary: String::new(),
             },
             body: "## Test\n\nRound trip body content".to_string(),
+            search_snippet: None,
         };
 
         let saved = save_note_with_context(&ctx, note).expect("save");
@@ -3828,6 +3878,7 @@ mod tests {
                 ..Default::default()
             },
             body: "Temporary content".to_string(),
+            search_snippet: None,
         };
         let saved = save_note_with_context(&ctx, note).expect("save");
         let path = saved.meta.path.clone();
@@ -3866,6 +3917,7 @@ mod tests {
                         ..Default::default()
                     },
                     body: format!("Content for note {}", i),
+                    search_snippet: None,
                 },
             )
             .expect("save");
@@ -3899,6 +3951,7 @@ mod tests {
                     ..Default::default()
                 },
                 body: "Tagged content".to_string(),
+                search_snippet: None,
             },
         )
         .expect("save");
@@ -4044,6 +4097,7 @@ mod tests {
                 ..Default::default()
             },
             body: "Content that should survive rebuild".to_string(),
+            search_snippet: None,
         };
         save_note_with_context(&ctx, note).expect("save");
 

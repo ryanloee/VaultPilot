@@ -770,11 +770,20 @@ fn build_agent_trace(tool_results: &[ToolExecution], forced_search: bool) -> Thi
 }
 
 fn truncate_for_trace(value: &str, max_chars: usize) -> String {
-    let mut output = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars {
-        output.push_str("...");
+    // Single-pass: collect up to max_chars, then check if we hit the limit
+    // by attempting one more character.
+    let mut result = String::new();
+    let mut chars = value.chars();
+    for _ in 0..max_chars {
+        match chars.next() {
+            Some(ch) => result.push(ch),
+            None => return result, // shorter than max_chars, no truncation
+        }
     }
-    output
+    if chars.next().is_some() {
+        result.push_str("...");
+    }
+    result
 }
 
 fn merge_usage(current: ai::RequestUsage, next: ai::RequestUsage) -> ai::RequestUsage {

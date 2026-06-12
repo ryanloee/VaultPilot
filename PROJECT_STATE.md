@@ -102,16 +102,17 @@
 - #189: AI 请求取消按钮 + Escape 键支持 (PR #323 已合并)
 - #161 + #60: AutomationProperties 屏幕阅读器无障碍 (PR #327 已合并, #60 关闭为重复)
 - #164: 错误消息本地化扩展 (PR #328 已合并)
-- #54: 笔记导出 CLI 命令 (PR #330 待合并)
-- #29: Markdown 链接和表格渲染 (PR #331 待合并)
-- #56: 搜索结果高亮和程序化片段 (PR #332 待合并)
+- #54: 笔记导出 CLI 命令 (PR #330 已合并)
+- #29: Markdown 链接和表格渲染 (PR #331 已合并)
+- #56: 搜索结果高亮和程序化片段 (PR #332 已合并)
+- #149: 会话侧边栏元数据 (PR #333 待合并)
+- #166: Vault 导出和 SQLite 自动备份 (PR #334 待合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #330: feat: add note export CLI commands (#54) — 待合并
-- PR #331: fix: render markdown links and tables in chat (#29) — 待合并
-- PR #332: feat: search result highlighting and programmatic snippets (#56) — 待合并
+- PR #333: feat: session sidebar metadata (#149) — 待合并
+- PR #334: feat: vault export and SQLite auto-backup (#166) — 待合并
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->

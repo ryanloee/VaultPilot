@@ -170,7 +170,7 @@
                                 x:Name="ContextUsageTrack"
                                 Height="4"
                                 CornerRadius="2"
-                                Background="#1C7A4B"
+                                Background="{ThemeResource ContextUsageTrackBrush}"
                                 Opacity="0.32"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Center" />
@@ -179,7 +179,7 @@
                                 Height="4"
                                 Width="0"
                                 CornerRadius="2"
-                                Background="#2FE06F"
+                                Background="{ThemeResource ContextUsageFillBrush}"
                                 HorizontalAlignment="Left"
                                 VerticalAlignment="Center" />
                         </Grid>

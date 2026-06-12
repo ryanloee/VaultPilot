@@ -67,6 +67,8 @@ pub struct StorageContext {
     paths: AppPaths,
     /// Cached SQLite connection, shared across clones of the same context.
     cached_conn: Arc<Mutex<Option<Connection>>>,
+    /// Cached parsed AppSettings, shared across clones of the same context.
+    cached_settings: Arc<Mutex<Option<AppSettings>>>,
 }
 
 impl StorageContext {
@@ -74,6 +76,7 @@ impl StorageContext {
         Self {
             paths,
             cached_conn: Arc::new(Mutex::new(None)),
+            cached_settings: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -195,6 +198,13 @@ pub fn initialize_storage_with_context(context: &StorageContext) -> Result<AppSe
 }
 
 pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSettings> {
+    // Return cached settings if available, avoiding redundant disk I/O.
+    if let Ok(cache) = context.cached_settings.lock() {
+        if let Some(ref settings) = *cache {
+            return Ok(settings.clone());
+        }
+    }
+
     let paths = &context.paths;
     if let Some(parent) = paths.settings_path.parent() {
         fs::create_dir_all(parent)?;
@@ -219,6 +229,10 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
     };
 
     fs::create_dir_all(&settings.vault_dir)?;
+    // Cache the parsed settings for future calls.
+    if let Ok(mut cache) = context.cached_settings.lock() {
+        *cache = Some(settings.clone());
+    }
     Ok(settings)
 }
 
@@ -237,6 +251,10 @@ pub fn save_settings_with_context(
         .with_context(|| format!("failed to write {}", paths.settings_path.display()))?;
     let connection = Connection::open(&paths.database_path)?;
     ensure_schema(&connection)?;
+    // Update the cached settings after successful write.
+    if let Ok(mut cache) = context.cached_settings.lock() {
+        *cache = Some(settings.clone());
+    }
     Ok(settings)
 }
 

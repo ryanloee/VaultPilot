@@ -1788,29 +1788,43 @@ fn query_attachment_semantic_scores(
         return Ok(HashMap::new());
     };
 
-    let mut statement = connection.prepare(
-        "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
-         FROM attachments
-         WHERE semantic_vector <> ''",
-    )?;
-    let rows = statement.query_map([], row_to_attachment_entry)?;
     let mut scores = HashMap::new();
+    let batch_size: i64 = 500;
+    let mut offset: i64 = 0;
 
-    for row in rows {
-        let entry = row?;
-        let Some(candidate_vector) = entry.semantic_vector.as_ref() else {
-            continue;
-        };
-        let similarity = cosine_similarity(&query_vector, candidate_vector);
-        let score = similarity_to_rank_score(similarity);
-        if score <= 0 {
-            continue;
+    loop {
+        let mut count: usize = 0;
+        {
+            let mut statement = connection.prepare(
+                "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
+                 FROM attachments
+                 WHERE semantic_vector <> ''
+                 LIMIT ?1 OFFSET ?2",
+            )?;
+            let rows = statement.query_map(params![batch_size, offset], row_to_attachment_entry)?;
+            for row in rows {
+                let entry = row?;
+                count += 1;
+                let Some(candidate_vector) = entry.semantic_vector.as_ref() else {
+                    continue;
+                };
+                let similarity = cosine_similarity(&query_vector, candidate_vector);
+                let score = similarity_to_rank_score(similarity);
+                if score <= 0 {
+                    continue;
+                }
+
+                scores
+                    .entry(entry.note_id.clone())
+                    .and_modify(|current: &mut i64| *current = (*current).max(score))
+                    .or_insert(score);
+            }
         }
 
-        scores
-            .entry(entry.note_id.clone())
-            .and_modify(|current: &mut i64| *current = (*current).max(score))
-            .or_insert(score);
+        if count < batch_size as usize {
+            break;
+        }
+        offset += batch_size;
     }
 
     Ok(scores)

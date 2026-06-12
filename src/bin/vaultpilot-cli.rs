@@ -785,6 +785,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                     tags: Vec::new(),
                     keywords: Vec::new(),
                     limit: Some(*limit),
+                    ..Default::default()
                 },
             )?;
             to_json(&result)
@@ -816,6 +817,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                     tags: parse_comma_list(tags),
                     keywords: parse_comma_list(keywords),
                     limit: Some(*limit),
+                    ..Default::default()
                 },
             )?;
             to_json(&result)

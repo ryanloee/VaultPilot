@@ -349,6 +349,14 @@ pub struct SearchQuery {
     #[serde(default)]
     pub keywords: Vec<String>,
     pub limit: Option<usize>,
+    /// Filter notes created on or after this ISO-8601 timestamp.
+    pub created_after: Option<String>,
+    /// Filter notes created on or before this ISO-8601 timestamp.
+    pub created_before: Option<String>,
+    /// Filter notes modified on or after this ISO-8601 timestamp.
+    pub modified_after: Option<String>,
+    /// Filter notes modified on or before this ISO-8601 timestamp.
+    pub modified_before: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -727,6 +735,7 @@ mod tests {
             tags: vec![],
             keywords: vec![],
             limit: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&no_limit).expect("serialize");
         // serde serializes Option<T> as null when None
@@ -737,6 +746,7 @@ mod tests {
             tags: vec![],
             keywords: vec![],
             limit: Some(10),
+            ..Default::default()
         };
         let json2 = serde_json::to_string(&with_limit).expect("serialize");
         assert!(json2.contains("\"limit\":10"));

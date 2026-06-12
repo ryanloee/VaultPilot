@@ -875,6 +875,30 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private TextBlock? _composerMeasureBlock;
+
+    private void OnComposerTextChanged(object sender, TextChangedEventArgs e)
+    {
+        var textBox = (TextBox)sender;
+        if (textBox.ActualWidth <= 0) return;
+
+        _composerMeasureBlock ??= new TextBlock
+        {
+            FontFamily = textBox.FontFamily,
+            FontSize = textBox.FontSize,
+            FontWeight = textBox.FontWeight,
+            TextWrapping = TextWrapping.Wrap,
+        };
+
+        _composerMeasureBlock.Text = textBox.Text ?? string.Empty;
+        var availableWidth = textBox.ActualWidth - 20; // padding + scrollbar
+        _composerMeasureBlock.Measure(new Windows.Foundation.Size(availableWidth, double.PositiveInfinity));
+
+        var desiredHeight = _composerMeasureBlock.DesiredSize.Height + 20; // inner padding
+        var clampedHeight = Math.Max(88, Math.Min(200, desiredHeight));
+        textBox.Height = clampedHeight;
+    }
+
     private async void OnComposerKeyDown(object sender, KeyRoutedEventArgs e)
     {
         try

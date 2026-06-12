@@ -225,6 +225,16 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         let normalized = raw.trim_start_matches('\u{feff}');
         let mut parsed: AppSettings = serde_json::from_str(normalized)
             .with_context(|| format!("failed to parse {}", paths.settings_path.display()))?;
+
+        // Decrypt API key if it was stored encrypted.
+        if !parsed.provider.api_key.is_empty() {
+            parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
+                .unwrap_or_else(|e| {
+                    eprintln!("warning: failed to decrypt API key, using raw value: {e}");
+                    parsed.provider.api_key.clone()
+                });
+        }
+
         normalize_settings(&mut parsed, paths);
         let warnings = parsed.validate();
         for w in &warnings {
@@ -256,9 +266,20 @@ pub fn save_settings_with_context(
         fs::create_dir_all(parent)?;
     }
     fs::create_dir_all(&settings.vault_dir)?;
+
+    // Encrypt API key before persisting to disk.
+    let api_key_plaintext = settings.provider.api_key.clone();
+    if !api_key_plaintext.is_empty() && !crate::crypto::is_encrypted(&api_key_plaintext) {
+        settings.provider.api_key = crate::crypto::encrypt_secret(&api_key_plaintext)?;
+    }
+
     let content = serde_json::to_string_pretty(&settings)?;
     atomic_write(&paths.settings_path, content.as_bytes())
         .with_context(|| format!("failed to write {}", paths.settings_path.display()))?;
+
+    // Restore the plaintext key in the struct we return and cache.
+    settings.provider.api_key = api_key_plaintext;
+
     let connection = Connection::open(&paths.database_path)?;
     ensure_schema(&connection)?;
     // Update the cached settings after successful write.
@@ -3971,6 +3992,41 @@ mod tests {
         assert_eq!(loaded.provider.model, "custom-model");
         assert_eq!(loaded.provider.request_timeout_ms, 99_000);
         assert_eq!(loaded.provider.context_window_tokens, Some(200_000));
+    }
+
+    #[test]
+    fn settings_api_key_encrypted_on_disk() {
+        let (_temp, ctx) = setup_temp_context();
+        let custom = AppSettings {
+            vault_dir: _temp.join("vault-enc").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                api_key: "sk-secret-api-key-12345".to_string(),
+                base_url: "https://custom.api.com".to_string(),
+                model: "custom-model".to_string(),
+                request_timeout_ms: 99_000,
+                context_window_tokens: None,
+                max_output_tokens: None,
+            },
+            ..Default::default()
+        };
+
+        save_settings_with_context(&ctx, custom).expect("save settings");
+
+        // Read the raw file content — the API key must NOT appear in plaintext.
+        let raw = fs::read_to_string(&ctx.paths.settings_path).expect("read settings file");
+        assert!(
+            !raw.contains("sk-secret-api-key-12345"),
+            "API key must not appear in plaintext on disk"
+        );
+        assert!(
+            raw.contains("ENC:v1:"),
+            "settings file must contain encrypted API key"
+        );
+
+        // But loading should still return the plaintext key.
+        let loaded = load_settings_with_context(&ctx).expect("load settings");
+        let expected = "sk-secret-api-key-12345";
+        assert_eq!(loaded.provider.api_key, expected);
     }
 
     #[test]

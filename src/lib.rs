@@ -2285,4 +2285,323 @@ mod tests {
 
         let _ = fs::remove_dir_all(&tmp);
     }
+
+    // ── looks_like_record_request edge cases (#147) ──
+
+    #[test]
+    fn record_request_empty_input_returns_false() {
+        assert!(!looks_like_record_request(""));
+    }
+
+    #[test]
+    fn record_request_whitespace_only_returns_false() {
+        assert!(!looks_like_record_request("   "));
+        assert!(!looks_like_record_request("\t\n"));
+    }
+
+    #[test]
+    fn record_request_english_variants() {
+        // All phrases from the command_phrases list
+        assert!(looks_like_record_request("record this note"));
+        assert!(looks_like_record_request("remember this"));
+        assert!(looks_like_record_request("store this in my vault"));
+        assert!(looks_like_record_request("capture this"));
+        assert!(looks_like_record_request("add to the knowledge base"));
+    }
+
+    #[test]
+    fn record_request_chinese_variants() {
+        assert!(looks_like_record_request("记一下这个命令"));
+        assert!(looks_like_record_request("存一下这段文字"));
+        assert!(looks_like_record_request("存到知识库"));
+        assert!(looks_like_record_request("加入知识库"));
+        assert!(looks_like_record_request("写入知识库"));
+        assert!(looks_like_record_request("帮我记一下"));
+        assert!(looks_like_record_request("帮我存一下"));
+    }
+
+    #[test]
+    fn record_request_case_insensitive() {
+        assert!(looks_like_record_request("SAVE THIS"));
+        assert!(looks_like_record_request("Record This"));
+        assert!(looks_like_record_request("REMEMBER THIS"));
+    }
+
+    #[test]
+    fn record_request_with_leading_trailing_whitespace() {
+        assert!(looks_like_record_request("  please save this  "));
+        assert!(looks_like_record_request("  记录一下  "));
+    }
+
+    #[test]
+    fn record_request_questions_with_generic_verbs_not_matched() {
+        // Questions containing 记录/保存/记住 but phrased as questions —
+        // only generic verbs are guarded by the question check; command phrases
+        // like "save this" always match regardless of punctuation.
+        assert!(!looks_like_record_request("这个怎么保存？"));
+        assert!(!looks_like_record_request("你记住我了吗？"));
+        assert!(!looks_like_record_request("什么是记录功能？"));
+        assert!(!looks_like_record_request("how do I remember things?"));
+    }
+
+    #[test]
+    fn record_request_unrelated_input_returns_false() {
+        assert!(!looks_like_record_request("今天天气怎么样"));
+        assert!(!looks_like_record_request("tell me a joke"));
+        assert!(!looks_like_record_request("打开文件"));
+        assert!(!looks_like_record_request("12345"));
+    }
+
+    #[test]
+    fn record_request_long_input_with_keyword() {
+        let long_prefix = "a".repeat(500);
+        assert!(looks_like_record_request(&format!(
+            "{long_prefix} please save this"
+        )));
+    }
+
+    #[test]
+    fn record_request_unicode_special_chars() {
+        assert!(looks_like_record_request("save this — it's important"));
+        assert!(looks_like_record_request("记录一下：这是个测试"));
+        assert!(looks_like_record_request("save this 🎉"));
+    }
+
+    // ── normalize_tool_path edge cases (#147) ──
+
+    #[test]
+    fn normalize_tool_path_empty_string_returns_error() {
+        let vault = {
+            let v = env::temp_dir().join("vaultpilot-norm-empty-test");
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let err = normalize_tool_path("", &vault).expect_err("empty path should fail");
+        assert!(err.to_string().contains("empty"), "error: {err}");
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_whitespace_only_returns_error() {
+        let vault = {
+            let v = env::temp_dir().join("vaultpilot-norm-ws-test");
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let err = normalize_tool_path("   ", &vault).expect_err("whitespace path should fail");
+        assert!(err.to_string().contains("empty"), "error: {err}");
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_strips_surrounding_quotes() {
+        let vault = {
+            let v = env::temp_dir().join("vaultpilot-norm-quotes-test");
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let inner = vault.join("note.md");
+        fs::write(&inner, "test").unwrap();
+        let path = normalize_tool_path(&format!("\"{}\"", inner.display()), &vault)
+            .expect("quoted path should work");
+        assert!(path.ends_with("note.md"));
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_strips_surrounding_backticks() {
+        let vault = {
+            let v = env::temp_dir().join("vaultpilot-norm-backtick-test");
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let inner = vault.join("note.md");
+        fs::write(&inner, "test").unwrap();
+        let path = normalize_tool_path(&format!("`{}`", inner.display()), &vault)
+            .expect("backtick path should work");
+        assert!(path.ends_with("note.md"));
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_rejects_dot_dot_traversal() {
+        let vault = {
+            let v = env::temp_dir().join("vaultpilot-norm-traversal-test");
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let result = normalize_tool_path("../../etc/passwd", &vault);
+        assert!(result.is_err(), "path traversal should be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("outside") || err.to_string().contains("cannot verify"),
+            "error: {err}"
+        );
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_accepts_path_within_vault() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-norm-invault-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&v).expect("create vault dir");
+            v
+        };
+        let nested = vault.join("subdir").join("note.md");
+        // Create the parent so canonicalize works
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(&nested, "content").unwrap();
+        let path = normalize_tool_path(&nested.to_string_lossy(), &vault)
+            .expect("in-vault path should work");
+        assert!(path.ends_with("note.md"));
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_nonexistent_within_vault_succeeds() {
+        let vault = {
+            let v = env::temp_dir().join(format!(
+                "vaultpilot-norm-nonexist-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(v.join("notes")).expect("create notes subdir");
+            v
+        };
+        // Use an absolute path that doesn't exist but whose parent (notes/) does
+        let abs_path = vault.join("notes").join("future.md");
+        let path = normalize_tool_path(&abs_path.to_string_lossy(), &vault)
+            .expect("nonexistent path inside vault should be accepted");
+        assert!(path.ends_with("future.md"));
+        let _ = fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn normalize_tool_path_unresolvable_vault_root_returns_error() {
+        let fake_vault = Path::new("/tmp/vaultpilot-definitely-does-not-exist-xyzzy");
+        let err =
+            normalize_tool_path("note.md", fake_vault).expect_err("unresolvable vault should fail");
+        assert!(err.to_string().contains("cannot resolve"), "error: {err}");
+    }
+
+    // ── extract_explicit_local_path edge cases (#147) ──
+
+    #[test]
+    fn extract_path_empty_string_returns_none() {
+        assert_eq!(extract_explicit_local_path(""), None);
+    }
+
+    #[test]
+    fn extract_path_no_path_returns_none() {
+        assert_eq!(
+            extract_explicit_local_path("tell me about docker commands"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_path_whitespace_only_returns_none() {
+        assert_eq!(extract_explicit_local_path("   "), None);
+    }
+
+    #[test]
+    fn extract_path_from_backticks() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("vaultpilot-extract-bt-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let question = format!("look at `{}` please", dir.display());
+        let extracted = extract_explicit_local_path(&question);
+        assert!(extracted.is_some(), "should extract path from backticks");
+        assert_eq!(Path::new(&extracted.unwrap()), dir.as_path());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_path_from_double_quotes() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("vaultpilot-extract-dq-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let question = format!("look at \"{}\" please", dir.display());
+        let extracted = extract_explicit_local_path(&question);
+        assert!(
+            extracted.is_some(),
+            "should extract path from double quotes"
+        );
+        assert_eq!(Path::new(&extracted.unwrap()), dir.as_path());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_path_nonexistent_returns_none() {
+        assert_eq!(
+            extract_explicit_local_path("check `/nonexistent/path/xyzzy`"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_path_multiple_candidates_returns_first() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir1 = env::temp_dir().join(format!("vaultpilot-extract-first-{unique}"));
+        let dir2 = env::temp_dir().join(format!("vaultpilot-extract-second-{unique}"));
+        fs::create_dir_all(&dir1).unwrap();
+        fs::create_dir_all(&dir2).unwrap();
+        let question = format!("compare `{}` and `{}`", dir1.display(), dir2.display());
+        let extracted = extract_explicit_local_path(&question);
+        assert!(extracted.is_some());
+        assert_eq!(Path::new(&extracted.unwrap()), dir1.as_path());
+        let _ = fs::remove_dir_all(&dir1);
+        let _ = fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn extract_path_whitespace_fallback() {
+        // A standalone absolute path (not quoted) that exists on disk
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("vaultpilot-extract-ws-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let question = format!("check {} for me", dir.display());
+        let extracted = extract_explicit_local_path(&question);
+        assert!(
+            extracted.is_some(),
+            "should find unquoted existing path via whitespace split"
+        );
+        assert_eq!(Path::new(&extracted.unwrap()), dir.as_path());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_path_unicode_in_surrounding_text() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("vaultpilot-extract-uni-{unique}"));
+        fs::create_dir_all(&dir).unwrap();
+        let question = format!("你看看这个 `{}` 下面有什么文件？", dir.display());
+        let extracted = extract_explicit_local_path(&question);
+        assert!(extracted.is_some(), "should extract path amid unicode text");
+        assert_eq!(Path::new(&extracted.unwrap()), dir.as_path());
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

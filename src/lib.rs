@@ -2205,26 +2205,30 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("readable.txt"), "hello").unwrap();
 
-        // Create a file with no read permissions for the directory listing
+        // Create a subdirectory with restricted permissions
         let restricted_dir = tmp.join("restricted");
         fs::create_dir(&restricted_dir).unwrap();
         fs::write(restricted_dir.join("secret.txt"), "secret").unwrap();
 
-        // Remove read+execute permissions on the restricted subdirectory
+        // Remove read+execute permissions on the restricted subdirectory (Unix only)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&restricted_dir, fs::Permissions::from_mode(0o000)).unwrap();
         }
 
-        let result = list_directory_result(&tmp.to_string_lossy(), Path::new("/"));
+        // Use tmp as vault_root so normalize_tool_path accepts it
+        let result = list_directory_result(&tmp.to_string_lossy(), &tmp);
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("readable.txt"));
 
-        // Restore permissions for cleanup
+        // On Unix, the restricted dir entry still appears (it's the DirEntry from read_dir),
+        // but reading its metadata or contents may fail. The key test is that the function
+        // doesn't panic and returns a result.
         #[cfg(unix)]
         {
+            // Restore permissions for cleanup
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&restricted_dir, fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -2241,14 +2245,16 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        fs::create_dir_all(&tmp).unwrap();
+        let subdir = tmp.join("files");
+        fs::create_dir_all(&subdir).unwrap();
 
         // Create 65 files to exceed the 60-item limit
         for i in 0..65 {
-            fs::write(tmp.join(format!("file_{:03}.txt", i)), "").unwrap();
+            fs::write(subdir.join(format!("file_{:03}.txt", i)), "").unwrap();
         }
 
-        let result = list_directory_result(&tmp.to_string_lossy(), Path::new("/"));
+        // Use tmp as vault_root, list the subdir
+        let result = list_directory_result(&subdir.to_string_lossy(), &tmp);
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("first 60 of 65"));

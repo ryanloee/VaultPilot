@@ -13,13 +13,16 @@
             <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="OnToggleSidebarAccelerator" />
             <KeyboardAccelerator Key="OemComma" Modifiers="Control" Invoked="OnSettingsAccelerator" />
             <KeyboardAccelerator Key="Escape" Invoked="OnEscapeAccelerator" />
+            <KeyboardAccelerator Key="D1" Modifiers="Control" Invoked="OnNavChatAccelerator" />
+            <KeyboardAccelerator Key="D2" Modifiers="Control" Invoked="OnNavNotesAccelerator" />
         </Grid.KeyboardAccelerators>
+
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
+        <!-- Status bar + CommandBar (always visible) -->
         <Grid Grid.Row="0" Padding="8,4,8,4" ColumnSpacing="8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
@@ -59,27 +62,40 @@
             </CommandBar>
         </Grid>
 
-        <Grid Grid.Row="1" Padding="24" RowSpacing="16">
-            <Grid x:Name="ContentGrid" ColumnSpacing="16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition x:Name="SidebarColumn" Width="280" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+        <!-- NavigationView + content area -->
+        <NavigationView
+            x:Name="RootNavigationView"
+            Grid.Row="1"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="False"
+            PaneDisplayMode="Top"
+            IsTitleBarAutoPaddingEnabled="False"
+            SelectionChanged="OnNavigationSelectionChanged">
 
-                <Border
-                    x:Name="SidebarBorder"
-                    Grid.Column="0"
-                    Padding="16"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                    <Grid RowSpacing="12">
+            <NavigationView.MenuItems>
+                <NavigationViewItem
+                    x:Name="NavChat"
+                    Content="对话"
+                    Icon="Chat"
+                    Tag="Chat"
+                    IsSelected="True"
+                    AutomationProperties.Name="对话"
+                    AutomationProperties.HelpText="切换到聊天界面" />
+                <NavigationViewItem
+                    x:Name="NavNotes"
+                    Content="笔记"
+                    Tag="Notes"
+                    AutomationProperties.Name="笔记"
+                    AutomationProperties.HelpText="切换到笔记浏览界面" />
+            </NavigationView.MenuItems>
+
+            <NavigationView.Content>
+                <Grid>
+                    <!-- Chat view -->
+                    <Grid x:Name="ChatView" Visibility="Visible">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
+<<<<<<< HEAD
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Text="会话" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <TextBlock Grid.Row="1" x:Name="NotesText" Text="笔记：正在加载..." />
@@ -182,98 +198,222 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+=======
+>>>>>>> origin/main
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBox
-                            x:Name="ComposerBox"
-                            Grid.Row="0"
-                            AcceptsReturn="True"
-                            AllowDrop="True"
-                            DragOver="OnComposerDropZoneDragOver"
-                            Drop="OnComposerDropZoneDrop"
-                            MinHeight="88"
-                            MaxHeight="200"
-                            TextChanged="OnComposerTextChanged"
-                            ScrollViewer.VerticalScrollBarVisibility="Auto"
-                            TextWrapping="Wrap"
-                            PlaceholderText="输入问题，或记录一条知识... (Enter 发送，Shift+Enter 换行)"
-                            ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
-                            AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
-                        </TextBox>
-                        <TextBlock
-                            x:Name="ComposerHintText"
-                            Grid.Row="1"
-                            Text="Enter 发送 · Shift+Enter 换行"
-                            FontSize="11"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Margin="4,0,0,0"
-                            HorizontalAlignment="Right" />
-                        <Grid
-                            x:Name="ContextUsageBarHost"
-                            Grid.Row="2"
-                            Height="8"
-                            MinWidth="120"
-                            HorizontalAlignment="Stretch"
-                            VerticalAlignment="Center"
-                            SizeChanged="OnContextUsageBarHostSizeChanged"
-                            AutomationProperties.Name="上下文使用量" AutomationProperties.HelpText="显示当前会话的上下文窗口使用百分比">
-                            <Border
-                                x:Name="ContextUsageTrack"
-                                Height="4"
-                                CornerRadius="2"
-                                Background="{ThemeResource ContextUsageTrackBrush}"
-                                Opacity="0.32"
-                                HorizontalAlignment="Stretch"
-                                VerticalAlignment="Center" />
-                            <Border
-                                x:Name="ContextUsageFill"
-                                Height="4"
-                                Width="0"
-                                CornerRadius="2"
-                                Background="{ThemeResource ContextUsageFillBrush}"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Center" />
+
+                        <Grid Grid.Row="0" Padding="24" RowSpacing="16">
+                            <Grid x:Name="ContentGrid" ColumnSpacing="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="SidebarColumn" Width="280" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <Border
+                                    x:Name="SidebarBorder"
+                                    Grid.Column="0"
+                                    Padding="16"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <Grid RowSpacing="12">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="会话" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                                        <TextBlock Grid.Row="1" x:Name="NotesText" Text="笔记：正在加载..." />
+                                        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                                            <Button x:Name="NewSessionButton" Content="新建对话"
+                                                AutomationProperties.Name="新建对话" AutomationProperties.HelpText="创建一个新的聊天会话">
+                                                <Button.Icon>
+                                                    <FontIcon Glyph="&#xE710;" FontSize="14" />
+                                                </Button.Icon>
+                                            </Button>
+                                            <Button x:Name="DeleteSessionButton" Content="删除当前会话" Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                                AutomationProperties.Name="删除当前会话" AutomationProperties.HelpText="删除当前选中的聊天会话">
+                                                <Button.Icon>
+                                                    <FontIcon Glyph="&#xE74D;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                                                </Button.Icon>
+                                            </Button>
+                                        </StackPanel>
+                                        <ListView
+                                            x:Name="SessionList"
+                                            Grid.Row="3"
+                                            MinHeight="0"
+                                            SelectionMode="Single"
+                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                            AutomationProperties.Name="会话列表" AutomationProperties.HelpText="选择一个聊天会话">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Spacing="2">
+                                                        <TextBlock Text="{Binding Title}" TextWrapping="WrapWholeWords" />
+                                                        <TextBlock
+                                                            Text="{Binding Detail}"
+                                                            Opacity="0.7"
+                                                            Style="{ThemeResource BodyTextBlockStyle}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                    </Grid>
+                                </Border>
+
+                                <Border
+                                    Grid.Column="1"
+                                    Padding="16"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                    <Grid>
+                                        <ScrollViewer
+                                            x:Name="ChatScrollViewer"
+                                            Margin="0,0,-10,0"
+                                            VerticalScrollBarVisibility="Auto">
+                                            <StackPanel
+                                                x:Name="MessagesPanel"
+                                                Margin="0,0,18,0"
+                                                Spacing="12">
+                                                <TextBlock Text="对话" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                                                <TextBlock Text="正在接入原生 Windows 界面。" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                        <Button
+                                            x:Name="JumpLatestButton"
+                                            Margin="0,8,0,0"
+                                            Padding="12,6,12,6"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Top"
+                                            Content="回到最新对话"
+                                            Visibility="Collapsed"
+                                            AutomationProperties.Name="回到最新对话" AutomationProperties.HelpText="滚动到最新的聊天消息" />
+                                    </Grid>
+                                </Border>
+                            </Grid>
                         </Grid>
-                        <ScrollViewer
-                            x:Name="AttachmentScroller"
-                            Grid.Row="3"
-                            Margin="0,4,0,0"
-                            HorizontalScrollBarVisibility="Auto"
-                            VerticalScrollBarVisibility="Disabled"
-                            VerticalAlignment="Center"
-                            Visibility="Collapsed">
-                            <StackPanel
-                                x:Name="AttachmentPanel"
-                                Orientation="Horizontal"
-                                Spacing="6"
-                                VerticalAlignment="Center" />
-                        </ScrollViewer>
+
+                        <Grid Grid.Row="1" Padding="24,0,24,24">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid
+                                        x:Name="ComposerDropZone"
+                                        Grid.Column="0"
+                                        RowSpacing="6"
+                                        AllowDrop="True"
+                                        DragOver="OnComposerDropZoneDragOver"
+                                        Drop="OnComposerDropZoneDrop">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBox
+                                            x:Name="ComposerBox"
+                                            Grid.Row="0"
+                                            AcceptsReturn="True"
+                                            AllowDrop="True"
+                                            DragOver="OnComposerDropZoneDragOver"
+                                            Drop="OnComposerDropZoneDrop"
+                                            MinHeight="88"
+                                            MaxHeight="200"
+                                            TextChanged="OnComposerTextChanged"
+                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                            TextWrapping="Wrap"
+                                            PlaceholderText="输入问题，或记录一条知识... (Enter 发送，Shift+Enter 换行)"
+                                            ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
+                                            AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
+                                        </TextBox>
+                                        <TextBlock
+                                            x:Name="ComposerHintText"
+                                            Grid.Row="1"
+                                            Text="Enter 发送 · Shift+Enter 换行"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Margin="4,0,0,0"
+                                            HorizontalAlignment="Right" />
+                                        <Grid
+                                            x:Name="ContextUsageBarHost"
+                                            Grid.Row="2"
+                                            Height="8"
+                                            MinWidth="120"
+                                            HorizontalAlignment="Stretch"
+                                            VerticalAlignment="Center"
+                                            SizeChanged="OnContextUsageBarHostSizeChanged"
+                                            AutomationProperties.Name="上下文使用量" AutomationProperties.HelpText="显示当前会话的上下文窗口使用百分比">
+                                            <Border
+                                                x:Name="ContextUsageTrack"
+                                                Height="4"
+                                                CornerRadius="2"
+                                                Background="{ThemeResource ContextUsageTrackBrush}"
+                                                Opacity="0.32"
+                                                HorizontalAlignment="Stretch"
+                                                VerticalAlignment="Center" />
+                                            <Border
+                                                x:Name="ContextUsageFill"
+                                                Height="4"
+                                                Width="0"
+                                                CornerRadius="2"
+                                                Background="{ThemeResource ContextUsageFillBrush}"
+                                                HorizontalAlignment="Left"
+                                                VerticalAlignment="Center" />
+                                        </Grid>
+                                        <ScrollViewer
+                                            x:Name="AttachmentScroller"
+                                            Grid.Row="3"
+                                            Margin="0,4,0,0"
+                                            HorizontalScrollBarVisibility="Auto"
+                                            VerticalScrollBarVisibility="Disabled"
+                                            VerticalAlignment="Center"
+                                            Visibility="Collapsed">
+                                            <StackPanel
+                                                x:Name="AttachmentPanel"
+                                                Orientation="Horizontal"
+                                                Spacing="6"
+                                                VerticalAlignment="Center" />
+                                        </ScrollViewer>
+                                    </Grid>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="8" HorizontalAlignment="Center">
+                                        <Button
+                                            x:Name="RecordButton"
+                                            Content="记录"
+                                            ToolTipService.ToolTip="将当前对话内容记录到知识库"
+                                            AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库" />
+                                        <Button
+                                            x:Name="SendButton"
+                                            Content="发送"
+                                            AutomationProperties.Name="发送" AutomationProperties.HelpText="发送消息到 AI" />
+                                        <Button
+                                            x:Name="CancelButton"
+                                            Content="取消"
+                                            Visibility="Collapsed"
+                                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                            AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Grid>
                     </Grid>
-                    <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="8" HorizontalAlignment="Center">
-                        <Button
-                            x:Name="RecordButton"
-                            Content="记录"
-                            ToolTipService.ToolTip="将当前对话内容记录到知识库"
-                            AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库" />
-                        <Button
-                            x:Name="SendButton"
-                            Content="发送"
-                            AutomationProperties.Name="发送" AutomationProperties.HelpText="发送消息到 AI" />
-                        <Button
-                            x:Name="CancelButton"
-                            Content="取消"
-                            Visibility="Collapsed"
-                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                            AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求" />
-                    </StackPanel>
+
+                    <!-- Notes view: populated in code-behind -->
+                    <Grid x:Name="NotesViewHost" Visibility="Collapsed" Padding="0" />
                 </Grid>
-            </StackPanel>
-        </Grid>
+            </NavigationView.Content>
+        </NavigationView>
 
         <!-- Loading overlay with ProgressRing (#215) -->
         <Grid
             x:Name="LoadingOverlay"
-            Grid.RowSpan="3"
+            Grid.RowSpan="2"
             Background="#80000000"
             Visibility="Collapsed"
             Canvas.ZIndex="100">

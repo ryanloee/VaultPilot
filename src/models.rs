@@ -217,6 +217,10 @@ pub struct NoteDocument {
     pub meta: NoteMeta,
     #[serde(default)]
     pub body: String,
+    /// FTS5-generated snippet with `==highlight==` markers around matched terms.
+    /// `None` when the note was not returned from a text search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -476,6 +480,29 @@ pub struct ImportResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub exported: usize,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultExportResult {
+    /// Number of notes exported
+    pub notes_exported: usize,
+    /// Number of chat sessions exported
+    pub sessions_exported: usize,
+    /// Path to the output zip file
+    pub output_path: String,
+    /// Size of the zip file in bytes
+    pub file_size_bytes: u64,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct IndexStats {
     pub scanned: usize,
     pub indexed: usize,
@@ -627,6 +654,7 @@ mod tests {
                 summary: "A test note".to_string(),
             },
             body: "Some content".to_string(),
+            search_snippet: None,
         };
         let json = serde_json::to_string(&doc).expect("serialize");
         let parsed: NoteDocument = serde_json::from_str(&json).expect("deserialize");

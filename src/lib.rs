@@ -1205,6 +1205,7 @@ fn draft_to_note_document(draft: StructuredNoteDraft) -> NoteDocument {
             summary: draft.summary,
         },
         body: draft.body,
+        search_snippet: None,
     }
 }
 
@@ -2032,6 +2033,7 @@ mod tests {
                 ..Default::default()
             },
             body: String::new(),
+            search_snippet: None,
         }];
         let result = summarize_docs_for_tool_result("list_notes", &docs);
         assert!(result.contains("list_notes returned 1 notes"));

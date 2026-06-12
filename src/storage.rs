@@ -24,8 +24,8 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::models::{
-    AppSettings, ChatSession, ChatState, ImportResult, IndexStats, NoteDocument, NoteMeta,
-    SearchQuery, SearchResult,
+    AppSettings, ChatSession, ChatState, ExportResult, ImportResult, IndexStats, NoteDocument,
+    NoteMeta, SearchQuery, SearchResult, VaultExportResult,
 };
 
 /// Type alias for a pooled SQLite connection.
@@ -83,6 +83,12 @@ impl StorageContext {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
         }
+
+        // Auto-backup SQLite database before opening (keep last 3 backups)
+        auto_backup_database(&db_path).unwrap_or_else(|e| {
+            tracing::warn!("SQLite auto-backup failed: {e}");
+        });
+
         let manager = SqliteConnectionManager::file(&db_path).with_init(|conn| {
             conn.execute_batch(
                 "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
@@ -538,6 +544,7 @@ fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
     Ok(NoteDocument {
         meta: meta.clone(),
         body: body.to_string(),
+        search_snippet: None,
     })
 }
 
@@ -692,6 +699,79 @@ pub fn import_markdown_with_context(
         }
     }
     Ok(result)
+}
+
+/// Export a single note as Markdown with frontmatter preserved.
+/// Returns the composed Markdown string and the suggested filename.
+pub fn export_note_markdown_with_context(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<(String, String)> {
+    let note = load_note_with_context(context, note_id)?;
+    let markdown = compose_markdown(&note.meta, &note.body)?;
+    let filename = sanitize_filename(&note.meta.title);
+    Ok((markdown, filename))
+}
+
+/// Export all notes as Markdown files into the given directory.
+pub fn export_all_notes_with_context(
+    context: &StorageContext,
+    output_dir: &Path,
+) -> Result<ExportResult> {
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("failed to create output directory {}", output_dir.display()))?;
+
+    let mut result = ExportResult::default();
+    // Use a large limit to get all notes
+    let all_notes = search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            limit: Some(10_000),
+            ..Default::default()
+        },
+    )?;
+
+    for meta in &all_notes.notes {
+        match export_note_markdown_with_context(context, &meta.id) {
+            Ok((markdown, filename)) => {
+                let path = output_dir.join(format!("{filename}.md"));
+                match fs::write(&path, &markdown) {
+                    Ok(()) => result.exported += 1,
+                    Err(e) => result
+                        .errors
+                        .push(format!("{}: failed to write: {e}", meta.title)),
+                }
+            }
+            Err(e) => result.errors.push(format!("{}: {e}", meta.title)),
+        }
+    }
+    Ok(result)
+}
+
+/// Produce a filesystem-safe filename from a note title.
+fn sanitize_filename(title: &str) -> String {
+    let slug = deunicode(title)
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        "untitled".to_string()
+    } else {
+        slug
+    }
 }
 
 #[instrument(skip(context))]
@@ -1006,6 +1086,7 @@ fn import_single_markdown(
             summary: parsed.meta.summary,
         },
         body: parsed.body,
+        search_snippet: None,
     };
     save_note_with_context(context, imported)?;
     Ok(true)
@@ -1068,6 +1149,7 @@ fn parse_markdown_note(path: &Path, default_source: &str) -> Result<NoteDocument
             },
         },
         body: body.trim().to_string(),
+        search_snippet: None,
     })
 }
 
@@ -1746,6 +1828,45 @@ fn query_fts_note_ids(connection: &Connection, text: &str, limit: usize) -> Resu
     Ok(rows)
 }
 
+/// Query FTS5 for per-note body snippets with `==highlight==` markers around
+/// matched terms.  Returns a map of note_id → snippet text.
+fn query_fts_snippets(
+    connection: &Connection,
+    text: &str,
+    limit: usize,
+) -> Result<HashMap<String, String>> {
+    let fts_query = make_fts_query(text);
+    if fts_query.trim().is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // snippet() parameters: table, column_idx, open_marker, close_marker, ellipsis, max_tokens
+    // Column 3 = body (0=note_id, 1=title, 2=keywords, 3=body)
+    let mut statement = connection.prepare(
+        "SELECT note_id, snippet(note_fts, 3, '==', '==', '…', 64)
+         FROM note_fts
+         WHERE note_fts MATCH ?1
+         ORDER BY bm25(note_fts)
+         LIMIT ?2",
+    )?;
+
+    let rows = match statement.query_map(params![fts_query, limit as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return Ok(HashMap::new()),
+    };
+
+    let mut snippets = HashMap::new();
+    for row in rows {
+        let (note_id, snippet) = row?;
+        if !snippet.trim().is_empty() && snippet.contains("==") {
+            snippets.insert(note_id, snippet);
+        }
+    }
+    Ok(snippets)
+}
+
 fn query_attachment_fts_note_ids(
     connection: &Connection,
     text: &str,
@@ -1991,6 +2112,8 @@ fn rank_documents(
     limit: usize,
 ) -> Result<Vec<NoteDocument>> {
     let note_fts_ids = query_fts_note_ids(connection, query, limit.saturating_mul(6).max(18))?;
+    // Fetch FTS5 body snippets with highlight markers for matching notes.
+    let fts_snippets = query_fts_snippets(connection, query, limit.saturating_mul(6).max(18))?;
     let attachment_query = attachment_query_text(query, image_paths);
     let attachment_fts_ids = query_attachment_fts_note_ids(
         connection,
@@ -2020,9 +2143,11 @@ fn rank_documents(
         let Some(meta) = load_note_meta_by_id(connection, &note_id)? else {
             continue;
         };
-        let Ok(doc) = load_note_body_from_meta(&meta) else {
+        let Ok(mut doc) = load_note_body_from_meta(&meta) else {
             continue;
         };
+        // Attach FTS5 snippet with highlight markers when available.
+        doc.search_snippet = fts_snippets.get(&note_id).cloned();
         let attachments = attachment_entries
             .get(&note_id)
             .map(Vec::as_slice)
@@ -2606,6 +2731,132 @@ fn make_fts_query(text: &str) -> String {
     terms.join(" ")
 }
 
+/// Auto-backup the SQLite database, keeping the last 3 backups.
+/// Creates rotating backups: db.bak, db.bak.1, db.bak.2
+fn auto_backup_database(db_path: &Path) -> Result<()> {
+    if !db_path.exists() {
+        debug!("no existing database to backup");
+        return Ok(());
+    }
+
+    let backup_dir = db_path.parent().unwrap_or(Path::new("."));
+    let max_backups = 3;
+
+    // Rotate existing backups: .bak.2 -> delete, .bak.1 -> .bak.2, .bak -> .bak.1
+    for i in (1..max_backups).rev() {
+        let older = backup_dir.join(format!(
+            "{}.bak.{i}",
+            db_path.file_name().unwrap().to_string_lossy()
+        ));
+        let newer = backup_dir.join(format!(
+            "{}.bak.{}",
+            db_path.file_name().unwrap().to_string_lossy(),
+            i + 1
+        ));
+        if older.exists() {
+            if i + 1 >= max_backups {
+                // Delete the oldest backup
+                fs::remove_file(&older).ok();
+            } else {
+                fs::rename(&older, &newer).ok();
+            }
+        }
+    }
+
+    // Move current .bak to .bak.1
+    let current_bak = backup_dir.join(format!(
+        "{}.bak",
+        db_path.file_name().unwrap().to_string_lossy()
+    ));
+    if current_bak.exists() {
+        let bak1 = backup_dir.join(format!(
+            "{}.bak.1",
+            db_path.file_name().unwrap().to_string_lossy()
+        ));
+        fs::rename(&current_bak, &bak1).ok();
+    }
+
+    // Copy current database to .bak
+    fs::copy(db_path, &current_bak).with_context(|| {
+        format!(
+            "failed to backup database from {} to {}",
+            db_path.display(),
+            current_bak.display()
+        )
+    })?;
+
+    debug!(source = %db_path.display(), backup = %current_bak.display(), "database backed up");
+    Ok(())
+}
+
+/// Export the entire vault as a zip file: all notes (as .md with frontmatter)
+/// plus all chat sessions (as a single chat-sessions.json).
+///
+/// The resulting zip has the structure:
+///   notes/<title>.md  (one file per note)
+///   chat-sessions.json  (all sessions in one JSON file)
+pub fn vault_export_with_context(
+    context: &StorageContext,
+    output_path: &Path,
+) -> Result<VaultExportResult> {
+    let mut result = VaultExportResult::default();
+
+    // Ensure parent directory exists
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Create the zip file
+    let zip_file = fs::File::create(output_path).with_context(|| {
+        format!(
+            "failed to create output zip file: {}",
+            output_path.display()
+        )
+    })?;
+    let mut zip = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    // ── Export all notes ──
+    let all_notes = search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            limit: Some(10_000),
+            ..Default::default()
+        },
+    )?;
+
+    for meta in &all_notes.notes {
+        match export_note_markdown_with_context(context, &meta.id) {
+            Ok((markdown, filename)) => {
+                let entry_name = format!("notes/{}.md", filename);
+                zip.start_file(entry_name, options)?;
+                std::io::Write::write_all(&mut zip, markdown.as_bytes())?;
+                result.notes_exported += 1;
+            }
+            Err(e) => result.errors.push(format!("{}: {e}", meta.title)),
+        }
+    }
+
+    // ── Export chat sessions ──
+    let chat_state = load_chat_state_with_context(context)?;
+    let chat_json = serde_json::to_string_pretty(&chat_state)?;
+    zip.start_file("chat-sessions.json", options)?;
+    std::io::Write::write_all(&mut zip, chat_json.as_bytes())?;
+    result.sessions_exported = chat_state.sessions.len();
+
+    zip.finish()?;
+
+    // Record output metadata
+    result.output_path = output_path.display().to_string();
+    result.file_size_bytes = fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2862,6 +3113,7 @@ mod tests {
             body:
                 "## 概述\nSD 卡接口引脚连接定义。\n## 备注\n软件层可参考 Device Tree pinctrl 配置。"
                     .to_string(),
+            search_snippet: None,
         };
 
         assert!(document_relevance_score("sd卡的引脚复用怎么做的", &doc) > 200);
@@ -2890,6 +3142,7 @@ mod tests {
                 summary: "之前刷机时使用过的命令记录".to_string(),
             },
             body: "相关命令: wboot -w update zboot.img".to_string(),
+            search_snippet: None,
         };
 
         assert!(document_relevance_score("刷机怎么刷啊", &doc) > 180);
@@ -3341,6 +3594,7 @@ mod tests {
                 ..Default::default()
             },
             body: "Nothing relevant here".to_string(),
+            search_snippet: None,
         };
         assert_eq!(document_relevance_score("mmc sd卡 pinmux", &doc), 0);
     }
@@ -3804,6 +4058,7 @@ mod tests {
                 summary: String::new(),
             },
             body: "## Test\n\nRound trip body content".to_string(),
+            search_snippet: None,
         };
 
         let saved = save_note_with_context(&ctx, note).expect("save");
@@ -3828,6 +4083,7 @@ mod tests {
                 ..Default::default()
             },
             body: "Temporary content".to_string(),
+            search_snippet: None,
         };
         let saved = save_note_with_context(&ctx, note).expect("save");
         let path = saved.meta.path.clone();
@@ -3866,6 +4122,7 @@ mod tests {
                         ..Default::default()
                     },
                     body: format!("Content for note {}", i),
+                    search_snippet: None,
                 },
             )
             .expect("save");
@@ -3899,6 +4156,7 @@ mod tests {
                     ..Default::default()
                 },
                 body: "Tagged content".to_string(),
+                search_snippet: None,
             },
         )
         .expect("save");
@@ -4044,6 +4302,7 @@ mod tests {
                 ..Default::default()
             },
             body: "Content that should survive rebuild".to_string(),
+            search_snippet: None,
         };
         save_note_with_context(&ctx, note).expect("save");
 

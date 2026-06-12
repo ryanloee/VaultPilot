@@ -2600,33 +2600,77 @@ public sealed partial class MainWindow : Window
         }
 
         var model = (_settings?.Provider.Model ?? string.Empty).Trim().ToLowerInvariant();
-        if (model.Contains("glm-5.1"))
+        if (ContainsModelToken(model, "glm-5.1"))
         {
             return 200_000;
         }
-        if (model.Contains("claude"))
+        if (ContainsModelToken(model, "claude"))
         {
-            return model.Contains("1m") ? 1_000_000UL : 200_000;
+            return ContainsModelToken(model, "1m") ? 1_000_000UL : 200_000;
         }
-        if (model.Contains("gpt-4.1") || model.Contains("gpt-5"))
+        if (ContainsModelToken(model, "gpt-4.1") || ContainsModelToken(model, "gpt-5"))
         {
             return 1_047_576;
         }
-        if (model.Contains("gpt-4o"))
+        if (ContainsModelToken(model, "gpt-4o"))
         {
             return 128_000;
         }
-        if (model.Contains("o1") || model.Contains("o3") || model.Contains("o4"))
+        if (IsOpenAiOSeriesModel(model))
         {
             return 200_000;
         }
-        if (model.Contains("gemini"))
+        if (ContainsModelToken(model, "gemini"))
         {
             return 1_000_000;
         }
 
         return 128_000;
     }
+
+    /// <summary>
+    /// Checks if the model name contains the given token as a distinct segment
+    /// (preceded by start, '-', '_', '.', '/', or ' ', or followed by the same).
+    /// Prevents false positives like "co1l" matching "o1".
+    /// </summary>
+    private static bool ContainsModelToken(string model, string token)
+    {
+        var index = model.IndexOf(token, StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            var beforeOk = index == 0 || IsModelSeparator(model[index - 1]);
+            var afterPos = index + token.Length;
+            var afterOk = afterPos >= model.Length || IsModelSeparator(model[afterPos]);
+            if (beforeOk && afterOk) return true;
+            index = model.IndexOf(token, index + 1, StringComparison.Ordinal);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// OpenAI o-series models: o1, o3, o4 (with optional suffix like -mini, -preview).
+    /// Matches "o1", "o1-mini", "o3-mini", "o4-mini" etc. but not "co1l" or "po3".
+    /// </summary>
+    private static bool IsOpenAiOSeriesModel(string model)
+    {
+        // Check for o1/o3/o4 at word boundary followed by end, separator, or hyphen
+        foreach (var prefix in new[] { "o1", "o3", "o4" })
+        {
+            var index = model.IndexOf(prefix, StringComparison.Ordinal);
+            while (index >= 0)
+            {
+                var beforeOk = index == 0 || IsModelSeparator(model[index - 1]);
+                var afterPos = index + prefix.Length;
+                var afterOk = afterPos >= model.Length || IsModelSeparator(model[afterPos]);
+                if (beforeOk && afterOk) return true;
+                index = model.IndexOf(prefix, index + 1, StringComparison.Ordinal);
+            }
+        }
+        return false;
+    }
+
+    private static bool IsModelSeparator(char c) =>
+        c is '-' or '_' or '.' or '/' or ' ' or '(' or ')' or ':' or ',';
 
     private static string FormatTokenCount(ulong tokens)
     {

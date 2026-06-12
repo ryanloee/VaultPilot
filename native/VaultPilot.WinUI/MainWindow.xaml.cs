@@ -3730,12 +3730,37 @@ public sealed partial class MainWindow : Window
             .Select(session => new SessionListItem(
                 session.Id,
                 session.Title,
-                $"{session.Turns.Count} 条消息"))
+                $"{session.Turns.Count} 条消息",
+                ToRelativeTime(session.UpdatedAt),
+                session.Turns.Count,
+                session.Summary?.Text is { Length: > 0 } summary
+                    ? (summary.Length <= 50 ? summary : $"{summary[..50]}...")
+                    : string.Empty))
             .ToList();
         SessionList.SelectedItem = SessionList.Items
             .OfType<SessionListItem>()
             .FirstOrDefault(item => item.Id == _currentSessionId);
         DeleteSessionButton.IsEnabled = _chatState.Sessions.Count > 0;
+    }
+
+    /// <summary>Converts an ISO-8601 timestamp to a human-readable relative time string.</summary>
+    private static string ToRelativeTime(string timestamp)
+    {
+        if (!DateTimeOffset.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var dto))
+        {
+            return timestamp;
+        }
+
+        var span = DateTimeOffset.Now - dto;
+        if (span.TotalSeconds < 60) return "刚刚";
+        if (span.TotalMinutes < 60) return $"{(int)span.TotalMinutes} 分钟前";
+        if (span.TotalHours < 24) return $"{(int)span.TotalHours} 小时前";
+        if (span.TotalDays < 2) return "昨天";
+        if (span.TotalDays < 7) return $"{(int)span.TotalDays} 天前";
+        if (span.TotalDays < 30) return $"{(int)(span.TotalDays / 7)} 周前";
+        if (span.TotalDays < 365) return $"{(int)(span.TotalDays / 30)} 个月前";
+        return $"{(int)(span.TotalDays / 365)} 年前";
     }
 
     private static string BuildSessionTitle(string text)
@@ -3820,5 +3845,11 @@ public sealed partial class MainWindow : Window
             .Replace("The SSL connection could not be established", "SSL 连接建立失败，请检查网络安全性设置。", StringComparison.Ordinal);
     }
 
-    private sealed record SessionListItem(string Id, string Title, string Detail);
+    private sealed record SessionListItem(
+        string Id,
+        string Title,
+        string Detail,
+        string RelativeTime,
+        int TurnCount,
+        string SummaryPreview);
 }

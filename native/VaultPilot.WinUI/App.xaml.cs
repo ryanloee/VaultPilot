@@ -81,12 +81,12 @@ public partial class App : Application
         if (_window != null)
         {
             _window.Closed -= OnWindowClosed;
-            await _window.PrepareExitAsync();
+            await _window.ShutdownAsync();
             _window.Close();
             _window = null;
         }
 
         _trayIcon?.Dispose();
-        Environment.Exit(0);
+        Application.Current.Exit();
     }
 }

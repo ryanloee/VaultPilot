@@ -1026,6 +1026,17 @@ public sealed partial class MainWindow : Window
 
     public async Task PrepareExitAsync()
     {
+        await ShutdownAsync();
+    }
+
+    /// <summary>
+    /// Performs all cleanup (backend client disposal, resource release) before
+    /// the application exits.  Called from the tray "Exit" handler so that
+    /// MainWindow.OnClosed logic is executed even when the window is only
+    /// hidden to tray.  See: https://github.com/user/repo/issues/62
+    /// </summary>
+    public async Task ShutdownAsync()
+    {
         RemoveThinkingIndicator();
         StopAutoWakeTimer();
         TryReleaseWindowFileDropHook();

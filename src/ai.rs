@@ -4,7 +4,7 @@ use std::{collections::HashSet, fs, path::Path, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -840,19 +840,26 @@ async fn send_request_with_temperature(
     let endpoint = normalize_messages_endpoint(&provider.base_url);
     let content_blocks = build_input_blocks(prompt, image_paths)?;
 
-    for attempt in 0..3 {
-        let payload = AnthropicRequest {
-            model: &provider.model,
-            max_tokens: 8192,
-            temperature,
-            system,
-            messages: vec![AnthropicMessage {
-                role: "user".to_string(),
-                content: content_blocks.clone(),
-            }],
-        };
+    let payload = AnthropicRequest {
+        model: &provider.model,
+        max_tokens: 8192,
+        temperature,
+        system,
+        messages: vec![AnthropicMessage {
+            role: "user".to_string(),
+            content: content_blocks,
+        }],
+    };
+    let body: Bytes = serde_json::to_vec(&payload)?.into();
 
-        let response = match client.post(&endpoint).json(&payload).send().await {
+    for attempt in 0..3 {
+        let response = match client
+            .post(&endpoint)
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {

@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +73,67 @@ impl Default for AppSettings {
             auto_wake_start_time: default_auto_wake_start_time(),
             auto_wake_end_time: default_auto_wake_end_time(),
         }
+    }
+}
+
+impl ProviderConfig {
+    /// Validate provider configuration, returning a list of error messages.
+    /// An empty list means the configuration is valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // Validate base_url is a valid HTTP(S) URL (if non-empty).
+        let url = self.base_url.trim();
+        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
+            errors.push(format!(
+                "provider.base_url must be an HTTP or HTTPS URL, got: {}",
+                self.base_url
+            ));
+        }
+
+        // Validate request_timeout_ms is in a reasonable range (1s to 10min).
+        if self.request_timeout_ms < 1_000 {
+            errors.push(format!(
+                "provider.request_timeout_ms is too low ({}ms); minimum is 1000ms",
+                self.request_timeout_ms
+            ));
+        } else if self.request_timeout_ms > 600_000 {
+            errors.push(format!(
+                "provider.request_timeout_ms is too high ({}ms); maximum is 600000ms",
+                self.request_timeout_ms
+            ));
+        }
+
+        errors
+    }
+}
+
+impl AppSettings {
+    /// Validate settings after deserialization, returning all error messages at once.
+    /// An empty list means the settings are valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // Validate vault_dir exists and is a directory (if non-empty).
+        let vault = self.vault_dir.trim();
+        if !vault.is_empty() {
+            let path = std::path::Path::new(vault);
+            if !path.exists() {
+                errors.push(format!("vault_dir does not exist: {}", self.vault_dir));
+            } else if !path.is_dir() {
+                errors.push(format!("vault_dir is not a directory: {}", self.vault_dir));
+            }
+        }
+
+        // Validate api_key is non-empty.
+        if self.provider.api_key.trim().is_empty() {
+            errors.push("provider.api_key is empty; an API key is required".to_string());
+        }
+
+        // Delegate provider-specific validation.
+        errors.extend(self.provider.validate());
+
+        errors
     }
 }
 
@@ -690,5 +751,148 @@ mod tests {
         };
         let json2 = serde_json::to_string(&stats).expect("serialize");
         assert!(json2.contains("\"indexed\":8"));
+    }
+
+    #[test]
+    fn validate_accepts_valid_settings() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                api_key: "sk-test-key".to_string(),
+                base_url: "https://api.anthropic.com/v1/messages".to_string(),
+                request_timeout_ms: 60_000,
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        // vault_dir is empty so it's skipped; api_key + base_url + timeout are valid
+        assert!(settings.validate().is_empty());
+    }
+
+    #[test]
+    fn validate_catches_empty_api_key() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                api_key: String::new(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        assert!(errors.iter().any(|e| e.contains("api_key")));
+    }
+
+    #[test]
+    fn validate_catches_whitespace_only_api_key() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                api_key: "   ".to_string(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        assert!(errors.iter().any(|e| e.contains("api_key")));
+    }
+
+    #[test]
+    fn validate_catches_invalid_base_url_scheme() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                api_key: "key".to_string(),
+                base_url: "ftp://example.com".to_string(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        assert!(errors.iter().any(|e| e.contains("base_url")));
+    }
+
+    #[test]
+    fn validate_accepts_http_base_url() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                api_key: "key".to_string(),
+                base_url: "http://localhost:8080/v1".to_string(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        // Only non-base_url errors should appear
+        assert!(!errors.iter().any(|e| e.contains("base_url")));
+    }
+
+    #[test]
+    fn validate_catches_timeout_too_low() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                api_key: "key".to_string(),
+                request_timeout_ms: 500,
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("request_timeout_ms") && e.contains("too low")));
+    }
+
+    #[test]
+    fn validate_catches_timeout_too_high() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                api_key: "key".to_string(),
+                request_timeout_ms: 999_999,
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("request_timeout_ms") && e.contains("too high")));
+    }
+
+    #[test]
+    fn validate_catches_nonexistent_vault_dir() {
+        let settings = AppSettings {
+            vault_dir: "/nonexistent/path/that/does/not/exist".to_string(),
+            provider: ProviderConfig {
+                api_key: "key".to_string(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("vault_dir") && e.contains("not exist")));
+    }
+
+    #[test]
+    fn validate_returns_all_errors_at_once() {
+        let settings = AppSettings {
+            vault_dir: "/nonexistent/path".to_string(),
+            provider: ProviderConfig {
+                api_key: String::new(),
+                base_url: "ftp://bad".to_string(),
+                request_timeout_ms: 0,
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = settings.validate();
+        // Should have errors for: vault_dir, api_key, base_url, timeout
+        assert!(
+            errors.len() >= 4,
+            "expected at least 4 errors, got: {}",
+            errors.len()
+        );
+        assert!(errors.iter().any(|e| e.contains("vault_dir")));
+        assert!(errors.iter().any(|e| e.contains("api_key")));
+        assert!(errors.iter().any(|e| e.contains("base_url")));
+        assert!(errors.iter().any(|e| e.contains("request_timeout_ms")));
     }
 }

@@ -3285,7 +3285,32 @@ public sealed partial class MainWindow : Window
             .Replace("API key is empty", "API Key 为空，请先在设置中配置模型服务。", StringComparison.Ordinal)
             .Replace("The Rust backend process is not connected.", "Rust 后端尚未连接。", StringComparison.Ordinal)
             .Replace("The Rust backend process closed stdout.", "Rust 后端已关闭输出通道。", StringComparison.Ordinal)
-            .Replace("Backend request failed.", "后端请求失败。", StringComparison.Ordinal);
+            .Replace("Backend request failed.", "后端请求失败。", StringComparison.Ordinal)
+            // Network errors
+            .Replace("Connection refused", "连接被拒绝，后端服务可能未启动。", StringComparison.Ordinal)
+            .Replace("Connection timed out", "连接超时，请检查网络或后端服务状态。", StringComparison.Ordinal)
+            .Replace("A task was canceled.", "操作已取消。", StringComparison.Ordinal)
+            .Replace("The operation was canceled.", "操作已取消。", StringComparison.Ordinal)
+            // HTTP errors
+            .Replace("401 Unauthorized", "认证失败（401），请检查 API Key 是否正确。", StringComparison.Ordinal)
+            .Replace("403 Forbidden", "访问被拒绝（403），API Key 可能没有足够权限。", StringComparison.Ordinal)
+            .Replace("429 Too Many Requests", "请求过于频繁（429），请稍后重试。", StringComparison.Ordinal)
+            .Replace("500 Internal Server Error", "服务器内部错误（500），请稍后重试。", StringComparison.Ordinal)
+            .Replace("502 Bad Gateway", "网关错误（502），服务可能正在重启。", StringComparison.Ordinal)
+            .Replace("503 Service Unavailable", "服务不可用（503），请稍后重试。", StringComparison.Ordinal)
+            // Model errors
+            .Replace("model not found", "指定的模型不存在，请在设置中检查模型名称。", StringComparison.Ordinal)
+            .Replace("Model not found", "指定的模型不存在，请在设置中检查模型名称。", StringComparison.Ordinal)
+            .Replace("Invalid API key", "API Key 无效，请在设置中重新配置。", StringComparison.Ordinal)
+            .Replace("insufficient_quota", "API 配额不足，请检查账户余额或提升套餐。", StringComparison.Ordinal)
+            // File/IO errors
+            .Replace("Access to the path", "文件访问被拒绝，可能正在被其他程序使用。", StringComparison.Ordinal)
+            .Replace("The file is being used by another process", "文件正在被其他程序使用，请关闭后重试。", StringComparison.Ordinal)
+            .Replace("No such file or directory", "文件或目录不存在。", StringComparison.Ordinal)
+            .Replace("Directory not found", "目录不存在，请检查知识库路径设置。", StringComparison.Ordinal)
+            // Generic fallback wrapping
+            .Replace("An error occurred while sending the request.", "发送请求时发生错误，请检查网络连接。", StringComparison.Ordinal)
+            .Replace("The SSL connection could not be established", "SSL 连接建立失败，请检查网络安全性设置。", StringComparison.Ordinal);
     }
 
     private sealed record SessionListItem(string Id, string Title, string Detail);

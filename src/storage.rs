@@ -2363,7 +2363,18 @@ fn is_cjk_stop_char(ch: char) -> bool {
 }
 
 fn is_cjk(ch: char) -> bool {
-    ('\u{4E00}'..='\u{9FFF}').contains(&ch)
+    matches!(
+        ch,
+        '\u{3400}'..='\u{4DBF}'   // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
+        | '\u{F900}'..='\u{FAFF}'   // CJK Compatibility Ideographs
+        | '\u{20000}'..='\u{2A6DF}' // CJK Extension B
+        | '\u{2A700}'..='\u{2B73F}' // CJK Extension C
+        | '\u{2B740}'..='\u{2B81F}' // CJK Extension D
+        | '\u{2B820}'..='\u{2CEAF}' // CJK Extension E
+        | '\u{2CEB0}'..='\u{2EBEF}' // CJK Extension F
+        | '\u{30000}'..='\u{3134F}' // CJK Extension G
+    )
 }
 
 fn has_all_terms(source: &[String], expected: &[String]) -> bool {
@@ -2457,7 +2468,7 @@ fn make_fts_query(text: &str) -> String {
         .into_iter()
         .map(|term| {
             term.chars()
-                .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+                .filter(|ch| ch.is_ascii_alphanumeric() || is_cjk(*ch) || *ch == '_' || *ch == '-')
                 .collect::<String>()
         })
         .filter(|term| !term.is_empty())
@@ -2550,8 +2561,25 @@ mod tests {
     }
 
     #[test]
-    fn fts_query_omits_pure_cjk_text() {
-        assert_eq!(make_fts_query("你好"), "");
+    fn fts_query_preserves_pure_cjk_text() {
+        let query = make_fts_query("你好");
+        assert!(
+            !query.is_empty(),
+            "CJK text should not be stripped from FTS query"
+        );
+        assert!(query.contains("你好"));
+    }
+
+    #[test]
+    fn fts_query_handles_cjk_search_terms() {
+        let query = make_fts_query("引脚配置");
+        assert!(
+            !query.is_empty(),
+            "CJK search terms should produce non-empty FTS query"
+        );
+        // extract_search_terms generates bigrams like "引脚" and "配置"
+        assert!(query.contains("引脚"));
+        assert!(query.contains("配置"));
     }
 
     #[test]
@@ -3068,6 +3096,10 @@ mod tests {
         assert!(is_cjk('的'));
         assert!(!is_cjk('A'));
         assert!(!is_cjk('1'));
+        // CJK Extension A (U+3400–U+4DBF)
+        assert!(is_cjk('\u{3400}'));
+        // CJK Compatibility Ideographs (U+F900–U+FAFF)
+        assert!(is_cjk('\u{F900}'));
     }
 
     #[test]

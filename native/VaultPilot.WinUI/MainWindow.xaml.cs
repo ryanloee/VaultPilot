@@ -404,6 +404,17 @@ public sealed partial class MainWindow : Window
             }
             panel.Children.Add(nextWakeLabel);
 
+            // Inline error bar shown at the top of the dialog.
+            var errorInfoBar = new InfoBar
+            {
+                Severity = InfoBarSeverity.Error,
+                Title = "设置校验失败",
+                IsOpen = false,
+                IsClosable = false,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
+            panel.Children.Insert(0, errorInfoBar);
+
             panel.Children.Add(footerRow);
 
             var dialog = new ContentDialog
@@ -421,110 +432,122 @@ public sealed partial class MainWindow : Window
                 }
             };
 
-            var result = await dialog.ShowAsync();
-            if (result != ContentDialogResult.Primary)
+            // Validate and save BEFORE the dialog closes so the user never
+            // loses input on a validation failure.  Setting args.Cancel = true
+            // keeps the dialog open; only an error-free path lets it close.
+            dialog.PrimaryButtonClick += async (_, args) =>
             {
-                return;
-            }
-
-            // --- Input validation ---
-            var validationErrors = new List<string>();
-
-            var trimmedApiKey = apiKeyBox.Password.Trim();
-            if (string.IsNullOrEmpty(trimmedApiKey))
-            {
-                validationErrors.Add("API Key 不能为空。");
-            }
-
-            var trimmedBaseUrl = baseUrlBox.Text.Trim();
-            if (string.IsNullOrEmpty(trimmedBaseUrl))
-            {
-                validationErrors.Add("接口地址不能为空。");
-            }
-            else if (!Uri.TryCreate(trimmedBaseUrl, UriKind.Absolute, out var parsedUri)
-                     || (parsedUri.Scheme != "http" && parsedUri.Scheme != "https"))
-            {
-                validationErrors.Add("接口地址必须是有效的 http:// 或 https:// URL。");
-            }
-
-            var trimmedModel = modelBox.Text.Trim();
-            if (string.IsNullOrEmpty(trimmedModel))
-            {
-                validationErrors.Add("模型名称不能为空。");
-            }
-
-            // Validate auto-wake time fields (HH:mm format, allow empty).
-            var trimmedWakeStart = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
-            if (!string.IsNullOrEmpty(trimmedWakeStart) && !TimeSpan.TryParse(trimmedWakeStart, out _))
-            {
-                validationErrors.Add("自动唤醒开始时间格式无效，请使用 HH:mm 格式。");
-            }
-
-            var trimmedWakeEnd = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
-            if (!string.IsNullOrEmpty(trimmedWakeEnd) && !TimeSpan.TryParse(trimmedWakeEnd, out _))
-            {
-                validationErrors.Add("自动唤醒结束时间格式无效，请使用 HH:mm 格式。");
-            }
-
-            if (validationErrors.Count > 0)
-            {
-                var errorDialog = new ContentDialog
+                var deferral = args.GetDeferral();
+                try
                 {
-                    XamlRoot = RootGrid.XamlRoot,
-                    Title = "设置校验失败",
-                    Content = string.Join("\n", validationErrors),
-                    CloseButtonText = "确定",
-                };
-                await errorDialog.ShowAsync();
-                return;
-            }
+                    var validationErrors = new List<string>();
 
-            if (!ulong.TryParse(timeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs == 0)
-            {
-                throw new InvalidOperationException("请求超时必须是大于 0 的数字。");
-            }
+                    var trimmedApiKey = apiKeyBox.Password.Trim();
+                    if (string.IsNullOrEmpty(trimmedApiKey))
+                    {
+                        validationErrors.Add("API Key 不能为空。");
+                    }
 
-            ulong? contextWindowTokens = null;
-            if (!string.IsNullOrWhiteSpace(contextWindowBox.Text))
-            {
-                if (!ulong.TryParse(contextWindowBox.Text.Trim(), out var parsedContextWindow))
-                {
-                    throw new InvalidOperationException("上下文窗口 Token 数必须是数字。");
+                    var trimmedBaseUrl = baseUrlBox.Text.Trim();
+                    if (string.IsNullOrEmpty(trimmedBaseUrl))
+                    {
+                        validationErrors.Add("接口地址不能为空。");
+                    }
+                    else if (!Uri.TryCreate(trimmedBaseUrl, UriKind.Absolute, out var parsedUri)
+                             || (parsedUri.Scheme != "http" && parsedUri.Scheme != "https"))
+                    {
+                        validationErrors.Add("接口地址必须是有效的 http:// 或 https:// URL。");
+                    }
+
+                    var trimmedModel = modelBox.Text.Trim();
+                    if (string.IsNullOrEmpty(trimmedModel))
+                    {
+                        validationErrors.Add("模型名称不能为空。");
+                    }
+
+                    var trimmedWakeStart = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
+                    if (!string.IsNullOrEmpty(trimmedWakeStart) && !TimeSpan.TryParse(trimmedWakeStart, out _))
+                    {
+                        validationErrors.Add("自动唤醒开始时间格式无效，请使用 HH:mm 格式。");
+                    }
+
+                    var trimmedWakeEnd = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
+                    if (!string.IsNullOrEmpty(trimmedWakeEnd) && !TimeSpan.TryParse(trimmedWakeEnd, out _))
+                    {
+                        validationErrors.Add("自动唤醒结束时间格式无效，请使用 HH:mm 格式。");
+                    }
+
+                    if (!ulong.TryParse(timeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs == 0)
+                    {
+                        validationErrors.Add("请求超时必须是大于 0 的数字。");
+                    }
+
+                    ulong? contextWindowTokens = null;
+                    if (!string.IsNullOrWhiteSpace(contextWindowBox.Text))
+                    {
+                        if (!ulong.TryParse(contextWindowBox.Text.Trim(), out var parsedContextWindow))
+                        {
+                            validationErrors.Add("上下文窗口 Token 数必须是数字。");
+                        }
+                        else
+                        {
+                            contextWindowTokens = parsedContextWindow;
+                        }
+                    }
+
+                    if (validationErrors.Count > 0)
+                    {
+                        errorInfoBar.Message = string.Join("\n", validationErrors);
+                        errorInfoBar.IsOpen = true;
+                        args.Cancel = true;
+                        return;
+                    }
+
+                    errorInfoBar.IsOpen = false;
+
+                    if (!ulong.TryParse(autoWakeIntervalBox.Text?.Trim() ?? "30", out var autoWakeInterval) || autoWakeInterval == 0)
+                    {
+                        autoWakeInterval = 30;
+                    }
+
+                    var autoWakeModel = (autoWakeModelBox.SelectedItem as string ?? autoWakeModelBox.Text ?? string.Empty).Trim();
+                    var autoWakeStartTime = trimmedWakeStart;
+                    var autoWakeEndTime = trimmedWakeEnd;
+
+                    var updated = new AppSettings(
+                        vaultBox.Text.Trim(),
+                        new ProviderConfig(
+                            trimmedApiKey,
+                            trimmedBaseUrl,
+                            trimmedModel,
+                            timeoutMs,
+                            contextWindowTokens),
+                        autoCheckUpdatesBox.IsChecked ?? true,
+                        autoWakeEnabledBox.IsChecked ?? false,
+                        autoWakeInterval,
+                        autoWakeModel,
+                        autoWakeStartTime,
+                        autoWakeEndTime);
+
+                    _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated });
+                    RefreshVaultSummary();
+                    RefreshContextStatus();
+                    ApplyAutoWakeSettings();
+                    UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
+                    ShowNextWakeTime();
                 }
+                catch (Exception error)
+                {
+                    ShowError("保存设置失败", error);
+                    args.Cancel = true;
+                }
+                finally
+                {
+                    deferral.Complete();
+                }
+            };
 
-                contextWindowTokens = parsedContextWindow;
-            }
-
-            if (!ulong.TryParse(autoWakeIntervalBox.Text?.Trim() ?? "30", out var autoWakeInterval) || autoWakeInterval == 0)
-            {
-                autoWakeInterval = 30;
-            }
-
-            var autoWakeModel = (autoWakeModelBox.SelectedItem as string ?? autoWakeModelBox.Text ?? string.Empty).Trim();
-            var autoWakeStartTime = trimmedWakeStart;
-            var autoWakeEndTime = trimmedWakeEnd;
-
-            var updated = new AppSettings(
-                vaultBox.Text.Trim(),
-                new ProviderConfig(
-                    apiKeyBox.Password.Trim(),
-                    baseUrlBox.Text.Trim(),
-                    modelBox.Text.Trim(),
-                    timeoutMs,
-                    contextWindowTokens),
-                autoCheckUpdatesBox.IsChecked ?? true,
-                autoWakeEnabledBox.IsChecked ?? false,
-                autoWakeInterval,
-                autoWakeModel,
-                autoWakeStartTime,
-                autoWakeEndTime);
-
-            _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated });
-            RefreshVaultSummary();
-            RefreshContextStatus();
-            ApplyAutoWakeSettings();
-            UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
-            ShowNextWakeTime();
+            await dialog.ShowAsync();
         }
         catch (Exception error)
         {

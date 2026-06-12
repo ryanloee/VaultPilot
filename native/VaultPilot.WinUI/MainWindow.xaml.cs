@@ -931,71 +931,17 @@ public sealed partial class MainWindow : Window
             ? "（发送了一张图片）"
             : text;
 
-        ComposerBox.Text = string.Empty;
-        _attachments.Clear();
-        RefreshAttachments();
+        await ExecuteAiRequestAsync(
+            prompt, userDisplay, pendingAttachments, text,
+            "助手处理中", "正在准备请求...", "请求失败");
 
-        _activeRequestCts?.Dispose();
-        _activeRequestCts = new CancellationTokenSource();
-        var cancellationToken = _activeRequestCts.Token;
-
-        try
+        if (_lastAiAnswer?.SavedNote is not null)
         {
-            SendButton.IsEnabled = false;
-            UpdateStatusBar("info", "助手处理中", "正在准备请求...");
-
-            await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
-            var history = GetConversationHistory();
-            AddTurn("user", userDisplay, attachments: pendingAttachments);
-            RenderCurrentSession();
+            AppendMessage("系统", $"已保存笔记：{_lastAiAnswer.SavedNote.Title}");
             ScrollToLatest();
-            await SaveChatStateAsync();
-
-            ShowThinkingIndicator();
-            ScrollToLatest();
-
-            var answer = await _backendClient.SendAsync<GroundedAnswer>(
-                "askWithAi",
-                new
-                {
-                    question = prompt,
-                    history,
-                    imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
-                });
-            RemoveThinkingIndicator();
-            AddTurn("assistant", answer?.Answer ?? string.Empty, answer);
-            RenderCurrentSession();
-            ScrollToLatest();
-            await SaveChatStateAsync();
-
-            if (answer?.SavedNote is not null)
-            {
-                AppendMessage("系统", $"已保存笔记：{answer.SavedNote.Title}");
-                ScrollToLatest();
-            }
-
-            RestoreIdleStatus();
         }
-        catch (Exception error)
-        {
-            RemoveThinkingIndicator();
-            ComposerBox.Text = text;
-            _attachments.AddRange(pendingAttachments);
-            RefreshAttachments();
-            var message = LocalizeError(error.Message);
-            AddTurn("assistant", message);
-            RenderCurrentSession();
-            ScrollToLatest();
-            await SaveChatStateAsync();
-            ShowError("请求失败", error, addMessage: false);
-        }
-        finally
-        {
-            _activeRequestCts?.Dispose();
-            _activeRequestCts = null;
-            SendButton.IsEnabled = true;
-            RefreshSessions();
-        }
+
+        RestoreIdleStatus();
     }
 
     private async Task RecordCurrentMessageAsync()
@@ -1025,6 +971,42 @@ public sealed partial class MainWindow : Window
             ? "（记录了当前对话内容）"
             : ComposerBox.Text.Trim();
 
+        await ExecuteAiRequestAsync(
+            prompt, userDisplay, pendingAttachments, text,
+            "正在记录知识", "正在整理并保存...", "记录失败",
+            passCancellationToken: true);
+
+        if (_lastAiAnswer?.SavedNote is null)
+        {
+            throw new InvalidOperationException("知识库写入未完成，模型未返回已保存笔记。");
+        }
+
+        var savedNote = _lastAiAnswer.SavedNote;
+        AppendMessage("系统", $"已保存笔记：{savedNote.Title}");
+        ScrollToLatest();
+        var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { });
+        _noteCount = notes?.Count ?? 0;
+        RefreshVaultSummary();
+
+        RestoreIdleStatus("知识已记录", $"已保存为笔记：{savedNote.Title}");
+    }
+
+    /// <summary>
+    /// Shared implementation for Send and Record flows: clears the composer,
+    /// sends the prompt to the AI backend, and updates the session.
+    /// </summary>
+    private GroundedAnswer? _lastAiAnswer;
+
+    private async Task ExecuteAiRequestAsync(
+        string prompt,
+        string userDisplay,
+        AttachmentItem[] pendingAttachments,
+        string originalText,
+        string statusTitle,
+        string statusDetail,
+        string errorTitle,
+        bool passCancellationToken = false)
+    {
         ComposerBox.Text = string.Empty;
         _attachments.Clear();
         RefreshAttachments();
@@ -1033,11 +1015,13 @@ public sealed partial class MainWindow : Window
         _activeRequestCts = new CancellationTokenSource();
         var cancellationToken = _activeRequestCts.Token;
 
+        _lastAiAnswer = null;
+
         try
         {
             SendButton.IsEnabled = false;
             RecordButton.IsEnabled = false;
-            UpdateStatusBar("info", "正在记录知识", "正在整理并保存...");
+            UpdateStatusBar("info", statusTitle, statusDetail);
 
             await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
             var history = GetConversationHistory();
@@ -1049,39 +1033,36 @@ public sealed partial class MainWindow : Window
             ShowThinkingIndicator();
             ScrollToLatest();
 
-            var answer = await _backendClient.SendAsync<GroundedAnswer>(
-                "askWithAi",
-                new
-                {
-                    question = prompt,
-                    history,
-                    imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
-                },
-                cancellationToken);
+            var answer = passCancellationToken
+                ? await _backendClient.SendAsync<GroundedAnswer>(
+                    "askWithAi",
+                    new
+                    {
+                        question = prompt,
+                        history,
+                        imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
+                    },
+                    cancellationToken)
+                : await _backendClient.SendAsync<GroundedAnswer>(
+                    "askWithAi",
+                    new
+                    {
+                        question = prompt,
+                        history,
+                        imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
+                    });
             RemoveThinkingIndicator();
-            if (answer?.SavedNote is null)
-            {
-                throw new InvalidOperationException("知识库写入未完成，模型未返回已保存笔记。");
-            }
-            var savedNote = answer.SavedNote;
+            _lastAiAnswer = answer;
 
             AddTurn("assistant", answer?.Answer ?? string.Empty, answer);
             RenderCurrentSession();
             ScrollToLatest();
             await SaveChatStateAsync();
-
-            AppendMessage("系统", $"已保存笔记：{savedNote.Title}");
-            ScrollToLatest();
-            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { });
-            _noteCount = notes?.Count ?? 0;
-            RefreshVaultSummary();
-
-            RestoreIdleStatus("知识已记录", $"已保存为笔记：{savedNote.Title}");
         }
         catch (Exception error)
         {
             RemoveThinkingIndicator();
-            ComposerBox.Text = text;
+            ComposerBox.Text = originalText;
             _attachments.AddRange(pendingAttachments);
             RefreshAttachments();
             var message = LocalizeError(error.Message);
@@ -1089,7 +1070,7 @@ public sealed partial class MainWindow : Window
             RenderCurrentSession();
             ScrollToLatest();
             await SaveChatStateAsync();
-            ShowError("记录失败", error, addMessage: false);
+            ShowError(errorTitle, error, addMessage: false);
         }
         finally
         {

@@ -240,7 +240,6 @@ pub async fn chat_with_ai_with_context(
     let history = current_session_history(&state, &active_session_id)?;
     let user_turn = build_chat_turn("user", &user_display, None, &attachments);
     append_turn_to_session(&mut state, &active_session_id, user_turn)?;
-    state = save_chat_state_with_context(context, &state)?;
 
     let answer = ask_with_ai_with_context(
         context,
@@ -1427,7 +1426,7 @@ fn estimate_tokens_for_text(text: Option<&str>) -> u64 {
         if item <= '\u{7f}' {
             ascii += 1;
         } else {
-            non_ascii += 1;
+            non_ascii += 2; // CJK characters typically require ~2 tokens
         }
     }
 
@@ -1668,7 +1667,7 @@ mod tests {
     #[test]
     fn estimate_tokens_cjk_counts_each_char() {
         let tokens = estimate_tokens_for_text(Some("测试一下"));
-        assert_eq!(tokens, 4); // 4 CJK chars, each = 1 token
+        assert_eq!(tokens, 8); // 4 CJK chars × 2 tokens each
     }
 
     #[test]

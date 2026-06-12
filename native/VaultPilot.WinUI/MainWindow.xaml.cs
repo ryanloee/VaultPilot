@@ -42,7 +42,6 @@ public sealed partial class MainWindow : Window
     private const int MinimumWindowWidth = 640;
     private const int MinimumWindowHeight = 520;
     private const double AutoCollapseSidebarWidth = 1040;
-    private const double SettingsDialogWidth = 520;
     private const int WindowMessageDropFiles = 0x0233;
     private const int WindowLongPtrWndProc = -4;
     private static readonly string ClipboardAttachmentDirectory = Path.Combine(
@@ -225,31 +224,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static void SetFieldError(TextBox box, TextBlock errorBlock, string message)
-    {
-        box.BorderBrush = BrushRed;
-        errorBlock.Text = message;
-        errorBlock.Visibility = Visibility.Visible;
-    }
-
-    private static void ClearFieldError(TextBox box, TextBlock errorBlock)
-    {
-        box.ClearValue(TextBox.BorderBrushProperty);
-        errorBlock.Text = string.Empty;
-        errorBlock.Visibility = Visibility.Collapsed;
-    }
-
-    private static TextBlock CreateErrorTextBlock()
-    {
-        return new TextBlock
-        {
-            Foreground = BrushRed,
-            FontSize = 12,
-            Visibility = Visibility.Collapsed,
-            Margin = new Thickness(0, -8, 0, 0),
-        };
-    }
-
     private async void OnSettingsClicked(object sender, RoutedEventArgs e)
     {
         try
@@ -269,374 +243,41 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var vaultBox = new TextBox
-            {
-                Header = "知识库目录",
-                Text = _settings.VaultDir,
-                PlaceholderText = "例如 D:\\KnowledgeVault",
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            var openVaultButton = new Button
-            {
-                Content = "打开目录"
-            };
-            openVaultButton.Click += async (_, _) => await OpenVaultDirectoryAsync();
-            var apiKeyBox = new PasswordBox
-            {
-                Header = "API Key",
-                Password = _settings.Provider.ApiKey,
-                PlaceholderText = "输入模型服务 API Key",
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            var baseUrlBox = new TextBox
-            {
-                Header = "接口地址",
-                Text = _settings.Provider.BaseUrl,
-                PlaceholderText = "例如 https://api.openai.com/v1",
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            var modelBox = new TextBox
-            {
-                Header = "模型",
-                Text = _settings.Provider.Model,
-                PlaceholderText = "例如 gpt-4o-mini",
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            var timeoutBox = new TextBox
-            {
-                Header = "请求超时（毫秒）",
-                Text = _settings.Provider.RequestTimeoutMs.ToString(),
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            var timeoutError = CreateErrorTextBlock();
-            timeoutBox.LostFocus += (_, _) =>
-            {
-                if (!ulong.TryParse(timeoutBox.Text.Trim(), out var v) || v == 0)
-                    SetFieldError(timeoutBox, timeoutError, "超时必须是大于 0 的数字");
-                else
-                    ClearFieldError(timeoutBox, timeoutError);
-            };
-            var contextWindowBox = new TextBox
-            {
-                Header = "上下文窗口 Token 数（可选）",
-                Text = _settings.Provider.ContextWindowTokens?.ToString() ?? string.Empty,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            var contextWindowError = CreateErrorTextBlock();
-            contextWindowBox.LostFocus += (_, _) =>
-            {
-                var text = contextWindowBox.Text.Trim();
-                if (!string.IsNullOrEmpty(text) && !ulong.TryParse(text, out _))
-                    SetFieldError(contextWindowBox, contextWindowError, "Token 数必须是数字");
-                else
-                    ClearFieldError(contextWindowBox, contextWindowError);
-            };
-            var autoCheckUpdatesBox = new CheckBox
-            {
-                Content = "启动时自动检查更新",
-                IsChecked = _settings.AutoCheckUpdates,
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-
-            // Auto-wake section.
-            var autoWakeSeparator = new Border
-            {
-                Height = 1,
-                Background = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                Margin = new Thickness(0, 4, 0, 4),
-            };
-            var autoWakeHeader = new TextBlock
-            {
-                Text = "自动唤醒",
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            };
-            var autoWakeEnabledBox = new CheckBox
-            {
-                Content = "启用自动唤醒（定时调用 API 保持会话活跃）",
-                IsChecked = _settings.AutoWakeEnabled,
-                HorizontalAlignment = HorizontalAlignment.Left,
-            };
-            var autoWakeIntervalBox = new TextBox
-            {
-                Header = "唤醒间隔（分钟）",
-                Text = _settings.AutoWakeIntervalMinutes.ToString(),
-                PlaceholderText = "30",
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-            };
-            var autoWakeIntervalError = CreateErrorTextBlock();
-            autoWakeIntervalBox.LostFocus += (_, _) =>
-            {
-                if (!ulong.TryParse(autoWakeIntervalBox.Text.Trim(), out var v) || v == 0)
-                    SetFieldError(autoWakeIntervalBox, autoWakeIntervalError, "间隔必须是大于 0 的数字");
-                else
-                    ClearFieldError(autoWakeIntervalBox, autoWakeIntervalError);
-            };
-            var autoWakeModelBox = new ComboBox
-            {
-                Header = "唤醒使用的模型（留空使用默认模型）",
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                IsEditable = true,
-                PlaceholderText = _settings.Provider.Model,
-            };
-            autoWakeModelBox.Items.Add(string.Empty);
-            foreach (var model in GetModelsForProvider(_settings.Provider.BaseUrl))
-            {
-                autoWakeModelBox.Items.Add(model);
-            }
-            if (string.IsNullOrEmpty(_settings.AutoWakeModel))
-            {
-                autoWakeModelBox.SelectedIndex = 0;
-            }
-            else
-            {
-                autoWakeModelBox.Text = _settings.AutoWakeModel;
-            }
-            var autoWakeStartTimeBox = new TextBox
-            {
-                Header = "开始时间（HH:mm，留空不限）",
-                Text = _settings?.AutoWakeStartTime ?? string.Empty,
-                PlaceholderText = "05:00",
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-            };
-            var autoWakeStartTimeError = CreateErrorTextBlock();
-            autoWakeStartTimeBox.LostFocus += (_, _) =>
-            {
-                var text = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
-                if (!string.IsNullOrEmpty(text) && !TimeSpan.TryParse(text, out _))
-                    SetFieldError(autoWakeStartTimeBox, autoWakeStartTimeError, "时间格式无效，请使用 HH:mm");
-                else
-                    ClearFieldError(autoWakeStartTimeBox, autoWakeStartTimeError);
-            };
-            var autoWakeEndTimeBox = new TextBox
-            {
-                Header = "结束时间（HH:mm，留空不限）",
-                Text = _settings?.AutoWakeEndTime ?? string.Empty,
-                PlaceholderText = "23:00",
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-            };
-            var autoWakeEndTimeError = CreateErrorTextBlock();
-            autoWakeEndTimeBox.LostFocus += (_, _) =>
-            {
-                var text = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
-                if (!string.IsNullOrEmpty(text) && !TimeSpan.TryParse(text, out _))
-                    SetFieldError(autoWakeEndTimeBox, autoWakeEndTimeError, "时间格式无效，请使用 HH:mm");
-                else
-                    ClearFieldError(autoWakeEndTimeBox, autoWakeEndTimeError);
-            };
-
-            var projectLinkButton = new Button
-            {
-                Content = "项目地址",
-                HorizontalAlignment = HorizontalAlignment.Left
-            };
-            projectLinkButton.Click += async (_, _) => await OpenProjectHomepageAsync();
-            var versionLabel = new TextBlock
-            {
-                Text = ResolveDisplayVersion(),
-                Opacity = 0.6,
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
-            var footerRow = new Grid
-            {
-                ColumnSpacing = 12
-            };
-            footerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            footerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            footerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(autoCheckUpdatesBox, 0);
-            Grid.SetColumn(projectLinkButton, 1);
-            Grid.SetColumn(versionLabel, 2);
-            footerRow.Children.Add(autoCheckUpdatesBox);
-            footerRow.Children.Add(projectLinkButton);
-            footerRow.Children.Add(versionLabel);
-
-            var panel = new StackPanel
-            {
-                Spacing = 12,
-                Width = SettingsDialogWidth,
-                HorizontalAlignment = HorizontalAlignment.Stretch
-            };
-            panel.Children.Add(vaultBox);
-            panel.Children.Add(openVaultButton);
-            panel.Children.Add(apiKeyBox);
-            panel.Children.Add(baseUrlBox);
-            panel.Children.Add(modelBox);
-            panel.Children.Add(timeoutBox);
-            panel.Children.Add(timeoutError);
-            panel.Children.Add(contextWindowBox);
-            panel.Children.Add(contextWindowError);
-            panel.Children.Add(autoWakeSeparator);
-            panel.Children.Add(autoWakeHeader);
-            panel.Children.Add(autoWakeEnabledBox);
-            panel.Children.Add(autoWakeIntervalBox);
-            panel.Children.Add(autoWakeIntervalError);
-            panel.Children.Add(autoWakeModelBox);
-            panel.Children.Add(autoWakeStartTimeBox);
-            panel.Children.Add(autoWakeStartTimeError);
-            panel.Children.Add(autoWakeEndTimeBox);
-            panel.Children.Add(autoWakeEndTimeError);
-
-            var nextWakeLabel = new TextBlock
-            {
-                Opacity = 0.7,
-            };
-            if (_settings?.AutoWakeEnabled == true)
+            // Compute next wake time text for display in the dialog.
+            string? nextWakeText = null;
+            if (_settings.AutoWakeEnabled)
             {
                 var next = GetNextAutoWakeTime();
                 if (next.HasValue)
                 {
-                    nextWakeLabel.Text = next.Value.Date == DateTime.Today
+                    nextWakeText = next.Value.Date == DateTime.Today
                         ? $"下次唤醒: {next.Value:HH:mm}"
                         : $"下次唤醒: {next.Value:MM/dd HH:mm}";
                 }
             }
-            panel.Children.Add(nextWakeLabel);
 
-            // Inline error bar shown at the top of the dialog.
-            var errorInfoBar = new InfoBar
-            {
-                Severity = InfoBarSeverity.Error,
-                Title = "设置校验失败",
-                IsOpen = false,
-                IsClosable = false,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-            };
-            panel.Children.Insert(0, errorInfoBar);
+            var models = GetModelsForProvider(_settings.Provider.BaseUrl);
 
-            panel.Children.Add(footerRow);
-
-            var dialog = new ContentDialog
-            {
-                XamlRoot = RootGrid.XamlRoot,
-                Title = "设置",
-                PrimaryButtonText = "保存",
-                CloseButtonText = "取消",
-                DefaultButton = ContentDialogButton.Primary,
-                Content = new ScrollViewer
-                {
-                    MaxHeight = 520,
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                    Content = panel
-                }
-            };
-
-            // Validate and save BEFORE the dialog closes so the user never
-            // loses input on a validation failure.  Setting args.Cancel = true
-            // keeps the dialog open; only an error-free path lets it close.
-            dialog.PrimaryButtonClick += async (_, args) =>
-            {
-                var deferral = args.GetDeferral();
-                try
-                {
-                    var validationErrors = new List<string>();
-
-                    var trimmedApiKey = apiKeyBox.Password.Trim();
-                    if (string.IsNullOrEmpty(trimmedApiKey))
-                    {
-                        validationErrors.Add("API Key 不能为空。");
-                    }
-
-                    var trimmedBaseUrl = baseUrlBox.Text.Trim();
-                    if (string.IsNullOrEmpty(trimmedBaseUrl))
-                    {
-                        validationErrors.Add("接口地址不能为空。");
-                    }
-                    else if (!Uri.TryCreate(trimmedBaseUrl, UriKind.Absolute, out var parsedUri)
-                             || (parsedUri.Scheme != "http" && parsedUri.Scheme != "https"))
-                    {
-                        validationErrors.Add("接口地址必须是有效的 http:// 或 https:// URL。");
-                    }
-
-                    var trimmedModel = modelBox.Text.Trim();
-                    if (string.IsNullOrEmpty(trimmedModel))
-                    {
-                        validationErrors.Add("模型名称不能为空。");
-                    }
-
-                    var trimmedWakeStart = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
-                    if (!string.IsNullOrEmpty(trimmedWakeStart) && !TimeSpan.TryParse(trimmedWakeStart, out _))
-                    {
-                        validationErrors.Add("自动唤醒开始时间格式无效，请使用 HH:mm 格式。");
-                    }
-
-                    var trimmedWakeEnd = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
-                    if (!string.IsNullOrEmpty(trimmedWakeEnd) && !TimeSpan.TryParse(trimmedWakeEnd, out _))
-                    {
-                        validationErrors.Add("自动唤醒结束时间格式无效，请使用 HH:mm 格式。");
-                    }
-
-                    if (!ulong.TryParse(timeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs == 0)
-                    {
-                        validationErrors.Add("请求超时必须是大于 0 的数字。");
-                    }
-
-                    ulong? contextWindowTokens = null;
-                    if (!string.IsNullOrWhiteSpace(contextWindowBox.Text))
-                    {
-                        if (!ulong.TryParse(contextWindowBox.Text.Trim(), out var parsedContextWindow))
-                        {
-                            validationErrors.Add("上下文窗口 Token 数必须是数字。");
-                        }
-                        else
-                        {
-                            contextWindowTokens = parsedContextWindow;
-                        }
-                    }
-
-                    if (validationErrors.Count > 0)
-                    {
-                        errorInfoBar.Message = string.Join("\n", validationErrors);
-                        errorInfoBar.IsOpen = true;
-                        args.Cancel = true;
-                        return;
-                    }
-
-                    errorInfoBar.IsOpen = false;
-
-                    if (!ulong.TryParse(autoWakeIntervalBox.Text?.Trim() ?? "30", out var autoWakeInterval) || autoWakeInterval == 0)
-                    {
-                        autoWakeInterval = 30;
-                    }
-
-                    var autoWakeModel = (autoWakeModelBox.SelectedItem as string ?? autoWakeModelBox.Text ?? string.Empty).Trim();
-                    var autoWakeStartTime = trimmedWakeStart;
-                    var autoWakeEndTime = trimmedWakeEnd;
-
-                    var updated = new AppSettings(
-                        vaultBox.Text.Trim(),
-                        new ProviderConfig(
-                            trimmedApiKey,
-                            trimmedBaseUrl,
-                            trimmedModel,
-                            timeoutMs,
-                            contextWindowTokens),
-                        autoCheckUpdatesBox.IsChecked ?? true,
-                        autoWakeEnabledBox.IsChecked ?? false,
-                        autoWakeInterval,
-                        autoWakeModel,
-                        autoWakeStartTime,
-                        autoWakeEndTime);
-
-                    _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated });
-                    RefreshVaultSummary();
-                    RefreshContextStatus();
-                    ApplyAutoWakeSettings();
-                    UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
-                    ShowNextWakeTime();
-                }
-                catch (Exception error)
-                {
-                    ShowError("保存设置失败", error);
-                    args.Cancel = true;
-                }
-                finally
-                {
-                    deferral.Complete();
-                }
-            };
+            var dialog = new Views.SettingsDialog(
+                _settings,
+                models,
+                nextWakeText,
+                ResolveDisplayVersion(),
+                RootGrid.XamlRoot,
+                OpenVaultDirectoryAsync,
+                OpenProjectHomepageAsync);
 
             await dialog.ShowAsync();
+
+            if (dialog.UpdatedSettings is { } updated)
+            {
+                _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated });
+                RefreshVaultSummary();
+                RefreshContextStatus();
+                ApplyAutoWakeSettings();
+                UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
+                ShowNextWakeTime();
+            }
         }
         catch (Exception error)
         {

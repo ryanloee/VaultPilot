@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::runtime::Runtime;
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use vaultpilot_lib::models::*;
@@ -839,6 +840,7 @@ async fn run_http_bridge(
             rate_limit_middleware,
         ))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
+        .layer(CorsLayer::very_permissive())
         .with_state(state);
 
     println!(

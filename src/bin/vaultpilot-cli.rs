@@ -1500,6 +1500,7 @@ async fn handle_mcp_request(
                     tags: Vec::new(),
                     keywords: Vec::new(),
                     limit: Some(offset + limit),
+                    ..Default::default()
                 },
             ) {
                 Ok(result) => {
@@ -1741,6 +1742,7 @@ async fn handle_mcp_request(
                             tags: Vec::new(),
                             keywords: Vec::new(),
                             limit: Some(limit),
+                            ..Default::default()
                         },
                     ) {
                         Ok(result) => {
@@ -2310,6 +2312,7 @@ fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
             tags: Vec::new(),
             keywords: Vec::new(),
             limit: Some(limit),
+            ..Default::default()
         },
     ) {
         Ok(result) => {
@@ -2390,6 +2393,7 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
             tags: parse_csv(tags_str),
             keywords: parse_csv(keywords_str),
             limit: Some(limit),
+            ..Default::default()
         },
     ) {
         Ok(result) => {

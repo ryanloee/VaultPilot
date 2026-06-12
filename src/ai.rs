@@ -453,38 +453,92 @@ fn is_openai_reasoning_model(model: &str) -> bool {
     false
 }
 
+/// A model context window rule for the built-in registry.
+///
+/// All `substrings` must appear in the model name (lowercased) for the rule to
+/// match. Rules are evaluated in order — place more specific patterns before
+/// general ones (e.g. `["claude", "1m"]` before `["claude"]`).
+struct ContextWindowRule {
+    substrings: &'static [&'static str],
+    tokens: usize,
+}
+
+/// Built-in model context window registry.
+///
+/// To add support for a new model, append an entry here — no other code changes
+/// required. Order matters: first matching rule wins, so put more specific
+/// patterns before general ones.
+static MODEL_CONTEXT_RULES: &[ContextWindowRule] = &[
+    // ── Anthropic ────────────────────────────────────────────────────
+    ContextWindowRule {
+        substrings: &["claude", "1m"],
+        tokens: 1_000_000,
+    },
+    ContextWindowRule {
+        substrings: &["claude"],
+        tokens: 200_000,
+    },
+    // ── Zhipu ────────────────────────────────────────────────────────
+    ContextWindowRule {
+        substrings: &["glm-5.1"],
+        tokens: 200_000,
+    },
+    // ── OpenAI ───────────────────────────────────────────────────────
+    ContextWindowRule {
+        substrings: &["gpt-4.1"],
+        tokens: 1_047_576,
+    },
+    ContextWindowRule {
+        substrings: &["gpt-5"],
+        tokens: 1_047_576,
+    },
+    ContextWindowRule {
+        substrings: &["gpt-4o"],
+        tokens: 128_000,
+    },
+    // ── Google ───────────────────────────────────────────────────────
+    ContextWindowRule {
+        substrings: &["gemini"],
+        tokens: 1_000_000,
+    },
+];
+
 pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
+    // Priority 1: explicit user configuration
     if let Some(explicit) = settings
         .provider
         .context_window_tokens
         .filter(|value| *value > 0)
     {
+        eprintln!("[vaultpilot] context window: {explicit} tokens (source: manual_override)");
         return (explicit, "manual_override".to_string());
     }
 
     let model = settings.provider.model.trim().to_ascii_lowercase();
-    if model.contains("glm-5.1") {
-        return (200_000, "model_registry".to_string());
-    }
-    if model.contains("claude") {
-        if model.contains("1m") {
-            return (1_000_000, "model_registry".to_string());
+
+    // Priority 2: built-in registry (data-driven)
+    for rule in MODEL_CONTEXT_RULES {
+        if rule.substrings.iter().all(|s| model.contains(s)) {
+            eprintln!(
+                "[vaultpilot] context window: {} tokens for model '{model}' (source: model_registry)",
+                rule.tokens,
+            );
+            return (rule.tokens, "model_registry".to_string());
         }
-        return (200_000, "model_registry".to_string());
-    }
-    if model.contains("gpt-4.1") || model.contains("gpt-5") {
-        return (1_047_576, "model_registry".to_string());
-    }
-    if model.contains("gpt-4o") {
-        return (128_000, "model_registry".to_string());
-    }
-    if is_openai_reasoning_model(&model) {
-        return (200_000, "model_registry".to_string());
-    }
-    if model.contains("gemini") {
-        return (1_000_000, "model_registry".to_string());
     }
 
+    // Priority 3: OpenAI reasoning models (prefix-based, not substring)
+    if is_openai_reasoning_model(&model) {
+        eprintln!(
+            "[vaultpilot] context window: 200000 tokens for model '{model}' (source: model_registry)"
+        );
+        return (200_000, "model_registry".to_string());
+    }
+
+    // Priority 4: heuristic default
+    eprintln!(
+        "[vaultpilot] context window: 128000 tokens for model '{model}' (source: heuristic_default)"
+    );
     (128_000, "heuristic_default".to_string())
 }
 

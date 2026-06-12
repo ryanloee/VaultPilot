@@ -386,6 +386,10 @@ public sealed class BackendClient : IAsyncDisposable
         _healthCheckTimer = null;
 
         await DisposeProcessAsync();
+
+        _writeLock?.Dispose();
+        _reconnectLock?.Dispose();
+        _readerCts?.Dispose();
     }
 
     private async Task DisposeProcessAsync()

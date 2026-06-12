@@ -876,7 +876,7 @@ async fn send_request_with_temperature(
             return Err(anyhow!(
                 "API request failed ({}): {}",
                 status.as_u16(),
-                detail
+                crate::sanitize_error(&detail)
             ));
         }
 
@@ -927,7 +927,10 @@ fn format_transport_error(error: &reqwest::Error, endpoint: &str) -> String {
     if error.is_decode() {
         return "模型服务返回的数据格式无法解析。".to_string();
     }
-    format!("调用模型服务失败：{}", error)
+    format!(
+        "调用模型服务失败：{}",
+        crate::sanitize_error(&error.to_string())
+    )
 }
 
 fn build_input_blocks(prompt: &str, image_paths: &[String]) -> Result<Vec<AnthropicInputBlock>> {

@@ -20,6 +20,115 @@ use storage::{
 };
 use uuid::Uuid;
 
+/// Redact sensitive substrings — API keys, bearer tokens, and secret query
+/// parameters — from an error or log message before it is shown to the user
+/// or written to a crash log.
+///
+/// The function is intentionally simple and conservative: it only redacts
+/// patterns it is confident about to avoid mangling unrelated messages.
+pub fn sanitize_error(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let bytes = message.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        // 1. Redact OpenAI / Anthropic-style secret keys: "sk-" followed by
+        //    20+ base64url characters (letters, digits, hyphen, underscore).
+        if i + 3 <= len
+            && &bytes[i..i + 3] == b"sk-"
+            && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+        {
+            let key_end = scan_secret_token(bytes, i + 3);
+            if key_end - (i + 3) >= 20 {
+                out.push_str("sk-[REDACTED]");
+                i = key_end;
+                continue;
+            }
+        }
+
+        // 2. Redact Bearer tokens: "Bearer " followed by 20+ non-whitespace
+        //    characters.
+        if i + 7 <= len && bytes[i..i + 7].eq_ignore_ascii_case(b"Bearer ") {
+            let tok_start = i + 7;
+            let tok_end = scan_until_whitespace(bytes, tok_start);
+            if tok_end - tok_start >= 20 {
+                out.push_str("Bearer [REDACTED]");
+                i = tok_end;
+                continue;
+            }
+        }
+
+        // 3. Redact URL query parameters that carry secrets:
+        //    "api_key=", "api-key=", "access_token=", "secret=", "token=", "key="
+        //    Only when preceded by '?' or '&' (or start-of-string).
+        for param_prefix in &[
+            "api_key=",
+            "api-key=",
+            "access_token=",
+            "secret=",
+            "token=",
+            "key=",
+        ] {
+            let prefix_bytes = param_prefix.as_bytes();
+            let plen = prefix_bytes.len();
+            if i + plen <= len
+                && bytes[i..i + plen].eq_ignore_ascii_case(prefix_bytes)
+                && (i == 0 || bytes[i - 1] == b'?' || bytes[i - 1] == b'&')
+            {
+                let val_end = scan_until_ampersand_or_end(bytes, i + plen);
+                if val_end - (i + plen) >= 8 {
+                    out.push_str(param_prefix);
+                    out.push_str("[REDACTED]");
+                    i = val_end;
+                    // If the value ended at '&' keep the ampersand for URL structure.
+                    if i < len && bytes[i] == b'&' {
+                        out.push('&');
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+
+    out
+}
+
+/// Scan forward from `pos` over base64url characters (a-z A-Z 0-9 - _ .).
+/// Returns the index just past the last such character.
+fn scan_secret_token(bytes: &[u8], pos: usize) -> usize {
+    let mut j = pos;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => j += 1,
+            _ => break,
+        }
+    }
+    j
+}
+
+/// Scan forward from `pos` until whitespace or end-of-string.
+fn scan_until_whitespace(bytes: &[u8], pos: usize) -> usize {
+    let mut j = pos;
+    while j < bytes.len() && !bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    j
+}
+
+/// Scan forward from `pos` until '&' or end-of-string.
+fn scan_until_ampersand_or_end(bytes: &[u8], pos: usize) -> usize {
+    let mut j = pos;
+    while j < bytes.len() && bytes[j] != b'&' {
+        j += 1;
+    }
+    j
+}
+
 pub async fn compress_chat_history_with_context(
     context: &StorageContext,
     summary: Option<ConversationSummary>,
@@ -1362,7 +1471,7 @@ mod tests {
         estimate_tokens_for_text, estimate_turn_tokens, extract_explicit_local_path,
         has_matching_tool_execution, looks_like_record_request, looks_like_session_memory_question,
         looks_like_small_talk, merge_usage, normalize_tool_path, planned_tool_identity,
-        require_saved_note_for_record_request, resolve_or_create_chat_session,
+        require_saved_note_for_record_request, resolve_or_create_chat_session, sanitize_error,
         summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession, ChatState,
         ChatTurn, ConversationSummary, ThinkingTrace, ToolExecution, IMAGE_ONLY_PROMPT,
         OCR_SECTION_HEADER,
@@ -1943,5 +2052,51 @@ mod tests {
         let merged = merge_usage(current, next);
         assert_eq!(merged.input_tokens, Some(100));
         assert_eq!(merged.output_tokens, Some(50));
+    }
+
+    // ── sanitize_error ──
+
+    #[test]
+    fn sanitize_redacts_openai_style_key() {
+        let msg = "request failed: invalid key sk-abcdefghijklmnopqrstuvwxyz123456";
+        let sanitized = sanitize_error(msg);
+        assert!(sanitized.contains("sk-[REDACTED]"));
+        assert!(!sanitized.contains("abcdefghijklmnopqrstuvwxyz123456"));
+    }
+
+    #[test]
+    fn sanitize_redacts_bearer_token() {
+        let msg = "auth failed: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+        let sanitized = sanitize_error(msg);
+        assert!(sanitized.contains("Bearer [REDACTED]"));
+        assert!(!sanitized.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
+    }
+
+    #[test]
+    fn sanitize_redacts_url_api_key_param() {
+        let msg = "request to https://api.example.com/v1?key=sk-abcdefghijklmnopqrstuvwxyz123456&model=gpt-4 failed";
+        let sanitized = sanitize_error(msg);
+        assert!(sanitized.contains("key=[REDACTED]"));
+        assert!(sanitized.contains("&model=gpt-4"));
+        assert!(!sanitized.contains("sk-abcdefghijklmnopqrstuvwxyz123456"));
+    }
+
+    #[test]
+    fn sanitize_preserves_normal_error_messages() {
+        let msg = "API request failed (404): model not found";
+        assert_eq!(sanitize_error(msg), msg);
+    }
+
+    #[test]
+    fn sanitize_does_not_redact_short_strings_after_sk() {
+        let msg = "task-skipping is not allowed";
+        // "sk-" prefix with only a short suffix should not be redacted
+        let sanitized = sanitize_error(msg);
+        assert_eq!(sanitized, msg);
+    }
+
+    #[test]
+    fn sanitize_handles_empty_string() {
+        assert_eq!(sanitize_error(""), "");
     }
 }

@@ -1352,6 +1352,12 @@ async fn handle_mcp_request(
                     "capabilities": {
                         "tools": {
                             "listChanged": false
+                        },
+                        "resources": {
+                            "listChanged": false
+                        },
+                        "prompts": {
+                            "listChanged": false
                         }
                     },
                     "serverInfo": {
@@ -1458,12 +1464,355 @@ async fn handle_mcp_request(
 
             Some(McpResponse::ok(id, result))
         }
-        "resources/list" => request
-            .id
-            .map(|id| McpResponse::ok(id, serde_json::json!({ "resources": [] }))),
-        "prompts/list" => request
-            .id
-            .map(|id| McpResponse::ok(id, serde_json::json!({ "prompts": [] }))),
+        "resources/list" => {
+            let id = match request.id {
+                Some(id) => id,
+                None => {
+                    return Some(McpResponse::error(
+                        Value::Null,
+                        -32600,
+                        "resources/list requires a request id".to_string(),
+                        None,
+                    ))
+                }
+            };
+            if !state.initialized {
+                return Some(McpResponse::error(
+                    id,
+                    -32002,
+                    "server not initialized".to_string(),
+                    None,
+                ));
+            }
+            let cursor = request
+                .params
+                .get("cursor")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let limit: usize = 50;
+            let offset = cursor.parse::<usize>().unwrap_or(0);
+            match search_notes_with_context(
+                context,
+                SearchQuery {
+                    text: String::new(),
+                    tags: Vec::new(),
+                    keywords: Vec::new(),
+                    limit: Some(offset + limit),
+                },
+            ) {
+                Ok(result) => {
+                    let resources: Vec<Value> = result
+                        .notes
+                        .into_iter()
+                        .skip(offset)
+                        .map(|meta| {
+                            serde_json::json!({
+                                "uri": format!("vault://notes/{}", meta.id),
+                                "name": meta.title,
+                                "description": if meta.summary.is_empty() { None } else { Some(&meta.summary) },
+                                "mimeType": "text/markdown"
+                            })
+                        })
+                        .collect();
+                    let next_offset = offset + resources.len();
+                    let has_more = resources.len() == limit;
+                    let next_cursor = if has_more {
+                        Some(next_offset.to_string())
+                    } else {
+                        None
+                    };
+                    let mut payload = serde_json::json!({ "resources": resources });
+                    if let Some(cursor) = next_cursor {
+                        payload["nextCursor"] = Value::String(cursor);
+                    }
+                    Some(McpResponse::ok(id, payload))
+                }
+                Err(e) => Some(McpResponse::error(
+                    id,
+                    -32603,
+                    format!("failed to list resources: {e}"),
+                    None,
+                )),
+            }
+        }
+        "resources/read" => {
+            let id = match request.id {
+                Some(id) => id,
+                None => {
+                    return Some(McpResponse::error(
+                        Value::Null,
+                        -32600,
+                        "resources/read requires a request id".to_string(),
+                        None,
+                    ))
+                }
+            };
+            if !state.initialized {
+                return Some(McpResponse::error(
+                    id,
+                    -32002,
+                    "server not initialized".to_string(),
+                    None,
+                ));
+            }
+            let uri = match request.params.get("uri").and_then(Value::as_str) {
+                Some(u) => u,
+                None => {
+                    return Some(McpResponse::error(
+                        id,
+                        -32602,
+                        "resources/read requires a string params.uri".to_string(),
+                        None,
+                    ))
+                }
+            };
+            // Parse vault://notes/{id}
+            let note_id = match uri.strip_prefix("vault://notes/") {
+                Some(nid) => nid,
+                None => {
+                    return Some(McpResponse::error(
+                        id,
+                        -32602,
+                        format!("unsupported resource URI scheme: {uri}"),
+                        None,
+                    ))
+                }
+            };
+            match load_note_with_context(context, note_id) {
+                Ok(note) => Some(McpResponse::ok(
+                    id,
+                    serde_json::json!({
+                        "contents": [{
+                            "uri": uri,
+                            "mimeType": "text/markdown",
+                            "text": note.body
+                        }]
+                    }),
+                )),
+                Err(e) => Some(McpResponse::error(
+                    id,
+                    -32603,
+                    format!("failed to read resource: {e}"),
+                    None,
+                )),
+            }
+        }
+        "prompts/list" => {
+            let id = match request.id {
+                Some(id) => id,
+                None => {
+                    return Some(McpResponse::error(
+                        Value::Null,
+                        -32600,
+                        "prompts/list requires a request id".to_string(),
+                        None,
+                    ))
+                }
+            };
+            if !state.initialized {
+                return Some(McpResponse::error(
+                    id,
+                    -32002,
+                    "server not initialized".to_string(),
+                    None,
+                ));
+            }
+            Some(McpResponse::ok(
+                id,
+                serde_json::json!({
+                    "prompts": [
+                        {
+                            "name": "summarize-note",
+                            "description": "Summarize a vault note by ID",
+                            "arguments": [
+                                { "name": "noteId", "description": "The ID of the note to summarize", "required": true }
+                            ]
+                        },
+                        {
+                            "name": "find-related",
+                            "description": "Find notes related to a given topic or note",
+                            "arguments": [
+                                { "name": "topic", "description": "The topic or keywords to search for", "required": true },
+                                { "name": "limit", "description": "Maximum number of related notes to return", "required": false }
+                            ]
+                        },
+                        {
+                            "name": "draft-from-keywords",
+                            "description": "Draft a note from keywords with optional style guidance",
+                            "arguments": [
+                                { "name": "keywords", "description": "Comma-separated keywords for the note", "required": true },
+                                { "name": "style", "description": "Writing style: concise, detailed, tutorial, reference", "required": false }
+                            ]
+                        }
+                    ]
+                }),
+            ))
+        }
+        "prompts/get" => {
+            let id = match request.id {
+                Some(id) => id,
+                None => {
+                    return Some(McpResponse::error(
+                        Value::Null,
+                        -32600,
+                        "prompts/get requires a request id".to_string(),
+                        None,
+                    ))
+                }
+            };
+            if !state.initialized {
+                return Some(McpResponse::error(
+                    id,
+                    -32002,
+                    "server not initialized".to_string(),
+                    None,
+                ));
+            }
+            let prompt_name = match request.params.get("name").and_then(Value::as_str) {
+                Some(n) => n,
+                None => {
+                    return Some(McpResponse::error(
+                        id,
+                        -32602,
+                        "prompts/get requires a string params.name".to_string(),
+                        None,
+                    ))
+                }
+            };
+            let args = request
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
+            let messages = match prompt_name {
+                "summarize-note" => {
+                    let note_id = match args.get("noteId").and_then(Value::as_str) {
+                        Some(nid) => nid,
+                        None => {
+                            return Some(McpResponse::error(
+                                id,
+                                -32602,
+                                "summarize-note requires 'noteId' argument".to_string(),
+                                None,
+                            ))
+                        }
+                    };
+                    match load_note_with_context(context, note_id) {
+                        Ok(note) => vec![serde_json::json!({
+                            "role": "user",
+                            "content": {
+                                "type": "text",
+                                "text": format!(
+                                    "Please provide a concise summary of the following note titled \"{}\":\n\n{}",
+                                    note.meta.title, note.body
+                                )
+                            }
+                        })],
+                        Err(e) => {
+                            return Some(McpResponse::error(
+                                id,
+                                -32603,
+                                format!("failed to load note: {e}"),
+                                None,
+                            ))
+                        }
+                    }
+                }
+                "find-related" => {
+                    let topic = match args.get("topic").and_then(Value::as_str) {
+                        Some(t) => t,
+                        None => {
+                            return Some(McpResponse::error(
+                                id,
+                                -32602,
+                                "find-related requires 'topic' argument".to_string(),
+                                None,
+                            ))
+                        }
+                    };
+                    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5) as usize;
+                    match search_notes_with_context(
+                        context,
+                        SearchQuery {
+                            text: topic.to_string(),
+                            tags: Vec::new(),
+                            keywords: Vec::new(),
+                            limit: Some(limit),
+                        },
+                    ) {
+                        Ok(result) => {
+                            let notes_text = result
+                                .notes
+                                .iter()
+                                .map(|m| format!("- **{}** (id: {}): {}", m.title, m.id, m.summary))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            vec![serde_json::json!({
+                                "role": "user",
+                                "content": {
+                                    "type": "text",
+                                    "text": format!(
+                                        "Here are notes related to \"{}\":\n\n{}\n\nPlease analyze their relationships and suggest how they connect.",
+                                        topic, notes_text
+                                    )
+                                }
+                            })]
+                        }
+                        Err(e) => {
+                            return Some(McpResponse::error(
+                                id,
+                                -32603,
+                                format!("failed to search notes: {e}"),
+                                None,
+                            ))
+                        }
+                    }
+                }
+                "draft-from-keywords" => {
+                    let keywords = match args.get("keywords").and_then(Value::as_str) {
+                        Some(k) => k,
+                        None => {
+                            return Some(McpResponse::error(
+                                id,
+                                -32602,
+                                "draft-from-keywords requires 'keywords' argument".to_string(),
+                                None,
+                            ))
+                        }
+                    };
+                    let style = args
+                        .get("style")
+                        .and_then(Value::as_str)
+                        .unwrap_or("concise");
+                    vec![serde_json::json!({
+                        "role": "user",
+                        "content": {
+                            "type": "text",
+                            "text": format!(
+                                "Draft a note about the following keywords: {keywords}\nWriting style: {style}\n\nPlease write a well-structured note with a title, relevant sections, and key takeaways."
+                            )
+                        }
+                    })]
+                }
+                _ => {
+                    return Some(McpResponse::error(
+                        id,
+                        -32601,
+                        format!("unknown prompt: {prompt_name}"),
+                        None,
+                    ))
+                }
+            };
+
+            Some(McpResponse::ok(
+                id,
+                serde_json::json!({
+                    "description": format!("Prompt: {prompt_name}"),
+                    "messages": messages
+                }),
+            ))
+        }
         method if method.starts_with("notifications/") => None,
         _ => request.id.map(|id| {
             McpResponse::error(

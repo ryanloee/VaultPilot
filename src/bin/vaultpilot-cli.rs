@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -1195,21 +1195,97 @@ fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiEr
 }
 
 fn run_mcp_server(context: &StorageContext, runtime: &Runtime) -> Result<()> {
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
+    runtime.block_on(run_mcp_server_async(context))
+}
+
+async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
     let mut state = McpServerState {
         initialized: false,
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
     };
 
-    for line in stdin.lock().lines() {
-        let line = line?;
+    let stdin = tokio::io::stdin();
+    let mut lines = BufReader::new(stdin).lines();
+
+    // Spawn a background task that resolves when a termination signal is
+    // received so we can incorporate it into the select! loop below.
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        // Wait for either Ctrl-C (SIGINT) or SIGTERM.
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        let _ = shutdown_tx.send(true);
+    });
+
+    loop {
+        // Before initialize, enforce a timeout so we don't block forever
+        // waiting for a client that never speaks.
+        let line: Option<String> = if !state.initialized {
+            let next = tokio::time::timeout(INITIALIZE_TIMEOUT, lines.next_line());
+            tokio::select! {
+                result = next => {
+                    match result {
+                        Ok(Ok(Some(line))) => Some(line),
+                        Ok(Ok(None)) => None,
+                        Ok(Err(e)) => return Err(anyhow::anyhow!("stdin read error: {e}")),
+                        Err(_elapsed) => {
+                            eprintln!(
+                                "MCP server: no initialize request received within {}s, shutting down",
+                                INITIALIZE_TIMEOUT.as_secs()
+                            );
+                            None
+                        }
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    eprintln!("MCP server: received shutdown signal before initialize");
+                    None
+                }
+            }
+        } else {
+            let mut shutdown = false;
+            let result = tokio::select! {
+                result = lines.next_line() => result?,
+                _ = shutdown_rx.changed() => {
+                    eprintln!("MCP server: received shutdown signal");
+                    shutdown = true;
+                    None
+                }
+            };
+            if shutdown {
+                break;
+            }
+            result
+        };
+
+        let line = match line {
+            Some(l) => l,
+            None => break, // EOF or timeout or signal
+        };
+
         if line.trim().is_empty() {
             continue;
         }
 
         let response = match serde_json::from_str::<McpRequest>(&line) {
-            Ok(request) => runtime.block_on(handle_mcp_request(context, &mut state, request)),
+            Ok(request) => handle_mcp_request(context, &mut state, request).await,
             Err(error) => Some(McpResponse::error(
                 Value::Null,
                 -32700,
@@ -1219,10 +1295,18 @@ fn run_mcp_server(context: &StorageContext, runtime: &Runtime) -> Result<()> {
         };
 
         if let Some(response) = response {
-            writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
-            stdout.flush()?;
+            use tokio::io::AsyncWriteExt;
+            let mut out = tokio::io::stdout();
+            let payload = serde_json::to_string(&response)?;
+            out.write_all(payload.as_bytes()).await?;
+            out.write_all(b"\n").await?;
+            out.flush().await?;
         }
     }
+
+    // Clean shutdown: log and give in-flight operations a moment to drain.
+    eprintln!("MCP server: shutting down cleanly");
+    tokio::time::sleep(SHUTDOWN_DRAIN_TIMEOUT).await;
 
     Ok(())
 }

@@ -408,6 +408,58 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            // --- Input validation ---
+            var validationErrors = new List<string>();
+
+            var trimmedApiKey = apiKeyBox.Password.Trim();
+            if (string.IsNullOrEmpty(trimmedApiKey))
+            {
+                validationErrors.Add("API Key 不能为空。");
+            }
+
+            var trimmedBaseUrl = baseUrlBox.Text.Trim();
+            if (string.IsNullOrEmpty(trimmedBaseUrl))
+            {
+                validationErrors.Add("接口地址不能为空。");
+            }
+            else if (!Uri.TryCreate(trimmedBaseUrl, UriKind.Absolute, out var parsedUri)
+                     || (parsedUri.Scheme != "http" && parsedUri.Scheme != "https"))
+            {
+                validationErrors.Add("接口地址必须是有效的 http:// 或 https:// URL。");
+            }
+
+            var trimmedModel = modelBox.Text.Trim();
+            if (string.IsNullOrEmpty(trimmedModel))
+            {
+                validationErrors.Add("模型名称不能为空。");
+            }
+
+            // Validate auto-wake time fields (HH:mm format, allow empty).
+            var trimmedWakeStart = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(trimmedWakeStart) && !TimeSpan.TryParse(trimmedWakeStart, out _))
+            {
+                validationErrors.Add("自动唤醒开始时间格式无效，请使用 HH:mm 格式。");
+            }
+
+            var trimmedWakeEnd = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(trimmedWakeEnd) && !TimeSpan.TryParse(trimmedWakeEnd, out _))
+            {
+                validationErrors.Add("自动唤醒结束时间格式无效，请使用 HH:mm 格式。");
+            }
+
+            if (validationErrors.Count > 0)
+            {
+                var errorDialog = new ContentDialog
+                {
+                    XamlRoot = RootGrid.XamlRoot,
+                    Title = "设置校验失败",
+                    Content = string.Join("\n", validationErrors),
+                    CloseButtonText = "确定",
+                };
+                await errorDialog.ShowAsync();
+                return;
+            }
+
             if (!ulong.TryParse(timeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs == 0)
             {
                 throw new InvalidOperationException("请求超时必须是大于 0 的数字。");
@@ -430,8 +482,8 @@ public sealed partial class MainWindow : Window
             }
 
             var autoWakeModel = (autoWakeModelBox.SelectedItem as string ?? autoWakeModelBox.Text ?? string.Empty).Trim();
-            var autoWakeStartTime = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
-            var autoWakeEndTime = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
+            var autoWakeStartTime = trimmedWakeStart;
+            var autoWakeEndTime = trimmedWakeEnd;
 
             var updated = new AppSettings(
                 vaultBox.Text.Trim(),

@@ -120,6 +120,12 @@ enum Commands {
         summary: Option<String>,
     },
 
+    /// Manage the vault (export, backup)
+    Vault {
+        #[command(subcommand)]
+        action: VaultActions,
+    },
+
     /// Start an MCP stdio server for VaultPilot's built-in model chat interface
     Mcp,
 }
@@ -245,6 +251,16 @@ enum NotesActions {
 enum IndexActions {
     /// Rebuild the search index from vault files
     Rebuild,
+}
+
+#[derive(Subcommand)]
+enum VaultActions {
+    /// Export the entire vault (notes + chat history) as a zip file
+    Export {
+        /// Output zip file path
+        #[arg(long, short)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -533,6 +549,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Mcp => Ok(serde_json::json!({
             "message": "The MCP server is started by running `vaultpilot-cli mcp` directly."
         })),
+        Commands::Vault { action } => handle_vault(context, action),
     }
 }
 
@@ -875,6 +892,15 @@ fn handle_index(context: &StorageContext, action: &IndexActions) -> Result<Value
         IndexActions::Rebuild => {
             let stats = rebuild_index_with_context(context)?;
             to_json(&stats)
+        }
+    }
+}
+
+fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value> {
+    match action {
+        VaultActions::Export { output } => {
+            let result = vault_export_with_context(context, output)?;
+            to_json(&result)
         }
     }
 }

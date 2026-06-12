@@ -488,6 +488,21 @@ pub struct ExportResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct VaultExportResult {
+    /// Number of notes exported
+    pub notes_exported: usize,
+    /// Number of chat sessions exported
+    pub sessions_exported: usize,
+    /// Path to the output zip file
+    pub output_path: String,
+    /// Size of the zip file in bytes
+    pub file_size_bytes: u64,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct IndexStats {
     pub scanned: usize,
     pub indexed: usize,

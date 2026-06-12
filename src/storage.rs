@@ -25,7 +25,7 @@ use walkdir::WalkDir;
 
 use crate::models::{
     AppSettings, ChatSession, ChatState, ExportResult, ImportResult, IndexStats, NoteDocument,
-    NoteMeta, SearchQuery, SearchResult,
+    NoteMeta, SearchQuery, SearchResult, VaultExportResult,
 };
 
 /// Type alias for a pooled SQLite connection.
@@ -83,6 +83,12 @@ impl StorageContext {
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
         }
+
+        // Auto-backup SQLite database before opening (keep last 3 backups)
+        auto_backup_database(&db_path).unwrap_or_else(|e| {
+            tracing::warn!("SQLite auto-backup failed: {e}");
+        });
+
         let manager = SqliteConnectionManager::file(&db_path).with_init(|conn| {
             conn.execute_batch(
                 "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
@@ -2723,6 +2729,132 @@ fn make_fts_query(text: &str) -> String {
         .take(8)
         .collect();
     terms.join(" ")
+}
+
+/// Auto-backup the SQLite database, keeping the last 3 backups.
+/// Creates rotating backups: db.bak, db.bak.1, db.bak.2
+fn auto_backup_database(db_path: &Path) -> Result<()> {
+    if !db_path.exists() {
+        debug!("no existing database to backup");
+        return Ok(());
+    }
+
+    let backup_dir = db_path.parent().unwrap_or(Path::new("."));
+    let max_backups = 3;
+
+    // Rotate existing backups: .bak.2 -> delete, .bak.1 -> .bak.2, .bak -> .bak.1
+    for i in (1..max_backups).rev() {
+        let older = backup_dir.join(format!(
+            "{}.bak.{i}",
+            db_path.file_name().unwrap().to_string_lossy()
+        ));
+        let newer = backup_dir.join(format!(
+            "{}.bak.{}",
+            db_path.file_name().unwrap().to_string_lossy(),
+            i + 1
+        ));
+        if older.exists() {
+            if i + 1 >= max_backups {
+                // Delete the oldest backup
+                fs::remove_file(&older).ok();
+            } else {
+                fs::rename(&older, &newer).ok();
+            }
+        }
+    }
+
+    // Move current .bak to .bak.1
+    let current_bak = backup_dir.join(format!(
+        "{}.bak",
+        db_path.file_name().unwrap().to_string_lossy()
+    ));
+    if current_bak.exists() {
+        let bak1 = backup_dir.join(format!(
+            "{}.bak.1",
+            db_path.file_name().unwrap().to_string_lossy()
+        ));
+        fs::rename(&current_bak, &bak1).ok();
+    }
+
+    // Copy current database to .bak
+    fs::copy(db_path, &current_bak).with_context(|| {
+        format!(
+            "failed to backup database from {} to {}",
+            db_path.display(),
+            current_bak.display()
+        )
+    })?;
+
+    debug!(source = %db_path.display(), backup = %current_bak.display(), "database backed up");
+    Ok(())
+}
+
+/// Export the entire vault as a zip file: all notes (as .md with frontmatter)
+/// plus all chat sessions (as a single chat-sessions.json).
+///
+/// The resulting zip has the structure:
+///   notes/<title>.md  (one file per note)
+///   chat-sessions.json  (all sessions in one JSON file)
+pub fn vault_export_with_context(
+    context: &StorageContext,
+    output_path: &Path,
+) -> Result<VaultExportResult> {
+    let mut result = VaultExportResult::default();
+
+    // Ensure parent directory exists
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Create the zip file
+    let zip_file = fs::File::create(output_path).with_context(|| {
+        format!(
+            "failed to create output zip file: {}",
+            output_path.display()
+        )
+    })?;
+    let mut zip = zip::ZipWriter::new(zip_file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    // ── Export all notes ──
+    let all_notes = search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            limit: Some(10_000),
+            ..Default::default()
+        },
+    )?;
+
+    for meta in &all_notes.notes {
+        match export_note_markdown_with_context(context, &meta.id) {
+            Ok((markdown, filename)) => {
+                let entry_name = format!("notes/{}.md", filename);
+                zip.start_file(entry_name, options)?;
+                std::io::Write::write_all(&mut zip, markdown.as_bytes())?;
+                result.notes_exported += 1;
+            }
+            Err(e) => result.errors.push(format!("{}: {e}", meta.title)),
+        }
+    }
+
+    // ── Export chat sessions ──
+    let chat_state = load_chat_state_with_context(context)?;
+    let chat_json = serde_json::to_string_pretty(&chat_state)?;
+    zip.start_file("chat-sessions.json", options)?;
+    std::io::Write::write_all(&mut zip, chat_json.as_bytes())?;
+    result.sessions_exported = chat_state.sessions.len();
+
+    zip.finish()?;
+
+    // Record output metadata
+    result.output_path = output_path.display().to_string();
+    result.file_size_bytes = fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
+
+    Ok(result)
 }
 
 #[cfg(test)]

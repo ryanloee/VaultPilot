@@ -16,6 +16,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text;
+using System.Threading;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 using Windows.Graphics;
@@ -49,6 +50,7 @@ public sealed partial class MainWindow : Window
     private readonly BackendClient _backendClient;
     private AppWindow? _appWindow;
     private ChatState _chatState = new(string.Empty, Array.Empty<ChatSession>());
+    private readonly SemaphoreSlim _chatStateLock = new(1, 1);
     private string _currentSessionId = string.Empty;
     private AppSettings? _settings;
     private int _noteCount;
@@ -695,14 +697,22 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            var remaining = _chatState.Sessions
-                .Where(item => item.Id != session.Id)
-                .ToArray();
+            await _chatStateLock.WaitAsync();
+            try
+            {
+                var remaining = _chatState.Sessions
+                    .Where(item => item.Id != session.Id)
+                    .ToArray();
 
-            _chatState = new ChatState(
-                remaining.FirstOrDefault()?.Id ?? string.Empty,
-                remaining);
-            _currentSessionId = _chatState.CurrentSessionId;
+                _chatState = new ChatState(
+                    remaining.FirstOrDefault()?.Id ?? string.Empty,
+                    remaining);
+                _currentSessionId = _chatState.CurrentSessionId;
+            }
+            finally
+            {
+                _chatStateLock.Release();
+            }
             EnsureCurrentSession();
             await SaveChatStateAsync();
             RefreshSessions();
@@ -729,10 +739,18 @@ public sealed partial class MainWindow : Window
                 now,
                 now);
 
-            _chatState = new ChatState(
-                session.Id,
-                [session, .. _chatState.Sessions]);
-            _currentSessionId = session.Id;
+            await _chatStateLock.WaitAsync();
+            try
+            {
+                _chatState = new ChatState(
+                    session.Id,
+                    [session, .. _chatState.Sessions]);
+                _currentSessionId = session.Id;
+            }
+            finally
+            {
+                _chatStateLock.Release();
+            }
             _attachments.Clear();
             ComposerBox.Text = string.Empty;
             RenderCurrentSession();
@@ -2569,11 +2587,19 @@ public sealed partial class MainWindow : Window
             Turns = session.Turns.Skip(compressibleCount).ToArray(),
             UpdatedAt = now
         };
-        var sessions = _chatState.Sessions
-            .Select(item => item.Id == updated.Id ? updated : item)
-            .ToArray();
-        _chatState = new ChatState(updated.Id, sessions);
-        _currentSessionId = updated.Id;
+        await _chatStateLock.WaitAsync();
+        try
+        {
+            var sessions = _chatState.Sessions
+                .Select(item => item.Id == updated.Id ? updated : item)
+                .ToArray();
+            _chatState = new ChatState(updated.Id, sessions);
+            _currentSessionId = updated.Id;
+        }
+        finally
+        {
+            _chatStateLock.Release();
+        }
         await SaveChatStateAsync();
         RefreshSessions();
         RenderCurrentSession();
@@ -2766,50 +2792,82 @@ public sealed partial class MainWindow : Window
         GroundedAnswer? answer = null,
         IReadOnlyList<ChatAttachment>? attachments = null)
     {
-        var session = CurrentSession();
-        if (session is null)
+        _chatStateLock.Wait();
+        try
         {
-            EnsureCurrentSession();
-            session = CurrentSession();
-        }
+            var session = CurrentSession();
+            if (session is null)
+            {
+                EnsureCurrentSession();
+                session = CurrentSession();
+            }
 
-        if (session is null)
+            if (session is null)
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow.ToString("O");
+            var turn = new ChatTurn(
+                Guid.NewGuid().ToString("N"),
+                role,
+                text,
+                answer?.Citations,
+                answer?.SavedNote,
+                answer?.ThinkingTrace,
+                attachments ?? Array.Empty<ChatAttachment>(),
+                now);
+
+            var turns = session.Turns.Concat(new[] { turn }).ToArray();
+            var title = session.Title == "新对话" && role == "user"
+                ? BuildSessionTitle(text)
+                : session.Title;
+            var updated = session with { Title = title, Turns = turns, UpdatedAt = now };
+            var sessions = _chatState.Sessions
+                .Select(item => item.Id == updated.Id ? updated : item)
+                .OrderByDescending(item => item.UpdatedAt)
+                .ToArray();
+
+            _chatState = new ChatState(updated.Id, sessions);
+            _currentSessionId = updated.Id;
+        }
+        finally
         {
-            return;
+            _chatStateLock.Release();
         }
-
-        var now = DateTimeOffset.UtcNow.ToString("O");
-        var turn = new ChatTurn(
-            Guid.NewGuid().ToString("N"),
-            role,
-            text,
-            answer?.Citations,
-            answer?.SavedNote,
-            answer?.ThinkingTrace,
-            attachments ?? Array.Empty<ChatAttachment>(),
-            now);
-
-        var turns = session.Turns.Concat(new[] { turn }).ToArray();
-        var title = session.Title == "新对话" && role == "user"
-            ? BuildSessionTitle(text)
-            : session.Title;
-        var updated = session with { Title = title, Turns = turns, UpdatedAt = now };
-        var sessions = _chatState.Sessions
-            .Select(item => item.Id == updated.Id ? updated : item)
-            .OrderByDescending(item => item.UpdatedAt)
-            .ToArray();
-
-        _chatState = new ChatState(updated.Id, sessions);
-        _currentSessionId = updated.Id;
     }
 
     private async Task SaveChatStateAsync()
     {
+        ChatState snapshot;
+        await _chatStateLock.WaitAsync();
         try
         {
-            _chatState = await _backendClient.SendAsync<ChatState>(
+            snapshot = _chatState;
+        }
+        finally
+        {
+            _chatStateLock.Release();
+        }
+
+        try
+        {
+            var saved = await _backendClient.SendAsync<ChatState>(
                 "saveChatState",
-                new { state = _chatState }) ?? _chatState;
+                new { state = snapshot });
+
+            if (saved is not null)
+            {
+                await _chatStateLock.WaitAsync();
+                try
+                {
+                    _chatState = saved;
+                }
+                finally
+                {
+                    _chatStateLock.Release();
+                }
+            }
         }
         catch (Exception error)
         {

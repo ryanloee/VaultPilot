@@ -96,6 +96,7 @@ public sealed partial class MainWindow : Window
         Closed += OnClosed;
         SendButton.Click += OnSendClicked;
         RecordButton.Click += OnRecordClicked;
+        CancelButton.Click += (_, _) => CancelActiveRequest();
         SettingsButton.Click += OnSettingsClicked;
         RebuildButton.Click += OnRebuildClicked;
         ImportButton.Click += OnImportClicked;
@@ -1068,6 +1069,7 @@ public sealed partial class MainWindow : Window
         {
             SendButton.IsEnabled = false;
             RecordButton.IsEnabled = false;
+            CancelButton.Visibility = Visibility.Visible;
             UpdateStatusBar("info", statusTitle, statusDetail);
 
             await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
@@ -1125,6 +1127,7 @@ public sealed partial class MainWindow : Window
             _activeRequestCts = null;
             SendButton.IsEnabled = true;
             RecordButton.IsEnabled = true;
+            CancelButton.Visibility = Visibility.Collapsed;
             RefreshSessions();
         }
     }

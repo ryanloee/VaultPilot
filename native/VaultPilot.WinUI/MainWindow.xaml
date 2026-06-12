@@ -229,6 +229,11 @@
                         <Button
                             x:Name="SendButton"
                             Content="发送" />
+                        <Button
+                            x:Name="CancelButton"
+                            Content="取消"
+                            Visibility="Collapsed"
+                            Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                     </StackPanel>
                 </Grid>
             </StackPanel>

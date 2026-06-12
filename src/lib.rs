@@ -134,8 +134,8 @@ pub async fn compress_chat_history_with_context(
     summary: Option<ConversationSummary>,
     history: Vec<ConversationTurn>,
     mut emit_status: impl FnMut(&str, String),
-) -> Result<ConversationSummary, String> {
-    let settings = initialize_storage_with_context(context).map_err(|error| error.to_string())?;
+) -> Result<ConversationSummary, anyhow::Error> {
+    let settings = initialize_storage_with_context(context)?;
     emit_status(
         "compressing",
         "Compressing earlier conversation context".to_string(),
@@ -144,9 +144,7 @@ pub async fn compress_chat_history_with_context(
         .as_ref()
         .map(|item| item.text.as_str())
         .unwrap_or_default();
-    let text = ai::compress_conversation(&settings, existing_summary, &history)
-        .await
-        .map_err(|error| error.to_string())?;
+    let text = ai::compress_conversation(&settings, existing_summary, &history).await?;
 
     Ok(ConversationSummary {
         text,
@@ -209,13 +207,13 @@ pub async fn chat_with_ai_with_context(
     image_paths: Option<Vec<String>>,
     create_new_session: bool,
     mut emit_status: impl FnMut(&str, String),
-) -> Result<ChatExchangeResult, String> {
-    let settings = initialize_storage_with_context(context).map_err(|error| error.to_string())?;
-    let mut state = load_chat_state_with_context(context).map_err(|error| error.to_string())?;
+) -> Result<ChatExchangeResult, anyhow::Error> {
+    let settings = initialize_storage_with_context(context)?;
+    let mut state = load_chat_state_with_context(context)?;
     let images = image_paths.unwrap_or_default();
     let trimmed_question = question.trim().to_string();
     if trimmed_question.is_empty() && images.is_empty() {
-        return Err("question is empty".to_string());
+        return Err(anyhow::anyhow!("question is empty"));
     }
 
     let prompt = build_effective_question(&trimmed_question, &images);
@@ -242,7 +240,7 @@ pub async fn chat_with_ai_with_context(
     let history = current_session_history(&state, &active_session_id)?;
     let user_turn = build_chat_turn("user", &user_display, None, &attachments);
     append_turn_to_session(&mut state, &active_session_id, user_turn)?;
-    state = save_chat_state_with_context(context, &state).map_err(|error| error.to_string())?;
+    state = save_chat_state_with_context(context, &state)?;
 
     let answer = ask_with_ai_with_context(
         context,
@@ -260,10 +258,11 @@ pub async fn chat_with_ai_with_context(
 
     let assistant_turn = build_chat_turn("assistant", &answer.answer, Some(&answer), &[]);
     append_turn_to_session(&mut state, &active_session_id, assistant_turn)?;
-    state = save_chat_state_with_context(context, &state).map_err(|error| error.to_string())?;
+    state = save_chat_state_with_context(context, &state)?;
 
-    let session = find_chat_session(&state, &active_session_id)
-        .ok_or_else(|| format!("chat session not found after save: {}", active_session_id))?;
+    let session = find_chat_session(&state, &active_session_id).ok_or_else(|| {
+        anyhow::anyhow!("chat session not found after save: {}", active_session_id)
+    })?;
 
     Ok(ChatExchangeResult {
         session_id: session.id.clone(),
@@ -281,24 +280,21 @@ pub async fn ask_with_ai_with_context(
     image_paths: Option<Vec<String>>,
     model_override: Option<String>,
     mut emit_status: impl FnMut(&str, String),
-) -> Result<GroundedAnswer, String> {
-    let mut settings =
-        initialize_storage_with_context(context).map_err(|error| error.to_string())?;
+) -> Result<GroundedAnswer, anyhow::Error> {
+    let mut settings = initialize_storage_with_context(context)?;
     if let Some(model) = model_override.filter(|m| !m.trim().is_empty()) {
         settings.provider.model = model;
     }
     let images = image_paths.unwrap_or_default();
     let raw_question = question.trim().to_string();
     if raw_question.is_empty() && images.is_empty() {
-        return Err("question is empty".to_string());
+        return Err(anyhow::anyhow!("question is empty"));
     }
 
     let effective_question = build_effective_question(&raw_question, &images);
     let history = history.unwrap_or_default();
     let session_memory_question = looks_like_session_memory_question(&raw_question);
-    let has_local_notes = !list_notes_with_context(context)
-        .map_err(|error| error.to_string())?
-        .is_empty();
+    let has_local_notes = !list_notes_with_context(context)?.is_empty();
     let mut docs: Vec<NoteDocument> = Vec::new();
     let mut tool_results: Vec<ToolExecution> = Vec::new();
     let mut saved_note: Option<NoteMeta> = None;
@@ -319,8 +315,7 @@ pub async fn ask_with_ai_with_context(
             &history,
             &tool_history,
         )
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
         usage = merge_usage(usage, selection.usage);
 
         let forced_local_path_tool =
@@ -403,15 +398,13 @@ pub async fn ask_with_ai_with_context(
                     &query,
                     &images,
                     limit.saturating_mul(3).max(8),
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
                 if docs.is_empty() {
                     emit_status(
                         "retrieving",
                         "No direct match; listing recent notes".to_string(),
                     );
-                    docs = load_recent_notes_for_overview(context, limit.min(12))
-                        .map_err(|error| error.to_string())?;
+                    docs = load_recent_notes_for_overview(context, limit.min(12))?;
                 } else {
                     emit_status("ranking", format!("Scored {} candidate notes", docs.len()));
                     docs.truncate(limit.max(1));
@@ -426,8 +419,7 @@ pub async fn ask_with_ai_with_context(
             }
             AssistantToolCall::ListNotes { limit } => {
                 emit_status("retrieving", "Loading recent notes".to_string());
-                docs = load_recent_notes_for_overview(context, limit)
-                    .map_err(|error| error.to_string())?;
+                docs = load_recent_notes_for_overview(context, limit)?;
                 let result = summarize_docs_for_tool_result("list_notes", &docs);
                 tool_results.push(ToolExecution::new(
                     "list_notes",
@@ -478,8 +470,7 @@ pub async fn ask_with_ai_with_context(
                     context,
                     draft_to_note_document(*draft),
                     &images,
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
                 let result = format!(
                     "save_note completed.
 Saved title: {}
@@ -540,19 +531,15 @@ async fn finalize_grounded_answer(
     saved_note: Option<NoteMeta>,
     usage: ai::RequestUsage,
     forced_search: bool,
-) -> Result<GroundedAnswer, String> {
+) -> Result<GroundedAnswer, anyhow::Error> {
     let answer = if tool_results.is_empty() {
-        ai::answer_question(settings, question, &[], images, history)
-            .await
-            .map_err(|error| error.to_string())?
+        ai::answer_question(settings, question, &[], images, history).await?
     } else {
         let transcript = tool_results
             .iter()
             .map(ToolExecution::render_for_model)
             .collect::<Vec<_>>();
-        ai::answer_after_tools(settings, question, &transcript, docs, history)
-            .await
-            .map_err(|error| error.to_string())?
+        ai::answer_after_tools(settings, question, &transcript, docs, history).await?
     };
 
     let usage = merge_usage(usage, answer.usage);
@@ -581,7 +568,7 @@ async fn finalize_checked_grounded_answer(
     saved_note: Option<NoteMeta>,
     usage: ai::RequestUsage,
     forced_search: bool,
-) -> Result<GroundedAnswer, String> {
+) -> Result<GroundedAnswer, anyhow::Error> {
     let answer = finalize_grounded_answer(
         settings,
         effective_question,
@@ -601,9 +588,11 @@ async fn finalize_checked_grounded_answer(
 fn require_saved_note_for_record_request(
     question: &str,
     answer: GroundedAnswer,
-) -> Result<GroundedAnswer, String> {
+) -> Result<GroundedAnswer, anyhow::Error> {
     if looks_like_record_request(question) && answer.saved_note.is_none() {
-        return Err("record request did not produce a saved note".to_string());
+        return Err(anyhow::anyhow!(
+            "record request did not produce a saved note"
+        ));
     }
 
     Ok(answer)
@@ -810,18 +799,17 @@ fn display_path(path: &str) -> &str {
     }
 }
 
-fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, String> {
+fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Error> {
     let directory = normalize_tool_path(path, vault_root)?;
     let display = directory.display().to_string();
     if !directory.exists() {
-        return Err(format!("path does not exist: {}", display));
+        return Err(anyhow::anyhow!("path does not exist: {}", display));
     }
     if !directory.is_dir() {
-        return Err(format!("path is not a directory: {}", display));
+        return Err(anyhow::anyhow!("path is not a directory: {}", display));
     }
 
-    let mut entries = fs::read_dir(directory)
-        .map_err(|error| error.to_string())?
+    let mut entries = fs::read_dir(directory)?
         .filter_map(|entry| entry.ok())
         .collect::<Vec<_>>();
     entries.sort_by_key(|entry| entry.file_name());
@@ -845,20 +833,20 @@ fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, String
     ))
 }
 
-fn read_file_result(path: &str, vault_root: &Path) -> Result<String, String> {
+fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Error> {
     let file_path = normalize_tool_path(path, vault_root)?;
     let display = file_path.display().to_string();
     if !file_path.exists() {
-        return Err(format!("path does not exist: {}", display));
+        return Err(anyhow::anyhow!("path does not exist: {}", display));
     }
     if !file_path.is_file() {
-        return Err(format!("path is not a file: {}", display));
+        return Err(anyhow::anyhow!("path is not a file: {}", display));
     }
 
     const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1 MB
-    let metadata = fs::metadata(&file_path).map_err(|error| error.to_string())?;
+    let metadata = fs::metadata(&file_path)?;
     if metadata.len() > MAX_FILE_SIZE {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "file too large ({} bytes, limit is {} bytes): {}",
             metadata.len(),
             MAX_FILE_SIZE,
@@ -866,7 +854,7 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, String> {
         ));
     }
 
-    let content = fs::read_to_string(&file_path).map_err(|error| error.to_string())?;
+    let content = fs::read_to_string(&file_path)?;
     let clipped = truncate_for_trace(&content, 12_000);
     Ok(format!(
         "read_file returned content for {}:\n{}",
@@ -874,10 +862,10 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, String> {
     ))
 }
 
-pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, String> {
+pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, anyhow::Error> {
     let trimmed = path.trim().trim_matches('\"').trim_matches('`');
     if trimmed.is_empty() {
-        return Err("path is empty".to_string());
+        return Err(anyhow::anyhow!("path is empty"));
     }
 
     let normalized = if let Some(stripped) = trimmed.strip_prefix(r"\\?\") {
@@ -896,7 +884,7 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, Str
     // Confinement check is fail-closed: if vault_root cannot be resolved,
     // reject the operation rather than silently skipping the security check.
     let vault_canonical = vault_root.canonicalize().map_err(|error| {
-        format!(
+        anyhow::anyhow!(
             "cannot resolve vault directory '{}': {error}",
             vault_root.display()
         )
@@ -904,7 +892,7 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, Str
 
     if let Ok(canonical) = candidate.canonicalize() {
         if !canonical.starts_with(&vault_canonical) {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "access denied: path '{}' is outside the vault directory",
                 trimmed
             ));
@@ -920,7 +908,7 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, Str
             if parent.exists() {
                 if let Ok(pc) = parent.canonicalize() {
                     if !pc.starts_with(&vault_canonical) {
-                        return Err(format!(
+                        return Err(anyhow::anyhow!(
                             "access denied: path '{}' is outside the vault directory",
                             trimmed
                         ));
@@ -932,7 +920,7 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, Str
             probe = parent;
         }
         if !confined {
-            return Err(format!(
+            return Err(anyhow::anyhow!(
                 "access denied: cannot verify path '{}' is inside the vault directory",
                 trimmed
             ));
@@ -1118,7 +1106,7 @@ fn resolve_or_create_chat_session(
     state: &mut ChatState,
     requested_session_id: Option<&str>,
     create_new_session: bool,
-) -> Result<(String, bool), String> {
+) -> Result<(String, bool), anyhow::Error> {
     if create_new_session || state.sessions.is_empty() {
         let session = new_chat_session(None);
         let id = session.id.clone();
@@ -1136,7 +1124,7 @@ fn resolve_or_create_chat_session(
             state.current_session_id = session_id.to_string();
             return Ok((session_id.to_string(), false));
         }
-        return Err(format!("chat session not found: {}", session_id));
+        return Err(anyhow::anyhow!("chat session not found: {}", session_id));
     }
 
     if state.current_session_id.trim().is_empty()
@@ -1211,12 +1199,12 @@ fn append_turn_to_session(
     state: &mut ChatState,
     session_id: &str,
     turn: ChatTurn,
-) -> Result<(), String> {
+) -> Result<(), anyhow::Error> {
     let index = state
         .sessions
         .iter()
         .position(|session| session.id == session_id)
-        .ok_or_else(|| format!("chat session not found: {}", session_id))?;
+        .ok_or_else(|| anyhow::anyhow!("chat session not found: {}", session_id))?;
     let mut session = state.sessions.remove(index);
     let next_title = if session.title == "新对话" && turn.role == "user" {
         build_chat_session_title(&turn.text)
@@ -1234,12 +1222,15 @@ fn append_turn_to_session(
     Ok(())
 }
 
-fn replace_chat_session(state: &mut ChatState, updated_session: ChatSession) -> Result<(), String> {
+fn replace_chat_session(
+    state: &mut ChatState,
+    updated_session: ChatSession,
+) -> Result<(), anyhow::Error> {
     let index = state
         .sessions
         .iter()
         .position(|session| session.id == updated_session.id)
-        .ok_or_else(|| format!("chat session not found: {}", updated_session.id))?;
+        .ok_or_else(|| anyhow::anyhow!("chat session not found: {}", updated_session.id))?;
     state.sessions.remove(index);
     state.current_session_id = updated_session.id.clone();
     state.sessions.push(updated_session);
@@ -1259,9 +1250,9 @@ fn find_chat_session<'a>(state: &'a ChatState, session_id: &str) -> Option<&'a C
 fn current_session_history(
     state: &ChatState,
     session_id: &str,
-) -> Result<Vec<ConversationTurn>, String> {
+) -> Result<Vec<ConversationTurn>, anyhow::Error> {
     let session = find_chat_session(state, session_id)
-        .ok_or_else(|| format!("chat session not found: {}", session_id))?;
+        .ok_or_else(|| anyhow::anyhow!("chat session not found: {}", session_id))?;
     let mut history = Vec::new();
     if let Some(summary) = session
         .summary
@@ -1294,10 +1285,10 @@ async fn compress_chat_session_if_needed(
     pending_text: &str,
     pending_attachments: &[ChatAttachment],
     emit_status: &mut impl FnMut(&str, String),
-) -> Result<(), String> {
+) -> Result<(), anyhow::Error> {
     let session = find_chat_session(state, session_id)
         .cloned()
-        .ok_or_else(|| format!("chat session not found: {}", session_id))?;
+        .ok_or_else(|| anyhow::anyhow!("chat session not found: {}", session_id))?;
     let (context_window_tokens, _) = ai::resolve_context_window(settings);
     if context_window_tokens == 0 {
         return Ok(());
@@ -1536,7 +1527,7 @@ mod tests {
             };
             let err = normalize_tool_path(r"\\?\C:\Users\test\note.md", &vault)
                 .expect_err("non-verifiable path should be rejected");
-            assert!(err.contains("cannot verify"), "error: {err}");
+            assert!(err.to_string().contains("cannot verify"), "error: {err}");
             let _ = fs::remove_dir_all(&vault);
         }
     }
@@ -1582,7 +1573,7 @@ mod tests {
         let error =
             require_saved_note_for_record_request("please save this", GroundedAnswer::default())
                 .expect_err("missing saved note should fail");
-        assert!(error.contains("saved note"));
+        assert!(error.to_string().contains("saved note"));
     }
 
     // ── 2.3 build_chat_session_title ──

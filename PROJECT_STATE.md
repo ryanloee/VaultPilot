@@ -40,11 +40,28 @@
 - #180: 附件搜索分批加载 (PR #249 已关闭未合并 → PR #256 已合并)
 - #178: 重试循环 content_blocks.clone() 预序列化 (PR #253 已合并)
 - #176: rank_documents 去除冗余连接和 DB 查询 (PR #254 已合并)
+- #88 + #52: strip_inline_markdown 保留 code block + HTTP body 10MB 限制 (PR #255 已合并)
+- #169: README 移除不存在的 run_command 能力描述 (PR #257 已合并)
+- #165: FTS5 搜索转义特殊字符 (PR #258 已合并)
+- #168: serde_yaml → serde_yml 替换废弃依赖 (PR #259 已合并)
+- #100: BackendClient.DisposeAsync 释放 SemaphoreSlim 和 CTS (PR #260 已合并)
+- #99 + #128: RecordButton guard + 退出前保存 chat state (PR #261 已合并)
+- #156: list_directory 报告权限错误和截断提示 (PR #262 已合并)
+- #140: ResolveContextWindowTokens 模型名边界匹配 (PR #263 已合并)
+- #63: OnLaunched 防止重复创建窗口 (PR #264 已合并)
+- #95: auto-wake timer 检查 shutdown 状态 (PR #265 已合并)
+- #155: Settings 对话框输入校验 (PR #266 已合并)
+- #62: tray exit calls cleanup before terminating (PR #267 已合并)
+- #71: _chatState SemaphoreSlim 同步 (PR #268 已合并)
+- #86: 剪贴板图片清理，最多保留 50 个 (PR #269 已合并)
+- #130 + #72: SolidColorBrush 静态缓存减少 GC 压力 (PR #271 已合并)
+- #90: AddTurn List 预分配替代 Concat+ToArray (PR #273 已合并)
+- #46: 全局异常处理 + 单实例 Mutex (PR #274 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #255: fix/issue-88-strip-markdown-and-52-body-limit — #88 + #52 (strip_inline_markdown 保留 code block + HTTP body 10MB 限制) ⚠️ CI rust-quality 失败（cargo fmt 格式化问题，已留 comment）
+（无）
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -74,33 +91,39 @@
 - 2026-06-12 [PR审核轮2]: 合并 3 个性能优化 PR (#253, #254, #256)，CI 全部通过
 - 2026-06-12 [PR审核轮2]: PR #255 代码逻辑正确但 cargo fmt 失败（2 处格式化问题），留 comment 要求修复后重新推送
 - 2026-06-12 [PR审核轮2]: PR #255 混合了 #88 + #52 两个独立 issue + 附件批量查询改动，建议后续一个 PR 对应一个 issue
+- 2026-06-12 [循环#6]: 文档被重置后重建，选定 3 个 issue：#165 (FTS5 转义), #169 (README 修正), #168 (serde_yaml 替换)
+- 2026-06-12 [循环#7]: 大量 issue 已修复但未关闭 — 系统性审计关闭 7 个已解决 issue
+- 2026-06-12 [循环#8]: 聚焦 C# WinUI 前端 Bug，PR #264, #265, #266 创建并合并
+- 2026-06-12 [循环#9]: 聚焦 C# WinUI Bug 修复，PR #267, #268, #269 创建并合并
+- 2026-06-12 [PR审核轮3]: 审核 6 个 open PR (#267-#272)，合并 5 个，重建 2 个冲突 PR (#270→#274, #272→#273)
+- 2026-06-12 [PR审核轮3]: 共合并 PR #267, #268, #269, #271, #273, #274 (6 个)，关闭冲突 PR #270, #272
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
 
-| 指标 | 循环#1 | 循环#2 | 循环#3 | 循环#3.5 | PR审核轮 | 循环#4 | 循环#5 |
-|------|--------|--------|--------|----------|----------|--------|--------|
-| Open issues 总数 | 50+ | 50+ | 47 | 47 | 47 | ~44 | ~44 |
-| Open Bug 数 | 16 | 16 | 16 | 16 | 16 | ~15 | 15 |
-| Open Security 数 | — | — | 8 | 8 | 8 | 8 | 8 |
-| Open Performance 数 | 8 | 8 | 14 | 12 | 12 | ~9 | 11 |
-| 已合并 PR | 11 | 13 | 15 | 17 | 17 | 17 | 23 |
-| 进行中 PR | 1 | 2 | 3 | 4 | 0 | 3 | 1 (#255) |
-| 阻塞项 | 2 | 3 | 4 | 5 | 6 | 2 | 2 |
+| 指标 | 循环#8 | 循环#9 | PR审核轮3 |
+|------|--------|--------|-----------|
+| Open issues 总数 | ~78 | ~75 | ~72 (预估) |
+| Open Bug 数 | ~0 | ~0 | ~0 |
+| Open Security 数 | 3 | 3 | 3 |
+| Open Performance 数 | 8 | 8 | 6 |
+| Open Enhancement 数 | 34 | 34 | 34 |
+| Open UI 数 | 26 | 26 | 26 |
+| 已合并 PR | 33+ | 33+ | 39+ |
+| 进行中 PR | 0 | 3 | 0 |
+| 阻塞项 | 2 (#192, #217) | 2 (#192, #217) | 2 (#192, #217) |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 5
-- 上次循环时间: 2026-06-12T14:00:00Z
-- 讨论重点: **Rust 后端性能优化** — 聚焦剩余可自动化的性能 issue
-- 本轮修复目标:
-  1. #178 — 重试循环中 content_blocks.clone() 重复克隆大型图片载荷 (🟡 Perf) → PR #253
-  2. #176 — rank_documents 每个候选笔记重复读取 settings.json (🟡 Perf) → PR #254
-  3. #180 — 附件搜索全表扫描，分批加载 (🟡 Perf) → PR #256
-- 本轮修复结果: 3/3 完成 ✅
-  - #178 → PR #253 (预序列化请求体到 Bytes，避免重试时克隆大型图片载荷)
-  - #176 → PR #254 (新增 load_note_body_from_meta，去除冗余连接和 DB 查询)
-  - #180 → PR #256 (LIMIT/OFFSET 分批加载 + IN 批量查询)
-- 待重建 issue: 无
+- 循环编号: PR审核轮3
+- 上次循环时间: 2026-06-12T21:30:00Z
+- 讨论重点: **PR 审核** — 审核循环#8/#9 产出的 6 个 open PR
+- 审核结果:
+  - ✅ PR #267 (合并) — #62 tray exit cleanup
+  - ✅ PR #268 (合并) — #71 _chatState SemaphoreSlim 同步
+  - ✅ PR #269 (合并) — #86 剪贴板图片清理
+  - ✅ PR #271 (合并) — #130/#72 SolidColorBrush 缓存
+  - ⚠️ PR #270 (关闭→重建为 #274, 合并) — #46 全局异常处理 + 单实例
+  - ⚠️ PR #272 (关闭→重建为 #273, 合并) — #90 AddTurn List 优化
 - 阻塞 issue: #192 (双转义, 2次失败), #217 (SQLite 同步阻塞, 子任务超时)

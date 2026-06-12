@@ -1114,6 +1114,7 @@ public sealed partial class MainWindow : Window
             _activeRequestCts?.Dispose();
             _activeRequestCts = null;
             RemoveThinkingIndicator();
+            UnsubscribeEvents();
             TryReleaseWindowFileDropHook();
             await _backendClient.DisposeAsync();
         }
@@ -1121,6 +1122,31 @@ public sealed partial class MainWindow : Window
         {
             ShowError("关闭窗口失败", error);
         }
+    }
+
+    /// <summary>
+    /// Unsubscribes all event handlers registered in the constructor to prevent
+    /// memory leaks from dangling references after the window is closed.
+    /// </summary>
+    private void UnsubscribeEvents()
+    {
+        _backendClient.AgentStatusReceived -= OnAgentStatusReceived;
+        _backendClient.ConnectionStateChanged -= OnConnectionStateChanged;
+        RootGrid.Loaded -= OnLoaded;
+        SendButton.Click -= OnSendClicked;
+        RecordButton.Click -= OnRecordClicked;
+        SettingsButton.Click -= OnSettingsClicked;
+        RebuildButton.Click -= OnRebuildClicked;
+        ImportButton.Click -= OnImportClicked;
+        ComposerBox.KeyDown -= OnComposerKeyDown;
+        ComposerBox.TextChanged -= OnComposerTextChanged;
+        SessionList.SelectionChanged -= OnSessionSelectionChanged;
+        DeleteSessionButton.Click -= OnDeleteSessionClicked;
+        NewSessionButton.Click -= OnNewSessionClicked;
+        ToggleSidebarButton.Click -= OnToggleSidebarClicked;
+        ChatScrollViewer.ViewChanged -= OnChatScrollViewerViewChanged;
+        JumpLatestButton.Click -= OnJumpLatestClicked;
+        RootGrid.SizeChanged -= OnRootGridSizeChanged;
     }
 
     /// <summary>
@@ -1162,6 +1188,7 @@ public sealed partial class MainWindow : Window
     {
         RemoveThinkingIndicator();
         StopAutoWakeTimer();
+        UnsubscribeEvents();
         TryReleaseWindowFileDropHook();
         await SaveChatStateAsync();
         await _backendClient.DisposeAsync();

@@ -35,7 +35,7 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 | **Note Management** | Markdown notes with structured frontmatter: tags, keywords, platform, board, kernel, status. |
 | **Image Intelligence** | OCR text extraction, perceptual hashing for near-duplicate detection, and semantic similarity for image-based search. |
 | **Conversation Memory** | Multi-session chat with automatic context compression when conversations get long. |
-| **AI Tool Use** | The agent can search notes, read files, list directories, run commands, and save notes — all grounded in your local vault. |
+| **AI Tool Use** | The agent can search notes, read files, list directories, and save notes — all grounded in your local vault. |
 | **Markdown Import** | Bulk-import existing `.md` files into the indexed vault. |
 | **Offline-First** | Notes and search work without a network. AI features only need an API key. |
 
@@ -178,7 +178,7 @@ VaultPilot 是一个面向工程师的**本地优先 AI 知识助手**。帮助�
 - **结构化笔记管理** — Markdown 文件 + 元数据（标签、关键词、平台、板卡、内核、状态）
 - **图片智能检索** — OCR 文字提取、感知哈希去重、语义相似度匹配
 - **多会话记忆** — 支持多个独立聊天会话，长对话自动压缩上下文
-- **AI 工具调用** — AI 可以搜索笔记、读取文件、列出目录、执行命令、保存笔记
+- **AI 工具调用** — AI 可以搜索笔记、读取文件、列出目录、保存笔记
 - **Markdown 批量导入** — 一键导入现有 `.md` 文件到知识库
 - **离线可用** — 笔记管理和搜索完全离线，AI 功能仅需配置 API Key
 

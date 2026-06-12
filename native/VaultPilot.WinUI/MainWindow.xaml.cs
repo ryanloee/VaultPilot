@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "com.local.vaultpilot",
         "clipboard-images");
+    private const int MaxClipboardImages = 50;
     private const string MarkdownOpenTag = "<vp-markdown>";
     private const string MarkdownCloseTag = "</vp-markdown>";
     private readonly BackendClient _backendClient;
@@ -1112,6 +1113,7 @@ public sealed partial class MainWindow : Window
         TryReleaseWindowFileDropHook();
         await SaveChatStateAsync();
         await _backendClient.DisposeAsync();
+        PruneClipboardImages();
     }
 
     private void OnAgentStatusReceived(AgentStatusEvent status)
@@ -2012,7 +2014,41 @@ public sealed partial class MainWindow : Window
         var fileName = $"clipboard-{DateTimeOffset.Now:yyyyMMdd-HHmmssfff}.png";
         var filePath = Path.Combine(ClipboardAttachmentDirectory, fileName);
         await File.WriteAllBytesAsync(filePath, buffer.ToArray());
-        return await StorageFile.GetFileFromPathAsync(filePath);
+        var file = await StorageFile.GetFileFromPathAsync(filePath);
+        PruneClipboardImages();
+        return file;
+    }
+
+    private static void PruneClipboardImages()
+    {
+        try
+        {
+            if (!Directory.Exists(ClipboardAttachmentDirectory))
+            {
+                return;
+            }
+
+            var files = new DirectoryInfo(ClipboardAttachmentDirectory)
+                .GetFiles("clipboard-*.png")
+                .OrderByDescending(f => f.CreationTimeUtc)
+                .ToArray();
+
+            for (var i = MaxClipboardImages; i < files.Length; i++)
+            {
+                try
+                {
+                    files[i].Delete();
+                }
+                catch (IOException)
+                {
+                    // File may be in use; skip
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Best-effort cleanup; don't disrupt user
+        }
     }
 
     private void EnsureWindowFileDropHook(nint hwnd)

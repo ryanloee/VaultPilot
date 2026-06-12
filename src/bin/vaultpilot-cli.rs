@@ -1436,6 +1436,16 @@ async fn handle_mcp_request(
                 "chat.send" => mcp_call_chat_send(context, arguments).await,
                 "chat.list_sessions" => mcp_call_chat_list_sessions(context),
                 "chat.get_state" => mcp_call_chat_get_state(context),
+                "chat.new" => mcp_call_chat_new(context, arguments),
+                "chat.delete" => mcp_call_chat_delete(context, arguments),
+                "notes.list" => mcp_call_notes_list(context, arguments),
+                "notes.get" => mcp_call_notes_get(context, arguments),
+                "notes.create" => mcp_call_notes_create(context, arguments),
+                "notes.delete" => mcp_call_notes_delete(context, arguments),
+                "notes.search" => mcp_call_notes_search(context, arguments),
+                "notes.import" => mcp_call_notes_import(context, arguments),
+                "index.rebuild" => mcp_call_index_rebuild(context),
+                "ask" => mcp_call_ask(context, arguments).await,
                 _ => {
                     return Some(McpResponse::error(
                         id,
@@ -1490,9 +1500,7 @@ fn mcp_tools() -> Vec<Value> {
                     "imagePaths": {
                         "type": "array",
                         "description": "Optional local image paths to include with the message.",
-                        "items": {
-                            "type": "string"
-                        }
+                        "items": { "type": "string" }
                     },
                     "sessionId": {
                         "type": "string",
@@ -1569,6 +1577,234 @@ fn mcp_tools() -> Vec<Value> {
                 "readOnlyHint": true,
                 "destructiveHint": false,
                 "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "chat.new",
+            "title": "New Chat Session",
+            "description": "Create a new chat session and set it as the current session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Optional title for the new session."
+                    }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "New Chat Session",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "chat.delete",
+            "title": "Delete Chat Session",
+            "description": "Delete a chat session by ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sessionId": {
+                        "type": "string",
+                        "description": "The session ID to delete."
+                    }
+                },
+                "required": ["sessionId"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Delete Chat Session",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.list",
+            "title": "List Notes",
+            "description": "List notes in the vault, ordered by most recent.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of notes to return.",
+                        "default": 20
+                    }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "List Notes",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.get",
+            "title": "Get Note",
+            "description": "Retrieve a single note by its ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "The note ID to retrieve."
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Get Note",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.create",
+            "title": "Create Note",
+            "description": "Create a new note in the vault. Provide the note document as arguments.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Note title." },
+                    "summary": { "type": "string", "description": "Brief summary." },
+                    "body": { "type": "string", "description": "Note body content." },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for the note." },
+                    "keywords": { "type": "array", "items": { "type": "string" }, "description": "Keywords." },
+                    "platform": { "type": "string" },
+                    "board": { "type": "string" },
+                    "kernel": { "type": "string" },
+                    "status": { "type": "string" }
+                },
+                "required": ["title", "body"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Create Note",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.delete",
+            "title": "Delete Note",
+            "description": "Delete a note by its ID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "The note ID to delete."
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Delete Note",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.search",
+            "title": "Search Notes",
+            "description": "Full-text search across notes in the vault.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query text." },
+                    "tags": { "type": "string", "description": "Comma-separated tags to filter by." },
+                    "keywords": { "type": "string", "description": "Comma-separated keywords to filter by." },
+                    "limit": { "type": "integer", "default": 10 }
+                },
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Search Notes",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.import",
+            "title": "Import Notes",
+            "description": "Import Markdown files from local paths into the vault.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "File or directory paths to import."
+                    }
+                },
+                "required": ["paths"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Import Notes",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "index.rebuild",
+            "title": "Rebuild Index",
+            "description": "Rebuild the full-text search index from all notes in the vault.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Rebuild Index",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "ask",
+            "title": "Ask Question",
+            "description": "Ask a direct question to the AI with local knowledge retrieval. Unlike chat.send, this is a one-shot Q&A without session persistence.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question to ask."
+                    }
+                },
+                "required": ["question"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Ask Question",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
                 "openWorldHint": false
             }
         }),
@@ -1657,6 +1893,203 @@ fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
             )
         }
         Err(error) => mcp_tool_error(error.to_string()),
+    }
+}
+
+fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
+    #[derive(Deserialize)]
+    struct Args {
+        #[serde(default)]
+        title: Option<String>,
+    }
+    let args: Args = match serde_json::from_value(arguments) {
+        Ok(a) => a,
+        Err(e) => return mcp_tool_error(format!("invalid chat.new arguments: {e}")),
+    };
+    match load_chat_state_with_context(context) {
+        Ok(mut state) => {
+            let session = new_cli_chat_session(args.title.as_deref());
+            state.current_session_id = session.id.clone();
+            state.sessions.insert(0, session.clone());
+            match save_chat_state_with_context(context, &state) {
+                Ok(_) => mcp_tool_success(
+                    format!("Created session '{}'", session.title),
+                    serde_json::json!({ "session": session }),
+                ),
+                Err(e) => mcp_tool_error(e.to_string()),
+            }
+        }
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        session_id: String,
+    }
+    let args: Args = match serde_json::from_value(arguments) {
+        Ok(a) => a,
+        Err(e) => return mcp_tool_error(format!("invalid chat.delete arguments: {e}")),
+    };
+    match load_chat_state_with_context(context) {
+        Ok(mut state) => {
+            let original_len = state.sessions.len();
+            state.sessions.retain(|s| s.id != args.session_id);
+            let deleted = state.sessions.len() != original_len;
+            match save_chat_state_with_context(context, &state) {
+                Ok(_) => mcp_tool_success(
+                    format!("Deleted={deleted}, id={}", args.session_id),
+                    serde_json::json!({ "deleted": deleted, "id": args.session_id }),
+                ),
+                Err(e) => mcp_tool_error(e.to_string()),
+            }
+        }
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
+    let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+    match search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            limit: Some(limit),
+        },
+    ) {
+        Ok(result) => {
+            let count = result.notes.len();
+            mcp_tool_success(
+                format!("Found {count} note(s)."),
+                serde_json::to_value(&result).unwrap_or_default(),
+            )
+        }
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
+    let id = match arguments.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => return mcp_tool_error("notes.get requires 'id' parameter".to_string()),
+    };
+    match load_note_with_context(context, &id) {
+        Ok(note) => mcp_tool_success(
+            format!("Loaded note '{}'", note.meta.title),
+            serde_json::to_value(&note).unwrap_or_default(),
+        ),
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
+    let note: NoteDocument = match serde_json::from_value(arguments) {
+        Ok(n) => n,
+        Err(e) => return mcp_tool_error(format!("invalid notes.create arguments: {e}")),
+    };
+    match save_note_with_context(context, note) {
+        Ok(saved) => mcp_tool_success(
+            format!("Created note '{}'", saved.meta.title),
+            serde_json::to_value(&saved).unwrap_or_default(),
+        ),
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
+    let id = match arguments.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => return mcp_tool_error("notes.delete requires 'id' parameter".to_string()),
+    };
+    match delete_note_with_context(context, &id) {
+        Ok(deleted) => mcp_tool_success(
+            format!("Deleted={deleted}, id={id}"),
+            serde_json::json!({ "deleted": deleted, "id": id }),
+        ),
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let tags_str = arguments.get("tags").and_then(Value::as_str).unwrap_or("");
+    let keywords_str = arguments
+        .get("keywords")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
+    let parse_csv = |s: &str| {
+        s.split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    };
+    match search_notes_with_context(
+        context,
+        SearchQuery {
+            text: query,
+            tags: parse_csv(tags_str),
+            keywords: parse_csv(keywords_str),
+            limit: Some(limit),
+        },
+    ) {
+        Ok(result) => {
+            let count = result.notes.len();
+            mcp_tool_success(
+                format!("Found {count} note(s)."),
+                serde_json::to_value(&result).unwrap_or_default(),
+            )
+        }
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
+    let paths: Vec<String> = match arguments.get("paths") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(p) => p,
+            Err(e) => return mcp_tool_error(format!("invalid paths: {e}")),
+        },
+        None => return mcp_tool_error("notes.import requires 'paths' parameter".to_string()),
+    };
+    match import_markdown_with_context(context, &paths) {
+        Ok(result) => mcp_tool_success(
+            "Import completed.".to_string(),
+            serde_json::to_value(&result).unwrap_or_default(),
+        ),
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+fn mcp_call_index_rebuild(context: &StorageContext) -> Value {
+    match rebuild_index_with_context(context) {
+        Ok(stats) => mcp_tool_success(
+            "Index rebuilt successfully.".to_string(),
+            serde_json::to_value(&stats).unwrap_or_default(),
+        ),
+        Err(e) => mcp_tool_error(e.to_string()),
+    }
+}
+
+async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
+    let question = match arguments.get("question").and_then(Value::as_str) {
+        Some(q) => q.to_string(),
+        None => return mcp_tool_error("ask requires 'question' parameter".to_string()),
+    };
+    match ask_with_ai_with_context(context, question, None, None, None, |_, _| ()).await {
+        Ok(answer) => {
+            let summary = format!("Answer: {}", answer.answer);
+            mcp_tool_success(summary, serde_json::to_value(&answer).unwrap_or_default())
+        }
+        Err(e) => mcp_tool_error(e.to_string()),
     }
 }
 

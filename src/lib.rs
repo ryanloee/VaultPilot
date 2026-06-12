@@ -854,12 +854,66 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
         ));
     }
 
+    /// Maximum number of characters to return from read_file (~50 KB).
+    const READ_FILE_MAX_CHARS: usize = 50_000;
+    /// Maximum number of lines to return from read_file.
+    const READ_FILE_MAX_LINES: usize = 200;
+    /// Number of lines from the beginning of the file to keep when truncating.
+    const READ_FILE_HEAD_LINES: usize = 150;
+    /// Number of lines from the end of the file to keep when truncating.
+    const READ_FILE_TAIL_LINES: usize = 50;
+
     let content = fs::read_to_string(&file_path)?;
-    let clipped = truncate_for_trace(&content, 12_000);
-    Ok(format!(
-        "read_file returned content for {}:\n{}",
-        display, clipped
-    ))
+    let total_bytes = content.len();
+    let total_lines = content.lines().count();
+
+    // If content fits within both limits, return as-is (no truncation needed).
+    if total_bytes <= READ_FILE_MAX_CHARS && total_lines <= READ_FILE_MAX_LINES {
+        return Ok(format!(
+            "read_file returned content for {}:\n{}",
+            display, content
+        ));
+    }
+
+    // Smart truncation: head + tail with metadata.
+    let lines: Vec<&str> = content.lines().collect();
+    let head_count = READ_FILE_HEAD_LINES.min(lines.len());
+    let tail_count = READ_FILE_TAIL_LINES.min(lines.len());
+    let head = &lines[..head_count];
+    let tail_start = lines.len().saturating_sub(tail_count);
+    let tail = &lines[tail_start..];
+
+    // Avoid overlapping head and tail when file has fewer lines than the
+    // combined head+tail budget but exceeds the character limit.
+    let (skipped_lines, skipped_content) = if tail_start > head_count {
+        let skipped = lines.len() - head_count - tail_count;
+        let skipped_str = lines[head_count..tail_start].join("\n");
+        (skipped, skipped_str)
+    } else {
+        (0, String::new())
+    };
+
+    let mut output = format!(
+        "read_file returned content for {} ({} bytes, {} lines total):\n",
+        display, total_bytes, total_lines
+    );
+    for line in head {
+        output.push_str(line);
+        output.push('\n');
+    }
+    output.push_str(&format!(
+        "\n... [{} lines / {} chars omitted — file too large; showing first {} and last {} lines] ...\n\n",
+        skipped_lines,
+        skipped_content.len(),
+        READ_FILE_HEAD_LINES,
+        READ_FILE_TAIL_LINES,
+    ));
+    for line in tail {
+        output.push_str(line);
+        output.push('\n');
+    }
+
+    Ok(output)
 }
 
 pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, anyhow::Error> {

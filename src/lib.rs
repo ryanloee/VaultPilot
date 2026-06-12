@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod crypto;
 pub mod models;
 pub mod prompting;
 pub mod storage;

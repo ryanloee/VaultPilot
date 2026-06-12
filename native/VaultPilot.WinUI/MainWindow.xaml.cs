@@ -55,10 +55,14 @@ public sealed partial class MainWindow : Window
     private static readonly SolidColorBrush BrushOrange = new(Microsoft.UI.Colors.Orange);
     private static readonly SolidColorBrush BrushGreen = new(Microsoft.UI.Colors.Green);
     private static readonly SolidColorBrush BrushLimeGreen = new(Microsoft.UI.Colors.LimeGreen);
-    private static readonly SolidColorBrush BrushWhite = new(Microsoft.UI.Colors.White);
-    private static readonly SolidColorBrush BrushCodeBackground = new(Microsoft.UI.ColorHelper.FromArgb(255, 24, 28, 34));
-    private static readonly SolidColorBrush BrushAttachmentDot = new(ColorHelper.FromArgb(255, 47, 224, 111));
-    private static readonly SolidColorBrush BrushAttachmentBorder = new(ColorHelper.FromArgb(255, 140, 255, 176));
+    // Code block and attachment colors now use theme-aware ThemeResource brushes
+    // defined in App.xaml ThemeDictionaries (see #196)
+
+    /// <summary>Looks up a theme-aware brush from application resources.</summary>
+    private static Brush GetThemeBrush(string key)
+    {
+        return (Brush)Application.Current.Resources[key];
+    }
     private ChatState _chatState = new(string.Empty, Array.Empty<ChatSession>());
     private readonly SemaphoreSlim _chatStateLock = new(1, 1);
     private string _currentSessionId = string.Empty;
@@ -1497,7 +1501,9 @@ public sealed partial class MainWindow : Window
                 {
                     var span = new Span
                     {
-                        FontFamily = new FontFamily("Consolas")
+                        FontFamily = new FontFamily("Consolas"),
+                        Background = GetThemeBrush("CodeInlineBackgroundBrush"),
+                        Foreground = GetThemeBrush("CodeInlineForegroundBrush")
                     };
                     span.Inlines.Add(new Run { Text = text[(index + 1)..closeIndex] });
                     inlines.Add(span);
@@ -1579,14 +1585,14 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
             IsTextSelectionEnabled = true,
             FontFamily = new FontFamily("Consolas"),
-            Foreground = BrushWhite
+            Foreground = GetThemeBrush("CodeBlockForegroundBrush")
         };
 
         return new Border
         {
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(10),
-            Background = BrushCodeBackground,
+            Background = GetThemeBrush("CodeBlockBackgroundBrush"),
             Child = new StackPanel
             {
                 Spacing = 8,
@@ -1833,8 +1839,8 @@ public sealed partial class MainWindow : Window
             Width = 10,
             Height = 10,
             CornerRadius = new CornerRadius(999),
-            Background = BrushAttachmentDot,
-            BorderBrush = BrushAttachmentBorder,
+            Background = GetThemeBrush("AttachmentDotBrush"),
+            BorderBrush = GetThemeBrush("AttachmentBorderBrush"),
             BorderThickness = new Thickness(1),
             Margin = new Thickness(0, 0, 2, 0)
         };

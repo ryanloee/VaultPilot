@@ -7,6 +7,30 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Theme-aware code block colors (#196) -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#F0F2F5" />
+                    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#1B1B1F" />
+                    <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="#E2E4E8" />
+                    <SolidColorBrush x:Key="CodeInlineForegroundBrush" Color="#1B1B1F" />
+                    <SolidColorBrush x:Key="ContextUsageTrackBrush" Color="#90C8A8" />
+                    <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#1A8C4E" />
+                    <SolidColorBrush x:Key="AttachmentDotBrush" Color="#1A8C4E" />
+                    <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#2EA85E" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#181C22" />
+                    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="#2D333B" />
+                    <SolidColorBrush x:Key="CodeInlineForegroundBrush" Color="#E6EDF3" />
+                    <SolidColorBrush x:Key="ContextUsageTrackBrush" Color="#1C7A4B" />
+                    <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#2FE06F" />
+                    <SolidColorBrush x:Key="AttachmentDotBrush" Color="#2FE06F" />
+                    <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#8CFFB0" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

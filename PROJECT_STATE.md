@@ -64,11 +64,14 @@
 - #103: truncate_for_trace 单次遍历优化 (PR #280 已合并)
 - #50: max_tokens 模型感知动态值 (PR #281 已合并)
 - #114: StorageContext 启动时创建并复用 (PR #282 已合并)
+- #206: HTTP bridge CORS headers + rate limiter + subtle::ConstantTimeEq 改进 (PR #279 已合并)
+- #198: list_directory/read_file 截断指示 (PR #284 已合并)
+- #204: 模型上下文窗口数据驱动注册表 (PR #283 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-（无进行中 PR）
+- #199: CancellationToken plumbing for AI requests (PR #285 待合并)
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -111,32 +114,38 @@
 - 2026-06-12 [循环#11]: 聚焦 Rust 后端性能优化，选定 #114 (StorageContext 缓存), #103 (truncation 统一), #50 (max_tokens 模型适配)
 - 2026-06-12 [循环#11]: 当前 70 open issue，Enhancement/UI 类 57 个，继续暂停创建新 issue
 - 2026-06-12 [循环#11]: 修复目标 3/3 全部完成（#114 ✅, #103 ✅, #50 ✅）
+- 2026-06-12 [循环#12]: PR #283 (模型上下文窗口注册表) + PR #284 (截断指示) 合并，均已通过 CI
+- 2026-06-12 [循环#12]: 66 open issue，继续暂停创建新 Enhancement/UI issue
+- 2026-06-12 [循环#12]: #192 第三次修复尝试，策略改为用 serde_json 直接解析而非手动字符状态机
+- 2026-06-12 [循环#12]: #42 (SQLite 连接池) 是当前最高优先级性能问题，与 #230 WAL + #176 rank_documents 形成完整优化链路
+- 2026-06-12 [循环#13]: 聚焦 Enhancement 修复，选定 #198 (截断指示), #204 (模型注册表), #199 (CancellationToken)
+- 2026-06-12 [循环#13]: #198 + #204 并行修复成功（PR #283, #284 已合并），#199 C# 前端修复完成（PR #285 待合并）
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
 
-| 指标 | PR审核轮3 | 循环#10 | 循环#11 |
-|------|-----------|---------|---------|
-| Open issues 总数 | ~72 | 30 | 67 |
-| Open Bug 数 | ~0 | 1 (#192 阻塞) | 1 (#192 阻塞) |
-| Open Security 数 | 3 | 1 (#163 有PR) | 1 (#123) |
-| Open Performance 数 | 6 | 1 (#217 阻塞) | 2 (#42, #217) |
-| Open Enhancement 数 | 34 | 13 | 31 |
-| Open UI 数 | 26 | 13 | 26 |
-| 已合并 PR | 39+ | 39+ | 46+ |
-| 进行中 PR | 0 | 3 (#275,#276,#277) | 0 |
-| 阻塞项 | 2 (#192, #217) | 2 (#192, #217) | 2 (#192, #217) |
+| 指标 | 循环#11 | 循环#12 | 循环#13 |
+|------|---------|---------|---------|
+| Open issues 总数 | 67 | 66 | 64 |
+| Open Bug 数 | 1 (#192 阻塞) | 1 (#192 第3次尝试) | 1 (#192 阻塞) |
+| Open Security 数 | 1 (#123) | 1 (#123) | 1 (#123) |
+| Open Performance 数 | 2 (#42, #217) | 2 (#42 本轮修复, #217 阻塞) | 1 (#217 阻塞) |
+| Open Enhancement 数 | 31 | 28 | 26 |
+| Open UI 数 | 26 | 26 | 26 |
+| 已合并 PR | 46+ | 48+ | 50+ |
+| 进行中 PR | 0 | 0 | 1 (#285) |
+| 阻塞项 | 2 (#192, #217) | 1 (#217) | 1 (#217) |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 11
-- 上次循环时间: 2026-06-12T22:30:00Z
-- 讨论重点: **性能优化** — 修复 #114 (StorageContext 缓存), #103 (truncation 统一), #50 (max_tokens 模型适配)
+- 循环编号: 13
+- 上次循环时间: 2026-06-13T00:00:00Z
+- 讨论重点: **Enhancement** — 改善用户体验和代码质量
 - 本轮修复目标:
-  1. #114 — Agent 每次请求重建 StorageContext，改为启动时创建一次并复用 (🟡 Performance) → PR #282 ✅
-  2. #103 — Unify truncation helpers into single-pass (🟡 Performance) → PR #280 ✅
-  3. #50 — max_tokens 硬编码 8192，改为模型感知的动态值 (🟡 Performance) → PR #281 ✅
-- 本轮修复结果: 3/3 完成 ✅
+  1. #198 — list_directory/read_file 截断指示 (🟢 Enhancement) → PR #284 ✅ 已合并
+  2. #204 — 模型上下文窗口数据驱动注册表 (🟢 Enhancement) → PR #283 ✅ 已合并
+  3. #199 — CancellationToken plumbing for AI requests (🟢 Enhancement) → PR #285 待合并
+- 本轮修复结果: 2/3 已合并，1/3 待合并
 - 待重建 issue: 无
-- 阻塞 issue: #192 (双转义, 2次失败), #217 (SQLite 同步阻塞, 子任务超时)
+- 阻塞 issue: #192 (双转义, 3次失败), #217 (SQLite 同步阻塞, 子任务超时)

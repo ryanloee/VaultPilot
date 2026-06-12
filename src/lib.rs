@@ -840,11 +840,20 @@ fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, anyhow
         })
         .collect::<Vec<_>>();
 
-    let mut output = format!(
-        "list_directory returned {} items.\n{}",
-        rendered.len(),
-        rendered.join("\n")
-    );
+    let mut output = if total > rendered.len() {
+        format!(
+            "list_directory showing {} of {} total entries.\n{}",
+            rendered.len(),
+            total,
+            rendered.join("\n")
+        )
+    } else {
+        format!(
+            "list_directory returned {} items.\n{}",
+            rendered.len(),
+            rendered.join("\n")
+        )
+    };
 
     if !errors.is_empty() {
         output.push_str(&format!(
@@ -938,11 +947,13 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
         output.push('\n');
     }
     output.push_str(&format!(
-        "\n... [{} lines / {} chars omitted — file too large; showing first {} and last {} lines] ...\n\n",
-        skipped_lines,
-        skipped_content.len(),
-        READ_FILE_HEAD_LINES,
-        READ_FILE_TAIL_LINES,
+        "\n... [{skipped_lines} lines / {skipped_chars} chars omitted — showing {} of {} total chars; first {head_lines} and last {tail_lines} lines kept] ...\n\n",
+        head.join("\n").len() + tail.join("\n").len(),
+        total_bytes,
+        head_lines = READ_FILE_HEAD_LINES,
+        tail_lines = READ_FILE_TAIL_LINES,
+        skipped_lines = skipped_lines,
+        skipped_chars = skipped_content.len(),
     ));
     for line in tail {
         output.push_str(line);

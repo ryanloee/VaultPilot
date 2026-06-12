@@ -94,6 +94,8 @@
 - #142 + #24: RenderCurrentSession 恢复 Citations/ThinkingTrace/SavedNote 渲染 (PR #321 已合并, #24 关闭为重复)
 - #26: 设置对话框 PrimaryButtonClick 验证防输入丢失 (PR #320 已合并)
 - #150: 搜索模糊匹配+日期范围+标签过滤 (PR #315 CI 修复后已合并)
+- #189: AI 请求取消按钮 + Escape 键支持 (PR #323 已合并)
+- #124: 代码块 SolidColorBrush 已通过 ThemeResource 修复 (关闭为已解决, PR #290)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->

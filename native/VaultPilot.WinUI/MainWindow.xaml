@@ -35,7 +35,7 @@
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1">
                 <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="14" Foreground="SteelBlue" />
+                    <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource StatusBarIconBrush}" />
                     <TextBlock x:Name="StatusBarTitle" Text="正在启动" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                     <TextBlock x:Name="StatusBarMessage" Text="正在连接 Rust 后端..." Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                 </StackPanel>

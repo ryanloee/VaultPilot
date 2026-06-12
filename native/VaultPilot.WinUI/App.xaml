@@ -19,6 +19,12 @@
                     <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#1A8C4E" />
                     <SolidColorBrush x:Key="AttachmentDotBrush" Color="#1A8C4E" />
                     <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#2EA85E" />
+                    <!-- Theme-aware status colors (#57) -->
+                    <SolidColorBrush x:Key="StatusBarIconBrush" Color="#0078D4" />
+                    <SolidColorBrush x:Key="StatusErrorBrush" Color="#C42B1C" />
+                    <SolidColorBrush x:Key="StatusWarningBrush" Color="#D88C00" />
+                    <SolidColorBrush x:Key="StatusSuccessBrush" Color="#0F7B0F" />
+                    <SolidColorBrush x:Key="StatusInfoBrush" Color="#0078D4" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#181C22" />
@@ -29,6 +35,12 @@
                     <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#2FE06F" />
                     <SolidColorBrush x:Key="AttachmentDotBrush" Color="#2FE06F" />
                     <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#8CFFB0" />
+                    <!-- Theme-aware status colors (#57) -->
+                    <SolidColorBrush x:Key="StatusBarIconBrush" Color="#60CDFF" />
+                    <SolidColorBrush x:Key="StatusErrorBrush" Color="#FF9999" />
+                    <SolidColorBrush x:Key="StatusWarningBrush" Color="#FFC864" />
+                    <SolidColorBrush x:Key="StatusSuccessBrush" Color="#6CCB5F" />
+                    <SolidColorBrush x:Key="StatusInfoBrush" Color="#60CDFF" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>

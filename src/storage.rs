@@ -4007,6 +4007,7 @@ mod tests {
                 request_timeout_ms: 99_000,
                 context_window_tokens: None,
                 max_output_tokens: None,
+                provider_type: None,
             },
             ..Default::default()
         };

@@ -2269,11 +2269,10 @@ fn expand_term_aliases(term: &str) -> Vec<String> {
         || normalized.contains("刷写")
         || normalized.contains("烧录")
         || normalized.contains("flash")
-        || normalized.contains("update")
     {
         aliases.extend(
             [
-                "刷机", "刷写", "烧录", "升级", "flash", "update", "wboot", "固件", "镜像", "zboot",
+                "刷机", "刷写", "烧录", "升级", "flash", "wboot", "固件", "镜像", "zboot",
             ]
             .into_iter()
             .map(str::to_string),

@@ -1003,13 +1003,17 @@ fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
     let start = text.find(open)?;
     let mut depth = 0;
     let mut in_string = false;
-    let mut prev_char = '\0';
+    let mut backslash_count = 0usize;
     for (i, c) in text[start..].char_indices() {
         if in_string {
-            if c == '"' && prev_char != '\\' {
-                in_string = false;
+            if c == '\\' {
+                backslash_count += 1;
+            } else {
+                if c == '"' && backslash_count % 2 == 0 {
+                    in_string = false;
+                }
+                backslash_count = 0;
             }
-            prev_char = c;
             continue;
         }
         match c {
@@ -1023,7 +1027,6 @@ fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
             }
             _ => {}
         }
-        prev_char = c;
     }
     None
 }
@@ -1095,6 +1098,17 @@ mod tests {
         let extracted = extract_json(raw).expect("extract with braces in string");
         assert!(extracted.contains("{var}"));
         assert!(extracted.contains("\"ok\": true"));
+    }
+
+    #[test]
+    fn extract_json_block_double_escaped_backslash() {
+        // \\" is an escaped backslash followed by a real closing quote
+        let text = r#"{"key": "value\\\\"}more"#;
+        // This should find the JSON object correctly
+        let result = extract_json_block(text, '{', '}');
+        assert!(result.is_some(), "Should handle double-escaped backslash");
+        let json = result.unwrap();
+        assert!(json.ends_with('}'), "JSON should end with closing brace");
     }
 
     #[test]

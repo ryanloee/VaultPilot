@@ -38,6 +38,14 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     );
     let tmp_path = path.with_file_name(tmp_name);
     fs::write(&tmp_path, data)?;
+    // Restrict temp file permissions before rename to prevent other users
+    // from reading sensitive data (e.g. settings.json with API keys).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&tmp_path, perms)?;
+    }
     fs::rename(&tmp_path, path)?;
     Ok(())
 }
@@ -496,7 +504,7 @@ pub fn save_note_with_images_with_context(
     };
 
     let serialized = compose_markdown(&meta, &body_with_images)?;
-    fs::write(&path, serialized).with_context(|| format!("failed to write {}", path.display()))?;
+    atomic_write(&path, serialized.as_bytes()).with_context(|| format!("failed to write {}", path.display()))?;
     index_note_file_with_connection(&connection, &path)?;
     load_note_with_context(context, &meta.id)
 }

@@ -791,8 +791,14 @@ fn truncate_for_trace(value: &str, max_chars: usize) -> String {
 
 fn merge_usage(current: ai::RequestUsage, next: ai::RequestUsage) -> ai::RequestUsage {
     ai::RequestUsage {
-        input_tokens: Some(current.input_tokens.unwrap_or(0) + next.input_tokens.unwrap_or(0)),
-        output_tokens: Some(current.output_tokens.unwrap_or(0) + next.output_tokens.unwrap_or(0)),
+        input_tokens: match (current.input_tokens, next.input_tokens) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+        },
+        output_tokens: match (current.output_tokens, next.output_tokens) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+        },
     }
 }
 
@@ -2052,6 +2058,21 @@ mod tests {
         let merged = merge_usage(current, next);
         assert_eq!(merged.input_tokens, Some(100));
         assert_eq!(merged.output_tokens, Some(50));
+    }
+
+    #[test]
+    fn merge_usage_preserves_none_when_both_none() {
+        let current = RequestUsage {
+            input_tokens: None,
+            output_tokens: None,
+        };
+        let next = RequestUsage {
+            input_tokens: None,
+            output_tokens: None,
+        };
+        let merged = merge_usage(current, next);
+        assert_eq!(merged.input_tokens, None);
+        assert_eq!(merged.output_tokens, None);
     }
 
     // ── sanitize_error ──

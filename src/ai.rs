@@ -6,7 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use url::Url;
@@ -25,27 +25,48 @@ struct CachedClient {
     // Fingerprint of the config used to build this client.
     api_key: String,
     timeout_ms: u64,
+    provider_type: crate::models::ProviderType,
 }
 
 static CACHED_CLIENT: Mutex<Option<CachedClient>> = Mutex::new(None);
 
-fn get_or_build_client(api_key: &str, timeout_ms: u64) -> Result<reqwest::Client> {
+fn get_or_build_client(
+    api_key: &str,
+    timeout_ms: u64,
+    provider_type: crate::models::ProviderType,
+) -> Result<reqwest::Client> {
     let mut cache = CACHED_CLIENT
         .lock()
         .map_err(|e| anyhow!("lock poisoned: {e}"))?;
     if let Some(ref cached) = *cache {
-        if cached.api_key == api_key && cached.timeout_ms == timeout_ms {
+        if cached.api_key == api_key
+            && cached.timeout_ms == timeout_ms
+            && cached.provider_type == provider_type
+        {
             return Ok(cached.client.clone());
         }
     }
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(
-        "x-api-key",
-        HeaderValue::from_str(api_key).context("invalid API key")?,
-    );
-    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+
+    use crate::models::ProviderType;
+    match provider_type {
+        ProviderType::Anthropic => {
+            headers.insert(
+                "x-api-key",
+                HeaderValue::from_str(api_key).context("invalid API key")?,
+            );
+            headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+        }
+        ProviderType::OpenAi => {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}"))
+                    .context("invalid API key for Bearer auth")?,
+            );
+        }
+    }
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
@@ -56,6 +77,7 @@ fn get_or_build_client(api_key: &str, timeout_ms: u64) -> Result<reqwest::Client
         client: client.clone(),
         api_key: api_key.to_string(),
         timeout_ms,
+        provider_type,
     });
     Ok(client)
 }
@@ -920,10 +942,15 @@ async fn send_request_with_temperature(
         return Err(anyhow!("API key is empty"));
     }
 
-    let client = get_or_build_client(&provider.api_key, provider.request_timeout_ms)?;
+    let provider_type = provider.effective_provider_type();
+    let client = get_or_build_client(
+        &provider.api_key,
+        provider.request_timeout_ms,
+        provider_type,
+    )?;
 
     validate_base_url(&provider.base_url)?;
-    let endpoint = normalize_messages_endpoint(&provider.base_url);
+    let endpoint = normalize_endpoint(&provider.base_url, provider_type);
     let content_blocks = build_input_blocks(prompt, image_paths)?;
 
     let payload = AnthropicRequest {
@@ -1229,13 +1256,32 @@ fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
-fn normalize_messages_endpoint(base_url: &str) -> String {
+/// Route to the correct API endpoint based on provider type.
+fn normalize_endpoint(base_url: &str, provider_type: crate::models::ProviderType) -> String {
+    use crate::models::ProviderType;
     let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.ends_with("/v1/messages") || trimmed.ends_with("/messages") {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}/v1/messages")
+    match provider_type {
+        ProviderType::Anthropic => {
+            if trimmed.ends_with("/v1/messages") || trimmed.ends_with("/messages") {
+                trimmed.to_string()
+            } else {
+                format!("{trimmed}/v1/messages")
+            }
+        }
+        ProviderType::OpenAi => {
+            if trimmed.ends_with("/v1/chat/completions") || trimmed.ends_with("/chat/completions") {
+                trimmed.to_string()
+            } else {
+                format!("{trimmed}/v1/chat/completions")
+            }
+        }
     }
+}
+
+/// Legacy wrapper for backward compatibility (Anthropic-only).
+#[allow(dead_code)]
+fn normalize_messages_endpoint(base_url: &str) -> String {
+    normalize_endpoint(base_url, crate::models::ProviderType::Anthropic)
 }
 
 fn is_retryable_provider_error(status: u16, detail: &str) -> bool {

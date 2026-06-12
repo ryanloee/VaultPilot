@@ -3956,6 +3956,7 @@ mod tests {
                 request_timeout_ms: 99_000,
                 context_window_tokens: Some(200_000),
                 max_output_tokens: None,
+                provider_type: None,
             },
             auto_check_updates: false,
             auto_wake_enabled: true,

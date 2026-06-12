@@ -1,5 +1,31 @@
 use serde::{Deserialize, Serialize};
 
+/// The type of AI provider, used to select correct API headers and endpoint format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderType {
+    /// Anthropic Messages API (x-api-key header, /v1/messages endpoint).
+    #[default]
+    Anthropic,
+    /// OpenAI-compatible Chat Completions API (Bearer token, /v1/chat/completions endpoint).
+    OpenAi,
+}
+
+impl ProviderType {
+    /// Auto-detect provider type from the base URL.
+    ///
+    /// URLs containing "anthropic" → Anthropic; everything else → OpenAI
+    /// (since OpenAI-compatible is the most common generic format).
+    pub fn from_base_url(base_url: &str) -> Self {
+        let lower = base_url.to_ascii_lowercase();
+        if lower.contains("anthropic") {
+            Self::Anthropic
+        } else {
+            Self::OpenAi
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
@@ -15,6 +41,9 @@ pub struct ProviderConfig {
     pub context_window_tokens: Option<usize>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+    /// Explicit provider type override. When `None`, auto-detected from `base_url`.
+    #[serde(default)]
+    pub provider_type: Option<ProviderType>,
 }
 
 impl ProviderConfig {
@@ -27,6 +56,7 @@ impl ProviderConfig {
             request_timeout_ms: self.request_timeout_ms,
             context_window_tokens: self.context_window_tokens,
             max_output_tokens: self.max_output_tokens,
+            provider_type: self.provider_type,
         }
     }
 }
@@ -40,6 +70,7 @@ impl Default for ProviderConfig {
             request_timeout_ms: default_timeout_ms(),
             context_window_tokens: None,
             max_output_tokens: None,
+            provider_type: None,
         }
     }
 }
@@ -81,6 +112,13 @@ impl Default for AppSettings {
 }
 
 impl ProviderConfig {
+    /// Return the effective provider type, using the explicit override if set,
+    /// otherwise auto-detecting from the base URL.
+    pub fn effective_provider_type(&self) -> ProviderType {
+        self.provider_type
+            .unwrap_or_else(|| ProviderType::from_base_url(&self.base_url))
+    }
+
     /// Validate provider configuration, returning a list of error messages.
     /// An empty list means the configuration is valid.
     pub fn validate(&self) -> Vec<String> {
@@ -532,6 +570,7 @@ mod tests {
                 request_timeout_ms: 30_000,
                 context_window_tokens: Some(128_000),
                 max_output_tokens: Some(16384),
+                provider_type: None,
             },
             auto_check_updates: false,
             auto_wake_enabled: true,

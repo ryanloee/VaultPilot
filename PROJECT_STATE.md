@@ -75,11 +75,14 @@
 - #207: .NET 单元测试项目 (PR #291 已合并)
 - #123: API Key 明文存储 AES-256-GCM 加密 (PR #300 已合并)
 - #137: API headers provider-aware — Anthropic/OpenAi 双协议支持 (PR #301 已合并)
+- #147: Rust 测试基础设施 — 意图检测和路径安全测试 (PR #302 已合并)
+- #42: SQLite 连接池 r2d2 替代逐次 Connection::open (PR #306 已合并)
+- #122: Auto-wake 模型下拉框 provider-aware (PR #305 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- #147: Rust 测试基础设施 — 意图检测和路径安全测试 (PR #302 待合并)
+- #104: MCP server 初始化超时和优雅关闭 (PR #307 待合并)
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -146,32 +149,36 @@
 - 2026-06-13 [PR审核轮5]: 关闭 PR #298 (serde_yml 0.0.13, 8个测试失败, 库已废弃), #294 (rusqlite 0.40, libsqlite3-sys 编译失败, 版本跨度太大)
 - 2026-06-13 [PR审核轮5]: cargo audit 失败是 main 分支已有问题 (rustls-webpki CVE), 不阻塞合并
 - 2026-06-13 [PR审核轮5]: PR #302 CI 失败因为与 PR #301 冲突 (缺少 provider_type 字段), 已留 comment 要求 rebase
+- 2026-06-13 [循环#18]: 聚焦 Performance + Enhancement，选定 #42 (SQLite 连接池), #122 (模型下拉框), #104 (MCP 超时)
+- 2026-06-13 [循环#18]: 修复目标 3/3：PR #306 (#42 ✅ 已合并), PR #305 (#122 ✅ 已合并), PR #307 (#104 待合并)
+- 2026-06-13 [循环#18]: PR #306 修复了 #42 长期阻塞的 SQLite 连接池问题，r2d2 pool max_size=5
+- 2026-06-13 [循环#18]: PR #306 同时修复了 #123 引入的加密测试编译错误 (缺少 provider_type) 和 pre-existing 断言失败
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
 
-| 指标 | 循环#16 | 循环#17 | PR审核轮5后 |
-|------|---------|---------|-------------|
-| Open issues 总数 | ~52 | ~49 | ~49 |
+| 指标 | 循环#17 | PR审核轮5后 | 循环#18 |
+|------|---------|-------------|---------|
+| Open issues 总数 | ~49 | ~49 | ~46 |
 | Open Bug 数 | 1 (#192 阻塞) | 1 (#192 阻塞) | 1 (#192 阻塞) |
-| Open Security 数 | 1 (#123) | 0 (#123 已合并) | 0 |
+| Open Security 数 | 0 | 0 | 0 |
 | Open Performance 数 | 1 (#217 阻塞) | 1 (#217 阻塞) | 1 (#217 阻塞) |
-| Open Enhancement 数 | 17 | ~14 | ~14 |
+| Open Enhancement 数 | ~14 | ~14 | ~11 |
 | Open UI 数 | 24 | 24 | 24 |
-| 已合并 PR | 56+ | 59+ | 65+ |
-| 进行中 PR | 0 | 1 (#302) | 1 (#302 需 rebase) |
+| 已合并 PR | 59+ | 65+ | 68+ |
+| 进行中 PR | 1 (#302) | 1 (#302 需 rebase) | 1 (#307) |
 | 阻塞项 | 2 (#192, #217) | 2 (#192, #217) | 2 (#192, #217) |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 17
-- 上次循环时间: 2026-06-13T18:00:00Z
-- 讨论重点: **Security + Enhancement** — API Key 加密、Provider 抽象、测试覆盖
+- 循环编号: 18
+- 上次循环时间: 2026-06-13T20:00:00Z
+- 讨论重点: **Performance + Enhancement** — SQLite 连接池、模型下拉框、MCP 超时
 - 本轮修复目标:
-  1. #123 — API Key 明文存储加密 (🟠 Security) → PR #300 ✅ 已合并
-  2. #137 — API headers provider-aware (🟢 Enhancement) → PR #301 ✅ 已合并
-  3. #147 — Rust 测试基础设施 (🔵 Infrastructure) → PR #302 待合并
+  1. #42 — SQLite 连接池 (🟡 Performance) → PR #306 ✅ 已合并
+  2. #122 — Auto-wake 模型下拉框 provider-aware (🟢 Enhancement) → PR #305 ✅ 已合并
+  3. #104 — MCP server 初始化超时和优雅关闭 (🟢 Enhancement) → PR #307 待合并
 - 本轮修复结果: 2/3 已合并，1/3 待合并
 - 待重建 issue: 无
 - 阻塞 issue: #192 (双转义, 3次失败), #217 (SQLite 同步阻塞, 子任务超时)

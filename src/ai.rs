@@ -982,33 +982,47 @@ fn extract_json(text: &str) -> Result<String> {
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         return Ok(trimmed.to_string());
     }
-    if let Some(start) = trimmed.find('{') {
-        let mut depth = 0;
-        let mut in_string = false;
-        let mut prev_char = '\0';
-        for (i, c) in trimmed[start..].char_indices() {
-            if in_string {
-                if c == '"' && prev_char != '\\' {
-                    in_string = false;
-                }
-                prev_char = c;
-                continue;
-            }
-            match c {
-                '"' => in_string = true,
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Ok(trimmed[start..=start + i].to_string());
-                    }
-                }
-                _ => {}
-            }
-            prev_char = c;
-        }
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return Ok(trimmed.to_string());
+    }
+    // Try extracting a JSON object
+    if let Some(result) = extract_json_block(trimmed, '{', '}') {
+        return Ok(result);
+    }
+    // Try extracting a JSON array
+    if let Some(result) = extract_json_block(trimmed, '[', ']') {
+        return Ok(result);
     }
     Err(anyhow!("AI response does not contain JSON"))
+}
+
+fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
+    let start = text.find(open)?;
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut prev_char = '\0';
+    for (i, c) in text[start..].char_indices() {
+        if in_string {
+            if c == '"' && prev_char != '\\' {
+                in_string = false;
+            }
+            prev_char = c;
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            c if c == open => depth += 1,
+            c if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start..=start + i].to_string());
+                }
+            }
+            _ => {}
+        }
+        prev_char = c;
+    }
+    None
 }
 
 fn normalize_messages_endpoint(base_url: &str) -> String {

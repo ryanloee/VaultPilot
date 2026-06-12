@@ -973,6 +973,9 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             RemoveThinkingIndicator();
+            ComposerBox.Text = text;
+            _attachments.AddRange(pendingAttachments);
+            RefreshAttachments();
             var message = LocalizeError(error.Message);
             AddTurn("assistant", message);
             RenderCurrentSession();
@@ -1072,6 +1075,9 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             RemoveThinkingIndicator();
+            ComposerBox.Text = text;
+            _attachments.AddRange(pendingAttachments);
+            RefreshAttachments();
             var message = LocalizeError(error.Message);
             AddTurn("assistant", message);
             RenderCurrentSession();

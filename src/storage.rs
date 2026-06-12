@@ -523,9 +523,6 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
         return Ok(false);
     };
     let file = PathBuf::from(&note_path);
-    if file.exists() {
-        fs::remove_file(&file)?;
-    }
 
     let tx = connection.transaction()?;
     tx.execute(
@@ -545,6 +542,15 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
         [resolved_note_id.as_str()],
     )?;
     tx.commit()?;
+
+    // Delete the physical file only after the DB transaction has been committed.
+    // If file deletion fails, the DB is already clean so we log a warning rather
+    // than propagating the error.
+    if file.exists() {
+        if let Err(e) = fs::remove_file(&file) {
+            eprintln!("warning: failed to delete file {}: {}", file.display(), e);
+        }
+    }
 
     Ok(true)
 }

@@ -70,6 +70,18 @@ fn main() {
         .build()
         .expect("failed to initialize async runtime");
 
+    // Create StorageContext once and reuse across all requests.
+    // StorageContext already caches the SQLite connection and AppSettings
+    // internally via Arc<Mutex<Option<...>>>, so reusing it avoids
+    // redundant path resolution and connection setup on every request.
+    let context = match StorageContext::for_sidecar() {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            eprintln!("fatal: failed to initialize storage context: {}", error);
+            std::process::exit(1);
+        }
+    };
+
     const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
     for line in stdin.lock().lines() {
@@ -77,7 +89,7 @@ fn main() {
             Ok(line) => {
                 match runtime.block_on(tokio::time::timeout(
                     REQUEST_TIMEOUT,
-                    handle_line(&line, &mut stdout),
+                    handle_line(&context, &line, &mut stdout),
                 )) {
                     Ok(response) => response,
                     Err(_elapsed) => {
@@ -175,7 +187,7 @@ fn log_agent_event(event: &str, detail: &str) {
         .and_then(|mut f| f.write_all(entry.as_bytes()));
 }
 
-async fn handle_line(line: &str, stdout: &mut impl Write) -> AgentResponse {
+async fn handle_line(context: &StorageContext, line: &str, stdout: &mut impl Write) -> AgentResponse {
     let request = match serde_json::from_str::<AgentRequest>(line) {
         Ok(request) => request,
         Err(error) => {
@@ -190,21 +202,7 @@ async fn handle_line(line: &str, stdout: &mut impl Write) -> AgentResponse {
         }
     };
 
-    let context = match StorageContext::for_sidecar() {
-        Ok(context) => context,
-        Err(error) => {
-            return AgentResponse::error(
-                request.id,
-                "context_error",
-                format!(
-                    "failed to initialize backend context: {}",
-                    vaultpilot_lib::sanitize_error(&error.to_string())
-                ),
-            );
-        }
-    };
-
-    match handle_request(&context, &request, stdout).await {
+    match handle_request(context, &request, stdout).await {
         Ok(result) => AgentResponse::ok(request.id, result),
         Err(error) => AgentResponse::error(request.id, "request_failed", error),
     }

@@ -238,5 +238,35 @@
                 </Grid>
             </StackPanel>
         </Grid>
+
+        <!-- Loading overlay with ProgressRing (#215) -->
+        <Grid
+            x:Name="LoadingOverlay"
+            Grid.RowSpan="3"
+            Background="#80000000"
+            Visibility="Collapsed"
+            Canvas.ZIndex="100">
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="12"
+                Padding="24"
+                CornerRadius="8"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1">
+                <ProgressRing
+                    x:Name="LoadingProgressRing"
+                    IsActive="True"
+                    Width="48"
+                    Height="48"
+                    HorizontalAlignment="Center" />
+                <TextBlock
+                    x:Name="LoadingMessage"
+                    Text="正在处理..."
+                    HorizontalAlignment="Center"
+                    Style="{ThemeResource BodyTextBlockStyle}" />
+            </StackPanel>
+        </Grid>
     </Grid>
 </Window>

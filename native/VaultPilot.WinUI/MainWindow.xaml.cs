@@ -1070,6 +1070,7 @@ public sealed partial class MainWindow : Window
             SendButton.IsEnabled = false;
             RecordButton.IsEnabled = false;
             CancelButton.Visibility = Visibility.Visible;
+            ShowLoadingOverlay(statusTitle);
             UpdateStatusBar("info", statusTitle, statusDetail);
 
             await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
@@ -1128,6 +1129,7 @@ public sealed partial class MainWindow : Window
             SendButton.IsEnabled = true;
             RecordButton.IsEnabled = true;
             CancelButton.Visibility = Visibility.Collapsed;
+            HideLoadingOverlay();
             RefreshSessions();
         }
     }
@@ -2673,6 +2675,17 @@ public sealed partial class MainWindow : Window
         {
             UpdateStatusBar("success", title, message);
         }
+    }
+
+    private void ShowLoadingOverlay(string message = "正在处理...")
+    {
+        LoadingMessage.Text = message;
+        LoadingOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void HideLoadingOverlay()
+    {
+        LoadingOverlay.Visibility = Visibility.Collapsed;
     }
 
     private static string StartupLogPath()

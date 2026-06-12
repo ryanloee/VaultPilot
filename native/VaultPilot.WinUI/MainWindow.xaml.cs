@@ -221,14 +221,48 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private static void SetFieldError(TextBox box, TextBlock errorBlock, string message)
+    {
+        box.BorderBrush = BrushRed;
+        errorBlock.Text = message;
+        errorBlock.Visibility = Visibility.Visible;
+    }
+
+    private static void ClearFieldError(TextBox box, TextBlock errorBlock)
+    {
+        box.ClearValue(TextBox.BorderBrushProperty);
+        errorBlock.Text = string.Empty;
+        errorBlock.Visibility = Visibility.Collapsed;
+    }
+
+    private static TextBlock CreateErrorTextBlock()
+    {
+        return new TextBlock
+        {
+            Foreground = BrushRed,
+            FontSize = 12,
+            Visibility = Visibility.Collapsed,
+            Margin = new Thickness(0, -8, 0, 0),
+        };
+    }
+
     private async void OnSettingsClicked(object sender, RoutedEventArgs e)
     {
         try
         {
-            _settings ??= await _backendClient.SendAsync<AppSettings>("getSettings", new { });
+            try
+            {
+                _settings ??= await _backendClient.SendAsync<AppSettings>("getSettings", new { });
+            }
+            catch (Exception loadError)
+            {
+                ShowError("无法加载设置", new InvalidOperationException($"设置加载失败，请检查后端连接：{loadError.Message}", loadError));
+                return;
+            }
             if (_settings is null)
             {
-                throw new InvalidOperationException("设置加载失败。");
+                ShowError("无法加载设置", new InvalidOperationException("后端返回了空设置数据，请重启应用后重试。"));
+                return;
             }
 
             var vaultBox = new TextBox
@@ -270,11 +304,28 @@ public sealed partial class MainWindow : Window
                 Text = _settings.Provider.RequestTimeoutMs.ToString(),
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
+            var timeoutError = CreateErrorTextBlock();
+            timeoutBox.LostFocus += (_, _) =>
+            {
+                if (!ulong.TryParse(timeoutBox.Text.Trim(), out var v) || v == 0)
+                    SetFieldError(timeoutBox, timeoutError, "超时必须是大于 0 的数字");
+                else
+                    ClearFieldError(timeoutBox, timeoutError);
+            };
             var contextWindowBox = new TextBox
             {
                 Header = "上下文窗口 Token 数（可选）",
                 Text = _settings.Provider.ContextWindowTokens?.ToString() ?? string.Empty,
                 HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            var contextWindowError = CreateErrorTextBlock();
+            contextWindowBox.LostFocus += (_, _) =>
+            {
+                var text = contextWindowBox.Text.Trim();
+                if (!string.IsNullOrEmpty(text) && !ulong.TryParse(text, out _))
+                    SetFieldError(contextWindowBox, contextWindowError, "Token 数必须是数字");
+                else
+                    ClearFieldError(contextWindowBox, contextWindowError);
             };
             var autoCheckUpdatesBox = new CheckBox
             {
@@ -308,6 +359,14 @@ public sealed partial class MainWindow : Window
                 PlaceholderText = "30",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
             };
+            var autoWakeIntervalError = CreateErrorTextBlock();
+            autoWakeIntervalBox.LostFocus += (_, _) =>
+            {
+                if (!ulong.TryParse(autoWakeIntervalBox.Text.Trim(), out var v) || v == 0)
+                    SetFieldError(autoWakeIntervalBox, autoWakeIntervalError, "间隔必须是大于 0 的数字");
+                else
+                    ClearFieldError(autoWakeIntervalBox, autoWakeIntervalError);
+            };
             var autoWakeModelBox = new ComboBox
             {
                 Header = "唤醒使用的模型（留空使用默认模型）",
@@ -335,12 +394,30 @@ public sealed partial class MainWindow : Window
                 PlaceholderText = "05:00",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
             };
+            var autoWakeStartTimeError = CreateErrorTextBlock();
+            autoWakeStartTimeBox.LostFocus += (_, _) =>
+            {
+                var text = autoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
+                if (!string.IsNullOrEmpty(text) && !TimeSpan.TryParse(text, out _))
+                    SetFieldError(autoWakeStartTimeBox, autoWakeStartTimeError, "时间格式无效，请使用 HH:mm");
+                else
+                    ClearFieldError(autoWakeStartTimeBox, autoWakeStartTimeError);
+            };
             var autoWakeEndTimeBox = new TextBox
             {
                 Header = "结束时间（HH:mm，留空不限）",
                 Text = _settings?.AutoWakeEndTime ?? string.Empty,
                 PlaceholderText = "23:00",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
+            var autoWakeEndTimeError = CreateErrorTextBlock();
+            autoWakeEndTimeBox.LostFocus += (_, _) =>
+            {
+                var text = autoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
+                if (!string.IsNullOrEmpty(text) && !TimeSpan.TryParse(text, out _))
+                    SetFieldError(autoWakeEndTimeBox, autoWakeEndTimeError, "时间格式无效，请使用 HH:mm");
+                else
+                    ClearFieldError(autoWakeEndTimeBox, autoWakeEndTimeError);
             };
 
             var projectLinkButton = new Button
@@ -382,14 +459,19 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(baseUrlBox);
             panel.Children.Add(modelBox);
             panel.Children.Add(timeoutBox);
+            panel.Children.Add(timeoutError);
             panel.Children.Add(contextWindowBox);
+            panel.Children.Add(contextWindowError);
             panel.Children.Add(autoWakeSeparator);
             panel.Children.Add(autoWakeHeader);
             panel.Children.Add(autoWakeEnabledBox);
             panel.Children.Add(autoWakeIntervalBox);
+            panel.Children.Add(autoWakeIntervalError);
             panel.Children.Add(autoWakeModelBox);
             panel.Children.Add(autoWakeStartTimeBox);
+            panel.Children.Add(autoWakeStartTimeError);
             panel.Children.Add(autoWakeEndTimeBox);
+            panel.Children.Add(autoWakeEndTimeError);
 
             var nextWakeLabel = new TextBlock
             {
@@ -554,7 +636,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            ShowError("保存设置失败", error);
+            ShowError("打开设置失败", error);
         }
     }
 
@@ -2790,6 +2872,7 @@ public sealed partial class MainWindow : Window
         var session = CurrentSession();
         if (session is null || session.Turns.Count == 0)
         {
+            ShowEmptyState();
             RefreshContextStatus();
             return;
         }
@@ -2821,6 +2904,87 @@ public sealed partial class MainWindow : Window
             }
         }
         RefreshContextStatus();
+    }
+
+    private void ShowEmptyState()
+    {
+        var isFirstRun = string.IsNullOrEmpty(_settings?.VaultDir);
+
+        var icon = new FontIcon
+        {
+            Glyph = isFirstRun ? "&#xE736;" : "&#xE8BD;",
+            FontSize = 48,
+            Opacity = 0.4,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+
+        var title = new TextBlock
+        {
+            Text = isFirstRun ? "欢迎使用 VaultPilot" : "开始新的对话",
+            Style = (Style)Application.Current.Resources["SubtitleTextBlockStyle"],
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+        };
+
+        var subtitle = new TextBlock
+        {
+            Text = isFirstRun
+                ? "请先在设置中配置 API Key 和知识库目录，然后就可以开始对话了。"
+                : "在下方输入框中输入问题，或试试这些示例：",
+            Opacity = 0.7,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 400,
+        };
+
+        var container = new StackPanel
+        {
+            Spacing = 12,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 80, 0, 0),
+        };
+        container.Children.Add(icon);
+        container.Children.Add(title);
+        container.Children.Add(subtitle);
+
+        if (!isFirstRun)
+        {
+            var suggestions = new[]
+            {
+                "帮我总结一下最近的笔记",
+                "搜索关于项目管理的内容",
+                "记录一条新想法",
+            };
+            foreach (var suggestion in suggestions)
+            {
+                var btn = new Button
+                {
+                    Content = suggestion,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
+                };
+                btn.Click += (_, _) =>
+                {
+                    ComposerBox.Text = suggestion;
+                    ComposerBox.Focus(FocusState.Programmatic);
+                };
+                container.Children.Add(btn);
+            }
+        }
+        else
+        {
+            var settingsBtn = new Button
+            {
+                Content = "打开设置",
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            settingsBtn.Click += async (_, _) => await OnSettingsClicked(settingsBtn, new RoutedEventArgs());
+            container.Children.Add(settingsBtn);
+        }
+
+        MessagesPanel.Children.Add(container);
     }
 
     private void AppendThinkingTrace(ThinkingTrace trace)

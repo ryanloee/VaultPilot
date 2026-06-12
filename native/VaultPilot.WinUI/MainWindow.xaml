@@ -242,7 +242,8 @@
                         <Button
                             x:Name="RecordButton"
                             Content="记录"
-                            AutomationProperties.Name="记录" AutomationProperties.HelpText="开始语音录音" />
+                            ToolTipService.ToolTip="将当前对话内容记录到知识库"
+                            AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库" />
                         <Button
                             x:Name="SendButton"
                             Content="发送"

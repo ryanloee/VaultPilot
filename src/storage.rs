@@ -3949,6 +3949,7 @@ mod tests {
                 model: "custom-model".to_string(),
                 request_timeout_ms: 99_000,
                 context_window_tokens: Some(200_000),
+                max_output_tokens: None,
             },
             auto_check_updates: false,
             auto_wake_enabled: true,

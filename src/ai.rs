@@ -488,6 +488,28 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
     (128_000, "heuristic_default".to_string())
 }
 
+/// Resolve the maximum output tokens to use for an API request.
+///
+/// Priority: explicit user configuration > model-name heuristic > default (8192).
+pub fn resolve_max_output_tokens(model: &str, configured: Option<u32>) -> u32 {
+    if let Some(value) = configured.filter(|v| *v > 0) {
+        return value;
+    }
+
+    let model_lower = model.trim().to_ascii_lowercase();
+    if model_lower.contains("claude-3-opus") || model_lower.contains("claude-opus") {
+        return 4096;
+    }
+    if model_lower.contains("gpt-4o")
+        || model_lower.contains("gpt-4.1")
+        || model_lower.contains("gpt-5")
+    {
+        return 16384;
+    }
+
+    8192
+}
+
 fn parse_or_fallback_note(text: &str, raw_input: &str) -> StructuredNoteDraft {
     let parsed = extract_json(text)
         .ok()
@@ -842,7 +864,7 @@ async fn send_request_with_temperature(
 
     let payload = AnthropicRequest {
         model: &provider.model,
-        max_tokens: 8192,
+        max_tokens: resolve_max_output_tokens(&provider.model, provider.max_output_tokens),
         temperature,
         system,
         messages: vec![AnthropicMessage {

@@ -1,18 +1,22 @@
+use std::collections::HashMap;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use subtle::ConstantTimeEq;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -262,6 +266,41 @@ struct McpServerState {
 struct HttpBridgeState {
     context: StorageContext,
     token: Option<String>,
+}
+
+/// Simple per-key fixed-window rate limiter.
+struct RateLimiter {
+    entries: std::sync::Mutex<HashMap<String, (u32, Instant)>>,
+    max_requests: u32,
+    window: std::time::Duration,
+}
+
+impl RateLimiter {
+    fn new(max_requests: u32, window: std::time::Duration) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(HashMap::new()),
+            max_requests,
+            window,
+        }
+    }
+
+    /// Returns `true` if the request is allowed, `false` if rate-limited.
+    fn check(&self, key: &str) -> bool {
+        let now = Instant::now();
+        let mut entries = self.entries.lock().expect("rate limiter lock poisoned");
+        let entry = entries.entry(key.to_string()).or_insert((0, now));
+
+        if now.duration_since(entry.1) > self.window {
+            *entry = (0, now);
+        }
+
+        if entry.0 >= self.max_requests {
+            return false;
+        }
+
+        entry.0 += 1;
+        true
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -788,12 +827,17 @@ async fn run_http_bridge(
     validate_http_bridge_binding(ip, token.as_deref())?;
     let address = SocketAddr::new(ip, port);
     let requires_token = token.is_some();
+    let rate_limiter = Arc::new(RateLimiter::new(60, std::time::Duration::from_secs(60)));
     let state = Arc::new(HttpBridgeState { context, token });
 
     let app = Router::new()
         .route("/health", get(http_health))
         .route("/v1/models", get(http_models))
         .route("/v1/chat/completions", post(http_chat_completions))
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_middleware,
+        ))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
         .with_state(state);
 
@@ -811,6 +855,34 @@ async fn run_http_bridge(
     let listener = tokio::net::TcpListener::bind(address).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn rate_limit_middleware(
+    State(rate_limiter): State<Arc<RateLimiter>>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // Extract a rate-limit key: use the bearer token if present, otherwise
+    // fall back to a generic key.
+    let key = bridge_token_from_headers(&headers)
+        .map(str::to_string)
+        .unwrap_or_else(|| "anonymous".to_string());
+
+    if !rate_limiter.check(&key) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(OpenAiErrorEnvelope {
+                error: OpenAiError {
+                    message: "rate limit exceeded, try again later".to_string(),
+                    kind: "rate_limit_error",
+                },
+            }),
+        )
+            .into_response();
+    }
+
+    next.run(request).await
 }
 
 async fn http_health() -> Json<Value> {
@@ -1030,16 +1102,23 @@ fn validate_http_bridge_binding(ip: IpAddr, token: Option<&str>) -> Result<()> {
 }
 
 /// Constant-time byte-slice comparison to prevent timing side-channel attacks.
-/// Returns `true` if `a` and `b` have the same length and contents.
+/// Never short-circuits on length mismatch: always iterates over max(a.len(), b.len())
+/// bytes so the comparison does not leak the expected token length.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
+    if a.len() == b.len() {
+        // `subtle::ConstantTimeEq` is constant-time for equal-length slices.
+        return a.ct_eq(b).into();
     }
-    let mut diff: u8 = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
+
+    // Length mismatch: still iterate over max_len bytes to avoid a timing gap.
+    let max_len = a.len().max(b.len());
+    let mut diff: u8 = 1; // mark length mismatch
+    for i in 0..max_len {
+        let ab = if i < a.len() { a[i] } else { 0 };
+        let bb = if i < b.len() { b[i] } else { 0 };
+        diff |= ab ^ bb;
     }
-    diff == 0
+    diff == 0 // always false — diff started at 1
 }
 
 fn require_bridge_token(

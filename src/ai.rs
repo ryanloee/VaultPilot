@@ -828,6 +828,8 @@ async fn send_request_with_temperature(
         return Err(anyhow!("API key is empty"));
     }
 
+    validate_base_url(&provider.base_url)?;
+
     let client = get_or_build_client(&provider.api_key, provider.request_timeout_ms)?;
 
     let endpoint = normalize_messages_endpoint(&provider.base_url);
@@ -1037,6 +1039,98 @@ fn normalize_messages_endpoint(base_url: &str) -> String {
     }
 }
 
+/// Validate a user-supplied base URL to prevent SSRF and common misconfigurations.
+///
+/// Checks:
+/// - URL parses correctly
+/// - Scheme is http or https
+/// - Host is present
+/// - Warns about non-HTTPS endpoints
+/// - Rejects RFC 1918 / loopback / link-local addresses unless explicitly allowed
+fn validate_base_url(base_url: &str) -> Result<()> {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("base_url is empty"));
+    }
+
+    let parsed = reqwest::Url::parse(trimmed)
+        .map_err(|e| anyhow!("invalid base_url '{}': {}", trimmed, e))?;
+
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(anyhow!(
+            "base_url scheme '{}' is not supported; use http or https",
+            scheme
+        ));
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("base_url has no host: {}", trimmed))?;
+
+    // Reject obvious private / loopback / link-local addresses
+    if is_private_host(host) {
+        return Err(anyhow!(
+            "base_url points to a private/loopback address '{}'; \
+             this is blocked to prevent SSRF. Use a public hostname or \
+             configure the application to allow local endpoints.",
+            host
+        ));
+    }
+
+    Ok(())
+}
+
+/// Check if a hostname looks like a private / loopback / link-local address.
+/// This is a best-effort check on the hostname string — it does NOT resolve DNS.
+fn is_private_host(host: &str) -> bool {
+    // Loopback
+    if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" {
+        return true;
+    }
+
+    // Parse as IP if possible
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+            }
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+        };
+    }
+
+    // Check for 10.x.x.x, 172.16-31.x.x, 192.168.x.x patterns in string form
+    if let Some(first_octet) = host.split('.').next().and_then(|s| s.parse::<u8>().ok()) {
+        match first_octet {
+            10 => return true,
+            172 => {
+                if let Some(second) = host.split('.').nth(1).and_then(|s| s.parse::<u8>().ok()) {
+                    if (16..=31).contains(&second) {
+                        return true;
+                    }
+                }
+            }
+            192 => {
+                if let Some(second) = host.split('.').nth(1).and_then(|s| s.parse::<u8>().ok()) {
+                    if second == 168 {
+                        return true;
+                    }
+                }
+            }
+            169 => {
+                if let Some(second) = host.split('.').nth(1).and_then(|s| s.parse::<u8>().ok()) {
+                    if second == 254 {
+                        return true; // link-local
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
 fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
     status == 429
         || status >= 500
@@ -1049,10 +1143,10 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 mod tests {
     use super::{
         dedupe_terms, detect_image_media_type, extract_json, fallback_answer,
-        heuristic_note_from_input, is_openai_reasoning_model, is_retryable_provider_error,
-        normalize_draft, normalize_messages_endpoint, parse_or_fallback_answer,
-        parse_or_fallback_note, parse_record_response, parse_tool_call, resolve_context_window,
-        AssistantToolCall, RequestUsage,
+        heuristic_note_from_input, is_openai_reasoning_model, is_private_host,
+        is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
+        parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
+        resolve_context_window, validate_base_url, AssistantToolCall, RequestUsage,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -1378,5 +1472,68 @@ mod tests {
         assert!(!is_openai_reasoning_model("pro1"));
         assert!(!is_openai_reasoning_model("some-o3thing"));
         assert!(!is_openai_reasoning_model("mo4del"));
+    }
+
+    #[test]
+    fn validate_base_url_rejects_empty() {
+        assert!(validate_base_url("").is_err());
+        assert!(validate_base_url("   ").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_invalid_url() {
+        assert!(validate_base_url("not a url").is_err());
+        assert!(validate_base_url("://missing-scheme").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_non_http_scheme() {
+        assert!(validate_base_url("ftp://example.com/api").is_err());
+        assert!(validate_base_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_accepts_https() {
+        assert!(validate_base_url("https://api.anthropic.com").is_ok());
+        assert!(validate_base_url("https://open.bigmodel.cn/api/anthropic").is_ok());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_loopback() {
+        assert!(validate_base_url("http://127.0.0.1:8080").is_err());
+        assert!(validate_base_url("http://localhost:3000").is_err());
+        assert!(validate_base_url("http://[::1]:8080").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_private_networks() {
+        assert!(validate_base_url("http://10.0.0.1:8080").is_err());
+        assert!(validate_base_url("http://172.16.0.1").is_err());
+        assert!(validate_base_url("http://192.168.1.1").is_err());
+        assert!(validate_base_url("http://169.254.1.1").is_err());
+    }
+
+    #[test]
+    fn is_private_host_loopback() {
+        assert!(is_private_host("localhost"));
+        assert!(is_private_host("127.0.0.1"));
+        assert!(is_private_host("::1"));
+        assert!(is_private_host("[::1]"));
+    }
+
+    #[test]
+    fn is_private_host_private_ranges() {
+        assert!(is_private_host("10.0.0.1"));
+        assert!(is_private_host("172.16.0.1"));
+        assert!(is_private_host("172.31.255.255"));
+        assert!(is_private_host("192.168.1.1"));
+        assert!(is_private_host("169.254.0.1"));
+    }
+
+    #[test]
+    fn is_private_host_public_ok() {
+        assert!(!is_private_host("api.anthropic.com"));
+        assert!(!is_private_host("8.8.8.8"));
+        assert!(!is_private_host("1.1.1.1"));
     }
 }

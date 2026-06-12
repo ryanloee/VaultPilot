@@ -483,6 +483,7 @@ pub fn list_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>
             tags: Vec::new(),
             keywords: Vec::new(),
             limit: Some(50),
+            ..Default::default()
         },
     )?;
     Ok(result.notes)
@@ -499,7 +500,13 @@ pub fn search_notes_with_context(
     let mut notes = if query.text.trim().is_empty() {
         query_recent_note_metas(&connection, limit)?
     } else {
-        rank_note_metas(context, &connection, &query.text, &[], limit)?
+        let fts_results = rank_note_metas(context, &connection, &query.text, &[], limit)?;
+        if fts_results.is_empty() {
+            // Fuzzy/approximate fallback: split query into words and use LIKE
+            query_like_note_metas(&connection, &query.text, limit)?
+        } else {
+            fts_results
+        }
     };
 
     if !query.tags.is_empty() {
@@ -508,6 +515,15 @@ pub fn search_notes_with_context(
     if !query.keywords.is_empty() {
         notes.retain(|note| has_all_terms(&note.keywords, &query.keywords));
     }
+
+    // Date range filtering
+    notes = filter_by_date_range(
+        notes,
+        query.created_after.as_deref(),
+        query.created_before.as_deref(),
+        query.modified_after.as_deref(),
+        query.modified_before.as_deref(),
+    );
 
     let total = notes.len();
     Ok(SearchResult { notes, total })
@@ -1621,6 +1637,90 @@ fn query_recent_note_metas(connection: &Connection, limit: usize) -> Result<Vec<
         .query_map([limit as i64], row_to_meta)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Fuzzy LIKE-based fallback when FTS5 returns no results.
+/// Splits the query into words and matches any note whose title or body
+/// contains at least one of the words (case-insensitive).
+fn query_like_note_metas(
+    connection: &Connection,
+    query_text: &str,
+    limit: usize,
+) -> Result<Vec<NoteMeta>> {
+    let words: Vec<&str> = query_text
+        .split_whitespace()
+        .filter(|w| w.len() >= 2)
+        .collect();
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build a WHERE clause: (title LIKE '%word1%' OR body LIKE '%word1%' OR ...)
+    let mut conditions = Vec::new();
+    let mut param_values: Vec<String> = Vec::new();
+    for word in &words {
+        let pattern = format!("%{}%", word.to_lowercase());
+        conditions.push("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)");
+        param_values.push(pattern.clone());
+        param_values.push(pattern);
+    }
+    let where_clause = conditions.join(" OR ");
+
+    let sql = format!(
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, \
+         created_at, updated_at, source, path, summary \
+         FROM notes WHERE {} ORDER BY updated_at DESC LIMIT ?",
+        where_clause
+    );
+
+    let mut statement = connection.prepare(&sql)?;
+    // Append the limit parameter
+    let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = param_values
+        .into_iter()
+        .map(|v| Box::new(v) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
+    all_params.push(Box::new(limit as i64));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        all_params.iter().map(|p| p.as_ref()).collect();
+
+    let rows = statement
+        .query_map(param_refs.as_slice(), row_to_meta)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Filter a list of NoteMetas by optional date range bounds.
+fn filter_by_date_range(
+    mut notes: Vec<NoteMeta>,
+    created_after: Option<&str>,
+    created_before: Option<&str>,
+    modified_after: Option<&str>,
+    modified_before: Option<&str>,
+) -> Vec<NoteMeta> {
+    notes.retain(|note| {
+        if let Some(after) = created_after {
+            if !note.created_at.is_empty() && note.created_at.as_str() < after {
+                return false;
+            }
+        }
+        if let Some(before) = created_before {
+            if !note.created_at.is_empty() && note.created_at.as_str() > before {
+                return false;
+            }
+        }
+        if let Some(after) = modified_after {
+            if !note.updated_at.is_empty() && note.updated_at.as_str() < after {
+                return false;
+            }
+        }
+        if let Some(before) = modified_before {
+            if !note.updated_at.is_empty() && note.updated_at.as_str() > before {
+                return false;
+            }
+        }
+        true
+    });
+    notes
 }
 
 fn query_fts_note_ids(connection: &Connection, text: &str, limit: usize) -> Result<Vec<String>> {
@@ -3778,6 +3878,7 @@ mod tests {
                 tags: vec![],
                 keywords: vec![],
                 limit: Some(10),
+                ..Default::default()
             },
         )
         .expect("search");
@@ -3809,6 +3910,7 @@ mod tests {
                 tags: vec!["kernel".to_string()],
                 keywords: vec![],
                 limit: Some(10),
+                ..Default::default()
             },
         )
         .expect("search by tag");

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::runtime::Runtime;
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 use vaultpilot_lib::models::*;
@@ -828,10 +829,7 @@ async fn run_http_bridge(
     let address = SocketAddr::new(ip, port);
     let requires_token = token.is_some();
     let rate_limiter = Arc::new(RateLimiter::new(60, std::time::Duration::from_secs(60)));
-    let state = Arc::new(HttpBridgeState {
-        context,
-        token,
-    });
+    let state = Arc::new(HttpBridgeState { context, token });
 
     let app = Router::new()
         .route("/health", get(http_health))
@@ -842,6 +840,7 @@ async fn run_http_bridge(
             rate_limit_middleware,
         ))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
+        .layer(CorsLayer::very_permissive())
         .with_state(state);
 
     println!(

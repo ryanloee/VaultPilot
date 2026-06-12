@@ -2,6 +2,7 @@ pub mod ai;
 pub mod crypto;
 pub mod models;
 pub mod prompting;
+pub mod search_rules;
 pub mod storage;
 
 use std::fs;

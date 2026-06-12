@@ -73,6 +73,14 @@ fn main() {
 
     tracing::info!("vaultpilot-agent starting");
 
+    // Initialize configurable search rules from user's config directory
+    let config_dir = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let rules_path = config_dir.join("search_rules.json");
+    vaultpilot_lib::search_rules::SearchRules::init_from_file(&rules_path);
+
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let runtime = tokio::runtime::Builder::new_multi_thread()

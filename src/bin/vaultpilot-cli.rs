@@ -412,6 +412,15 @@ fn main() {
             .init();
     }
     let is_mcp = matches!(cli.command, Commands::Mcp);
+
+    // Initialize configurable search rules from user's config directory
+    let config_dir = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let rules_path = config_dir.join("search_rules.json");
+    vaultpilot_lib::search_rules::SearchRules::init_from_file(&rules_path);
+
     let serve_target = match &cli.command {
         Commands::Serve { host, port, token } => Some((host.clone(), *port, token.clone())),
         _ => None,

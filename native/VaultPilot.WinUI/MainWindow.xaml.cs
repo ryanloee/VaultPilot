@@ -904,7 +904,7 @@ public sealed partial class MainWindow : Window
 
     private async Task RecordCurrentMessageAsync()
     {
-        if (!SendButton.IsEnabled)
+        if (!RecordButton.IsEnabled)
         {
             return;
         }
@@ -1029,6 +1029,7 @@ public sealed partial class MainWindow : Window
         RemoveThinkingIndicator();
         StopAutoWakeTimer();
         TryReleaseWindowFileDropHook();
+        await SaveChatStateAsync();
         await _backendClient.DisposeAsync();
     }
 

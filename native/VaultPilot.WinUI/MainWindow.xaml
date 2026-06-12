@@ -145,6 +145,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBox
                             x:Name="ComposerBox"
@@ -156,11 +157,20 @@
                             Height="88"
                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                             TextWrapping="Wrap"
-                            PlaceholderText="输入问题，或记录一条知识...">
+                            PlaceholderText="输入问题，或记录一条知识... (Enter 发送，Shift+Enter 换行)"
+                            ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行">
                         </TextBox>
+                        <TextBlock
+                            x:Name="ComposerHintText"
+                            Grid.Row="1"
+                            Text="Enter 发送 · Shift+Enter 换行"
+                            FontSize="11"
+                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                            Margin="4,0,0,0"
+                            HorizontalAlignment="Right" />
                         <Grid
                             x:Name="ContextUsageBarHost"
-                            Grid.Row="1"
+                            Grid.Row="2"
                             Height="8"
                             MinWidth="120"
                             HorizontalAlignment="Stretch"
@@ -185,7 +195,7 @@
                         </Grid>
                         <ScrollViewer
                             x:Name="AttachmentScroller"
-                            Grid.Row="2"
+                            Grid.Row="3"
                             Margin="0,2,0,0"
                             HorizontalScrollBarVisibility="Auto"
                             VerticalScrollBarVisibility="Disabled"

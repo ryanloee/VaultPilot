@@ -18,6 +18,7 @@ use storage::{
     load_context_notes_with_context, load_note_with_context, ocr_image_text,
     save_chat_state_with_context, save_note_with_images_with_context, StorageContext,
 };
+use tracing::instrument;
 use uuid::Uuid;
 
 /// Redact sensitive substrings — API keys, bearer tokens, and secret query
@@ -129,6 +130,7 @@ fn scan_until_ampersand_or_end(bytes: &[u8], pos: usize) -> usize {
     j
 }
 
+#[instrument(skip(context, summary, history, emit_status))]
 pub async fn compress_chat_history_with_context(
     context: &StorageContext,
     summary: Option<ConversationSummary>,
@@ -200,6 +202,7 @@ fn append_ocr_text_to_prompt(mut prompt: String, ocr_parts: &[String]) -> String
     prompt
 }
 
+#[instrument(skip(context, question, image_paths, emit_status))]
 pub async fn chat_with_ai_with_context(
     context: &StorageContext,
     session_id: Option<String>,

@@ -17,6 +17,7 @@ use image::{imageops::FilterType, ImageReader};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::{debug, instrument};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -192,6 +193,7 @@ struct LegacyChatState {
     summary: Option<crate::models::ConversationSummary>,
 }
 
+#[instrument(skip(context))]
 pub fn initialize_storage_with_context(context: &StorageContext) -> Result<AppSettings> {
     let settings = load_settings_with_context(context)?;
     let database_path = context.paths.database_path.clone();
@@ -438,12 +440,14 @@ pub fn list_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>
     Ok(result.notes)
 }
 
+#[instrument(skip(context))]
 pub fn search_notes_with_context(
     context: &StorageContext,
     query: SearchQuery,
 ) -> Result<SearchResult> {
     let (connection, _) = open_connection(context)?;
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    debug!(text = %query.text, limit = limit, "searching notes");
     let mut notes = if query.text.trim().is_empty() {
         query_recent_note_metas(&connection, limit)?
     } else {
@@ -604,6 +608,7 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     Ok(true)
 }
 
+#[instrument(skip(context, paths))]
 pub fn import_markdown_with_context(
     context: &StorageContext,
     paths: &[String],
@@ -625,6 +630,7 @@ pub fn import_markdown_with_context(
     Ok(result)
 }
 
+#[instrument(skip(context))]
 pub fn rebuild_index_with_context(context: &StorageContext) -> Result<IndexStats> {
     let (mut connection, settings) = open_connection(context)?;
     let vault_dir = PathBuf::from(&settings.vault_dir);

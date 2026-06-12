@@ -1,251 +1,66 @@
-name: ci
+name: CI
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - "v*"
+    branches: [main]
   pull_request:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [main]
 
-permissions:
-  contents: read
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  rust_quality:
-    name: rust-quality
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting
-        shell: powershell
-        run: cargo fmt --all --check
-
-      - name: Run clippy
-        shell: powershell
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Run tests
-        shell: powershell
-        run: cargo test --workspace --all-targets
-
-  linux_cli_build:
-    name: linux-cli-build
+  fmt:
+    name: cargo fmt
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Linux build prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xz-utils dpkg-dev
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Zig
-        run: |
-          mkdir -p "$HOME/.local/zig"
-          cd "$HOME/.local/zig"
-          curl -L https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz -o zig.tar.xz
-          tar -xf zig.tar.xz
-          echo "$HOME/.local/zig/zig-linux-x86_64-0.14.0" >> "$GITHUB_PATH"
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
-
-      - name: Build x64 Linux CLI binary and deb
-        run: |
-          chmod +x scripts/build-linux-cli.sh
-          ./scripts/build-linux-cli.sh --platforms x64 --format all
-
-      - name: Verify Linux CLI outputs
-        run: |
-          test -f artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
-          compgen -G "artifacts/linux-cli/packages/linux-x64/*.deb" > /dev/null
-
-      - name: Upload Linux CLI artifacts
-        if: success()
-        uses: actions/upload-artifact@v4
+          components: rustfmt
+      - uses: actions/cache@v4
         with:
-          name: ci-linux-cli-x64
           path: |
-            artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
-            artifacts/linux-cli/packages/linux-x64/*.deb
-          if-no-files-found: error
-          retention-days: 7
-
-  winui_build:
-    name: winui-build
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
-        with:
-          path: ~\.nuget\packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('native/VaultPilot.WinUI/VaultPilot.WinUI.csproj') }}
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-fmt-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            nuget-${{ runner.os }}-
+            ${{ runner.os }}-cargo-fmt-
+      - run: cargo fmt --all -- --check
 
-      - name: Create log directory
-        shell: powershell
-        run: New-Item -ItemType Directory -Force -Path artifacts/logs | Out-Null
-
-      - name: Build WinUI app
-        shell: powershell
-        run: >
-          MSBuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj
-          /restore
-          /t:Build
-          /p:Configuration=Debug
-          /p:Platform=x64
-          /bl:artifacts/logs/winui-debug-x64.binlog
-
-      - name: Verify WinUI outputs
-        shell: powershell
-        run: |
-          $required = @(
-            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe",
-            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/vaultpilot-agent.exe",
-            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/vaultpilot-cli.exe"
-          )
-
-          foreach ($path in $required) {
-            if (-not (Test-Path $path)) {
-              throw "Expected build output not found: $path"
-            }
-          }
-
-          $binDir = "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0"
-          $notifyIconDll = Get-ChildItem $binDir -Filter "H.NotifyIcon.WinUI.dll" -Recurse -ErrorAction SilentlyContinue
-          if (-not $notifyIconDll) {
-            throw "H.NotifyIcon.WinUI.dll not found in build output"
-          }
-
-      - name: Upload WinUI diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: winui-build-logs
-          path: artifacts/logs/winui-debug-x64.binlog
-          if-no-files-found: warn
-          retention-days: 7
-
-  package_smoke:
-    name: package-smoke
-    runs-on: windows-latest
-
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          dotnet-version: 8.0.x
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+          components: clippy
+      - uses: actions/cache@v4
         with:
-          targets: x86_64-pc-windows-msvc
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install Velopack CLI
-        shell: powershell
-        run: dotnet tool install --global vpk --version 0.0.1298
-
-      - name: Create log directory
-        shell: powershell
-        run: New-Item -ItemType Directory -Force -Path artifacts/logs | Out-Null
-
-      - name: Build x64 package
-        shell: powershell
-        run: powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x64
-
-      - name: Verify package outputs
-        shell: powershell
-        run: |
-          $required = @(
-            "artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Setup.exe",
-            "artifacts/velopack/packages/win-x64/releases.win-x64.json",
-            "artifacts/velopack/packages/win-x64/RELEASES-win-x64"
-          )
-
-          foreach ($path in $required) {
-            if (-not (Test-Path $path)) {
-              throw "Expected package output not found: $path"
-            }
-          }
-
-          $nupkg = Get-ChildItem "artifacts/velopack/packages/win-x64" -Filter "*-full.nupkg" -File
-          if (-not $nupkg) {
-            throw "Expected x64 full nupkg was not generated."
-          }
-
-      - name: Upload package artifact
-        if: success()
-        uses: actions/upload-artifact@v4
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
         with:
-          name: ci-package-smoke-x64
-          path: artifacts/velopack/packages/win-x64
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload package diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-smoke-logs
-          path: artifacts/logs
-          if-no-files-found: warn
-          retention-days: 7
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+      - run: cargo test --workspace

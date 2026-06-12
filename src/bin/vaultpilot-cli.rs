@@ -21,6 +21,7 @@ use tokio::runtime::Runtime;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
+use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::*;
 use vaultpilot_lib::{
@@ -399,6 +400,17 @@ struct OpenAiError {
 
 fn main() {
     let cli = Cli::parse();
+
+    // Skip tracing init when running as MCP stdio server to avoid
+    // polluting the JSON-RPC stdout channel with log output.
+    if !matches!(cli.command, Commands::Mcp) {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .init();
+    }
     let is_mcp = matches!(cli.command, Commands::Mcp);
     let serve_target = match &cli.command {
         Commands::Serve { host, port, token } => Some((host.clone(), *port, token.clone())),

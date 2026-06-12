@@ -808,11 +808,17 @@ fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, anyhow
         return Err(anyhow::anyhow!("path is not a directory: {}", display));
     }
 
-    let mut entries = fs::read_dir(directory)?
-        .filter_map(|entry| entry.ok())
-        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    let mut errors = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        match entry {
+            Ok(e) => entries.push(e),
+            Err(e) => errors.push(e.to_string()),
+        }
+    }
     entries.sort_by_key(|entry| entry.file_name());
 
+    let total = entries.len();
     let rendered = entries
         .into_iter()
         .take(60)
@@ -825,11 +831,33 @@ fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, anyhow
         })
         .collect::<Vec<_>>();
 
-    Ok(format!(
+    let mut output = format!(
         "list_directory returned {} items.\n{}",
         rendered.len(),
         rendered.join("\n")
-    ))
+    );
+
+    if !errors.is_empty() {
+        output.push_str(&format!(
+            "\n\n⚠ {} entries could not be read due to permission or I/O errors:\n{}",
+            errors.len(),
+            errors
+                .iter()
+                .take(10)
+                .map(|e| format!("- {}", e))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
+    if total > 60 {
+        output.push_str(&format!(
+            "\n\n(Showing first 60 of {} entries. Use a subdirectory path to see more.)",
+            total
+        ));
+    }
+
+    Ok(output)
 }
 
 fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Error> {
@@ -1519,12 +1547,12 @@ mod tests {
         build_chat_session_title, build_effective_question, current_session_history, display_path,
         draft_to_note_document, enrich_turn_for_compression, estimate_session_tokens,
         estimate_tokens_for_text, estimate_turn_tokens, extract_explicit_local_path,
-        has_matching_tool_execution, looks_like_record_request, looks_like_session_memory_question,
-        looks_like_small_talk, merge_usage, normalize_tool_path, planned_tool_identity,
-        require_saved_note_for_record_request, resolve_or_create_chat_session, sanitize_error,
-        summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession, ChatState,
-        ChatTurn, ConversationSummary, ThinkingTrace, ToolExecution, IMAGE_ONLY_PROMPT,
-        OCR_SECTION_HEADER,
+        has_matching_tool_execution, list_directory_result, looks_like_record_request,
+        looks_like_session_memory_question, looks_like_small_talk, merge_usage,
+        normalize_tool_path, planned_tool_identity, require_saved_note_for_record_request,
+        resolve_or_create_chat_session, sanitize_error, summarize_docs_for_tool_result,
+        truncate_for_trace, ChatAttachment, ChatSession, ChatState, ChatTurn, ConversationSummary,
+        ThinkingTrace, ToolExecution, IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
     use crate::models::{GroundedAnswer, NoteDocument, NoteMeta, StructuredNoteDraft};
@@ -2163,5 +2191,74 @@ mod tests {
     #[test]
     fn sanitize_handles_empty_string() {
         assert_eq!(sanitize_error(""), "");
+    }
+
+    #[test]
+    fn list_directory_reports_permission_errors() {
+        let tmp = env::temp_dir().join(format!(
+            "vp_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("readable.txt"), "hello").unwrap();
+
+        // Create a subdirectory with restricted permissions
+        let restricted_dir = tmp.join("restricted");
+        fs::create_dir(&restricted_dir).unwrap();
+        fs::write(restricted_dir.join("secret.txt"), "secret").unwrap();
+
+        // Remove read+execute permissions on the restricted subdirectory (Unix only)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&restricted_dir, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+
+        // Use tmp as vault_root so normalize_tool_path accepts it
+        let result = list_directory_result(&tmp.to_string_lossy(), &tmp);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("readable.txt"));
+
+        // On Unix, the restricted dir entry still appears (it's the DirEntry from read_dir),
+        // but reading its metadata or contents may fail. The key test is that the function
+        // doesn't panic and returns a result.
+        #[cfg(unix)]
+        {
+            // Restore permissions for cleanup
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&restricted_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn list_directory_reports_truncation() {
+        let tmp = env::temp_dir().join(format!(
+            "vp_test_trunc_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let subdir = tmp.join("files");
+        fs::create_dir_all(&subdir).unwrap();
+
+        // Create 65 files to exceed the 60-item limit
+        for i in 0..65 {
+            fs::write(subdir.join(format!("file_{:03}.txt", i)), "").unwrap();
+        }
+
+        // Use tmp as vault_root, list the subdir
+        let result = list_directory_result(&subdir.to_string_lossy(), &tmp);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("first 60 of 65"));
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

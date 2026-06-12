@@ -1727,8 +1727,10 @@ fn load_attachment_entries_by_note_ids(
             placeholders.join(", ")
         );
         let mut statement = connection.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            chunk.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
         let rows = statement.query_map(params.as_slice(), row_to_attachment_entry)?;
         for row in rows {
             let entry = row?;

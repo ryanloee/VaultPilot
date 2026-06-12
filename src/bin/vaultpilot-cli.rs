@@ -1656,7 +1656,10 @@ mod tests {
     #[test]
     fn simplify_cli_text_removes_common_markdown_noise() {
         let text = "<vp-markdown>\n### 标题\n1. **第一步**\n- `git fetch`\n```bash\ngit pull\n```\n</vp-markdown>";
-        assert_eq!(simplify_cli_text(text), "标题\n第一步\n`git fetch`\ngit pull");
+        assert_eq!(
+            simplify_cli_text(text),
+            "标题\n第一步\n`git fetch`\ngit pull"
+        );
     }
 
     #[test]

@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "nuget"
+    directory: "/native/VaultPilot.WinUI"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10

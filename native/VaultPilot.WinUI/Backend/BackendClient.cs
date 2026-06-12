@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using VaultPilot.WinUI.Models;
 using System.Threading;
 using System.Collections.Concurrent;
+using Microsoft.Win32;
 
 namespace VaultPilot.WinUI.Backend;
 
@@ -12,12 +13,14 @@ public sealed class BackendClient : IAsyncDisposable
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly TimeSpan HealthCheckInterval = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(10);
-    private const int MaxReconnectAttempts = 3;
+    private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(30);
+    private const int MaxReconnectAttempts = 5;
+    private static readonly TimeSpan BaseReconnectDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromSeconds(60);
     private const int MaxStderrLines = 50;
 
     private readonly ConcurrentQueue<string> _stderrLines = new();
+    private int _consecutiveFailures;
 
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -49,6 +52,7 @@ public sealed class BackendClient : IAsyncDisposable
         _executablePath = executablePath;
         StartProcess();
         StartHealthCheck();
+        RegisterPowerModeChanged();
     }
 
     private void StartProcess()
@@ -96,25 +100,22 @@ public sealed class BackendClient : IAsyncDisposable
         {
             if (!IsConnected)
             {
-                var reconnected = await TryReconnectWithRetryAsync();
-                if (!reconnected && !_isDisposed)
-                {
-                    ConnectionStateChanged?.Invoke(false);
-                }
+                _ = TryReconnectWithRetryAsync();
                 return;
             }
 
             using var cts = new CancellationTokenSource(PingTimeout);
             await SendAsync("ping", new { }, cts.Token);
+            _consecutiveFailures = 0;
         }
         catch
         {
             if (!_isDisposed)
             {
-                var reconnected = await TryReconnectWithRetryAsync();
-                if (!reconnected)
+                _consecutiveFailures++;
+                if (_consecutiveFailures >= 3)
                 {
-                    ConnectionStateChanged?.Invoke(false);
+                    _ = TryReconnectWithRetryAsync();
                 }
             }
         }
@@ -122,6 +123,17 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async Task<bool> TryReconnectWithRetryAsync()
     {
+        // Quick check under lock to avoid duplicate reconnect attempts
+        await _reconnectLock.WaitAsync();
+        try
+        {
+            if (_isDisposed || IsConnected) return IsConnected;
+        }
+        finally
+        {
+            _reconnectLock.Release();
+        }
+
         for (int attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
         {
             if (_isDisposed) return false;
@@ -133,6 +145,7 @@ public sealed class BackendClient : IAsyncDisposable
                 {
                     using var cts = new CancellationTokenSource(PingTimeout);
                     await SendAsync("ping", new { }, cts.Token);
+                    _consecutiveFailures = 0;
                     ConnectionStateChanged?.Invoke(true);
                     return true;
                 }
@@ -144,10 +157,16 @@ public sealed class BackendClient : IAsyncDisposable
 
             if (attempt < MaxReconnectAttempts)
             {
-                await Task.Delay(ReconnectDelay * attempt);
+                // Exponential backoff: 5s -> 15s -> 45s -> 60s (capped)
+                var delay = TimeSpan.FromTicks(
+                    Math.Min(
+                        BaseReconnectDelay.Ticks * (long)Math.Pow(3, attempt - 1),
+                        MaxReconnectDelay.Ticks));
+                await Task.Delay(delay);
             }
         }
 
+        ConnectionStateChanged?.Invoke(false);
         return false;
     }
 
@@ -176,14 +195,14 @@ public sealed class BackendClient : IAsyncDisposable
             if (IsConnected && !forceRestart) return true;
 
             await DisposeProcessAsync();
-            await Task.Delay(ReconnectDelay, cancellationToken);
+            await Task.Delay(BaseReconnectDelay, cancellationToken);
 
             if (_isDisposed) return false;
 
             StartProcess();
 
             // Verify process actually started
-            await Task.Delay(100, cancellationToken);
+            await Task.Delay(500, cancellationToken);
             return _process is { HasExited: false };
         }
         catch
@@ -276,6 +295,8 @@ public sealed class BackendClient : IAsyncDisposable
         _healthCheckTimer?.Dispose();
         _healthCheckTimer = null;
 
+        try { SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
+
         await DisposeProcessAsync();
     }
 
@@ -305,6 +326,27 @@ public sealed class BackendClient : IAsyncDisposable
             _process.Dispose();
             _process = null;
             ConnectionStateChanged?.Invoke(false);
+        }
+    }
+
+    private void RegisterPowerModeChanged()
+    {
+        try
+        {
+            SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        }
+        catch
+        {
+            // SystemEvents may not be available in all environments
+        }
+    }
+
+    private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == PowerModes.Resume && !_isDisposed)
+        {
+            _consecutiveFailures = 0;
+            _ = TryReconnectWithRetryAsync();
         }
     }
 

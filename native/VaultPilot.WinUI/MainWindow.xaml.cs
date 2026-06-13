@@ -3258,7 +3258,7 @@ public sealed partial class MainWindow : Window
     /// (preceded by start, '-', '_', '.', '/', or ' ', or followed by the same).
     /// Prevents false positives like "co1l" matching "o1".
     /// </summary>
-    private static bool ContainsModelToken(string model, string token)
+    internal static bool ContainsModelToken(string model, string token)
     {
         var index = model.IndexOf(token, StringComparison.Ordinal);
         while (index >= 0)
@@ -3276,7 +3276,7 @@ public sealed partial class MainWindow : Window
     /// OpenAI o-series models: o1, o3, o4 (with optional suffix like -mini, -preview).
     /// Matches "o1", "o1-mini", "o3-mini", "o4-mini" etc. but not "co1l" or "po3".
     /// </summary>
-    private static bool IsOpenAiOSeriesModel(string model)
+    internal static bool IsOpenAiOSeriesModel(string model)
     {
         // Check for o1/o3/o4 at word boundary followed by end, separator, or hyphen
         foreach (var prefix in new[] { "o1", "o3", "o4" })
@@ -3294,10 +3294,10 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
-    private static bool IsModelSeparator(char c) =>
+    internal static bool IsModelSeparator(char c) =>
         c is '-' or '_' or '.' or '/' or ' ' or '(' or ')' or ':' or ',';
 
-    private static string FormatTokenCount(ulong tokens)
+    internal static string FormatTokenCount(ulong tokens)
     {
         if (tokens >= 1_000_000)
         {
@@ -3421,7 +3421,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Converts an ISO-8601 timestamp to a human-readable relative time string.</summary>
-    private static string ToRelativeTime(string timestamp)
+    internal static string ToRelativeTime(string timestamp)
     {
         if (!DateTimeOffset.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.None, out var dto))
@@ -3440,13 +3440,13 @@ public sealed partial class MainWindow : Window
         return $"{(int)(span.TotalDays / 365)} 年前";
     }
 
-    private static string BuildSessionTitle(string text)
+    internal static string BuildSessionTitle(string text)
     {
         var normalized = string.Join(" ", text.Split(Array.Empty<char>(), StringSplitOptions.RemoveEmptyEntries));
         return normalized.Length <= 28 ? normalized : $"{normalized[..28]}...";
     }
 
-    private static string LocalizeStage(string stage)
+    internal static string LocalizeStage(string stage)
     {
         return stage switch
         {
@@ -3461,7 +3461,7 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private static string LocalizeStatusDetail(string detail)
+    internal static string LocalizeStatusDetail(string detail)
     {
         return detail switch
         {
@@ -3488,7 +3488,7 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private static string LocalizeError(string message)
+    internal static string LocalizeError(string message)
     {
         return message
             .Replace("API key is empty", "API Key 为空，请先在设置中配置模型服务。", StringComparison.Ordinal)

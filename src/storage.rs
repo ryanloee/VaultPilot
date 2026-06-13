@@ -2753,9 +2753,11 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
         if older.exists() {
             if i + 1 >= max_backups {
                 // Delete the oldest backup
-                fs::remove_file(&older).ok();
-            } else {
-                fs::rename(&older, &newer).ok();
+                if let Err(e) = fs::remove_file(&older) {
+                    tracing::warn!(path = %older.display(), error = %e, "Failed to remove old backup");
+                }
+            } else if let Err(e) = fs::rename(&older, &newer) {
+                tracing::warn!(from = %older.display(), to = %newer.display(), error = %e, "Failed to rotate backup");
             }
         }
     }
@@ -2764,7 +2766,9 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
     let current_bak = backup_dir.join(format!("{file_name_str}.bak"));
     if current_bak.exists() {
         let bak1 = backup_dir.join(format!("{file_name_str}.bak.1"));
-        fs::rename(&current_bak, &bak1).ok();
+        if let Err(e) = fs::rename(&current_bak, &bak1) {
+            tracing::warn!(from = %current_bak.display(), to = %bak1.display(), error = %e, "Failed to rotate current backup");
+        }
     }
 
     // Copy current database to .bak

@@ -175,7 +175,9 @@ fn log_agent_event(event: &str, detail: &str) {
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."))
         .join("com.local.vaultpilot");
-    let _ = fs::create_dir_all(&log_dir);
+    if fs::create_dir_all(&log_dir).is_err() {
+        return;
+    }
     let log_path = log_dir.join("agent-crash.log");
 
     // Rotate log if it exceeds the size limit — keep the last 256 KB
@@ -350,7 +352,9 @@ fn emit_agent_status(stdout: &mut impl Write, stage: &str, detail: String) {
         if writeln!(stdout, "{serialized}").is_err() {
             return;
         }
-        let _ = stdout.flush();
+        if let Err(e) = stdout.flush() {
+            eprintln!("[emit_agent_status] Failed to flush stdout: {e}");
+        }
     }
 }
 

@@ -271,9 +271,20 @@ public sealed partial class SettingsDialog : ContentDialog
     //  Inline field error helpers
     // ──────────────────────────────────────────────
 
+    private static Brush GetThemeBrush(string key)
+    {
+        if (Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush)
+        {
+            return brush;
+        }
+
+        System.Diagnostics.Debug.WriteLine($"[SettingsDialog.GetThemeBrush] Missing resource key: '{key}', falling back to Transparent.");
+        return new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+    }
+
     private static void SetFieldError(TextBox box, TextBlock errorBlock, string message)
     {
-        box.BorderBrush = (Brush)Application.Current.Resources["StatusErrorBrush"];
+        box.BorderBrush = GetThemeBrush("StatusErrorBrush");
         errorBlock.Text = message;
         errorBlock.Visibility = Visibility.Visible;
     }

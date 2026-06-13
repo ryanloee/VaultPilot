@@ -110,11 +110,15 @@
 - #166: Vault 导出和 SQLite 自动备份 (PR #334 已合并)
 - #146: 笔记浏览面板 NavigationView (PR #335 已合并)
 - #234: 设置对话框 XAML 化 — SettingsDialog.xaml ContentDialog (PR #336 已合并)
+- #337: AddTurn 同步 Wait → async WaitAsync 防止 UI 死锁 (PR #342 已合并)
+- #338: GetThemeBrush TryGetValue + Transparent fallback 防止 NRE (PR #343 已合并)
+- #339: LogStartup File.AppendAllText → AppendAllTextAsync 避免 UI 阻塞 (PR #344 已合并)
+- #340: storage.rs 备份函数 unwrap → ok_or_else 错误传播 (PR #341 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-（无 — 循环#25 无可操作 issue，agent 修复循环终止）
+（无 — 循环#42 修复目标 4/4 全部完成并合并）
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -228,7 +232,7 @@
 ||| 指标 | 循环#37 | 循环#38 | 循环#40 | 循环#41 ||
 |||------|---------|---------|---------|---------||
 ||| Open issues 总数 | 5 | 5 | 0 | 4 ||
-||| Open Bug 数 | 0 ✅ | 0 ✅ | 0 ✅ | 4 (#337-#340) ||
+|||| Open Bug 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 ||| Open Security 数 | 0 | 0 | 0 | 0 ||
 ||| Open Performance 数 | 1 (#217 阻塞) | 0 ✅ | 0 ✅ | 0 ✅ ||
 ||| Open Enhancement 数 | 4 (Architecture) | 4 (Architecture) | 0 ✅ | 0 ✅ ||
@@ -241,13 +245,13 @@
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 41
-- 上次循环时间: 2026-06-13T18:00:00Z
-- 讨论重点: **代码质量深度审查** — Rust 后端 + C# WinUI 前端全面扫描，聚焦运行时安全性
+- 循环编号: 42
+- 上次循环时间: 2026-06-13T18:30:00Z
+- 讨论重点: **循环#41 Bug 修复执行** — 修复代码审查发现的 4 个运行时安全问题
 - 本轮修复目标: #337 (AddTurn 死锁), #338 (GetThemeBrush NRE), #339 (LogStartup UI 阻塞), #340 (storage.rs unwrap)
-- 本轮审查目标: 4 个新 issue，全部为 Bug 类（1 Critical + 2 High + 1 Medium）
-- 本轮修复结果: 待修复团队执行
+- 本轮审查目标: 无（纯修复轮）
+- 本轮修复结果: **4/4 全部完成并合并** ✅
 - 额外完成: 无
 - 待重建 issue: 无
 - 阻塞 issue: 无
-- 项目里程碑: 讨论团队通过系统性代码审查发现 4 个运行时安全问题，覆盖死锁、NRE、UI 阻塞、panic 四类典型缺陷
+- 项目里程碑: 循环#41 发现的 4 个 Bug 全部在本轮修复并合并，项目恢复 0 open issue 状态

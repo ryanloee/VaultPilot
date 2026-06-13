@@ -87,10 +87,15 @@ public partial class App : Application
         (sender as MainWindow)?.Hide();
     }
 
-    public void BeginExitForUpdate()
+    public async Task BeginExitForUpdate()
     {
-        _window?.SignalStopping();
         _isExiting = true;
+        if (_window != null)
+        {
+            _window.SignalStopping();
+            _window.Closed -= OnWindowClosed;
+            await _window.ShutdownAsync();
+        }
     }
 
     private async void ExitApplication()

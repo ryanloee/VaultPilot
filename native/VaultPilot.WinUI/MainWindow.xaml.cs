@@ -900,17 +900,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnClosed(object sender, WindowEventArgs args)
+    private bool _isShuttingDown;
+
+    private void OnClosed(object sender, WindowEventArgs args)
     {
+        if (_isShuttingDown)
+        {
+            // ShutdownAsync already performed full cleanup; nothing to do.
+            return;
+        }
+
+        // We are NOT truly exiting — this is a hide-to-tray close.
+        // Only cancel the active request; do NOT dispose the backend or
+        // unsubscribe events so the window can be re-shown from the tray.
         try
         {
             _activeRequestCts?.Cancel();
             _activeRequestCts?.Dispose();
             _activeRequestCts = null;
             RemoveThinkingIndicator();
-            UnsubscribeEvents();
-            TryReleaseWindowFileDropHook();
-            await _backendClient.DisposeAsync();
         }
         catch (Exception error)
         {
@@ -1020,6 +1028,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public async Task ShutdownAsync()
     {
+        _isShuttingDown = true;
         RemoveThinkingIndicator();
         StopAutoWakeTimer();
         UnsubscribeEvents();

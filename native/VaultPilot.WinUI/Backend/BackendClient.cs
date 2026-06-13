@@ -116,17 +116,24 @@ public sealed class BackendClient : IAsyncDisposable
     {
         if (_isDisposed) return;
 
-        if (e.Mode == PowerModes.Resume)
+        try
         {
-            // System just woke up — proactively trigger reconnection
-            _consecutiveHealthCheckFailures = 0;
-            _degradedMode = false;
-            SetHealthCheckInterval(HealthCheckInterval);
-
-            if (!IsConnected)
+            if (e.Mode == PowerModes.Resume)
             {
-                _ = TryReconnectWithRetryAsync();
+                // System just woke up — proactively trigger reconnection
+                _consecutiveHealthCheckFailures = 0;
+                _degradedMode = false;
+                SetHealthCheckInterval(HealthCheckInterval);
+
+                if (!IsConnected)
+                {
+                    _ = TryReconnectWithRetryAsync();
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceError($"OnPowerModeChanged error: {ex}");
         }
     }
 

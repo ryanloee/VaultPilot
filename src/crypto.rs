@@ -1,7 +1,8 @@
 //! Machine-bound encryption for sensitive settings (API keys).
 //!
 //! Uses AES-256-GCM with a key derived from machine-specific identifiers
-//! via SHA-256.  The derived key never leaves the host; ciphertext includes
+//! via HKDF-SHA256 (RFC 5869).  The derived key never leaves the host;
+//! ciphertext includes
 //! a 12-byte random nonce prepended to the payload.  A version prefix
 //! (`ENC:v1:`) distinguishes encrypted values from legacy plaintext.
 
@@ -11,7 +12,8 @@ use aes_gcm::{
 };
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use sha2::{Digest, Sha256};
+use hkdf::Hkdf;
+use sha2::Sha256;
 
 /// Prefix that identifies a value as encrypted by this module.
 pub const ENCRYPTED_PREFIX: &str = "ENC:v1:";
@@ -22,27 +24,24 @@ pub const ENCRYPTED_PREFIX: &str = "ENC:v1:";
 /// salt.  The result is deterministic for a given host — no external key
 /// store is needed.
 fn derive_machine_key() -> [u8; 32] {
-    let mut hasher = Sha256::new();
-
-    // Fixed application salt to namespace the derivation.
-    hasher.update(b"vaultpilot-api-key-encryption-v1:");
+    let mut ikm = Vec::new();
 
     // Machine hostname (stable across reboots on most systems).
     if let Ok(name) = hostname::get() {
-        hasher.update(name.to_string_lossy().as_bytes());
+        ikm.extend_from_slice(name.to_string_lossy().as_bytes());
     }
 
     // OS and architecture — adds entropy on shared-hostname setups.
-    hasher.update(std::env::consts::OS.as_bytes());
-    hasher.update(std::env::consts::ARCH.as_bytes());
+    ikm.extend_from_slice(std::env::consts::OS.as_bytes());
+    ikm.extend_from_slice(std::env::consts::ARCH.as_bytes());
 
     // Machine-id on Linux (systemd) and macOS.
     #[cfg(target_os = "linux")]
     {
         if let Ok(id) = std::fs::read_to_string("/etc/machine-id") {
-            hasher.update(id.trim().as_bytes());
+            ikm.extend_from_slice(id.trim().as_bytes());
         } else if let Ok(id) = std::fs::read_to_string("/var/lib/dbus/machine-id") {
-            hasher.update(id.trim().as_bytes());
+            ikm.extend_from_slice(id.trim().as_bytes());
         }
     }
     #[cfg(target_os = "macos")]
@@ -51,9 +50,12 @@ fn derive_machine_key() -> [u8; 32] {
         // hostname + arch is sufficient on consumer macOS machines.
     }
 
-    let hash = hasher.finalize();
+    // HKDF (RFC 5869) with domain-separated salt.
+    let salt = b"vaultpilot-machine-key-v1";
+    let hk = Hkdf::<Sha256>::new(Some(salt), &ikm);
     let mut key = [0u8; 32];
-    key.copy_from_slice(&hash);
+    hk.expand(b"vaultpilot-aes-256-gcm", &mut key)
+        .expect("HKDF expand to 32 bytes should never fail");
     key
 }
 

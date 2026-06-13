@@ -1057,7 +1057,7 @@ async fn send_request_with_temperature(
         provider_type,
     )?;
 
-    validate_base_url(&provider.base_url)?;
+    validate_base_url(&provider.base_url).await?;
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);
     let content_blocks = build_input_blocks(prompt, image_paths)?;
 
@@ -1294,7 +1294,7 @@ fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
 /// 2. Host must be present.
 /// 3. Rejects RFC 1918 / loopback / link-local addresses (SSRF protection)
 ///    unless `VAULTPILOT_ALLOW_LOCAL_ENDPOINT` env var is set.
-fn validate_base_url(base_url: &str) -> Result<()> {
+async fn validate_base_url(base_url: &str) -> Result<()> {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("base_url is empty"));
@@ -1341,6 +1341,32 @@ fn validate_base_url(base_url: &str) -> Result<()> {
                  set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
                 ip
             ));
+        }
+    } else {
+        // For hostnames that aren't literal IPs, resolve DNS and check each address.
+        let port = parsed
+            .port_or_known_default()
+            .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+        match tokio::net::lookup_host(format!("{}:{}", host_str, port)).await {
+            Ok(addrs) => {
+                for addr in addrs {
+                    if is_private_ip(addr.ip()) {
+                        return Err(anyhow!(
+                            "base_url host '{}' resolves to a private/reserved IP ({}); \
+                             set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
+                            host_str,
+                            addr.ip()
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(anyhow!(
+                    "failed to resolve base_url host '{}': {}",
+                    host_str,
+                    e
+                ));
+            }
         }
     }
 
@@ -1754,54 +1780,66 @@ mod tests {
 
     // ── validate_base_url ─────────────────────────────────────────────
 
-    #[test]
-    fn validate_base_url_accepts_https() {
-        assert!(validate_base_url("https://api.anthropic.com/v1").is_ok());
+    #[tokio::test]
+    async fn validate_base_url_accepts_https() {
+        assert!(validate_base_url("https://api.anthropic.com/v1")
+            .await
+            .is_ok());
     }
 
-    #[test]
-    fn validate_base_url_rejects_empty() {
-        assert!(validate_base_url("").is_err());
-        assert!(validate_base_url("   ").is_err());
+    #[tokio::test]
+    async fn validate_base_url_rejects_empty() {
+        assert!(validate_base_url("").await.is_err());
+        assert!(validate_base_url("   ").await.is_err());
     }
 
-    #[test]
-    fn validate_base_url_rejects_invalid_url() {
-        assert!(validate_base_url("not a url").is_err());
+    #[tokio::test]
+    async fn validate_base_url_rejects_invalid_url() {
+        assert!(validate_base_url("not a url").await.is_err());
     }
 
-    #[test]
-    fn validate_base_url_rejects_non_http_scheme() {
-        assert!(validate_base_url("ftp://example.com").is_err());
-        assert!(validate_base_url("file:///etc/passwd").is_err());
+    #[tokio::test]
+    async fn validate_base_url_rejects_non_http_scheme() {
+        assert!(validate_base_url("ftp://example.com").await.is_err());
+        assert!(validate_base_url("file:///etc/passwd").await.is_err());
     }
 
-    #[test]
-    fn validate_base_url_localhost_env_guard() {
+    #[tokio::test]
+    async fn validate_base_url_localhost_env_guard() {
         // Combines "rejects localhost without env" and "allows with env" into one
         // test to avoid parallel env-var race conditions (flaky in CI).
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
         // Without env var → reject localhost
-        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
-        assert!(validate_base_url("http://localhost:8080").is_err());
+        {
+            let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+        }
+        assert!(validate_base_url("http://localhost:8080").await.is_err());
 
         // With env var → allow localhost
-        std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
-        assert!(validate_base_url("http://localhost:8080").is_ok());
+        {
+            let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
+        }
+        assert!(validate_base_url("http://localhost:8080").await.is_ok());
 
         // Cleanup
-        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+        {
+            let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+        }
     }
 
-    #[test]
-    fn validate_base_url_rejects_private_ip() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
-        assert!(validate_base_url("http://192.168.1.1/api").is_err());
-        assert!(validate_base_url("http://10.0.0.1/api").is_err());
-        assert!(validate_base_url("http://172.16.0.1/api").is_err());
-        assert!(validate_base_url("http://127.0.0.1/api").is_err());
+    #[tokio::test]
+    async fn validate_base_url_rejects_private_ip() {
+        {
+            let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+        }
+        assert!(validate_base_url("http://192.168.1.1/api").await.is_err());
+        assert!(validate_base_url("http://10.0.0.1/api").await.is_err());
+        assert!(validate_base_url("http://172.16.0.1/api").await.is_err());
+        assert!(validate_base_url("http://127.0.0.1/api").await.is_err());
     }
 
     // ── is_private_ip ──────────────────────────────────────────────────

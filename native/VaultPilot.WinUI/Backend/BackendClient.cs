@@ -83,6 +83,8 @@ public sealed class BackendClient : IAsyncDisposable
         };
 
         _process.Start();
+        _readerCts?.Cancel();
+        _readerCts?.Dispose();
         _readerCts = new CancellationTokenSource();
         _ = Task.Run(() => PumpStdoutAsync(_readerCts.Token));
         _ = Task.Run(() => PumpStderrAsync(_readerCts.Token));

@@ -126,7 +126,9 @@
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-（无）
+- PR #364: fix/issue-359-exit-try-catch → Closes #359 (ExitApplication try-catch)
+- PR #365: fix/issue-360-reader-cts-cleanup → Closes #360 (BackendClient _readerCts cleanup)
+- PR #366: fix/issue-362-ssrf-precise-ranges → Closes #362 (SSRF precise IP ranges)
 
 122|122|
 123|123|## 已知阻塞项
@@ -262,19 +264,15 @@
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: #48
-- 上次循环时间: 2026-06-13T21:30:00Z
-- 讨论重点: **深度代码审查 — 主动发现新问题**
-- 本轮审查目标: 全代码库质量扫描（Rust + C#）
-- 本轮创建 issue:
-  - #359: App.xaml.cs ExitApplication async void 缺少 try-catch (BUG, HIGH)
-  - #360: BackendClient 重连时 _readerCts 未取消导致孤儿任务 (BUG, HIGH)
-  - #361: sanitize_error 按字节处理 UTF-8 导致中文乱码 (BUG, LOW)
-  - #362: SSRF 防护 IP 范围过大误拦截合法地址 (SECURITY, MEDIUM)
-  - #363: 5 处 eprintln! 应替换为 tracing (ENHANCEMENT, LOW)
-- 项目健康检查:
-  - cargo test: 353 tests, 0 failures ✅
-  - cargo clippy -- -W clippy::all: 0 warnings ✅
-  - cargo build --release: clean build ✅
-  - dotnet test: .NET SDK 未安装，无法运行 ⚠️
-- 项目状态: 0 open issue → 5 open issue（本轮创建），0 open PR
+- 循环编号: #49
+- 上次循环时间: 2026-06-13T21:35:00Z
+- 讨论重点: **修复循环#48 审查发现的 HIGH/MEDIUM issue**
+- 本轮修复目标:
+  - #359: App.xaml.cs ExitApplication async void try-catch (BUG, HIGH) → PR #364
+  - #360: BackendClient _readerCts 孤儿任务 (BUG, HIGH) → PR #365
+  - #362: SSRF 防护精确 IP 范围 (SECURITY, MEDIUM) → PR #366
+- 剩余未修: #361 (BUG, LOW), #363 (ENHANCEMENT, LOW)
+- 项目状态: 3 open PR 待审核，2 open issue 待修- 2026-06-13 [循环#49]: 修复循环#48 发现的 3 个 issue：#359 (HIGH BUG), #360 (HIGH BUG), #362 (SECURITY MEDIUM)
+- 2026-06-13 [循环#49]: 3 个 PR 创建：#364, #365, #366，均基于最新 main 串行创建，无冲突
+- 2026-06-13 [循环#49]: 子任务因 API 429 限流未完成 PR 创建，手动接管完成修复
+- 2026-06-13 [循环#49]: cargo test 全通过（#362 修复后验证），C# 修复因无 .NET SDK 未验证

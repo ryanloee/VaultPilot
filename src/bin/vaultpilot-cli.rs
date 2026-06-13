@@ -24,18 +24,28 @@ use uuid::Uuid;
 use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
+    delete_note_with_context,
+    export_all_notes_with_context,
+    export_note_markdown_with_context,
+    import_markdown_with_context,
+    // Sync originals (for use in sync helper functions)
+    initialize_storage_with_context,
+    load_chat_state_async,
+    load_chat_state_with_context,
+    load_note_async,
+    load_note_with_context,
     // Async wrappers (for use in async functions)
     load_settings_async,
-    load_chat_state_async, save_chat_state_async,
-    search_notes_async, load_note_async,
-    // Sync originals (for use in sync helper functions)
-    initialize_storage_with_context, load_settings_with_context,
-    save_settings_with_context, load_chat_state_with_context,
+    load_settings_with_context,
+    rebuild_index_with_context,
+    save_chat_state_async,
     save_chat_state_with_context,
-    search_notes_with_context, load_note_with_context, save_note_with_context,
-    delete_note_with_context, import_markdown_with_context,
-    export_note_markdown_with_context, export_all_notes_with_context,
-    rebuild_index_with_context, vault_export_with_context, StorageContext,
+    save_note_with_context,
+    save_settings_with_context,
+    search_notes_async,
+    search_notes_with_context,
+    vault_export_with_context,
+    StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
@@ -516,7 +526,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             "message": "The HTTP bridge is started by running `vaultpilot-cli serve` directly."
         })),
         Commands::Chat { action } => handle_chat(context, action).await,
-        Commands::Settings { action } => tokio::task::block_in_place(|| handle_settings(context, action)),
+        Commands::Settings { action } => {
+            tokio::task::block_in_place(|| handle_settings(context, action))
+        }
         Commands::Notes { action } => tokio::task::block_in_place(|| handle_notes(context, action)),
         Commands::Index { action } => tokio::task::block_in_place(|| handle_index(context, action)),
         Commands::Ask {
@@ -1001,7 +1013,9 @@ async fn http_models(
     headers: HeaderMap,
 ) -> Result<Json<OpenAiModelsResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let settings = load_settings_async(&state.context).await.unwrap_or_default();
+    let settings = load_settings_async(&state.context)
+        .await
+        .unwrap_or_default();
     let now = Utc::now().timestamp();
     Ok(Json(OpenAiModelsResponse {
         object: "list",
@@ -1027,7 +1041,8 @@ async fn http_chat_completions(
         ));
     }
 
-    let settings = load_settings_async(&state.context).await
+    let settings = load_settings_async(&state.context)
+        .await
         .map_err(|error| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
     let requested_model = request.model.trim().to_string();
     let vault_root = PathBuf::from(&settings.vault_dir);
@@ -1582,7 +1597,9 @@ async fn handle_mcp_request(
                     limit: Some(offset + limit),
                     ..Default::default()
                 },
-            ).await {
+            )
+            .await
+            {
                 Ok(result) => {
                     let resources: Vec<Value> = result
                         .notes
@@ -1824,7 +1841,9 @@ async fn handle_mcp_request(
                             limit: Some(limit),
                             ..Default::default()
                         },
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(result) => {
                             let notes_text = result
                                 .notes

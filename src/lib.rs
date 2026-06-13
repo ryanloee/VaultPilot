@@ -16,11 +16,17 @@ use models::{
     StructuredNoteDraft, ThinkingTrace, ThinkingTraceStep,
 };
 use storage::{
-    initialize_storage_async, list_notes_async, load_chat_state_async,
-    load_context_notes_async, ocr_image_text,
-    save_chat_state_async, save_note_with_images_async, StorageContext,
+    initialize_storage_async,
+    list_notes_async,
     // Sync originals for load_recent_notes_for_overview helper
-    list_notes_with_context, load_note_with_context,
+    list_notes_with_context,
+    load_chat_state_async,
+    load_context_notes_async,
+    load_note_with_context,
+    ocr_image_text,
+    save_chat_state_async,
+    save_note_with_images_async,
+    StorageContext,
 };
 use tracing::instrument;
 use uuid::Uuid;
@@ -404,7 +410,8 @@ pub async fn ask_with_ai_with_context(
                     &query,
                     &images,
                     limit.saturating_mul(3).max(8),
-                ).await?;
+                )
+                .await?;
                 if docs.is_empty() {
                     emit_status(
                         "retrieving",
@@ -472,11 +479,9 @@ pub async fn ask_with_ai_with_context(
             }
             AssistantToolCall::SaveNote { draft } => {
                 emit_status("saving", "Saving generated note".to_string());
-                let saved = save_note_with_images_async(
-                    context,
-                    draft_to_note_document(*draft),
-                    &images,
-                ).await?;
+                let saved =
+                    save_note_with_images_async(context, draft_to_note_document(*draft), &images)
+                        .await?;
                 let result = format!(
                     "save_note completed.
 Saved title: {}

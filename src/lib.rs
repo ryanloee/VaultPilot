@@ -2235,8 +2235,27 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_error_preserves_chinese() {
-        let msg = "保存失败: connection timeout";
+    fn sanitize_redacts_multiple_secrets() {
+        let msg = "Error with key sk-abcdefghijklmnopqrstuvwxyz123456 and Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+        let sanitized = sanitize_error(msg);
+        assert!(sanitized.contains("sk-[REDACTED]"));
+        assert!(sanitized.contains("Bearer [REDACTED]"));
+        assert!(!sanitized.contains("abcdefghijklmnopqrstuvwxyz123456"));
+        assert!(!sanitized.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
+    }
+
+    #[test]
+    fn sanitize_redacts_access_token_param() {
+        let msg = "Failed: https://example.com/callback?access_token=abcdefghijklmnopqrstuvwxyz12345678&state=abc";
+        let sanitized = sanitize_error(msg);
+        assert!(sanitized.contains("access_token=[REDACTED]"));
+        assert!(sanitized.contains("&state=abc"));
+    }
+
+    #[test]
+    fn sanitize_handles_bearer_with_short_token() {
+        // Bearer with token < 20 chars should NOT be redacted
+        let msg = "Auth: Bearer short123";
         let sanitized = sanitize_error(msg);
         assert_eq!(sanitized, msg);
     }

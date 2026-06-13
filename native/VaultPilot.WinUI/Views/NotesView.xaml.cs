@@ -178,24 +178,24 @@ public sealed partial class NotesView : UserControl
     {
         if (_selectedNote is null) return;
 
-        var note = _selectedNote;
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "删除笔记",
-            Content = $"确认删除「{note.Title}」吗？此操作不可撤销。",
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close
-        };
-
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
         try
         {
+            var note = _selectedNote;
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "删除笔记",
+                Content = $"确认删除「{note.Title}」吗？此操作不可撤销。",
+                PrimaryButtonText = "删除",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Close
+            };
+
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
             ShowLoading(true);
             await _backendClient.SendAsync<bool>("deleteNote", new { id = note.Id });
 

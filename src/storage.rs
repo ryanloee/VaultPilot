@@ -47,12 +47,19 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     // Create the temp file, then restrict permissions *before* writing any
     // sensitive data so that other users can never read the contents, even
     // in the brief window between file creation and rename (issue #186).
-    fs::File::create(&tmp_path)?;
-    #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        fs::set_permissions(&tmp_path, perms)?;
+        use std::fs::OpenOptions;
+        let _file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            _file.set_permissions(perms)?;
+        }
     }
     fs::write(&tmp_path, data)?;
     fs::rename(&tmp_path, path)?;
@@ -2711,7 +2718,7 @@ fn is_markdown_file(path: &Path) -> bool {
 fn escape_fts5_term(term: &str) -> String {
     let cleaned: String = term
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || is_cjk(*ch) || *ch == '_' || *ch == '-')
+        .filter(|ch| ch.is_alphanumeric() || is_cjk(*ch) || *ch == '_' || *ch == '-')
         .collect();
     if cleaned.is_empty() {
         return String::new();
@@ -3183,6 +3190,19 @@ mod tests {
         assert_eq!(escape_fts5_term("***"), String::new());
         // Only chars that are NOT alphanumeric, CJK, '_', or '-' produce empty
         assert_eq!(escape_fts5_term("+^:"), String::new());
+    }
+
+    #[test]
+    fn escape_fts5_term_preserves_unicode_letters() {
+        // French accented characters
+        assert_eq!(escape_fts5_term("café"), "\"café\"");
+        // German umlauts
+        assert_eq!(escape_fts5_term("über"), "\"über\"");
+        assert_eq!(escape_fts5_term("schön"), "\"schön\"");
+        // Russian Cyrillic
+        assert_eq!(escape_fts5_term("Москва"), "\"Москва\"");
+        // Mixed ASCII + Unicode
+        assert_eq!(escape_fts5_term("résumé"), "\"résumé\"");
     }
 
     #[test]

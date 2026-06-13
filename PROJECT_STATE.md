@@ -122,13 +122,14 @@
 - #353: MainWindow.xaml merge conflict markers 清除 (PR #356 已合并)
 - #354: SettingsDialog WireUpButtons async void lambda try-catch (PR #356 已合并)
 - #355: Rate limiter HashMap 清理 + lock poisoned 恢复 (PR #356 已合并)
+- #369: BackendClient 线程安全 — volatile + Interlocked + health check guard + CancellationToken 传播 (PR #372 已合并)
+- #370: generate_programmatic_snippet CJK/Unicode 安全切片 (PR #373 已合并)
+- #371: ExitApplication 双重调用竞态 Interlocked guard (PR #374 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #364: fix/issue-359-exit-try-catch → Closes #359 (ExitApplication try-catch)
-- PR #365: fix/issue-360-reader-cts-cleanup → Closes #360 (BackendClient _readerCts cleanup)
-- PR #366: fix/issue-362-ssrf-precise-ranges → Closes #362 (SSRF precise IP ranges)
+（无）
 
 122|122|
 123|123|## 已知阻塞项
@@ -244,35 +245,39 @@
 - 2026-06-13 [循环#48]: 全代码库深度审查（Rust 7 项 + C# 8 项发现），创建 5 个高质量 issue（3 BUG + 1 SECURITY + 1 ENHANCEMENT）
 - 2026-06-13 [循环#48]: Rust 后端质量优秀 — 0 unsafe、0 生产 unwrap、0 TODO/FIXME、0 clippy warnings、353 tests 全通过
 - 2026-06-13 [循环#48]: C# 前端仍有 2 个 HIGH 问题（ExitApplication 无 try-catch、_readerCts 孤儿任务）
+- 2026-06-13 [循环#52]: 修复循环#51 创建的 3 个 BUG issue，3/3 全部完成
+- 2026-06-13 [循环#52]: #369 BackendClient 线程安全 — 5 项改进（volatile、Interlocked、guard、CancellationToken 传播）
+- 2026-06-13 [循环#52]: #370 CJK snippet — 改用 str::replace() 消除字节偏移映射，新增 2 测试
+- 2026-06-13 [循环#53]: 审核并合并 3 个 PR (#372, #373, #374)，CI 5/6 通过（cargo audit 预存在 CVE），代码审查无问题
+- 2026-06-13 [循环#53]: 项目恢复 0 open issue + 0 open PR 状态，累计 154 已合并 PR
+- 2026-06-13 [循环#52]: #371 ExitApplication — Interlocked.CompareExchange 原子 guard 防并发
 228|228|
 229|229|## 项目健康度快照
 230|230|<!-- 每轮循环更新 -->
 231|231|
-| 指标 | 循环#43 | 循环#44 | 循环#45 | PR审核轮 | 循环#47 | 循环#48 |
-|------|---------|---------|---------|----------|---------|---------|
-| Open issues 总数 | 3 | 2 | 2 | 0 ✅ | 3 | 5 |
-| Open Bug 数 | 3 | 2 | 2 | 0 ✅ | 2 | 3 |
-| Open Security 数 | 0 | 0 | 0 | 0 | 1 | 1 |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 |
-| Open UI 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Feature 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 115+ | 116+ | 116+ | 146 | 146 | 146 |
-| 进行中 PR | 0 | 0 | 2 | 0 | 0 | 0 |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#43 | 循环#44 | 循环#45 | PR审核轮 | 循环#47 | 循环#48 | 循环#53 |
+|------|---------|---------|---------|----------|---------|---------|---------|
+| Open issues 总数 | 3 | 2 | 2 | 0 ✅ | 3 | 5 | 0 ✅ |
+| Open Bug 数 | 3 | 2 | 2 | 0 ✅ | 2 | 3 | 0 ✅ |
+| Open Security 数 | 0 | 0 | 0 | 0 | 1 | 1 | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ |
+| Open UI 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Feature 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 115+ | 116+ | 116+ | 146 | 146 | 146 | 154 |
+| 进行中 PR | 0 | 0 | 2 | 0 | 0 | 0 | 0 |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 244|244|
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: #49
-- 上次循环时间: 2026-06-13T21:35:00Z
-- 讨论重点: **修复循环#48 审查发现的 HIGH/MEDIUM issue**
-- 本轮修复目标:
-  - #359: App.xaml.cs ExitApplication async void try-catch (BUG, HIGH) → PR #364
-  - #360: BackendClient _readerCts 孤儿任务 (BUG, HIGH) → PR #365
-  - #362: SSRF 防护精确 IP 范围 (SECURITY, MEDIUM) → PR #366
-- 剩余未修: #361 (BUG, LOW), #363 (ENHANCEMENT, LOW)
-- 项目状态: 3 open PR 待审核，2 open issue 待修- 2026-06-13 [循环#49]: 修复循环#48 发现的 3 个 issue：#359 (HIGH BUG), #360 (HIGH BUG), #362 (SECURITY MEDIUM)
-- 2026-06-13 [循环#49]: 3 个 PR 创建：#364, #365, #366，均基于最新 main 串行创建，无冲突
-- 2026-06-13 [循环#49]: 子任务因 API 429 限流未完成 PR 创建，手动接管完成修复
-- 2026-06-13 [循环#49]: cargo test 全通过（#362 修复后验证），C# 修复因无 .NET SDK 未验证
+- 循环编号: #53
+- 本轮时间: 2026-06-14
+- 讨论重点方向: 审核并合并循环#52 创建的 3 个 PR
+- 项目状态: **0 open issue, 0 open PR, 154 已合并 PR, 0 阻塞项**
+- 修复结果:
+  - PR #372 (#369 BackendClient 线程安全) ✅ 已合并
+  - PR #373 (#370 CJK snippet panic) ✅ 已合并
+  - PR #374 (#371 ExitApplication 竞态) ✅ 已合并
+- CI 状态: 5/6 通过（cargo audit 为预存在 rustls-webpki CVE，不阻塞）
+- 修复目标 3/3 全部完成

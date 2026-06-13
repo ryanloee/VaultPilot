@@ -346,7 +346,18 @@ impl RateLimiter {
     /// Returns `true` if the request is allowed, `false` if rate-limited.
     fn check(&self, key: &str) -> bool {
         let now = Instant::now();
-        let mut entries = self.entries.lock().expect("rate limiter lock poisoned");
+        let mut entries = match self.entries.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("rate limiter lock was poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+
+        // Purge entries older than 2 window durations to prevent unbounded growth.
+        let stale_threshold = self.window * 2;
+        entries.retain(|_, (_, last)| now.duration_since(*last) < stale_threshold);
+
         let entry = entries.entry(key.to_string()).or_insert((0, now));
 
         if now.duration_since(entry.1) > self.window {

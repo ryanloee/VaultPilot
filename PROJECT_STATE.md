@@ -117,18 +117,19 @@
 - #345: async void 事件处理器 try-catch 异常保护 (PR #348 已合并)
 - #346: 资源字典统一 GetThemeBrush 消除 NRE 风险 (PR #348 已合并)
 - #347: backup rotation/agent flush 静默吞错改日志记录 (PR #348 已合并)
-117|117|
-118|118|## 当前进行中
-119|119|<!-- 由 issue-monitor 任务在创建 PR 后更新 -->
-120|120|
-121|121|- PR #356: fix: remove merge conflict markers from MainWindow.xaml (#353)
-- PR #357: fix: add try-catch to SettingsDialog async void lambdas (#354)
-- PR #358: fix: rate limiter HashMap cleanup + graceful lock handling (#355)
+- #349: OnPowerModeChanged async void try-catch 异常保护 (PR #351 已合并)
+- #350: Style 资源访问统一为安全 GetThemeStyle 模式 (PR #352 已合并)
+
+## 当前进行中
+<!-- 由 issue-monitor 任务在创建 PR 后更新 -->
+
+（无）
+
 122|122|
 123|123|## 已知阻塞项
 124|124|<!-- 记录失败的修复尝试、需要人工介入的问题 -->
 125|125|
-126|126|（无 — 所有阻塞项已清空）
+126|126|- #353: MainWindow.xaml merge conflict markers — 构建完全阻塞，必须优先修复
 127|127|
 128|128|## 决策记录
 129|129|<!-- 指挥官任务的重要决策 -->
@@ -229,44 +230,43 @@
 224|224|- 2026-06-13 [循环#24]: #234 Settings XAML 化完成 (PR #336)，MainWindow.xaml.cs 减少 359 行
 225|225|- 2026-06-13 [循环#24]: #192 已被关闭（非 agent 修复），阻塞项从 2 个减为 1 个
 226|226|- 2026-06-13 [循环#24]: 剩余 6 个 open issue：1 个阻塞 (#217) + 4 个 Architecture (#183, #143, #49, #144) + 1 个 PR 待合并 (#234)
-227|227|- 2026-06-13 [循环#25]: 无可操作 issue — #217 阻塞 + 4 个 Architecture 留人工决策，agent 修复循环进入终止状态
-- 2026-06-13 [循环#44]: **主动代码审查** — PR #348 合并后全量审查，发现 OnPowerModeChanged async void 安全缺口和 2 处 Style 直接资源访问，创建 #349 和 #350
 - 2026-06-13 [循环#44]: cargo audit 持续失败（rustls-webpki RUSTSEC-2026-0104），需人工升级依赖
 - 2026-06-13 [循环#45]: 修复循环#44 审查发现的 2 个 Bug：#349 (PR #351)、#350 (PR #352)，并行修复成功
-- 2026-06-13 [PR审核轮8]: 审核并合并 PR #351 (#349) 和 PR #352 (#350)，CI 5/6 通过（cargo audit 预存在 CVE）
-- 2026-06-13 [循环#47]: **CRITICAL** MainWindow.xaml 包含未解决 merge conflict markers（line 98-202），已创建 #353
+- 2026-06-13 [PR审核轮8]: 审核并合并 PR #351 (#349) 和 PR #352 (#350)，CI 5/6 通过（cargo audit 预存在 CVE），代码审查无问题
+- 2026-06-13 [PR审核轮8]: 项目恢复 0 open issue + 0 open PR 状态，累计已合并 146 PR
+- 2026-06-13 [循环#47]: **CRITICAL** MainWindow.xaml 包含未解决 merge conflict markers（line 98-202），来自 PR #149 合并时的冲突未解决，已创建 #353
 - 2026-06-13 [循环#47]: SettingsDialog WireUpButtons async void lambda 缺少 try-catch（#354），Rate limiter HashMap 无上限 + expect panic（#355）
-- 2026-06-13 [循环#48]: 修复 3/3 issue：#353 (PR #356), #354 (PR #357), #355 (PR #358)，全部并行修复成功
 228|228|
 229|229|## 项目健康度快照
 230|230|<!-- 每轮循环更新 -->
 231|231|
-|||| 指标 | 循环#40 | 循环#41 | 循环#43 | 循环#44 ||
-||||------|---------|---------|---------|---------||
-|||| Open issues 总数 | 0 | 4 | 3 | 2 ||
-|||| Open Bug 数 | 0 ✅ | 4 | 3 | 2 ||
-|||| Open Security 数 | 0 | 0 | 0 | 0 ||
-|||| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ ||
-|||| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ ||
-|||| Open UI 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ ||
-|||| Open Feature 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ ||
-|||| 已合并 PR | 112+ | 112+ | 115+ | 116+ ||
-|||| 进行中 PR | 0 | 0 | 0 | 0 ||
-|||| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#43 | 循环#44 | 循环#45 | PR审核轮 | 循环#47 |
+|------|---------|---------|---------|----------|---------|
+| Open issues 总数 | 3 | 2 | 2 | 0 ✅ | 3 |
+| Open Bug 数 | 3 | 2 | 2 | 0 ✅ | 2 |
+| Open Security 数 | 0 | 0 | 0 | 0 | 1 |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open UI 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Feature 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 115+ | 116+ | 116+ | 146 | 146 |
+| 进行中 PR | 0 | 0 | 2 | 0 | 0 |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 244|244|
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 48 (修复轮)
-- 上次循环时间: 2026-06-13T20:20:00Z
-- 修复重点: 修复循环#47 审查发现的 3 个 issue (#353, #354, #355)
-- 修复目标:
-  - #353: MainWindow.xaml merge conflict markers (CRITICAL 构建阻塞) → PR #356
-  - #354: SettingsDialog async void lambda try-catch → PR #357
-  - #355: Rate limiter HashMap cleanup + lock handling → PR #358
-- 修复结果: 3/3 全部完成
-  - PR #356: 移除 MainWindow.xaml 105 行冲突标记，保留 origin/main sidebar 布局
-  - PR #357: SettingsDialog WireUpButtons 添加 try-catch + Trace.TraceError
-  - PR #358: RateLimiter HashMap 过期条目清理 + expect→match graceful lock handling
-  - Rust 测试全部通过 (9/9)，cargo fmt + clippy 干净
-- 当前状态: 3 open issue (#353, #354, #355)，3 open PR (#356, #357, #358)，等待合并
+- 循环编号: 47 (讨论轮)
+- 上次循环时间: 2026-06-13T20:10:00Z
+- 讨论重点: **代码质量深度审查** — 全面扫描 Rust 后端 + C# 前端，发现新问题
+- 本轮修复目标: 无（纯讨论轮，产出 issue）
+- 本轮审查目标: 全代码库
+- 本轮审查结果:
+  - 发现 1 个 CRITICAL 构建阻塞问题：MainWindow.xaml 未解决的 merge conflict markers（#353）
+  - 发现 1 个前端 Bug：SettingsDialog async void lambda 缺少 try-catch（#354）
+  - 发现 1 个后端安全问题：Rate limiter HashMap 无上限 + expect() panic（#355）
+  - 确认 PR #351, #352 已正确合并到 origin/main
+  - 本地 main 分支落后 origin/main 2 个 commit，已拉取同步
+  - Rust 测试全部通过（19/19），TODO/FIXME 搜索为空
+- 创建的 issue: #353, #354, #355
+- 阻塞 issue: 无

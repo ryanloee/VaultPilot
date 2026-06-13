@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::runtime::Runtime;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use uuid::Uuid;
 
 use tracing_subscriber::EnvFilter;
@@ -966,7 +966,19 @@ async fn run_http_bridge(
             rate_limit_middleware,
         ))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
-        .layer(CorsLayer::very_permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::predicate(|origin, _parts| {
+                    // Only allow localhost/127.0.0.1 origins (any port).
+                    let o = origin.to_str().unwrap_or("");
+                    o.starts_with("http://localhost:")
+                        || o.starts_with("http://127.0.0.1:")
+                        || o == "http://localhost"
+                        || o == "http://127.0.0.1"
+                }))
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any),
+        )
         .with_state(state);
 
     println!(

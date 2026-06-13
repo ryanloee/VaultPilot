@@ -2740,19 +2740,16 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
     }
 
     let backup_dir = db_path.parent().unwrap_or(Path::new("."));
+    let file_name = db_path
+        .file_name()
+        .ok_or_else(|| anyhow!("db_path has no file name: {}", db_path.display()))?;
+    let file_name_str = file_name.to_string_lossy();
     let max_backups = 3;
 
     // Rotate existing backups: .bak.2 -> delete, .bak.1 -> .bak.2, .bak -> .bak.1
     for i in (1..max_backups).rev() {
-        let older = backup_dir.join(format!(
-            "{}.bak.{i}",
-            db_path.file_name().unwrap().to_string_lossy()
-        ));
-        let newer = backup_dir.join(format!(
-            "{}.bak.{}",
-            db_path.file_name().unwrap().to_string_lossy(),
-            i + 1
-        ));
+        let older = backup_dir.join(format!("{file_name_str}.bak.{i}"));
+        let newer = backup_dir.join(format!("{file_name_str}.bak.{}", i + 1));
         if older.exists() {
             if i + 1 >= max_backups {
                 // Delete the oldest backup
@@ -2764,15 +2761,9 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
     }
 
     // Move current .bak to .bak.1
-    let current_bak = backup_dir.join(format!(
-        "{}.bak",
-        db_path.file_name().unwrap().to_string_lossy()
-    ));
+    let current_bak = backup_dir.join(format!("{file_name_str}.bak"));
     if current_bak.exists() {
-        let bak1 = backup_dir.join(format!(
-            "{}.bak.1",
-            db_path.file_name().unwrap().to_string_lossy()
-        ));
+        let bak1 = backup_dir.join(format!("{file_name_str}.bak.1"));
         fs::rename(&current_bak, &bak1).ok();
     }
 
@@ -2879,7 +2870,10 @@ pub async fn load_settings_async(ctx: &StorageContext) -> Result<AppSettings> {
 }
 
 /// Spawn-blocking wrapper for [`save_settings_with_context`].
-pub async fn save_settings_async(ctx: &StorageContext, settings: AppSettings) -> Result<AppSettings> {
+pub async fn save_settings_async(
+    ctx: &StorageContext,
+    settings: AppSettings,
+) -> Result<AppSettings> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || save_settings_with_context(&ctx, settings))
         .await
@@ -2944,9 +2938,11 @@ pub async fn save_note_with_images_async(
 ) -> Result<NoteDocument> {
     let ctx = ctx.clone();
     let image_paths = image_paths.to_vec();
-    tokio::task::spawn_blocking(move || save_note_with_images_with_context(&ctx, note, &image_paths))
-        .await
-        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        save_note_with_images_with_context(&ctx, note, &image_paths)
+    })
+    .await
+    .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }
 
 /// Spawn-blocking wrapper for [`delete_note_with_context`].
@@ -2968,7 +2964,10 @@ pub async fn import_markdown_async(ctx: &StorageContext, paths: &[String]) -> Re
 }
 
 /// Spawn-blocking wrapper for [`export_note_markdown_with_context`].
-pub async fn export_note_markdown_async(ctx: &StorageContext, note_id: &str) -> Result<(String, String)> {
+pub async fn export_note_markdown_async(
+    ctx: &StorageContext,
+    note_id: &str,
+) -> Result<(String, String)> {
     let ctx = ctx.clone();
     let note_id = note_id.to_owned();
     tokio::task::spawn_blocking(move || export_note_markdown_with_context(&ctx, &note_id))
@@ -2977,7 +2976,10 @@ pub async fn export_note_markdown_async(ctx: &StorageContext, note_id: &str) -> 
 }
 
 /// Spawn-blocking wrapper for [`export_all_notes_with_context`].
-pub async fn export_all_notes_async(ctx: &StorageContext, output_dir: &Path) -> Result<ExportResult> {
+pub async fn export_all_notes_async(
+    ctx: &StorageContext,
+    output_dir: &Path,
+) -> Result<ExportResult> {
     let ctx = ctx.clone();
     let output_dir = output_dir.to_path_buf();
     tokio::task::spawn_blocking(move || export_all_notes_with_context(&ctx, &output_dir))
@@ -3028,7 +3030,10 @@ pub async fn search_candidate_notes_async(
 }
 
 /// Spawn-blocking wrapper for [`vault_export_with_context`].
-pub async fn vault_export_async(ctx: &StorageContext, output_path: &Path) -> Result<VaultExportResult> {
+pub async fn vault_export_async(
+    ctx: &StorageContext,
+    output_path: &Path,
+) -> Result<VaultExportResult> {
     let ctx = ctx.clone();
     let output_path = output_path.to_path_buf();
     tokio::task::spawn_blocking(move || vault_export_with_context(&ctx, &output_path))

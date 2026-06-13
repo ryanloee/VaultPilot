@@ -12,9 +12,8 @@ use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
-    import_markdown_async, initialize_storage_async, list_notes_async,
-    load_chat_state_async, rebuild_index_async, save_chat_state_async,
-    save_settings_async, StorageContext,
+    import_markdown_async, initialize_storage_async, list_notes_async, load_chat_state_async,
+    rebuild_index_async, save_chat_state_async, save_settings_async, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
@@ -238,8 +237,9 @@ async fn handle_request(
     match request.method.as_str() {
         "ping" => Ok(serde_json::json!({ "ok": true })),
         "getSettings" => {
-            let mut settings =
-                initialize_storage_async(context).await.map_err(|e| e.to_string())?;
+            let mut settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| e.to_string())?;
             settings.provider = settings.provider.masked();
             serde_json::to_value(&settings).map_err(|e| e.to_string())
         }
@@ -260,7 +260,9 @@ async fn handle_request(
         "rebuildIndex" => serialize_result(rebuild_index_async(context).await),
         "readImagePreview" => {
             let params: PathParams = parse_params(&request.params)?;
-            let settings = initialize_storage_async(context).await.map_err(|e| e.to_string())?;
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| e.to_string())?;
             let vault_root = Path::new(&settings.vault_dir);
             let confined =
                 normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;
@@ -268,7 +270,9 @@ async fn handle_request(
         }
         "openVaultDirectory" => {
             let params: PathParams = parse_params(&request.params)?;
-            let settings = initialize_storage_async(context).await.map_err(|e| e.to_string())?;
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| e.to_string())?;
             let vault_root = Path::new(&settings.vault_dir);
             let confined =
                 normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;

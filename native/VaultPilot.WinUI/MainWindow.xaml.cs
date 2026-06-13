@@ -124,17 +124,17 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            LogStartup("Window loaded");
+            await LogStartup("Window loaded");
             UpdateStartupStep("启动后端");
             var backendPath = ResolveBackendPath();
-            LogStartup($"Backend path: {backendPath}");
+            await LogStartup($"Backend path: {backendPath}");
             _backendClient.Start(backendPath);
-            LogStartup("Backend process started");
+            await LogStartup("Backend process started");
             UpdateStartupStep("检查后端响应");
             await SendWithTimeoutAsync(
                 (token) => _backendClient.SendAsync("ping", new { }, token),
                 "ping");
-            LogStartup("Ping ok");
+            await LogStartup("Ping ok");
 
             UpdateStartupStep("读取设置");
             _settings = await SendWithTimeoutAsync(
@@ -155,7 +155,7 @@ public sealed partial class MainWindow : Window
             ScrollToLatest();
 
             UpdateStatusBar("success", "后端已连接", "就绪");
-            LogStartup("Startup complete");
+            await LogStartup("Startup complete");
             ApplyAutoWakeSettings();
             ShowNextWakeTime();
             if (_settings?.AutoCheckUpdates ?? true)
@@ -164,7 +164,7 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                LogStartup("Update check skipped: disabled in settings.");
+                await LogStartup("Update check skipped: disabled in settings.");
             }
         }
         catch (Exception error)
@@ -2410,11 +2410,11 @@ public sealed partial class MainWindow : Window
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await _backendClient.SendAsync("ping", new { }, cts.Token);
             _lastAutoWakeTime = DateTime.Now;
-            LogStartup("自动唤醒完成: ping ok");
+            await LogStartup("自动唤醒完成: ping ok");
         }
         catch (Exception error)
         {
-            LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
+            await LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
         }
         finally
         {
@@ -2696,11 +2696,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void UpdateStartupStep(string step)
+    private async void UpdateStartupStep(string step)
     {
         _startupStep = step;
         UpdateStatusBar("info", "正在启动", $"{step}...");
-        LogStartup($"Step: {step}");
+        await LogStartup($"Step: {step}");
     }
 
     private void UpdateStatusBar(string level, string title, string message)
@@ -2755,12 +2755,12 @@ public sealed partial class MainWindow : Window
         return Path.Combine(root, "startup.log");
     }
 
-    private static void LogStartup(string message)
+    private static async Task LogStartup(string message)
     {
         try
         {
             var line = $"{DateTimeOffset.Now:O} {message}";
-            File.AppendAllText(StartupLogPath(), line + Environment.NewLine, Encoding.UTF8);
+            await File.AppendAllTextAsync(StartupLogPath(), line + Environment.NewLine, Encoding.UTF8);
         }
         catch
         {

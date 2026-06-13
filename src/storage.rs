@@ -1728,6 +1728,22 @@ fn query_recent_note_metas(connection: &Connection, limit: usize) -> Result<Vec<
     Ok(rows)
 }
 
+/// Escape SQL LIKE wildcard characters (`%`, `_`, `\`) in user input
+/// so they are treated as literal characters in a LIKE pattern.
+fn escape_like_pattern(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 /// Fuzzy LIKE-based fallback when FTS5 returns no results.
 /// Splits the query into words and matches any note whose title or body
 /// contains at least one of the words (case-insensitive).
@@ -1748,8 +1764,9 @@ fn query_like_note_metas(
     let mut conditions = Vec::new();
     let mut param_values: Vec<String> = Vec::new();
     for word in &words {
-        let pattern = format!("%{}%", word.to_lowercase());
-        conditions.push("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)");
+        let escaped = escape_like_pattern(&word.to_lowercase());
+        let pattern = format!("%{}%", escaped);
+        conditions.push("(LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(summary) LIKE ? ESCAPE '\\')");
         param_values.push(pattern.clone());
         param_values.push(pattern);
     }
@@ -3080,6 +3097,22 @@ mod tests {
     // ══════════════════════════════════════
 
     // ── 1.0 existing tests (preserved) ──
+
+    #[test]
+    fn escape_like_pattern_escapes_wildcards() {
+        // Percent sign
+        assert_eq!(escape_like_pattern("100%"), "100\\%");
+        // Underscore
+        assert_eq!(escape_like_pattern("a_b"), "a\\_b");
+        // Backslash
+        assert_eq!(escape_like_pattern("a\\b"), "a\\\\b");
+        // Combined
+        assert_eq!(escape_like_pattern("%_\\test"), "\\%\\_\\\\test");
+        // No wildcards
+        assert_eq!(escape_like_pattern("hello"), "hello");
+        // Empty string
+        assert_eq!(escape_like_pattern(""), "");
+    }
 
     #[test]
     fn derived_id_is_stable_for_same_path() {

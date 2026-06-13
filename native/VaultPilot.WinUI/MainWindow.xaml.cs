@@ -1394,7 +1394,8 @@ public sealed partial class MainWindow : Window
                     {
                         var linkText = text[(index + 1)..closeBracket];
                         var linkUrl = text[(closeBracket + 2)..closeParen];
-                        if (Uri.TryCreate(linkUrl, UriKind.Absolute, out var uri))
+                        if (Uri.TryCreate(linkUrl, UriKind.Absolute, out var uri)
+                            && uri.Scheme is "http" or "https")
                         {
                             var hyperlink = new Hyperlink
                             {
@@ -1491,7 +1492,8 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            if (sender.NavigateUri != null)
+            if (sender.NavigateUri != null
+                && sender.NavigateUri.Scheme is "http" or "https")
             {
                 await Windows.System.Launcher.LaunchUriAsync(sender.NavigateUri);
             }

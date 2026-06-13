@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using VaultPilot.WinUI.Models;
+using System.Diagnostics;
 
 namespace VaultPilot.WinUI.Views;
 
@@ -97,8 +98,16 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private void WireUpButtons()
     {
-        OpenVaultButton.Click += async (_, _) => await _openVaultDirectoryAsync();
-        ProjectLinkButton.Click += async (_, _) => await _openProjectHomepageAsync();
+        OpenVaultButton.Click += async (_, _) =>
+        {
+            try { await _openVaultDirectoryAsync(); }
+            catch (Exception ex) { Trace.TraceError($"OpenVault error: {ex}"); }
+        };
+        ProjectLinkButton.Click += async (_, _) =>
+        {
+            try { await _openProjectHomepageAsync(); }
+            catch (Exception ex) { Trace.TraceError($"ProjectLink error: {ex}"); }
+        };
     }
 
     // ──────────────────────────────────────────────

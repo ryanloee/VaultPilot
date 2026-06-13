@@ -119,6 +119,9 @@
 - #347: backup rotation/agent flush 静默吞错改日志记录 (PR #348 已合并)
 - #349: OnPowerModeChanged async void try-catch 异常保护 (PR #351 已合并)
 - #350: Style 资源访问统一为安全 GetThemeStyle 模式 (PR #352 已合并)
+- #353: MainWindow.xaml merge conflict markers 清除 (PR #356 已合并)
+- #354: SettingsDialog WireUpButtons async void lambda try-catch (PR #356 已合并)
+- #355: Rate limiter HashMap 清理 + lock poisoned 恢复 (PR #356 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -129,7 +132,7 @@
 123|123|## 已知阻塞项
 124|124|<!-- 记录失败的修复尝试、需要人工介入的问题 -->
 125|125|
-126|126|- #353: MainWindow.xaml merge conflict markers — 构建完全阻塞，必须优先修复
+126|126|（无 — 所有阻塞项已清空）
 127|127|
 128|128|## 决策记录
 129|129|<!-- 指挥官任务的重要决策 -->
@@ -256,17 +259,15 @@
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 47 (讨论轮)
-- 上次循环时间: 2026-06-13T20:10:00Z
-- 讨论重点: **代码质量深度审查** — 全面扫描 Rust 后端 + C# 前端，发现新问题
-- 本轮修复目标: 无（纯讨论轮，产出 issue）
-- 本轮审查目标: 全代码库
+- 循环编号: PR审核轮9
+- 上次循环时间: 2026-06-13T20:15:00Z
+- 讨论重点: **PR 审核与合并**
+- 本轮修复目标: PR #356, #357, #358
+- 本轮审查目标: 3 个 open PR
 - 本轮审查结果:
-  - 发现 1 个 CRITICAL 构建阻塞问题：MainWindow.xaml 未解决的 merge conflict markers（#353）
-  - 发现 1 个前端 Bug：SettingsDialog async void lambda 缺少 try-catch（#354）
-  - 发现 1 个后端安全问题：Rate limiter HashMap 无上限 + expect() panic（#355）
-  - 确认 PR #351, #352 已正确合并到 origin/main
-  - 本地 main 分支落后 origin/main 2 个 commit，已拉取同步
-  - Rust 测试全部通过（19/19），TODO/FIXME 搜索为空
-- 创建的 issue: #353, #354, #355
-- 阻塞 issue: 无
+  - PR #356 合并（综合修复 #353 + #354 + #355），CI 5/6 通过（cargo audit 预存在 CVE）
+  - PR #357 关闭（被 #356 包含，SettingsDialog try-catch 相同改动）
+  - PR #358 关闭（被 #356 包含，rate limiter 清理相同改动）
+  - Issue #353, #354, #355 全部关闭
+  - rebase 到最新 main 后合并成功，无冲突
+  - 项目恢复 0 open issue + 0 open PR 状态

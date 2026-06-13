@@ -102,8 +102,15 @@ pub fn sanitize_error(message: &str) -> String {
             }
         }
 
-        out.push(bytes[i] as char);
-        i += 1;
+        // Decode the full UTF-8 character at this position.
+        // Multi-byte chars can never start a redaction pattern (all ASCII),
+        // so skipping continuation bytes is safe.
+        let mut end = i + 1;
+        while end < len && (bytes[end] & 0xC0) == 0x80 {
+            end += 1;
+        }
+        out.push_str(&message[i..end]);
+        i = end;
     }
 
     out
@@ -2225,6 +2232,13 @@ mod tests {
     #[test]
     fn sanitize_handles_empty_string() {
         assert_eq!(sanitize_error(""), "");
+    }
+
+    #[test]
+    fn sanitize_error_preserves_chinese() {
+        let msg = "保存失败: connection timeout";
+        let sanitized = sanitize_error(msg);
+        assert_eq!(sanitized, msg);
     }
 
     #[test]

@@ -832,7 +832,7 @@ public sealed partial class MainWindow : Window
 
             await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
             var history = GetConversationHistory();
-            AddTurn("user", userDisplay, attachments: pendingAttachments);
+            await AddTurnAsync("user", userDisplay, attachments: pendingAttachments);
             RenderCurrentSession();
             ScrollToLatest();
             await SaveChatStateAsync();
@@ -861,7 +861,7 @@ public sealed partial class MainWindow : Window
             RemoveThinkingIndicator();
             _lastAiAnswer = answer;
 
-            AddTurn("assistant", answer?.Answer ?? string.Empty, answer);
+            await AddTurnAsync("assistant", answer?.Answer ?? string.Empty, answer);
             RenderCurrentSession();
             ScrollToLatest();
             await SaveChatStateAsync();
@@ -873,7 +873,7 @@ public sealed partial class MainWindow : Window
             _attachments.AddRange(pendingAttachments);
             RefreshAttachments();
             var message = LocalizeError(error.Message);
-            AddTurn("assistant", message);
+            await AddTurnAsync("assistant", message);
             RenderCurrentSession();
             ScrollToLatest();
             await SaveChatStateAsync();
@@ -3274,13 +3274,13 @@ public sealed partial class MainWindow : Window
         return tokens.ToString();
     }
 
-    private void AddTurn(
+    private async Task AddTurnAsync(
         string role,
         string text,
         GroundedAnswer? answer = null,
         IReadOnlyList<ChatAttachment>? attachments = null)
     {
-        _chatStateLock.Wait();
+        await _chatStateLock.WaitAsync();
         try
         {
             var session = CurrentSession();

@@ -19,7 +19,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -260,7 +260,7 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         if !parsed.provider.api_key.is_empty() {
             parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
                 .unwrap_or_else(|e| {
-                    eprintln!("warning: failed to decrypt API key, using raw value: {e}");
+                    warn!(error = %e, "failed to decrypt API key, using raw value");
                     parsed.provider.api_key.clone()
                 });
         }
@@ -268,7 +268,7 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         normalize_settings(&mut parsed, paths);
         let warnings = parsed.validate();
         for w in &warnings {
-            eprintln!("settings warning: {w}");
+            warn!("{w}");
         }
         parsed
     } else {
@@ -446,7 +446,7 @@ fn normalize_chat_state(mut state: ChatState) -> ChatState {
     // unbounded growth of chat-state.json.
     if state.sessions.len() > MAX_SESSIONS {
         let pruned = state.sessions.len() - MAX_SESSIONS;
-        eprintln!("[vaultpilot] pruning {pruned} old chat session(s) (limit={MAX_SESSIONS})");
+        info!(pruned, limit = MAX_SESSIONS, "pruning old chat session(s)");
         state.sessions.truncate(MAX_SESSIONS);
     }
 
@@ -672,7 +672,7 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     // than propagating the error.
     if file.exists() {
         if let Err(e) = fs::remove_file(&file) {
-            eprintln!("warning: failed to delete file {}: {}", file.display(), e);
+            warn!(path = %file.display(), error = %e, "failed to delete file");
         }
     }
 

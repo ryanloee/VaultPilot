@@ -15,7 +15,7 @@ use crate::models::{
     AnswerCitation, AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft,
 };
 use crate::prompting;
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024; // 50MB
 
@@ -541,7 +541,11 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
         .context_window_tokens
         .filter(|value| *value > 0)
     {
-        eprintln!("[vaultpilot] context window: {explicit} tokens (source: manual_override)");
+        debug!(
+            tokens = explicit,
+            source = "manual_override",
+            "context window"
+        );
         return (explicit, "manual_override".to_string());
     }
 
@@ -550,9 +554,11 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
     // Priority 2: built-in registry (data-driven)
     for rule in MODEL_CONTEXT_RULES {
         if rule.substrings.iter().all(|s| model.contains(s)) {
-            eprintln!(
-                "[vaultpilot] context window: {} tokens for model '{model}' (source: model_registry)",
-                rule.tokens,
+            debug!(
+                tokens = rule.tokens,
+                model = %model,
+                source = "model_registry",
+                "context window",
             );
             return (rule.tokens, "model_registry".to_string());
         }
@@ -560,15 +566,21 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
 
     // Priority 3: OpenAI reasoning models (prefix-based, not substring)
     if is_openai_reasoning_model(&model) {
-        eprintln!(
-            "[vaultpilot] context window: 200000 tokens for model '{model}' (source: model_registry)"
+        debug!(
+            tokens = 200_000,
+            model = %model,
+            source = "model_registry",
+            "context window",
         );
         return (200_000, "model_registry".to_string());
     }
 
     // Priority 4: heuristic default
-    eprintln!(
-        "[vaultpilot] context window: 128000 tokens for model '{model}' (source: heuristic_default)"
+    debug!(
+        tokens = 128_000,
+        model = %model,
+        source = "heuristic_default",
+        "context window",
     );
     (128_000, "heuristic_default".to_string())
 }
@@ -1306,9 +1318,9 @@ fn validate_base_url(base_url: &str) -> Result<()> {
     match parsed.scheme() {
         "https" => {}
         "http" => {
-            eprintln!(
-                "WARNING: base_url uses HTTP (not HTTPS). \
-                 Consider using HTTPS for production endpoints."
+            warn!(
+                "base_url uses HTTP (not HTTPS); \
+                 consider using HTTPS for production endpoints"
             );
         }
         other => {

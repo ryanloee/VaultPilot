@@ -65,7 +65,12 @@ public sealed partial class MainWindow : Window
     /// <summary>Looks up a theme-aware brush from application resources.</summary>
     private static Brush GetThemeBrush(string key)
     {
-        return (Brush)Application.Current.Resources[key];
+        if (Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush)
+        {
+            return brush;
+        }
+        System.Diagnostics.Debug.WriteLine($"[GetThemeBrush] Missing resource key: '{key}', falling back to Transparent.");
+        return new SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
     private ChatState _chatState = new(string.Empty, Array.Empty<ChatSession>());
     private readonly SemaphoreSlim _chatStateLock = new(1, 1);

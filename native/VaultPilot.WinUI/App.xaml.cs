@@ -95,18 +95,28 @@ public partial class App : Application
     {
         _isExiting = true;
 
-        if (_window != null)
+        try
         {
-            _window.Closed -= OnWindowClosed;
-            await _window.ShutdownAsync();
-            _window.Close();
-            _window = null;
+            if (_window != null)
+            {
+                _window.Closed -= OnWindowClosed;
+                await _window.ShutdownAsync();
+                _window.Close();
+                _window = null;
+            }
         }
-
-        _trayIcon?.Dispose();
-        _instanceMutex?.ReleaseMutex();
-        _instanceMutex?.Dispose();
-        Application.Current.Exit();
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[VaultPilot] ExitApplication error: {ex}");
+            LogToFile("EXIT", ex);
+        }
+        finally
+        {
+            _trayIcon?.Dispose();
+            _instanceMutex?.ReleaseMutex();
+            _instanceMutex?.Dispose();
+            Application.Current.Exit();
+        }
     }
 
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)

@@ -1792,6 +1792,9 @@ public sealed partial class MainWindow : Window
         return false;
     }
 
+    [GeneratedRegex(@"\[[^\]]+\]\(https?://[^)]+\)", RegexOptions.Compiled)]
+    private static partial Regex MarkdownLinkPattern();
+
     private static bool LooksLikeMarkdownPayload(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -1813,7 +1816,7 @@ public sealed partial class MainWindow : Window
 
         // Detect markdown tables and links
         if (text.Contains("|---", StringComparison.Ordinal)
-            || Regex.IsMatch(text, @"\[[^\]]+\]\(https?://[^)]+\)"))
+            || MarkdownLinkPattern().IsMatch(text))
         {
             return true;
         }

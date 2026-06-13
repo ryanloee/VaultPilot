@@ -410,29 +410,36 @@ public sealed partial class MainWindow : Window
 
     private async void OnNavigationSelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        if (args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag)
+        try
         {
-            return;
+            if (args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag)
+            {
+                return;
+            }
+
+            switch (tag)
+            {
+                case "Chat":
+                    ChatView.Visibility = Visibility.Visible;
+                    NotesViewHost.Visibility = Visibility.Collapsed;
+                    break;
+
+                case "Notes":
+                    ChatView.Visibility = Visibility.Collapsed;
+                    NotesViewHost.Visibility = Visibility.Visible;
+                    if (!_notesViewLoaded)
+                    {
+                        _notesView = new Views.NotesView(_backendClient);
+                        NotesViewHost.Children.Add(_notesView);
+                        _notesViewLoaded = true;
+                    }
+                    await _notesView.RefreshNotesAsync();
+                    break;
+            }
         }
-
-        switch (tag)
+        catch (Exception error)
         {
-            case "Chat":
-                ChatView.Visibility = Visibility.Visible;
-                NotesViewHost.Visibility = Visibility.Collapsed;
-                break;
-
-            case "Notes":
-                ChatView.Visibility = Visibility.Collapsed;
-                NotesViewHost.Visibility = Visibility.Visible;
-                if (!_notesViewLoaded)
-                {
-                    _notesView = new Views.NotesView(_backendClient);
-                    NotesViewHost.Children.Add(_notesView);
-                    _notesViewLoaded = true;
-                }
-                await _notesView.RefreshNotesAsync();
-                break;
+            System.Diagnostics.Debug.WriteLine($"[OnNavigationSelectionChanged] Error: {error}");
         }
     }
 
@@ -1087,11 +1094,11 @@ public sealed partial class MainWindow : Window
             Padding = new Thickness(12, 9, 12, 9),
             CornerRadius = new CornerRadius(8),
             Background = isUser
-                ? (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"]
-                : (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+                ? GetThemeBrush("AccentFillColorDefaultBrush")
+                : GetThemeBrush("CardBackgroundFillColorSecondaryBrush"),
             BorderBrush = isUser
                 ? null
-                : (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                : GetThemeBrush("CardStrokeColorDefaultBrush"),
             BorderThickness = isUser ? new Thickness(0) : new Thickness(1),
             HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
             Child = bubbleContent
@@ -1126,7 +1133,7 @@ public sealed partial class MainWindow : Window
 
         _thinkingDotStep = 0;
 
-        var dotBrush = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+        var dotBrush = GetThemeBrush("TextFillColorPrimaryBrush");
         var dots = new TextBlock[3];
         for (var i = 0; i < 3; i++)
         {
@@ -1156,8 +1163,8 @@ public sealed partial class MainWindow : Window
             MaxWidth = 680,
             Padding = new Thickness(14, 10, 14, 10),
             CornerRadius = new CornerRadius(8),
-            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            Background = GetThemeBrush("CardBackgroundFillColorSecondaryBrush"),
+            BorderBrush = GetThemeBrush("CardStrokeColorDefaultBrush"),
             BorderThickness = new Thickness(1),
             HorizontalAlignment = HorizontalAlignment.Left,
             Child = dotsPanel,
@@ -1223,8 +1230,8 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
             IsTextSelectionEnabled = true,
             Foreground = isUser
-                ? (Brush)Application.Current.Resources["TextOnAccentFillColorPrimaryBrush"]
-                : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+                ? GetThemeBrush("TextOnAccentFillColorPrimaryBrush")
+                : GetThemeBrush("TextFillColorPrimaryBrush")
         };
     }
 
@@ -1284,7 +1291,7 @@ public sealed partial class MainWindow : Window
             {
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+                Foreground = GetThemeBrush("TextFillColorPrimaryBrush")
             };
 
             if (line.StartsWith("# "))
@@ -1328,13 +1335,13 @@ public sealed partial class MainWindow : Window
                 // Blockquote: left border + muted italic text
                 var quoteText = line.StartsWith("> ") ? line[2..] : line[1..];
                 textBlock.FontStyle = Windows.UI.Text.FontStyle.Italic;
-                textBlock.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                textBlock.Foreground = GetThemeBrush("TextFillColorSecondaryBrush");
                 textBlock.Padding = new Thickness(12, 4, 4, 4);
                 ApplyInlineMarkdown(textBlock, quoteText.Trim());
 
                 var border = new Border
                 {
-                    BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
+                    BorderBrush = GetThemeBrush("ControlStrokeColorDefaultBrush"),
                     BorderThickness = new Thickness(3, 0, 0, 0),
                     Child = textBlock,
                     Margin = new Thickness(0, 2, 0, 2)
@@ -1475,9 +1482,16 @@ public sealed partial class MainWindow : Window
 
     private static async void Hyperlink_Click(Hyperlink sender, HyperlinkClickEventArgs args)
     {
-        if (sender.NavigateUri != null)
+        try
         {
-            await Windows.System.Launcher.LaunchUriAsync(sender.NavigateUri);
+            if (sender.NavigateUri != null)
+            {
+                await Windows.System.Launcher.LaunchUriAsync(sender.NavigateUri);
+            }
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Hyperlink_Click] Error: {error}");
         }
     }
 
@@ -1548,7 +1562,7 @@ public sealed partial class MainWindow : Window
                 Text = tableText,
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+                Foreground = GetThemeBrush("TextFillColorPrimaryBrush")
             };
         }
 
@@ -1577,7 +1591,7 @@ public sealed partial class MainWindow : Window
                 Text = tableText,
                 TextWrapping = TextWrapping.Wrap,
                 IsTextSelectionEnabled = true,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+                Foreground = GetThemeBrush("TextFillColorPrimaryBrush")
             };
         }
 
@@ -1607,7 +1621,7 @@ public sealed partial class MainWindow : Window
                     TextWrapping = TextWrapping.Wrap,
                     IsTextSelectionEnabled = true,
                     Padding = new Thickness(8, 6, 8, 6),
-                    Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+                    Foreground = GetThemeBrush("TextFillColorPrimaryBrush")
                 };
                 ApplyInlineMarkdown(cellBlock, cellText);
 
@@ -1619,7 +1633,7 @@ public sealed partial class MainWindow : Window
 
                 var cellBorder = new Border
                 {
-                    BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
+                    BorderBrush = GetThemeBrush("ControlStrokeColorDefaultBrush"),
                     BorderThickness = new Thickness(
                         c == 0 ? 0 : 0.5,
                         r == 0 ? 0 : 0.5,
@@ -1636,7 +1650,7 @@ public sealed partial class MainWindow : Window
 
         return new Border
         {
-            BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
+            BorderBrush = GetThemeBrush("ControlStrokeColorDefaultBrush"),
             BorderThickness = new Thickness(0.5),
             CornerRadius = new CornerRadius(4),
             Margin = new Thickness(0, 4, 0, 4),
@@ -2023,7 +2037,7 @@ public sealed partial class MainWindow : Window
             MinWidth = 120,
             MaxWidth = 200,
             CornerRadius = new CornerRadius(4),
-            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+            Background = GetThemeBrush("CardBackgroundFillColorSecondaryBrush"),
             BorderBrush = GetThemeBrush("AttachmentBorderBrush"),
             BorderThickness = new Thickness(1),
             Margin = new Thickness(0, 0, 2, 0),
@@ -2074,8 +2088,8 @@ public sealed partial class MainWindow : Window
             Width = 132,
             Padding = new Thickness(6),
             CornerRadius = new CornerRadius(8),
-            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            Background = GetThemeBrush("CardBackgroundFillColorSecondaryBrush"),
+            BorderBrush = GetThemeBrush("CardStrokeColorDefaultBrush"),
             BorderThickness = new Thickness(1),
             Child = stack
         };
@@ -2698,9 +2712,16 @@ public sealed partial class MainWindow : Window
 
     private async void UpdateStartupStep(string step)
     {
-        _startupStep = step;
-        UpdateStatusBar("info", "正在启动", $"{step}...");
-        await LogStartup($"Step: {step}");
+        try
+        {
+            _startupStep = step;
+            UpdateStatusBar("info", "正在启动", $"{step}...");
+            await LogStartup($"Step: {step}");
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine($"[UpdateStartupStep] Error: {error}");
+        }
     }
 
     private void UpdateStatusBar(string level, string title, string message)
@@ -2712,7 +2733,7 @@ public sealed partial class MainWindow : Window
             "error" => BrushRed,
             "warning" => BrushOrange,
             "success" => BrushGreen,
-            _ => (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+            _ => GetThemeBrush("TextFillColorSecondaryBrush")
         };
         StatusBarIcon.Glyph = level switch
         {
@@ -2965,8 +2986,8 @@ public sealed partial class MainWindow : Window
         {
             var card = new Border
             {
-                Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
-                BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                Background = GetThemeBrush("CardBackgroundFillColorDefaultBrush"),
+                BorderBrush = GetThemeBrush("CardStrokeColorDefaultBrush"),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(8, 4, 8, 4),

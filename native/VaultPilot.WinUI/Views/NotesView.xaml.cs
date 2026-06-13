@@ -273,9 +273,9 @@ public sealed partial class NotesView : UserControl
             var diff = now - local;
 
             if (diff.TotalMinutes < 1) return "刚刚";
-            if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes} 分钟前";
-            if (diff.TotalDays < 1) return $"{(int)diff.TotalHours} 小时前";
-            if (diff.TotalDays < 7) return $"{(int)diff.TotalDays} 天前";
+            if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}分钟前";
+            if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}小时前";
+            if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}天前";
             return local.ToString("yyyy-MM-dd");
         }
         catch

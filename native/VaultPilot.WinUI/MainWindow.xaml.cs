@@ -72,6 +72,14 @@ public sealed partial class MainWindow : Window
         System.Diagnostics.Debug.WriteLine($"[GetThemeBrush] Missing resource key: '{key}', falling back to Transparent.");
         return new SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
+    /// <summary>Looks up a theme-aware Style from application resources, returning null if missing.</summary>
+    private static Style? GetThemeStyle(string key)
+    {
+        if (Application.Current.Resources.TryGetValue(key, out var value) && value is Style style)
+            return style;
+        System.Diagnostics.Debug.WriteLine($"[GetThemeStyle] Missing resource key: '{key}'.");
+        return null;
+    }
     private ChatState _chatState = new(string.Empty, Array.Empty<ChatSession>());
     private readonly SemaphoreSlim _chatStateLock = new(1, 1);
     private string _currentSessionId = string.Empty;
@@ -2870,7 +2878,7 @@ public sealed partial class MainWindow : Window
         var title = new TextBlock
         {
             Text = isFirstRun ? "欢迎使用 VaultPilot" : "开始新的对话",
-            Style = (Style)Application.Current.Resources["SubtitleTextBlockStyle"],
+            Style = GetThemeStyle("SubtitleTextBlockStyle"),
             HorizontalAlignment = HorizontalAlignment.Center,
             TextAlignment = TextAlignment.Center,
         };
@@ -2912,7 +2920,7 @@ public sealed partial class MainWindow : Window
                 {
                     Content = suggestion,
                     HorizontalAlignment = HorizontalAlignment.Center,
-                    Style = (Style)Application.Current.Resources["DefaultButtonStyle"],
+                    Style = GetThemeStyle("DefaultButtonStyle"),
                 };
                 btn.Click += (_, _) =>
                 {

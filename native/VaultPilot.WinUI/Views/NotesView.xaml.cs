@@ -33,7 +33,8 @@ public sealed partial class NotesView : UserControl
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        await RefreshNotesAsync();
+        try { await RefreshNotesAsync(); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[NotesView] OnLoaded error: {ex.Message}"); }
     }
 
     /// <summary>
@@ -62,7 +63,8 @@ public sealed partial class NotesView : UserControl
 
     private async void OnRefreshClicked(object sender, RoutedEventArgs e)
     {
-        await RefreshNotesAsync();
+        try { await RefreshNotesAsync(); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[NotesView] OnRefreshClicked error: {ex.Message}"); }
     }
 
     private async void OnSearchQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)

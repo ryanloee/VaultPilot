@@ -1357,7 +1357,9 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || v4.is_link_local()
                 || v4.is_broadcast()
                 || v4.is_unspecified()
-                || matches!(v4.octets()[0], 100 | 127 | 198 | 240..=255)
+                || matches!(v4.octets(), [100, 64..=127, _, _]) // CGNAT 100.64.0.0/10
+                || matches!(v4.octets(), [198, 18..=19, _, _]) // Benchmarking 198.18.0.0/15
+                || matches!(v4.octets()[0], 240..=255)
         }
         IpAddr::V6(v6) => {
             v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80

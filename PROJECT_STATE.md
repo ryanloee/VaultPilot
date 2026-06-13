@@ -121,7 +121,9 @@
 118|118|## 当前进行中
 119|119|<!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 120|120|
-121|121|（无 — 循环#43 修复目标 3/3 全部完成并合并）
+121|121|- PR #356: fix: remove merge conflict markers from MainWindow.xaml (#353)
+- PR #357: fix: add try-catch to SettingsDialog async void lambdas (#354)
+- PR #358: fix: rate limiter HashMap cleanup + graceful lock handling (#355)
 122|122|
 123|123|## 已知阻塞项
 124|124|<!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -230,6 +232,11 @@
 227|227|- 2026-06-13 [循环#25]: 无可操作 issue — #217 阻塞 + 4 个 Architecture 留人工决策，agent 修复循环进入终止状态
 - 2026-06-13 [循环#44]: **主动代码审查** — PR #348 合并后全量审查，发现 OnPowerModeChanged async void 安全缺口和 2 处 Style 直接资源访问，创建 #349 和 #350
 - 2026-06-13 [循环#44]: cargo audit 持续失败（rustls-webpki RUSTSEC-2026-0104），需人工升级依赖
+- 2026-06-13 [循环#45]: 修复循环#44 审查发现的 2 个 Bug：#349 (PR #351)、#350 (PR #352)，并行修复成功
+- 2026-06-13 [PR审核轮8]: 审核并合并 PR #351 (#349) 和 PR #352 (#350)，CI 5/6 通过（cargo audit 预存在 CVE）
+- 2026-06-13 [循环#47]: **CRITICAL** MainWindow.xaml 包含未解决 merge conflict markers（line 98-202），已创建 #353
+- 2026-06-13 [循环#47]: SettingsDialog WireUpButtons async void lambda 缺少 try-catch（#354），Rate limiter HashMap 无上限 + expect panic（#355）
+- 2026-06-13 [循环#48]: 修复 3/3 issue：#353 (PR #356), #354 (PR #357), #355 (PR #358)，全部并行修复成功
 228|228|
 229|229|## 项目健康度快照
 230|230|<!-- 每轮循环更新 -->
@@ -250,14 +257,16 @@
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 44
-- 上次循环时间: 2026-06-13T19:02:00Z
-- 讨论重点: **主动代码质量审查** — PR #348 合并后的系统性审查，发现残留问题
-- 本轮修复目标: #349 (OnPowerModeChanged async void safety), #350 (Style 直接资源访问统一)
-- 本轮审查目标: PR #348 合并后全量代码审查
-- 本轮审查结果:
-  - PR #348 已合并，#345/#346/#347 全部关闭 ✅
-  - 代码审查发现 2 个残留问题，创建 issue #349 和 #350
-  - Clippy 0 warnings，cargo fmt 干净
-  - cargo audit 仍失败（rustls-webpki RUSTSEC-2026-0104，预存在问题）
-- 项目里程碑: 项目进入深度质量打磨阶段，主体功能/安全/性能/UI 已全部完成，剩余为一致性改进
+- 循环编号: 48 (修复轮)
+- 上次循环时间: 2026-06-13T20:20:00Z
+- 修复重点: 修复循环#47 审查发现的 3 个 issue (#353, #354, #355)
+- 修复目标:
+  - #353: MainWindow.xaml merge conflict markers (CRITICAL 构建阻塞) → PR #356
+  - #354: SettingsDialog async void lambda try-catch → PR #357
+  - #355: Rate limiter HashMap cleanup + lock handling → PR #358
+- 修复结果: 3/3 全部完成
+  - PR #356: 移除 MainWindow.xaml 105 行冲突标记，保留 origin/main sidebar 布局
+  - PR #357: SettingsDialog WireUpButtons 添加 try-catch + Trace.TraceError
+  - PR #358: RateLimiter HashMap 过期条目清理 + expect→match graceful lock handling
+  - Rust 测试全部通过 (9/9)，cargo fmt + clippy 干净
+- 当前状态: 3 open issue (#353, #354, #355)，3 open PR (#356, #357, #358)，等待合并

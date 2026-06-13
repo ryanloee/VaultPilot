@@ -1,9 +1,10 @@
 //! Machine-bound encryption for sensitive settings (API keys).
 //!
 //! Uses AES-256-GCM with a key derived from machine-specific identifiers
-//! via SHA-256.  The derived key never leaves the host; ciphertext includes
-//! a 12-byte random nonce prepended to the payload.  A version prefix
-//! (`ENC:v1:`) distinguishes encrypted values from legacy plaintext.
+//! via PBKDF2-HMAC-SHA256 (600,000 iterations).  The derived key never
+//! leaves the host; ciphertext includes a 12-byte random nonce prepended
+//! to the payload.  A version prefix (`ENC:v1:`) distinguishes encrypted
+//! values from legacy plaintext.
 
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
@@ -16,33 +17,97 @@ use sha2::{Digest, Sha256};
 /// Prefix that identifies a value as encrypted by this module.
 pub const ENCRYPTED_PREFIX: &str = "ENC:v1:";
 
-/// Derive a 256-bit key from machine-specific entropy.
-///
-/// Sources include hostname, OS architecture, and a fixed application
-/// salt.  The result is deterministic for a given host — no external key
-/// store is needed.
-fn derive_machine_key() -> [u8; 32] {
-    let mut hasher = Sha256::new();
+/// Number of PBKDF2 iterations for key derivation.
+/// OWASP recommends ≥ 600,000 for PBKDF2-SHA256 (2023).
+const PBKDF2_ITERATIONS: u32 = 600_000;
+
+/// HMAC-SHA256 using only sha2 (no external hmac crate dependency).
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    // Block size for SHA-256 is 64 bytes.
+    const BLOCK_SIZE: usize = 64;
+
+    let mut key_block = [0u8; BLOCK_SIZE];
+    if key.len() > BLOCK_SIZE {
+        let hash = Sha256::digest(key);
+        key_block[..32].copy_from_slice(&hash);
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+
+    // ipad and opad
+    let mut ipad = [0x36u8; BLOCK_SIZE];
+    let mut opad = [0x5cu8; BLOCK_SIZE];
+    for i in 0..BLOCK_SIZE {
+        ipad[i] ^= key_block[i];
+        opad[i] ^= key_block[i];
+    }
+
+    let inner_hash = Sha256::new()
+        .chain_update(ipad)
+        .chain_update(message)
+        .finalize();
+
+    Sha256::new()
+        .chain_update(opad)
+        .chain_update(inner_hash)
+        .finalize()
+        .into()
+}
+
+/// PBKDF2-HMAC-SHA256 key derivation.
+fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
+    let u1 = hmac_sha256(password, &{
+        let mut buf = Vec::with_capacity(salt.len() + 4);
+        buf.extend_from_slice(salt);
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        buf
+    });
+
+    let mut result = u1;
+    let mut u_prev = u1;
+
+    for i in 2..=iterations {
+        let u_next = hmac_sha256(password, &u_prev);
+        for j in 0..32 {
+            result[j] ^= u_next[j];
+        }
+        u_prev = u_next;
+
+        // Progress indicator every 100k iterations (only in debug builds).
+        #[cfg(debug_assertions)]
+        {
+            if i % 100_000 == 0 {
+                eprintln!("PBKDF2: {i}/{iterations} iterations...");
+            }
+        }
+    }
+
+    result
+}
+
+/// Build the salt from machine-specific entropy.
+fn machine_salt() -> Vec<u8> {
+    let mut salt = Vec::with_capacity(256);
 
     // Fixed application salt to namespace the derivation.
-    hasher.update(b"vaultpilot-api-key-encryption-v1:");
+    salt.extend_from_slice(b"vaultpilot-api-key-encryption-v2:");
 
     // Machine hostname (stable across reboots on most systems).
     if let Ok(name) = hostname::get() {
-        hasher.update(name.to_string_lossy().as_bytes());
+        salt.extend_from_slice(name.to_string_lossy().as_bytes());
     }
 
     // OS and architecture — adds entropy on shared-hostname setups.
-    hasher.update(std::env::consts::OS.as_bytes());
-    hasher.update(std::env::consts::ARCH.as_bytes());
+    salt.extend_from_slice(std::env::consts::OS.as_bytes());
+    salt.extend_from_slice(std::env::consts::ARCH.as_bytes());
 
     // Machine-id on Linux (systemd) and macOS.
     #[cfg(target_os = "linux")]
     {
         if let Ok(id) = std::fs::read_to_string("/etc/machine-id") {
-            hasher.update(id.trim().as_bytes());
+            salt.extend_from_slice(id.trim().as_bytes());
         } else if let Ok(id) = std::fs::read_to_string("/var/lib/dbus/machine-id") {
-            hasher.update(id.trim().as_bytes());
+            salt.extend_from_slice(id.trim().as_bytes());
         }
     }
     #[cfg(target_os = "macos")]
@@ -51,10 +116,17 @@ fn derive_machine_key() -> [u8; 32] {
         // hostname + arch is sufficient on consumer macOS machines.
     }
 
-    let hash = hasher.finalize();
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&hash);
-    key
+    salt
+}
+
+/// Derive a 256-bit key from machine-specific entropy using PBKDF2-HMAC-SHA256.
+///
+/// Uses 600,000 iterations per OWASP 2023 recommendations.  The result is
+/// deterministic for a given host — no external key store is needed.
+fn derive_machine_key() -> [u8; 32] {
+    let salt = machine_salt();
+    // Password is the fixed application identifier (the salt carries the entropy).
+    pbkdf2_hmac_sha256(b"vaultpilot-machine-key", &salt, PBKDF2_ITERATIONS)
 }
 
 /// Encrypt a plaintext string, returning `ENC:v1:<base64(nonce||ciphertext)>`.
@@ -129,8 +201,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hmac_sha256_known_vector() {
+        // RFC 4231 Test Case 2
+        let key = b"Jefe";
+        let data = b"what do ya want for nothing?";
+        let mac = hmac_sha256(key, data);
+        // Expected: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+        let expected: [u8; 32] = [
+            0x5b, 0xdc, 0xc1, 0x46, 0xbf, 0x60, 0x75, 0x4e, 0x6a, 0x04, 0x24, 0x26, 0x08, 0x95,
+            0x75, 0xc7, 0x5a, 0x00, 0x3f, 0x08, 0x9d, 0x27, 0x39, 0x83, 0x9d, 0xec, 0x58, 0xb9,
+            0x64, 0xec, 0x38, 0x43,
+        ];
+        assert_eq!(mac, expected);
+    }
+
+    #[test]
+    fn pbkdf2_low_iterations() {
+        // Quick sanity test with low iterations
+        let dk = pbkdf2_hmac_sha256(b"password", b"salt", 1);
+        // Just verify it produces a deterministic 32-byte output
+        assert_eq!(dk.len(), 32);
+        let dk2 = pbkdf2_hmac_sha256(b"password", b"salt", 1);
+        assert_eq!(dk, dk2);
+        // Different input → different output
+        let dk3 = pbkdf2_hmac_sha256(b"password", b"salt2", 1);
+        assert_ne!(dk, dk3);
+    }
+
+    #[test]
     fn round_trip_encrypt_decrypt() {
-        let secret = "sk-ant-api03-abcdefghij1234567890";
+        let secret = "sk-ant...7890";
         let encrypted = encrypt_secret(secret).unwrap();
 
         // Encrypted value should be different from plaintext.

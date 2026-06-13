@@ -401,6 +401,9 @@ public sealed class BackendClient : IAsyncDisposable
         _healthCheckTimer?.Dispose();
         _healthCheckTimer = null;
 
+        // Fail all pending requests before releasing resources
+        FailPending("Backend client disposed.");
+
         await DisposeProcessAsync();
 
         _writeLock?.Dispose();

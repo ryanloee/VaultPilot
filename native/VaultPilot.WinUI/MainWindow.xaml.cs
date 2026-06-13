@@ -1030,6 +1030,13 @@ public sealed partial class MainWindow : Window
     public async Task ShutdownAsync()
     {
         _isShuttingDown = true;
+
+        // Cancel any active AI request before releasing resources
+        // to prevent catch/finally blocks from accessing disposed objects
+        _activeRequestCts?.Cancel();
+        _activeRequestCts?.Dispose();
+        _activeRequestCts = null;
+
         RemoveThinkingIndicator();
         StopAutoWakeTimer();
         UnsubscribeEvents();

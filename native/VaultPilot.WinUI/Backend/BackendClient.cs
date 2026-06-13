@@ -441,7 +441,8 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async Task PumpStdoutAsync(CancellationToken token)
     {
-        if (_process?.StandardOutput is null)
+        var process = _process;
+        if (process?.StandardOutput is null)
         {
             return;
         }
@@ -450,7 +451,7 @@ public sealed class BackendClient : IAsyncDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                var line = await _process.StandardOutput.ReadLineAsync(token);
+                var line = await process.StandardOutput.ReadLineAsync(token);
                 if (line is null)
                 {
                     FailPending("Rust 后端已关闭输出通道。");
@@ -539,7 +540,8 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async Task PumpStderrAsync(CancellationToken token)
     {
-        if (_process?.StandardError is null)
+        var process = _process;
+        if (process?.StandardError is null)
         {
             return;
         }
@@ -548,7 +550,7 @@ public sealed class BackendClient : IAsyncDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                var line = await _process.StandardError.ReadLineAsync(token);
+                var line = await process.StandardError.ReadLineAsync(token);
                 if (line is null)
                 {
                     return;

@@ -36,10 +36,11 @@ public sealed class BackendClient : IAsyncDisposable
     private CancellationTokenSource? _readerCts;
     private string? _executablePath;
     private Timer? _healthCheckTimer;
-    private bool _isDisposed;
+    private volatile bool _isDisposed;
     private readonly SemaphoreSlim _reconnectLock = new(1, 1);
     private int _consecutiveHealthCheckFailures;
-    private bool _degradedMode;
+    private volatile bool _degradedMode;
+    private int _healthCheckInProgress;
 
     public bool IsConnected => _process is { HasExited: false };
     public event Action<AgentStatusEvent>? AgentStatusReceived;
@@ -123,7 +124,7 @@ public sealed class BackendClient : IAsyncDisposable
             if (e.Mode == PowerModes.Resume)
             {
                 // System just woke up — proactively trigger reconnection
-                _consecutiveHealthCheckFailures = 0;
+                Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
                 _degradedMode = false;
                 SetHealthCheckInterval(HealthCheckInterval);
 
@@ -142,6 +143,7 @@ public sealed class BackendClient : IAsyncDisposable
     private async void OnHealthCheckTick(object? state)
     {
         if (_isDisposed) return;
+        if (Interlocked.CompareExchange(ref _healthCheckInProgress, 1, 0) != 0) return;
 
         try
         {
@@ -150,7 +152,7 @@ public sealed class BackendClient : IAsyncDisposable
                 var reconnected = await TryReconnectWithRetryAsync();
                 if (reconnected)
                 {
-                    _consecutiveHealthCheckFailures = 0;
+                    Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
                     _degradedMode = false;
                     SetHealthCheckInterval(HealthCheckInterval);
                 }
@@ -165,9 +167,9 @@ public sealed class BackendClient : IAsyncDisposable
             await SendAsync("ping", new { }, cts.Token);
 
             // Ping succeeded — reset failure tracking
-            if (_consecutiveHealthCheckFailures > 0)
+            if (Volatile.Read(ref _consecutiveHealthCheckFailures) > 0)
             {
-                _consecutiveHealthCheckFailures = 0;
+                Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
                 _degradedMode = false;
                 SetHealthCheckInterval(HealthCheckInterval);
             }
@@ -179,7 +181,7 @@ public sealed class BackendClient : IAsyncDisposable
                 var reconnected = await TryReconnectWithRetryAsync();
                 if (reconnected)
                 {
-                    _consecutiveHealthCheckFailures = 0;
+                    Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
                     _degradedMode = false;
                     SetHealthCheckInterval(HealthCheckInterval);
                 }
@@ -189,15 +191,19 @@ public sealed class BackendClient : IAsyncDisposable
                 }
             }
         }
+        finally
+        {
+            Interlocked.Exchange(ref _healthCheckInProgress, 0);
+        }
     }
 
     private void OnConsecutiveHealthCheckFailure()
     {
-        _consecutiveHealthCheckFailures++;
+        var failures = Interlocked.Increment(ref _consecutiveHealthCheckFailures);
         ConnectionStateChanged?.Invoke(false);
 
         // After repeated failures, switch to degraded mode with slower health checks
-        if (_consecutiveHealthCheckFailures >= DegradedFailureThreshold && !_degradedMode)
+        if (failures >= DegradedFailureThreshold && !_degradedMode)
         {
             _degradedMode = true;
             SetHealthCheckInterval(DegradedHealthCheckInterval);
@@ -211,21 +217,22 @@ public sealed class BackendClient : IAsyncDisposable
         return delay > MaxBackoff ? MaxBackoff : delay;
     }
 
-    private async Task<bool> TryReconnectWithRetryAsync()
+    private async Task<bool> TryReconnectWithRetryAsync(CancellationToken cancellationToken = default)
     {
         for (int attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
         {
-            if (_isDisposed) return false;
+            if (_isDisposed || cancellationToken.IsCancellationRequested) return false;
 
-            var success = await TryReconnectAsync(forceRestart: true);
+            var success = await TryReconnectAsync(forceRestart: true, cancellationToken: cancellationToken);
             if (success)
             {
                 try
                 {
                     // Give the process more time to initialize after restart
-                    await Task.Delay(TimeSpan.FromSeconds(2));
-                    using var cts = new CancellationTokenSource(PingTimeout);
-                    await SendAsync("ping", new { }, cts.Token);
+                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+                    using var timeoutCts = new CancellationTokenSource(PingTimeout);
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+                    await SendAsync("ping", new { }, linkedCts.Token);
                     ConnectionStateChanged?.Invoke(true);
                     return true;
                 }
@@ -238,7 +245,7 @@ public sealed class BackendClient : IAsyncDisposable
             if (attempt < MaxReconnectAttempts)
             {
                 var backoff = GetBackoffDelay(attempt);
-                await Task.Delay(backoff);
+                await Task.Delay(backoff, cancellationToken);
             }
         }
 
@@ -253,11 +260,11 @@ public sealed class BackendClient : IAsyncDisposable
         if (_isDisposed) return false;
 
         // Reset failure tracking so health check interval goes back to normal
-        _consecutiveHealthCheckFailures = 0;
+        Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
         _degradedMode = false;
         SetHealthCheckInterval(HealthCheckInterval);
 
-        return await TryReconnectWithRetryAsync();
+        return await TryReconnectWithRetryAsync(cancellationToken);
     }
 
     public Task<bool> EnsureConnectedAsync(CancellationToken cancellationToken = default)

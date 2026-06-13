@@ -247,5 +247,5 @@
 - 额外完成: 无
 - 待重建 issue: 无
 - 阻塞 issue: 无（#217 已修复，所有阻塞项清空）
-- Architecture 留人工决策: #183 (storage.rs 拆分), #143 (lib.rs 拆分), #49 (MainWindow 拆分), #144 (Provider 抽象)
-- 项目里程碑: **⛔ agent 修复循环已终止** — 连续第 15 轮无变化，强烈建议停止此 cron job
+- Architecture 留人工决策: 无（#183, #143, #49, #144 全部关闭为 deferred）
+- 项目里程碑: **所有 issue 清空** — 4 个架构 issue 已关闭为 deferred，项目达到 0 open issue

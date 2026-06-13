@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System.Diagnostics;
+using System.Threading;
 
 namespace VaultPilot.WinUI;
 
@@ -12,6 +13,7 @@ public partial class App : Application
     private TaskbarIcon? _trayIcon;
     private bool _isExiting;
     private Mutex? _instanceMutex;
+    private int _exitInProgress;
 
     public App()
     {
@@ -93,6 +95,7 @@ public partial class App : Application
 
     private async void ExitApplication()
     {
+        if (Interlocked.CompareExchange(ref _exitInProgress, 1, 0) != 0) return;
         _isExiting = true;
 
         try

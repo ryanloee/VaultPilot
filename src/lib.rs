@@ -23,7 +23,7 @@ use storage::{
     load_chat_state_async,
     load_context_notes_async,
     load_note_with_context,
-    ocr_image_text,
+    ocr_image_text_async,
     save_chat_state_async,
     save_note_with_images_async,
     StorageContext,
@@ -179,7 +179,7 @@ const IMAGE_ATTACHMENT_TOKEN_ESTIMATE: u64 = 1_200;
 const IMAGE_ONLY_PROMPT: &str = "请结合我发送的图片理解并回复。";
 const OCR_SECTION_HEADER: &str = "[图片文字识别结果]:";
 
-fn build_effective_question(question: &str, image_paths: &[String]) -> String {
+async fn build_effective_question(question: &str, image_paths: &[String]) -> String {
     let mut prompt = if question.trim().is_empty() {
         IMAGE_ONLY_PROMPT.to_string()
     } else {
@@ -192,7 +192,7 @@ fn build_effective_question(question: &str, image_paths: &[String]) -> String {
 
     let mut ocr_parts = Vec::new();
     for image_path in image_paths {
-        if let Ok(text) = ocr_image_text(Path::new(image_path)) {
+        if let Ok(text) = ocr_image_text_async(Path::new(image_path)).await {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
                 ocr_parts.push(trimmed.to_string());
@@ -236,7 +236,7 @@ pub async fn chat_with_ai_with_context(
         return Err(anyhow::anyhow!("question is empty"));
     }
 
-    let prompt = build_effective_question(&trimmed_question, &images);
+    let prompt = build_effective_question(&trimmed_question, &images).await;
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {
@@ -310,7 +310,7 @@ pub async fn ask_with_ai_with_context(
         return Err(anyhow::anyhow!("question is empty"));
     }
 
-    let effective_question = build_effective_question(&raw_question, &images);
+    let effective_question = build_effective_question(&raw_question, &images).await;
     let history = history.unwrap_or_default();
     let session_memory_question = looks_like_session_memory_question(&raw_question);
     let has_local_notes = !list_notes_async(context).await?.is_empty();
@@ -1669,14 +1669,14 @@ mod tests {
 
     // ── 2.1 dangerous command detection ──
 
-    #[test]
-    fn build_effective_question_without_images_uses_trimmed_text() {
-        assert_eq!(build_effective_question("  hello  ", &[]), "hello");
+    #[tokio::test]
+    async fn build_effective_question_without_images_uses_trimmed_text() {
+        assert_eq!(build_effective_question("  hello  ", &[]).await, "hello");
     }
 
-    #[test]
-    fn build_effective_question_for_image_only_uses_default_prompt() {
-        assert_eq!(build_effective_question("", &[]), IMAGE_ONLY_PROMPT);
+    #[tokio::test]
+    async fn build_effective_question_for_image_only_uses_default_prompt() {
+        assert_eq!(build_effective_question("", &[]).await, IMAGE_ONLY_PROMPT);
     }
 
     #[test]

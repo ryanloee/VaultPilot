@@ -834,8 +834,8 @@ public sealed partial class MainWindow : Window
         _attachments.Clear();
         RefreshAttachments();
 
-        _activeRequestCts?.Dispose();
-        _activeRequestCts = new CancellationTokenSource();
+        var oldCts = Interlocked.Exchange(ref _activeRequestCts, new CancellationTokenSource());
+        oldCts?.Dispose();
         var cancellationToken = _activeRequestCts.Token;
 
         _lastAiAnswer = null;
@@ -890,8 +890,7 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            _activeRequestCts?.Dispose();
-            _activeRequestCts = null;
+            Interlocked.Exchange(ref _activeRequestCts, null)?.Dispose();
             SendButton.IsEnabled = true;
             RecordButton.IsEnabled = true;
             CancelButton.Visibility = Visibility.Collapsed;
@@ -915,9 +914,9 @@ public sealed partial class MainWindow : Window
         // unsubscribe events so the window can be re-shown from the tray.
         try
         {
-            _activeRequestCts?.Cancel();
-            _activeRequestCts?.Dispose();
-            _activeRequestCts = null;
+            var oldCts = Interlocked.Exchange(ref _activeRequestCts, null);
+            oldCts?.Cancel();
+            oldCts?.Dispose();
             RemoveThinkingIndicator();
         }
         catch (Exception error)

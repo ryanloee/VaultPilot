@@ -957,7 +957,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public void CancelActiveRequest()
     {
-        _activeRequestCts?.Cancel();
+        Volatile.Read(ref _activeRequestCts)?.Cancel();
     }
 
     #region Keyboard Accelerator Handlers

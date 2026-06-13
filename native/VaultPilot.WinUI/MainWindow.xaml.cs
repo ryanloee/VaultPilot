@@ -798,8 +798,7 @@ public sealed partial class MainWindow : Window
 
         await ExecuteAiRequestAsync(
             prompt, userDisplay, pendingAttachments, text,
-            "正在记录知识", "正在整理并保存...", "记录失败",
-            passCancellationToken: true);
+            "正在记录知识", "正在整理并保存...", "记录失败");
 
         if (_lastAiAnswer?.SavedNote is null)
         {
@@ -829,8 +828,7 @@ public sealed partial class MainWindow : Window
         string originalText,
         string statusTitle,
         string statusDetail,
-        string errorTitle,
-        bool passCancellationToken = false)
+        string errorTitle)
     {
         ComposerBox.Text = string.Empty;
         _attachments.Clear();
@@ -860,8 +858,7 @@ public sealed partial class MainWindow : Window
             ShowThinkingIndicator();
             ScrollToLatest();
 
-            var answer = passCancellationToken
-                ? await _backendClient.SendAsync<GroundedAnswer>(
+            var answer = await _backendClient.SendAsync<GroundedAnswer>(
                     "askWithAi",
                     new
                     {
@@ -869,15 +866,7 @@ public sealed partial class MainWindow : Window
                         history,
                         imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
                     },
-                    cancellationToken)
-                : await _backendClient.SendAsync<GroundedAnswer>(
-                    "askWithAi",
-                    new
-                    {
-                        question = prompt,
-                        history,
-                        imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
-                    });
+                    cancellationToken);
             RemoveThinkingIndicator();
             _lastAiAnswer = answer;
 

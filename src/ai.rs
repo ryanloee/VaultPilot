@@ -703,25 +703,12 @@ fn generate_programmatic_snippet(body: &str, query: &str) -> String {
         });
 
     // Highlight each term in the chosen paragraph (case-insensitive).
-    let mut snippet = best.to_string();
+    // We operate entirely on the lowered snippet to avoid byte-boundary mismatches
+    // when to_lowercase() changes the byte length of characters (e.g. ß → ss).
+    let mut snippet = best.to_lowercase();
     for term in &terms {
-        // Use a simple case-insensitive replacement to add markers.
-        let lower_snippet = snippet.to_lowercase();
-        let mut result = String::with_capacity(snippet.len());
-        let mut last_end = 0;
-        let term_lower = term.as_str();
-
-        while let Some(pos) = lower_snippet[last_end..].find(term_lower) {
-            let abs_pos = last_end + pos;
-            result.push_str(&snippet[last_end..abs_pos]);
-            result.push_str("==");
-            let match_end = abs_pos + term.len();
-            result.push_str(&snippet[abs_pos..match_end]);
-            result.push_str("==");
-            last_end = match_end;
-        }
-        result.push_str(&snippet[last_end..]);
-        snippet = result;
+        let marker = format!("=={term}==");
+        snippet = snippet.replace(term.as_str(), &marker);
     }
 
     // Truncate if too long.
@@ -1419,8 +1406,8 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 mod tests {
     use super::{
         dedupe_terms, detect_image_media_type, extract_json, extract_json_block, fallback_answer,
-        heuristic_note_from_input, is_openai_reasoning_model, is_private_ip,
-        is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
+        generate_programmatic_snippet, heuristic_note_from_input, is_openai_reasoning_model,
+        is_private_ip, is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
         parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
         resolve_context_window, validate_base_url, AssistantToolCall, RequestUsage,
     };
@@ -1836,5 +1823,22 @@ mod tests {
     fn is_private_ip_allows_public_ip() {
         assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
         assert!(!is_private_ip("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn generate_programmatic_snippet_handles_cjk() {
+        let body = "这是一个测试文档，包含中文字符和English混合内容。\n\n第二段包含更多中文。";
+        let snippet = generate_programmatic_snippet(body, "测试");
+        // Should not panic and should contain highlight markers
+        assert!(snippet.contains("=="));
+        assert!(snippet.contains("测试"));
+    }
+
+    #[test]
+    fn generate_programmatic_snippet_handles_multibyte_unicode() {
+        let body = "Straße und Überprüfung sind wichtig.";
+        let snippet = generate_programmatic_snippet(body, "Straße");
+        // Should not panic even with ß which lowercases to "ss"
+        assert!(!snippet.is_empty());
     }
 }

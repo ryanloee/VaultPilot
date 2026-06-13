@@ -178,6 +178,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             await ShowStartupFailureAsync(error, _backendClient.GetStderrTail());
+            await _backendClient.DisposeAsync();
             Close();
         }
     }

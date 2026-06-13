@@ -16,9 +16,11 @@ use models::{
     StructuredNoteDraft, ThinkingTrace, ThinkingTraceStep,
 };
 use storage::{
-    initialize_storage_with_context, list_notes_with_context, load_chat_state_with_context,
-    load_context_notes_with_context, load_note_with_context, ocr_image_text,
-    save_chat_state_with_context, save_note_with_images_with_context, StorageContext,
+    initialize_storage_async, list_notes_async, load_chat_state_async,
+    load_context_notes_async, ocr_image_text,
+    save_chat_state_async, save_note_with_images_async, StorageContext,
+    // Sync originals for load_recent_notes_for_overview helper
+    list_notes_with_context, load_note_with_context,
 };
 use tracing::instrument;
 use uuid::Uuid;
@@ -139,7 +141,7 @@ pub async fn compress_chat_history_with_context(
     history: Vec<ConversationTurn>,
     mut emit_status: impl FnMut(&str, String),
 ) -> Result<ConversationSummary, anyhow::Error> {
-    let settings = initialize_storage_with_context(context)?;
+    let settings = initialize_storage_async(context).await?;
     emit_status(
         "compressing",
         "Compressing earlier conversation context".to_string(),
@@ -213,8 +215,8 @@ pub async fn chat_with_ai_with_context(
     create_new_session: bool,
     mut emit_status: impl FnMut(&str, String),
 ) -> Result<ChatExchangeResult, anyhow::Error> {
-    let settings = initialize_storage_with_context(context)?;
-    let mut state = load_chat_state_with_context(context)?;
+    let settings = initialize_storage_async(context).await?;
+    let mut state = load_chat_state_async(context).await?;
     let images = image_paths.unwrap_or_default();
     let trimmed_question = question.trim().to_string();
     if trimmed_question.is_empty() && images.is_empty() {
@@ -262,7 +264,7 @@ pub async fn chat_with_ai_with_context(
 
     let assistant_turn = build_chat_turn("assistant", &answer.answer, Some(&answer), &[]);
     append_turn_to_session(&mut state, &active_session_id, assistant_turn)?;
-    state = save_chat_state_with_context(context, &state)?;
+    state = save_chat_state_async(context, &state).await?;
 
     let session = find_chat_session(&state, &active_session_id).ok_or_else(|| {
         anyhow::anyhow!("chat session not found after save: {}", active_session_id)
@@ -285,7 +287,7 @@ pub async fn ask_with_ai_with_context(
     model_override: Option<String>,
     mut emit_status: impl FnMut(&str, String),
 ) -> Result<GroundedAnswer, anyhow::Error> {
-    let mut settings = initialize_storage_with_context(context)?;
+    let mut settings = initialize_storage_async(context).await?;
     if let Some(model) = model_override.filter(|m| !m.trim().is_empty()) {
         settings.provider.model = model;
     }
@@ -298,7 +300,7 @@ pub async fn ask_with_ai_with_context(
     let effective_question = build_effective_question(&raw_question, &images);
     let history = history.unwrap_or_default();
     let session_memory_question = looks_like_session_memory_question(&raw_question);
-    let has_local_notes = !list_notes_with_context(context)?.is_empty();
+    let has_local_notes = !list_notes_async(context).await?.is_empty();
     let mut docs: Vec<NoteDocument> = Vec::new();
     let mut tool_results: Vec<ToolExecution> = Vec::new();
     let mut saved_note: Option<NoteMeta> = None;
@@ -397,12 +399,12 @@ pub async fn ask_with_ai_with_context(
                 }
 
                 emit_status("retrieving", format!("Searching notes: {}", query));
-                docs = load_context_notes_with_context(
+                docs = load_context_notes_async(
                     context,
                     &query,
                     &images,
                     limit.saturating_mul(3).max(8),
-                )?;
+                ).await?;
                 if docs.is_empty() {
                     emit_status(
                         "retrieving",
@@ -470,11 +472,11 @@ pub async fn ask_with_ai_with_context(
             }
             AssistantToolCall::SaveNote { draft } => {
                 emit_status("saving", "Saving generated note".to_string());
-                let saved = save_note_with_images_with_context(
+                let saved = save_note_with_images_async(
                     context,
                     draft_to_note_document(*draft),
                     &images,
-                )?;
+                ).await?;
                 let result = format!(
                     "save_note completed.
 Saved title: {}

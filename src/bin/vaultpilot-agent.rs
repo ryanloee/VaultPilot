@@ -12,9 +12,9 @@ use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
-    import_markdown_with_context, initialize_storage_with_context, list_notes_with_context,
-    load_chat_state_with_context, rebuild_index_with_context, save_chat_state_with_context,
-    save_settings_with_context, StorageContext,
+    import_markdown_async, initialize_storage_async, list_notes_async,
+    load_chat_state_async, rebuild_index_async, save_chat_state_async,
+    save_settings_async, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
@@ -239,28 +239,28 @@ async fn handle_request(
         "ping" => Ok(serde_json::json!({ "ok": true })),
         "getSettings" => {
             let mut settings =
-                initialize_storage_with_context(context).map_err(|e| e.to_string())?;
+                initialize_storage_async(context).await.map_err(|e| e.to_string())?;
             settings.provider = settings.provider.masked();
             serde_json::to_value(&settings).map_err(|e| e.to_string())
         }
         "saveSettings" => {
             let params: SaveSettingsParams = parse_params(&request.params)?;
-            serialize_result(save_settings_with_context(context, params.settings))
+            serialize_result(save_settings_async(context, params.settings).await)
         }
-        "loadChatState" => serialize_result(load_chat_state_with_context(context)),
+        "loadChatState" => serialize_result(load_chat_state_async(context).await),
         "saveChatState" => {
             let params: SaveChatStateParams = parse_params(&request.params)?;
-            serialize_result(save_chat_state_with_context(context, &params.state))
+            serialize_result(save_chat_state_async(context, &params.state).await)
         }
-        "listNotes" => serialize_result(list_notes_with_context(context)),
+        "listNotes" => serialize_result(list_notes_async(context).await),
         "importMarkdown" => {
             let params: ImportMarkdownParams = parse_params(&request.params)?;
-            serialize_result(import_markdown_with_context(context, &params.paths))
+            serialize_result(import_markdown_async(context, &params.paths).await)
         }
-        "rebuildIndex" => serialize_result(rebuild_index_with_context(context)),
+        "rebuildIndex" => serialize_result(rebuild_index_async(context).await),
         "readImagePreview" => {
             let params: PathParams = parse_params(&request.params)?;
-            let settings = initialize_storage_with_context(context).map_err(|e| e.to_string())?;
+            let settings = initialize_storage_async(context).await.map_err(|e| e.to_string())?;
             let vault_root = Path::new(&settings.vault_dir);
             let confined =
                 normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;
@@ -268,7 +268,7 @@ async fn handle_request(
         }
         "openVaultDirectory" => {
             let params: PathParams = parse_params(&request.params)?;
-            let settings = initialize_storage_with_context(context).map_err(|e| e.to_string())?;
+            let settings = initialize_storage_async(context).await.map_err(|e| e.to_string())?;
             let vault_root = Path::new(&settings.vault_dir);
             let confined =
                 normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;

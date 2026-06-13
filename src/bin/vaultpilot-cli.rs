@@ -23,7 +23,20 @@ use uuid::Uuid;
 
 use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::models::*;
-use vaultpilot_lib::storage::*;
+use vaultpilot_lib::storage::{
+    // Async wrappers (for use in async functions)
+    load_settings_async,
+    load_chat_state_async, save_chat_state_async,
+    search_notes_async, load_note_async,
+    // Sync originals (for use in sync helper functions)
+    initialize_storage_with_context, load_settings_with_context,
+    save_settings_with_context, load_chat_state_with_context,
+    save_chat_state_with_context,
+    search_notes_with_context, load_note_with_context, save_note_with_context,
+    delete_note_with_context, import_markdown_with_context,
+    export_note_markdown_with_context, export_all_notes_with_context,
+    rebuild_index_with_context, vault_export_with_context, StorageContext,
+};
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
     normalize_tool_path,
@@ -503,9 +516,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             "message": "The HTTP bridge is started by running `vaultpilot-cli serve` directly."
         })),
         Commands::Chat { action } => handle_chat(context, action).await,
-        Commands::Settings { action } => handle_settings(context, action),
-        Commands::Notes { action } => handle_notes(context, action),
-        Commands::Index { action } => handle_index(context, action),
+        Commands::Settings { action } => tokio::task::block_in_place(|| handle_settings(context, action)),
+        Commands::Notes { action } => tokio::task::block_in_place(|| handle_notes(context, action)),
+        Commands::Index { action } => tokio::task::block_in_place(|| handle_index(context, action)),
         Commands::Ask {
             question,
             image,
@@ -577,7 +590,7 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             to_json(&strip_cli_markdown_from_chat_result(result))
         }
         ChatActions::Sessions => {
-            let state = load_chat_state_with_context(context)?;
+            let state = load_chat_state_async(context).await?;
             let sessions = state
                 .sessions
                 .iter()
@@ -589,26 +602,26 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             }))
         }
         ChatActions::State => {
-            let state = load_chat_state_with_context(context)?;
+            let state = load_chat_state_async(context).await?;
             to_json(&strip_cli_markdown_from_chat_state(state))
         }
         ChatActions::New { title } => {
-            let mut state = load_chat_state_with_context(context)?;
+            let mut state = load_chat_state_async(context).await?;
             let session = new_cli_chat_session(title.as_deref());
             state.current_session_id = session.id.clone();
             state.sessions.insert(0, session.clone());
-            let saved = save_chat_state_with_context(context, &state)?;
+            let saved = save_chat_state_async(context, &state).await?;
             Ok(serde_json::json!({
                 "session": session,
                 "state": strip_cli_markdown_from_chat_state(saved)
             }))
         }
         ChatActions::Delete { id } => {
-            let mut state = load_chat_state_with_context(context)?;
+            let mut state = load_chat_state_async(context).await?;
             let original_len = state.sessions.len();
             state.sessions.retain(|session| session.id != *id);
             let deleted = state.sessions.len() != original_len;
-            let saved = save_chat_state_with_context(context, &state)?;
+            let saved = save_chat_state_async(context, &state).await?;
             Ok(serde_json::json!({
                 "deleted": deleted,
                 "id": id,
@@ -988,7 +1001,7 @@ async fn http_models(
     headers: HeaderMap,
 ) -> Result<Json<OpenAiModelsResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let settings = load_settings_with_context(&state.context).unwrap_or_default();
+    let settings = load_settings_async(&state.context).await.unwrap_or_default();
     let now = Utc::now().timestamp();
     Ok(Json(OpenAiModelsResponse {
         object: "list",
@@ -1014,7 +1027,7 @@ async fn http_chat_completions(
         ));
     }
 
-    let settings = load_settings_with_context(&state.context)
+    let settings = load_settings_async(&state.context).await
         .map_err(|error| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
     let requested_model = request.model.trim().to_string();
     let vault_root = PathBuf::from(&settings.vault_dir);
@@ -1560,7 +1573,7 @@ async fn handle_mcp_request(
                 .unwrap_or("");
             let limit: usize = 50;
             let offset = cursor.parse::<usize>().unwrap_or(0);
-            match search_notes_with_context(
+            match search_notes_async(
                 context,
                 SearchQuery {
                     text: String::new(),
@@ -1569,7 +1582,7 @@ async fn handle_mcp_request(
                     limit: Some(offset + limit),
                     ..Default::default()
                 },
-            ) {
+            ).await {
                 Ok(result) => {
                     let resources: Vec<Value> = result
                         .notes
@@ -1648,7 +1661,7 @@ async fn handle_mcp_request(
                     ))
                 }
             };
-            match load_note_with_context(context, note_id) {
+            match load_note_async(context, note_id).await {
                 Ok(note) => Some(McpResponse::ok(
                     id,
                     serde_json::json!({
@@ -1768,7 +1781,7 @@ async fn handle_mcp_request(
                             ))
                         }
                     };
-                    match load_note_with_context(context, note_id) {
+                    match load_note_async(context, note_id).await {
                         Ok(note) => vec![serde_json::json!({
                             "role": "user",
                             "content": {
@@ -1802,7 +1815,7 @@ async fn handle_mcp_request(
                         }
                     };
                     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5) as usize;
-                    match search_notes_with_context(
+                    match search_notes_async(
                         context,
                         SearchQuery {
                             text: topic.to_string(),
@@ -1811,7 +1824,7 @@ async fn handle_mcp_request(
                             limit: Some(limit),
                             ..Default::default()
                         },
-                    ) {
+                    ).await {
                         Ok(result) => {
                             let notes_text = result
                                 .notes

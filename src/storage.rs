@@ -2857,6 +2857,193 @@ pub fn vault_export_with_context(
     Ok(result)
 }
 
+// ---------------------------------------------------------------------------
+// Async wrappers – spawn_blocking for all public sync storage functions
+// These prevent synchronous SQLite / file I/O from blocking the Tokio runtime.
+// ---------------------------------------------------------------------------
+
+/// Spawn-blocking wrapper for [`initialize_storage_with_context`].
+pub async fn initialize_storage_async(ctx: &StorageContext) -> Result<AppSettings> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || initialize_storage_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`load_settings_with_context`].
+pub async fn load_settings_async(ctx: &StorageContext) -> Result<AppSettings> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || load_settings_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`save_settings_with_context`].
+pub async fn save_settings_async(ctx: &StorageContext, settings: AppSettings) -> Result<AppSettings> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || save_settings_with_context(&ctx, settings))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`load_chat_state_with_context`].
+pub async fn load_chat_state_async(ctx: &StorageContext) -> Result<ChatState> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || load_chat_state_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`save_chat_state_with_context`].
+pub async fn save_chat_state_async(ctx: &StorageContext, state: &ChatState) -> Result<ChatState> {
+    let ctx = ctx.clone();
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || save_chat_state_with_context(&ctx, &state))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`list_notes_with_context`].
+pub async fn list_notes_async(ctx: &StorageContext) -> Result<Vec<NoteMeta>> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || list_notes_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`search_notes_with_context`].
+pub async fn search_notes_async(ctx: &StorageContext, query: SearchQuery) -> Result<SearchResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || search_notes_with_context(&ctx, query))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`load_note_with_context`].
+pub async fn load_note_async(ctx: &StorageContext, note_id: &str) -> Result<NoteDocument> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    tokio::task::spawn_blocking(move || load_note_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`save_note_with_context`].
+pub async fn save_note_async(ctx: &StorageContext, note: NoteDocument) -> Result<NoteDocument> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || save_note_with_context(&ctx, note))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`save_note_with_images_with_context`].
+pub async fn save_note_with_images_async(
+    ctx: &StorageContext,
+    note: NoteDocument,
+    image_paths: &[String],
+) -> Result<NoteDocument> {
+    let ctx = ctx.clone();
+    let image_paths = image_paths.to_vec();
+    tokio::task::spawn_blocking(move || save_note_with_images_with_context(&ctx, note, &image_paths))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`delete_note_with_context`].
+pub async fn delete_note_async(ctx: &StorageContext, note_id: &str) -> Result<bool> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    tokio::task::spawn_blocking(move || delete_note_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`import_markdown_with_context`].
+pub async fn import_markdown_async(ctx: &StorageContext, paths: &[String]) -> Result<ImportResult> {
+    let ctx = ctx.clone();
+    let paths = paths.to_vec();
+    tokio::task::spawn_blocking(move || import_markdown_with_context(&ctx, &paths))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`export_note_markdown_with_context`].
+pub async fn export_note_markdown_async(ctx: &StorageContext, note_id: &str) -> Result<(String, String)> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    tokio::task::spawn_blocking(move || export_note_markdown_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`export_all_notes_with_context`].
+pub async fn export_all_notes_async(ctx: &StorageContext, output_dir: &Path) -> Result<ExportResult> {
+    let ctx = ctx.clone();
+    let output_dir = output_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || export_all_notes_with_context(&ctx, &output_dir))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`rebuild_index_with_context`].
+pub async fn rebuild_index_async(ctx: &StorageContext) -> Result<IndexStats> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || rebuild_index_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`load_context_notes_with_context`].
+pub async fn load_context_notes_async(
+    ctx: &StorageContext,
+    question: &str,
+    image_paths: &[String],
+    limit: usize,
+) -> Result<Vec<NoteDocument>> {
+    let ctx = ctx.clone();
+    let question = question.to_owned();
+    let image_paths = image_paths.to_vec();
+    tokio::task::spawn_blocking(move || {
+        load_context_notes_with_context(&ctx, &question, &image_paths, limit)
+    })
+    .await
+    .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`search_candidate_notes_with_context`].
+pub async fn search_candidate_notes_async(
+    ctx: &StorageContext,
+    question: &str,
+    image_paths: &[String],
+    limit: usize,
+) -> Result<Vec<NoteMeta>> {
+    let ctx = ctx.clone();
+    let question = question.to_owned();
+    let image_paths = image_paths.to_vec();
+    tokio::task::spawn_blocking(move || {
+        search_candidate_notes_with_context(&ctx, &question, &image_paths, limit)
+    })
+    .await
+    .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`vault_export_with_context`].
+pub async fn vault_export_async(ctx: &StorageContext, output_path: &Path) -> Result<VaultExportResult> {
+    let ctx = ctx.clone();
+    let output_path = output_path.to_path_buf();
+    tokio::task::spawn_blocking(move || vault_export_with_context(&ctx, &output_path))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`ocr_image_text`].
+pub async fn ocr_image_text_async(path: &Path) -> Result<String> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || ocr_image_text(&path))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

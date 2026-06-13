@@ -1052,9 +1052,10 @@ async fn http_chat_completions(
         ));
     }
 
-    let settings = load_settings_async(&state.context)
-        .await
-        .map_err(|error| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &error.to_string()))?;
+    let settings = load_settings_async(&state.context).await.map_err(|error| {
+        tracing::warn!("http_chat_completions: failed to load settings: {error}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load settings")
+    })?;
     let requested_model = request.model.trim().to_string();
     let vault_root = PathBuf::from(&settings.vault_dir);
     let (question, history, image_paths) = openai_request_to_dialog(request, &vault_root)
@@ -1073,7 +1074,10 @@ async fn http_chat_completions(
         |_, _| (),
     )
     .await
-    .map_err(|error| openai_error(StatusCode::BAD_GATEWAY, &error.to_string()))?;
+    .map_err(|error| {
+        tracing::warn!("http_chat_completions: upstream AI service error: {error}");
+        openai_error(StatusCode::BAD_GATEWAY, "Upstream service error")
+    })?;
 
     let prompt_tokens = answer
         .context_status

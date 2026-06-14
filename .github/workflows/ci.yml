@@ -147,8 +147,5 @@ jobs:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('native/VaultPilot.WinUI/VaultPilot.WinUI.csproj') }}
 
-      - name: Restore NuGet packages
-        run: dotnet restore native/VaultPilot.WinUI/VaultPilot.WinUI.csproj
-
       - name: Build WinUI project
-        run: dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --configuration Release --no-restore
+        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /restore /p:Configuration=Release /p:Platform=x64

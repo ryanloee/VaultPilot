@@ -57,6 +57,7 @@ public sealed partial class MainWindow
         }
         catch (Exception error)
         {
+            _updateCheckStarted = false; // Allow retry on transient failure
             _updateDownloadPercent = -1;
             LogStartup($"Update check failed: {error}");
             UpdateStatusBar("warning", "\u66f4\u65b0\u68c0\u67e5\u5931\u8d25", LocalizeError(error.Message));

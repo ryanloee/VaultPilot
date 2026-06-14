@@ -53,8 +53,8 @@ public sealed partial class MainWindow : Window
     private const string MarkdownCloseTag = "</vp-markdown>";
     private readonly BackendClient _backendClient;
     private AppWindow? _appWindow;
-    // Cached brushes to avoid per-call allocations (see #130)
-    // Status colors now use theme-aware ThemeResource brushes (#57)
+    // Theme-aware status brushes — looked up from ThemeResource each call so they
+    // automatically track theme changes (light/dark).  The dictionary lookup is O(1).
     private static Brush BrushRed => GetThemeBrush("StatusErrorBrush");
     private static Brush BrushOrange => GetThemeBrush("StatusWarningBrush");
     private static Brush BrushGreen => GetThemeBrush("StatusSuccessBrush");

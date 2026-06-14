@@ -195,15 +195,23 @@ public sealed class BackendClient : IAsyncDisposable
         {
             if (!_isDisposed)
             {
-                var reconnected = await TryReconnectWithRetryAsync();
-                if (reconnected)
+                try
                 {
-                    Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
-                    _degradedMode = false;
-                    SetHealthCheckInterval(HealthCheckInterval);
+                    var reconnected = await TryReconnectWithRetryAsync();
+                    if (reconnected)
+                    {
+                        Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
+                        _degradedMode = false;
+                        SetHealthCheckInterval(HealthCheckInterval);
+                    }
+                    else
+                    {
+                        OnConsecutiveHealthCheckFailure();
+                    }
                 }
-                else
+                catch (Exception reconnectEx)
                 {
+                    Trace.TraceError($"OnHealthCheckTick reconnect failed: {reconnectEx.Message}");
                     OnConsecutiveHealthCheckFailure();
                 }
             }

@@ -2847,6 +2847,16 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
         }
     }
 
+    // Checkpoint WAL before copying to ensure backup is consistent.
+    // In WAL mode, committed transactions may reside in the -wal file
+    // and won't be included in a plain file copy.
+    if let Ok(checkpoint_conn) = Connection::open(db_path) {
+        // TRUNCATE mode: flush WAL into main DB and truncate WAL file
+        if let Err(e) = checkpoint_conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            tracing::warn!(error = %e, "WAL checkpoint before backup failed, proceeding with copy");
+        }
+    }
+
     // Copy current database to .bak
     fs::copy(db_path, &current_bak).with_context(|| {
         format!(

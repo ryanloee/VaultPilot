@@ -156,7 +156,6 @@
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #451: fix: add build and test steps to winui_build CI (#445) — 待合并（取代 #450，修正无效 workload install）
 
 
 ## 已知阻塞项
@@ -315,32 +314,22 @@
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 循环#91
+- 循环编号: 修复轮#97
 - 本轮时间: 2026-06-14
-- 讨论重点方向: 修复循环#90 审查发现的 3 个 BUG + CI 修复
-- 项目状态: **0 open issues, 0 open PR, 187 已合并 PR, 0 阻塞项**
-- 修复目标: #453, #454, #455, #445
-- 审查目标: PR #452 (winui-build CI)
+- 修复目标: #464 (CRITICAL BUG), #462 (SECURITY), #463 (BUG)
 - 修复结果:
-  - PR #456 ✅ 已合并 — 3 个 BUG 修复（#453 + #454 + #455）
-  - #445 ✅ 已关闭 — winui_build CI 修复已在 main 上通过（MSBuild /restore 方案）
-  - PR #452, #457 关闭 — 已被 main 上的直接提交取代
-  - 项目恢复 0 open issue + 0 open PR 状态，累计 187 已合并 PR
+  - PR #465 ✅ 已创建 — 3 个 issue 一次性修复（#464 + #462 + #463）
+  - #464: AppendInlineMarkdown forward-progress guard — 防止未匹配标记导致无限循环
+  - #462: ProviderConfig.ToString() 重写，ApiKey 字段遮蔽为 [REDACTED]
+  - #463: read_file_result head/tail 重叠时仅输出 head 部分，避免行重复
+  - CI: cargo fmt ✅, cargo clippy ✅, cargo test ✅ (353+ tests)
+  - 项目状态: **0 open issue（待 PR 合并后关闭）, 1 open PR, 188 已合并 PR, 0 阻塞项**
 
 ## 决策记录
 - 2026-06-14 [循环#91]: PR #456 一次性修复 3 个 BUG（#453 按钮禁用、#454 CancellationToken、#455 FTS5 日志），单 PR 多 issue 策略验证成功
 - 2026-06-14 [循环#91]: winui_build CI 最终方案：MSBuild /restore 替代 dotnet restore，msbuild /t:VSTest 替代 dotnet test，windows-2022 runner
 - 2026-06-14 [循环#91]: PR #452 多次迭代失败后，CI 修复通过 main 直接提交完成（非 PR 合并路径）
 
-## 项目健康度快照
-
-| 指标 | 循环#91 |
-|------|---------|
-| Open issues 总数 | 0 ✅ |
-| Open Bug 数 | 0 ✅ |
-| Open Security 数 | 0 ✅ |
-| Open Performance 数 | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ |
-| 已合并 PR | 187 |
-| 进行中 PR | 0 ✅ |
-| 阻塞项 | 0 ✅ |
+- #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
+- #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
+- #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)

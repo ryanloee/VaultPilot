@@ -3007,7 +3007,7 @@ public sealed partial class MainWindow : Window
                 Content = "打开设置",
                 HorizontalAlignment = HorizontalAlignment.Center,
             };
-            settingsBtn.Click += async (_, _) => await OnSettingsClicked(settingsBtn, new RoutedEventArgs());
+            settingsBtn.Click += (_, _) => _ = OnSettingsClicked(settingsBtn, new RoutedEventArgs());
             container.Children.Add(settingsBtn);
         }
 

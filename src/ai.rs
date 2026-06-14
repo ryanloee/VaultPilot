@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 use std::sync::Mutex;
-use std::{collections::HashSet, fs, path::Path, time::Duration};
+use std::{collections::HashSet, path::Path, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -1086,7 +1086,7 @@ async fn send_request_with_temperature(
 
     validate_base_url(&provider.base_url).await?;
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);
-    let content_blocks = build_input_blocks(prompt, image_paths)?;
+    let content_blocks = build_input_blocks(prompt, image_paths).await?;
 
     let payload = AnthropicRequest {
         model: &provider.model,
@@ -1216,7 +1216,10 @@ fn format_transport_error(error: &reqwest::Error, endpoint: &str) -> String {
     )
 }
 
-fn build_input_blocks(prompt: &str, image_paths: &[String]) -> Result<Vec<AnthropicInputBlock>> {
+async fn build_input_blocks(
+    prompt: &str,
+    image_paths: &[String],
+) -> Result<Vec<AnthropicInputBlock>> {
     let mut blocks = vec![AnthropicInputBlock::Text {
         text: prompt.to_string(),
     }];
@@ -1225,8 +1228,9 @@ fn build_input_blocks(prompt: &str, image_paths: &[String]) -> Result<Vec<Anthro
         let media_type = detect_image_media_type(path)?;
         // Guard against OOM from excessively large image files (issue #141)
         const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
-        let metadata =
-            fs::metadata(path).with_context(|| format!("failed to stat image: {path}"))?;
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .with_context(|| format!("failed to stat image: {path}"))?;
         if metadata.len() > MAX_IMAGE_SIZE {
             return Err(anyhow!(
                 "image file too large: {} ({} MB > 20 MB limit)",
@@ -1234,7 +1238,9 @@ fn build_input_blocks(prompt: &str, image_paths: &[String]) -> Result<Vec<Anthro
                 metadata.len() / (1024 * 1024)
             ));
         }
-        let data = fs::read(path).with_context(|| format!("failed to read image: {path}"))?;
+        let data = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("failed to read image: {path}"))?;
         blocks.push(AnthropicInputBlock::Image {
             source: AnthropicImageSource {
                 kind: "base64".to_string(),

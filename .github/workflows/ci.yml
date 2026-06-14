@@ -75,15 +75,10 @@ jobs:
       - name: Set DOTNET_ROOT
         shell: pwsh
         run: |
-          $installDir = "$env:LOCALAPPDATA\Microsoft\dotnet"
-          if (Test-Path "$installDir\dotnet.exe") {
-            Write-Host "Found setup-dotnet SDK at: $installDir"
-            echo "DOTNET_ROOT=$installDir" >> $env:GITHUB_ENV
-            echo "$installDir" >> $env:GITHUB_PATH
-          } else {
-            Write-Host "setup-dotnet path not found, searching..."
-            Get-ChildItem "C:\Users\*\.dotnet" -ErrorAction SilentlyContinue | Select-Object FullName
-          }
+          Write-Host "=== Installed SDKs ==="
+          Get-ChildItem "C:\Program Files\dotnet\sdk\" -Directory -ErrorAction SilentlyContinue | Select-Object Name
+          Write-Host "=== dotnet version ==="
+          dotnet --version
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

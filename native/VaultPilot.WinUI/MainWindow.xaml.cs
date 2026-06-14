@@ -244,7 +244,8 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                _settings ??= await _backendClient.SendAsync<AppSettings>("getSettings", new { });
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                _settings ??= await _backendClient.SendAsync<AppSettings>("getSettings", new { }, cts.Token);
             }
             catch (Exception loadError)
             {
@@ -285,7 +286,8 @@ public sealed partial class MainWindow : Window
 
             if (dialog.UpdatedSettings is { } updated)
             {
-                _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated });
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated }, cts.Token);
                 RefreshVaultSummary();
                 RefreshContextStatus();
                 ApplyAutoWakeSettings();
@@ -306,8 +308,9 @@ public sealed partial class MainWindow : Window
             RebuildButton.IsEnabled = false;
             UpdateStatusBar("info", "正在重建索引", "正在扫描知识库...");
 
-            var stats = await _backendClient.SendAsync<IndexStats>("rebuildIndex", new { });
-            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { });
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var stats = await _backendClient.SendAsync<IndexStats>("rebuildIndex", new { }, cts.Token);
+            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
             _noteCount = notes?.Count ?? 0;
             RefreshVaultSummary();
 
@@ -345,8 +348,9 @@ public sealed partial class MainWindow : Window
             UpdateStatusBar("info", "正在导入", $"正在导入 {files.Count} 个 Markdown 文件...");
 
             var paths = files.Select(file => file.Path).ToArray();
-            var result = await _backendClient.SendAsync<ImportResult>("importMarkdown", new { paths });
-            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { });
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var result = await _backendClient.SendAsync<ImportResult>("importMarkdown", new { paths }, cts.Token);
+            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
             _noteCount = notes?.Count ?? 0;
             RefreshVaultSummary();
 
@@ -809,7 +813,8 @@ public sealed partial class MainWindow : Window
         var savedNote = _lastAiAnswer.SavedNote;
         AppendMessage("系统", $"已保存笔记：{savedNote.Title}");
         ScrollToLatest();
-        var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { });
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
         _noteCount = notes?.Count ?? 0;
         RefreshVaultSummary();
 
@@ -2064,7 +2069,17 @@ public sealed partial class MainWindow : Window
         };
 
         ToolTipService.SetToolTip(chipBorder, $"{attachment.Name}\n单击预览，右键移除");
-        chipBorder.Tapped += async (_, _) => await ShowImagePreviewDialogAsync(attachment, removable: true);
+        chipBorder.Tapped += async (_, _) =>
+        {
+            try
+            {
+                await ShowImagePreviewDialogAsync(attachment, removable: true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Image preview failed: {ex.Message}");
+            }
+        };
 
         return chipBorder;
     }
@@ -2078,7 +2093,17 @@ public sealed partial class MainWindow : Window
             Stretch = Stretch.UniformToFill,
             Opacity = 0.2
         };
-        image.Tapped += async (_, _) => await ShowImagePreviewDialogAsync(attachment);
+        image.Tapped += async (_, _) =>
+        {
+            try
+            {
+                await ShowImagePreviewDialogAsync(attachment);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Image preview failed: {ex.Message}");
+            }
+        };
 
         var stack = new StackPanel
         {
@@ -2177,7 +2202,8 @@ public sealed partial class MainWindow : Window
 
     private async Task<BitmapImage?> LoadPreviewBitmapAsync(string path)
     {
-        var dataUrl = await _backendClient.SendAsync<string>("readImagePreview", new { path });
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var dataUrl = await _backendClient.SendAsync<string>("readImagePreview", new { path }, cts.Token);
         if (string.IsNullOrWhiteSpace(dataUrl))
         {
             return null;
@@ -3101,13 +3127,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var summary = await _backendClient.SendAsync<ConversationSummary>(
             "compressChatHistory",
             new
             {
                 summary = session.Summary,
                 history = compressibleTurns
-            });
+            },
+            cts.Token);
         if (summary is null)
         {
             return;
@@ -3387,9 +3415,11 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var saved = await _backendClient.SendAsync<ChatState>(
                 "saveChatState",
-                new { state = snapshot });
+                new { state = snapshot },
+                cts.Token);
 
             if (saved is not null)
             {

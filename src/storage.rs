@@ -38,6 +38,8 @@ type PooledConnection = r2d2::PooledConnection<SqliteConnectionManager>;
 /// Uses a random UUID suffix for the temp file to prevent concurrent writers
 /// from racing on the same deterministic temp filename.
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
+
     let tmp_name = format!(
         "{}.{}.tmp",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp"),
@@ -47,24 +49,28 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     // Create the temp file, then restrict permissions *before* writing any
     // sensitive data so that other users can never read the contents, even
     // in the brief window between file creation and rename (issue #186).
+    //
+    // We keep the file handle open and write through it to avoid a TOCTOU
+    // race between dropping the handle and re-opening via fs::write (#475).
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp_path)?;
+    #[cfg(unix)]
     {
-        use std::fs::OpenOptions;
-        let _file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            _file.set_permissions(perms)?;
-        }
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        file.set_permissions(perms)?;
     }
-    fs::write(&tmp_path, data).inspect_err(|_| {
+    file.write_all(data).inspect_err(|_| {
         // Clean up the temp file on write failure to prevent disk accumulation
         let _ = fs::remove_file(&tmp_path);
     })?;
+    file.sync_all().inspect_err(|_| {
+        let _ = fs::remove_file(&tmp_path);
+    })?;
+    drop(file);
     fs::rename(&tmp_path, path)?;
     Ok(())
 }

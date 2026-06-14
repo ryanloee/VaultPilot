@@ -49,7 +49,7 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
-    normalize_tool_path,
+    normalize_tool_path, sanitize_error,
 };
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -1657,7 +1657,7 @@ async fn handle_mcp_request(
                 Err(e) => Some(McpResponse::error(
                     id,
                     -32603,
-                    format!("failed to list resources: {e}"),
+                    sanitize_error(&format!("failed to list resources: {e}")),
                     None,
                 )),
             }
@@ -1719,7 +1719,7 @@ async fn handle_mcp_request(
                 Err(e) => Some(McpResponse::error(
                     id,
                     -32603,
-                    format!("failed to read resource: {e}"),
+                    sanitize_error(&format!("failed to read resource: {e}")),
                     None,
                 )),
             }
@@ -1840,7 +1840,7 @@ async fn handle_mcp_request(
                             return Some(McpResponse::error(
                                 id,
                                 -32603,
-                                format!("failed to load note: {e}"),
+                                sanitize_error(&format!("failed to load note: {e}")),
                                 None,
                             ))
                         }
@@ -1893,7 +1893,7 @@ async fn handle_mcp_request(
                             return Some(McpResponse::error(
                                 id,
                                 -32603,
-                                format!("failed to search notes: {e}"),
+                                sanitize_error(&format!("failed to search notes: {e}")),
                                 None,
                             ))
                         }
@@ -2383,7 +2383,9 @@ fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
     }
     let args: Args = match serde_json::from_value(arguments) {
         Ok(a) => a,
-        Err(e) => return mcp_tool_error(format!("invalid chat.new arguments: {e}")),
+        Err(e) => {
+            return mcp_tool_error(sanitize_error(&format!("invalid chat.new arguments: {e}")))
+        }
     };
     match load_chat_state_with_context(context) {
         Ok(mut state) => {
@@ -2410,7 +2412,11 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
     }
     let args: Args = match serde_json::from_value(arguments) {
         Ok(a) => a,
-        Err(e) => return mcp_tool_error(format!("invalid chat.delete arguments: {e}")),
+        Err(e) => {
+            return mcp_tool_error(sanitize_error(&format!(
+                "invalid chat.delete arguments: {e}"
+            )))
+        }
     };
     match load_chat_state_with_context(context) {
         Ok(mut state) => {
@@ -2469,7 +2475,11 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
 fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
     let note: NoteDocument = match serde_json::from_value(arguments) {
         Ok(n) => n,
-        Err(e) => return mcp_tool_error(format!("invalid notes.create arguments: {e}")),
+        Err(e) => {
+            return mcp_tool_error(sanitize_error(&format!(
+                "invalid notes.create arguments: {e}"
+            )))
+        }
     };
     match save_note_with_context(context, note) {
         Ok(saved) => mcp_tool_success(
@@ -2537,7 +2547,7 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
     let paths: Vec<String> = match arguments.get("paths") {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(p) => p,
-            Err(e) => return mcp_tool_error(format!("invalid paths: {e}")),
+            Err(e) => return mcp_tool_error(sanitize_error(&format!("invalid paths: {e}"))),
         },
         None => return mcp_tool_error("notes.import requires 'paths' parameter".to_string()),
     };

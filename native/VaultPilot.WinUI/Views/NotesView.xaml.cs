@@ -120,6 +120,7 @@ public sealed partial class NotesView : UserControl
             _selectedNote = item.Meta;
             DeleteNoteButton.IsEnabled = true;
             _loadDetailCts?.Cancel();
+            _loadDetailCts?.Dispose();
             _loadDetailCts = new CancellationTokenSource();
             _ = LoadNoteDetailAsync(item.Meta, _loadDetailCts.Token);
         }
@@ -277,9 +278,12 @@ public sealed partial class NotesView : UserControl
         }
     }
 
-    private static void ShowError(string title, Exception error)
+    private void ShowError(string title, Exception error)
     {
         System.Diagnostics.Debug.WriteLine($"NotesView error [{title}]: {error.Message}");
+        ErrorInfoBar.Title = title;
+        ErrorInfoBar.Message = error.Message;
+        ErrorInfoBar.IsOpen = true;
     }
 }
 

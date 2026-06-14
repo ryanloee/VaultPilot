@@ -148,7 +148,27 @@ jobs:
         run: dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
 
       - name: Build WinUI
+        id: build-winui
         run: dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release -p:Platform=x64
+        continue-on-error: true
+
+      - name: Diagnose XamlCompiler errors
+        if: steps.build-winui.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $outputJson = "native/VaultPilot.WinUI/obj/x64/Release/net8.0-windows10.0.19041.0/output.json"
+          if (Test-Path $outputJson) {
+            Get-Content $outputJson -Raw
+          } else {
+            Write-Host "output.json not found"
+            Get-ChildItem "native/VaultPilot.WinUI/obj/x64/Release/net8.0-windows10.0.19041.0/" -ErrorAction SilentlyContinue
+          }
+
+      - name: Fail if build failed
+        shell: pwsh
+        run: |
+          $buildResult = (dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release -p:Platform=x64 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Run C# tests
         run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"

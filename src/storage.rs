@@ -545,7 +545,7 @@ pub fn search_notes_with_context(
     Ok(SearchResult { notes, total })
 }
 
-fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
+pub fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
     let path = Path::new(&meta.path);
     let raw =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;

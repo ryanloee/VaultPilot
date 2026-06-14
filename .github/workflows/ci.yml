@@ -60,7 +60,7 @@ jobs:
 
   winui_build:
     name: winui-build
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       DOTNET_MULTILEVEL_LOOKUP: 0
     steps:

@@ -22,7 +22,7 @@ use storage::{
     list_notes_with_context,
     load_chat_state_async,
     load_context_notes_async,
-    load_note_with_context,
+    load_note_body_from_meta,
     ocr_image_text_async,
     save_chat_state_async,
     save_note_with_images_async,
@@ -1067,7 +1067,7 @@ fn load_recent_notes_for_overview(
     let notes = list_notes_with_context(context)?;
     let mut docs = Vec::new();
     for note in notes.into_iter().take(limit) {
-        if let Ok(doc) = load_note_with_context(context, &note.id) {
+        if let Ok(doc) = load_note_body_from_meta(&note) {
             docs.push(doc);
         }
     }

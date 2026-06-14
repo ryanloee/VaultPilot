@@ -152,12 +152,16 @@
 - #436: query_like_note_metas LIKE 子句单词上限 .take(20) (PR #437 已合并)
 - #447: CheckForAppUpdatesAsync 瞬态失败后重置 _updateCheckStarted (PR #448 已合并)
 - #446: ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源 (PR #449 已合并)
+- #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
+- #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
+- #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)
+- #466: IPv6 SSRF bypass — unique-local fd00::/8 + IPv4-mapped ::ffff:x.x.x.x (PR #469 已合并)
+- #467: C# ProviderConfig 添加 MaxOutputTokens/ProviderType 字段 (PR #468 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-
-
+（无）
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
 
@@ -300,36 +304,42 @@
 
 | 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
 |------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 |
-|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|
-| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 |
-| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 |
-| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 |
-| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 |
+|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|
+| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 3 |
+| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 2 |
+| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 | 190 | 190 |
+| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 0 ✅ |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 修复轮#97
+- 循环编号: 讨论轮#101
 - 本轮时间: 2026-06-14
-- 修复目标: #464 (CRITICAL BUG), #462 (SECURITY), #463 (BUG)
-- 修复结果:
-  - PR #465 ✅ 已创建 — 3 个 issue 一次性修复（#464 + #462 + #463）
-  - #464: AppendInlineMarkdown forward-progress guard — 防止未匹配标记导致无限循环
-  - #462: ProviderConfig.ToString() 重写，ApiKey 字段遮蔽为 [REDACTED]
-  - #463: read_file_result head/tail 重叠时仅输出 head 部分，避免行重复
-  - CI: cargo fmt ✅, cargo clippy ✅, cargo test ✅ (353+ tests)
-  - 项目状态: **0 open issue（待 PR 合并后关闭）, 1 open PR, 188 已合并 PR, 0 阻塞项**
+- 讨论重点: 全代码库深度审查（Rust 9 文件 15K+ 行 + C# 21 文件）
+- 审查发现:
+  - Rust 后端: 4 个 MEDIUM（TOCTOU race, N+1 查询, 全表扫描, settings 缓存无 TTL）+ 4 个 LOW + 4 个 INFO
+  - C# 前端: 3 个 HIGH（SaveChatState 竞态, _chatStateLock Dispose, ShutdownAsync 同步不一致）+ 5 个 MEDIUM + 5 个 LOW
+  - 已排除与已合并 PR 重叠的发现
+- 创建 issue:
+  - #470 [BUG/HIGH] SaveChatStateAsync 竞态覆盖并发状态修改
+  - #471 [BUG/MEDIUM] _chatStateLock ShutdownAsync Dispose 导致 ObjectDisposedException
+  - #472 [PERF/MEDIUM] load_recent_notes_for_overview N+1 查询
+- 项目状态: **3 open issue, 0 open PR, 190 已合并 PR, 0 阻塞项**
 
 ## 决策记录
 - 2026-06-14 [循环#91]: PR #456 一次性修复 3 个 BUG（#453 按钮禁用、#454 CancellationToken、#455 FTS5 日志），单 PR 多 issue 策略验证成功
 - 2026-06-14 [循环#91]: winui_build CI 最终方案：MSBuild /restore 替代 dotnet restore，msbuild /t:VSTest 替代 dotnet test，windows-2022 runner
 - 2026-06-14 [循环#91]: PR #452 多次迭代失败后，CI 修复通过 main 直接提交完成（非 PR 合并路径）
-
-- #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
-- #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
-- #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)
+- 2026-06-14 [讨论轮#98]: 代码库进入极高质量阶段（188 merged PR），仅发现 2 个新 issue（1 SECURITY + 1 BUG）
+- 2026-06-14 [讨论轮#98]: IPv6 SSRF 绕过（#466）优先级高于 C# 字段对齐（#467），因为安全问题可被外部利用
+- 2026-06-14 [讨论轮#98]: send_request_with_temperature 的 Anthropic/OpenAI 格式问题记录但暂不创建 issue（低优先级，多数 proxy 兼容）
+- 2026-06-14 [PR审核轮#100]: 审核并合并 2 个 PR (#469, #468)，CI 5/6 通过（cargo audit 预存在 CVE），累计 190 已合并 PR
+- 2026-06-14 [PR审核轮#100]: 项目恢复 0 open issue + 0 open PR 状态，代码库持续保持极高质量
+- 2026-06-14 [讨论轮#101]: 全代码库深度审查（Rust 9 文件 15K+ 行 + C# 21 文件），Rust 后端质量优秀（0 unsafe、0 生产 unwrap、参数化 SQL、完整 SSRF/路径穿越/prompt 注入防护）
+- 2026-06-14 [讨论轮#101]: C# 前端发现 3 个 HIGH 问题（SaveChatState 竞态、_chatStateLock Dispose、ShutdownAsync 同步不一致），均为 await 交错/关闭顺序的边缘场景
+- 2026-06-14 [讨论轮#101]: 创建 3 个 issue（#470 SaveChatState 竞态, #471 _chatStateLock Dispose, #472 N+1 查询），选择标准：影响数据完整性 > 稳定性 > 性能

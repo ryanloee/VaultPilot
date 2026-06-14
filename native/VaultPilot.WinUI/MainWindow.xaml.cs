@@ -1075,7 +1075,6 @@ public sealed partial class MainWindow : Window
         TryReleaseWindowFileDropHook();
         await SaveChatStateAsync();
         await _backendClient.DisposeAsync();
-        _chatStateLock.Dispose();
         PruneClipboardImages();
     }
 

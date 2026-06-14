@@ -138,15 +138,14 @@
 - #404: BUG — escape_fts5_term 仅保留 ASCII，Unicode 字母被丢弃 (PR #407 已合并)
 - #405: SECURITY — atomic_write File::create 到 set_permissions TOCTOU 窗口 (PR #407 已合并)
 - #408: NotesView.OnDeleteNoteClicked async void try-catch 保护 (PR #409 已合并)
+- #423: BackendClient.DisposeAsync _readerCts.Cancel 前置于 FailPending (PR #427 已合并)
+- #424: atomic_write 失败时清理临时文件 inspect_err (PR #426 已合并)
+- #425: 剪贴板图片文件名随机后缀防冲突 (PR #428 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- #423 (HIGH BUG — BackendClient.DisposeAsync FailPending 竞态)
-- #424 (HIGH BUG — atomic_write 临时文件泄漏)
-- #425 (MEDIUM BUG — 剪贴板图片文件名冲突)
-
-
+（无 — 所有进行中 PR 已审核合并）
 
 
 ## 已知阻塞项
@@ -279,7 +278,6 @@
 - 2026-06-14 [循环#66]: 全代码库深度审查（Rust 4 HIGH + 8 MEDIUM, C# 3 CRITICAL + 6 HIGH + 12 MEDIUM），创建 3 个 issue
 - 2026-06-14 [循环#66]: 排除 4 个与已合并 PR 重叠的发现（#398, #399, #393, #106/#206），确保 issue 不重复
 - 2026-06-14 [循环#69]: 项目进入极高质量阶段，168 个已合并 PR 后仅发现 1 个 LOW severity BUG，代码库接近"零缺陷"状态
-- 2026-06-14 [循环#75]: OpenAI 请求/响应格式不兼容（CRITICAL）与 #144 完全重叠，repo owner 已关闭为 deferred（需架构设计文档），不重复创建
 - 2026-06-14 [循环#71]: 全代码库深度审查（Rust 9 文件 15K+ 行 + C# 10 文件），发现 2 个 SECURITY + 1 个 BUG issue
 - 2026-06-14 [循环#71]: Rust 后端安全实践优秀（0 unsafe、0 生产 unwrap、参数化 SQL、路径穿越防护、prompt 注入防护），但存在 CORS 过度开放和密钥派生弱点
 - 2026-06-14 [循环#71]: C# 前端所有 22 个 async void handler 均已正确包装 try-catch，无 .Result/.Wait() 同步阻塞
@@ -289,37 +287,28 @@
 
 | 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
 |------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 |
-|------|---------|-----------|---------|
-| Open issues 总数 | 3 | 0 ✅ | 3 |
-| Open Bug 数 | 1 | 0 ✅ | 3 |
-| Open Security 数 | 1 | 0 ✅ | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 172 | 174 | 174 |
-| 进行中 PR | 0 | 0 | 0 |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 |
+|------|---------|-----------|---------|-------------|
+| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ |
+| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ |
+| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 172 | 174 | 174 | 177 |
+| 进行中 PR | 0 | 0 | 3 | 0 ✅ |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 循环#75
+- 循环编号: PR审核轮#77
 - 本轮时间: 2026-06-14
-- 项目状态: **3 open issue, 0 open PR, 174 已合并 PR, 0 阻塞项**
-- 讨论重点: 三路并行深度代码审查（Rust 后端 + C# 前端 + CI/测试）
-- 审查发现:
-  - Rust 后端: 1 CRITICAL（OpenAI 格式，#144 已 deferred）+ 4 HIGH + 5 MEDIUM + 7 LOW
-  - C# 前端: 3 HIGH + 6 MEDIUM + 12 LOW
-  - CI: cargo test 362 passed ✅, cargo clippy clean ✅, dotnet SDK 未安装
-- 创建的 issue:
-  - #423 (HIGH BUG — BackendClient.DisposeAsync FailPending 在 _readerCts 取消前调用)
-  - #424 (HIGH BUG — atomic_write 临时文件泄漏)
-  - #425 (MEDIUM BUG — 剪贴板图片文件名冲突)
-- 修复目标:
-  - #423 (HIGH — BackendClient dispose 竞态)
-  - #424 (HIGH — atomic_write 临时文件泄漏)
-  - #425 (MEDIUM — 剪贴板文件名冲突)
-- 本轮结果: 创建 3 个 issue，待修复
+- 项目状态: **0 open issue, 0 open PR, 177 已合并 PR, 0 阻塞项**
+- 审核结果:
+  - PR #427 (fix #423 — _readerCts.Cancel 前置于 FailPending) — 5/6 CI 通过，cargo audit 预存在 CVE，**已合并** ✅
+  - PR #428 (fix #425 — 剪贴板文件名随机后缀) — 5/6 CI 通过，cargo audit 预存在 CVE，**已合并** ✅
+  - PR #426 (fix #424 — atomic_write 失败清理临时文件) — 原始 CI clippy 失败（map_err → inspect_err），修复后 5/6 通过，**已合并** ✅
+- 结果: 3/3 全部合并
 
 - 2026-06-14 [循环#73]: 全代码库三路并行深度审查，创建 3 个 issue (#416, #417, #418)
 - 2026-06-14 [修复轮#74]: 修复循环#73 创建的 3 个 issue
@@ -327,7 +316,10 @@
 - 2026-06-14 [修复轮#74]: #417 PR #422 已合并（Volatile.Read 防止 stale read）
 - 2026-06-14 [修复轮#74]: #418 PR #421 已合并（serde_yml → serde_yaml_ng）
 - 2026-06-14 [修复轮#74]: 项目恢复 0 open issue + 0 open PR 状态，累计 174 已合并 PR
-- 2026-06-14 [循环#75]: 三路并行深度代码审查（Rust 后端 + C# 前端 + CI/测试），创建 3 个 issue
-- 2026-06-14 [循环#75]: Rust 审查发现 1 CRITICAL + 4 HIGH + 5 MEDIUM + 7 LOW；C# 审查发现 3 HIGH + 6 MEDIUM + 12 LOW
-- 2026-06-14 [循环#75]: CRITICAL 发现（OpenAI 格式不兼容）与 #144 重叠，#144 已被 repo owner 关闭为 deferred，不重复创建
-- 2026-06-14 [循环#75]: CI 状态：cargo test 362 passed ✅, cargo clippy clean ✅, cargo audit 网络不通, dotnet SDK 未安装
+- 2026-06-14 [修复轮#76]: 修复循环#75 创建的 3 个 issue
+- 2026-06-14 [修复轮#76]: #423 PR #427（_readerCts.Cancel 前置于 FailPending）
+- 2026-06-14 [修复轮#76]: #424 PR #426（atomic_write 失败时清理临时文件）
+- 2026-06-14 [修复轮#76]: #425 PR #428（剪贴板文件名添加随机后缀）
+- 2026-06-14 [PR审核轮#77]: 审核 3 个 open PR (#426, #427, #428)，全部合并
+- 2026-06-14 [PR审核轮#77]: PR #426 clippy 失败（map_err 应为 inspect_err），修复后 CI 5/6 通过并合并
+- 2026-06-14 [PR审核轮#77]: 项目恢复 0 open issue + 0 open PR 状态，累计 177 已合并 PR

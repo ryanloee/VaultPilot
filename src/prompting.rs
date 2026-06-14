@@ -501,7 +501,7 @@ fn render_history(history: &[ConversationTurn]) -> String {
 
     history
         .iter()
-        .map(|turn| format!("{}: {}", turn.role, turn.text))
+        .map(|turn| format!("{}: {}", turn.role, escape_xml_close_tags(&turn.text)))
         .collect::<Vec<_>>()
         .join("\n")
 }

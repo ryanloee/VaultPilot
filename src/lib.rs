@@ -19,10 +19,10 @@ use storage::{
     initialize_storage_async,
     list_notes_async,
     // Sync originals for load_recent_notes_for_overview helper
-    list_notes_with_context,
+    // (moved to storage.rs with async wrapper)
     load_chat_state_async,
     load_context_notes_async,
-    load_note_body_from_meta,
+    load_recent_notes_for_overview_async,
     ocr_image_text_async,
     save_chat_state_async,
     save_note_with_images_async,
@@ -424,7 +424,7 @@ pub async fn ask_with_ai_with_context(
                         "retrieving",
                         "No direct match; listing recent notes".to_string(),
                     );
-                    docs = load_recent_notes_for_overview(context, limit.min(12))?;
+                    docs = load_recent_notes_for_overview_async(context, limit.min(12)).await?;
                 } else {
                     emit_status("ranking", format!("Scored {} candidate notes", docs.len()));
                     docs.truncate(limit.max(1));
@@ -439,7 +439,7 @@ pub async fn ask_with_ai_with_context(
             }
             AssistantToolCall::ListNotes { limit } => {
                 emit_status("retrieving", "Loading recent notes".to_string());
-                docs = load_recent_notes_for_overview(context, limit)?;
+                docs = load_recent_notes_for_overview_async(context, limit).await?;
                 let result = summarize_docs_for_tool_result("list_notes", &docs);
                 tool_results.push(ToolExecution::new(
                     "list_notes",
@@ -1058,20 +1058,6 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, any
     }
 
     Ok(candidate)
-}
-
-fn load_recent_notes_for_overview(
-    context: &StorageContext,
-    limit: usize,
-) -> anyhow::Result<Vec<NoteDocument>> {
-    let notes = list_notes_with_context(context)?;
-    let mut docs = Vec::new();
-    for note in notes.into_iter().take(limit) {
-        if let Ok(doc) = load_note_body_from_meta(&note) {
-            docs.push(doc);
-        }
-    }
-    Ok(docs)
 }
 
 fn summarize_docs_for_tool_result(tool_name: &str, docs: &[NoteDocument]) -> String {

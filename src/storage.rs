@@ -259,11 +259,14 @@ pub fn initialize_storage_with_context(context: &StorageContext) -> Result<AppSe
 
 pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSettings> {
     // Return cached settings if available, avoiding redundant disk I/O.
-    if let Ok(cache) = context.cached_settings.lock() {
-        if let Some(ref settings) = *cache {
-            return Ok(settings.clone());
-        }
+    let cache = context
+        .cached_settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(ref settings) = *cache {
+        return Ok(settings.clone());
     }
+    drop(cache);
 
     let paths = &context.paths;
     if let Some(parent) = paths.settings_path.parent() {
@@ -304,7 +307,11 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
 
     fs::create_dir_all(&settings.vault_dir)?;
     // Cache the parsed settings for future calls.
-    if let Ok(mut cache) = context.cached_settings.lock() {
+    {
+        let mut cache = context
+            .cached_settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *cache = Some(settings.clone());
     }
     Ok(settings)
@@ -340,7 +347,11 @@ pub fn save_settings_with_context(
         .with_context(|| "failed to get connection from pool")?;
     ensure_schema(&connection)?;
     // Update the cached settings after successful write.
-    if let Ok(mut cache) = context.cached_settings.lock() {
+    {
+        let mut cache = context
+            .cached_settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *cache = Some(settings.clone());
     }
     Ok(settings)
@@ -3100,6 +3111,32 @@ pub async fn vault_export_async(
 pub async fn ocr_image_text_async(path: &Path) -> Result<String> {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || ocr_image_text(&path))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Load recent notes with body text for overview/listing. Performs sync I/O.
+pub fn load_recent_notes_for_overview(
+    context: &StorageContext,
+    limit: usize,
+) -> Result<Vec<NoteDocument>> {
+    let notes = list_notes_with_context(context)?;
+    let mut docs = Vec::new();
+    for note in notes.into_iter().take(limit) {
+        if let Ok(doc) = load_note_body_from_meta(&note) {
+            docs.push(doc);
+        }
+    }
+    Ok(docs)
+}
+
+/// Spawn-blocking wrapper for [`load_recent_notes_for_overview`].
+pub async fn load_recent_notes_for_overview_async(
+    ctx: &StorageContext,
+    limit: usize,
+) -> Result<Vec<NoteDocument>> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || load_recent_notes_for_overview(&ctx, limit))
         .await
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }

@@ -65,7 +65,8 @@ public sealed partial class MainWindow : Window
     /// <summary>Looks up a theme-aware brush from application resources.</summary>
     private static Brush GetThemeBrush(string key)
     {
-        if (Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush)
+        if (Application.Current?.Resources is not null
+            && Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush)
         {
             return brush;
         }
@@ -75,7 +76,8 @@ public sealed partial class MainWindow : Window
     /// <summary>Looks up a theme-aware Style from application resources, returning null if missing.</summary>
     private static Style? GetThemeStyle(string key)
     {
-        if (Application.Current.Resources.TryGetValue(key, out var value) && value is Style style)
+        if (Application.Current?.Resources is not null
+            && Application.Current.Resources.TryGetValue(key, out var value) && value is Style style)
             return style;
         System.Diagnostics.Debug.WriteLine($"[GetThemeStyle] Missing resource key: '{key}'.");
         return null;
@@ -2383,7 +2385,7 @@ public sealed partial class MainWindow : Window
     #region Auto-wake timer
 
     private DateTime? _lastAutoWakeTime;
-    private bool _autoWakeInProgress;
+    private volatile int _autoWakeInProgress;
     private bool _isStopping;
 
     /// <summary>
@@ -2486,14 +2488,14 @@ public sealed partial class MainWindow : Window
     private async void OnAutoWakeTimerTick(object? sender, object e)
     {
         if (_isStopping) return;
-        if (_autoWakeInProgress) return;
+        if (_autoWakeInProgress != 0) return;
         if (!IsInAutoWakeWindow()) return;
 
         var interval = TimeSpan.FromMinutes(Math.Max(1, (int)(_settings?.AutoWakeIntervalMinutes ?? 30)));
         var now = DateTime.Now;
         if (_lastAutoWakeTime.HasValue && (now - _lastAutoWakeTime.Value) < interval) return;
 
-        _autoWakeInProgress = true;
+        if (Interlocked.CompareExchange(ref _autoWakeInProgress, 1, 0) != 0) return;
         try
         {
             await _backendClient.EnsureConnectedAsync();
@@ -2508,7 +2510,7 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            _autoWakeInProgress = false;
+            Interlocked.Exchange(ref _autoWakeInProgress, 0);
             ShowNextWakeTime();
         }
     }

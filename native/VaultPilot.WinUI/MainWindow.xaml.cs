@@ -100,6 +100,7 @@ public sealed partial class MainWindow : Window
     private nint _windowHandle;
     private nint _originalWindowProc;
     private WindowProcDelegate? _windowProcDelegate;
+    private GCHandle _windowProcDelegateHandle;
     private FrameworkElement? _thinkingIndicator;
     private DispatcherTimer? _thinkingDotsTimer;
     private int _thinkingDotStep;
@@ -2388,6 +2389,7 @@ public sealed partial class MainWindow : Window
         }
 
         _windowProcDelegate = WindowProc;
+        _windowProcDelegateHandle = GCHandle.Alloc(_windowProcDelegate);
         var newWindowProc = Marshal.GetFunctionPointerForDelegate(_windowProcDelegate);
         _originalWindowProc = SetWindowLongPtr(hwnd, WindowLongPtrWndProc, newWindowProc);
         DragAcceptFiles(hwnd, true);
@@ -2620,6 +2622,8 @@ public sealed partial class MainWindow : Window
         {
             _windowHandle = 0;
             _originalWindowProc = 0;
+            if (_windowProcDelegateHandle.IsAllocated)
+                _windowProcDelegateHandle.Free();
             _windowProcDelegate = null;
         }
     }

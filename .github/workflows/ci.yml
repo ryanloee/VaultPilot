@@ -130,6 +130,9 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -149,26 +152,28 @@ jobs:
 
       - name: Build WinUI
         id: build-winui
-        run: dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release -p:Platform=x64
+        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /p:Configuration=Release /p:Platform=x64 /restore:false /v:diag
         continue-on-error: true
 
-      - name: Diagnose XamlCompiler errors
-        if: steps.build-winui.outcome == 'failure'
+      - name: Capture XamlCompiler diagnostics
+        if: always()
         shell: pwsh
         run: |
-          $outputJson = "native/VaultPilot.WinUI/obj/x64/Release/net8.0-windows10.0.19041.0/output.json"
-          if (Test-Path $outputJson) {
-            Get-Content $outputJson -Raw
-          } else {
-            Write-Host "output.json not found"
-            Get-ChildItem "native/VaultPilot.WinUI/obj/x64/Release/net8.0-windows10.0.19041.0/" -ErrorAction SilentlyContinue
-          }
+          $objDir = "native/VaultPilot.WinUI/obj/x64/Release/net8.0-windows10.0.19041.0"
+          Write-Host "=== output.json ==="
+          if (Test-Path "$objDir/output.json") { Get-Content "$objDir/output.json" -Raw } else { Write-Host "NOT FOUND" }
+          Write-Host "`n=== intermediatexaml ==="
+          Get-ChildItem "$objDir/intermediatexaml/" -Recurse -ErrorAction SilentlyContinue
+          Write-Host "`n=== XamlCompiler.exe test ==="
+          $xamlExe = "$env:USERPROFILE\.nuget\packages\microsoft.windowsappsdk\1.6.250108002\tools\net472\XamlCompiler.exe"
+          if (Test-Path $xamlExe) {
+            Write-Host "XamlCompiler.exe exists"
+            try { & $xamlExe 2>&1 | Out-String } catch { Write-Host "Exit: $LASTEXITCODE" }
+          } else { Write-Host "XamlCompiler.exe NOT FOUND at $xamlExe" }
 
       - name: Fail if build failed
-        shell: pwsh
-        run: |
-          $buildResult = (dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release -p:Platform=x64 2>&1 | Out-String)
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+        if: steps.build-winui.outcome == 'failure'
+        run: exit 1
 
       - name: Run C# tests
         run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"

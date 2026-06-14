@@ -854,6 +854,8 @@ public sealed partial class MainWindow : Window
         {
             SendButton.IsEnabled = false;
             RecordButton.IsEnabled = false;
+            NewSessionButton.IsEnabled = false;
+            DeleteSessionButton.IsEnabled = false;
             CancelButton.Visibility = Visibility.Visible;
             ShowLoadingOverlay(statusTitle);
             UpdateStatusBar("info", statusTitle, statusDetail);
@@ -905,6 +907,8 @@ public sealed partial class MainWindow : Window
             Volatile.Write(ref _activeRequestTask, null);
             SendButton.IsEnabled = true;
             RecordButton.IsEnabled = true;
+            NewSessionButton.IsEnabled = true;
+            // DeleteSessionButton.IsEnabled restored by RefreshSessions()
             CancelButton.Visibility = Visibility.Collapsed;
             HideLoadingOverlay();
             RefreshSessions();

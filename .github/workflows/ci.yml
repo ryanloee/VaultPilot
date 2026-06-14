@@ -72,6 +72,17 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Set DOTNET_ROOT
+        shell: pwsh
+        run: |
+          $dotnetPath = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
+          if ($dotnetPath) {
+            $root = Split-Path $dotnetPath
+            Write-Host "dotnet found at: $dotnetPath"
+            Write-Host "Setting DOTNET_ROOT=$root"
+            echo "DOTNET_ROOT=$root" >> $env:GITHUB_ENV
+          }
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:

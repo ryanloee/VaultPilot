@@ -286,7 +286,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private static Brush GetThemeBrush(string key)
     {
-        if (Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush)
+        if (Application.Current?.Resources.TryGetValue(key, out var value) == true && value is Brush brush)
         {
             return brush;
         }

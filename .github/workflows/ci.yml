@@ -60,18 +60,18 @@ jobs:
 
   winui_build:
     name: winui-build
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -91,10 +91,10 @@ jobs:
         run: dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
 
       - name: Build WinUI
-        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /p:Configuration=Release /p:Platform=x64 /restore:false
+        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /p:Configuration=Release /p:Platform=x64
 
       - name: Run C# tests
-        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4

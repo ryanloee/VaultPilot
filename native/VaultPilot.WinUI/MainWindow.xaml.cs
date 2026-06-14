@@ -2270,7 +2270,7 @@ public sealed partial class MainWindow : Window
         using var buffer = new MemoryStream();
         await memoryStream.CopyToAsync(buffer);
 
-        var fileName = $"clipboard-{DateTimeOffset.Now:yyyyMMdd-HHmmssfff}.png";
+        var fileName = $"clipboard-{DateTimeOffset.Now:yyyyMMdd-HHmmssfff}-{Path.GetFileNameWithoutExtension(Path.GetRandomFileName())}.png";
         var filePath = Path.Combine(ClipboardAttachmentDirectory, fileName);
         await File.WriteAllBytesAsync(filePath, buffer.ToArray());
         var file = await StorageFile.GetFileFromPathAsync(filePath);

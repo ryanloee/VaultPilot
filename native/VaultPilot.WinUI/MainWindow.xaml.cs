@@ -63,6 +63,8 @@ public sealed partial class MainWindow : Window
     // defined in App.xaml ThemeDictionaries (see #196)
 
     /// <summary>Looks up a theme-aware brush from application resources.</summary>
+    private static readonly SolidColorBrush _transparentBrush = new(Microsoft.UI.Colors.Transparent);
+
     private static Brush GetThemeBrush(string key)
     {
         if (Application.Current?.Resources is not null
@@ -71,7 +73,7 @@ public sealed partial class MainWindow : Window
             return brush;
         }
         System.Diagnostics.Debug.WriteLine($"[GetThemeBrush] Missing resource key: '{key}', falling back to Transparent.");
-        return new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        return _transparentBrush;
     }
     /// <summary>Looks up a theme-aware Style from application resources, returning null if missing.</summary>
     private static Style? GetThemeStyle(string key)
@@ -1530,10 +1532,12 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private static readonly string[] _inlineMarkers = { "**", "*", "`", "[" };
+
     private static int FindNextInlineMarker(string text, int startIndex)
     {
         var nextIndex = text.Length;
-        foreach (var marker in new[] { "**", "*", "`", "[" })
+        foreach (var marker in _inlineMarkers)
         {
             var index = text.IndexOf(marker, startIndex, StringComparison.Ordinal);
             if (index >= 0 && index < nextIndex)
@@ -2081,7 +2085,7 @@ public sealed partial class MainWindow : Window
             FontSize = 10,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0),
-            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)
+            Background = _transparentBrush
         };
         removeButton.Click += (_, _) =>
         {
@@ -3366,10 +3370,12 @@ public sealed partial class MainWindow : Window
     /// OpenAI o-series models: o1, o3, o4 (with optional suffix like -mini, -preview).
     /// Matches "o1", "o1-mini", "o3-mini", "o4-mini" etc. but not "co1l" or "po3".
     /// </summary>
+    private static readonly string[] _openAiOSeriesPrefixes = { "o1", "o3", "o4" };
+
     internal static bool IsOpenAiOSeriesModel(string model)
     {
         // Check for o1/o3/o4 at word boundary followed by end, separator, or hyphen
-        foreach (var prefix in new[] { "o1", "o3", "o4" })
+        foreach (var prefix in _openAiOSeriesPrefixes)
         {
             var index = model.IndexOf(prefix, StringComparison.Ordinal);
             while (index >= 0)

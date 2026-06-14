@@ -70,6 +70,18 @@ pub fn sanitize_error(message: &str) -> String {
             }
         }
 
+        // 2b. Redact HTTP Basic auth credentials: "Basic " followed by 20+
+        //     base64 characters.
+        if i + 6 <= len && bytes[i..i + 6].eq_ignore_ascii_case(b"Basic ") {
+            let tok_start = i + 6;
+            let tok_end = scan_until_whitespace(bytes, tok_start);
+            if tok_end - tok_start >= 20 {
+                out.push_str("Basic [REDACTED]");
+                i = tok_end;
+                continue;
+            }
+        }
+
         // 3. Redact URL query parameters that carry secrets:
         //    "api_key=", "api-key=", "access_token=", "secret=", "token=", "key="
         //    Only when preceded by '?' or '&' (or start-of-string).
@@ -2252,6 +2264,23 @@ mod tests {
     fn sanitize_handles_bearer_with_short_token() {
         // Bearer with token < 20 chars should NOT be redacted
         let msg = "Auth: Bearer short123";
+        let sanitized = sanitize_error(msg);
+        assert_eq!(sanitized, msg);
+    }
+
+    #[test]
+    fn sanitize_redacts_basic_auth() {
+        // Basic auth credentials (base64 encoded user:pass) should be redacted
+        let msg = "Request failed: Authorization: Basic dXNlcm5hbWU6cGFzc3dvcmQxMjM0NTY3ODkw";
+        let sanitized = sanitize_error(msg);
+        assert!(sanitized.contains("Basic [REDACTED]"));
+        assert!(!sanitized.contains("dXNlcm5hbWU6cGFzc3dvcmQxMjM0NTY3ODkw"));
+    }
+
+    #[test]
+    fn sanitize_preserves_short_basic_token() {
+        // Basic with short token < 20 chars should NOT be redacted
+        let msg = "Auth: Basic short";
         let sanitized = sanitize_error(msg);
         assert_eq!(sanitized, msg);
     }

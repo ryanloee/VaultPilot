@@ -196,6 +196,9 @@
 - #532: BeginExitForUpdate 不终止进程 — tray icon 阻止 Velopack 更新 (PR #535 已合并)
 - #533: ExitApplication finally 块 ReleaseMutex 异常安全 (PR #535 已合并)
 - #534: BeginExitForUpdate 和 ExitApplication 竞态 Interlocked guard (PR #535 已合并)
+- #536: TryReconnectAsync bare catch 吞没 OperationCanceledException → 传播取消异常 (PR #539 已合并)
+- #537: ShutdownAsync 5s 超时不足 → 35s + ExecuteAiRequestAsync catch _isShuttingDown 保护 (PR #539 已合并)
+- #538: NotesView RefreshNotesAsync 取消 _loadDetailCts 防止过时数据更新 (PR #539 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -398,15 +401,15 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#122
+- 循环编号: 循环#123
 - 本轮时间: 2026-06-15
-- 审查模块: Rust crypto.rs, lib.rs, vaultpilot-agent.rs, vaultpilot-cli.rs; C# App.xaml.cs, MainWindow.Updates.cs, WrapPanel.cs, Models/*
+- 审查模块: Rust ai.rs, prompting.rs, storage.rs; C# BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs
 - 讨论阶段发现:
-  - **#532** BUG (HIGH): BeginExitForUpdate 不终止进程，Velopack 更新静默失败
-  - **#533** BUG (MEDIUM): ExitApplication finally 块 ReleaseMutex 可抛异常阻止 Exit()
-  - **#534** BUG (MEDIUM): BeginExitForUpdate 和 ExitApplication 竞态双重 ShutdownAsync
+  - **#536** BUG (MEDIUM): TryReconnectAsync bare catch 吞没 OperationCanceledException
+  - **#537** BUG (MEDIUM): ShutdownAsync 5s 超时不足 + ExecuteAiRequestAsync catch 块 Shutdown 后仍调用 SaveChatStateAsync
+  - **#538** BUG (MEDIUM): NotesView _loadDetailCts 在 RefreshNotesAsync 时未取消
 - 修复结果:
-  - **PR #535** (#532+#533+#534): ✅ 已合并 — tray icon dispose + Interlocked guard + finally 安全
+  - **PR #539** (#536+#537+#538): ✅ 已合并 — cancellation 传播 + 35s 超时 + _isShuttingDown 保护 + detail load 取消
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ❌ (预存在 CVE)
-- 项目状态: **0 open issue, 0 open PR, 221 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 ~6.5K 行 Rust (crypto, lib, agent, cli) + ~1.5K 行 C# (App, Updates, WrapPanel, Models)。Rust 后端零 HIGH/CRITICAL 发现；C# 前端发现更新流程致命缺陷（HIGH）和退出安全性问题（MEDIUM）。prompting.rs 零测试覆盖为长期技术债。
+- 项目状态: **0 open issue, 0 open PR, 222 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 ~2.2K 行 Rust (ai.rs 2219行 + prompting.rs 838行 + storage.rs 前300行) + ~4.8K 行 C# (BackendClient 606行 + MainWindow 3617行 + NotesView 346行 + SettingsDialog 311行)。Rust 后端零新 HIGH/CRITICAL 发现，代码质量优秀；C# 前端发现 7 个 MEDIUM + 6 个 LOW 问题，主要集中在 cancellation 语义、shutdown 生命周期和 UI 线程阻塞。C# 子任务因 API 限流部分失败，改为直接人工审查。

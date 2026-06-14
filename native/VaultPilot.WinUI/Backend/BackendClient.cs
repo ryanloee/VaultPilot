@@ -401,7 +401,10 @@ public sealed class BackendClient : IAsyncDisposable
         _healthCheckTimer?.Dispose();
         _healthCheckTimer = null;
 
-        // Fail all pending requests before releasing resources
+        // Cancel reader first to stop Pump thread from adding new pending entries
+        _readerCts?.Cancel();
+
+        // Then fail all existing pending requests
         FailPending("Backend client disposed.");
 
         await DisposeProcessAsync();

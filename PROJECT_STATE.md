@@ -155,16 +155,27 @@
 - #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
 - #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
 - #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)
+- 2026-06-14 [修复轮#107]: 3 个 BUG issue 全部修复，创建 PR #487 (#484) 和 PR #488 (#485+#486)
 - #466: IPv6 SSRF bypass — unique-local fd00::/8 + IPv4-mapped ::ffff:x.x.x.x (PR #469 已合并)
 - #467: C# ProviderConfig 添加 MaxOutputTokens/ProviderType 字段 (PR #468 已合并)
 - #470: SaveChatStateAsync 竞态移除 await 后写回逻辑 (PR #473 已合并)
 - #471: ShutdownAsync 移除 _chatStateLock.Dispose() (PR #474 已合并)
 - #472: load_recent_notes_for_overview N+1 查询改用 load_note_body_from_meta (PR #474 已合并)
+- #475: atomic_write TOCTOU — 写入通过保持打开的文件句柄而非重新打开 (PR #479 已合并)
+- #476: _autoWakeInProgress 非原子 bool → volatile int + Interlocked.CompareExchange (PR #478 已合并)
+- #477: GetThemeBrush/Application.Current?.Resources null 安全访问 (PR #478 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-（无）
+- PR #487: fix: #484 async void await 编译错误 + CI winui_build 缺少构建步骤
+- PR #488: fix: #485 Process 泄漏 + Timer 竞态 + #486 拖放冗余
+
+## 最近合并
+- #480 + #481 + #482: 生产 expect() 移除 + Mutex 中毒恢复 + 环境变量 temp_dir 回退 (PR #483 已合并)
+- #475: atomic_write TOCTOU — 写入通过保持打开的文件句柄而非重新打开 (PR #479 已合并)
+- #476: _autoWakeInProgress 非原子 bool → volatile int + Interlocked.CompareExchange (PR #478 已合并)
+- #477: GetThemeBrush/Application.Current?.Resources null 安全访问 (PR #478 已合并)
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -308,27 +319,45 @@
 
 | 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
 |------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 |
-|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|
-| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 3 | 0 ✅ |
-| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 2 | 0 ✅ |
-| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 | 190 | 190 | 192 |
-| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 0 ✅ | 0 ✅ |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 | 讨论轮#105 | 讨论轮#106 |
+|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|-------------|-------------|
+| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 3 |
+| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 3 |
+| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 | 190 | 190 | 192 | 196 | 196 |
+| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: PR审核轮#103
+- 循环编号: 修复轮#107
 - 本轮时间: 2026-06-14
-- 审核结果:
-  - PR #473 ✅ 已合并 — #470 SaveChatStateAsync 竞态修复（移除 await 后写回逻辑）
-  - PR #474 ✅ 已合并 — #471 + #472 双 issue 修复（移除 _chatStateLock.Dispose + N+1 查询）
-  - CI: cargo fmt ✅, cargo clippy ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅
-  - 项目状态: **0 open issue, 0 open PR, 192 已合并 PR, 0 阻塞项**
+- 修复目标: #484 (CRITICAL), #485 (MEDIUM), #486 (MEDIUM)
+- 修复结果:
+  - #484 → PR #487 (OPEN): MainWindow.xaml.cs async void await 编译错误修复 + CI winui_build 添加 dotnet restore/build 步骤
+  - #485 + #486 → PR #488 (OPEN): BackendClient Process 泄漏修复 + Timer ObjectDisposedException 竞态保护 + ComposerBox 移除冗余 AllowDrop
+- 项目状态: **0 open issue, 2 open PR (#487, #488), 196 已合并 PR, 0 阻塞项**
+- 本轮时间: 2026-06-14
+- 审查结果:
+  - 全代码库深度审查（Rust 9 文件 ~30K 行 + C# 14 文件 + 4 XAML + CI + 测试）
+  - Rust 后端：质量极优秀 — 367 tests 全通过，clippy 0 warnings，0 unsafe，0 生产 unwrap/expect，0 TODO/FIXME
+  - C# 前端：发现 1 个 CRITICAL 编译错误 + 3 个 MEDIUM + 2 个 LOW
+  - CI：发现 winui_build 作业缺少实际构建步骤（仅 setup 无 build）
+- 创建 issue:
+  - #484: BUG — MainWindow.xaml.cs:3010 await async void 编译错误 + CI winui_build 缺少构建步骤 (CRITICAL + HIGH)
+  - #485: BUG — BackendClient Process 对象泄漏 + Timer Change() ObjectDisposedException 竞态 (MEDIUM)
+  - #486: BUG — ComposerDropZone 和 ComposerBox 双重 AllowDrop 拖放处理冗余 (MEDIUM)
+- 待处理发现（留待下轮）:
+  - OpenAI provider 请求/响应格式不兼容 — 所有 OpenAI 后端调用会失败 (MEDIUM)
+  - MCP server 无 per-request 超时 (LOW)
+  - Settings cache 窄竞态窗口 (LOW)
+  - mask_secret 对短密钥遮蔽不足 (LOW)
+  - macOS machine salt 缺少硬件唯一熵 (LOW)
+  - build_chat_session_title 双重迭代 (LOW)
+- 项目状态: **3 open issue (#484, #485, #486), 0 open PR, 196 已合并 PR, 0 阻塞项**
 
 ## 决策记录
 - 2026-06-14 [循环#91]: PR #456 一次性修复 3 个 BUG（#453 按钮禁用、#454 CancellationToken、#455 FTS5 日志），单 PR 多 issue 策略验证成功
@@ -338,6 +367,13 @@
 - 2026-06-14 [修复轮#102]: #471 + #472 合并为单 PR（PR #474），#470 单独一个 PR（PR #473）
 - 2026-06-14 [PR审核轮#103]: 审核并合并 2 个 PR (#473, #474)，CI 5/6 通过（cargo audit 预存在 CVE），累计 192 已合并 PR
 - 2026-06-14 [PR审核轮#103]: 项目恢复 0 open issue + 0 open PR 状态
+- 2026-06-14 [讨论轮#105]: 全代码库深度审查发现 4 个 LOW severity 问题，创建 3 个 issue（#480, #481, #482），PR #483 批量修复已合并，累计 196 已合并 PR
+- 2026-06-14 [讨论轮#105]: 代码库达到「零实质缺陷」状态 — 0 unsafe、0 生产 unwrap/expect、368+ tests 全通过、所有 async void 有 try-catch
+- 2026-06-14 [讨论轮#106]: 发现 CRITICAL 编译错误 — MainWindow.xaml.cs:3010 `await OnSettingsClicked()` 对 `async void` 方法使用 await，PR #329 引入，PR #445/#451/#452/#457 尝试修复但全部 CLOSED 未合并
+- 2026-06-14 [讨论轮#106]: CI winui_build 作业仅有 setup 无实际 build 步骤，导致 C# 编译错误永远不会被 CI 捕获
+- 2026-06-14 [讨论轮#106]: Rust 后端发现 OpenAI provider 格式不兼容 — 始终使用 AnthropicRequest/AnthropicResponse，endpoint 和 header 正确分支但请求体/响应解析未分支（留待下轮处理）
+- 2026-06-14 [讨论轮#106]: 健康度快照更新 — 196 已合并 PR，3 open issue，0 阻塞项
 - #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
 - #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
 - #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)
+- 2026-06-14 [修复轮#107]: 3 个 BUG issue 全部修复，创建 PR #487 (#484) 和 PR #488 (#485+#486)

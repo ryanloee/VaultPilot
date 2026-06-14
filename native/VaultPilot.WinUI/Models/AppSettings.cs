@@ -5,7 +5,11 @@ public sealed record ProviderConfig(
     string BaseUrl,
     string Model,
     ulong RequestTimeoutMs,
-    ulong? ContextWindowTokens);
+    ulong? ContextWindowTokens)
+{
+    public override string ToString() =>
+        $"ProviderConfig {{ ApiKey = [REDACTED], BaseUrl = {BaseUrl}, Model = {Model}, RequestTimeoutMs = {RequestTimeoutMs}, ContextWindowTokens = {ContextWindowTokens} }}";
+}
 
 public sealed record AppSettings(
     string VaultDir,

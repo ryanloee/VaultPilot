@@ -1505,6 +1505,10 @@ public sealed partial class MainWindow : Window
             }
 
             var nextIndex = FindNextInlineMarker(text, index);
+            if (nextIndex <= index)
+            {
+                nextIndex = index + 1; // forward-progress guarantee: emit the unmatched char as plain text
+            }
             inlines.Add(new Run
             {
                 Text = text[index..nextIndex]

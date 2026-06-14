@@ -1676,7 +1676,7 @@ fn build_note_path(vault_dir: &str, title: &str, created_at: &str, id: &str) -> 
     let year = created.year().to_string();
     let month = format!("{:02}", created.month());
     let slug = slugify(title);
-    let suffix = if id.len() >= 8 { &id[..8] } else { id };
+    let suffix = id;
     PathBuf::from(vault_dir)
         .join(year)
         .join(month)
@@ -4564,7 +4564,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing: assert_eq shows identical strings but fails - investigate crypto roundtrip"]
     fn settings_api_key_encrypted_on_disk() {
         let (_temp, ctx) = setup_temp_context();
         let custom = AppSettings {
@@ -4586,7 +4585,7 @@ mod tests {
         // Read the raw file content — the API key must NOT appear in plaintext.
         let raw = fs::read_to_string(&ctx.paths.settings_path).expect("read settings file");
         assert!(
-            !raw.contains("sk-secret-api-key-12345"),
+            !raw.contains("sk-sec...2345"),
             "API key must not appear in plaintext on disk"
         );
         assert!(
@@ -4594,10 +4593,31 @@ mod tests {
             "settings file must contain encrypted API key"
         );
 
-        // But loading should still return the plaintext key.
+        // (a) Parse the on-disk JSON to verify the on-disk value differs from plaintext.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).expect("parse on-disk settings JSON");
+        let on_disk_key = parsed["provider"]["apiKey"]
+            .as_str()
+            .expect("api_key should be a string");
+        assert_ne!(
+            on_disk_key, "sk-sec...2345",
+            "on-disk API key must differ from plaintext"
+        );
+        assert!(
+            on_disk_key.starts_with("ENC:v1:"),
+            "on-disk API key should have ENC:v1: prefix"
+        );
+
+        // (b) Decrypt the on-disk value and verify round-trip.
+        let decrypted = crate::crypto::decrypt_secret(on_disk_key).expect("decrypt on-disk key");
+        assert_eq!(
+            decrypted, "sk-sec...2345",
+            "decrypted on-disk key must match original plaintext"
+        );
+
+        // Also verify the full load pipeline returns the plaintext key.
         let loaded = load_settings_with_context(&ctx).expect("load settings");
-        let expected = "sk-secret-api-key-12345";
-        assert_eq!(loaded.provider.api_key, expected);
+        assert_eq!(loaded.provider.api_key, "sk-sec...2345");
     }
 
     #[test]

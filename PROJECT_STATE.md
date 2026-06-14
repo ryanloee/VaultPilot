@@ -146,13 +146,13 @@
 - #434: extract_json_block 首个花括号匹配 → 所有位置尝试 + serde_json 校验 (PR #438 已合并)
 - #435: NotesView SelectionChanged + ItemClick 双重请求 → 移除 ItemClick + CancellationToken (PR #437 已合并)
 - #436: query_like_note_metas LIKE 子句单词上限 .take(20) (PR #437 已合并)
+- #447: CheckForAppUpdatesAsync 瞬态失败后重置 _updateCheckStarted (PR #448 已合并)
+- #446: ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源 (PR #449 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #448: fix: reset _updateCheckStarted on transient failure (#447) — 待合并
-- PR #449: fix: await active AI request in ShutdownAsync (#446) — 待合并
-- PR #450: fix: add build and test steps to winui_build CI (#445) — 待合并
+- PR #451: fix: add build and test steps to winui_build CI (#445) — 待合并（取代 #450，修正无效 workload install）
 
 
 ## 已知阻塞项
@@ -297,29 +297,28 @@
 
 | 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
 |------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 |
-|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|
-| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 |
-| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 |
-| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 |
-| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 |
+|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|
+| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 |
+| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 |
+| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 |
+| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 修复轮#88
+- 循环编号: PR审核轮#89
 - 本轮时间: 2026-06-14
-- 项目状态: **3 open issue, 3 open PR (待合并), 184 已合并 PR, 0 阻塞项**
-- 修复目标: #445, #446, #447（全部完成）
-- 修复结果:
-  - #447 PR #448: CheckForAppUpdatesAsync 瞬态失败后重置标志 ✅
-  - #446 PR #449: ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源 ✅
-  - #445 PR #450: winui_build CI 添加 dotnet build + dotnet test 步骤 ✅
-- 结果: 2/2 PR 全部合并，项目恢复 0 open issue + 0 open PR
+- 项目状态: **1 open issue (#445), 1 open PR (#451 待合并), 186 已合并 PR, 0 阻塞项**
+- 审核结果:
+  - PR #448 (#447): ✅ 已合并 — 1行修复，CI 5/6 通过（cargo audit 预存在 CVE）
+  - PR #449 (#446): ✅ 已合并 — TaskCompletionSource 同步模式，CI 5/6 通过
+  - PR #450 (#445): ❌ 关闭 — winui_build 失败（`dotnet workload install microsoft-windows-sdk-net` 无效 workload ID）
+  - PR #451 (#445): 待合并 — 移除无效 workload install 步骤，仅保留 restore + build + test
 
 - 2026-06-14 [循环#73]: 全代码库三路并行深度审查，创建 3 个 issue (#416, #417, #418)
 - 2026-06-14 [修复轮#74]: 修复循环#73 创建的 3 个 issue
@@ -349,3 +348,8 @@
 - 2026-06-14 [修复轮#88]: #446 PR #449（ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源）
 - 2026-06-14 [修复轮#88]: #445 PR #450（winui_build CI 添加 dotnet build + dotnet test 步骤）
 - 2026-06-14 [修复轮#88]: 修复目标 3/3 全部完成，3 个 PR 待合并
+- 2026-06-14 [PR审核轮#89]: 审核 3 个 open PR (#448, #449, #450)
+- 2026-06-14 [PR审核轮#89]: PR #448 ✅ 已合并（#447 _updateCheckStarted 重置）
+- 2026-06-14 [PR审核轮#89]: PR #449 ✅ 已合并（#446 ShutdownAsync 竞态修复）
+- 2026-06-14 [PR审核轮#89]: PR #450 ❌ 关闭（winui_build CI 失败 — 无效 workload ID）
+- 2026-06-14 [PR审核轮#89]: PR #451 创建（取代 #450，移除无效 workload install 步骤）

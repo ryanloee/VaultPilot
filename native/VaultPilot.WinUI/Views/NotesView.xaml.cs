@@ -47,7 +47,8 @@ public sealed partial class NotesView : UserControl
         try
         {
             ShowLoading(true);
-            _allNotes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { })
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            _allNotes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token)
                 ?? Array.Empty<NoteMeta>();
             ApplyFilter();
             UpdateNotesCount();
@@ -81,8 +82,9 @@ public sealed partial class NotesView : UserControl
         try
         {
             ShowLoading(true);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var results = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>(
-                "searchNotes", new { query = _searchQuery, limit = 50 });
+                "searchNotes", new { query = _searchQuery, limit = 50 }, cts.Token);
             if (results is not null)
             {
                 _allNotes = results;
@@ -191,7 +193,8 @@ public sealed partial class NotesView : UserControl
             }
 
             ShowLoading(true);
-            await _backendClient.SendAsync<bool>("deleteNote", new { id = note.Id });
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await _backendClient.SendAsync<bool>("deleteNote", new { id = note.Id }, cts.Token);
 
             // Remove from local list and refresh
             _allNotes = _allNotes.Where(n => n.Id != note.Id).ToArray();

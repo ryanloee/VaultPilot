@@ -1850,7 +1850,10 @@ fn query_fts_note_ids(connection: &Connection, text: &str, limit: usize) -> Resu
         row.get::<_, String>(0)
     }) {
         Ok(rows) => rows,
-        Err(_) => return Ok(Vec::new()),
+        Err(e) => {
+            tracing::warn!(error = %e, "FTS5 query failed, returning empty results");
+            return Ok(Vec::new());
+        }
     }
     .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
@@ -1882,7 +1885,10 @@ fn query_fts_snippets(
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     }) {
         Ok(rows) => rows,
-        Err(_) => return Ok(HashMap::new()),
+        Err(e) => {
+            tracing::warn!(error = %e, "FTS5 snippet query failed, returning empty results");
+            return Ok(HashMap::new());
+        }
     };
 
     let mut snippets = HashMap::new();
@@ -1917,7 +1923,10 @@ fn query_attachment_fts_note_ids(
         |row| row.get::<_, String>(0),
     ) {
         Ok(rows) => rows,
-        Err(_) => return Ok(Vec::new()),
+        Err(e) => {
+            tracing::warn!(error = %e, "Attachment FTS5 query failed, returning empty results");
+            return Ok(Vec::new());
+        }
     };
 
     let mut note_ids = Vec::new();

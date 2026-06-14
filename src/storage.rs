@@ -1758,6 +1758,7 @@ fn query_like_note_metas(
     let words: Vec<&str> = query_text
         .split_whitespace()
         .filter(|w| w.len() >= 2)
+        .take(20) // Limit to 20 search terms to avoid SQLITE_MAX_VARIABLE_NUMBER overflow (#436)
         .collect();
     if words.is_empty() {
         return Ok(Vec::new());

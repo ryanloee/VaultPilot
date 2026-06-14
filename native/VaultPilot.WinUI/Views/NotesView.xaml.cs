@@ -3,6 +3,7 @@ using VaultPilot.WinUI.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using System.Threading;
 
 namespace VaultPilot.WinUI.Views;
 
@@ -16,6 +17,7 @@ public sealed partial class NotesView : UserControl
     private IReadOnlyList<NoteMeta> _allNotes = Array.Empty<NoteMeta>();
     private NoteMeta? _selectedNote;
     private string _searchQuery = string.Empty;
+    private CancellationTokenSource? _loadDetailCts;
 
     public NotesView(BackendClient backendClient)
     {
@@ -25,7 +27,6 @@ public sealed partial class NotesView : UserControl
         SearchBox.QuerySubmitted += OnSearchQuerySubmitted;
         SearchBox.TextChanged += OnSearchTextChanged;
         NotesList.SelectionChanged += OnNoteSelectionChanged;
-        NotesList.ItemClick += OnNoteItemClick;
         RefreshButton.Click += OnRefreshClicked;
         DeleteNoteButton.Click += OnDeleteNoteClicked;
         Loaded += OnLoaded;
@@ -118,7 +119,9 @@ public sealed partial class NotesView : UserControl
         {
             _selectedNote = item.Meta;
             DeleteNoteButton.IsEnabled = true;
-            _ = LoadNoteDetailAsync(item.Meta);
+            _loadDetailCts?.Cancel();
+            _loadDetailCts = new CancellationTokenSource();
+            _ = LoadNoteDetailAsync(item.Meta, _loadDetailCts.Token);
         }
         else
         {
@@ -127,17 +130,7 @@ public sealed partial class NotesView : UserControl
         }
     }
 
-    private void OnNoteItemClick(object sender, ItemClickEventArgs e)
-    {
-        if (e.ClickedItem is NoteListItem item)
-        {
-            _selectedNote = item.Meta;
-            DeleteNoteButton.IsEnabled = true;
-            _ = LoadNoteDetailAsync(item.Meta);
-        }
-    }
-
-    private async Task LoadNoteDetailAsync(NoteMeta meta)
+    private async Task LoadNoteDetailAsync(NoteMeta meta, CancellationToken cancellationToken)
     {
         try
         {
@@ -152,7 +145,7 @@ public sealed partial class NotesView : UserControl
 
             // Try to load the full document body
             var doc = await _backendClient.SendAsync<NoteDocument>(
-                "loadNote", new { id = meta.Id });
+                "loadNote", new { id = meta.Id }, cancellationToken);
 
             if (doc is not null && !string.IsNullOrEmpty(doc.Body))
             {

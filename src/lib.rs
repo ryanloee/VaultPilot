@@ -943,40 +943,50 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
     let lines: Vec<&str> = content.lines().collect();
     let head_count = READ_FILE_HEAD_LINES.min(lines.len());
     let tail_count = READ_FILE_TAIL_LINES.min(lines.len());
-    let head = &lines[..head_count];
     let tail_start = lines.len().saturating_sub(tail_count);
-    let tail = &lines[tail_start..];
 
     // Avoid overlapping head and tail when file has fewer lines than the
     // combined head+tail budget but exceeds the character limit.
-    let (skipped_lines, skipped_content) = if tail_start > head_count {
-        let skipped = lines.len() - head_count - tail_count;
-        let skipped_str = lines[head_count..tail_start].join("\n");
-        (skipped, skipped_str)
-    } else {
-        (0, String::new())
-    };
+    let (skipped_lines, skipped_content, effective_head, effective_tail) =
+        if tail_start > head_count {
+            let skipped = lines.len() - head_count - tail_count;
+            let skipped_str = lines[head_count..tail_start].join("\n");
+            (
+                skipped,
+                skipped_str,
+                &lines[..head_count],
+                &lines[tail_start..],
+            )
+        } else {
+            // File is small enough — show head portion only, no overlapping tail
+            (0usize, String::new(), &lines[..head_count], &lines[0..0])
+        };
+
+    let shown_chars: usize = effective_head.iter().map(|l| l.len()).sum::<usize>()
+        + effective_tail.iter().map(|l| l.len()).sum::<usize>();
 
     let mut output = format!(
         "read_file returned content for {} ({} bytes, {} lines total):\n",
         display, total_bytes, total_lines
     );
-    for line in head {
+    for line in effective_head {
         output.push_str(line);
         output.push('\n');
     }
-    output.push_str(&format!(
-        "\n... [{skipped_lines} lines / {skipped_chars} chars omitted — showing {} of {} total chars; first {head_lines} and last {tail_lines} lines kept] ...\n\n",
-        head.join("\n").len() + tail.join("\n").len(),
-        total_bytes,
-        head_lines = READ_FILE_HEAD_LINES,
-        tail_lines = READ_FILE_TAIL_LINES,
-        skipped_lines = skipped_lines,
-        skipped_chars = skipped_content.len(),
-    ));
-    for line in tail {
-        output.push_str(line);
-        output.push('\n');
+    if skipped_lines > 0 {
+        output.push_str(&format!(
+            "\n... [{skipped_lines} lines / {skipped_chars} chars omitted — showing {} of {} total chars; first {head_lines} and last {tail_lines} lines kept] ...\n\n",
+            shown_chars,
+            total_bytes,
+            head_lines = READ_FILE_HEAD_LINES,
+            tail_lines = READ_FILE_TAIL_LINES,
+            skipped_lines = skipped_lines,
+            skipped_chars = skipped_content.len(),
+        ));
+        for line in effective_tail {
+            output.push_str(line);
+            output.push('\n');
+        }
     }
 
     Ok(output)

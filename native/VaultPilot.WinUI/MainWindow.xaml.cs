@@ -130,7 +130,7 @@ public sealed partial class MainWindow : Window
 
         // Register keyboard accelerators that use VirtualKey values not supported
         // by the XAML compiler (OemComma, D1, D2).
-        AddKeyboardAccelerator(VirtualKey.OemComma, VirtualKeyModifiers.Control, OnSettingsAccelerator);
+        AddKeyboardAccelerator((VirtualKey)188, VirtualKeyModifiers.Control, OnSettingsAccelerator); // OemComma
         AddKeyboardAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, OnNavChatAccelerator);
         AddKeyboardAccelerator(VirtualKey.Number2, VirtualKeyModifiers.Control, OnNavNotesAccelerator);
     }
@@ -989,7 +989,7 @@ public sealed partial class MainWindow : Window
     private void OnNewSessionAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        _ = OnNewSessionClicked(NewSessionButton, new RoutedEventArgs());
+        OnNewSessionClicked(NewSessionButton, new RoutedEventArgs());
     }
 
     private void OnToggleSidebarAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -1001,7 +1001,7 @@ public sealed partial class MainWindow : Window
     private void OnSettingsAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        _ = OnSettingsClicked(SettingsButton, new RoutedEventArgs());
+        OnSettingsClicked(SettingsButton, new RoutedEventArgs());
     }
 
     private void OnEscapeAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -1236,7 +1236,6 @@ public sealed partial class MainWindow : Window
             Spacing = 4,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
-        AutomationProperties.SetLiveSetting(stack, AutomationLiveSetting.Assertive);
         AutomationProperties.SetName(stack, "AI 正在思考");
         stack.Children.Add(label);
         stack.Children.Add(bubble);
@@ -1485,7 +1484,6 @@ public sealed partial class MainWindow : Window
                     var span = new Span
                     {
                         FontFamily = new FontFamily("Consolas"),
-                        Background = GetThemeBrush("CodeInlineBackgroundBrush"),
                         Foreground = GetThemeBrush("CodeInlineForegroundBrush")
                     };
                     span.Inlines.Add(new Run { Text = text[(index + 1)..closeIndex] });
@@ -3009,7 +3007,7 @@ public sealed partial class MainWindow : Window
                 Content = "打开设置",
                 HorizontalAlignment = HorizontalAlignment.Center,
             };
-            settingsBtn.Click += async (_, _) => await OnSettingsClicked(settingsBtn, new RoutedEventArgs());
+            settingsBtn.Click += (_, _) => OnSettingsClicked(settingsBtn, new RoutedEventArgs());
             container.Children.Add(settingsBtn);
         }
 

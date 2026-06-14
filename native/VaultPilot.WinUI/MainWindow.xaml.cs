@@ -916,7 +916,10 @@ public sealed partial class MainWindow : Window
             await AddTurnAsync("assistant", message);
             RenderCurrentSession();
             ScrollToLatest();
-            await SaveChatStateAsync();
+            if (!_isShuttingDown)
+            {
+                await SaveChatStateAsync();
+            }
             ShowError(errorTitle, error, addMessage: false);
         }
         finally
@@ -1075,7 +1078,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                await activeTask.WaitAsync(TimeSpan.FromSeconds(5));
+                await activeTask.WaitAsync(TimeSpan.FromSeconds(35));
             }
             catch (TimeoutException)
             {

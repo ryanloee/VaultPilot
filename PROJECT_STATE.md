@@ -19,6 +19,10 @@
 6. 📝 文档和测试覆盖
 
 ## 已完成记录
+- #453: ExecuteAiRequestAsync 期间禁用 NewSession/DeleteSession 按钮 (PR #456 已合并)
+- #454: NotesView 后端调用 30s CancellationToken 超时保护 (PR #456 已合并)
+- #455: FTS5 查询错误 tracing::warn! 日志记录 (PR #456 已合并)
+- #445: winui_build CI 添加 MSBuild build + test 步骤 (main 直接提交已修复)
 - #417: CancelActiveRequest Volatile.Read 保护 (PR #422 已合并)
 - #418: serde_yml → serde_yaml_ng 替换废弃依赖 (PR #421 已合并)
 - #416: derive_machine_key KDF — 已由 PR #413 (PBKDF2-HMAC-SHA256 600k) 修复，关闭
@@ -311,45 +315,32 @@
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: PR审核轮#89
+- 循环编号: 循环#91
 - 本轮时间: 2026-06-14
-- 项目状态: **1 open issue (#445), 1 open PR (#451 待合并), 186 已合并 PR, 0 阻塞项**
-- 审核结果:
-  - PR #448 (#447): ✅ 已合并 — 1行修复，CI 5/6 通过（cargo audit 预存在 CVE）
-  - PR #449 (#446): ✅ 已合并 — TaskCompletionSource 同步模式，CI 5/6 通过
-  - PR #450 (#445): ❌ 关闭 — winui_build 失败（`dotnet workload install microsoft-windows-sdk-net` 无效 workload ID）
-  - PR #451 (#445): 待合并 — 移除无效 workload install 步骤，仅保留 restore + build + test
+- 讨论重点方向: 修复循环#90 审查发现的 3 个 BUG + CI 修复
+- 项目状态: **0 open issues, 0 open PR, 187 已合并 PR, 0 阻塞项**
+- 修复目标: #453, #454, #455, #445
+- 审查目标: PR #452 (winui-build CI)
+- 修复结果:
+  - PR #456 ✅ 已合并 — 3 个 BUG 修复（#453 + #454 + #455）
+  - #445 ✅ 已关闭 — winui_build CI 修复已在 main 上通过（MSBuild /restore 方案）
+  - PR #452, #457 关闭 — 已被 main 上的直接提交取代
+  - 项目恢复 0 open issue + 0 open PR 状态，累计 187 已合并 PR
 
-- 2026-06-14 [循环#73]: 全代码库三路并行深度审查，创建 3 个 issue (#416, #417, #418)
-- 2026-06-14 [修复轮#74]: 修复循环#73 创建的 3 个 issue
-- 2026-06-14 [修复轮#74]: #416 已由 PR #413 修复（PBKDF2-HMAC-SHA256 600k 迭代），关闭
-- 2026-06-14 [修复轮#74]: #417 PR #422 已合并（Volatile.Read 防止 stale read）
-- 2026-06-14 [修复轮#74]: #418 PR #421 已合并（serde_yml → serde_yaml_ng）
-- 2026-06-14 [修复轮#74]: 项目恢复 0 open issue + 0 open PR 状态，累计 174 已合并 PR
-- 2026-06-14 [修复轮#76]: 修复循环#75 创建的 3 个 issue
-- 2026-06-14 [修复轮#76]: #423 PR #427（_readerCts.Cancel 前置于 FailPending）
-- 2026-06-14 [修复轮#76]: #424 PR #426（atomic_write 失败时清理临时文件）
-- 2026-06-14 [修复轮#76]: #425 PR #428（剪贴板文件名添加随机后缀）
-- 2026-06-14 [PR审核轮#77]: 审核 3 个 open PR (#426, #427, #428)，全部合并
-- 2026-06-14 [PR审核轮#77]: PR #426 clippy 失败（map_err 应为 inspect_err），修复后 CI 5/6 通过并合并
-- 2026-06-14 [PR审核轮#77]: 项目恢复 0 open issue + 0 open PR 状态，累计 177 已合并 PR
-- 2026-06-14 [修复轮#79]: 修复循环#78 创建的 3 个 BUG issue
-- 2026-06-14 [修复轮#79]: #431 PR #432（case-insensitive snippet highlight，保留原文大小写）
-- 2026-06-14 [修复轮#79]: #429 + #430 PR #433（async void try-catch + SendAsync 30s timeout CTS）
-- 2026-06-14 [PR审核轮#80]: 审核并合并 PR #432 (#431) 和 PR #433 (#429+#430)，累计 179 已合并 PR
-- 2026-06-14 [PR审核轮#80]: 项目恢复 0 open issue + 0 open PR 状态
-- 2026-06-14 [修复轮#82]: 修复循环#81 创建的 3 个 issue
-- 2026-06-14 [修复轮#82]: #434 PR #438（extract_json_block 遍历所有花括号位置，跳过散文中的括号）
-- 2026-06-14 [修复轮#82]: #435 PR #437（移除 ItemClick handler + CancellationToken 防过时数据）
-- 2026-06-14 [修复轮#82]: #436 PR #437（query_like_note_metas .take(20) 限制搜索词上限）
+## 决策记录
+- 2026-06-14 [循环#91]: PR #456 一次性修复 3 个 BUG（#453 按钮禁用、#454 CancellationToken、#455 FTS5 日志），单 PR 多 issue 策略验证成功
+- 2026-06-14 [循环#91]: winui_build CI 最终方案：MSBuild /restore 替代 dotnet restore，msbuild /t:VSTest 替代 dotnet test，windows-2022 runner
+- 2026-06-14 [循环#91]: PR #452 多次迭代失败后，CI 修复通过 main 直接提交完成（非 PR 合并路径）
 
-- 2026-06-14 [修复轮#88]: 修复循环#87 创建的 3 个 BUG issue
-- 2026-06-14 [修复轮#88]: #447 PR #448（CheckForAppUpdatesAsync _updateCheckStarted 瞬态失败后重置）
-- 2026-06-14 [修复轮#88]: #446 PR #449（ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源）
-- 2026-06-14 [修复轮#88]: #445 PR #450（winui_build CI 添加 dotnet build + dotnet test 步骤）
-- 2026-06-14 [修复轮#88]: 修复目标 3/3 全部完成，3 个 PR 待合并
-- 2026-06-14 [PR审核轮#89]: 审核 3 个 open PR (#448, #449, #450)
-- 2026-06-14 [PR审核轮#89]: PR #448 ✅ 已合并（#447 _updateCheckStarted 重置）
-- 2026-06-14 [PR审核轮#89]: PR #449 ✅ 已合并（#446 ShutdownAsync 竞态修复）
-- 2026-06-14 [PR审核轮#89]: PR #450 ❌ 关闭（winui_build CI 失败 — 无效 workload ID）
-- 2026-06-14 [PR审核轮#89]: PR #451 创建（取代 #450，移除无效 workload install 步骤）
+## 项目健康度快照
+
+| 指标 | 循环#91 |
+|------|---------|
+| Open issues 总数 | 0 ✅ |
+| Open Bug 数 | 0 ✅ |
+| Open Security 数 | 0 ✅ |
+| Open Performance 数 | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ |
+| 已合并 PR | 187 |
+| 进行中 PR | 0 ✅ |
+| 阻塞项 | 0 ✅ |

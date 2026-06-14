@@ -16,8 +16,8 @@ use models::{
     StructuredNoteDraft, ThinkingTrace, ThinkingTraceStep,
 };
 use storage::{
+    has_notes_async,
     initialize_storage_async,
-    list_notes_async,
     // Sync originals for load_recent_notes_for_overview helper
     // (moved to storage.rs with async wrapper)
     load_chat_state_async,
@@ -313,7 +313,7 @@ pub async fn ask_with_ai_with_context(
     let effective_question = build_effective_question(&raw_question, &images).await;
     let history = history.unwrap_or_default();
     let session_memory_question = looks_like_session_memory_question(&raw_question);
-    let has_local_notes = !list_notes_async(context).await?.is_empty();
+    let has_local_notes = has_notes_async(context).await?;
     let mut docs: Vec<NoteDocument> = Vec::new();
     let mut tool_results: Vec<ToolExecution> = Vec::new();
     let mut saved_note: Option<NoteMeta> = None;

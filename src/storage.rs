@@ -530,6 +530,20 @@ pub fn list_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>
     Ok(result.notes)
 }
 
+/// Returns `true` if the notes table contains at least one row.
+///
+/// This is much cheaper than [`list_notes_with_context`] which loads full
+/// metadata — use this when you only need to know whether any notes exist.
+#[instrument(skip(context))]
+pub fn has_notes_with_context(context: &StorageContext) -> Result<bool> {
+    let (connection, _) = open_connection(context)?;
+    let exists: bool =
+        connection.query_row("SELECT EXISTS(SELECT 1 FROM notes LIMIT 1)", [], |row| {
+            row.get(0)
+        })?;
+    Ok(exists)
+}
+
 #[instrument(skip(context))]
 pub fn search_notes_with_context(
     context: &StorageContext,
@@ -2967,6 +2981,14 @@ pub async fn save_chat_state_async(ctx: &StorageContext, state: &ChatState) -> R
 pub async fn list_notes_async(ctx: &StorageContext) -> Result<Vec<NoteMeta>> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || list_notes_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`has_notes_with_context`].
+pub async fn has_notes_async(ctx: &StorageContext) -> Result<bool> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || has_notes_with_context(&ctx))
         .await
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }

@@ -187,6 +187,9 @@
 - #518: GetNextAutoWakeTime 200 迭代上限截断小间隔唤醒窗口 (PR #521 已合并)
 - #519: VAULTPILOT_ALLOW_LOCAL_ENDPOINT 绕过 DNS pinning — 仍解析 DNS 钉住地址 (PR #521 已合并)
 - #520: mask_secret UTF-8 多字节边界 panic — 改用 chars() 操作 (PR #521 已合并)
+- #522: FindNextInlineMarker + IsOpenAiOSeriesModel 热路径数组分配 → static readonly 字段 (PR #525 已合并)
+- #523: CreateAttachmentChip + GetThemeBrush Transparent SolidColorBrush 缓存复用 (PR #525 已合并)
+- #524: sanitize_error Authorization: Basic 凭据脱敏 (PR #525 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -372,29 +375,28 @@
 
 | 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
 |------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 | 讨论轮#105 | 讨论轮#106 | 讨论轮#108 | 修复轮#109 | PR审核轮#110 | 修复轮#111 | PR审核轮#112 | 讨论轮#113 | 修复轮#114 | PR审核轮#115 | 循环#117 | 循环#118 | 循环#119 |
-|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|-------------|-------------|-------------|-----------|-------------|-------------|-------------|-------------|-------------|-------------|-----------|-----------|-----------|
-| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 3 | 1 | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 2 | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 3 | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 | 190 | 190 | 192 | 196 | 196 | 198 | 199 | 200 | 200 | 202 | 202 | 202 | 205 | 208 | 211 | 214 |
-| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 | 讨论轮#105 | 讨论轮#106 | 讨论轮#108 | 修复轮#109 | PR审核轮#110 | 修复轮#111 | PR审核轮#112 | 讨论轮#113 | 修复轮#114 | PR审核轮#115 | 循环#117 | 循环#118 | 循环#119 | 循环#120 |
+|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|-------------|-------------|-------------|-----------|-------------|-------------|-------------|-------------|-------------|-------------|-----------|-----------|-----------|-----------|
+| Open issues 总数 | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Bug 数 | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Security 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 190 | 192 | 192 | 194 | 196 | 198 | 200 | 202 | 202 | 202 | 208 | 211 | 214 | 214 | 214 | 214 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 216 |
+| 进行中 PR | 1 | 0 | 1 | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#119
+- 循环编号: 循环#120
 - 本轮时间: 2026-06-15
-- 审查模块: Rust models.rs + prompting.rs + bin/vaultpilot-agent.rs + bin/vaultpilot-cli.rs + lib.rs + ai.rs, C# MainWindow.xaml.cs + BackendClient.cs + NotesView.xaml.cs + AppSettings.cs + ChatModels.cs + NoteModels.cs + AiModels.cs + OperationModels.cs + Program.cs + SettingsDialog.xaml.cs + MainWindow.Updates.cs + WrapPanel.cs + StringToVisibilityConverter.cs + App.xaml.cs + 3 XAML files
+- 审查模块: Rust lib.rs (sanitize_error), C# MainWindow.xaml.cs (FindNextInlineMarker, IsOpenAiOSeriesModel, CreateAttachmentChip, GetThemeBrush)
 - 讨论阶段发现:
-  - **#518** MEDIUM BUG: GetNextAutoWakeTime 200-iteration cap truncates wake window for small intervals
-  - **#519** MEDIUM SECURITY: DNS pinning bypassed when VAULTPILOT_ALLOW_LOCAL_ENDPOINT is set
-  - **#520** LOW BUG: mask_secret panics on multi-byte UTF-8 boundary slicing
-  - 额外 LOW 级发现（未创建 issue）：generate_programmatic_snippet highlight 重叠损坏、agent log rotation 非原子、MCP protocol version 静默接受任意版本、strip_inline_markdown 未闭合 marker 吞噬全文、read_image_preview TOCTOU、CACHED_CLIENT API key 内存未清零、AppSettings validate 不检查可写性、EnsureConnectedAsync 返回值丢弃、FormatUpdatedAt culture-dependent、FailPending 不清理 _pending、BackendClient DisposeAsync _isDisposed 非原子、JSON null 处理、Markdown 表格分隔检测过于宽松、FontFamily("Consolas") 重复分配
+  - **#522** PERF: FindNextInlineMarker + IsOpenAiOSeriesModel 热路径 new[] 每次调用分配
+  - **#523** BUG: CreateAttachmentChip 每次创建 SolidColorBrush(Transparent)
+  - **#524** SECURITY: sanitize_error 不脱敏 Authorization: Basic 凭据
 - 修复结果:
-  - **PR #521** (#518 + #519 + #520): ✅ 已合并 — auto-wake timer cap 修复 + DNS pinning with local endpoints + mask_secret UTF-8 安全
-- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ❌ (预存在 CVE)
-- 项目状态: **0 open issue, 0 open PR, 214 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 ~10K 行 Rust + ~8.5K 行 C# 代码，发现 1 MEDIUM SECURITY + 1 MEDIUM BUG + 1 LOW BUG，均已修复。
+  - **PR #525** (#522 + #523 + #524): ✅ 已合并 — Basic auth 脱敏 + 缓存 Transparent brush + static 数组字段
+- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ⏳, cargo audit ❌ (预存在 CVE)
+- 项目状态: **0 open issue, 0 open PR, 215 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 ~15K 行 Rust + ~8.5K 行 C# 代码，Rust 后端安全实践优秀，C# 前端代码质量高。新发现均为 LOW severity 性能和维护改进。

@@ -127,6 +127,19 @@ public sealed partial class MainWindow : Window
         ChatScrollViewer.ViewChanged += OnChatScrollViewerViewChanged;
         JumpLatestButton.Click += OnJumpLatestClicked;
         RootGrid.SizeChanged += OnRootGridSizeChanged;
+
+        // Register keyboard accelerators that use VirtualKey values not supported
+        // by the XAML compiler (OemComma, D1, D2).
+        AddKeyboardAccelerator(VirtualKey.OemComma, VirtualKeyModifiers.Control, OnSettingsAccelerator);
+        AddKeyboardAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, OnNavChatAccelerator);
+        AddKeyboardAccelerator(VirtualKey.Number2, VirtualKeyModifiers.Control, OnNavNotesAccelerator);
+    }
+
+    private void AddKeyboardAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs> handler)
+    {
+        var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+        accelerator.Invoked += handler;
+        RootGrid.KeyboardAccelerators.Add(accelerator);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)

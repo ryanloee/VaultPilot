@@ -340,3 +340,6 @@
 - 2026-06-14 [循环#91]: PR #452 多次迭代失败后，CI 修复通过 main 直接提交完成（非 PR 合并路径）
 - 2026-06-14 [修复轮#102]: 3 个 issue 全部修复（#470 SaveChatState 竞态, #471 _chatStateLock Dispose, #472 N+1 查询），创建 PR #473 和 PR #474
 - 2026-06-14 [修复轮#102]: #471 + #472 合并为单 PR（PR #474），#470 单独一个 PR（PR #473）
+- #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
+- #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
+- #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)

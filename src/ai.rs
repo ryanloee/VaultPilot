@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 use std::{collections::HashSet, path::Path, time::Duration};
 
@@ -19,13 +19,14 @@ use tracing::{debug, info, instrument, warn};
 
 const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024; // 50MB
 
-/// Cached HTTP client, rebuilt only when provider config changes.
+/// Cached HTTP client, rebuilt only when provider config or base_url changes.
 struct CachedClient {
     client: reqwest::Client,
     // Fingerprint of the config used to build this client.
     api_key: String,
     timeout_ms: u64,
     provider_type: crate::models::ProviderType,
+    base_url: String,
 }
 
 static CACHED_CLIENT: Mutex<Option<CachedClient>> = Mutex::new(None);
@@ -34,6 +35,8 @@ fn get_or_build_client(
     api_key: &str,
     timeout_ms: u64,
     provider_type: crate::models::ProviderType,
+    base_url: &str,
+    resolved_addrs: &[(String, SocketAddr)],
 ) -> Result<reqwest::Client> {
     let mut cache = CACHED_CLIENT.lock().unwrap_or_else(|e| {
         tracing::warn!("CACHED_CLIENT lock poisoned, recovering inner value");
@@ -43,6 +46,7 @@ fn get_or_build_client(
         if cached.api_key == api_key
             && cached.timeout_ms == timeout_ms
             && cached.provider_type == provider_type
+            && cached.base_url == base_url
         {
             return Ok(cached.client.clone());
         }
@@ -69,16 +73,24 @@ fn get_or_build_client(
         }
     }
 
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
-        .default_headers(headers)
-        .build()?;
+        .default_headers(headers);
+
+    // Pin DNS to the addresses verified by validate_base_url to prevent
+    // DNS rebinding TOCTOU attacks (issue #503).
+    for (host, addr) in resolved_addrs {
+        builder = builder.resolve(host, *addr);
+    }
+
+    let client = builder.build()?;
 
     *cache = Some(CachedClient {
         client: client.clone(),
         api_key: api_key.to_string(),
         timeout_ms,
         provider_type,
+        base_url: base_url.to_string(),
     });
     Ok(client)
 }
@@ -1158,13 +1170,15 @@ async fn send_request_with_temperature(
     }
 
     let provider_type = provider.effective_provider_type();
+    let resolved_addrs = validate_base_url(&provider.base_url).await?;
     let client = get_or_build_client(
         &provider.api_key,
         provider.request_timeout_ms,
         provider_type,
+        &provider.base_url,
+        &resolved_addrs,
     )?;
 
-    validate_base_url(&provider.base_url).await?;
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);
 
     let body: Bytes = match provider_type {
@@ -1523,14 +1537,19 @@ fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
     None
 }
 
-/// Validate that a base_url is safe to use as a request endpoint.
+/// Validate that a base_url is safe to use as a request endpoint, and
+/// resolve DNS to pin the verified addresses.
 ///
 /// Checks:
 /// 1. URL must parse as valid HTTP or HTTPS.
 /// 2. Host must be present.
 /// 3. Rejects RFC 1918 / loopback / link-local addresses (SSRF protection)
 ///    unless `VAULTPILOT_ALLOW_LOCAL_ENDPOINT` env var is set.
-async fn validate_base_url(base_url: &str) -> Result<()> {
+///
+/// Returns a list of `(hostname, SocketAddr)` pairs that were verified to be
+/// non-private. These can be passed to `reqwest::ClientBuilder::resolve()` to
+/// pin DNS and prevent rebinding attacks (TOCTOU fix, #503).
+async fn validate_base_url(base_url: &str) -> Result<Vec<(String, SocketAddr)>> {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("base_url is empty"));
@@ -1560,7 +1579,7 @@ async fn validate_base_url(base_url: &str) -> Result<()> {
 
     // Allow explicit opt-in to local/private endpoints via env var.
     if std::env::var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT").is_ok() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     if host_str == "localhost" {
@@ -1578,6 +1597,7 @@ async fn validate_base_url(base_url: &str) -> Result<()> {
                 ip
             ));
         }
+        Ok(Vec::new())
     } else {
         // For hostnames that aren't literal IPs, resolve DNS and check each address.
         let port = parsed
@@ -1585,6 +1605,7 @@ async fn validate_base_url(base_url: &str) -> Result<()> {
             .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
         match tokio::net::lookup_host(format!("{}:{}", host_str, port)).await {
             Ok(addrs) => {
+                let mut resolved = Vec::new();
                 for addr in addrs {
                     if is_private_ip(addr.ip()) {
                         return Err(anyhow!(
@@ -1594,19 +1615,17 @@ async fn validate_base_url(base_url: &str) -> Result<()> {
                             addr.ip()
                         ));
                     }
+                    resolved.push((host_str.to_string(), addr));
                 }
+                Ok(resolved)
             }
-            Err(e) => {
-                return Err(anyhow!(
-                    "failed to resolve base_url host '{}': {}",
-                    host_str,
-                    e
-                ));
-            }
+            Err(e) => Err(anyhow!(
+                "failed to resolve base_url host '{}': {}",
+                host_str,
+                e
+            )),
         }
     }
-
-    Ok(())
 }
 
 /// Returns `true` for RFC 1918, loopback, link-local, and other reserved IPs.

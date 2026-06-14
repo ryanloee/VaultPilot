@@ -61,8 +61,6 @@ jobs:
   winui_build:
     name: winui-build
     runs-on: windows-2022
-    env:
-      DOTNET_MULTILEVEL_LOOKUP: 0
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,14 +69,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
-      - name: Set DOTNET_ROOT
-        shell: pwsh
-        run: |
-          Write-Host "=== Installed SDKs ==="
-          Get-ChildItem "C:\Program Files\dotnet\sdk\" -Directory -ErrorAction SilentlyContinue | Select-Object Name
-          Write-Host "=== dotnet version ==="
-          dotnet --version
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

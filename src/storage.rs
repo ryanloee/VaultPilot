@@ -831,14 +831,21 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<IndexStats
     let vault_dir = PathBuf::from(&settings.vault_dir);
     fs::create_dir_all(&vault_dir)?;
 
-    let tx = connection.transaction()?;
-    let mut indexed_paths = HashSet::new();
-    let mut stats = IndexStats::default();
-    for entry in WalkDir::new(&vault_dir)
+    // Collect all markdown files first (no transaction needed).
+    let markdown_files: Vec<_> = WalkDir::new(&vault_dir)
         .into_iter()
         .filter_map(|entry| entry.ok())
-    {
-        if entry.file_type().is_file() && is_markdown_file(entry.path()) {
+        .filter(|entry| entry.file_type().is_file() && is_markdown_file(entry.path()))
+        .collect();
+
+    let mut indexed_paths = HashSet::new();
+    let mut stats = IndexStats::default();
+
+    // Process files in batches of 50 to avoid holding a long write lock.
+    const BATCH_SIZE: usize = 50;
+    for chunk in markdown_files.chunks(BATCH_SIZE) {
+        let tx = connection.transaction()?;
+        for entry in chunk {
             stats.scanned += 1;
             let canonical = entry
                 .path()
@@ -849,27 +856,32 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<IndexStats
                 stats.indexed += 1;
             }
         }
+        tx.commit()?;
     }
 
-    let mut statement = tx.prepare("SELECT path FROM notes")?;
-    let existing_paths = statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
-    for existing in existing_paths {
-        if !indexed_paths.contains(&existing) {
-            tx.execute(
-                "DELETE FROM note_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
-                [&existing],
-            )?;
-            tx.execute(
-                "DELETE FROM attachment_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
-                [&existing],
-            )?;
-            stats.removed += tx.execute("DELETE FROM notes WHERE path = ?1", [&existing])?;
+    // Clean up stale entries in a separate transaction.
+    {
+        let tx = connection.transaction()?;
+        let mut statement = tx.prepare("SELECT path FROM notes")?;
+        let existing_paths = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        for existing in existing_paths {
+            if !indexed_paths.contains(&existing) {
+                tx.execute(
+                    "DELETE FROM note_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
+                    [&existing],
+                )?;
+                tx.execute(
+                    "DELETE FROM attachment_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
+                    [&existing],
+                )?;
+                stats.removed += tx.execute("DELETE FROM notes WHERE path = ?1", [&existing])?;
+            }
         }
+        tx.commit()?;
     }
-    tx.commit()?;
 
     Ok(stats)
 }

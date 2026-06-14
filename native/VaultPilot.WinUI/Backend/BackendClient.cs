@@ -83,7 +83,17 @@ public sealed class BackendClient : IAsyncDisposable
             }
         };
 
-        _process.Start();
+        try
+        {
+            _process.Start();
+        }
+        catch
+        {
+            _process.Dispose();
+            _process = null!;
+            throw;
+        }
+
         _readerCts?.Cancel();
         _readerCts?.Dispose();
         _readerCts = new CancellationTokenSource();
@@ -100,7 +110,14 @@ public sealed class BackendClient : IAsyncDisposable
 
     private void SetHealthCheckInterval(TimeSpan interval)
     {
-        _healthCheckTimer?.Change(interval, interval);
+        try
+        {
+            _healthCheckTimer?.Change(interval, interval);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Timer was disposed between the null-check and Change(); safe to ignore.
+        }
     }
 
     private void RegisterPowerModeHandler()

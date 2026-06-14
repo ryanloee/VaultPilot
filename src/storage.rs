@@ -1874,46 +1874,18 @@ fn filter_by_date_range(
     notes
 }
 
-fn query_fts_note_ids(connection: &Connection, text: &str, limit: usize) -> Result<Vec<String>> {
-    let fts_query = make_fts_query(text);
-    if fts_query.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut statement = connection.prepare(
-        "SELECT note_id
-         FROM note_fts
-         WHERE note_fts MATCH ?1
-         ORDER BY bm25(note_fts)
-         LIMIT ?2",
-    )?;
-    let rows = match statement.query_map(params![fts_query, limit as i64], |row| {
-        row.get::<_, String>(0)
-    }) {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(error = %e, "FTS5 query failed, returning empty results");
-            return Ok(Vec::new());
-        }
-    }
-    .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-/// Query FTS5 for per-note body snippets with `==highlight==` markers around
-/// matched terms.  Returns a map of note_id → snippet text.
-fn query_fts_snippets(
+///// Combined FTS5 query that returns both ordered note IDs and body snippets
+/// in a single query, halving the FTS5 query cost.
+fn query_fts_ids_and_snippets(
     connection: &Connection,
     text: &str,
     limit: usize,
-) -> Result<HashMap<String, String>> {
+) -> Result<(Vec<String>, HashMap<String, String>)> {
     let fts_query = make_fts_query(text);
     if fts_query.trim().is_empty() {
-        return Ok(HashMap::new());
+        return Ok((Vec::new(), HashMap::new()));
     }
 
-    // snippet() parameters: table, column_idx, open_marker, close_marker, ellipsis, max_tokens
-    // Column 3 = body (0=note_id, 1=title, 2=keywords, 3=body)
     let mut statement = connection.prepare(
         "SELECT note_id, snippet(note_fts, 3, '==', '==', '…', 64)
          FROM note_fts
@@ -1927,19 +1899,21 @@ fn query_fts_snippets(
     }) {
         Ok(rows) => rows,
         Err(e) => {
-            tracing::warn!(error = %e, "FTS5 snippet query failed, returning empty results");
-            return Ok(HashMap::new());
+            tracing::warn!(error = %e, "FTS5 combined query failed, returning empty results");
+            return Ok((Vec::new(), HashMap::new()));
         }
     };
 
+    let mut ids = Vec::new();
     let mut snippets = HashMap::new();
     for row in rows {
         let (note_id, snippet) = row?;
+        ids.push(note_id.clone());
         if !snippet.trim().is_empty() && snippet.contains("==") {
             snippets.insert(note_id, snippet);
         }
     }
-    Ok(snippets)
+    Ok((ids, snippets))
 }
 
 fn query_attachment_fts_note_ids(
@@ -2201,9 +2175,9 @@ fn rank_documents(
     image_paths: &[String],
     limit: usize,
 ) -> Result<Vec<NoteDocument>> {
-    let note_fts_ids = query_fts_note_ids(connection, query, limit.saturating_mul(6).max(18))?;
-    // Fetch FTS5 body snippets with highlight markers for matching notes.
-    let fts_snippets = query_fts_snippets(connection, query, limit.saturating_mul(6).max(18))?;
+    // Single FTS5 query returns both ordered IDs and body snippets.
+    let (note_fts_ids, fts_snippets) =
+        query_fts_ids_and_snippets(connection, query, limit.saturating_mul(6).max(18))?;
     let attachment_query = attachment_query_text(query, image_paths);
     let attachment_fts_ids = query_attachment_fts_note_ids(
         connection,

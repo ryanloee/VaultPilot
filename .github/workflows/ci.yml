@@ -146,3 +146,15 @@ jobs:
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('native/VaultPilot.WinUI/VaultPilot.WinUI.csproj') }}
+
+      - name: Install Windows App SDK workload
+        run: dotnet workload install microsoft-windows-sdk-net
+
+      - name: Restore NuGet packages
+        run: dotnet restore native/VaultPilot.WinUI/VaultPilot.WinUI.csproj
+
+      - name: Build WinUI
+        run: dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release
+
+      - name: Run C# tests
+        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore -c Release --logger "trx;LogFileName=test-results.trx"

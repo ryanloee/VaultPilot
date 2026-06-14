@@ -120,7 +120,7 @@ jobs:
 
   winui_build:
     name: winui-build
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -129,9 +129,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -148,10 +145,10 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('native/VaultPilot.WinUI/VaultPilot.WinUI.csproj') }}
 
       - name: Restore NuGet packages
-        run: dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj -p:Platform=x64
+        run: dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
 
       - name: Build WinUI
-        run: dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release -p:Platform=x64 -v:detailed
+        run: dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release -p:Platform=x64
 
       - name: Run C# tests
         run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"

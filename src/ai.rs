@@ -181,6 +181,85 @@ struct AnthropicUsage {
     output_tokens: usize,
 }
 
+// ---------------------------------------------------------------------------
+// OpenAI-compatible request / response structs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+struct OpenAiRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    temperature: f32,
+    messages: Vec<OpenAiMessage>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiMessage {
+    role: String,
+    content: OpenAiContent,
+}
+
+/// OpenAI content can be a plain string (text-only) or an array of parts
+/// (when images are present).
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum OpenAiContent {
+    Text(String),
+    Parts(Vec<OpenAiContentPart>),
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAiContentPart {
+    Text {
+        text: String,
+    },
+    #[serde(rename = "image_url")]
+    ImageUrl {
+        image_url: OpenAiImageUrl,
+    },
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct OpenAiImageUrl {
+    url: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiResponse {
+    #[serde(default)]
+    choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: OpenAiUsage,
+    error: Option<OpenAiApiError>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiChoice {
+    #[serde(default)]
+    message: OpenAiChoiceMessage,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiChoiceMessage {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiApiError {
+    #[serde(default)]
+    message: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiUsage {
+    #[serde(default)]
+    prompt_tokens: usize,
+    #[serde(default)]
+    completion_tokens: usize,
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct IngestResponse {
     #[serde(default)]
@@ -1087,19 +1166,33 @@ async fn send_request_with_temperature(
 
     validate_base_url(&provider.base_url).await?;
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);
-    let content_blocks = build_input_blocks(prompt, image_paths).await?;
 
-    let payload = AnthropicRequest {
-        model: &provider.model,
-        max_tokens: resolve_max_output_tokens(&provider.model, provider.max_output_tokens),
-        temperature,
-        system,
-        messages: vec![AnthropicMessage {
-            role: "user".to_string(),
-            content: content_blocks,
-        }],
+    let body: Bytes = match provider_type {
+        crate::models::ProviderType::Anthropic => {
+            let content_blocks = build_input_blocks(prompt, image_paths).await?;
+            let payload = AnthropicRequest {
+                model: &provider.model,
+                max_tokens: resolve_max_output_tokens(&provider.model, provider.max_output_tokens),
+                temperature,
+                system,
+                messages: vec![AnthropicMessage {
+                    role: "user".to_string(),
+                    content: content_blocks,
+                }],
+            };
+            serde_json::to_vec(&payload)?.into()
+        }
+        crate::models::ProviderType::OpenAi => {
+            let messages = build_openai_messages(system, prompt, image_paths).await?;
+            let payload = OpenAiRequest {
+                model: &provider.model,
+                max_tokens: resolve_max_output_tokens(&provider.model, provider.max_output_tokens),
+                temperature,
+                messages,
+            };
+            serde_json::to_vec(&payload)?.into()
+        }
     };
-    let body: Bytes = serde_json::to_vec(&payload)?.into();
 
     for attempt in 0..3 {
         let response = match client
@@ -1136,11 +1229,24 @@ async fn send_request_with_temperature(
         let text = String::from_utf8_lossy(&buf).to_string();
 
         if !status.is_success() {
-            let detail = serde_json::from_str::<AnthropicResponse>(&text)
-                .ok()
-                .and_then(|value| value.error.map(|error| error.message))
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or(text);
+            // Try to extract a human-readable error message from the response,
+            // using the format appropriate for the provider.
+            let detail = match provider_type {
+                crate::models::ProviderType::Anthropic => {
+                    serde_json::from_str::<AnthropicResponse>(&text)
+                        .ok()
+                        .and_then(|value| value.error.map(|error| error.message))
+                        .filter(|message| !message.trim().is_empty())
+                        .unwrap_or(text.clone())
+                }
+                crate::models::ProviderType::OpenAi => {
+                    serde_json::from_str::<OpenAiResponse>(&text)
+                        .ok()
+                        .and_then(|value| value.error.map(|error| error.message))
+                        .filter(|message| !message.trim().is_empty())
+                        .unwrap_or(text.clone())
+                }
+            };
 
             if is_retryable_provider_error(status.as_u16(), &detail) && attempt < 2 {
                 warn!(
@@ -1159,24 +1265,49 @@ async fn send_request_with_temperature(
             ));
         }
 
-        let parsed: AnthropicResponse =
-            serde_json::from_str(&text).context("failed to parse API response")?;
-        let usage = RequestUsage {
-            input_tokens: Some(parsed.usage.input_tokens),
-            output_tokens: Some(parsed.usage.output_tokens),
+        // Parse the response using the format appropriate for the provider.
+        let (joined, usage) = match provider_type {
+            crate::models::ProviderType::Anthropic => {
+                let parsed: AnthropicResponse =
+                    serde_json::from_str(&text).context("failed to parse API response")?;
+                let joined = parsed
+                    .content
+                    .into_iter()
+                    .filter(|block| block.kind == "text")
+                    .filter_map(|block| block.text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let usage = RequestUsage {
+                    input_tokens: Some(parsed.usage.input_tokens),
+                    output_tokens: Some(parsed.usage.output_tokens),
+                };
+                info!(
+                    input_tokens = parsed.usage.input_tokens,
+                    output_tokens = parsed.usage.output_tokens,
+                    "API request completed"
+                );
+                (joined, usage)
+            }
+            crate::models::ProviderType::OpenAi => {
+                let parsed: OpenAiResponse =
+                    serde_json::from_str(&text).context("failed to parse API response")?;
+                let joined = parsed
+                    .choices
+                    .first()
+                    .and_then(|choice| choice.message.content.clone())
+                    .unwrap_or_default();
+                let usage = RequestUsage {
+                    input_tokens: Some(parsed.usage.prompt_tokens),
+                    output_tokens: Some(parsed.usage.completion_tokens),
+                };
+                info!(
+                    input_tokens = parsed.usage.prompt_tokens,
+                    output_tokens = parsed.usage.completion_tokens,
+                    "API request completed"
+                );
+                (joined, usage)
+            }
         };
-        info!(
-            input_tokens = parsed.usage.input_tokens,
-            output_tokens = parsed.usage.output_tokens,
-            "API request completed"
-        );
-        let joined = parsed
-            .content
-            .into_iter()
-            .filter(|block| block.kind == "text")
-            .filter_map(|block| block.text)
-            .collect::<Vec<_>>()
-            .join("\n");
 
         if joined.trim().is_empty() {
             return Err(anyhow!("API returned an empty response"));
@@ -1252,6 +1383,67 @@ async fn build_input_blocks(
     }
 
     Ok(blocks)
+}
+
+/// Build the messages array for an OpenAI-compatible request.
+///
+/// The system prompt is emitted as a `system` role message. User content is a
+/// plain string when no images are attached, or an array of content parts when
+/// images are present.
+async fn build_openai_messages(
+    system: &str,
+    prompt: &str,
+    image_paths: &[String],
+) -> Result<Vec<OpenAiMessage>> {
+    let mut messages = Vec::new();
+
+    if !system.is_empty() {
+        messages.push(OpenAiMessage {
+            role: "system".to_string(),
+            content: OpenAiContent::Text(system.to_string()),
+        });
+    }
+
+    if image_paths.is_empty() {
+        messages.push(OpenAiMessage {
+            role: "user".to_string(),
+            content: OpenAiContent::Text(prompt.to_string()),
+        });
+    } else {
+        let mut parts: Vec<OpenAiContentPart> = vec![OpenAiContentPart::Text {
+            text: prompt.to_string(),
+        }];
+
+        for path in image_paths {
+            let media_type = detect_image_media_type(path)?;
+            const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024;
+            let metadata = tokio::fs::metadata(path)
+                .await
+                .with_context(|| format!("failed to stat image: {path}"))?;
+            if metadata.len() > MAX_IMAGE_SIZE {
+                return Err(anyhow!(
+                    "image file too large: {} ({} MB > 20 MB limit)",
+                    path,
+                    metadata.len() / (1024 * 1024)
+                ));
+            }
+            let data = tokio::fs::read(path)
+                .await
+                .with_context(|| format!("failed to read image: {path}"))?;
+            parts.push(OpenAiContentPart::ImageUrl {
+                image_url: OpenAiImageUrl {
+                    url: format!("data:{};base64,{}", media_type, STANDARD.encode(data)),
+                },
+            });
+        }
+
+        messages.push(OpenAiMessage {
+            role: "user".to_string(),
+            content: OpenAiContent::Parts(parts),
+        });
+    }
+
+    Ok(messages)
 }
 
 fn detect_image_media_type(path: &str) -> Result<&'static str> {

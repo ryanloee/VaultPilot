@@ -309,9 +309,10 @@ public sealed partial class MainWindow : Window
             RebuildButton.IsEnabled = false;
             UpdateStatusBar("info", "正在重建索引", "正在扫描知识库...");
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var stats = await _backendClient.SendAsync<IndexStats>("rebuildIndex", new { }, cts.Token);
-            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
+            using var rebuildCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var stats = await _backendClient.SendAsync<IndexStats>("rebuildIndex", new { }, rebuildCts.Token);
+            using var listCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, listCts.Token);
             _noteCount = notes?.Count ?? 0;
             RefreshVaultSummary();
 
@@ -349,9 +350,10 @@ public sealed partial class MainWindow : Window
             UpdateStatusBar("info", "正在导入", $"正在导入 {files.Count} 个 Markdown 文件...");
 
             var paths = files.Select(file => file.Path).ToArray();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var result = await _backendClient.SendAsync<ImportResult>("importMarkdown", new { paths }, cts.Token);
-            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
+            using var importCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var result = await _backendClient.SendAsync<ImportResult>("importMarkdown", new { paths }, importCts.Token);
+            using var listCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, listCts.Token);
             _noteCount = notes?.Count ?? 0;
             RefreshVaultSummary();
 

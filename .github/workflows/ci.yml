@@ -18,6 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
 
   clippy:
@@ -68,11 +69,6 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -87,17 +83,14 @@ jobs:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('native/VaultPilot.WinUI/VaultPilot.WinUI.csproj') }}
 
-      - name: Restore NuGet packages
-        run: dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
-
       - name: Build WinUI
-        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /p:Configuration=Release /p:Platform=x64
+        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /p:Configuration=Release /p:Platform=x64 /restore
 
       - name: Build C# tests
         run: msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Release /p:Platform=x64 /restore
 
       - name: Run C# tests
-        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-build -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"
+        run: msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /t:VSTest /p:Configuration=Release /p:Platform=x64
 
       - name: Upload test results
         uses: actions/upload-artifact@v4

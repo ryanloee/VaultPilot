@@ -146,13 +146,14 @@
 - #434: extract_json_block 首个花括号匹配 → 所有位置尝试 + serde_json 校验 (PR #438 已合并)
 - #435: NotesView SelectionChanged + ItemClick 双重请求 → 移除 ItemClick + CancellationToken (PR #437 已合并)
 - #436: query_like_note_metas LIKE 子句单词上限 .take(20) (PR #437 已合并)
-- #447: CheckForAppUpdatesAsync 瞬态失败后重置 _updateCheckStarted (PR #448 已合并)
-- #446: ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源 (PR #449 已合并)
+- #439: PERF — build_input_blocks 同步 fs::read 阻塞 Tokio → tokio::fs 异步 (PR #443 已合并)
+- #440: PERF — derive_machine_key PBKDF2 600k 迭代未缓存 → OnceLock 缓存 (PR #442 已合并)
+- #441: BUG — NotesView _loadDetailCts 泄漏 + ShowError 静默吞错 (PR #444 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-- PR #451: fix: add build and test steps to winui_build CI (#445) — 待合并（取代 #450，修正无效 workload install）
+（无）
 
 
 ## 已知阻塞项
@@ -291,45 +292,39 @@
 - 2026-06-14 [PR审核轮#83]: 审核并合并 2 个 PR (#437, #438)，累计 181 已合并 PR
 - 2026-06-14 [PR审核轮#83]: PR #437 额外修复 XAML IsItemClickEnabled 残留（Sibling agent 未清理 XAML 属性）
 - 2026-06-14 [PR审核轮#83]: 项目恢复 0 open issue + 0 open PR 状态
-- 2026-06-14 [循环#90]: 全代码库深度审查（Rust 9 文件 + C# 14 文件），创建 3 个 issue（#453 MEDIUM, #454 MEDIUM, #455 LOW）
-- 2026-06-14 [循环#90]: PR #452 (v3) winui-build 仍失败 — restore 目标错误，已留 comment 分析
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
 
 | 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
 |------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | 循环#90 |
-|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|---------|
-| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 4 |
-| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 4 |
-| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 | 186 |
-| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 1 |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | 修复轮#85 | PR审核轮#86 |
+|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-----------|-------------|
+| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 181 | 184 |
+| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 3 | 0 ✅ |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 循环#90
+- 循环编号: #87（讨论审查轮）
 - 本轮时间: 2026-06-14
-- 讨论重点方向: 全代码库深度审查（Rust + C#），产出新 issue
-- 项目状态: **4 open issues (#445, #453, #454, #455), 1 open PR (#452 待合并), 186 已合并 PR, 0 阻塞项**
-- 修复目标: #453, #454, #455（本轮审查发现的 3 个新 issue）
-- 审查目标: PR #452 (#445 winui_build CI)
-- 审查发现:
-  - PR #452 winui-build 仍然失败：restore 仅恢复 Tests 项目，主项目 NuGet 包未恢复
-  - 已在 PR #452 留 comment 分析失败原因和修复建议
-- 新建 issue:
-  - #453: BUG — ExecuteAiRequestAsync 期间 NewSession/DeleteSession 按钮未禁用（MEDIUM）
-  - #454: BUG — NotesView 后端调用缺少 CancellationToken 超时保护（MEDIUM）
-  - #455: BUG — FTS5 查询错误静默返回空结果，缺少日志记录（LOW）
-- 代码审查总结:
-  - Rust 后端：极高质量（0 unsafe、0 生产 unwrap、参数化 SQL、完整安全防护），仅发现 LOW 级别问题
-  - C# 前端：22+ async void handler 全部有 try-catch，发现 2 个 MEDIUM 级别遗漏
-  - 累计已合并 186 个 PR，项目处于"零缺陷"末期阶段
+- 项目状态: **3 open issue, 0 open PR, 184 已合并 PR, 0 阻塞项**
+- 审查方向: 三路并行深度审查（Rust 后端 + C# 前端 + 测试/CI）
+- 创建的 issue:
+  - #445: BUG — ci.yml winui_build job 空壳，C# 测试从未在 CI 运行 (CRITICAL)
+  - #446: BUG — ShutdownAsync 与 ExecuteAiRequestAsync catch 块竞态 (MEDIUM)
+  - #447: BUG — CheckForAppUpdatesAsync 瞬态失败后永久禁用更新 (MEDIUM)
+- 本轮修复目标: #445, #446, #447
+- 关键发现:
+  - CI 层面: winui_build job 无 run 步骤，~45 个 C# 测试从未被 CI 覆盖
+  - Rust 后端: 代码质量优秀，仅 LOW/MEDIUM 级发现
+  - C# 前端: 2 个 MEDIUM 竞态 + 3 个 MEDIUM + 5 个 LOW
 
 - 2026-06-14 [循环#73]: 全代码库三路并行深度审查，创建 3 个 issue (#416, #417, #418)
 - 2026-06-14 [修复轮#74]: 修复循环#73 创建的 3 个 issue
@@ -353,14 +348,16 @@
 - 2026-06-14 [修复轮#82]: #434 PR #438（extract_json_block 遍历所有花括号位置，跳过散文中的括号）
 - 2026-06-14 [修复轮#82]: #435 PR #437（移除 ItemClick handler + CancellationToken 防过时数据）
 - 2026-06-14 [修复轮#82]: #436 PR #437（query_like_note_metas .take(20) 限制搜索词上限）
+- 2026-06-14 [修复轮#85]: 修复循环#84 创建的 3 个 issue
+- 2026-06-14 [修复轮#85]: #439 PR #443（build_input_blocks → tokio::fs 异步读取，避免阻塞 Tokio worker）
+- 2026-06-14 [修复轮#85]: #440 PR #442（derive_machine_key OnceLock 缓存，600k PBKDF2 仅执行一次）
+- 2026-06-14 [修复轮#85]: #441 PR #444（NotesView CTS Dispose + ShowError InfoBar UI 反馈）
+- 2026-06-14 [PR审核轮#86]: 审核 3 个 open PR (#442, #443, #444)，全部合并
+- 2026-06-14 [PR审核轮#86]: CI 5/6 通过（cargo audit 预存在 CVE RUSTSEC-2026-0104），代码审查无问题
+- 2026-06-14 [PR审核轮#86]: 项目恢复 0 open issue + 0 open PR 状态，累计 184 已合并 PR
 
-- 2026-06-14 [修复轮#88]: 修复循环#87 创建的 3 个 BUG issue
-- 2026-06-14 [修复轮#88]: #447 PR #448（CheckForAppUpdatesAsync _updateCheckStarted 瞬态失败后重置）
-- 2026-06-14 [修复轮#88]: #446 PR #449（ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源）
-- 2026-06-14 [修复轮#88]: #445 PR #450（winui_build CI 添加 dotnet build + dotnet test 步骤）
-- 2026-06-14 [修复轮#88]: 修复目标 3/3 全部完成，3 个 PR 待合并
-- 2026-06-14 [PR审核轮#89]: 审核 3 个 open PR (#448, #449, #450)
-- 2026-06-14 [PR审核轮#89]: PR #448 ✅ 已合并（#447 _updateCheckStarted 重置）
-- 2026-06-14 [PR审核轮#89]: PR #449 ✅ 已合并（#446 ShutdownAsync 竞态修复）
-- 2026-06-14 [PR审核轮#89]: PR #450 ❌ 关闭（winui_build CI 失败 — 无效 workload ID）
-- 2026-06-14 [PR审核轮#89]: PR #451 创建（取代 #450，移除无效 workload install 步骤）
+- 2026-06-14 [循环#87]: 全代码库三路并行深度审查（Rust 后端 + C# 前端 + 测试/CI 覆盖率）
+- 2026-06-14 [循环#87]: Rust 后端质量优秀——5 个 LOW/MEDIUM 发现（TOCTOU 路径返回、匿名限流桶、分页效率等），无 HIGH/CRITICAL
+- 2026-06-14 [循环#87]: C# 前端发现 2 个 MEDIUM 竞态问题（ShutdownAsync 资源释放竞态、更新检查永久禁用）+ 3 个 MEDIUM（JSON null 反序列化、NotesView 缺少 CancellationToken、CTS 未 dispose）+ 5 个 LOW
+- 2026-06-14 [循环#87]: **CRITICAL CI 发现** — winui_build job 是空壳（无 run 步骤），C# 测试（~45 个）从未在 CI 中运行
+- 2026-06-14 [循环#87]: 创建 3 个 issue：#445 (CI 空壳, CRITICAL), #446 (Shutdown 竞态, MEDIUM BUG), #447 (更新检查禁用, MEDIUM BUG)

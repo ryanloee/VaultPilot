@@ -5,10 +5,12 @@ public sealed record ProviderConfig(
     string BaseUrl,
     string Model,
     ulong RequestTimeoutMs,
-    ulong? ContextWindowTokens)
+    ulong? ContextWindowTokens,
+    uint? MaxOutputTokens,
+    string? ProviderType)
 {
     public override string ToString() =>
-        $"ProviderConfig {{ ApiKey = [REDACTED], BaseUrl = {BaseUrl}, Model = {Model}, RequestTimeoutMs = {RequestTimeoutMs}, ContextWindowTokens = {ContextWindowTokens} }}";
+        $"ProviderConfig {{ ApiKey = [REDACTED], BaseUrl = {BaseUrl}, Model = {Model}, RequestTimeoutMs = {RequestTimeoutMs}, ContextWindowTokens = {ContextWindowTokens}, MaxOutputTokens = {MaxOutputTokens}, ProviderType = {ProviderType} }}";
 }
 
 public sealed record AppSettings(

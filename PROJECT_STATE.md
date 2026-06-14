@@ -152,11 +152,20 @@
 - #436: query_like_note_metas LIKE 子句单词上限 .take(20) (PR #437 已合并)
 - #447: CheckForAppUpdatesAsync 瞬态失败后重置 _updateCheckStarted (PR #448 已合并)
 - #446: ShutdownAsync TaskCompletionSource 等待活跃请求完成后再释放资源 (PR #449 已合并)
+- #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
+- #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
+- #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)
+- #466: IPv6 SSRF bypass — unique-local fd00::/8 + IPv4-mapped ::ffff:x.x.x.x (PR #469 已合并)
+- #467: C# ProviderConfig 添加 MaxOutputTokens/ProviderType 字段 (PR #468 已合并)
+- #470: SaveChatStateAsync 竞态移除 await 后写回逻辑 (PR #473 待合并)
+- #471: ShutdownAsync 移除 _chatStateLock.Dispose() (PR #474 待合并)
+- #472: load_recent_notes_for_overview N+1 查询改用 load_note_body_from_meta (PR #474 待合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-
+- PR #473: fix: remove SaveChatStateAsync write-back to prevent race condition (#470)
+- PR #474: fix: remove _chatStateLock.Dispose in ShutdownAsync + batch note loading (#471, #472)
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -314,22 +323,23 @@
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 
-- 循环编号: 修复轮#97
+- 循环编号: 修复轮#102
 - 本轮时间: 2026-06-14
-- 修复目标: #464 (CRITICAL BUG), #462 (SECURITY), #463 (BUG)
+- 修复目标: #470 (BUG/HIGH), #471 (BUG/MEDIUM), #472 (PERF/MEDIUM)
 - 修复结果:
-  - PR #465 ✅ 已创建 — 3 个 issue 一次性修复（#464 + #462 + #463）
-  - #464: AppendInlineMarkdown forward-progress guard — 防止未匹配标记导致无限循环
-  - #462: ProviderConfig.ToString() 重写，ApiKey 字段遮蔽为 [REDACTED]
-  - #463: read_file_result head/tail 重叠时仅输出 head 部分，避免行重复
-  - CI: cargo fmt ✅, cargo clippy ✅, cargo test ✅ (353+ tests)
-  - 项目状态: **0 open issue（待 PR 合并后关闭）, 1 open PR, 188 已合并 PR, 0 阻塞项**
+  - PR #473 ✅ 已创建 — #470 SaveChatStateAsync 竞态修复（移除 await 后写回逻辑）
+  - PR #474 ✅ 已创建 — #471 + #472 双 issue 修复
+    - #471: 移除 ShutdownAsync 中 _chatStateLock.Dispose()，防止 ObjectDisposedException
+    - #472: load_recent_notes_for_overview 改用 load_note_body_from_meta 消除 N+1 查询
+  - CI: cargo fmt ✅, cargo clippy ✅, cargo test ✅ (363 tests)
+  - 项目状态: **0 open issue（待 PR 合并后关闭）, 2 open PR, 190 已合并 PR, 0 阻塞项**
 
 ## 决策记录
 - 2026-06-14 [循环#91]: PR #456 一次性修复 3 个 BUG（#453 按钮禁用、#454 CancellationToken、#455 FTS5 日志），单 PR 多 issue 策略验证成功
 - 2026-06-14 [循环#91]: winui_build CI 最终方案：MSBuild /restore 替代 dotnet restore，msbuild /t:VSTest 替代 dotnet test，windows-2022 runner
 - 2026-06-14 [循环#91]: PR #452 多次迭代失败后，CI 修复通过 main 直接提交完成（非 PR 合并路径）
-
+- 2026-06-14 [修复轮#102]: 3 个 issue 全部修复（#470 SaveChatState 竞态, #471 _chatStateLock Dispose, #472 N+1 查询），创建 PR #473 和 PR #474
+- 2026-06-14 [修复轮#102]: #471 + #472 合并为单 PR（PR #474），#470 单独一个 PR（PR #473）
 - #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
 - #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
 - #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)

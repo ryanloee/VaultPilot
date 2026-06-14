@@ -847,7 +847,7 @@ public sealed partial class MainWindow : Window
     private async Task ExecuteAiRequestAsync(
         string prompt,
         string userDisplay,
-        AttachmentItem[] pendingAttachments,
+        ChatAttachment[] pendingAttachments,
         string originalText,
         string statusTitle,
         string statusDetail,

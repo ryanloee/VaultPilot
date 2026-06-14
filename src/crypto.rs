@@ -13,6 +13,7 @@ use aes_gcm::{
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
 /// Prefix that identifies a value as encrypted by this module.
 pub const ENCRYPTED_PREFIX: &str = "ENC:v1:";
@@ -123,10 +124,17 @@ fn machine_salt() -> Vec<u8> {
 ///
 /// Uses 600,000 iterations per OWASP 2023 recommendations.  The result is
 /// deterministic for a given host — no external key store is needed.
+/// Cached machine key — derived once per process lifetime.
+/// The inputs (hostname, OS, machine-id) do not change while the process
+/// is running, so caching is safe and avoids ~600ms PBKDF2 on every call.
+static MACHINE_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
 fn derive_machine_key() -> [u8; 32] {
-    let salt = machine_salt();
-    // Password is the fixed application identifier (the salt carries the entropy).
-    pbkdf2_hmac_sha256(b"vaultpilot-machine-key", &salt, PBKDF2_ITERATIONS)
+    *MACHINE_KEY.get_or_init(|| {
+        let salt = machine_salt();
+        // Password is the fixed application identifier (the salt carries the entropy).
+        pbkdf2_hmac_sha256(b"vaultpilot-machine-key", &salt, PBKDF2_ITERATIONS)
+    })
 }
 
 /// Encrypt a plaintext string, returning `ENC:v1:<base64(nonce||ciphertext)>`.

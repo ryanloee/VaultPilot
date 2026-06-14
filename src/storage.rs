@@ -61,7 +61,10 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
             _file.set_permissions(perms)?;
         }
     }
-    fs::write(&tmp_path, data)?;
+    fs::write(&tmp_path, data).inspect_err(|_| {
+        // Clean up the temp file on write failure to prevent disk accumulation
+        let _ = fs::remove_file(&tmp_path);
+    })?;
     fs::rename(&tmp_path, path)?;
     Ok(())
 }

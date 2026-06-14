@@ -703,12 +703,39 @@ fn generate_programmatic_snippet(body: &str, query: &str) -> String {
         });
 
     // Highlight each term in the chosen paragraph (case-insensitive).
-    // We operate entirely on the lowered snippet to avoid byte-boundary mismatches
-    // when to_lowercase() changes the byte length of characters (e.g. ß → ss).
-    let mut snippet = best.to_lowercase();
+    // We match against the lowercase representation but preserve the original
+    // case of the text in the output.
+    let mut snippet = best.to_string();
     for term in &terms {
-        let marker = format!("=={term}==");
-        snippet = snippet.replace(term.as_str(), &marker);
+        // Perform case-insensitive replace by scanning char-by-char.
+        let term_chars: Vec<char> = term.chars().collect();
+        let term_len = term_chars.len();
+        if term_len == 0 {
+            continue;
+        }
+        let mut result = String::with_capacity(snippet.len());
+        let chars: Vec<char> = snippet.chars().collect();
+        let mut i = 0;
+        while i <= chars.len().saturating_sub(term_len) {
+            // Compare the next term_len characters case-insensitively.
+            let candidate_lower: String = chars[i..i + term_len]
+                .iter()
+                .collect::<String>()
+                .to_lowercase();
+            if candidate_lower.as_str() == term.as_str() {
+                let matched: String = chars[i..i + term_len].iter().collect();
+                result.push_str(&format!("=={matched}=="));
+                i += term_len;
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+        // Append remaining characters.
+        for c in &chars[i..] {
+            result.push(*c);
+        }
+        snippet = result;
     }
 
     // Truncate if too long.

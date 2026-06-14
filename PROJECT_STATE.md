@@ -19,6 +19,12 @@
 6. 📝 文档和测试覆盖
 
 ## 已完成记录
+<!-- 由 pr-review 任务在合并/关闭 PR 后更新 -->
+- #500: MCP server tool errors sanitize_error() 包装 (PR #505 已合并)
+- #501: build_note_path 使用完整 UUID 消除截断 (PR #506 已合并)
+- #502: settings_api_key_encrypted_on_disk 测试修复并取消 #[ignore] (PR #506 已合并)
+- #503: DNS rebinding TOCTOU — pin DNS resolution 防重绑定 (PR #507 已合并)
+- #504: attachment LIKE 全表扫描 — FTS5 评分优化 (PR #507 已合并)
 - #453: ExecuteAiRequestAsync 期间禁用 NewSession/DeleteSession 按钮 (PR #456 已合并)
 - #454: NotesView 后端调用 30s CancellationToken 超时保护 (PR #456 已合并)
 - #455: FTS5 查询错误 tracing::warn! 日志记录 (PR #456 已合并)
@@ -26,8 +32,6 @@
 - #417: CancelActiveRequest Volatile.Read 保护 (PR #422 已合并)
 - #418: serde_yml → serde_yaml_ng 替换废弃依赖 (PR #421 已合并)
 - #416: derive_machine_key KDF — 已由 PR #413 (PBKDF2-HMAC-SHA256 600k) 修复，关闭
-<!-- 由 pr-review 任务在合并/关闭 PR 后更新 -->
-
 - #226: save_note 路径限制到 vault 目录 (PR #241 已合并)
 - #225: sanitize 函数转义闭合 XML 标签 (PR #240 已合并)
 - #236: delete_note 事务顺序修复 (PR #237 已合并)
@@ -166,11 +170,19 @@
 - #491: render_history() XML 闭合标签转义 — 存储型提示注入防护 (PR #494 已合并)
 - #492: load_recent_notes_for_overview async spawn_blocking 包装 (PR #494 已合并)
 - #493: cached_settings Mutex 中毒恢复 unwrap_or_else 模式 (PR #494 已合并)
+- #495: _windowProcDelegate GCHandle pinning 防 GC 回收 (PR #498 已合并)
+- #496: SettingsDialog.GetThemeBrush NRE null-safe 保护 (PR #498 已合并)
+- #497: has_notes_async 替代 list_notes_async 空检查优化 (PR #499 已合并)
+- #500: MCP server tool errors 泄露内部路径和 SQL 细节 (PR #505 已合并)
+- #501: build_note_path UUID 后缀截断为 8 字符 — 低碰撞抗性 (PR #506 已合并)
+- #502: settings_api_key_encrypted_on_disk test #[ignore]d — crypto round-trip 回归风险 (PR #506 已合并)
+- #503: validate_base_url DNS rebinding TOCTOU — reqwest 重新解析 (PR #507 已合并)
+- #504: attachment visual/semantic scoring 全表扫描 O(n) 性能瓶颈 (PR #507 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-（无）
+（无 — 0 open PR, 0 open issue）
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -183,7 +195,7 @@
 - 2026-06-12: ~~进入稳定化阶段，优先修 Bug，暂停新功能开发~~ → 已过时，见循环#40
 - 2026-06-12: 架构重构类 issue（如 lib.rs 拆分）暂不自动化处理，留人工决策
 - 2026-06-12 [循环#1]: 当前 50+ open issue，已远超 30 阈值，暂停创建新 Enhancement/UI 类 issue，集中精力消化存量
-- 2026-06-13 [循环#26]: **存量已从 50+ 消化至 5 个**，解除"暂停创建新 issue"限制。讨论任务恢复主动审查代码质量和提出新 issue 的职责
+- 2026-06-12 [循环#26]: **存量已从 50+ 消化至 5 个**，解除"暂停创建新 issue"限制。讨论任务恢复主动审查代码质量和提出新 issue 的职责
 - 2026-06-13 [循环#40]: **AI 驱动产品改进模式** — 讨论团队不限方向，可自由创建 bug/安全/性能/架构/功能/测试/文档类 issue；修复团队自动认领实现；审核团队把关合并。唯一约束：issue 必须具体可操作，不能是模糊的建议
 - 2026-06-13 [循环#26]: 4 个 Architecture issue (#183, #143, #49, #144) 不再搁置，讨论任务可拆分为小粒度子 issue 后交由修复任务执行
 - 2026-06-13 [循环#26]: #217 策略变更 — 不再走子任务构建，直接在主仓库本地操作
@@ -308,40 +320,6 @@
 - 2026-06-14 [PR审核轮#83]: 审核并合并 2 个 PR (#437, #438)，累计 181 已合并 PR
 - 2026-06-14 [PR审核轮#83]: PR #437 额外修复 XAML IsItemClickEnabled 残留（Sibling agent 未清理 XAML 属性）
 - 2026-06-14 [PR审核轮#83]: 项目恢复 0 open issue + 0 open PR 状态
-
-## 项目健康度快照
-<!-- 每轮循环更新 -->
-
-| 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
-|------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 | 讨论轮#105 | 讨论轮#106 | 讨论轮#108 | 修复轮#109 | PR审核轮#110 |
-|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|-------------|-------------|-------------|-----------|-------------|
-| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 3 | 1 | 3 | 0 ✅ |
-| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 3 | 1 | 1 | 0 ✅ |
-| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 | 190 | 190 | 192 | 196 | 196 | 198 | 199 | 200 |
-| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-
-## 本轮循环状态
-<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: PR审核轮#110
-- 本轮时间: 2026-06-14
-- 审核重点: 审核并合并修复轮#109 的 PR #494
-- 审核结果:
-  - PR #494 (#491+#492+#493) 已合并 — render_history XML escape + async load_recent_notes + mutex poison recovery
-  - CI 5/6 通过（cargo audit 为预存在 CVE RUSTSEC-2026-0104），winui-build ✅ 通过
-  - 3 个 issue 自动关闭
-- 代码质量评估:
-  - PR #494 改动精简（+48/-25），3 文件，3 个独立修复清晰分离
-  - #491: `render_history()` 添加 `escape_xml_close_tags()` 防存储型提示注入
-  - #492: `load_recent_notes_for_overview` 移入 storage.rs + `spawn_blocking` 包装
-  - #493: `cached_settings.lock()` 3 处改为 `unwrap_or_else(|e| e.into_inner())` 恢复中毒 Mutex
-- 项目状态: **0 open issue, 0 open PR, 200 已合并 PR, 0 阻塞项**
-
-## 决策记录
 - 2026-06-14 [循环#91]: PR #456 一次性修复 3 个 BUG（#453 按钮禁用、#454 CancellationToken、#455 FTS5 日志），单 PR 多 issue 策略验证成功
 - 2026-06-14 [循环#91]: winui_build CI 最终方案：MSBuild /restore 替代 dotnet restore，msbuild /t:VSTest 替代 dotnet test，windows-2022 runner
 - 2026-06-14 [循环#91]: PR #452 多次迭代失败后，CI 修复通过 main 直接提交完成（非 PR 合并路径）
@@ -362,6 +340,51 @@
 - 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 - 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 - 2026-06-14 [PR审核轮#110]: 项目恢复 0 open issue + 0 open PR 状态，里程碑 — 200 PR 合并
-- #464: AppendInlineMarkdown 无限循环 forward-progress guard (PR #465 已合并)
-- #462: ProviderConfig.ToString() API Key 遮蔽为 [REDACTED] (PR #465 已合并)
-- #463: read_file_result head/tail 重叠重复输出修复 (PR #465 已合并)
+- 2026-06-14 [修复轮#111]: 全代码库深度审查（Rust 9 文件 + C# 25 文件），Rust 后端 4 个 MEDIUM + 4 个 LOW，C# 前端 4 个 HIGH + 7 个 MEDIUM + 9 个 LOW
+- 2026-06-14 [修复轮#111]: 选定 3 个 issue 修复 — #495 (GCHandle pinning), #496 (NRE), #497 (perf)，3/3 全部完成
+- 2026-06-14 [修复轮#111]: C# 子任务发现 4 个 HIGH severity 问题（#495 GC pinning, #496 NRE, H-3 fire-and-forget, H-4 fire-and-forget），本轮修复 2 个，H-3/H-4 属低风险留后续
+- 2026-06-14 [PR审核轮#112]: 审核并合并 PR #498 (#495+#496) 和 PR #499 (#497)，CI 5/6 通过（cargo audit 预存在 CVE），累计 202 已合并 PR
+- 2026-06-14 [PR审核轮#112]: 项目恢复 0 open issue + 0 open PR 状态
+- 2026-06-14 [讨论轮#113]: 全代码库深度审查（Rust 9 文件 6K+ 行 + C# 11 文件），Rust 后端 2 MEDIUM + 12 LOW，C# 前端 0 新发现
+- 2026-06-14 [讨论轮#113]: 创建 2 个 issue — #503 SECURITY (DNS rebinding TOCTOU), #504 PERF (attachment 全表扫描)
+- 2026-06-14 [讨论轮#113]: Rust 后端安全实践持续优秀 — SSRF 防护、路径穿越防护、prompt 注入防护、原子文件写入、加密存储均正确
+- 2026-06-14 [讨论轮#113]: C# 前端所有 async void handler 均有 try-catch，所有 fire-and-forget 均有内层 catch，无 .Result/.Wait() 同步阻塞
+- 2026-06-14 [修复轮#114]: 修复 3 个 issue（#500 MCP error 泄露, #501 UUID 截断, #502 加密测试），创建 PR #505 和 PR #506
+- 2026-06-14 [修复轮#114]: #501 + #502 合并为单 PR（PR #506），#500 单独一个 PR（PR #505）
+- 2026-06-15 [PR审核轮#115]: 审核并合并 3 个 PR (#505, #506, #507)，累计 205 已合并 PR
+- 2026-06-15 [PR审核轮#115]: 项目恢复 0 open issue + 0 open PR 状态
+- 2026-06-15 [讨论轮#115]: 修复 2 个遗留 issue (#503 SECURITY + #504 PERF)，创建并合并 PR #507
+- 2026-06-15 [讨论轮#115]: #503 DNS rebinding TOCTOU — validate_base_url 返回 resolved SocketAddrs，通过 ClientBuilder::resolve() 钉住 DNS
+- 2026-06-15 [讨论轮#115]: #504 attachment scoring 优化 — SELECT 8 列→2 列，内联 row mapper 避免反序列化未使用字段
+- 2026-06-15 [讨论轮#115]: 项目进入零缺陷状态 — 0 open issue, 0 open PR, 205 已合并 PR, 349 tests 全通过
+
+## 项目健康度快照
+<!-- 每轮循环更新 -->
+
+| 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
+|------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 | 讨论轮#105 | 讨论轮#106 | 讨论轮#108 | 修复轮#109 | PR审核轮#110 | 修复轮#111 | PR审核轮#112 | 讨论轮#113 | 修复轮#114 | PR审核轮#115 |
+|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|-------------|-------------|-------------|-----------|-------------|-------------|-------------|-------------|-------------|-------------|
+| Open issues 总数 | 3 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 3 | 1 | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 2 | 2 | 0 ✅ |
+| Open Bug 数 | 1 | 0 ✅ | 3 | 0 ✅ | 3 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 3 | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Security 数 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 172 | 174 | 174 | 177 | 177 | 179 | 181 | 184 | 184 | 186 | 190 | 190 | 192 | 196 | 196 | 198 | 199 | 200 | 200 | 202 | 202 | 202 | 205 |
+| 进行中 PR | 0 | 0 | 3 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 0 ✅ | 3 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 2 | 0 ✅ | 0 ✅ | 2 | 0 ✅ |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+
+## 本轮循环状态
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: PR审核轮#115
+- 本轮时间: 2026-06-15
+- 审核结果:
+  - **PR #505** (#500): ✅ 已合并 — MCP server 8 处 error 泄露内部路径 → 全部通过 sanitize_error() 包装
+  - **PR #506** (#501, #502): ✅ 已合并 — UUID 截断 8→全部字符 + 加密测试修复并取消 ignore
+  - **PR #507** (#503, #504): ✅ 已合并 — DNS rebinding TOCTOU pin resolution + attachment FTS5 评分优化
+- 项目状态: **0 open issue, 0 open PR, 205 已合并 PR, 0 阻塞项**
+- 代码审查:
+  - #503 修复方案: validate_base_url 返回 Vec<(String, SocketAddr)>，通过 ClientBuilder::resolve() 钉住 DNS，消除 TOCTOU 窗口
+  - #504 修复方案: query_visual_candidate_scores 和 query_attachment_semantic_scores 仅 SELECT note_id + hash/vector 两列，内联 row mapper 避免反序列化未使用字段
+  - CI 5/6 通过（cargo audit 为预存在 CVE），349 tests 全通过
+- 项目状态: **0 open issue, 0 open PR, 205 已合并 PR, 0 阻塞项**

@@ -17,6 +17,7 @@ public sealed partial class NotesView : UserControl
     private IReadOnlyList<NoteMeta> _allNotes = Array.Empty<NoteMeta>();
     private NoteMeta? _selectedNote;
     private string _searchQuery = string.Empty;
+    private IReadOnlyList<NoteMeta>? _allNotesBeforeSearch;
     private CancellationTokenSource? _loadDetailCts;
 
     public NotesView(BackendClient backendClient)
@@ -50,6 +51,7 @@ public sealed partial class NotesView : UserControl
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             _allNotes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token)
                 ?? Array.Empty<NoteMeta>();
+            _allNotesBeforeSearch = null;
             ApplyFilter();
             UpdateNotesCount();
         }
@@ -75,6 +77,11 @@ public sealed partial class NotesView : UserControl
 
         if (string.IsNullOrEmpty(_searchQuery))
         {
+            if (_allNotesBeforeSearch is not null)
+            {
+                _allNotes = _allNotesBeforeSearch;
+                _allNotesBeforeSearch = null;
+            }
             ApplyFilter();
             return;
         }
@@ -87,6 +94,7 @@ public sealed partial class NotesView : UserControl
                 "searchNotes", new { query = _searchQuery, limit = 50 }, cts.Token);
             if (results is not null)
             {
+                _allNotesBeforeSearch ??= _allNotes;
                 _allNotes = results;
                 ApplyFilter();
             }
@@ -110,6 +118,11 @@ public sealed partial class NotesView : UserControl
             _searchQuery = sender.Text?.Trim() ?? string.Empty;
             if (string.IsNullOrEmpty(_searchQuery))
             {
+                if (_allNotesBeforeSearch is not null)
+                {
+                    _allNotes = _allNotesBeforeSearch;
+                    _allNotesBeforeSearch = null;
+                }
                 ApplyFilter();
             }
         }

@@ -3447,23 +3447,10 @@ public sealed partial class MainWindow : Window
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var saved = await _backendClient.SendAsync<ChatState>(
+            await _backendClient.SendAsync<ChatState>(
                 "saveChatState",
                 new { state = snapshot },
                 cts.Token);
-
-            if (saved is not null)
-            {
-                await _chatStateLock.WaitAsync();
-                try
-                {
-                    _chatState = saved;
-                }
-                finally
-                {
-                    _chatStateLock.Release();
-                }
-            }
         }
         catch (Exception error)
         {

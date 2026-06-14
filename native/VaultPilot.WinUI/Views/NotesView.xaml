@@ -39,24 +39,24 @@
             <Button
                 x:Name="RefreshButton"
                 Grid.Column="1"
-                Content="刷新"
                 AutomationProperties.Name="刷新笔记列表"
                 AutomationProperties.HelpText="重新加载笔记列表">
-                <Button.Icon>
+                <StackPanel Orientation="Horizontal" Spacing="6">
                     <FontIcon Glyph="&#xE72C;" FontSize="14" />
-                </Button.Icon>
+                    <TextBlock Text="刷新" VerticalAlignment="Center" />
+                </StackPanel>
             </Button>
             <Button
                 x:Name="DeleteNoteButton"
                 Grid.Column="2"
-                Content="删除"
                 Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                 IsEnabled="False"
                 AutomationProperties.Name="删除笔记"
                 AutomationProperties.HelpText="删除当前选中的笔记">
-                <Button.Icon>
+                <StackPanel Orientation="Horizontal" Spacing="6">
                     <FontIcon Glyph="&#xE74D;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                </Button.Icon>
+                    <TextBlock Text="删除" VerticalAlignment="Center" />
+                </StackPanel>
             </Button>
         </Grid>
 

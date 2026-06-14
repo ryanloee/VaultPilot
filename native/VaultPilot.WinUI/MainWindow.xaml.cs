@@ -129,6 +129,18 @@ public sealed partial class MainWindow : Window
         ChatScrollViewer.ViewChanged += OnChatScrollViewerViewChanged;
         JumpLatestButton.Click += OnJumpLatestClicked;
         RootGrid.SizeChanged += OnRootGridSizeChanged;
+
+        // KeyboardAccelerators for keys that the WinUI XamlCompiler cannot parse (OemComma, Number1, Number2)
+        AddKeyboardAccelerator(VirtualKey.OemComma, VirtualKeyModifiers.Control, OnSettingsAccelerator);
+        AddKeyboardAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, OnNavChatAccelerator);
+        AddKeyboardAccelerator(VirtualKey.Number2, VirtualKeyModifiers.Control, OnNavNotesAccelerator);
+    }
+
+    private void AddKeyboardAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs> handler)
+    {
+        var accel = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+        accel.Invoked += handler;
+        RootGrid.KeyboardAccelerators.Add(accel);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)

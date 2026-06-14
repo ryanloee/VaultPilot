@@ -1283,32 +1283,42 @@ fn extract_json(text: &str) -> Result<String> {
 }
 
 fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
-    let start = text.find(open)?;
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut backslash_count = 0usize;
-    for (i, c) in text[start..].char_indices() {
-        if in_string {
-            if c == '\\' {
-                backslash_count += 1;
-            } else {
-                if c == '"' && backslash_count.is_multiple_of(2) {
-                    in_string = false;
+    // Try every occurrence of the opening character, not just the first.
+    // Prose before the real JSON may contain braces/brackets that cause
+    // a false match when we only look at the first occurrence (issue #434).
+    for (start, _) in text.match_indices(open) {
+        let mut depth = 0;
+        let mut in_string = false;
+        let mut backslash_count = 0usize;
+        for (i, c) in text[start..].char_indices() {
+            if in_string {
+                if c == '\\' {
+                    backslash_count += 1;
+                } else {
+                    if c == '"' && backslash_count.is_multiple_of(2) {
+                        in_string = false;
+                    }
+                    backslash_count = 0;
                 }
-                backslash_count = 0;
+                continue;
             }
-            continue;
-        }
-        match c {
-            '"' => in_string = true,
-            c if c == open => depth += 1,
-            c if c == close => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(text[start..=start + i].to_string());
+            match c {
+                '"' => in_string = true,
+                c if c == open => depth += 1,
+                c if c == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        // Validate that this substring is parseable JSON
+                        let candidate = &text[start..=start + i];
+                        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                            return Some(candidate.to_string());
+                        }
+                        // Not valid JSON — continue searching from next open char
+                        break;
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
     None
@@ -1520,6 +1530,15 @@ mod tests {
         assert!(result.is_some(), "Should handle double-escaped backslash");
         let json = result.unwrap();
         assert!(json.ends_with('}'), "JSON should end with closing brace");
+    }
+
+    #[test]
+    fn extract_json_block_skips_prose_braces() {
+        let text = r#"Here is some text {with braces} and then {"key": "value"}"#;
+        let result = extract_json_block(text, '{', '}');
+        let json = result.expect("should find JSON");
+        assert!(json.contains("\"key\""));
+        assert!(json.contains("\"value\""));
     }
 
     #[test]

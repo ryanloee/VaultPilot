@@ -1430,7 +1430,13 @@ fn is_private_ip(ip: IpAddr) -> bool {
                 || matches!(v4.octets()[0], 240..=255)
         }
         IpAddr::V6(v6) => {
-            v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xffc0) == 0xfe80
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+                || v6
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| is_private_ip(IpAddr::V4(v4))) // IPv4-mapped
         }
     }
 }
@@ -1913,6 +1919,36 @@ mod tests {
     fn is_private_ip_allows_public_ip() {
         assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
         assert!(!is_private_ip("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_detects_ipv6_unique_local() {
+        assert!(is_private_ip("fd00::1".parse().unwrap()));
+        assert!(is_private_ip("fc00::1".parse().unwrap()));
+        assert!(is_private_ip("fd12:3456:789a::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_detects_ipv4_mapped_private() {
+        // IPv4-mapped IPv6 addresses that resolve to private IPv4
+        assert!(is_private_ip("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(is_private_ip("::ffff:192.168.1.1".parse().unwrap()));
+        assert!(is_private_ip("::ffff:172.16.0.1".parse().unwrap()));
+        assert!(is_private_ip("::ffff:127.0.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_allows_ipv4_mapped_public() {
+        // IPv4-mapped IPv6 addresses that resolve to public IPv4
+        assert!(!is_private_ip("::ffff:8.8.8.8".parse().unwrap()));
+        assert!(!is_private_ip("::ffff:1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_allows_global_ipv6() {
+        // Global unicast IPv6 addresses should be allowed
+        assert!(!is_private_ip("2001:db8::1".parse().unwrap()));
+        assert!(!is_private_ip("2606:4700:4700::1111".parse().unwrap()));
     }
 
     #[test]

@@ -102,6 +102,7 @@ public sealed partial class MainWindow : Window
     private DispatcherTimer? _thinkingDotsTimer;
     private int _thinkingDotStep;
     private CancellationTokenSource? _activeRequestCts;
+    private volatile Task? _activeRequestTask;
 
     public MainWindow()
     {
@@ -844,6 +845,9 @@ public sealed partial class MainWindow : Window
         oldCts?.Dispose();
         var cancellationToken = _activeRequestCts.Token;
 
+        var completionSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Volatile.Write(ref _activeRequestTask, completionSignal.Task);
+
         _lastAiAnswer = null;
 
         try
@@ -897,6 +901,8 @@ public sealed partial class MainWindow : Window
         finally
         {
             Interlocked.Exchange(ref _activeRequestCts, null)?.Dispose();
+            completionSignal.TrySetResult(true);
+            Volatile.Write(ref _activeRequestTask, null);
             SendButton.IsEnabled = true;
             RecordButton.IsEnabled = true;
             CancelButton.Visibility = Visibility.Collapsed;
@@ -1038,6 +1044,22 @@ public sealed partial class MainWindow : Window
         // Cancel any active AI request before releasing resources
         // to prevent catch/finally blocks from accessing disposed objects
         _activeRequestCts?.Cancel();
+
+        // Wait for the active AI request to finish its catch/finally cleanup
+        // before disposing shared resources (#446)
+        var activeTask = Volatile.Read(ref _activeRequestTask);
+        if (activeTask != null)
+        {
+            try
+            {
+                await activeTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                // Proceed with disposal even if the request doesn't finish in time
+            }
+        }
+
         _activeRequestCts?.Dispose();
         _activeRequestCts = null;
 

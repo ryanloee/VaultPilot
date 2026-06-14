@@ -541,13 +541,16 @@ pub struct AiWorkflowManual {
 
 /// Mask a secret string for safe display: show first 4 and last 4 chars.
 fn mask_secret(s: &str) -> String {
-    if s.len() <= 12 {
-        if s.is_empty() {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= 12 {
+        if chars.is_empty() {
             return String::new();
         }
-        return "*".repeat(s.len());
+        return "*".repeat(chars.len());
     }
-    format!("{}…{}", &s[..4], &s[s.len() - 4..])
+    let prefix: String = chars[..4].iter().collect();
+    let suffix: String = chars[chars.len() - 4..].iter().collect();
+    format!("{}…{}", prefix, suffix)
 }
 
 pub fn default_base_url() -> String {

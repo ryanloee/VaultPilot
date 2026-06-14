@@ -94,7 +94,7 @@ jobs:
         run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /p:Configuration=Release /p:Platform=x64
 
       - name: Build C# tests
-        run: msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Release /p:Platform=x64
+        run: msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Release /p:Platform=x64 /restore
 
       - name: Run C# tests
         run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-build -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"

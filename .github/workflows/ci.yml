@@ -150,7 +150,33 @@ jobs:
         run: dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
 
       - name: Build WinUI
+        id: build-winui
         run: dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj --no-restore -c Release -p:Platform=x64
+        continue-on-error: true
+
+      - name: Diagnose XamlCompiler
+        if: always()
+        shell: pwsh
+        run: |
+          dotnet --version
+          $objDir = "native/VaultPilot.WinUI/obj/x64/Release/net8.0-windows10.0.19041.0"
+          if (Test-Path "$objDir/output.json") { Write-Host "=== output.json ==="; Get-Content "$objDir/output.json" -Raw } else { Write-Host "output.json: NOT FOUND" }
+          $xamlExe = "$env:USERPROFILE\.nuget\packages\microsoft.windowsappsdk\1.6.250108002\tools\net472\XamlCompiler.exe"
+          Push-Location "native/VaultPilot.WinUI"
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $xamlExe
+          $psi.Arguments = "`"obj\x64\Release\net8.0-windows10.0.19041.0\input.json`" `"obj\x64\Release\net8.0-windows10.0.19041.0\output.json`""
+          $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.UseShellExecute = $false
+          $psi.WorkingDirectory = (Get-Location).Path
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          $stdout = $proc.StandardOutput.ReadToEnd(); $stderr = $proc.StandardError.ReadToEnd()
+          $proc.WaitForExit()
+          Write-Host "XamlCompiler exit: $($proc.ExitCode) stdout: $stdout stderr: $stderr"
+          Pop-Location
+
+      - name: Fail if build failed
+        if: steps.build-winui.outcome == 'failure'
+        run: exit 1
 
       - name: Run C# tests
         run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore -c Release -p:Platform=x64 --logger "trx;LogFileName=test-results.trx"

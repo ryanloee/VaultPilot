@@ -178,6 +178,9 @@
 - #502: settings_api_key_encrypted_on_disk test #[ignore]d — crypto round-trip 回归风险 (PR #506 已合并)
 - #503: validate_base_url DNS rebinding TOCTOU — reqwest 重新解析 (PR #507 已合并)
 - #504: attachment visual/semantic scoring 全表扫描 O(n) 性能瓶颈 (PR #507 已合并)
+- #508: search_rules synonym expansion 子串误匹配 → ASCII trigger 全词匹配 (PR #511 已合并)
+- #509: OnHealthCheckTick catch 块 async void 异常安全 (PR #511 已合并)
+- #510: MainWindow Brush 属性注释误导 — 非缓存而是每次查找 (PR #511 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -376,15 +379,18 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: PR审核轮#115
+- 循环编号: 循环#116
 - 本轮时间: 2026-06-15
-- 审核结果:
-  - **PR #505** (#500): ✅ 已合并 — MCP server 8 处 error 泄露内部路径 → 全部通过 sanitize_error() 包装
-  - **PR #506** (#501, #502): ✅ 已合并 — UUID 截断 8→全部字符 + 加密测试修复并取消 ignore
-  - **PR #507** (#503, #504): ✅ 已合并 — DNS rebinding TOCTOU pin resolution + attachment FTS5 评分优化
-- 项目状态: **0 open issue, 0 open PR, 205 已合并 PR, 0 阻塞项**
+- 审查模块: Rust ai.rs + search_rules.rs + storage.rs + crypto.rs, C# BackendClient.cs + MainWindow.xaml.cs + NotesView.xaml.cs + SettingsDialog.xaml.cs
+- 讨论阶段发现:
+  - **#508** MEDIUM: search_rules synonym expansion 子串匹配误触发（"sd" 匹配 "address"）
+  - **#509** MEDIUM: BackendClient.OnHealthCheckTick catch 块内 TryReconnectWithRetryAsync 可抛异常导致 async void 崩溃
+  - **#510** LOW: MainWindow Brush 属性注释声称缓存但实际每次执行字典查找
+- 修复结果:
+  - **PR #511** (#508, #509, #510): ✅ 已合并 — search_rules 全词匹配 + health check catch 安全 + 注释修正
+- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, cargo audit ❌ (预存在 CVE), winui-build ⏳
+- 项目状态: **0 open issue, 0 open PR, 208 已合并 PR, 0 阻塞项**
 - 代码审查:
-  - #503 修复方案: validate_base_url 返回 Vec<(String, SocketAddr)>，通过 ClientBuilder::resolve() 钉住 DNS，消除 TOCTOU 窗口
-  - #504 修复方案: query_visual_candidate_scores 和 query_attachment_semantic_scores 仅 SELECT note_id + hash/vector 两列，内联 row mapper 避免反序列化未使用字段
-  - CI 5/6 通过（cargo audit 为预存在 CVE），349 tests 全通过
-- 项目状态: **0 open issue, 0 open PR, 205 已合并 PR, 0 阻塞项**
+  - #508 修复方案: trigger_matches() 函数，ASCII trigger 使用全词边界匹配，CJK trigger 保留子串匹配，5 个新测试
+  - #509 修复方案: catch 块内层 try-catch 包装 TryReconnectWithRetryAsync，失败时记录日志并调用 OnConsecutiveHealthCheckFailure
+  - #510 修复方案: 注释改为准确描述 ThemeResource 每次查找行为

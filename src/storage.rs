@@ -129,7 +129,9 @@ struct AttachmentEntry {
     file_name: String,
     stem: String,
     ocr_text: String,
+    #[allow(dead_code)] // Used in row_to_attachment_entry but not read after construction
     semantic_vector: Option<Vec<f32>>,
+    #[allow(dead_code)] // Used in row_to_attachment_entry but not read after construction
     perceptual_hash: Option<u64>,
 }
 
@@ -2077,20 +2079,26 @@ fn query_visual_candidate_scores(
     let batch_size: i64 = 500;
     let mut offset: i64 = 0;
 
+    // Only SELECT the two columns we need (note_id, perceptual_hash) to
+    // reduce I/O and memory allocation for large vaults (#504).
     loop {
         let mut count: usize = 0;
         {
             let mut statement = connection.prepare(
-                "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
+                "SELECT note_id, perceptual_hash
                  FROM attachments
                  WHERE perceptual_hash <> ''
                  LIMIT ?1 OFFSET ?2",
             )?;
-            let rows = statement.query_map(params![batch_size, offset], row_to_attachment_entry)?;
+            let rows = statement.query_map(params![batch_size, offset], |row| {
+                let hash_str: String = row.get(1)?;
+                let hash = u64::from_str_radix(hash_str.trim(), 16).ok();
+                Ok((row.get::<_, String>(0)?, hash))
+            })?;
             for row in rows {
-                let entry = row?;
+                let (note_id, hash_opt) = row?;
                 count += 1;
-                let Some(attachment_hash) = entry.perceptual_hash else {
+                let Some(attachment_hash) = hash_opt else {
                     continue;
                 };
 
@@ -2104,7 +2112,7 @@ fn query_visual_candidate_scores(
                 }
 
                 scores
-                    .entry(entry.note_id.clone())
+                    .entry(note_id)
                     .and_modify(|current: &mut i64| *current = (*current).max(best))
                     .or_insert(best);
             }
@@ -2131,30 +2139,36 @@ fn query_attachment_semantic_scores(
     let batch_size: i64 = 500;
     let mut offset: i64 = 0;
 
+    // Only SELECT the two columns we need (note_id, semantic_vector) to
+    // reduce I/O and memory allocation for large vaults (#504).
     loop {
         let mut count: usize = 0;
         {
             let mut statement = connection.prepare(
-                "SELECT note_id, id, path, file_name, stem, semantic_vector, perceptual_hash, ocr_text
+                "SELECT note_id, semantic_vector
                  FROM attachments
                  WHERE semantic_vector <> ''
                  LIMIT ?1 OFFSET ?2",
             )?;
-            let rows = statement.query_map(params![batch_size, offset], row_to_attachment_entry)?;
+            let rows = statement.query_map(params![batch_size, offset], |row| {
+                let sv: String = row.get(1)?;
+                let vector = deserialize_semantic_vector(&sv);
+                Ok((row.get::<_, String>(0)?, vector))
+            })?;
             for row in rows {
-                let entry = row?;
+                let (note_id, candidate_vector_opt) = row?;
                 count += 1;
-                let Some(candidate_vector) = entry.semantic_vector.as_ref() else {
+                let Some(candidate_vector) = candidate_vector_opt else {
                     continue;
                 };
-                let similarity = cosine_similarity(&query_vector, candidate_vector);
+                let similarity = cosine_similarity(&query_vector, &candidate_vector);
                 let score = similarity_to_rank_score(similarity);
                 if score <= 0 {
                     continue;
                 }
 
                 scores
-                    .entry(entry.note_id.clone())
+                    .entry(note_id)
                     .and_modify(|current: &mut i64| *current = (*current).max(score))
                     .or_insert(score);
             }

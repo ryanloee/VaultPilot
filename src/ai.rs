@@ -795,39 +795,60 @@ fn generate_programmatic_snippet(body: &str, query: &str) -> String {
         });
 
     // Highlight each term in the chosen paragraph (case-insensitive).
-    // We match against the lowercase representation but preserve the original
-    // case of the text in the output.
-    let mut snippet = best.to_string();
+    // We collect all highlight ranges first, merge overlapping ones,
+    // then apply markers once to avoid corruption from sequential passes.
+    let snippet_chars: Vec<char> = best.chars().collect();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
     for term in &terms {
-        // Perform case-insensitive replace by scanning char-by-char.
-        let term_chars: Vec<char> = term.chars().collect();
-        let term_len = term_chars.len();
+        let term_len = term.chars().count();
         if term_len == 0 {
             continue;
         }
-        let mut result = String::with_capacity(snippet.len());
-        let chars: Vec<char> = snippet.chars().collect();
         let mut i = 0;
-        while i <= chars.len().saturating_sub(term_len) {
-            // Compare the next term_len characters case-insensitively.
-            let candidate_lower: String = chars[i..i + term_len]
+        while i <= snippet_chars.len().saturating_sub(term_len) {
+            let candidate_lower: String = snippet_chars[i..i + term_len]
                 .iter()
                 .collect::<String>()
                 .to_lowercase();
             if candidate_lower.as_str() == term.as_str() {
-                let matched: String = chars[i..i + term_len].iter().collect();
-                result.push_str(&format!("=={matched}=="));
-                i += term_len;
+                ranges.push((i, i + term_len));
+                i += term_len; // skip past this match to avoid overlapping highlights
             } else {
-                result.push(chars[i]);
                 i += 1;
             }
         }
-        // Append remaining characters.
-        for c in &chars[i..] {
-            result.push(*c);
+    }
+    // Merge overlapping ranges
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+                continue;
+            }
         }
-        snippet = result;
+        merged.push((start, end));
+    }
+    // Apply highlight markers once
+    let mut snippet = String::with_capacity(best.len() + merged.len() * 4);
+    let mut prev_end = 0;
+    for (start, end) in &merged {
+        // Append text before this highlight
+        for c in &snippet_chars[prev_end..*start] {
+            snippet.push(*c);
+        }
+        // Append highlighted text
+        snippet.push_str("==");
+        for c in &snippet_chars[*start..*end] {
+            snippet.push(*c);
+        }
+        snippet.push_str("==");
+        prev_end = *end;
+    }
+    // Append remaining characters after last highlight
+    for c in &snippet_chars[prev_end..] {
+        snippet.push(*c);
     }
 
     // Truncate if too long.

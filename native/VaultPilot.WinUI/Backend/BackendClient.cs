@@ -327,6 +327,10 @@ public sealed class BackendClient : IAsyncDisposable
             await Task.Delay(500, cancellationToken);
             return _process is { HasExited: false };
         }
+        catch (OperationCanceledException)
+        {
+            throw; // Propagate cancellation to caller (#536)
+        }
         catch
         {
             return false;

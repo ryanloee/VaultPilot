@@ -48,6 +48,9 @@ public sealed partial class NotesView : UserControl
         try
         {
             ShowLoading(true);
+            _loadDetailCts?.Cancel();
+            _loadDetailCts?.Dispose();
+            _loadDetailCts = null;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             _allNotes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token)
                 ?? Array.Empty<NoteMeta>();

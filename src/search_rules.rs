@@ -162,7 +162,16 @@ impl SearchRules {
 }
 
 fn default_config() -> SearchRulesConfig {
-    serde_json::from_str(DEFAULT_RULES_JSON).expect("default search rules JSON is valid")
+    serde_json::from_str(DEFAULT_RULES_JSON).unwrap_or_else(|e| {
+        tracing::error!(
+            "Failed to parse default search rules JSON: {e}, falling back to empty config"
+        );
+        SearchRulesConfig {
+            synonym_groups: Vec::new(),
+            relevance_bonuses: Vec::new(),
+            heuristic_keywords: Vec::new(),
+        }
+    })
 }
 
 pub const DEFAULT_RULES_JSON: &str = r#"{

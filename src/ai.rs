@@ -35,9 +35,10 @@ fn get_or_build_client(
     timeout_ms: u64,
     provider_type: crate::models::ProviderType,
 ) -> Result<reqwest::Client> {
-    let mut cache = CACHED_CLIENT
-        .lock()
-        .map_err(|e| anyhow!("lock poisoned: {e}"))?;
+    let mut cache = CACHED_CLIENT.lock().unwrap_or_else(|e| {
+        tracing::warn!("CACHED_CLIENT lock poisoned, recovering inner value");
+        e.into_inner()
+    });
     if let Some(ref cached) = *cache {
         if cached.api_key == api_key
             && cached.timeout_ms == timeout_ms

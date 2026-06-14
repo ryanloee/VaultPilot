@@ -129,6 +129,18 @@ public sealed partial class MainWindow : Window
         ChatScrollViewer.ViewChanged += OnChatScrollViewerViewChanged;
         JumpLatestButton.Click += OnJumpLatestClicked;
         RootGrid.SizeChanged += OnRootGridSizeChanged;
+
+        // KeyboardAccelerators for keys that the WinUI XamlCompiler cannot parse (OemComma, Number1, Number2)
+        AddKeyboardAccelerator((VirtualKey)188 /* OemComma */, VirtualKeyModifiers.Control, OnSettingsAccelerator);
+        AddKeyboardAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, OnNavChatAccelerator);
+        AddKeyboardAccelerator(VirtualKey.Number2, VirtualKeyModifiers.Control, OnNavNotesAccelerator);
+    }
+
+    private void AddKeyboardAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs> handler)
+    {
+        var accel = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+        accel.Invoked += handler;
+        RootGrid.KeyboardAccelerators.Add(accel);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -835,7 +847,7 @@ public sealed partial class MainWindow : Window
     private async Task ExecuteAiRequestAsync(
         string prompt,
         string userDisplay,
-        AttachmentItem[] pendingAttachments,
+        ChatAttachment[] pendingAttachments,
         string originalText,
         string statusTitle,
         string statusDetail,
@@ -984,7 +996,7 @@ public sealed partial class MainWindow : Window
     private void OnNewSessionAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        _ = OnNewSessionClicked(NewSessionButton, new RoutedEventArgs());
+        OnNewSessionClicked(NewSessionButton, new RoutedEventArgs());
     }
 
     private void OnToggleSidebarAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -996,7 +1008,7 @@ public sealed partial class MainWindow : Window
     private void OnSettingsAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        _ = OnSettingsClicked(SettingsButton, new RoutedEventArgs());
+        OnSettingsClicked(SettingsButton, new RoutedEventArgs());
     }
 
     private void OnEscapeAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -1230,7 +1242,7 @@ public sealed partial class MainWindow : Window
             Spacing = 4,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
-        AutomationProperties.SetLiveSetting(stack, AutomationLiveSetting.Assertive);
+        // Note: LiveSetting is not available in WinUI 3; using automation name only
         AutomationProperties.SetName(stack, "AI 正在思考");
         stack.Children.Add(label);
         stack.Children.Add(bubble);
@@ -1479,7 +1491,6 @@ public sealed partial class MainWindow : Window
                     var span = new Span
                     {
                         FontFamily = new FontFamily("Consolas"),
-                        Background = GetThemeBrush("CodeInlineBackgroundBrush"),
                         Foreground = GetThemeBrush("CodeInlineForegroundBrush")
                     };
                     span.Inlines.Add(new Run { Text = text[(index + 1)..closeIndex] });
@@ -3007,7 +3018,7 @@ public sealed partial class MainWindow : Window
                 Content = "打开设置",
                 HorizontalAlignment = HorizontalAlignment.Center,
             };
-            settingsBtn.Click += async (_, _) => await OnSettingsClicked(settingsBtn, new RoutedEventArgs());
+            settingsBtn.Click += (_, _) => OnSettingsClicked(settingsBtn, new RoutedEventArgs());
             container.Children.Add(settingsBtn);
         }
 

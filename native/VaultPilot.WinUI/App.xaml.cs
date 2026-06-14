@@ -89,13 +89,21 @@ public partial class App : Application
 
     public async Task BeginExitForUpdate()
     {
+        // #534: Atomic guard prevents ExitApplication from racing
+        if (Interlocked.CompareExchange(ref _exitInProgress, 1, 0) != 0) return;
         _isExiting = true;
+
         if (_window != null)
         {
             _window.SignalStopping();
             _window.Closed -= OnWindowClosed;
             await _window.ShutdownAsync();
         }
+
+        // #532: Dispose tray icon so the process can exit after window closes.
+        // Without this, WaitExitThenApplyUpdates never sees the process exit.
+        _trayIcon?.Dispose();
+        _trayIcon = null;
     }
 
     private async void ExitApplication()
@@ -120,9 +128,11 @@ public partial class App : Application
         }
         finally
         {
-            _trayIcon?.Dispose();
-            _instanceMutex?.ReleaseMutex();
-            _instanceMutex?.Dispose();
+            // #533: Each cleanup step wrapped individually so a failure
+            // in one doesn't prevent the rest (especially Application.Current.Exit())
+            try { _trayIcon?.Dispose(); } catch { }
+            try { _instanceMutex?.ReleaseMutex(); } catch { }
+            try { _instanceMutex?.Dispose(); } catch { }
             Application.Current.Exit();
         }
     }

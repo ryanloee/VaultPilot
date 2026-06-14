@@ -36,7 +36,7 @@ public sealed class BackendClient : IAsyncDisposable
     private CancellationTokenSource? _readerCts;
     private string? _executablePath;
     private Timer? _healthCheckTimer;
-    private volatile bool _isDisposed;
+    private int _isDisposed;
     private readonly SemaphoreSlim _reconnectLock = new(1, 1);
     private int _consecutiveHealthCheckFailures;
     private volatile bool _degradedMode;
@@ -61,7 +61,7 @@ public sealed class BackendClient : IAsyncDisposable
 
     private void StartProcess()
     {
-        if (_isDisposed) return;
+        if (Volatile.Read(ref _isDisposed) != 0) return;
         if (string.IsNullOrWhiteSpace(_executablePath))
         {
             throw new InvalidOperationException("Rust 后端路径尚未设置。");
@@ -134,7 +134,7 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
     {
-        if (_isDisposed) return;
+        if (Volatile.Read(ref _isDisposed) != 0) return;
 
         try
         {
@@ -159,7 +159,7 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async void OnHealthCheckTick(object? state)
     {
-        if (_isDisposed) return;
+        if (Volatile.Read(ref _isDisposed) != 0) return;
         if (Interlocked.CompareExchange(ref _healthCheckInProgress, 1, 0) != 0) return;
 
         try
@@ -173,7 +173,7 @@ public sealed class BackendClient : IAsyncDisposable
                     _degradedMode = false;
                     SetHealthCheckInterval(HealthCheckInterval);
                 }
-                else if (!_isDisposed)
+                else if (Volatile.Read(ref _isDisposed) == 0)
                 {
                     OnConsecutiveHealthCheckFailure();
                 }
@@ -193,7 +193,7 @@ public sealed class BackendClient : IAsyncDisposable
         }
         catch
         {
-            if (!_isDisposed)
+            if (Volatile.Read(ref _isDisposed) == 0)
             {
                 try
                 {
@@ -246,7 +246,7 @@ public sealed class BackendClient : IAsyncDisposable
     {
         for (int attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
         {
-            if (_isDisposed || cancellationToken.IsCancellationRequested) return false;
+            if (Volatile.Read(ref _isDisposed) != 0 || cancellationToken.IsCancellationRequested) return false;
 
             var success = await TryReconnectAsync(forceRestart: true, cancellationToken: cancellationToken);
             if (success)
@@ -282,7 +282,7 @@ public sealed class BackendClient : IAsyncDisposable
     /// </summary>
     public async Task<bool> ReconnectAsync(CancellationToken cancellationToken = default)
     {
-        if (_isDisposed) return false;
+        if (Volatile.Read(ref _isDisposed) != 0) return false;
 
         // Reset failure tracking so health check interval goes back to normal
         Interlocked.Exchange(ref _consecutiveHealthCheckFailures, 0);
@@ -303,7 +303,7 @@ public sealed class BackendClient : IAsyncDisposable
         CancellationToken cancellationToken = default,
         bool forceRestart = false)
     {
-        if (_isDisposed || _executablePath == null) return false;
+        if (Volatile.Read(ref _isDisposed) != 0 || _executablePath == null) return false;
         if (IsConnected && !forceRestart) return true;
 
         if (!await _reconnectLock.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken))
@@ -313,13 +313,13 @@ public sealed class BackendClient : IAsyncDisposable
 
         try
         {
-            if (_isDisposed || _executablePath == null) return false;
+            if (Volatile.Read(ref _isDisposed) != 0 || _executablePath == null) return false;
             if (IsConnected && !forceRestart) return true;
 
             await DisposeProcessAsync();
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
 
-            if (_isDisposed) return false;
+            if (Volatile.Read(ref _isDisposed) != 0) return false;
 
             StartProcess();
 
@@ -411,8 +411,7 @@ public sealed class BackendClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_isDisposed) return;
-        _isDisposed = true;
+        if (Interlocked.CompareExchange(ref _isDisposed, 1, 0) != 0) return;
 
         try
         {
@@ -486,7 +485,7 @@ public sealed class BackendClient : IAsyncDisposable
                 if (line is null)
                 {
                     FailPending("Rust 后端已关闭输出通道。");
-                    if (!_isDisposed)
+                    if (Volatile.Read(ref _isDisposed) == 0)
                     {
                         _ = TryReconnectWithRetryAsync();
                     }
@@ -531,7 +530,7 @@ public sealed class BackendClient : IAsyncDisposable
         catch (Exception error)
         {
             FailPending($"后端响应读取失败：{error.Message}");
-            if (!_isDisposed)
+            if (Volatile.Read(ref _isDisposed) == 0)
             {
                 _ = TryReconnectWithRetryAsync();
             }

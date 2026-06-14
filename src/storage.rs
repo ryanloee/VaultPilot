@@ -144,7 +144,10 @@ impl StorageContext {
         let config_root = std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("."))
+            .unwrap_or_else(|| {
+                tracing::warn!("APPDATA/HOME unset, falling back to temp dir for config_root");
+                std::env::temp_dir()
+            })
             .join("com.local.vaultpilot");
         let data_root = std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
@@ -154,7 +157,12 @@ impl StorageContext {
         let default_vault_dir = std::env::var_os("USERPROFILE")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("."))
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    "USERPROFILE/HOME unset, falling back to temp dir for default_vault_dir"
+                );
+                std::env::temp_dir()
+            })
             .join("Documents")
             .join("VaultPilotVault");
 

@@ -1578,8 +1578,24 @@ async fn validate_base_url(base_url: &str) -> Result<Vec<(String, SocketAddr)>> 
         .ok_or_else(|| anyhow!("base_url has no host component"))?;
 
     // Allow explicit opt-in to local/private endpoints via env var.
-    if std::env::var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT").is_ok() {
+    // Still resolve DNS for pinning even when local endpoints are allowed.
+    let allow_local = std::env::var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT").is_ok();
+    if allow_local && (host_str == "localhost" || host_str.parse::<IpAddr>().is_ok()) {
         return Ok(Vec::new());
+    }
+    if allow_local {
+        // Resolve DNS and return addresses (skip private IP check) to enable DNS pinning.
+        let port = parsed
+            .port_or_known_default()
+            .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+        return match tokio::net::lookup_host(format!("{}:{}", host_str, port)).await {
+            Ok(addrs) => Ok(addrs.map(|a| (host_str.to_string(), a)).collect()),
+            Err(e) => Err(anyhow!(
+                "failed to resolve base_url host '{}': {}",
+                host_str,
+                e
+            )),
+        };
     }
 
     if host_str == "localhost" {

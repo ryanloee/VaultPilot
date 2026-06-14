@@ -2563,7 +2563,12 @@ public sealed partial class MainWindow : Window
         for (var day = 0; day <= 1; day++)
         {
             var baseTime = now.Date.AddDays(day) + startTime;
-            for (int i = 0; i < 200; i++)
+            // Calculate max slots from window duration to cover the entire window
+            var windowDuration = endTime >= startTime
+                ? endTime - startTime
+                : (TimeSpan.FromHours(24) - startTime) + endTime;
+            var maxSlots = (int)(windowDuration.TotalMinutes / intervalMinutes) + 1;
+            for (int i = 0; i <= maxSlots; i++)
             {
                 var slot = baseTime + TimeSpan.FromTicks(interval.Ticks * i);
                 var slotTime = slot.TimeOfDay;

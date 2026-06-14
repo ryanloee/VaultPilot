@@ -81,7 +81,6 @@
                         MinHeight="0"
                         SelectionMode="Single"
                         ScrollViewer.VerticalScrollBarVisibility="Auto"
-                        IsItemClickEnabled="True"
                         AutomationProperties.Name="笔记列表"
                         AutomationProperties.HelpText="选择一篇笔记查看详情">
                         <ListView.ItemTemplate>

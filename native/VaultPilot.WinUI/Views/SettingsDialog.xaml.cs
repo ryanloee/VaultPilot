@@ -15,6 +15,7 @@ public sealed partial class SettingsDialog : ContentDialog
 {
     private readonly Func<Task> _openVaultDirectoryAsync;
     private readonly Func<Task> _openProjectHomepageAsync;
+    private readonly AppSettings _originalSettings;
 
     /// <summary>
     /// The updated settings after successful validation, or null if the user cancelled.
@@ -42,6 +43,7 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         _openVaultDirectoryAsync = openVaultDirectoryAsync;
         _openProjectHomepageAsync = openProjectHomepageAsync;
+        _originalSettings = settings;
 
         InitializeComponent();
         XamlRoot = xamlRoot;
@@ -255,7 +257,9 @@ public sealed partial class SettingsDialog : ContentDialog
                     trimmedBaseUrl,
                     trimmedModel,
                     timeoutMs,
-                    contextWindowTokens),
+                    contextWindowTokens,
+                    _originalSettings.Provider.MaxOutputTokens,
+                    _originalSettings.Provider.ProviderType),
                 AutoCheckUpdatesBox.IsChecked ?? true,
                 AutoWakeEnabledBox.IsChecked ?? false,
                 autoWakeInterval,

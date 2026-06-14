@@ -11,7 +11,9 @@ public class AppSettingsTests
             BaseUrl: "https://api.example.com",
             Model: "gpt-4",
             RequestTimeoutMs: 30_000,
-            ContextWindowTokens: 128_000);
+            ContextWindowTokens: 128_000,
+            MaxOutputTokens: 4096,
+            ProviderType: "openai");
 
     private static AppSettings CreateTestSettings() =>
         new(
@@ -81,6 +83,8 @@ public class AppSettingsTests
         Assert.Equal(original.Provider.Model, deserialized.Provider.Model);
         Assert.Equal(original.Provider.RequestTimeoutMs, deserialized.Provider.RequestTimeoutMs);
         Assert.Equal(original.Provider.ContextWindowTokens, deserialized.Provider.ContextWindowTokens);
+        Assert.Equal(original.Provider.MaxOutputTokens, deserialized.Provider.MaxOutputTokens);
+        Assert.Equal(original.Provider.ProviderType, deserialized.Provider.ProviderType);
     }
 
     [Fact]
@@ -91,8 +95,12 @@ public class AppSettingsTests
             BaseUrl: "https://api.example.com",
             Model: "gpt-3.5-turbo",
             RequestTimeoutMs: 15_000,
-            ContextWindowTokens: null);
+            ContextWindowTokens: null,
+            MaxOutputTokens: null,
+            ProviderType: null);
 
         Assert.Null(provider.ContextWindowTokens);
+        Assert.Null(provider.MaxOutputTokens);
+        Assert.Null(provider.ProviderType);
     }
 }

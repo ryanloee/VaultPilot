@@ -1882,7 +1882,14 @@ async fn handle_mcp_request(
                             let notes_text = result
                                 .notes
                                 .iter()
-                                .map(|m| format!("- **{}** (id: {}): {}", sanitize_mcp_prompt_content(&m.title), m.id, sanitize_mcp_prompt_content(&m.summary)))
+                                .map(|m| {
+                                    format!(
+                                        "- **{}** (id: {}): {}",
+                                        sanitize_mcp_prompt_content(&m.title),
+                                        m.id,
+                                        sanitize_mcp_prompt_content(&m.summary)
+                                    )
+                                })
                                 .collect::<Vec<_>>()
                                 .join("\n");
                             vec![serde_json::json!({

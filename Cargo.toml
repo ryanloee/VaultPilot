@@ -31,7 +31,7 @@ serde_yaml_ng = "0.9"
 sha2 = "0.10"
 subtle = "2"
 tokio = { version = "1", features = ["net", "process", "time", "rt-multi-thread", "signal", "io-util", "io-std", "fs"] }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors", "timeout"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 clap = { version = "4", features = ["derive"] }
 walkdir = "2"

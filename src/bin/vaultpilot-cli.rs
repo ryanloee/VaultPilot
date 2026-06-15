@@ -19,6 +19,7 @@ use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::runtime::Runtime;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
 
 use tracing_subscriber::EnvFilter;
@@ -974,6 +975,10 @@ async fn run_http_bridge(
             rate_limit_middleware,
         ))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::GATEWAY_TIMEOUT,
+            std::time::Duration::from_secs(180),
+        )) // #605: overall request timeout
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|origin, _parts| {

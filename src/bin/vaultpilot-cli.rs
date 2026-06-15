@@ -1249,23 +1249,21 @@ fn validate_http_bridge_binding(ip: IpAddr, token: Option<&str>) -> Result<()> {
 }
 
 /// Constant-time byte-slice comparison to prevent timing side-channel attacks.
-/// Never short-circuits on length mismatch: always iterates over max(a.len(), b.len())
-/// bytes so the comparison does not leak the expected token length.
+/// Always iterates over a fixed 256-byte buffer regardless of input lengths,
+/// so the comparison never leaks the expected token length via timing.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() == b.len() {
-        // `subtle::ConstantTimeEq` is constant-time for equal-length slices.
-        return a.ct_eq(b).into();
-    }
-
-    // Length mismatch: still iterate over max_len bytes to avoid a timing gap.
-    let max_len = a.len().max(b.len());
-    let mut diff: u8 = 1; // mark length mismatch
-    for i in 0..max_len {
-        let ab = if i < a.len() { a[i] } else { 0 };
-        let bb = if i < b.len() { b[i] } else { 0 };
-        diff |= ab ^ bb;
-    }
-    diff == 0 // always false — diff started at 1
+    // Fixed buffer size — must be >= any realistic token length.
+    const FIXED_LEN: usize = 256;
+    let mut a_padded = [0u8; FIXED_LEN];
+    let mut b_padded = [0u8; FIXED_LEN];
+    let a_copy = a.len().min(FIXED_LEN);
+    let b_copy = b.len().min(FIXED_LEN);
+    a_padded[..a_copy].copy_from_slice(&a[..a_copy]);
+    b_padded[..b_copy].copy_from_slice(&b[..b_copy]);
+    // Compare full padded buffers in constant time, then combine with length equality.
+    let eq: bool = a_padded.ct_eq(&b_padded).into();
+    let len_eq: bool = a.len().ct_eq(&b.len()).into();
+    eq && len_eq
 }
 
 fn require_bridge_token(

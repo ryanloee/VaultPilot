@@ -243,6 +243,9 @@
 - #621: NotesView 快速搜索竞态 — 旧搜索结果可覆盖新搜索结果 (PR #624 已合并)
 - #622: NotesView 删除笔记不检查后端返回值 — 删除失败仍从 UI 移除 (PR #624 已合并)
 - #623: tool_result_user_prompt 的 tool_name 未转义 XML 闭合标签 — 防御纵深不一致 (PR #624 已合并)
+- #625: render_notes/render_candidate_notes/render_history note metadata XML 转义 (PR #628 已合并)
+- #626: ExecuteAiRequestAsync session ID 竞态 — AddTurnAsync sessionId 参数 (PR #629 已合并)
+- #627: OnComposerKeyDown Ctrl+V e.Handled 提前到 await 前 (PR #630 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -453,27 +456,24 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#142
+- 循环编号: 循环#143
 - 本轮时间: 2026-06-16
-- 审查模块: Rust models.rs (987行), prompting.rs (865行), ai.rs (2245行); C# Models 5文件, Converters/Controls/Program.cs; C# SettingsDialog.xaml.cs, NotesView.xaml.cs, App.xaml.cs
+- 审查模块: Rust prompting.rs (865行), storage.rs (4963行), ai.rs (2245行), lib.rs (3068行), crypto.rs (318行), models.rs (987行), search_rules.rs (439行); C# MainWindow.xaml.cs, BackendClient.cs, App.xaml.cs, Updates.cs
 - 讨论阶段发现:
-  - **创建 3 个 issue**: #621 (BUG), #622 (BUG), #623 (SECURITY)
-  - #621: NotesView 快速搜索竞态 — 每次搜索独立 CTS 不取消前一次，旧结果可覆盖新结果
-  - #622: NotesView 删除笔记 SendAsync<bool> 返回值被丢弃，删除失败仍从 UI 移除
-  - #623: tool_result_user_prompt 的 tool_name 未转义 XML 闭合标签，防御纵深不一致
-  - Rust models.rs — GroundedAnswer.used_context_count 缺少 #[serde(default)]（LOW）
-  - Rust ai.rs — extract_command_keywords 重复调用（LOW）、JSON escape repair 不处理全部控制字符（Info）
-  - Rust prompting.rs — tool_name 是唯一未转义的外部输入（LOW → #623）
-  - C# Models — 反射式 JSON 反序列化不强制非空注解（HIGH 系统性风险）、多个 IReadOnlyList 字段缺少可空标记（MEDIUM）
-  - C# WrapPanel.cs — 实现正确，float 累积误差极小（Info）
-  - C# Program.cs — 单实例 mutex 已在 App.xaml.cs 实现（非 bug）
-  - C# NotesView — 搜索竞态（MEDIUM → #621）、删除返回值不检查（MEDIUM → #622）
-  - C# App.xaml.cs — atomic exit guard 正确、async void handler 全部有 try-catch
+  - **创建 3 个 issue**: #625 (SECURITY), #626 (BUG), #627 (BUG)
+  - #625: prompting.rs render_notes/render_candidate_notes/render_history note metadata (title/tags/path/role) 未 XML 转义 — prompt 注入 via note title
+  - #626: ExecuteAiRequestAsync AddTurnAsync 两次调用读取 _currentSessionId，用户切换会话后 AI 回答落入错误会话
+  - #627: OnComposerKeyDown Ctrl+V e.Handled 在 await 后设置，await 期间默认 paste handler 可执行
+  - Rust 后端总体评估：高质量代码库，0 unsafe、0 生产 unwrap、参数化 SQL、SSRF/路径穿越/prompt 注入防护完整
+  - C# 前端总体评估：所有 async void 有 try-catch、无 .Result/.Wait() 阻塞、CTS 生命周期管理正确
+  - 其他 LOW 发现（未创建 issue）：BackendClient pump task 未 await、SaveChatStateAsync 失败仅状态栏警告、_chatState 无锁读取模式脆弱
 - 修复结果:
-  - PR #624 (#621+#622+#623) ✅ 已合并 — CI 6/6 全通过
-  - #621: 添加 _searchCts 字段，新搜索前 Cancel 旧搜索 + OperationCanceledException catch
-  - #622: 检查 deleteNote 返回值，失败时 ShowError + return
-  - #623: escape_xml_close_tags(tool_name) 与其他输入转义策略一致
+  - PR #628 (#625) ✅ 已合并 — CI 6/6 全通过
+  - PR #629 (#626) ✅ 已合并 — CI 6/6 全通过
+  - PR #630 (#627) ✅ 已合并 — CI 6/6 全通过
+  - #625: render_notes 5 字段 + render_candidate_notes 5 字段 + render_history role 字段全部 escape_xml_close_tags()
+  - #626: AddTurnAsync 新增可选 sessionId 参数，ExecuteAiRequestAsync 捕获 requestSessionId 传递给 3 次调用
+  - #627: e.Handled = true 提前到 await 之前，TryHandleClipboardImagePasteAsync 返回 false 时重置为 false
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 253 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust 3 文件 (~4.1K行) + C# 11 文件 (~11K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、所有 async void 有 try-catch、Rust 错误处理完整。C# 模型层反射式 JSON 反序列化是系统性风险但非本次修复范围
+- 项目状态: **1 open issue (#597), 0 open PR, 256 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust 7 文件 (~15K行) + C# 4 文件。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位

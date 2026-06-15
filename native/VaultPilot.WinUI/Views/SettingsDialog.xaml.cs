@@ -13,6 +13,7 @@ namespace VaultPilot.WinUI.Views;
 /// </summary>
 public sealed partial class SettingsDialog : ContentDialog
 {
+    private static readonly SolidColorBrush _transparentBrush = new(Microsoft.UI.Colors.Transparent);
     private readonly Func<Task> _openVaultDirectoryAsync;
     private readonly Func<Task> _openProjectHomepageAsync;
     private readonly AppSettings _originalSettings;
@@ -292,7 +293,7 @@ public sealed partial class SettingsDialog : ContentDialog
         }
 
         System.Diagnostics.Debug.WriteLine($"[SettingsDialog.GetThemeBrush] Missing resource key: '{key}', falling back to Transparent.");
-        return new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        return _transparentBrush;
     }
 
     private static void SetFieldError(TextBox box, TextBlock errorBlock, string message)

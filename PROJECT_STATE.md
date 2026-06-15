@@ -211,6 +211,8 @@
 - #557: BackendClient 并发 reader pump 竞态 — await 旧 pump task 后再启动新 task (PR #562 已合并)
 - #558: MCP prompts/get 用户内容提示注入 — sanitize_mcp_prompt_content() 转义+分隔符 (PR #561 已合并)
 - #559: read_stdin_json 无上限 OOM + MCP search limit 无上限 — 10MB cap + limit 上限 (PR #560 已合并)
+- #563: BeginExitForUpdate 不释放 _instanceMutex — 更新后重启单实例检测失败 (PR #565 已合并)
+- #564: windows-installers.yml release workflow 缺少 cargo audit 步骤 (PR #566 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -418,17 +420,18 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#128
+- 循环编号: 循环#129
 - 本轮时间: 2026-06-15
-- 审查模块: Rust vaultpilot-cli.rs (2814行), vaultpilot-agent.rs (610行), models.rs (987行), prompting.rs (838行); C# MainWindow.xaml.cs (3628行), BackendClient.cs (633行); CI workflows (3 files)
+- 审查模块: Rust ai.rs (2219行), crypto.rs (294行), search_rules.rs (439行), storage.rs (4787行); C# App.xaml.cs, MainWindow.Updates.cs, SettingsDialog.xaml.cs, NotesView.xaml.cs, AppSettings.cs, WrapPanel.cs; CI workflows (3 files)
 - 讨论阶段发现:
-  - **#557** BUG (CRITICAL): BackendClient 并发 reader pump 竞态 — 重连时旧 pump task 未完成即启动新 task
-  - **#558** SECURITY (HIGH): MCP prompts/get 用户内容提示注入 — note title/body 直接插入 prompt
-  - **#559** BUG (HIGH): read_stdin_json 无上限 OOM + MCP search limit 无上限资源耗尽
+  - **#563** BUG (MEDIUM): BeginExitForUpdate 不释放 _instanceMutex — 更新后重启可能单实例检测失败
+  - **#564** ENHANCEMENT (MEDIUM): windows-installers.yml release workflow 缺少 cargo audit 步骤
+  - Rust 后端：0 CRITICAL, 0 HIGH, 1 MEDIUM (note content prompt injection — LLM 固有限制), 10 LOW
+  - C# 前端：0 CRITICAL, 0 HIGH, 2 MEDIUM (mutex + fire-and-forget), 8 LOW
+  - CI/CD：cargo audit 预存在 CVE (rustls-webpki) 已解决, rand unsound advisory (LOW)
 - 修复结果:
-  - **PR #562** (#557): ✅ 已合并 — await 旧 pump task + async void + try-catch
-  - **PR #561** (#558): ✅ 已合并 — sanitize_mcp_prompt_content() 转义+分隔符
-  - **PR #560** (#559): ✅ 已合并 — 10MB stdin cap + limit 上限 (500/1000)
-- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ✅
-- 项目状态: **0 open issue, 0 open PR, 228 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust vaultpilot-cli.rs (2814行) + vaultpilot-agent.rs (610行) + models.rs (987行) + prompting.rs (838行) + C# MainWindow.xaml.cs (3628行) + BackendClient.cs (633行) + CI workflows (3 files)。发现 1 CRITICAL + 5 HIGH + 13 MEDIUM + 16 LOW。Rust 后端安全实践优秀（SSRF 防护、路径穿越防护、prompt 注入防护），但 MCP prompts/get 路径遗漏了注入防护。C# 前端 BackendClient 重连竞态为本轮最关键发现。
+  - **PR #565** (#563): ✅ 已合并 — BeginExitForUpdate 末尾添加 _instanceMutex 释放
+  - **PR #566** (#564): ✅ 已合并 — windows-installers.yml 添加 cargo install cargo-audit + cargo audit
+- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅ (375 tests), linux-cli-build ✅, winui-build ✅, cargo audit ✅
+- 项目状态: **0 open issue, 0 open PR, 230 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust ai.rs + crypto.rs + search_rules.rs + storage.rs (8739行) + C# 7 文件 + CI 3 文件。Rust 后端质量优秀 — 0 unsafe, 0 生产 unwrap, 所有 SQL 参数化, SSRF/路径穿越防护正确。C# 前端所有 async void 均有 try-catch, 无 .Result/.Wait() 阻塞。代码库持续保持「零实质缺陷」状态。

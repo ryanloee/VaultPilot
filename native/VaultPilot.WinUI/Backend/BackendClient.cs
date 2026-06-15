@@ -34,6 +34,8 @@ public sealed class BackendClient : IAsyncDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement>> _pending = new();
     private CancellationTokenSource? _readerCts;
+    private Task? _pumpStdoutTask;
+    private Task? _pumpStderrTask;
     private string? _executablePath;
     private Timer? _healthCheckTimer;
     private int _isDisposed;

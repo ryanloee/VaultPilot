@@ -995,7 +995,8 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public void CancelActiveRequest()
     {
-        Volatile.Read(ref _activeRequestCts)?.Cancel();
+        try { Volatile.Read(ref _activeRequestCts)?.Cancel(); }
+        catch (ObjectDisposedException) { }
     }
 
     #region Keyboard Accelerator Handlers

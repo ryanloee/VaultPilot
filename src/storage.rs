@@ -557,36 +557,64 @@ pub fn search_notes_with_context(
     let (connection, _) = open_connection(context)?;
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
     let offset = query.offset.unwrap_or(0);
-    debug!(text = %query.text, limit = limit, offset = offset, "searching notes");
+    let has_filters = !query.tags.is_empty()
+        || !query.keywords.is_empty()
+        || query.created_after.is_some()
+        || query.created_before.is_some()
+        || query.modified_after.is_some()
+        || query.modified_before.is_some();
+    debug!(text = %query.text, limit = limit, offset = offset, has_filters = has_filters, "searching notes");
+
     let mut notes = if query.text.trim().is_empty() {
-        query_recent_note_metas(&connection, limit, offset)?
+        if has_filters {
+            // SQL-level filtering when text is empty but filters are specified.
+            // This avoids the bug where query_recent_note_metas returns only
+            // the N most recent notes and post-filtering silently drops results.
+            query_filtered_note_metas(&connection, &query, limit, offset)?
+        } else {
+            query_recent_note_metas(&connection, limit, offset)?
+        }
     } else {
-        let fts_results = rank_note_metas(context, &connection, &query.text, &[], limit + offset)?;
+        // When filters are active, over-fetch to compensate for post-filtering attrition.
+        let fetch_limit = if has_filters {
+            // Fetch more candidates so that after in-memory filtering we still
+            // have enough results to fill the requested page.
+            (limit + offset).saturating_mul(4).max(50)
+        } else {
+            limit + offset
+        };
+        let fts_results = rank_note_metas(context, &connection, &query.text, &[], fetch_limit)?;
         let fts_results = fts_results.into_iter().skip(offset).collect::<Vec<_>>();
         if fts_results.is_empty() {
             // Fuzzy/approximate fallback: split query into words and use LIKE
-            let like_results = query_like_note_metas(&connection, &query.text, limit + offset)?;
+            let like_results = query_like_note_metas(&connection, &query.text, fetch_limit)?;
             like_results.into_iter().skip(offset).collect::<Vec<_>>()
         } else {
             fts_results
         }
     };
 
-    if !query.tags.is_empty() {
+    // In-memory filtering (for FTS path where SQL filtering isn't applied)
+    if !query.tags.is_empty() && !query.text.trim().is_empty() {
         notes.retain(|note| has_all_terms(&note.tags, &query.tags));
     }
-    if !query.keywords.is_empty() {
+    if !query.keywords.is_empty() && !query.text.trim().is_empty() {
         notes.retain(|note| has_all_terms(&note.keywords, &query.keywords));
     }
 
-    // Date range filtering
-    notes = filter_by_date_range(
-        notes,
-        query.created_after.as_deref(),
-        query.created_before.as_deref(),
-        query.modified_after.as_deref(),
-        query.modified_before.as_deref(),
-    );
+    // Date range filtering (for FTS path where SQL filtering isn't applied)
+    if !query.text.trim().is_empty() {
+        notes = filter_by_date_range(
+            notes,
+            query.created_after.as_deref(),
+            query.created_before.as_deref(),
+            query.modified_after.as_deref(),
+            query.modified_before.as_deref(),
+        );
+    }
+
+    // Trim to requested limit after filtering
+    notes.truncate(limit);
 
     let total = notes.len();
     Ok(SearchResult { notes, total })
@@ -1848,6 +1876,85 @@ fn query_recent_note_metas(
     )?;
     let rows = statement
         .query_map([limit as i64, offset as i64], row_to_meta)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// SQL-level filtered note query for empty-text searches with active filters.
+/// Pushes tag, keyword, and date-range filters into the SQL WHERE clause so
+/// that pagination operates on the correctly filtered result set.
+fn query_filtered_note_metas(
+    connection: &Connection,
+    query: &SearchQuery,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<NoteMeta>> {
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut param_idx = 1usize;
+
+    // Tag filtering: each required tag must appear in the comma-separated tags column
+    for tag in &query.tags {
+        let trimmed = tag.trim();
+        if !trimmed.is_empty() {
+            conditions.push(format!("LOWER(tags) LIKE LOWER(?{param_idx})"));
+            params.push(Box::new(format!("%{trimmed}%")));
+            param_idx += 1;
+        }
+    }
+
+    // Keyword filtering: each required keyword must appear in the comma-separated keywords column
+    for kw in &query.keywords {
+        let trimmed = kw.trim();
+        if !trimmed.is_empty() {
+            conditions.push(format!("LOWER(keywords) LIKE LOWER(?{param_idx})"));
+            params.push(Box::new(format!("%{trimmed}%")));
+            param_idx += 1;
+        }
+    }
+
+    // Date range filtering
+    let date_filters: [(&str, &str, Option<&str>); 4] = [
+        ("created_at", ">=", query.created_after.as_deref()),
+        ("created_at", "<=", query.created_before.as_deref()),
+        ("updated_at", ">=", query.modified_after.as_deref()),
+        ("updated_at", "<=", query.modified_before.as_deref()),
+    ];
+    for (col, op, val) in date_filters {
+        if let Some(v) = val {
+            if !v.is_empty() {
+                conditions.push(format!("{col} {op} ?{param_idx}"));
+                params.push(Box::new(v.to_string()));
+                param_idx += 1;
+            }
+        }
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    // Add LIMIT and OFFSET params
+    params.push(Box::new(limit as i64));
+    let limit_idx = param_idx;
+    param_idx += 1;
+    params.push(Box::new(offset as i64));
+    let offset_idx = param_idx;
+
+    let sql = format!(
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
+         FROM notes
+         {where_clause}
+         ORDER BY updated_at DESC
+         LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+    );
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement
+        .query_map(param_refs.as_slice(), row_to_meta)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }

@@ -1856,7 +1856,11 @@ async fn handle_mcp_request(
                             ))
                         }
                     };
-                    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5).min(500) as usize;
+                    let limit = args
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(5)
+                        .min(500) as usize;
                     match search_notes_async(
                         context,
                         SearchQuery {
@@ -2434,7 +2438,11 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
 }
 
 fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
-    let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(20).min(1000) as usize;
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(20)
+        .min(1000) as usize;
     match search_notes_with_context(
         context,
         SearchQuery {
@@ -2513,7 +2521,11 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
         .get("keywords")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(10).min(500) as usize;
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(10)
+        .min(500) as usize;
     let parse_csv = |s: &str| {
         s.split(',')
             .map(|t| t.trim().to_string())

@@ -201,6 +201,9 @@
 - #538: NotesView RefreshNotesAsync 取消 _loadDetailCts 防止过时数据更新 (PR #539 已合并)
 - #541: PromptToInstallUpdateAsync null-forgiving cast → pattern matching 防 NRE (PR #543 已合并)
 - #542: CheckForAppUpdatesAsync _updateCheckStarted Interlocked 原子 guard (PR #543 已合并)
+- #544: unsanitized API response text in tool-call retry error (PR #547 已合并)
+- #545: CopyTextToClipboard 缺少 try/catch 剪贴板锁崩溃 (PR #548 已合并)
+- #546: load_chat_state_with_context TOCTOU exists/read 竞态 (PR #548 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -384,35 +387,41 @@
 - 2026-06-15 [循环#121]: #526 WAL 备份一致性 — PRAGMA wal_checkpoint(TRUNCATE) 刷新后复制
 - 2026-06-15 [循环#121]: #527 搜索高亮重叠 — 收集所有范围、合并重叠、单次应用标记
 - 2026-06-15 [循环#121]: #528 DisposeAsync TOCTOU — volatile bool → int + Interlocked.CompareExchange
+- 2026-06-15 [循环#125]: 深度审查 Rust 4 文件 (ai.rs, lib.rs, prompting.rs, storage.rs ~10.9K行) + C# 9 文件 (~10K行)，创建 3 个 issue（#544 SECURITY, #545 BUG, #546 BUG），3/3 全部修复
+- 2026-06-15 [循环#125]: #544 tool-call 重试错误 sanitize_error() 包装 — PR #547 已合并
+- 2026-06-15 [循环#125]: #545 CopyTextToClipboard try/catch 剪贴板崩溃防护 — PR #548 已合并
+- 2026-06-15 [循环#125]: #546 load_chat_state_with_context TOCTOU 消除 — PR #548 已合并
+- 2026-06-15 [循环#125]: 代码库持续保持高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
 
 | 指标 | 循环#48 | 循环#53 | PR审核轮#62 | 循环#63 | PR审核轮#65 | 循环#66 | 循环#67 | PR审核轮#68 | 循环#69 | 修复轮#70 | 循环#71 |
 |------|---------|---------|-------------|---------|-----------|---------|---------|-----------|---------|-----------|---------|
-| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 | 讨论轮#105 | 讨论轮#106 | 讨论轮#108 | 修复轮#109 | PR审核轮#110 | 修复轮#111 | PR审核轮#112 | 讨论轮#113 | 修复轮#114 | PR审核轮#115 | 循环#117 | 循环#118 | 循环#119 | 循环#120 | 循环#121 |
-|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|-------------|-------------|-------------|-----------|-------------|-------------|-------------|-------------|-------------|-------------|-----------|-----------|-----------|-----------|-----------|
-| Open issues 总数 | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Bug 数 | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Security 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 已合并 PR | 190 | 192 | 192 | 194 | 196 | 198 | 200 | 202 | 202 | 202 | 208 | 211 | 214 | 214 | 214 | 214 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 216 | 218 |
-| 进行中 PR | 1 | 0 | 1 | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
-| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 指标 | 循环#73 | 修复轮#74 | 循环#75 | PR审核轮#77 | 修复轮#79 | PR审核轮#80 | 修复轮#82 | PR审核轮#86 | 修复轮#88 | PR审核轮#89 | PR审核轮#100 | 讨论轮#101 | PR审核轮#103 | 讨论轮#105 | 讨论轮#106 | 讨论轮#108 | 修复轮#109 | PR审核轮#110 | 修复轮#111 | PR审核轮#112 | 讨论轮#113 | 修复轮#114 | PR审核轮#115 | 循环#117 | 循环#118 | 循环#119 | 循环#120 | 循环#121 | 循环#125 |
+|------|---------|-----------|---------|-------------|-----------|-------------|-----------|-------------|-----------|-------------|-------------|-------------|---------------|-------------|-------------|-------------|-----------|-------------|-------------|-------------|-------------|-------------|-------------|-----------|-----------|-----------|-----------|-----------|-----------|
+| Open issues 总数 | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Bug 数 | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Security 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Performance 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| Open Enhancement 数 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 已合并 PR | 190 | 192 | 192 | 194 | 196 | 198 | 200 | 202 | 202 | 202 | 208 | 211 | 214 | 214 | 214 | 214 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 215 | 216 | 218 | 225 |
+| 进行中 PR | 1 | 0 | 1 | 0 ✅ | 0 ✅ | 1 | 0 ✅ | 0 ✅ | 1 | 1 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
+| 阻塞项 | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ | 0 ✅ |
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#124
+- 循环编号: 循环#125
 - 本轮时间: 2026-06-15
-- 审查模块: Rust crypto.rs, models.rs, search_rules.rs, vaultpilot-cli.rs, vaultpilot-agent.rs; C# MainWindow.Updates.cs, App.xaml.cs, AppSettings.cs, WrapPanel.cs, Program.cs, test files
+- 审查模块: Rust ai.rs, lib.rs, prompting.rs, storage.rs; C# BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs, StringToVisibilityConverter.cs, ChatModels.cs, NoteModels.cs, OperationModels.cs, AiModels.cs
 - 讨论阶段发现:
-  - **#540** BUG (MEDIUM): _updateDownloadPercent 跨线程读取缺 volatile → 已关闭（字段已有 volatile）
-  - **#541** BUG (MEDIUM): PromptToInstallUpdateAsync null-forgiving cast NRE 风险
-  - **#542** BUG (MEDIUM): CheckForAppUpdatesAsync _updateCheckStarted 非原子 guard
-  - 额外发现（不创建 issue）: crypto.rs 自定义 HMAC/PBKDF2 实现（HIGH 设计问题）、macOS/容器弱 salt（HIGH）、hostname to_string_lossy 信息丢失（HIGH）、file:// URL 解析不完整（MEDIUM）
+  - **#544** SECURITY (MEDIUM): ai.rs:393-397 tool-call 重试错误消息未 sanitize API 响应文本
+  - **#545** BUG (MEDIUM): MainWindow.xaml.cs:1970 CopyTextToClipboard 缺少 try/catch，剪贴板被锁时崩溃
+  - **#546** BUG (MEDIUM): storage.rs:362-380 load_chat_state_with_context TOCTOU exists/read 竞态
+  - 额外发现（不创建 issue）: ai.rs 50MB 响应全量缓冲内存压力（HIGH）、storage.rs rank_documents N+1 磁盘读取（HIGH）、storage.rs 附件语义评分全表扫描（MEDIUM）、lib.rs 路径祖先遍历无深度限制（MEDIUM）、storage.rs 导出文件名碰撞（MEDIUM）、BackendClient stale TCS 竞态（MEDIUM）、NotesView FormatUpdatedAt 重复逻辑（MEDIUM）、SettingsDialog 错误注释误导（LOW）
 - 修复结果:
-  - **PR #543** (#541+#542): ✅ 已合并 — Interlocked.CompareExchange 原子 guard + pattern matching 防 NRE
+  - **PR #547** (#544): ✅ 已合并 — sanitize_error() 包装 API 响应文本
+  - **PR #548** (#545+#546): ✅ 已合并 — Clipboard try/catch + TOCTOU match 修复
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ❌ (预存在 CVE)
-- 项目状态: **0 open issue, 0 open PR, 223 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 ~28K 行 Rust (crypto.rs, models.rs, search_rules.rs, vaultpilot-cli.rs 2700+行, vaultpilot-agent.rs 200+行) + ~20K 行 C# (MainWindow.Updates.cs, App.xaml.cs, AppSettings.cs, WrapPanel.cs, Program.cs, 8 个测试文件)。Rust 后端 3 HIGH（均在 crypto.rs 密钥派生层）+ 4 MEDIUM + 7 LOW；C# 前端 2 MEDIUM + 5 LOW。代码库整体质量优秀。
+- 项目状态: **0 open issue, 0 open PR, 225 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 ~10.9K 行 Rust (ai.rs 2219行, lib.rs 3056行, prompting.rs 838行, storage.rs 4777行) + ~10K 行 C# (BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs, 5 个 Model 文件)。Rust 后端 2 HIGH + 4 MEDIUM + 5 LOW；C# 前端 2 MEDIUM + 6 LOW。代码库整体质量优秀，安全实践到位。

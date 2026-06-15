@@ -510,7 +510,13 @@ fn render_history(history: &[ConversationTurn]) -> String {
 
     history
         .iter()
-        .map(|turn| format!("{}: {}", turn.role, escape_xml_close_tags(&turn.text)))
+        .map(|turn| {
+            format!(
+                "{}: {}",
+                escape_xml_close_tags(&turn.role),
+                escape_xml_close_tags(&turn.text)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -540,11 +546,11 @@ fn render_notes(docs: &[NoteDocument]) -> String {
             };
             format!(
                 "NOTE_ID: {}\nTITLE: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\n{}CONTENT:\n{}\n",
-                doc.meta.id,
-                doc.meta.title,
-                doc.meta.path,
-                doc.meta.tags.join(", "),
-                doc.meta.keywords.join(", "),
+                escape_xml_close_tags(&doc.meta.id),
+                escape_xml_close_tags(&doc.meta.title),
+                escape_xml_close_tags(&doc.meta.path),
+                escape_xml_close_tags(&doc.meta.tags.join(", ")),
+                escape_xml_close_tags(&doc.meta.keywords.join(", ")),
                 snippet_section,
                 doc.body
             )
@@ -563,11 +569,11 @@ fn render_candidate_notes(candidates: &[NoteMeta]) -> String {
         .map(|note| {
             format!(
                 "NOTE_ID: {}\nTITLE: {}\nSUMMARY: {}\nKEYWORDS: {}\nPATH: {}\n",
-                note.id,
-                note.title,
-                note.summary,
-                note.keywords.join(", "),
-                note.path
+                escape_xml_close_tags(&note.id),
+                escape_xml_close_tags(&note.title),
+                escape_xml_close_tags(&note.summary),
+                escape_xml_close_tags(&note.keywords.join(", ")),
+                escape_xml_close_tags(&note.path)
             )
         })
         .collect::<Vec<_>>()

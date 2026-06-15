@@ -1891,7 +1891,7 @@ async fn handle_mcp_request(
                         .get("limit")
                         .and_then(Value::as_u64)
                         .unwrap_or(5)
-                        .min(500) as usize;
+                        .min(200) as usize;
                     match search_notes_async(
                         context,
                         SearchQuery {
@@ -2567,7 +2567,7 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(10)
-        .min(500) as usize;
+        .min(200) as usize;
     let parse_csv = |s: &str| {
         s.split(',')
             .map(|t| t.trim().to_string())

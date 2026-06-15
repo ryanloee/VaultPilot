@@ -815,7 +815,7 @@ pub fn export_all_notes_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let path = output_dir.join(format!("{filename}.md"));
+                let path = output_dir.join(format!("{}-{}.md", filename, &meta.id[..8]));
                 match fs::write(&path, &markdown) {
                     Ok(()) => result.exported += 1,
                     Err(e) => result
@@ -3096,7 +3096,7 @@ pub fn vault_export_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let entry_name = format!("notes/{}.md", filename);
+                let entry_name = format!("notes/{}-{}.md", filename, &meta.id[..8]);
                 zip.start_file(entry_name, options)?;
                 std::io::Write::write_all(&mut zip, markdown.as_bytes())?;
                 result.notes_exported += 1;

@@ -219,6 +219,8 @@
 - #573: import_note_images 图片导入路径缺少敏感目录校验 (PR #576 已合并)
 - #574: WalkDir 无深度限制，循环符号链接导致无限遍历 (PR #577 已合并)
 - #575: export_all_notes 受 search_notes_with_context 200 条上限截断 (PR #578 已合并)
+- #579: MCP tool call 错误路径 14 处缺少 sanitize_error 脱敏 (PR #581 已合并)
+- #580: serialize_string_result serde 序列化错误未脱敏 — 与 serialize_result 不一致 (PR #581 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -426,20 +428,17 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#131
+- 循环编号: 循环#132
 - 本轮时间: 2026-06-15
-- 审查模块: Rust storage.rs (4858行), ai.rs (2219行), crypto.rs (294行), search_rules.rs (439行); C# MainWindow.Updates.cs (130行), SettingsDialog.xaml.cs (311行), NotesView.xaml.cs (331行), WrapPanel.cs (176行)
+- 审查模块: Rust lib.rs (3068行), prompting.rs (838行), models.rs (987行), vaultpilot-agent.rs (610行), vaultpilot-cli.rs (2847行); C# BackendClient.cs (655行), App.xaml.cs (176行), Models/*.cs (~170行), Converters/*.cs (23行), Program.cs (23行)
 - 讨论阶段发现:
-  - **#573** SECURITY (MEDIUM): import_note_images 缺少路径校验 — 可从 /etc/shadow, ~/.ssh 等敏感路径复制文件到 vault
-  - **#574** BUG (MEDIUM): WalkDir 无 max_depth 限制 — 循环符号链接导致无限遍历和 OOM
-  - **#575** BUG (MEDIUM): export_all_notes 使用 search_notes_with_context 但 limit 被 clamp(1,200) — 导出截断为 200 条
-  - Rust 后端：0 CRITICAL, 0 HIGH, 3 MEDIUM (path validation, symlink loops, export truncation), 8 LOW
-  - C# 前端：0 CRITICAL, 0 HIGH, 0 NEW — 所有 async void 均有 try-catch，无 .Result/.Wait() 同步阻塞
-  - 代码库整体质量优秀 — 236 PR 后仅发现防御深度改进
+  - **#579** BUG (MEDIUM): MCP tool call 14 处 mcp_tool_error(e.to_string()) 缺少 sanitize_error — 存储错误可泄露内部路径和 SQL 细节给 MCP 客户端
+  - **#580** BUG (LOW): vaultpilot-agent.rs serialize_string_result serde 序列化错误未脱敏，与 serialize_result 不一致
+  - Rust 后端：0 CRITICAL, 0 HIGH, 2 MEDIUM (error sanitization inconsistency), 0 LOW
+  - C# 前端：0 CRITICAL, 0 HIGH, 0 NEW — BackendClient 线程安全优秀、App.xaml.cs 单实例+退出逻辑健壮、Models 使用 sealed record 简洁安全
+  - 代码库整体质量极优秀 — 236 PR 后仅发现 error sanitization 一致性问题
 - 修复结果:
-  - **PR #576** (#573): ✅ 已合并 — import_note_images() 调用前先 validate_import_path() 校验所有源路径
-  - **PR #577** (#574): ✅ 已合并 — WalkDir::new().max_depth(20) 限制遍历深度防循环符号链接
-  - **PR #578** (#575): ✅ 已合并 — 新增 list_all_note_metas() 无 LIMIT 查询替代 search_notes_with_context
-- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ✅
-- 项目状态: **0 open issue, 0 open PR, 236 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust storage.rs + ai.rs + crypto.rs + search_rules.rs (~7.8K行) + C# MainWindow.Updates.cs + SettingsDialog.xaml.cs + NotesView.xaml.cs + WrapPanel.cs (~950行)。Rust 后端发现 import_note_images 路径校验遗漏、WalkDir 无深度限制、export 截断为 200 条（非文档中的 10000 条）。C# 前端代码质量优秀 — 所有 async void 均有 try-catch，无 .Result/.Wait()，WrapPanel 布局逻辑正确。
+  - **PR #581** (#579 + #580): ✅ 已合并 — 14 处 mcp_tool_error 调用统一包裹 sanitize_error()，serialize_string_result 对齐 serialize_result
+- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
+- 项目状态: **0 open issue, 0 open PR, 237 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust lib.rs + prompting.rs + models.rs + vaultpilot-agent.rs + vaultpilot-cli.rs (~8.3K行) + C# BackendClient.cs + App.xaml.cs + Models + Converters + Program.cs (~1K行)。发现 MCP tool call 错误脱敏不一致（14 处遗漏）和 agent serialize_string_result 脱敏遗漏。Rust 后端安全实践整体优秀 — SSRF 防护、路径穿越防护、prompt 注入防护、constant_time_eq、sanitize_error 均到位，仅 MCP 工具层遗漏。C# 前端 BackendClient 线程安全（Interlocked、volatile、SemaphoreSlim）、App 单实例 + Interlocked exit guard、sealed record 不可变模型。

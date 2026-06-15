@@ -589,17 +589,24 @@ public sealed class BackendClient : IAsyncDisposable
 
     private void HandleEvent(JsonElement root)
     {
-        if (!root.TryGetProperty("event", out var eventElement)
-            || eventElement.GetString() != "agentStatus"
-            || !root.TryGetProperty("payload", out var payload))
+        try
         {
-            return;
-        }
+            if (!root.TryGetProperty("event", out var eventElement)
+                || eventElement.GetString() != "agentStatus"
+                || !root.TryGetProperty("payload", out var payload))
+            {
+                return;
+            }
 
-        var status = payload.Deserialize<AgentStatusEvent>(_jsonOptions);
-        if (status is not null)
+            var status = payload.Deserialize<AgentStatusEvent>(_jsonOptions);
+            if (status is not null)
+            {
+                AgentStatusReceived?.Invoke(status);
+            }
+        }
+        catch (Exception ex)
         {
-            AgentStatusReceived?.Invoke(status);
+            System.Diagnostics.Debug.WriteLine($"HandleEvent: failed to process event: {ex.Message}");
         }
     }
 

@@ -1990,7 +1990,7 @@ fn escape_like_pattern(input: &str) -> String {
 }
 
 /// Fuzzy LIKE-based fallback when FTS5 returns no results.
-/// Splits the query into words and matches any note whose title or body
+/// Splits the query into words and matches any note whose title or summary
 /// contains at least one of the words (case-insensitive).
 fn query_like_note_metas(
     connection: &Connection,
@@ -3040,6 +3040,9 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
     // In WAL mode, committed transactions may reside in the -wal file
     // and won't be included in a plain file copy.
     if let Ok(checkpoint_conn) = Connection::open(db_path) {
+        // Set busy_timeout so the checkpoint retries on SQLITE_BUSY instead of
+        // failing immediately when another connection has an active transaction.
+        let _ = checkpoint_conn.execute_batch("PRAGMA busy_timeout = 5000;");
         // TRUNCATE mode: flush WAL into main DB and truncate WAL file
         if let Err(e) = checkpoint_conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
             tracing::warn!(error = %e, "WAL checkpoint before backup failed, proceeding with copy");

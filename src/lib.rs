@@ -465,7 +465,13 @@ pub async fn ask_with_ai_with_context(
                     "executing",
                     format!("Listing directory: {}", display_path(&path)),
                 );
-                let result = list_directory_result(&path, Path::new(&settings.vault_dir));
+                let path_owned = path.clone();
+                let vault_owned = settings.vault_dir.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    list_directory_result(&path_owned, Path::new(&vault_owned))
+                })
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e)));
                 let is_error = result.is_err();
                 let output = match result {
                     Ok(output) => output,
@@ -483,7 +489,13 @@ pub async fn ask_with_ai_with_context(
                     "executing",
                     format!("Reading file: {}", display_path(&path)),
                 );
-                let result = read_file_result(&path, Path::new(&settings.vault_dir));
+                let path_owned = path.clone();
+                let vault_owned = settings.vault_dir.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    read_file_result(&path_owned, Path::new(&vault_owned))
+                })
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e)));
                 let is_error = result.is_err();
                 let output = match result {
                     Ok(output) => output,

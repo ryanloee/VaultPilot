@@ -45,6 +45,14 @@ jobs:
         shell: powershell
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Install cargo-audit
+        shell: powershell
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        shell: powershell
+        run: cargo audit
+
       - name: Build WinUI validation target
         shell: powershell
         run: >

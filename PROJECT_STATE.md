@@ -237,6 +237,9 @@
 - #606: MCP notes.search limit cap 500 与 search_notes 内部 200 不一致 (PR #609 已合并)
 - #605: HTTP bridge 无请求级超时 — 添加 180s TimeoutLayer (PR #610 已合并)
 - #608: strip_inline_markdown italic 处理 — 关闭（代码已有 italic 处理，非 bug）
+- #615: CancelActiveRequest() ObjectDisposedException — CTS 被 Dispose 后 Cancel() 无保护 (PR #619 已合并)
+- #616: BackendClient.SendAsync 无 _isDisposed 守卫 — Dispose 后 _writeLock 抛 ObjectDisposedException (PR #620 已合并)
+- #617: sanitize_mcp_prompt_content 不转义开标签 — 用户内容可注入 `<user_content>` 破坏分隔符 (PR #618 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -447,24 +450,26 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#140
+- 循环编号: 循环#141
 - 本轮时间: 2026-06-16
-- 审查模块: Rust models.rs (987行), prompting.rs (838行), ai.rs (2245行); C# Models/*.cs (5文件), App.xaml.cs (176行), StringToVisibilityConverter.cs (23行), NotesView.xaml (219行), SettingsDialog.xaml (173行), MainWindow.xaml (334行), App.xaml (52行)
+- 审查模块: Rust lib.rs (3068行), storage.rs (4963行), bin/vaultpilot-agent.rs (645行), bin/vaultpilot-cli.rs (2876行), search_rules.rs (439行), crypto.rs (318行); C# BackendClient.cs (655行), MainWindow.xaml.cs (3630行), MainWindow.Updates.cs (130行)
 - 讨论阶段发现:
-  - **创建 2 个 issue**: #611 (BUG), #612 (BUG)
-  - #611: render_history() 缺少 `<conversation_history>` XML delimiter — prompt 注入防御不一致，其他内容类型均有 delimiter 包裹
-  - #612: NotesView.xaml SystemAccentColor (Color) 用作 Foreground (Brush) — 类型不匹配，依赖隐式 XAML 类型转换
-  - Rust models.rs — 数据结构清洁，serde 序列化正确，validate() 测试完善，mask_secret() 使用 chars() 安全操作
-  - Rust prompting.rs — 7 处 render_history() 调用未包裹 delimiter，escape_xml_close_tags 防止 tag breakout 但缺少 defense-in-depth 第二层
-  - Rust ai.rs — 0 unsafe、0 生产 unwrap/expect、SSRF/路径穿越防护完整、DNS pinning 正确；发现图片读取逻辑重复（LOW）和 from_utf8_lossy 静默数据丢失（LOW）
-  - C# Models — sealed record 类型，nullable 注解正确，ProviderConfig.ToString() 正确遮蔽 ApiKey
-  - C# XAML — 其他 Foreground 均使用 Brush ThemeResource，仅 NotesView 2 处使用 Color
-  - C# App.xaml.cs — Interlocked guard 防重复退出正确，Mutex 名称无 GUID（可接受）
+  - **创建 3 个 issue**: #615 (BUG), #616 (BUG), #617 (SECURITY)
+  - #615: CancelActiveRequest() TOCTOU — Volatile.Read 后 CTS 被 Dispose，Cancel() 抛 ObjectDisposedException
+  - #616: SendAsync 无 _isDisposed 守卫 — 其他 10+ 方法均有此 guard，唯独 SendAsync 缺失
+  - #617: sanitize_mcp_prompt_content 仅转义 `</` 不转义 `<user_content>` 开标签 — 用户内容可注入嵌套分隔符
+  - Rust lib.rs — 参数化 SQL、路径穿越防护、连接池管理正确；发现 settings cache 竞态（MEDIUM）、OCR 影响启发式路由（LOW）、search total 截断后计数（MEDIUM）
+  - Rust storage.rs — 原子写入、WAL 备份一致性、FTS5 转义均正确；发现图片解码无尺寸限制（MEDIUM）、rank_documents 静默跳过不可读笔记（LOW）
+  - Rust bin/ — stdin 10MB 限制正确；发现 MCP prompt sanitize 不完整（MEDIUM → #617）、read_line 先分配后检查（MEDIUM）、search_rules 大小写不一致（MEDIUM）
+  - C# BackendClient.cs — 线程安全 guard 全面；发现 SendAsync 缺 _isDisposed 检查（MEDIUM → #616）
+  - C# MainWindow — 所有 async void 有 try-catch；发现 CancelActiveRequest ODE 竞态（MEDIUM → #615）
 - 修复结果:
-  - PR #613 (#611) ✅ 已合并 — CI 6/6 全通过
-  - PR #614 (#612) ✅ 已合并 — CI 6/6 全通过
-  - #611: 新增 sanitize_history() 函数包裹 `<conversation_history>` 标签，更新 PROMPT_INJECTION_DEFENSE 指令，替换 7 处调用
-  - #612: SystemAccentColor → SystemControlHighlightAccentBrush（2 处），使用标准 WinUI accent brush
+  - PR #618 (#617) ✅ 已合并 — CI 6/6 全通过
+  - PR #619 (#615) ✅ 已合并 — CI 6/6 全通过
+  - PR #620 (#616) ✅ 已合并 — CI 6/6 全通过
+  - #617: sanitize_mcp_prompt_content 额外转义 `<user_content>` 和 `</user_content>` 模式，新增 3 个测试
+  - #615: CancelActiveRequest 添加 try-catch (ObjectDisposedException)
+  - #616: SendAsync 顶部添加 `if (Volatile.Read(ref _isDisposed) != 0) throw`
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 247 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust models.rs + prompting.rs + ai.rs (~4K行) + C# Models 5 文件 + XAML 4 文件 + App.xaml.cs + Converter (~900行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、prompt 注入防御现在包含所有内容类型 delimiter、XAML 类型安全一致
+- 项目状态: **1 open issue (#597), 0 open PR, 250 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust 6 文件 (~12.5K行) + C# 3 文件 (~4.4K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、参数化 SQL、路径穿越防护完整、prompt 注入防御含所有内容类型 delimiter、所有 async void 有 try-catch

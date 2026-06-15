@@ -216,6 +216,9 @@
 - #567: BackendClient.HandleEvent 缺少 try-catch — 畸形事件杀死所有挂起请求 (PR #570 已合并)
 - #568: importMarkdown 接受任意文件系统路径，缺少敏感目录限制 (PR #571 已合并)
 - #569: lib.rs list_directory/read_file 同步阻塞 IO 在异步上下文 (PR #572 已合并)
+- #573: import_note_images 图片导入路径缺少敏感目录校验 (PR #576 已合并)
+- #574: WalkDir 无深度限制，循环符号链接导致无限遍历 (PR #577 已合并)
+- #575: export_all_notes 受 search_notes_with_context 200 条上限截断 (PR #578 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -423,20 +426,20 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#130
+- 循环编号: 循环#131
 - 本轮时间: 2026-06-15
-- 审查模块: Rust lib.rs (3056行), prompting.rs (838行), models.rs (987行), vaultpilot-cli.rs (2847行), vaultpilot-agent.rs (610行); C# BackendClient.cs (648行), App.xaml.cs (176行)
+- 审查模块: Rust storage.rs (4858行), ai.rs (2219行), crypto.rs (294行), search_rules.rs (439行); C# MainWindow.Updates.cs (130行), SettingsDialog.xaml.cs (311行), NotesView.xaml.cs (331行), WrapPanel.cs (176行)
 - 讨论阶段发现:
-  - **#567** BUG (HIGH): BackendClient.HandleEvent 缺少 try-catch — 单个畸形事件杀死所有挂起请求
-  - **#568** SECURITY (HIGH): importMarkdown 接受任意文件系统路径，缺少敏感目录限制
-  - **#569** BUG (MEDIUM): lib.rs list_directory/read_file 同步阻塞 IO 在异步上下文
-  - Rust 后端：0 CRITICAL, 1 HIGH (import path), 2 MEDIUM (blocking IO, TOCTOU), 12 LOW
-  - C# 前端：0 CRITICAL, 2 HIGH (HandleEvent, IsConnected race), 5 MEDIUM (Dispose races, missing try-finally), 6 LOW
-  - 代码库整体质量优秀 — 230+ PR 后仅发现防御深度改进，无功能性缺陷
+  - **#573** SECURITY (MEDIUM): import_note_images 缺少路径校验 — 可从 /etc/shadow, ~/.ssh 等敏感路径复制文件到 vault
+  - **#574** BUG (MEDIUM): WalkDir 无 max_depth 限制 — 循环符号链接导致无限遍历和 OOM
+  - **#575** BUG (MEDIUM): export_all_notes 使用 search_notes_with_context 但 limit 被 clamp(1,200) — 导出截断为 200 条
+  - Rust 后端：0 CRITICAL, 0 HIGH, 3 MEDIUM (path validation, symlink loops, export truncation), 8 LOW
+  - C# 前端：0 CRITICAL, 0 HIGH, 0 NEW — 所有 async void 均有 try-catch，无 .Result/.Wait() 同步阻塞
+  - 代码库整体质量优秀 — 236 PR 后仅发现防御深度改进
 - 修复结果:
-  - **PR #570** (#567): ✅ 已合并 — HandleEvent 方法体包裹 try-catch，异常仅记录不影响 pump 循环
-  - **PR #571** (#568): ✅ 已合并 — validate_import_path() 阻止从 /etc, /proc, /sys, ~/.ssh 等敏感目录导入
-  - **PR #572** (#569): ✅ 已合并 — list_directory 和 read_file 调用包装在 tokio::task::spawn_blocking 中
+  - **PR #576** (#573): ✅ 已合并 — import_note_images() 调用前先 validate_import_path() 校验所有源路径
+  - **PR #577** (#574): ✅ 已合并 — WalkDir::new().max_depth(20) 限制遍历深度防循环符号链接
+  - **PR #578** (#575): ✅ 已合并 — 新增 list_all_note_metas() 无 LIMIT 查询替代 search_notes_with_context
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ✅
-- 项目状态: **0 open issue, 0 open PR, 233 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust lib.rs + prompting.rs + models.rs + vaultpilot-cli.rs + vaultpilot-agent.rs (10.5K行) + C# BackendClient.cs + App.xaml.cs (824行)。Rust 后端安全实践优秀 — SQL 参数化、路径穿越防护、SSRF 防护、prompt 注入防护均正确。C# 前端所有 async void 均有 try-catch。代码库持续保持高质量。
+- 项目状态: **0 open issue, 0 open PR, 236 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust storage.rs + ai.rs + crypto.rs + search_rules.rs (~7.8K行) + C# MainWindow.Updates.cs + SettingsDialog.xaml.cs + NotesView.xaml.cs + WrapPanel.cs (~950行)。Rust 后端发现 import_note_images 路径校验遗漏、WalkDir 无深度限制、export 截断为 200 条（非文档中的 10000 条）。C# 前端代码质量优秀 — 所有 async void 均有 try-catch，无 .Result/.Wait()，WrapPanel 布局逻辑正确。

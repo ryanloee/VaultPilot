@@ -1136,8 +1136,15 @@ fn validate_import_path(path: &Path) -> Result<()> {
 
     // Reject sensitive system directories to prevent exfiltration via import.
     let blocked_prefixes: &[&str] = &[
-        "/etc", "/proc", "/sys", "/dev", "/boot", "/run",
-        "/System", "/private/etc", "/private/var",
+        "/etc",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/boot",
+        "/run",
+        "/System",
+        "/private/etc",
+        "/private/var",
     ];
     let path_str = canonical.to_string_lossy();
     for prefix in blocked_prefixes {

@@ -1777,7 +1777,11 @@ fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteMeta> {
     })
 }
 
-fn query_recent_note_metas(connection: &Connection, limit: usize, offset: usize) -> Result<Vec<NoteMeta>> {
+fn query_recent_note_metas(
+    connection: &Connection,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<NoteMeta>> {
     let mut statement = connection.prepare(
         "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
          FROM notes

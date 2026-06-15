@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Threading;
 using Velopack;
 using Velopack.Sources;
 
@@ -9,16 +10,15 @@ public sealed partial class MainWindow
 {
     private const string UpdateRepoUrl = "https://github.com/ryanloee/VaultPilot";
     private UpdateManager? _updateManager;
-    private bool _updateCheckStarted;
+    private int _updateCheckStarted;  // #542: Interlocked-guarded for thread safety
 
     private async Task CheckForAppUpdatesAsync()
     {
-        if (_updateCheckStarted)
+        // #542: Atomic re-entrance guard — prevents double-start from concurrent callers
+        if (Interlocked.CompareExchange(ref _updateCheckStarted, 1, 0) != 0)
         {
             return;
         }
-
-        _updateCheckStarted = true;
 
         try
         {
@@ -57,7 +57,7 @@ public sealed partial class MainWindow
         }
         catch (Exception error)
         {
-            _updateCheckStarted = false; // Allow retry on transient failure
+            Interlocked.Exchange(ref _updateCheckStarted, 0); // #542: Allow retry on transient failure
             _updateDownloadPercent = -1;
             LogStartup($"Update check failed: {error}");
             UpdateStatusBar("warning", "\u66f4\u65b0\u68c0\u67e5\u5931\u8d25", LocalizeError(error.Message));
@@ -97,7 +97,14 @@ public sealed partial class MainWindow
         try
         {
             UpdateStatusBar("info", "正在准备更新", "关闭应用后会自动安装新版本。");
-            await (Application.Current as App)!.BeginExitForUpdate();
+            // #541: Pattern-match instead of null-forgiving cast to prevent NRE
+            if (Application.Current is not App app)
+            {
+                LogStartup("Cannot apply update: Application.Current is not available.");
+                ShowError("更新失败", new InvalidOperationException("Application not available"), addMessage: false);
+                return;
+            }
+            await app.BeginExitForUpdate();
             _updateManager?.WaitExitThenApplyUpdates(update, silent: false, restart: true);
             Close();
         }

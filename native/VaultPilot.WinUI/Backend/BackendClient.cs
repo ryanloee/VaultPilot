@@ -366,6 +366,9 @@ public sealed class BackendClient : IAsyncDisposable
 
     public async Task<JsonElement> SendAsync(string method, object? parameters, CancellationToken cancellationToken = default)
     {
+        if (Volatile.Read(ref _isDisposed) != 0)
+            throw new InvalidOperationException("Backend client disposed.");
+
         if (!IsConnected || _process?.StandardInput is null || _process.StandardOutput is null)
         {
             var reconnected = await EnsureConnectedAsync(cancellationToken);

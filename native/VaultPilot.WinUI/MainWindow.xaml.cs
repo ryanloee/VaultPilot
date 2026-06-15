@@ -870,6 +870,10 @@ public sealed partial class MainWindow : Window
 
         _lastAiAnswer = null;
 
+        // Capture session ID at request start to prevent response landing
+        // in a different session if user switches during the AI call (#626)
+        var requestSessionId = _currentSessionId;
+
         try
         {
             SendButton.IsEnabled = false;
@@ -882,7 +886,7 @@ public sealed partial class MainWindow : Window
 
             await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
             var history = GetConversationHistory();
-            await AddTurnAsync("user", userDisplay, attachments: pendingAttachments);
+            await AddTurnAsync("user", userDisplay, attachments: pendingAttachments, sessionId: requestSessionId);
             RenderCurrentSession();
             ScrollToLatest();
             await SaveChatStateAsync();
@@ -902,7 +906,7 @@ public sealed partial class MainWindow : Window
             RemoveThinkingIndicator();
             _lastAiAnswer = answer;
 
-            await AddTurnAsync("assistant", answer?.Answer ?? string.Empty, answer);
+            await AddTurnAsync("assistant", answer?.Answer ?? string.Empty, answer, sessionId: requestSessionId);
             RenderCurrentSession();
             ScrollToLatest();
             await SaveChatStateAsync();
@@ -914,7 +918,7 @@ public sealed partial class MainWindow : Window
             _attachments.AddRange(pendingAttachments);
             RefreshAttachments();
             var message = LocalizeError(error.Message);
-            await AddTurnAsync("assistant", message);
+            await AddTurnAsync("assistant", message, sessionId: requestSessionId);
             RenderCurrentSession();
             ScrollToLatest();
             if (!_isShuttingDown)
@@ -3424,16 +3428,27 @@ public sealed partial class MainWindow : Window
         string role,
         string text,
         GroundedAnswer? answer = null,
-        IReadOnlyList<ChatAttachment>? attachments = null)
+        IReadOnlyList<ChatAttachment>? attachments = null,
+        string? sessionId = null)
     {
         await _chatStateLock.WaitAsync();
         try
         {
-            var session = CurrentSession();
+            ChatSession? session;
+            if (sessionId is not null)
+            {
+                session = _chatState.Sessions.FirstOrDefault(s => s.Id == sessionId);
+            }
+            else
+            {
+                session = CurrentSession();
+            }
             if (session is null)
             {
                 EnsureCurrentSession();
-                session = CurrentSession();
+                session = sessionId is not null
+                    ? _chatState.Sessions.FirstOrDefault(s => s.Id == sessionId)
+                    : CurrentSession();
             }
 
             if (session is null)

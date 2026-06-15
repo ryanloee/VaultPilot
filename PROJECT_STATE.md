@@ -425,6 +425,9 @@
 - 2026-06-15 [循环#125]: #545 CopyTextToClipboard try/catch 剪贴板崩溃防护 — PR #548 已合并
 - 2026-06-15 [循环#125]: #546 load_chat_state_with_context TOCTOU 消除 — PR #548 已合并
 - 2026-06-15 [循环#125]: 代码库持续保持高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位
+- 2026-06-16 [循环#140]: 深度审查 Rust models.rs + prompting.rs + ai.rs (~4K行) + C# Models/XAML/App (~900行)，创建 2 个 issue (#611 BUG, #612 BUG)，2/2 全部修复
+- 2026-06-16 [循环#140]: #611 render_history() 缺少 conversation_history XML delimiter — 新增 sanitize_history() 包裹 7 处调用
+- 2026-06-16 [循环#140]: #612 NotesView.xaml SystemAccentColor (Color) → SystemControlHighlightAccentBrush (Brush) 类型修复
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
@@ -444,25 +447,24 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#139
+- 循环编号: 循环#140
 - 本轮时间: 2026-06-16
-- 审查模块: Rust search_rules.rs (439行), crypto.rs (318行), vaultpilot-agent.rs (645行), vaultpilot-cli.rs (2871行 HTTP bridge + MCP server); C# WrapPanel.cs (176行), MainWindow.Updates.cs (130行), Program.cs (23行)
+- 审查模块: Rust models.rs (987行), prompting.rs (838行), ai.rs (2245行); C# Models/*.cs (5文件), App.xaml.cs (176行), StringToVisibilityConverter.cs (23行), NotesView.xaml (219行), SettingsDialog.xaml (173行), MainWindow.xaml (334行), App.xaml (52行)
 - 讨论阶段发现:
-  - **创建 2 个 issue**: #605 (ENHANCEMENT), #606 (ENHANCEMENT); #608 创建后关闭（非 bug）
-  - #605: HTTP bridge 无请求级超时层 — 慢操作可能耗尽连接
-  - #606: MCP notes.search limit 上限 500 与 search_notes 内部 clamp(1,200) 不一致
-  - #608: strip_inline_markdown italic 处理 — 关闭（代码 803-831 行已有 *text* 和 _text_ 处理）
-  - Rust search_rules.rs — ASCII 全词匹配 + CJK 子串匹配、JSON 配置加载、OnceLock 单例
-  - Rust crypto.rs — PBKDF2-HMAC-SHA256 600k 迭代、AES-256-GCM、平台特定 machine_salt
-  - Rust vaultpilot-agent.rs — 10MB stdin 限制、sanitize_error panic hook、日志轮转
-  - Rust vaultpilot-cli.rs — HTTP bridge: CORS 限制 localhost、rate limiter、constant-time token、TimeoutLayer; MCP server: signal handling、prompt injection defense
-  - C# WrapPanel.cs — 自定义面板布局实现，正确处理水平/垂直方向
-  - C# MainWindow.Updates.cs — Velopack 更新集成，Interlocked guard 防重复检查
+  - **创建 2 个 issue**: #611 (BUG), #612 (BUG)
+  - #611: render_history() 缺少 `<conversation_history>` XML delimiter — prompt 注入防御不一致，其他内容类型均有 delimiter 包裹
+  - #612: NotesView.xaml SystemAccentColor (Color) 用作 Foreground (Brush) — 类型不匹配，依赖隐式 XAML 类型转换
+  - Rust models.rs — 数据结构清洁，serde 序列化正确，validate() 测试完善，mask_secret() 使用 chars() 安全操作
+  - Rust prompting.rs — 7 处 render_history() 调用未包裹 delimiter，escape_xml_close_tags 防止 tag breakout 但缺少 defense-in-depth 第二层
+  - Rust ai.rs — 0 unsafe、0 生产 unwrap/expect、SSRF/路径穿越防护完整、DNS pinning 正确；发现图片读取逻辑重复（LOW）和 from_utf8_lossy 静默数据丢失（LOW）
+  - C# Models — sealed record 类型，nullable 注解正确，ProviderConfig.ToString() 正确遮蔽 ApiKey
+  - C# XAML — 其他 Foreground 均使用 Brush ThemeResource，仅 NotesView 2 处使用 Color
+  - C# App.xaml.cs — Interlocked guard 防重复退出正确，Mutex 名称无 GUID（可接受）
 - 修复结果:
-  - PR #609 (#606) ✅ 已合并 — CI 6/6 全通过
-  - PR #610 (#605) ✅ 已合并 — CI 6/6 全通过
-  - #606: MCP notes.search 和 find-related prompt .min(500) → .min(200)
-  - #605: tower-http TimeoutLayer 180s + StatusCode::GATEWAY_TIMEOUT
+  - PR #613 (#611) ✅ 已合并 — CI 6/6 全通过
+  - PR #614 (#612) ✅ 已合并 — CI 6/6 全通过
+  - #611: 新增 sanitize_history() 函数包裹 `<conversation_history>` 标签，更新 PROMPT_INJECTION_DEFENSE 指令，替换 7 处调用
+  - #612: SystemAccentColor → SystemControlHighlightAccentBrush（2 处），使用标准 WinUI accent brush
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 249 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust search_rules + crypto + vaultpilot-agent + vaultpilot-cli (~4.3K行) + C# WrapPanel + Updates + Program (~330行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、MCP prompt 注入防护完整、constant-time token 比较、PBKDF2 600k 迭代加密
+- 项目状态: **1 open issue (#597), 0 open PR, 247 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust models.rs + prompting.rs + ai.rs (~4K行) + C# Models 5 文件 + XAML 4 文件 + App.xaml.cs + Converter (~900行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、prompt 注入防御现在包含所有内容类型 delimiter、XAML 类型安全一致

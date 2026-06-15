@@ -2327,7 +2327,9 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
     let args: ChatSendArgs = match serde_json::from_value(arguments) {
         Ok(args) => args,
         Err(error) => {
-            return mcp_tool_error(format!("invalid chat.send arguments: {error}"));
+            return mcp_tool_error(sanitize_error(&format!(
+                "invalid chat.send arguments: {error}"
+            )));
         }
     };
 
@@ -2353,7 +2355,7 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
             let structured = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
             mcp_tool_success(summary, structured)
         }
-        Err(error) => mcp_tool_error(error.to_string()),
+        Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
     }
 }
 
@@ -2378,7 +2380,7 @@ fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
                 structured,
             )
         }
-        Err(error) => mcp_tool_error(error.to_string()),
+        Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
     }
 }
 
@@ -2391,7 +2393,7 @@ fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
                 structured,
             )
         }
-        Err(error) => mcp_tool_error(error.to_string()),
+        Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
     }
 }
 
@@ -2417,10 +2419,10 @@ fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
                     format!("Created session '{}'", session.title),
                     serde_json::json!({ "session": session }),
                 ),
-                Err(e) => mcp_tool_error(e.to_string()),
+                Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
             }
         }
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2448,10 +2450,10 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
                     format!("Deleted={deleted}, id={}", args.session_id),
                     serde_json::json!({ "deleted": deleted, "id": args.session_id }),
                 ),
-                Err(e) => mcp_tool_error(e.to_string()),
+                Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
             }
         }
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2478,7 +2480,7 @@ fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
                 serde_json::to_value(&result).unwrap_or_default(),
             )
         }
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2492,7 +2494,7 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
             format!("Loaded note '{}'", note.meta.title),
             serde_json::to_value(&note).unwrap_or_default(),
         ),
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2510,7 +2512,7 @@ fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
             format!("Created note '{}'", saved.meta.title),
             serde_json::to_value(&saved).unwrap_or_default(),
         ),
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2524,7 +2526,7 @@ fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
             format!("Deleted={deleted}, id={id}"),
             serde_json::json!({ "deleted": deleted, "id": id }),
         ),
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2567,7 +2569,7 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
                 serde_json::to_value(&result).unwrap_or_default(),
             )
         }
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2584,7 +2586,7 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
             "Import completed.".to_string(),
             serde_json::to_value(&result).unwrap_or_default(),
         ),
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2594,7 +2596,7 @@ fn mcp_call_index_rebuild(context: &StorageContext) -> Value {
             "Index rebuilt successfully.".to_string(),
             serde_json::to_value(&stats).unwrap_or_default(),
         ),
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 
@@ -2608,7 +2610,7 @@ async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
             let summary = format!("Answer: {}", answer.answer);
             mcp_tool_success(summary, serde_json::to_value(&answer).unwrap_or_default())
         }
-        Err(e) => mcp_tool_error(e.to_string()),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
 

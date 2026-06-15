@@ -8,7 +8,7 @@ use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use url::Url;
 
 use crate::models::{
@@ -1499,19 +1499,23 @@ fn detect_image_media_type(path: &str) -> Result<&'static str> {
 
 fn extract_json(text: &str) -> Result<String> {
     let trimmed = text.trim();
+    // Try extracting a well-delimited, validated JSON block first.
+    // This prevents returning strings like `{"a":1} prose {"b":2}` that
+    // bracket-match but fail serde_json (issue #601).
+    if let Some(result) = extract_json_block(trimmed, '{', '}') {
+        return Ok(result);
+    }
+    if let Some(result) = extract_json_block(trimmed, '[', ']') {
+        return Ok(result);
+    }
+    // Fallback: if the whole string bracket-matches, return it directly.
+    // This handles inputs that are valid JSON but have unusual structure
+    // that extract_json_block's depth-tracking doesn't capture.
     if trimmed.starts_with('{') && trimmed.ends_with('}') {
         return Ok(trimmed.to_string());
     }
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         return Ok(trimmed.to_string());
-    }
-    // Try extracting a JSON object
-    if let Some(result) = extract_json_block(trimmed, '{', '}') {
-        return Ok(result);
-    }
-    // Try extracting a JSON array
-    if let Some(result) = extract_json_block(trimmed, '[', ']') {
-        return Ok(result);
     }
     Err(anyhow!("AI response does not contain JSON"))
 }
@@ -1609,12 +1613,22 @@ async fn validate_base_url(base_url: &str) -> Result<Vec<(String, SocketAddr)>> 
         let port = parsed
             .port_or_known_default()
             .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-        return match tokio::net::lookup_host(format!("{}:{}", host_str, port)).await {
-            Ok(addrs) => Ok(addrs.map(|a| (host_str.to_string(), a)).collect()),
-            Err(e) => Err(anyhow!(
+        // 10s DNS timeout to avoid consuming the full request budget (issue #603).
+        return match timeout(
+            Duration::from_secs(10),
+            tokio::net::lookup_host(format!("{}:{}", host_str, port)),
+        )
+        .await
+        {
+            Ok(Ok(addrs)) => Ok(addrs.map(|a| (host_str.to_string(), a)).collect()),
+            Ok(Err(e)) => Err(anyhow!(
                 "failed to resolve base_url host '{}': {}",
                 host_str,
                 e
+            )),
+            Err(_) => Err(anyhow!(
+                "DNS resolution timed out (10s) for base_url host '{}'",
+                host_str
             )),
         };
     }
@@ -1640,13 +1654,19 @@ async fn validate_base_url(base_url: &str) -> Result<Vec<(String, SocketAddr)>> 
         let port = parsed
             .port_or_known_default()
             .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-        match tokio::net::lookup_host(format!("{}:{}", host_str, port)).await {
-            Ok(addrs) => {
+        // 10s DNS timeout to avoid consuming the full request budget (issue #603).
+        match timeout(
+            Duration::from_secs(10),
+            tokio::net::lookup_host(format!("{}:{}", host_str, port)),
+        )
+        .await
+        {
+            Ok(Ok(addrs)) => {
                 let mut resolved = Vec::new();
                 for addr in addrs {
                     if is_private_ip(addr.ip()) {
                         return Err(anyhow!(
-                            "base_url host '{}' resolves to a private/reserved IP ({}); \
+                            "base_url host '{}' resolves to a private/reserved IP ({}); \\
                              set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
                             host_str,
                             addr.ip()
@@ -1656,10 +1676,14 @@ async fn validate_base_url(base_url: &str) -> Result<Vec<(String, SocketAddr)>> 
                 }
                 Ok(resolved)
             }
-            Err(e) => Err(anyhow!(
+            Ok(Err(e)) => Err(anyhow!(
                 "failed to resolve base_url host '{}': {}",
                 host_str,
                 e
+            )),
+            Err(_) => Err(anyhow!(
+                "DNS resolution timed out (10s) for base_url host '{}'",
+                host_str
             )),
         }
     }
@@ -1696,14 +1720,16 @@ fn normalize_endpoint(base_url: &str, provider_type: crate::models::ProviderType
     let trimmed = base_url.trim().trim_end_matches('/');
     match provider_type {
         ProviderType::Anthropic => {
-            if trimmed.ends_with("/v1/messages") || trimmed.ends_with("/messages") {
+            // Only recognize the full canonical path, not arbitrary suffixes
+            // like /custom/messages (issue #602).
+            if trimmed.ends_with("/v1/messages") {
                 trimmed.to_string()
             } else {
                 format!("{trimmed}/v1/messages")
             }
         }
         ProviderType::OpenAi => {
-            if trimmed.ends_with("/v1/chat/completions") || trimmed.ends_with("/chat/completions") {
+            if trimmed.ends_with("/v1/chat/completions") {
                 trimmed.to_string()
             } else {
                 format!("{trimmed}/v1/chat/completions")

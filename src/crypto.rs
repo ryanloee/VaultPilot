@@ -111,6 +111,30 @@ fn machine_salt() -> Vec<u8> {
             salt.extend_from_slice(id.trim().as_bytes());
         }
     }
+    // Windows MachineGuid — a per-installation unique identifier stored in
+    // the registry, equivalent to Linux's /etc/machine-id.  Without this,
+    // two Windows machines sharing the same hostname would derive identical
+    // encryption keys (#595).
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography').MachineGuid",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                let guid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !guid.is_empty() {
+                    salt.extend_from_slice(guid.as_bytes());
+                }
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         // macOS IOPlatformUUID is not directly accessible without IOKit;

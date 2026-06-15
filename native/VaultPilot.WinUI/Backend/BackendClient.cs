@@ -34,6 +34,8 @@ public sealed class BackendClient : IAsyncDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonElement>> _pending = new();
     private CancellationTokenSource? _readerCts;
+    private Task? _pumpStdoutTask;
+    private Task? _pumpStderrTask;
     private string? _executablePath;
     private Timer? _healthCheckTimer;
     private int _isDisposed;
@@ -59,7 +61,7 @@ public sealed class BackendClient : IAsyncDisposable
         RegisterPowerModeHandler();
     }
 
-    private void StartProcess()
+    private async void StartProcess()
     {
         if (Volatile.Read(ref _isDisposed) != 0) return;
         if (string.IsNullOrWhiteSpace(_executablePath))
@@ -94,12 +96,25 @@ public sealed class BackendClient : IAsyncDisposable
             throw;
         }
 
-        _readerCts?.Cancel();
-        _readerCts?.Dispose();
-        _readerCts = new CancellationTokenSource();
-        _ = Task.Run(() => PumpStdoutAsync(_readerCts.Token));
-        _ = Task.Run(() => PumpStderrAsync(_readerCts.Token));
-        ConnectionStateChanged?.Invoke(true);
+        try
+        {
+            _readerCts?.Cancel();
+            // Await old pump tasks to prevent concurrent readers on the same stream
+            var oldStdout = _pumpStdoutTask;
+            var oldStderr = _pumpStderrTask;
+            if (oldStdout != null) try { await oldStdout; } catch { /* cancelled */ }
+            if (oldStderr != null) try { await oldStderr; } catch { /* cancelled */ }
+            _readerCts?.Dispose();
+            _readerCts = new CancellationTokenSource();
+            var token = _readerCts.Token;
+            _pumpStdoutTask = Task.Run(() => PumpStdoutAsync(token));
+            _pumpStderrTask = Task.Run(() => PumpStderrAsync(token));
+            ConnectionStateChanged?.Invoke(true);
+        }
+        catch (Exception ex) when (Volatile.Read(ref _isDisposed) == 0)
+        {
+            Trace.TraceError($"StartProcess pump setup error: {ex}");
+        }
     }
 
     private void StartHealthCheck()

@@ -221,6 +221,9 @@
 - #575: export_all_notes 受 search_notes_with_context 200 条上限截断 (PR #578 已合并)
 - #579: MCP tool call 错误路径 14 处缺少 sanitize_error 脱敏 (PR #581 已合并)
 - #580: serialize_string_result serde 序列化错误未脱敏 — 与 serialize_result 不一致 (PR #581 已合并)
+- #582: search_notes_with_context tag/keyword/date 过滤在分页后应用导致结果丢失 (PR #585 已合并)
+- #583: export zip 目录导出文件名冲突导致笔记静默覆盖 (PR #586 已合并)
+- #584: NotesView 快速选择笔记竞态 — 取消的旧详情覆写新选中笔记 (PR #587 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -428,17 +431,20 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#132
+- 循环编号: 循环#133
 - 本轮时间: 2026-06-15
-- 审查模块: Rust lib.rs (3068行), prompting.rs (838行), models.rs (987行), vaultpilot-agent.rs (610行), vaultpilot-cli.rs (2847行); C# BackendClient.cs (655行), App.xaml.cs (176行), Models/*.cs (~170行), Converters/*.cs (23行), Program.cs (23行)
+- 审查模块: Rust ai.rs (2219行), crypto.rs (294行), search_rules.rs (439行), storage.rs (4853行); C# MainWindow.xaml.cs (3628行), MainWindow.Updates.cs (130行), NotesView.xaml.cs (331行), SettingsDialog.xaml.cs (311行), WrapPanel.cs (176行)
 - 讨论阶段发现:
-  - **#579** BUG (MEDIUM): MCP tool call 14 处 mcp_tool_error(e.to_string()) 缺少 sanitize_error — 存储错误可泄露内部路径和 SQL 细节给 MCP 客户端
-  - **#580** BUG (LOW): vaultpilot-agent.rs serialize_string_result serde 序列化错误未脱敏，与 serialize_result 不一致
-  - Rust 后端：0 CRITICAL, 0 HIGH, 2 MEDIUM (error sanitization inconsistency), 0 LOW
-  - C# 前端：0 CRITICAL, 0 HIGH, 0 NEW — BackendClient 线程安全优秀、App.xaml.cs 单实例+退出逻辑健壮、Models 使用 sealed record 简洁安全
-  - 代码库整体质量极优秀 — 236 PR 后仅发现 error sanitization 一致性问题
+  - **#582** BUG (HIGH): search_notes_with_context tag/keyword/date 过滤在分页后应用 — 空文本+标签搜索返回 0 结果
+  - **#583** BUG (MEDIUM): export zip/目录导出文件名 sanitize_filename 碰撞 — 同名笔记静默覆盖
+  - **#584** BUG (HIGH): NotesView 快速选择竞态 — 取消的旧请求 catch 块覆写新选中笔记 UI
+  - Rust 后端：0 CRITICAL, 0 HIGH, 3 MEDIUM (total image payload, Windows machine_salt, Chinese retry string), 5 LOW
+  - C# 前端：0 CRITICAL, 3 HIGH (NotesView race, attachment count limit, ShutdownAsync re-entrance), 8 MEDIUM, 7 LOW
+  - storage.rs：0 CRITICAL, 1 HIGH (post-pagination filtering), 6 MEDIUM (filename collision, unused body_hash, attachment scan, empty-text+tags, backup PRAGMAs, N+1 file I/O), 5 LOW
 - 修复结果:
-  - **PR #581** (#579 + #580): ✅ 已合并 — 14 处 mcp_tool_error 调用统一包裹 sanitize_error()，serialize_string_result 对齐 serialize_result
+  - **PR #585** (#582): ✅ 已合并 — 新增 query_filtered_note_metas() SQL 级过滤 + FTS 搜索 4x 过量获取
+  - **PR #586** (#583): ✅ 已合并 — 导出文件名追加 note ID 前 8 字符后缀
+  - **PR #587** (#584): ✅ 已合并 — OperationCanceledException when (IsCancellationRequested) guard
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **0 open issue, 0 open PR, 237 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust lib.rs + prompting.rs + models.rs + vaultpilot-agent.rs + vaultpilot-cli.rs (~8.3K行) + C# BackendClient.cs + App.xaml.cs + Models + Converters + Program.cs (~1K行)。发现 MCP tool call 错误脱敏不一致（14 处遗漏）和 agent serialize_string_result 脱敏遗漏。Rust 后端安全实践整体优秀 — SSRF 防护、路径穿越防护、prompt 注入防护、constant_time_eq、sanitize_error 均到位，仅 MCP 工具层遗漏。C# 前端 BackendClient 线程安全（Interlocked、volatile、SemaphoreSlim）、App 单实例 + Interlocked exit guard、sealed record 不可变模型。
+- 项目状态: **0 open issue, 0 open PR, 240 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust ai.rs + crypto.rs + search_rules.rs (~2.9K行) + storage.rs (4.9K行) + C# MainWindow + NotesView + SettingsDialog + WrapPanel (~4.6K行)。发现 search_notes_with_context 分页正确性 bug、export 文件名碰撞、NotesView 选择竞态。Rust 后端安全实践持续优秀（0 unsafe、0 生产 unwrap、SSRF/路径穿越/prompt 注入防护到位）。C# 前端所有 async void 有 try-catch、BackendClient 线程安全健壮。代码库整体质量极优秀。

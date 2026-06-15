@@ -1307,6 +1307,12 @@ fn import_note_images(note_path: &Path, image_paths: &[String]) -> Result<Vec<St
         return Ok(Vec::new());
     }
 
+    // #573: Validate all source paths before copying any files to prevent
+    // exfiltration of sensitive system/user files via image import.
+    for source in image_paths {
+        validate_import_path(Path::new(source))?;
+    }
+
     let parent = note_path
         .parent()
         .ok_or_else(|| anyhow!("note path has no parent: {}", note_path.display()))?;

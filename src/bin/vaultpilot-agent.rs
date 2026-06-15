@@ -100,34 +100,66 @@ fn main() {
     };
 
     const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+    /// Maximum bytes allowed for a single JSON-RPC line on stdin.
+    /// Prevents OOM from a malicious or buggy client sending an
+    /// unbounded payload without a newline delimiter (#596).
+    const MAX_LINE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 
-    for line in stdin.lock().lines() {
-        let response = match line {
-            Ok(line) => {
-                match runtime.block_on(tokio::time::timeout(
-                    REQUEST_TIMEOUT,
-                    handle_line(&context, &line, &mut stdout),
-                )) {
-                    Ok(response) => response,
-                    Err(_elapsed) => {
-                        log_agent_event(
-                            "request_timeout",
-                            &format!("request timed out after {}s", REQUEST_TIMEOUT.as_secs()),
-                        );
-                        // We don't have the request id here, so use an empty string.
-                        // The client matches on the sequential id from stdin, so this
-                        // is acceptable — the client knows which request it sent last.
-                        AgentResponse::error(
-                            String::new(),
-                            "timeout",
-                            format!("request timed out after {}s", REQUEST_TIMEOUT.as_secs()),
-                        )
-                    }
-                }
-            }
+    let mut stdin_buf = String::new();
+    loop {
+        stdin_buf.clear();
+        let bytes_read = match stdin.lock().read_line(&mut stdin_buf) {
+            Ok(n) => n,
             Err(error) => {
                 log_agent_event("stdin_error", &format!("{error}"));
                 break;
+            }
+        };
+        if bytes_read == 0 {
+            break; // EOF
+        }
+        if stdin_buf.len() > MAX_LINE_BYTES {
+            log_agent_event(
+                "stdin_error",
+                &format!(
+                    "stdin line exceeds {}MB limit",
+                    MAX_LINE_BYTES / (1024 * 1024)
+                ),
+            );
+            let response = AgentResponse::error(
+                String::new(),
+                "input_too_large",
+                format!(
+                    "stdin line exceeds {}MB limit",
+                    MAX_LINE_BYTES / (1024 * 1024)
+                ),
+            );
+            if let Ok(serialized) = serde_json::to_string(&response) {
+                let _ = writeln!(stdout, "{serialized}");
+                let _ = stdout.flush();
+            }
+            continue;
+        }
+        let line = stdin_buf.trim_end_matches('\n').trim_end_matches('\r');
+        let line = line.to_string();
+        let response = match runtime.block_on(tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            handle_line(&context, &line, &mut stdout),
+        )) {
+            Ok(response) => response,
+            Err(_elapsed) => {
+                log_agent_event(
+                    "request_timeout",
+                    &format!("request timed out after {}s", REQUEST_TIMEOUT.as_secs()),
+                );
+                // We don't have the request id here, so use an empty string.
+                // The client matches on the sequential id from stdin, so this
+                // is acceptable — the client knows which request it sent last.
+                AgentResponse::error(
+                    String::new(),
+                    "timeout",
+                    format!("request timed out after {}s", REQUEST_TIMEOUT.as_secs()),
+                )
             }
         };
 

@@ -732,11 +732,16 @@ public sealed partial class MainWindow : Window
             if (e.Key == VirtualKey.V)
             {
                 var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
-                if (controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down)
-                    && await TryHandleClipboardImagePasteAsync())
+                if (controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
                 {
+                    // Set Handled pre-emptively to block the default paste handler
+                    // during the await. Reset if image paste doesn't apply. (#627)
                     e.Handled = true;
-                    return;
+                    if (await TryHandleClipboardImagePasteAsync())
+                    {
+                        return;
+                    }
+                    e.Handled = false;
                 }
             }
 

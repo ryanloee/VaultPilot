@@ -570,12 +570,7 @@ pub fn search_notes_with_context(
             // SQL-level filtering when text is empty but filters are specified.
             // This avoids the bug where query_recent_note_metas returns only
             // the N most recent notes and post-filtering silently drops results.
-            query_filtered_note_metas(
-                &connection,
-                &query,
-                limit,
-                offset,
-            )?
+            query_filtered_note_metas(&connection, &query, limit, offset)?
         } else {
             query_recent_note_metas(&connection, limit, offset)?
         }

@@ -240,6 +240,9 @@
 - #615: CancelActiveRequest() ObjectDisposedException — CTS 被 Dispose 后 Cancel() 无保护 (PR #619 已合并)
 - #616: BackendClient.SendAsync 无 _isDisposed 守卫 — Dispose 后 _writeLock 抛 ObjectDisposedException (PR #620 已合并)
 - #617: sanitize_mcp_prompt_content 不转义开标签 — 用户内容可注入 `<user_content>` 破坏分隔符 (PR #618 已合并)
+- #621: NotesView 快速搜索竞态 — 旧搜索结果可覆盖新搜索结果 (PR #624 已合并)
+- #622: NotesView 删除笔记不检查后端返回值 — 删除失败仍从 UI 移除 (PR #624 已合并)
+- #623: tool_result_user_prompt 的 tool_name 未转义 XML 闭合标签 — 防御纵深不一致 (PR #624 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -450,26 +453,27 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#141
+- 循环编号: 循环#142
 - 本轮时间: 2026-06-16
-- 审查模块: Rust lib.rs (3068行), storage.rs (4963行), bin/vaultpilot-agent.rs (645行), bin/vaultpilot-cli.rs (2876行), search_rules.rs (439行), crypto.rs (318行); C# BackendClient.cs (655行), MainWindow.xaml.cs (3630行), MainWindow.Updates.cs (130行)
+- 审查模块: Rust models.rs (987行), prompting.rs (865行), ai.rs (2245行); C# Models 5文件, Converters/Controls/Program.cs; C# SettingsDialog.xaml.cs, NotesView.xaml.cs, App.xaml.cs
 - 讨论阶段发现:
-  - **创建 3 个 issue**: #615 (BUG), #616 (BUG), #617 (SECURITY)
-  - #615: CancelActiveRequest() TOCTOU — Volatile.Read 后 CTS 被 Dispose，Cancel() 抛 ObjectDisposedException
-  - #616: SendAsync 无 _isDisposed 守卫 — 其他 10+ 方法均有此 guard，唯独 SendAsync 缺失
-  - #617: sanitize_mcp_prompt_content 仅转义 `</` 不转义 `<user_content>` 开标签 — 用户内容可注入嵌套分隔符
-  - Rust lib.rs — 参数化 SQL、路径穿越防护、连接池管理正确；发现 settings cache 竞态（MEDIUM）、OCR 影响启发式路由（LOW）、search total 截断后计数（MEDIUM）
-  - Rust storage.rs — 原子写入、WAL 备份一致性、FTS5 转义均正确；发现图片解码无尺寸限制（MEDIUM）、rank_documents 静默跳过不可读笔记（LOW）
-  - Rust bin/ — stdin 10MB 限制正确；发现 MCP prompt sanitize 不完整（MEDIUM → #617）、read_line 先分配后检查（MEDIUM）、search_rules 大小写不一致（MEDIUM）
-  - C# BackendClient.cs — 线程安全 guard 全面；发现 SendAsync 缺 _isDisposed 检查（MEDIUM → #616）
-  - C# MainWindow — 所有 async void 有 try-catch；发现 CancelActiveRequest ODE 竞态（MEDIUM → #615）
+  - **创建 3 个 issue**: #621 (BUG), #622 (BUG), #623 (SECURITY)
+  - #621: NotesView 快速搜索竞态 — 每次搜索独立 CTS 不取消前一次，旧结果可覆盖新结果
+  - #622: NotesView 删除笔记 SendAsync<bool> 返回值被丢弃，删除失败仍从 UI 移除
+  - #623: tool_result_user_prompt 的 tool_name 未转义 XML 闭合标签，防御纵深不一致
+  - Rust models.rs — GroundedAnswer.used_context_count 缺少 #[serde(default)]（LOW）
+  - Rust ai.rs — extract_command_keywords 重复调用（LOW）、JSON escape repair 不处理全部控制字符（Info）
+  - Rust prompting.rs — tool_name 是唯一未转义的外部输入（LOW → #623）
+  - C# Models — 反射式 JSON 反序列化不强制非空注解（HIGH 系统性风险）、多个 IReadOnlyList 字段缺少可空标记（MEDIUM）
+  - C# WrapPanel.cs — 实现正确，float 累积误差极小（Info）
+  - C# Program.cs — 单实例 mutex 已在 App.xaml.cs 实现（非 bug）
+  - C# NotesView — 搜索竞态（MEDIUM → #621）、删除返回值不检查（MEDIUM → #622）
+  - C# App.xaml.cs — atomic exit guard 正确、async void handler 全部有 try-catch
 - 修复结果:
-  - PR #618 (#617) ✅ 已合并 — CI 6/6 全通过
-  - PR #619 (#615) ✅ 已合并 — CI 6/6 全通过
-  - PR #620 (#616) ✅ 已合并 — CI 6/6 全通过
-  - #617: sanitize_mcp_prompt_content 额外转义 `<user_content>` 和 `</user_content>` 模式，新增 3 个测试
-  - #615: CancelActiveRequest 添加 try-catch (ObjectDisposedException)
-  - #616: SendAsync 顶部添加 `if (Volatile.Read(ref _isDisposed) != 0) throw`
+  - PR #624 (#621+#622+#623) ✅ 已合并 — CI 6/6 全通过
+  - #621: 添加 _searchCts 字段，新搜索前 Cancel 旧搜索 + OperationCanceledException catch
+  - #622: 检查 deleteNote 返回值，失败时 ShowError + return
+  - #623: escape_xml_close_tags(tool_name) 与其他输入转义策略一致
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 250 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust 6 文件 (~12.5K行) + C# 3 文件 (~4.4K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、参数化 SQL、路径穿越防护完整、prompt 注入防御含所有内容类型 delimiter、所有 async void 有 try-catch
+- 项目状态: **1 open issue (#597), 0 open PR, 253 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust 3 文件 (~4.1K行) + C# 11 文件 (~11K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、所有 async void 有 try-catch、Rust 错误处理完整。C# 模型层反射式 JSON 反序列化是系统性风险但非本次修复范围

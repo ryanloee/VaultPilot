@@ -1342,6 +1342,10 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
 
     const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     const SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    /// Maximum bytes allowed for a single JSON-RPC line on stdin.
+    /// Prevents OOM from a malicious or buggy MCP client sending an
+    /// unbounded payload without a newline delimiter.
+    const MAX_MCP_LINE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 
     let mut state = McpServerState {
         initialized: false,
@@ -1349,7 +1353,7 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
     };
 
     let stdin = tokio::io::stdin();
-    let mut lines = BufReader::new(stdin).lines();
+    let mut reader = BufReader::new(stdin);
 
     // Spawn a background task that resolves when a termination signal is
     // received so we can incorporate it into the select! loop below.
@@ -1374,10 +1378,28 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
     });
 
     loop {
+        // Helper: read one line with a size cap to prevent OOM from
+        // unbounded stdin input (#596).
+        let read_line_bounded = async {
+            let mut line = String::new();
+            let bytes = reader.read_line(&mut line).await?;
+            if bytes == 0 {
+                return Ok(None); // EOF
+            }
+            if line.len() > MAX_MCP_LINE_BYTES {
+                return Err(anyhow::anyhow!(
+                    "stdin line exceeds {}MB limit",
+                    MAX_MCP_LINE_BYTES / (1024 * 1024)
+                ));
+            }
+            // Strip trailing newline for consistent handling.
+            Ok::<_, anyhow::Error>(Some(line.trim_end_matches('\n').to_string()))
+        };
+
         // Before initialize, enforce a timeout so we don't block forever
         // waiting for a client that never speaks.
         let line: Option<String> = if !state.initialized {
-            let next = tokio::time::timeout(INITIALIZE_TIMEOUT, lines.next_line());
+            let next = tokio::time::timeout(INITIALIZE_TIMEOUT, read_line_bounded);
             tokio::select! {
                 result = next => {
                     match result {
@@ -1401,7 +1423,7 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
         } else {
             let mut shutdown = false;
             let result = tokio::select! {
-                result = lines.next_line() => result?,
+                result = read_line_bounded => result?,
                 _ = shutdown_rx.changed() => {
                     eprintln!("MCP server: received shutdown signal");
                     shutdown = true;

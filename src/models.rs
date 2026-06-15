@@ -353,6 +353,8 @@ pub struct SearchQuery {
     #[serde(default)]
     pub keywords: Vec<String>,
     pub limit: Option<usize>,
+    /// Number of results to skip (for pagination). Defaults to 0.
+    pub offset: Option<usize>,
     /// Filter notes created on or after this ISO-8601 timestamp.
     pub created_after: Option<String>,
     /// Filter notes created on or before this ISO-8601 timestamp.

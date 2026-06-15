@@ -1619,7 +1619,8 @@ async fn handle_mcp_request(
                     text: String::new(),
                     tags: Vec::new(),
                     keywords: Vec::new(),
-                    limit: Some(offset + limit),
+                    limit: Some(limit),
+                    offset: Some(offset),
                     ..Default::default()
                 },
             )
@@ -1629,7 +1630,6 @@ async fn handle_mcp_request(
                     let resources: Vec<Value> = result
                         .notes
                         .into_iter()
-                        .skip(offset)
                         .map(|meta| {
                             serde_json::json!({
                                 "uri": format!("vault://notes/{}", meta.id),

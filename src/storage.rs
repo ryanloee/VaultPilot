@@ -556,14 +556,17 @@ pub fn search_notes_with_context(
 ) -> Result<SearchResult> {
     let (connection, _) = open_connection(context)?;
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
-    debug!(text = %query.text, limit = limit, "searching notes");
+    let offset = query.offset.unwrap_or(0);
+    debug!(text = %query.text, limit = limit, offset = offset, "searching notes");
     let mut notes = if query.text.trim().is_empty() {
-        query_recent_note_metas(&connection, limit)?
+        query_recent_note_metas(&connection, limit, offset)?
     } else {
-        let fts_results = rank_note_metas(context, &connection, &query.text, &[], limit)?;
+        let fts_results = rank_note_metas(context, &connection, &query.text, &[], limit + offset)?;
+        let fts_results = fts_results.into_iter().skip(offset).collect::<Vec<_>>();
         if fts_results.is_empty() {
             // Fuzzy/approximate fallback: split query into words and use LIKE
-            query_like_note_metas(&connection, &query.text, limit)?
+            let like_results = query_like_note_metas(&connection, &query.text, limit + offset)?;
+            like_results.into_iter().skip(offset).collect::<Vec<_>>()
         } else {
             fts_results
         }
@@ -1774,15 +1777,19 @@ fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteMeta> {
     })
 }
 
-fn query_recent_note_metas(connection: &Connection, limit: usize) -> Result<Vec<NoteMeta>> {
+fn query_recent_note_metas(
+    connection: &Connection,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<NoteMeta>> {
     let mut statement = connection.prepare(
         "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
          FROM notes
          ORDER BY updated_at DESC
-         LIMIT ?1",
+         LIMIT ?1 OFFSET ?2",
     )?;
     let rows = statement
-        .query_map([limit as i64], row_to_meta)?
+        .query_map([limit as i64, offset as i64], row_to_meta)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }

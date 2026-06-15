@@ -229,18 +229,18 @@
 - #590: SettingsDialog.GetThemeBrush 回退 Brush 每次分配 — static readonly 缓存 (PR #591 已合并)
 - #592: auto_backup_database WAL checkpoint 连接缺少 busy_timeout — 添加 PRAGMA busy_timeout = 5000 (PR #594 已合并)
 - #593: query_like_note_metas 文档注释说 "body" 但代码搜索 "summary" — 修正注释 (PR #594 已合并)
+- #595: crypto.rs Windows machine_salt 缺少唯一机器标识符 — 同主机名机器可派生相同加密密钥 (PR #599 已合并)
+- #596: MCP server 和 agent stdin 行读取无长度上限 — 10MB cap (PR #598 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-（无 — 0 open PR, 0 open issue）
-
-（无 — 0 open PR, 0 open issue）
+（无 — 0 open PR, 1 open issue #597 — CI WinUI 测试，需要 WindowsAppSDK 基础设施支持）
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
 
-（无 — 所有阻塞项已清空）
+- #597: CI C# 测试无法运行 — WinUI 项目需要 MSBuild + WindowsAppSDK 基础设施，dotnet test 无法处理传递依赖构建。需要创建独立测试解决方案或 mock WinUI 依赖。
 
 ## 决策记录
 <!-- 指挥官任务的重要决策 -->
@@ -438,20 +438,24 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#136
-- 本轮时间: 2026-06-15
-- 审查模块: Rust storage.rs (4960行), models.rs (987行), prompting.rs (838行); C# BackendClient.cs (655行), App.xaml.cs (176行), Models/* (126行), Program.cs (23行), Converters (23行)
+- 循环编号: 循环#137
+- 本轮时间: 2026-06-16
+- 审查模块: Rust crypto.rs (294行), search_rules.rs (439行), vaultpilot-agent.rs (613行), vaultpilot-cli.rs (2849行); C# WrapPanel.cs (176行), MainWindow.Updates.cs (130行), Tests/* (755行); CI workflows
 - 讨论阶段发现:
-  - **创建 2 个 issue**: #592 (MEDIUM), #593 (LOW)
-  - #592: auto_backup_database WAL checkpoint 连接缺少 busy_timeout — Connection::open() 不设 PRAGMA busy_timeout，SQLITE_BUSY 时立即失败而非重试
-  - #593: query_like_note_metas 文档注释说 "title or body" 但 SQL 搜索 "title or summary"
-  - Rust 后端 storage.rs 质量极佳 — 原子写入、连接池、WAL 模式、路径穿越防护、SQL 注入防护(参数化查询)、FTS5 转义、CJK 分词、语义向量搜索、感知哈希图像匹配、spawn_blocking 异步包装全覆盖
-  - Rust models.rs — 数据结构清晰、serde camelCase 序列化、完善的 validate() 校验
-  - Rust prompting.rs — XML 闭合标签转义、prompt injection defense 注入所有系统提示、OnceLock 缓存 manual
-  - C# BackendClient.cs — Interlocked 原子 guard、volatile 标记、SemaphoreSlim 互斥、CancellationToken 传播、指数退避重连、degraded mode 健康检查、ConcurrentDictionary 请求管理、90s 超时清理
-  - C# App.xaml.cs — 单实例 Mutex、async void 有 try-catch、BeginExitForUpdate/ExitApplication 竞态 Interlocked guard、finally 块逐步清理
-  - C# Models — 全部 sealed record，无逻辑代码
-- 修复结果: 2/2 全部完成 — PR #594 (CI 6/6 全通过)
+  - **创建 3 个 issue**: #595 (SECURITY), #596 (SECURITY), #597 (ENHANCEMENT)
+  - #595: crypto.rs Windows machine_salt 缺少唯一机器标识符 — hostname+OS+arch 不足以区分同名 Windows 机器，导致相同加密密钥
+  - #596: MCP server 和 agent stdin 行读取无长度上限 — BufReader::lines() 无限制，恶意超长行可导致 OOM
+  - #597: CI winui_build 作业仅构建不执行 C# 单元测试 — VaultPilot.WinUI.Tests 永不运行
+  - Rust 后端 crypto.rs 质量优秀 — AES-256-GCM、PBKDF2-HMAC-SHA256 600K iterations、OsRng nonce、OnceLock 缓存、HMAC RFC4231 测试向量验证
+  - Rust search_rules.rs — 全词匹配 ASCII trigger、子串匹配 CJK、serde 配置加载、12 个单元测试覆盖全面
+  - Rust vaultpilot-agent.rs — JSON-RPC over stdin/stdout、120s 请求超时、sanitize_error 错误脱敏、panic hook 捕获
+  - Rust vaultpilot-cli.rs — 2849 行完整 CLI + HTTP bridge + MCP server，代码质量极高：CORS 限制 localhost、constant_time_eq token 比较、rate limiter 60 req/min、10MB body 限制、路径穿越防护
+  - C# WrapPanel.cs — 标准 MeasureOverride/ArrangeOverride 实现，辅助扩展方法
+  - C# MainWindow.Updates.cs — Velopack 更新流程、Interlocked guard、pattern matching 防 NRE
+- 修复结果:
+  - PR #598 (#596 stdin 限制) ✅ 已合并 — CI 6/6 全通过
+  - PR #599 (#595 Windows machine-id) ✅ 已合并 — CI 6/6 全通过
+  - PR #600 (#597 CI C# 测试) ❌ 关闭 — WinUI 项目需要 MSBuild + WindowsAppSDK 基础设施，dotnet test 无法处理传递依赖构建
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **0 open issue, 0 open PR, 244 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust storage.rs + models.rs + prompting.rs (~6.8K行) + C# BackendClient + App + Models + Program + Converters (~1K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、375 tests 全通过、所有 async void 有 try-catch。仅有 2 个 LOW-MEDIUM 级别发现（checkpoint busy_timeout + doc comment），反映代码库已接近零缺陷状态。
+- 项目状态: **1 open issue (#597), 0 open PR, 246 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust crypto.rs + search_rules.rs + vaultpilot-agent.rs + vaultpilot-cli.rs (~6K行) + C# WrapPanel + Updates + Tests (~1K行) + CI workflows。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect（main 入口除外）、所有 MCP tool error 路径均有 sanitize_error、constant_time_eq token 比较、路径穿越防护完整。

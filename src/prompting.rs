@@ -469,7 +469,7 @@ pub fn tool_result_user_prompt(
          {}",
         sanitize_history(&render_history(history)),
         sanitize_user_input(question),
-        tool_name,
+        escape_xml_close_tags(tool_name),
         sanitize_tool_result(tool_result),
         sanitize_note_content(&render_notes(docs)),
     )

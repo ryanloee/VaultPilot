@@ -19,6 +19,7 @@ public sealed partial class NotesView : UserControl
     private string _searchQuery = string.Empty;
     private IReadOnlyList<NoteMeta>? _allNotesBeforeSearch;
     private CancellationTokenSource? _loadDetailCts;
+    private CancellationTokenSource? _searchCts;
 
     public NotesView(BackendClient backendClient)
     {
@@ -51,6 +52,9 @@ public sealed partial class NotesView : UserControl
             _loadDetailCts?.Cancel();
             _loadDetailCts?.Dispose();
             _loadDetailCts = null;
+            _searchCts?.Cancel();
+            _searchCts?.Dispose();
+            _searchCts = null;
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             _allNotes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token)
                 ?? Array.Empty<NoteMeta>();
@@ -92,15 +96,21 @@ public sealed partial class NotesView : UserControl
         try
         {
             ShowLoading(true);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            _searchCts?.Cancel();
+            _searchCts?.Dispose();
+            _searchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var results = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>(
-                "searchNotes", new { query = _searchQuery, limit = 50 }, cts.Token);
+                "searchNotes", new { query = _searchQuery, limit = 50 }, _searchCts.Token);
             if (results is not null)
             {
                 _allNotesBeforeSearch ??= _allNotes;
                 _allNotes = results;
                 ApplyFilter();
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Previous search was cancelled — ignore
         }
         catch (Exception error)
         {
@@ -214,7 +224,12 @@ public sealed partial class NotesView : UserControl
 
             ShowLoading(true);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await _backendClient.SendAsync<bool>("deleteNote", new { id = note.Id }, cts.Token);
+            var success = await _backendClient.SendAsync<bool>("deleteNote", new { id = note.Id }, cts.Token);
+            if (!success)
+            {
+                ShowError("删除失败", new Exception("后端未能删除笔记，请重试"));
+                return;
+            }
 
             // Remove from local list and refresh
             _allNotes = _allNotes.Where(n => n.Id != note.Id).ToArray();

@@ -208,6 +208,9 @@
 - #550: BackendClient SendAsync 挂起请求 TCS 泄漏 (PR #553 已合并)
 - #551: MCP resources/list fetch-all-then-skip 分页低效 (PR #554 已合并)
 - #555: FormatUpdatedAt 重复代码 DRY 违反 — 提取共享 FormatRelativeTime (PR #556 已合并)
+- #557: BackendClient 并发 reader pump 竞态 — await 旧 pump task 后再启动新 task (PR #562 已合并)
+- #558: MCP prompts/get 用户内容提示注入 — sanitize_mcp_prompt_content() 转义+分隔符 (PR #561 已合并)
+- #559: read_stdin_json 无上限 OOM + MCP search limit 无上限 — 10MB cap + limit 上限 (PR #560 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -415,13 +418,17 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#127
+- 循环编号: 循环#128
 - 本轮时间: 2026-06-15
-- 审查模块: Rust ai.rs, prompting.rs, search_rules.rs, crypto.rs, storage.rs; C# NotesView.xaml.cs, SettingsDialog.xaml.cs, MainWindow.Updates.cs, App.xaml.cs, Models (4 files); CI workflows (3 files), build scripts (3 files), Cargo.toml, csproj
+- 审查模块: Rust vaultpilot-cli.rs (2814行), vaultpilot-agent.rs (610行), models.rs (987行), prompting.rs (838行); C# MainWindow.xaml.cs (3628行), BackendClient.cs (633行); CI workflows (3 files)
 - 讨论阶段发现:
-  - **#555** BUG (LOW): NotesView.xaml.cs FormatUpdatedAt 重复代码 DRY 违反
+  - **#557** BUG (CRITICAL): BackendClient 并发 reader pump 竞态 — 重连时旧 pump task 未完成即启动新 task
+  - **#558** SECURITY (HIGH): MCP prompts/get 用户内容提示注入 — note title/body 直接插入 prompt
+  - **#559** BUG (HIGH): read_stdin_json 无上限 OOM + MCP search limit 无上限资源耗尽
 - 修复结果:
-  - **PR #556** (#555): ✅ 已合并 — 提取共享 FormatRelativeTime + 8 单元测试
+  - **PR #562** (#557): ✅ 已合并 — await 旧 pump task + async void + try-catch
+  - **PR #561** (#558): ✅ 已合并 — sanitize_mcp_prompt_content() 转义+分隔符
+  - **PR #560** (#559): ✅ 已合并 — 10MB stdin cap + limit 上限 (500/1000)
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ✅
-- 项目状态: **0 open issue, 0 open PR, 229 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust ai.rs (2219行) + prompting.rs (838行) + search_rules.rs (439行) + crypto.rs (294行) + storage.rs (4787行) + C# NotesView.xaml.cs (349行) + SettingsDialog.xaml.cs (311行) + MainWindow.Updates.cs (130行) + App.xaml.cs (172行) + 4 Model 文件 + 7 Test 文件 + 3 CI workflow + 3 Build scripts + Cargo.toml + csproj。Rust 后端 0 新 issue；C# 前端 1 LOW (DRY)。代码库整体质量持续优秀，安全实践到位。375 tests 全通过。
+- 项目状态: **0 open issue, 0 open PR, 228 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust vaultpilot-cli.rs (2814行) + vaultpilot-agent.rs (610行) + models.rs (987行) + prompting.rs (838行) + C# MainWindow.xaml.cs (3628行) + BackendClient.cs (633行) + CI workflows (3 files)。发现 1 CRITICAL + 5 HIGH + 13 MEDIUM + 16 LOW。Rust 后端安全实践优秀（SSRF 防护、路径穿越防护、prompt 注入防护），但 MCP prompts/get 路径遗漏了注入防护。C# 前端 BackendClient 重连竞态为本轮最关键发现。

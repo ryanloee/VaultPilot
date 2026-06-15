@@ -1969,11 +1969,19 @@ public sealed partial class MainWindow : Window
 
     private void CopyTextToClipboard(string text)
     {
-        var package = new DataPackage();
-        package.SetText(text);
-        Clipboard.SetContent(package);
-        Clipboard.Flush();
-        UpdateStatusBar("success", "已复制", "消息内容已复制到剪贴板。");
+        try
+        {
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
+            UpdateStatusBar("success", "已复制", "消息内容已复制到剪贴板。");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Clipboard copy failed: {ex.Message}");
+            UpdateStatusBar("warning", "复制失败", "无法写入剪贴板，可能被其他程序占用。");
+        }
     }
 
     private void AppendAttachmentPreviews(IReadOnlyList<ChatAttachment> attachments, string role)

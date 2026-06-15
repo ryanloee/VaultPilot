@@ -365,18 +365,21 @@ pub fn load_chat_state_with_context(context: &StorageContext) -> Result<ChatStat
         fs::create_dir_all(parent)?;
     }
 
-    if !paths.chat_state_path.exists() {
-        let state = default_chat_state();
-        save_chat_state_with_context(context, &state)?;
-        return Ok(state);
+    match fs::read_to_string(&paths.chat_state_path) {
+        Ok(raw) => {
+            let normalized = raw.trim_start_matches('\u{feff}');
+            let state = parse_chat_state(normalized)
+                .with_context(|| format!("failed to parse {}", paths.chat_state_path.display()))?;
+            Ok(state)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let state = default_chat_state();
+            save_chat_state_with_context(context, &state)?;
+            Ok(state)
+        }
+        Err(e) => Err(anyhow::Error::from(e))
+            .with_context(|| format!("failed to read {}", paths.chat_state_path.display())),
     }
-
-    let raw = fs::read_to_string(&paths.chat_state_path)
-        .with_context(|| format!("failed to read {}", paths.chat_state_path.display()))?;
-    let normalized = raw.trim_start_matches('\u{feff}');
-    let state = parse_chat_state(normalized)
-        .with_context(|| format!("failed to parse {}", paths.chat_state_path.display()))?;
-    Ok(state)
 }
 
 pub fn save_chat_state_with_context(

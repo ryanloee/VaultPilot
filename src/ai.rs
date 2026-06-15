@@ -393,7 +393,7 @@ pub async fn select_tool_call(
             let tool_call = parse_tool_call(&retry_response.text, question).with_context(|| {
                 format!(
                     "model did not return a valid tool call after retry; last response: {}",
-                    retry_response.text.trim()
+                    crate::sanitize_error(retry_response.text.trim())
                 )
             })?;
             (tool_call, retry_response.usage)

@@ -335,7 +335,10 @@ where
 {
     result
         .map_err(|error| vaultpilot_lib::sanitize_error(&error.to_string()))
-        .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()))
+        .and_then(|value| {
+            serde_json::to_value(value)
+                .map_err(|error| vaultpilot_lib::sanitize_error(&error.to_string()))
+        })
 }
 
 fn emit_agent_status(stdout: &mut impl Write, stage: &str, detail: String) {

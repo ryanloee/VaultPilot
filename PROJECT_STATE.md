@@ -224,6 +224,9 @@
 - #582: search_notes_with_context tag/keyword/date 过滤在分页后应用导致结果丢失 (PR #585 已合并)
 - #583: export zip 目录导出文件名冲突导致笔记静默覆盖 (PR #586 已合并)
 - #584: NotesView 快速选择笔记竞态 — 取消的旧详情覆写新选中笔记 (PR #587 已合并)
+- #588: ShutdownAsync _activeRequestCts 竞态 — Interlocked.Exchange 原子操作 (PR #591 已合并)
+- #589: _isShuttingDown 缺少 volatile 关键字 — 跨线程可见性 (PR #591 已合并)
+- #590: SettingsDialog.GetThemeBrush 回退 Brush 每次分配 — static readonly 缓存 (PR #591 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -431,20 +434,17 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#134
+- 循环编号: 循环#135
 - 本轮时间: 2026-06-15
-- 审查模块: Rust prompting.rs (838行), models.rs (987行), bin/vaultpilot-agent.rs (613行), bin/vaultpilot-cli.rs (2849行), lib.rs (3068行); C# BackendClient.cs (655行), App.xaml.cs (176行), Program.cs (23行), Models/*.cs (126行), Converters/StringToVisibilityConverter.cs (23行)
+- 审查模块: Rust ai.rs (2219行), crypto.rs (294行), search_rules.rs (439行); C# MainWindow.xaml.cs (3628行), MainWindow.Updates.cs, Views/NotesView.xaml.cs, Views/SettingsDialog.xaml.cs, Controls/WrapPanel.cs, App.xaml
 - 讨论阶段发现:
-  - **无新 issue** — 代码库处于零缺陷状态，深度审查 ~9,358 行代码未发现 MEDIUM+ 可操作问题
-  - Rust 后端：0 CRITICAL, 0 HIGH, 0 MEDIUM, 4 LOW (MCP 无单消息大小限制, notes.create 无 body 大小限制, sanitize_error O(n×6) 模式扫描, looks_like_record_request 子串误匹配)
-  - C# 前端：0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW — 全部审查文件无问题
-  - prompting.rs: XML 闭合标签转义正确，所有系统提示注入防御，OnceLock 缓存，全面测试覆盖
-  - models.rs: validate() 正确覆盖空 API Key、无效 URL scheme、超时范围，mask_secret 正确处理 CJK/Unicode
-  - vaultpilot-agent.rs: panic hook sanitize_error，日志轮转 512KB，请求超时 120s，10MB 图片限制
-  - vaultpilot-cli.rs: HTTP bridge 限流+CORS+constant-time auth，MCP 30s 初始化超时+信号处理，路径均通过 normalize_tool_path 约束
-  - BackendClient.cs: Interlocked/Volatile 线程安全，指数退避重连 5s-60s，降级模式，所有 async void 有 try-catch
-  - App.xaml.cs: 单实例 Mutex，Interlocked exit guard，finally 块逐步清理
-- 修复结果: 无（无需修复）
-- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅ (375 tests) — 3/3 全通过
-- 项目状态: **0 open issue, 0 open PR, 240 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust prompting.rs + models.rs + bin/*.rs + lib.rs (~8.4K行) + C# BackendClient + App + Models (~1K行)。代码库处于极高质量阶段 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护到位、sanitize_error 全路径覆盖。375 测试全通过，0 clippy 警告。审查的 LOW 级别发现均为实际场景中已缓解的边界情况，不值得创建 issue。
+  - **创建 3 个 issue**: #588 (HIGH), #589 (MEDIUM), #590 (LOW)
+  - #588: ShutdownAsync 读取 _activeRequestCts 无 Interlocked 保护 — 与 ExecuteAiRequestAsync 存在竞态
+  - #589: _isShuttingDown 缺少 volatile 关键字 — 跨线程可见性问题
+  - #590: SettingsDialog.GetThemeBrush 回退 Brush 每次 new 分配 — 应缓存为 static readonly
+  - Rust 后端: ai.rs 安全实践优秀 — SSRF 防护、重试逻辑、响应大小限制、sanitize_error 全覆盖; crypto.rs 使用 AES-256-GCM + PBKDF2 600K 迭代 + OsRng nonce; search_rules.rs ASCII 全词匹配 + CJK 子串匹配
+  - C# 前端: 2 HIGH (_activeRequestCts 竞态 + _isShuttingDown volatile) + 4 MEDIUM + 6 LOW; 所有 async void 有 try-catch; XAML 绑定正确
+- 修复结果: 3/3 全部完成 — PR #591 (WinUI CI 6/6 全通过, cargo build + test 通过)
+- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
+- 项目状态: **0 open issue, 0 open PR, 243 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust ai.rs + crypto.rs + search_rules.rs (~3K行) + C# MainWindow + SettingsDialog + NotesView + WrapPanel + App.xaml (~4.6K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、线程安全模式一致。修复了 _activeRequestCts 从创建以来一直存在的竞态条件。

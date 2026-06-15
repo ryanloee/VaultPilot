@@ -1122,11 +1122,61 @@ fn index_note_file_with_connection(connection: &Connection, path: &Path) -> Resu
     Ok(())
 }
 
+fn validate_import_path(path: &Path) -> Result<()> {
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("cannot resolve import path '{}'", path.display()))?;
+
+    if !canonical.is_file() {
+        return Err(anyhow::anyhow!(
+            "import path '{}' is not a regular file",
+            path.display()
+        ));
+    }
+
+    // Reject sensitive system directories to prevent exfiltration via import.
+    let blocked_prefixes: &[&str] = &[
+        "/etc", "/proc", "/sys", "/dev", "/boot", "/run",
+        "/System", "/private/etc", "/private/var",
+    ];
+    let path_str = canonical.to_string_lossy();
+    for prefix in blocked_prefixes {
+        if path_str.starts_with(prefix)
+            && (path_str.len() == prefix.len() || path_str.as_bytes()[prefix.len()] == b'/')
+        {
+            return Err(anyhow::anyhow!(
+                "access denied: cannot import from system directory '{}'",
+                prefix
+            ));
+        }
+    }
+
+    // Also block common sensitive user paths.
+    if let Ok(home) = std::env::var("HOME").map(std::path::PathBuf::from) {
+        let sensitive: &[&str] = &[".ssh", ".gnupg", ".aws", ".config/gh"];
+        for rel in sensitive {
+            let sensitive_path = home.join(rel);
+            if let Ok(sensitive_canonical) = sensitive_path.canonicalize() {
+                if canonical.starts_with(&sensitive_canonical) {
+                    return Err(anyhow::anyhow!(
+                        "access denied: cannot import from sensitive directory '{}'",
+                        sensitive_path.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn import_single_markdown(
     context: &StorageContext,
     connection: &Connection,
     file: &Path,
 ) -> Result<bool> {
+    validate_import_path(file)?;
+
     let settings = load_settings_with_context(context)?;
     let vault_dir = PathBuf::from(&settings.vault_dir)
         .canonicalize()

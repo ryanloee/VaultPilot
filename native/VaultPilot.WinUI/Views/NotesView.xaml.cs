@@ -176,6 +176,10 @@ public sealed partial class NotesView : UserControl
                 DetailBody.Text = meta.Summary ?? "（无法加载笔记正文）";
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A newer selection has superseded this one — don't update UI
+        }
         catch (Exception error)
         {
             // loadNote may not be implemented; show what we have from metadata

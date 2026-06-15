@@ -202,8 +202,11 @@
 - #541: PromptToInstallUpdateAsync null-forgiving cast → pattern matching 防 NRE (PR #543 已合并)
 - #542: CheckForAppUpdatesAsync _updateCheckStarted Interlocked 原子 guard (PR #543 已合并)
 - #544: unsanitized API response text in tool-call retry error (PR #547 已合并)
-- #545: CopyTextToClipboard 缺少 try/catch 剪贴板锁崩溃 (PR #548 已合并)
+- #545: CopyTextToClipboard 缺少 try/catch，剪贴板被锁时崩溃 (PR #548 已合并)
 - #546: load_chat_state_with_context TOCTOU exists/read 竞态 (PR #548 已合并)
+- #549: constant_time_eq token 长度侧信道泄露 (PR #552 已合并)
+- #550: BackendClient SendAsync 挂起请求 TCS 泄漏 (PR #553 已合并)
+- #551: MCP resources/list fetch-all-then-skip 分页低效 (PR #554 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -411,17 +414,19 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#125
+- 循环编号: 循环#126
 - 本轮时间: 2026-06-15
-- 审查模块: Rust ai.rs, lib.rs, prompting.rs, storage.rs; C# BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs, StringToVisibilityConverter.cs, ChatModels.cs, NoteModels.cs, OperationModels.cs, AiModels.cs
+- 审查模块: Rust crypto.rs, models.rs, search_rules.rs, bin/vaultpilot-agent.rs, bin/vaultpilot-cli.rs; C# App.xaml.cs, Program.cs, WrapPanel.cs, AppSettings.cs, BackendClient.cs; C# Tests (7 files) + XAML (4 files)
 - 讨论阶段发现:
-  - **#544** SECURITY (MEDIUM): ai.rs:393-397 tool-call 重试错误消息未 sanitize API 响应文本
-  - **#545** BUG (MEDIUM): MainWindow.xaml.cs:1970 CopyTextToClipboard 缺少 try/catch，剪贴板被锁时崩溃
-  - **#546** BUG (MEDIUM): storage.rs:362-380 load_chat_state_with_context TOCTOU exists/read 竞态
-  - 额外发现（不创建 issue）: ai.rs 50MB 响应全量缓冲内存压力（HIGH）、storage.rs rank_documents N+1 磁盘读取（HIGH）、storage.rs 附件语义评分全表扫描（MEDIUM）、lib.rs 路径祖先遍历无深度限制（MEDIUM）、storage.rs 导出文件名碰撞（MEDIUM）、BackendClient stale TCS 竞态（MEDIUM）、NotesView FormatUpdatedAt 重复逻辑（MEDIUM）、SettingsDialog 错误注释误导（LOW）
+  - **#549** SECURITY (HIGH): vaultpilot-cli.rs constant_time_eq 分支泄露 token 长度
+  - **#550** BUG (MEDIUM): BackendClient.SendAsync TCS 挂起无超时导致内存泄漏
+  - **#551** PERF (MEDIUM): MCP resources/list fetch-all-then-skip 分页低效
+  - 额外发现（不创建 issue）: crypto.rs 手写 HMAC/PBKDF2 (HIGH, 需人工决策)、crypto.rs macOS 低熵 salt (MEDIUM)、CORS 不允许 HTTPS localhost (MEDIUM)、App.xaml.cs session-local mutex (MEDIUM)、BackendClient fire-and-forget rethrow (LOW)、测试覆盖缺口: ToRelativeTime/StringToVisibilityConverter/WrapPanel/DisposeAsync (HIGH)、XAML: loading overlay 硬编码颜色 (MEDIUM)、WrapPanel 无限约束 (MEDIUM)
 - 修复结果:
-  - **PR #547** (#544): ✅ 已合并 — sanitize_error() 包装 API 响应文本
-  - **PR #548** (#545+#546): ✅ 已合并 — Clipboard try/catch + TOCTOU match 修复
+  - **PR #552** (#549): ✅ 已合并 — constant_time_eq 固定 256 字节缓冲区
+  - **PR #553** (#550): ✅ 已合并 — SendAsync 90s 超时 + 重连触发
+  - **PR #554** (#551): ✅ 已合并 — SearchQuery offset + SQL LIMIT/OFFSET
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ❌ (预存在 CVE)
-- 项目状态: **0 open issue, 0 open PR, 225 已合并 PR, 0 阻塞项**
+- 项目状态: **0 open issue, 0 open PR, 228 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 ~46K 行 Rust (crypto.rs, models.rs, search_rules.rs, vaultpilot-agent.rs, vaultpilot-cli.rs) + ~26K 行 C# (App.xaml.cs, Program.cs, WrapPanel.cs, AppSettings.cs, BackendClient.cs) + 7 测试文件 + 4 XAML 文件。Rust 后端 2 HIGH + 4 MEDIUM + 8 LOW；C# 前端 2 MEDIUM + 5 LOW；测试覆盖 4 HIGH + 5 MEDIUM + 3 LOW；XAML 0 HIGH + 3 MEDIUM + 6 LOW。代码库整体质量持续优秀。
 - 代码审查: 深度审查 ~10.9K 行 Rust (ai.rs 2219行, lib.rs 3056行, prompting.rs 838行, storage.rs 4777行) + ~10K 行 C# (BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs, 5 个 Model 文件)。Rust 后端 2 HIGH + 4 MEDIUM + 5 LOW；C# 前端 2 MEDIUM + 6 LOW。代码库整体质量优秀，安全实践到位。

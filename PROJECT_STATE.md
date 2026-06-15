@@ -213,6 +213,9 @@
 - #559: read_stdin_json 无上限 OOM + MCP search limit 无上限 — 10MB cap + limit 上限 (PR #560 已合并)
 - #563: BeginExitForUpdate 不释放 _instanceMutex — 更新后重启单实例检测失败 (PR #565 已合并)
 - #564: windows-installers.yml release workflow 缺少 cargo audit 步骤 (PR #566 已合并)
+- #567: BackendClient.HandleEvent 缺少 try-catch — 畸形事件杀死所有挂起请求 (PR #570 已合并)
+- #568: importMarkdown 接受任意文件系统路径，缺少敏感目录限制 (PR #571 已合并)
+- #569: lib.rs list_directory/read_file 同步阻塞 IO 在异步上下文 (PR #572 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -420,18 +423,20 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#129
+- 循环编号: 循环#130
 - 本轮时间: 2026-06-15
-- 审查模块: Rust ai.rs (2219行), crypto.rs (294行), search_rules.rs (439行), storage.rs (4787行); C# App.xaml.cs, MainWindow.Updates.cs, SettingsDialog.xaml.cs, NotesView.xaml.cs, AppSettings.cs, WrapPanel.cs; CI workflows (3 files)
+- 审查模块: Rust lib.rs (3056行), prompting.rs (838行), models.rs (987行), vaultpilot-cli.rs (2847行), vaultpilot-agent.rs (610行); C# BackendClient.cs (648行), App.xaml.cs (176行)
 - 讨论阶段发现:
-  - **#563** BUG (MEDIUM): BeginExitForUpdate 不释放 _instanceMutex — 更新后重启可能单实例检测失败
-  - **#564** ENHANCEMENT (MEDIUM): windows-installers.yml release workflow 缺少 cargo audit 步骤
-  - Rust 后端：0 CRITICAL, 0 HIGH, 1 MEDIUM (note content prompt injection — LLM 固有限制), 10 LOW
-  - C# 前端：0 CRITICAL, 0 HIGH, 2 MEDIUM (mutex + fire-and-forget), 8 LOW
-  - CI/CD：cargo audit 预存在 CVE (rustls-webpki) 已解决, rand unsound advisory (LOW)
+  - **#567** BUG (HIGH): BackendClient.HandleEvent 缺少 try-catch — 单个畸形事件杀死所有挂起请求
+  - **#568** SECURITY (HIGH): importMarkdown 接受任意文件系统路径，缺少敏感目录限制
+  - **#569** BUG (MEDIUM): lib.rs list_directory/read_file 同步阻塞 IO 在异步上下文
+  - Rust 后端：0 CRITICAL, 1 HIGH (import path), 2 MEDIUM (blocking IO, TOCTOU), 12 LOW
+  - C# 前端：0 CRITICAL, 2 HIGH (HandleEvent, IsConnected race), 5 MEDIUM (Dispose races, missing try-finally), 6 LOW
+  - 代码库整体质量优秀 — 230+ PR 后仅发现防御深度改进，无功能性缺陷
 - 修复结果:
-  - **PR #565** (#563): ✅ 已合并 — BeginExitForUpdate 末尾添加 _instanceMutex 释放
-  - **PR #566** (#564): ✅ 已合并 — windows-installers.yml 添加 cargo install cargo-audit + cargo audit
-- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅ (375 tests), linux-cli-build ✅, winui-build ✅, cargo audit ✅
-- 项目状态: **0 open issue, 0 open PR, 230 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust ai.rs + crypto.rs + search_rules.rs + storage.rs (8739行) + C# 7 文件 + CI 3 文件。Rust 后端质量优秀 — 0 unsafe, 0 生产 unwrap, 所有 SQL 参数化, SSRF/路径穿越防护正确。C# 前端所有 async void 均有 try-catch, 无 .Result/.Wait() 阻塞。代码库持续保持「零实质缺陷」状态。
+  - **PR #570** (#567): ✅ 已合并 — HandleEvent 方法体包裹 try-catch，异常仅记录不影响 pump 循环
+  - **PR #571** (#568): ✅ 已合并 — validate_import_path() 阻止从 /etc, /proc, /sys, ~/.ssh 等敏感目录导入
+  - **PR #572** (#569): ✅ 已合并 — list_directory 和 read_file 调用包装在 tokio::task::spawn_blocking 中
+- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ✅
+- 项目状态: **0 open issue, 0 open PR, 233 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust lib.rs + prompting.rs + models.rs + vaultpilot-cli.rs + vaultpilot-agent.rs (10.5K行) + C# BackendClient.cs + App.xaml.cs (824行)。Rust 后端安全实践优秀 — SQL 参数化、路径穿越防护、SSRF 防护、prompt 注入防护均正确。C# 前端所有 async void 均有 try-catch。代码库持续保持高质量。

@@ -73,7 +73,7 @@
                 <NavigationViewItem
                     x:Name="NavChat"
                     Content="对话"
-                    Icon="Chat"
+                    Icon="Message"
                     Tag="Chat"
                     IsSelected="True"
                     AutomationProperties.Name="对话"

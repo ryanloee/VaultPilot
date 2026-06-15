@@ -231,6 +231,9 @@
 - #593: query_like_note_metas 文档注释说 "body" 但代码搜索 "summary" — 修正注释 (PR #594 已合并)
 - #595: crypto.rs Windows machine_salt 缺少唯一机器标识符 — 同主机名机器可派生相同加密密钥 (PR #599 已合并)
 - #596: MCP server 和 agent stdin 行读取无长度上限 — 10MB cap (PR #598 已合并)
+- #601: extract_json fast-path 绕过 JSON 校验 — prose-wrapped JSON 浪费 API 重试 (PR #604 已合并)
+- #602: normalize_endpoint ends_with 后缀匹配过松 — proxy URL 被错误路由 (PR #604 已合并)
+- #603: validate_base_url DNS 解析无显式超时 — 慢 DNS 消耗请求超时预算 (PR #604 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -438,24 +441,24 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#137
+- 循环编号: 循环#138
 - 本轮时间: 2026-06-16
-- 审查模块: Rust crypto.rs (294行), search_rules.rs (439行), vaultpilot-agent.rs (613行), vaultpilot-cli.rs (2849行); C# WrapPanel.cs (176行), MainWindow.Updates.cs (130行), Tests/* (755行); CI workflows
+- 审查模块: Rust models.rs (987行), prompting.rs (838行), ai.rs (2219行); C# BackendClient.cs (655行), App.xaml.cs (176行), Models/*.cs (97行)
 - 讨论阶段发现:
-  - **创建 3 个 issue**: #595 (SECURITY), #596 (SECURITY), #597 (ENHANCEMENT)
-  - #595: crypto.rs Windows machine_salt 缺少唯一机器标识符 — hostname+OS+arch 不足以区分同名 Windows 机器，导致相同加密密钥
-  - #596: MCP server 和 agent stdin 行读取无长度上限 — BufReader::lines() 无限制，恶意超长行可导致 OOM
-  - #597: CI winui_build 作业仅构建不执行 C# 单元测试 — VaultPilot.WinUI.Tests 永不运行
-  - Rust 后端 crypto.rs 质量优秀 — AES-256-GCM、PBKDF2-HMAC-SHA256 600K iterations、OsRng nonce、OnceLock 缓存、HMAC RFC4231 测试向量验证
-  - Rust search_rules.rs — 全词匹配 ASCII trigger、子串匹配 CJK、serde 配置加载、12 个单元测试覆盖全面
-  - Rust vaultpilot-agent.rs — JSON-RPC over stdin/stdout、120s 请求超时、sanitize_error 错误脱敏、panic hook 捕获
-  - Rust vaultpilot-cli.rs — 2849 行完整 CLI + HTTP bridge + MCP server，代码质量极高：CORS 限制 localhost、constant_time_eq token 比较、rate limiter 60 req/min、10MB body 限制、路径穿越防护
-  - C# WrapPanel.cs — 标准 MeasureOverride/ArrangeOverride 实现，辅助扩展方法
-  - C# MainWindow.Updates.cs — Velopack 更新流程、Interlocked guard、pattern matching 防 NRE
+  - **创建 3 个 issue**: #601 (BUG), #602 (BUG), #603 (ENHANCEMENT)
+  - #601: extract_json fast-path 绕过 serde_json 校验 — prose-wrapped JSON 浪费 API 重试
+  - #602: normalize_endpoint ends_with 后缀匹配过松 — proxy URL 被错误路由
+  - #603: validate_base_url DNS 解析无显式超时 — 慢 DNS 消耗请求超时预算
+  - Rust models.rs 质量优秀 — ProviderConfig/AppSettings validate() 校验、mask_secret 脱敏、serde 默认值
+  - Rust prompting.rs — XML sanitize、CJK 处理、结构化 prompt 构建
+  - Rust ai.rs — SSRF 防护完整（DNS pinning + RFC1918 + IPv6）、extract_json_block 深度追踪、prompt 注入防护
+  - C# BackendClient.cs — Process 生命周期管理正确、TCS pending 清理、Interlocked guard
+  - C# App.xaml.cs — 单实例 Mutex、全局异常处理、Velopack 更新集成
 - 修复结果:
-  - PR #598 (#596 stdin 限制) ✅ 已合并 — CI 6/6 全通过
-  - PR #599 (#595 Windows machine-id) ✅ 已合并 — CI 6/6 全通过
-  - PR #600 (#597 CI C# 测试) ❌ 关闭 — WinUI 项目需要 MSBuild + WindowsAppSDK 基础设施，dotnet test 无法处理传递依赖构建
+  - PR #604 (#601+#602+#603) ✅ 已合并 — CI 6/6 全通过
+  - #601: extract_json 改为优先使用 extract_json_block（深度追踪 + serde_json 校验），bracket-match 降级为 fallback
+  - #602: normalize_endpoint 仅识别完整路径 /v1/messages 和 /v1/chat/completions
+  - #603: DNS 解析添加 10s tokio::time::timeout 包装
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 246 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust crypto.rs + search_rules.rs + vaultpilot-agent.rs + vaultpilot-cli.rs (~6K行) + C# WrapPanel + Updates + Tests (~1K行) + CI workflows。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect（main 入口除外）、所有 MCP tool error 路径均有 sanitize_error、constant_time_eq token 比较、路径穿越防护完整。
+- 项目状态: **1 open issue (#597), 0 open PR, 247 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust models.rs + prompting.rs + ai.rs (~4K行) + C# BackendClient + App + Models (~950行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、SSRF/路径穿越/prompt 注入防护完整、所有 async void 有 try-catch

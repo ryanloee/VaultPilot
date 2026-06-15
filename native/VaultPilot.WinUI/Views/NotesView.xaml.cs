@@ -157,7 +157,7 @@ public sealed partial class NotesView : UserControl
             DetailTags.Text = meta.Tags.Count > 0
                 ? $"🏷 {string.Join(", ", meta.Tags)}"
                 : string.Empty;
-            DetailUpdated.Text = FormatUpdatedAt(meta.UpdatedAt);
+            DetailUpdated.Text = FormatRelativeTime(meta.UpdatedAt);
             DetailPath.Text = meta.Path;
             DetailMetaPanel.Visibility = Visibility.Visible;
             DetailSeparator.Visibility = Visibility.Visible;
@@ -275,7 +275,19 @@ public sealed partial class NotesView : UserControl
         NotesLoading.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private static string FormatUpdatedAt(string updatedAt)
+    private void ShowError(string title, Exception error)
+    {
+        System.Diagnostics.Debug.WriteLine($"NotesView error [{title}]: {error.Message}");
+        ErrorInfoBar.Title = title;
+        ErrorInfoBar.Message = error.Message;
+        ErrorInfoBar.IsOpen = true;
+    }
+
+    /// <summary>
+    /// Format an ISO 8601 timestamp as a human-readable relative time string.
+    /// Shared between <see cref="NotesView"/> and <see cref="NoteListItem"/>.
+    /// </summary>
+    internal static string FormatRelativeTime(string updatedAt)
     {
         if (string.IsNullOrEmpty(updatedAt)) return string.Empty;
         try
@@ -295,14 +307,6 @@ public sealed partial class NotesView : UserControl
         {
             return updatedAt;
         }
-    }
-
-    private void ShowError(string title, Exception error)
-    {
-        System.Diagnostics.Debug.WriteLine($"NotesView error [{title}]: {error.Message}");
-        ErrorInfoBar.Title = title;
-        ErrorInfoBar.Message = error.Message;
-        ErrorInfoBar.IsOpen = true;
     }
 }
 
@@ -318,32 +322,10 @@ public sealed class NoteListItem
     public string TagsDisplay => Meta.Tags.Count > 0
         ? $"🏷 {string.Join(", ", Meta.Tags)}"
         : string.Empty;
-    public string UpdatedDisplay => NotesView_FormatUpdatedAt(Meta.UpdatedAt);
+    public string UpdatedDisplay => NotesView.FormatRelativeTime(Meta.UpdatedAt);
 
     public NoteListItem(NoteMeta meta)
     {
         Meta = meta;
-    }
-
-    private static string NotesView_FormatUpdatedAt(string updatedAt)
-    {
-        if (string.IsNullOrEmpty(updatedAt)) return string.Empty;
-        try
-        {
-            var dt = DateTimeOffset.Parse(updatedAt);
-            var local = dt.ToLocalTime();
-            var now = DateTimeOffset.Now;
-            var diff = now - local;
-
-            if (diff.TotalMinutes < 1) return "刚刚";
-            if (diff.TotalHours < 1) return $"{(int)diff.TotalMinutes}分钟前";
-            if (diff.TotalDays < 1) return $"{(int)diff.TotalHours}小时前";
-            if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}天前";
-            return local.ToString("yyyy-MM-dd");
-        }
-        catch
-        {
-            return updatedAt;
-        }
     }
 }

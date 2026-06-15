@@ -227,9 +227,13 @@
 - #588: ShutdownAsync _activeRequestCts 竞态 — Interlocked.Exchange 原子操作 (PR #591 已合并)
 - #589: _isShuttingDown 缺少 volatile 关键字 — 跨线程可见性 (PR #591 已合并)
 - #590: SettingsDialog.GetThemeBrush 回退 Brush 每次分配 — static readonly 缓存 (PR #591 已合并)
+- #592: auto_backup_database WAL checkpoint 连接缺少 busy_timeout — 添加 PRAGMA busy_timeout = 5000 (PR #594 已合并)
+- #593: query_like_note_metas 文档注释说 "body" 但代码搜索 "summary" — 修正注释 (PR #594 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
+
+（无 — 0 open PR, 0 open issue）
 
 （无 — 0 open PR, 0 open issue）
 
@@ -434,17 +438,20 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#135
+- 循环编号: 循环#136
 - 本轮时间: 2026-06-15
-- 审查模块: Rust ai.rs (2219行), crypto.rs (294行), search_rules.rs (439行); C# MainWindow.xaml.cs (3628行), MainWindow.Updates.cs, Views/NotesView.xaml.cs, Views/SettingsDialog.xaml.cs, Controls/WrapPanel.cs, App.xaml
+- 审查模块: Rust storage.rs (4960行), models.rs (987行), prompting.rs (838行); C# BackendClient.cs (655行), App.xaml.cs (176行), Models/* (126行), Program.cs (23行), Converters (23行)
 - 讨论阶段发现:
-  - **创建 3 个 issue**: #588 (HIGH), #589 (MEDIUM), #590 (LOW)
-  - #588: ShutdownAsync 读取 _activeRequestCts 无 Interlocked 保护 — 与 ExecuteAiRequestAsync 存在竞态
-  - #589: _isShuttingDown 缺少 volatile 关键字 — 跨线程可见性问题
-  - #590: SettingsDialog.GetThemeBrush 回退 Brush 每次 new 分配 — 应缓存为 static readonly
-  - Rust 后端: ai.rs 安全实践优秀 — SSRF 防护、重试逻辑、响应大小限制、sanitize_error 全覆盖; crypto.rs 使用 AES-256-GCM + PBKDF2 600K 迭代 + OsRng nonce; search_rules.rs ASCII 全词匹配 + CJK 子串匹配
-  - C# 前端: 2 HIGH (_activeRequestCts 竞态 + _isShuttingDown volatile) + 4 MEDIUM + 6 LOW; 所有 async void 有 try-catch; XAML 绑定正确
-- 修复结果: 3/3 全部完成 — PR #591 (WinUI CI 6/6 全通过, cargo build + test 通过)
+  - **创建 2 个 issue**: #592 (MEDIUM), #593 (LOW)
+  - #592: auto_backup_database WAL checkpoint 连接缺少 busy_timeout — Connection::open() 不设 PRAGMA busy_timeout，SQLITE_BUSY 时立即失败而非重试
+  - #593: query_like_note_metas 文档注释说 "title or body" 但 SQL 搜索 "title or summary"
+  - Rust 后端 storage.rs 质量极佳 — 原子写入、连接池、WAL 模式、路径穿越防护、SQL 注入防护(参数化查询)、FTS5 转义、CJK 分词、语义向量搜索、感知哈希图像匹配、spawn_blocking 异步包装全覆盖
+  - Rust models.rs — 数据结构清晰、serde camelCase 序列化、完善的 validate() 校验
+  - Rust prompting.rs — XML 闭合标签转义、prompt injection defense 注入所有系统提示、OnceLock 缓存 manual
+  - C# BackendClient.cs — Interlocked 原子 guard、volatile 标记、SemaphoreSlim 互斥、CancellationToken 传播、指数退避重连、degraded mode 健康检查、ConcurrentDictionary 请求管理、90s 超时清理
+  - C# App.xaml.cs — 单实例 Mutex、async void 有 try-catch、BeginExitForUpdate/ExitApplication 竞态 Interlocked guard、finally 块逐步清理
+  - C# Models — 全部 sealed record，无逻辑代码
+- 修复结果: 2/2 全部完成 — PR #594 (CI 6/6 全通过)
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **0 open issue, 0 open PR, 243 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust ai.rs + crypto.rs + search_rules.rs (~3K行) + C# MainWindow + SettingsDialog + NotesView + WrapPanel + App.xaml (~4.6K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、线程安全模式一致。修复了 _activeRequestCts 从创建以来一直存在的竞态条件。
+- 项目状态: **0 open issue, 0 open PR, 244 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust storage.rs + models.rs + prompting.rs (~6.8K行) + C# BackendClient + App + Models + Program + Converters (~1K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、375 tests 全通过、所有 async void 有 try-catch。仅有 2 个 LOW-MEDIUM 级别发现（checkpoint busy_timeout + doc comment），反映代码库已接近零缺陷状态。

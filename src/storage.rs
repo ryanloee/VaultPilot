@@ -779,19 +779,12 @@ pub fn export_all_notes_with_context(
         .with_context(|| format!("failed to create output directory {}", output_dir.display()))?;
 
     let mut result = ExportResult::default();
-    // Use a large limit to get all notes
-    let all_notes = search_notes_with_context(
-        context,
-        SearchQuery {
-            text: String::new(),
-            tags: Vec::new(),
-            keywords: Vec::new(),
-            limit: Some(10_000),
-            ..Default::default()
-        },
-    )?;
+    // #575: Use list_all_note_metas to get all notes without the 200-note
+    // clamp imposed by search_notes_with_context.
+    let (connection, _) = open_connection(context)?;
+    let all_note_metas = list_all_note_metas(&connection)?;
 
-    for meta in &all_notes.notes {
+    for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
                 let path = output_dir.join(format!("{filename}.md"));
@@ -1847,6 +1840,20 @@ fn query_recent_note_metas(
     )?;
     let rows = statement
         .query_map([limit as i64, offset as i64], row_to_meta)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// List all note metas without any LIMIT clause. Used by export functions
+/// that need to process every note in the vault.
+fn list_all_note_metas(connection: &Connection) -> Result<Vec<NoteMeta>> {
+    let mut statement = connection.prepare(
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
+         FROM notes
+         ORDER BY updated_at DESC",
+    )?;
+    let rows = statement
+        .query_map([], row_to_meta)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -2966,18 +2973,12 @@ pub fn vault_export_with_context(
         .compression_method(zip::CompressionMethod::Deflated);
 
     // ── Export all notes ──
-    let all_notes = search_notes_with_context(
-        context,
-        SearchQuery {
-            text: String::new(),
-            tags: Vec::new(),
-            keywords: Vec::new(),
-            limit: Some(10_000),
-            ..Default::default()
-        },
-    )?;
+    // #575: Use list_all_note_metas to get all notes without the 200-note
+    // clamp imposed by search_notes_with_context.
+    let (connection, _) = open_connection(context)?;
+    let all_note_metas = list_all_note_metas(&connection)?;
 
-    for meta in &all_notes.notes {
+    for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
                 let entry_name = format!("notes/{}.md", filename);

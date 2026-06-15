@@ -860,9 +860,10 @@ public sealed partial class MainWindow : Window
         _attachments.Clear();
         RefreshAttachments();
 
-        var oldCts = Interlocked.Exchange(ref _activeRequestCts, new CancellationTokenSource());
+        var newCts = new CancellationTokenSource();
+        var oldCts = Interlocked.Exchange(ref _activeRequestCts, newCts);
         oldCts?.Dispose();
-        var cancellationToken = _activeRequestCts.Token;
+        var cancellationToken = newCts.Token;
 
         var completionSignal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         Volatile.Write(ref _activeRequestTask, completionSignal.Task);
@@ -937,7 +938,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private bool _isShuttingDown;
+    private volatile bool _isShuttingDown;
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
@@ -1068,8 +1069,10 @@ public sealed partial class MainWindow : Window
         _isShuttingDown = true;
 
         // Cancel any active AI request before releasing resources
-        // to prevent catch/finally blocks from accessing disposed objects
-        _activeRequestCts?.Cancel();
+        // to prevent catch/finally blocks from accessing disposed objects.
+        // Use Interlocked.Exchange for thread safety with ExecuteAiRequestAsync (#588).
+        var activeCts = Interlocked.Exchange(ref _activeRequestCts, null);
+        activeCts?.Cancel();
 
         // Wait for the active AI request to finish its catch/finally cleanup
         // before disposing shared resources (#446)
@@ -1086,8 +1089,7 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        _activeRequestCts?.Dispose();
-        _activeRequestCts = null;
+        activeCts?.Dispose();
 
         RemoveThinkingIndicator();
         StopAutoWakeTimer();

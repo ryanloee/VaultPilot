@@ -57,6 +57,14 @@ const MCP_FALLBACK_PROTOCOL_VERSION: &str = "2024-11-05";
 const MARKDOWN_OPEN_TAG: &str = "<vp-markdown>";
 const MARKDOWN_CLOSE_TAG: &str = "</vp-markdown>";
 
+/// Escape closing XML tags and wrap content in delimiters to mitigate prompt injection
+/// in MCP prompt templates. User-controlled content (note titles, bodies, search results)
+/// must be sanitized before interpolation into LLM prompts.
+fn sanitize_mcp_prompt_content(content: &str) -> String {
+    let escaped = content.replace("</", "<//");
+    format!("<user_content>\n{}\n</user_content>", escaped)
+}
+
 #[derive(Parser)]
 #[command(name = "vaultpilot-cli")]
 #[command(about = "VaultPilot knowledge base management CLI")]
@@ -1829,8 +1837,9 @@ async fn handle_mcp_request(
                             "content": {
                                 "type": "text",
                                 "text": format!(
-                                    "Please provide a concise summary of the following note titled \"{}\":\n\n{}",
-                                    note.meta.title, note.body
+                                    "Please provide a concise summary of the following note:\n\nTitle: {}\n\n{}",
+                                    sanitize_mcp_prompt_content(&note.meta.title),
+                                    sanitize_mcp_prompt_content(&note.body)
                                 )
                             }
                         })],
@@ -1873,7 +1882,7 @@ async fn handle_mcp_request(
                             let notes_text = result
                                 .notes
                                 .iter()
-                                .map(|m| format!("- **{}** (id: {}): {}", m.title, m.id, m.summary))
+                                .map(|m| format!("- **{}** (id: {}): {}", sanitize_mcp_prompt_content(&m.title), m.id, sanitize_mcp_prompt_content(&m.summary)))
                                 .collect::<Vec<_>>()
                                 .join("\n");
                             vec![serde_json::json!({
@@ -1881,8 +1890,8 @@ async fn handle_mcp_request(
                                 "content": {
                                     "type": "text",
                                     "text": format!(
-                                        "Here are notes related to \"{}\":\n\n{}\n\nPlease analyze their relationships and suggest how they connect.",
-                                        topic, notes_text
+                                        "Here are notes related to the topic:\n\n{}\n\nPlease analyze their relationships and suggest how they connect.",
+                                        notes_text
                                     )
                                 }
                             })]
@@ -1918,7 +1927,9 @@ async fn handle_mcp_request(
                         "content": {
                             "type": "text",
                             "text": format!(
-                                "Draft a note about the following keywords: {keywords}\nWriting style: {style}\n\nPlease write a well-structured note with a title, relevant sections, and key takeaways."
+                                "Draft a note about the following keywords:\n{}\nWriting style: {}\n\nPlease write a well-structured note with a title, relevant sections, and key takeaways.",
+                                sanitize_mcp_prompt_content(keywords),
+                                sanitize_mcp_prompt_content(style)
                             )
                         }
                     })]

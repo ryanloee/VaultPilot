@@ -394,18 +394,41 @@ public sealed class BackendClient : IAsyncDisposable
                 _writeLock.Release();
             }
 
-            var root = await completion.Task.WaitAsync(cancellationToken);
-            if (root.TryGetProperty("error", out var errorProp))
+            try
             {
-                var message = errorProp.TryGetProperty("message", out var messageElement)
-                    ? messageElement.GetString()
-                    : "后端请求失败。";
-                throw new InvalidOperationException(message);
-            }
+                // Use a per-request timeout to clean up stale TCS entries if the
+                // backend drops the request or never responds.
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(90));
+                try
+                {
+                    var root = await completion.Task.WaitAsync(timeoutCts.Token);
+                    if (root.TryGetProperty("error", out var errorProp))
+                    {
+                        var message = errorProp.TryGetProperty("message", out var messageElement)
+                            ? messageElement.GetString()
+                            : "后端请求失败。";
+                        throw new InvalidOperationException(message);
+                    }
 
-            return root.TryGetProperty("result", out var result)
-                ? result.Clone()
-                : default;
+                    return root.TryGetProperty("result", out var result)
+                        ? result.Clone()
+                        : default;
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // The timeout fired (not the caller's token) — the backend
+                    // likely dropped the request. Clean up and report.
+                    throw new TimeoutException(
+                        $"后端请求 {method} 超时（90 秒无响应），后端可能已断开。");
+                }
+            }
+            catch (TimeoutException)
+            {
+                // Attempt reconnection on timeout since the backend may be dead.
+                _ = TryReconnectWithRetryAsync();
+                throw;
+            }
         }
         finally
         {

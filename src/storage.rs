@@ -839,6 +839,7 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<IndexStats
 
     // Collect all markdown files first (no transaction needed).
     let markdown_files: Vec<_> = WalkDir::new(&vault_dir)
+        .max_depth(20)
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file() && is_markdown_file(entry.path()))
@@ -1773,6 +1774,7 @@ fn collect_markdown_files(paths: &[String]) -> Vec<PathBuf> {
         }
         if path.is_dir() {
             for entry in WalkDir::new(path)
+                .max_depth(20)
                 .into_iter()
                 .filter_map(|entry| entry.ok())
             {

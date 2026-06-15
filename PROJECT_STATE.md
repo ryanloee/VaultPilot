@@ -207,6 +207,7 @@
 - #549: constant_time_eq token 长度侧信道泄露 (PR #552 已合并)
 - #550: BackendClient SendAsync 挂起请求 TCS 泄漏 (PR #553 已合并)
 - #551: MCP resources/list fetch-all-then-skip 分页低效 (PR #554 已合并)
+- #555: FormatUpdatedAt 重复代码 DRY 违反 — 提取共享 FormatRelativeTime (PR #556 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -414,19 +415,13 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#126
+- 循环编号: 循环#127
 - 本轮时间: 2026-06-15
-- 审查模块: Rust crypto.rs, models.rs, search_rules.rs, bin/vaultpilot-agent.rs, bin/vaultpilot-cli.rs; C# App.xaml.cs, Program.cs, WrapPanel.cs, AppSettings.cs, BackendClient.cs; C# Tests (7 files) + XAML (4 files)
+- 审查模块: Rust ai.rs, prompting.rs, search_rules.rs, crypto.rs, storage.rs; C# NotesView.xaml.cs, SettingsDialog.xaml.cs, MainWindow.Updates.cs, App.xaml.cs, Models (4 files); CI workflows (3 files), build scripts (3 files), Cargo.toml, csproj
 - 讨论阶段发现:
-  - **#549** SECURITY (HIGH): vaultpilot-cli.rs constant_time_eq 分支泄露 token 长度
-  - **#550** BUG (MEDIUM): BackendClient.SendAsync TCS 挂起无超时导致内存泄漏
-  - **#551** PERF (MEDIUM): MCP resources/list fetch-all-then-skip 分页低效
-  - 额外发现（不创建 issue）: crypto.rs 手写 HMAC/PBKDF2 (HIGH, 需人工决策)、crypto.rs macOS 低熵 salt (MEDIUM)、CORS 不允许 HTTPS localhost (MEDIUM)、App.xaml.cs session-local mutex (MEDIUM)、BackendClient fire-and-forget rethrow (LOW)、测试覆盖缺口: ToRelativeTime/StringToVisibilityConverter/WrapPanel/DisposeAsync (HIGH)、XAML: loading overlay 硬编码颜色 (MEDIUM)、WrapPanel 无限约束 (MEDIUM)
+  - **#555** BUG (LOW): NotesView.xaml.cs FormatUpdatedAt 重复代码 DRY 违反
 - 修复结果:
-  - **PR #552** (#549): ✅ 已合并 — constant_time_eq 固定 256 字节缓冲区
-  - **PR #553** (#550): ✅ 已合并 — SendAsync 90s 超时 + 重连触发
-  - **PR #554** (#551): ✅ 已合并 — SearchQuery offset + SQL LIMIT/OFFSET
-- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ❌ (预存在 CVE)
-- 项目状态: **0 open issue, 0 open PR, 228 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 ~46K 行 Rust (crypto.rs, models.rs, search_rules.rs, vaultpilot-agent.rs, vaultpilot-cli.rs) + ~26K 行 C# (App.xaml.cs, Program.cs, WrapPanel.cs, AppSettings.cs, BackendClient.cs) + 7 测试文件 + 4 XAML 文件。Rust 后端 2 HIGH + 4 MEDIUM + 8 LOW；C# 前端 2 MEDIUM + 5 LOW；测试覆盖 4 HIGH + 5 MEDIUM + 3 LOW；XAML 0 HIGH + 3 MEDIUM + 6 LOW。代码库整体质量持续优秀。
-- 代码审查: 深度审查 ~10.9K 行 Rust (ai.rs 2219行, lib.rs 3056行, prompting.rs 838行, storage.rs 4777行) + ~10K 行 C# (BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs, 5 个 Model 文件)。Rust 后端 2 HIGH + 4 MEDIUM + 5 LOW；C# 前端 2 MEDIUM + 6 LOW。代码库整体质量优秀，安全实践到位。
+  - **PR #556** (#555): ✅ 已合并 — 提取共享 FormatRelativeTime + 8 单元测试
+- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, linux-cli-build ✅, winui-build ✅, cargo audit ✅
+- 项目状态: **0 open issue, 0 open PR, 229 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust ai.rs (2219行) + prompting.rs (838行) + search_rules.rs (439行) + crypto.rs (294行) + storage.rs (4787行) + C# NotesView.xaml.cs (349行) + SettingsDialog.xaml.cs (311行) + MainWindow.Updates.cs (130行) + App.xaml.cs (172行) + 4 Model 文件 + 7 Test 文件 + 3 CI workflow + 3 Build scripts + Cargo.toml + csproj。Rust 后端 0 新 issue；C# 前端 1 LOW (DRY)。代码库整体质量持续优秀，安全实践到位。375 tests 全通过。

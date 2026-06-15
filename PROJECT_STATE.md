@@ -234,6 +234,9 @@
 - #601: extract_json fast-path 绕过 JSON 校验 — prose-wrapped JSON 浪费 API 重试 (PR #604 已合并)
 - #602: normalize_endpoint ends_with 后缀匹配过松 — proxy URL 被错误路由 (PR #604 已合并)
 - #603: validate_base_url DNS 解析无显式超时 — 慢 DNS 消耗请求超时预算 (PR #604 已合并)
+- #606: MCP notes.search limit cap 500 与 search_notes 内部 200 不一致 (PR #609 已合并)
+- #605: HTTP bridge 无请求级超时 — 添加 180s TimeoutLayer (PR #610 已合并)
+- #608: strip_inline_markdown italic 处理 — 关闭（代码已有 italic 处理，非 bug）
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -441,24 +444,25 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#138
+- 循环编号: 循环#139
 - 本轮时间: 2026-06-16
-- 审查模块: Rust models.rs (987行), prompting.rs (838行), ai.rs (2219行); C# BackendClient.cs (655行), App.xaml.cs (176行), Models/*.cs (97行)
+- 审查模块: Rust search_rules.rs (439行), crypto.rs (318行), vaultpilot-agent.rs (645行), vaultpilot-cli.rs (2871行 HTTP bridge + MCP server); C# WrapPanel.cs (176行), MainWindow.Updates.cs (130行), Program.cs (23行)
 - 讨论阶段发现:
-  - **创建 3 个 issue**: #601 (BUG), #602 (BUG), #603 (ENHANCEMENT)
-  - #601: extract_json fast-path 绕过 serde_json 校验 — prose-wrapped JSON 浪费 API 重试
-  - #602: normalize_endpoint ends_with 后缀匹配过松 — proxy URL 被错误路由
-  - #603: validate_base_url DNS 解析无显式超时 — 慢 DNS 消耗请求超时预算
-  - Rust models.rs 质量优秀 — ProviderConfig/AppSettings validate() 校验、mask_secret 脱敏、serde 默认值
-  - Rust prompting.rs — XML sanitize、CJK 处理、结构化 prompt 构建
-  - Rust ai.rs — SSRF 防护完整（DNS pinning + RFC1918 + IPv6）、extract_json_block 深度追踪、prompt 注入防护
-  - C# BackendClient.cs — Process 生命周期管理正确、TCS pending 清理、Interlocked guard
-  - C# App.xaml.cs — 单实例 Mutex、全局异常处理、Velopack 更新集成
+  - **创建 2 个 issue**: #605 (ENHANCEMENT), #606 (ENHANCEMENT); #608 创建后关闭（非 bug）
+  - #605: HTTP bridge 无请求级超时层 — 慢操作可能耗尽连接
+  - #606: MCP notes.search limit 上限 500 与 search_notes 内部 clamp(1,200) 不一致
+  - #608: strip_inline_markdown italic 处理 — 关闭（代码 803-831 行已有 *text* 和 _text_ 处理）
+  - Rust search_rules.rs — ASCII 全词匹配 + CJK 子串匹配、JSON 配置加载、OnceLock 单例
+  - Rust crypto.rs — PBKDF2-HMAC-SHA256 600k 迭代、AES-256-GCM、平台特定 machine_salt
+  - Rust vaultpilot-agent.rs — 10MB stdin 限制、sanitize_error panic hook、日志轮转
+  - Rust vaultpilot-cli.rs — HTTP bridge: CORS 限制 localhost、rate limiter、constant-time token、TimeoutLayer; MCP server: signal handling、prompt injection defense
+  - C# WrapPanel.cs — 自定义面板布局实现，正确处理水平/垂直方向
+  - C# MainWindow.Updates.cs — Velopack 更新集成，Interlocked guard 防重复检查
 - 修复结果:
-  - PR #604 (#601+#602+#603) ✅ 已合并 — CI 6/6 全通过
-  - #601: extract_json 改为优先使用 extract_json_block（深度追踪 + serde_json 校验），bracket-match 降级为 fallback
-  - #602: normalize_endpoint 仅识别完整路径 /v1/messages 和 /v1/chat/completions
-  - #603: DNS 解析添加 10s tokio::time::timeout 包装
+  - PR #609 (#606) ✅ 已合并 — CI 6/6 全通过
+  - PR #610 (#605) ✅ 已合并 — CI 6/6 全通过
+  - #606: MCP notes.search 和 find-related prompt .min(500) → .min(200)
+  - #605: tower-http TimeoutLayer 180s + StatusCode::GATEWAY_TIMEOUT
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 247 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust models.rs + prompting.rs + ai.rs (~4K行) + C# BackendClient + App + Models (~950行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、SSRF/路径穿越/prompt 注入防护完整、所有 async void 有 try-catch
+- 项目状态: **1 open issue (#597), 0 open PR, 249 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust search_rules + crypto + vaultpilot-agent + vaultpilot-cli (~4.3K行) + C# WrapPanel + Updates + Program (~330行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、MCP prompt 注入防护完整、constant-time token 比较、PBKDF2 600k 迭代加密

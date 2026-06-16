@@ -437,6 +437,7 @@
 - 2026-06-16 [循环#140]: 深度审查 Rust models.rs + prompting.rs + ai.rs (~4K行) + C# Models/XAML/App (~900行)，创建 2 个 issue (#611 BUG, #612 BUG)，2/2 全部修复
 - 2026-06-16 [循环#140]: #611 render_history() 缺少 conversation_history XML delimiter — 新增 sanitize_history() 包裹 7 处调用
 - 2026-06-16 [循环#140]: #612 NotesView.xaml SystemAccentColor (Color) → SystemControlHighlightAccentBrush (Brush) 类型修复
+- #631: 删除笔记后清除搜索框已删除笔记重现 — _allNotesBeforeSearch 同步过滤 (PR #632 已合并)
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
@@ -456,24 +457,19 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#143
+- 循环编号: 循环#144
 - 本轮时间: 2026-06-16
-- 审查模块: Rust prompting.rs (865行), storage.rs (4963行), ai.rs (2245行), lib.rs (3068行), crypto.rs (318行), models.rs (987行), search_rules.rs (439行); C# MainWindow.xaml.cs, BackendClient.cs, App.xaml.cs, Updates.cs
+- 审查模块: Rust vaultpilot-cli.rs (2909行), vaultpilot-agent.rs (645行); C# NotesView.xaml.cs, SettingsDialog.xaml.cs, BackendClient.cs, MainWindow.xaml.cs, prompting.rs, search_rules.rs, models.rs
 - 讨论阶段发现:
-  - **创建 3 个 issue**: #625 (SECURITY), #626 (BUG), #627 (BUG)
-  - #625: prompting.rs render_notes/render_candidate_notes/render_history note metadata (title/tags/path/role) 未 XML 转义 — prompt 注入 via note title
-  - #626: ExecuteAiRequestAsync AddTurnAsync 两次调用读取 _currentSessionId，用户切换会话后 AI 回答落入错误会话
-  - #627: OnComposerKeyDown Ctrl+V e.Handled 在 await 后设置，await 期间默认 paste handler 可执行
-  - Rust 后端总体评估：高质量代码库，0 unsafe、0 生产 unwrap、参数化 SQL、SSRF/路径穿越/prompt 注入防护完整
-  - C# 前端总体评估：所有 async void 有 try-catch、无 .Result/.Wait() 阻塞、CTS 生命周期管理正确
-  - 其他 LOW 发现（未创建 issue）：BackendClient pump task 未 await、SaveChatStateAsync 失败仅状态栏警告、_chatState 无锁读取模式脆弱
+  - **创建 1 个 issue**: #631 (BUG)
+  - #631: NotesView 删除笔记后清除搜索框，已删除笔记重新出现 — _allNotesBeforeSearch 未同步过滤
+  - 其他 MEDIUM 发现（已验证为非问题）：BackendClient PowerModeChanged 双重订阅（实际 Start() 仅调用一次）、notes.import 路径限制（已有 validate_import_path 阻止敏感目录）
+  - 其他 LOW 发现（未创建 issue）：SettingsDialog timeout 无上限、FormatRelativeTime bare catch、vaultpilot-agent 日志轮转非原子、MCP/HTTP bridge 无集成测试
+  - Rust 后端总体评估：0 unsafe、0 生产 unwrap、参数化 SQL、SSRF/路径穿越/prompt 注入防护完整、validate_import_path 阻止敏感目录导入
+  - C# 前端总体评估：所有 async void 有 try-catch、Interlocked 原子操作、volatile 可见性、CTS 生命周期管理正确
 - 修复结果:
-  - PR #628 (#625) ✅ 已合并 — CI 6/6 全通过
-  - PR #629 (#626) ✅ 已合并 — CI 6/6 全通过
-  - PR #630 (#627) ✅ 已合并 — CI 6/6 全通过
-  - #625: render_notes 5 字段 + render_candidate_notes 5 字段 + render_history role 字段全部 escape_xml_close_tags()
-  - #626: AddTurnAsync 新增可选 sessionId 参数，ExecuteAiRequestAsync 捕获 requestSessionId 传递给 3 次调用
-  - #627: e.Handled = true 提前到 await 之前，TryHandleClipboardImagePasteAsync 返回 false 时重置为 false
+  - PR #632 (#631) ✅ 已合并 — CI 6/6 全通过
+  - #631: OnDeleteNoteClicked 新增 _allNotesBeforeSearch 同步过滤
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 256 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust 7 文件 (~15K行) + C# 4 文件。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap/expect、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位
+- 项目状态: **1 open issue (#597), 0 open PR, 257 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust 3 文件 (~8.4K行) + C# 7 文件 (~8K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位

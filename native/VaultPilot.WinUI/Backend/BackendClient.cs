@@ -395,7 +395,16 @@ public sealed class BackendClient : IAsyncDisposable
 
         try
         {
-            await _writeLock.WaitAsync(cancellationToken);
+            // Issue #634: wrap in try-catch — _writeLock may be disposed by
+            // DisposeAsync between the _isDisposed guard above and this WaitAsync.
+            try
+            {
+                await _writeLock.WaitAsync(cancellationToken);
+            }
+            catch (ObjectDisposedException)
+            {
+                throw new InvalidOperationException("Backend client disposed.");
+            }
             try
             {
                 await process.StandardInput.WriteLineAsync(payload.AsMemory(), cancellationToken);
@@ -485,19 +494,22 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async Task DisposeProcessAsync()
     {
-        if (_process is null)
+        // Issue #635: capture _process to local variable via atomic exchange
+        // to prevent NRE from concurrent callers.
+        var process = Interlocked.Exchange(ref _process, null);
+        if (process is null)
         {
             return;
         }
 
         try
         {
-            if (!_process.HasExited)
+            if (!process.HasExited)
             {
-                _process.Kill(entireProcessTree: true);
+                process.Kill(entireProcessTree: true);
             }
 
-            await _process.WaitForExitAsync();
+            await process.WaitForExitAsync();
         }
         catch
         {
@@ -506,8 +518,7 @@ public sealed class BackendClient : IAsyncDisposable
         finally
         {
             _readerCts?.Cancel();
-            _process.Dispose();
-            _process = null;
+            process.Dispose();
             ConnectionStateChanged?.Invoke(false);
         }
     }

@@ -258,6 +258,9 @@
 - #649: MCP server read_line_bounded BufReader::read_line() 全行缓冲 OOM — 改用逐字节 read_exact() (PR #652 已合并)
 - #650: MCP server read_line 仅 trim `\n` 不 trim `\r` — Windows CRLF 支持 (PR #652 已合并)
 - #653: SendAsync _writeLock.Release() 在 finally 块中可抛出 ObjectDisposedException — 添加 try-catch 保护 (PR #654 已合并)
+- #655: query_filtered_note_metas LIKE 通配符未转义 — 应用 escape_like_pattern() + ESCAPE 子句 (PR #658 已合并)
+- #656: SearchResult.total 返回截断后计数 — 移至 truncate() 前计算 (PR #658 已合并)
+- #657: StartProcess() async void re-throw 崩溃 — 替换为 Trace.TraceError + ConnectionStateChanged + return (PR #659 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -473,25 +476,33 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#151
+- 循环编号: 循环#152
 - 本轮时间: 2026-06-16
-- 审查模块: crypto.rs (318行), search_rules.rs (439行), vaultpilot-agent.rs (666行), vaultpilot-cli.rs (2939行), App.xaml.cs (176行), Program.cs (23行), AppSettings.cs (24行), SettingsDialog.xaml.cs (312行), WrapPanel.cs (176行), StringToVisibilityConverter.cs (23行)
+- 审查模块: storage.rs (4993行), BackendClient.cs (673行), MainWindow.xaml.cs (3655行), NotesView.xaml.cs (354行), NotesView.xaml
 - 讨论阶段发现:
-  - **未创建新 issue** — 全部 10 个发现均为 LOW/MEDIUM severity，属已知权衡或理论边缘场景，不满足可操作 issue 标准
-  - Rust 后端 (crypto/search_rules/agent/cli):
-    - MEDIUM: CORS 允许任意 localhost 端口 (cli:990-997) — 已有 non-loopback token 要求缓解
-    - LOW: 手写 HMAC-SHA256/PBKDF2 (crypto.rs:26-87) — 测试向量验证正确，但不如审计过的 crate
-    - LOW: macOS 机器盐仅 hostname+arch (crypto.rs:138-142) — 消费级 macOS 可接受
-    - LOW: 密钥材料无 zeroize (crypto.rs) — 桌面应用可接受
-    - LOW: constant_time_eq 截断 256 字节 (cli:1273-1286) — token 远短于此
-    - LOW: agent stdin 读错误静默退出 (agent.rs:120-123) — EOF+IO error 未区分
-  - C# 前端 (App/Program/Settings/WrapPanel):
-    - MEDIUM: BeginExitForUpdate 无 try/finally (App.xaml.cs:90-111) — ShutdownAsync 异常会跳过清理
-    - LOW: ExitApplication _window.Close() 可能双重关闭 (App.xaml.cs:124) — 已有 _isExiting 保护
-    - LOW: ShowMainWindow 不检查 _isExiting (App.xaml.cs:25) — tray icon 点击竞态理论风险
-    - LOW: Program.Main 无顶层 try-catch (Program.cs) — 早期启动崩溃无日志
-- 修复结果: 无（无可操作 open issue）
-- 审核结果: PR #646 (#597 CI WinUI 测试) — 取消了旧的卡住 CI (27595315303)，触发新 CI (27610211973)，5/6 通过，winui-build 排队中
-- CI 状态: 本地 380 tests 全通过 (358+10+12), 0 clippy warnings, cargo build 成功
-- 项目状态: **1 open issue (#597), 1 open PR (#646), 265 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
-- 代码审查: 深度审查 10 个模块 (~5K行新模块)，覆盖 Rust crypto/search_rules/agent/cli + C# App/Program/Settings/WrapPanel。代码库持续保持零缺陷状态 — 380 tests 全通过, 0 clippy warnings, 0 unsafe, 0 生产 unwrap/expect。累计 265 已合并 PR 后代码库质量持续优秀。
+  - 创建 3 个 issue — #655 (BUG MEDIUM), #656 (BUG MEDIUM), #657 (BUG HIGH)
+  - Rust 后端 (storage.rs):
+    - #655 BUG MEDIUM: query_filtered_note_metas LIKE 通配符未转义 — tag/keyword 搜索中 % 和 _ 匹配意外行
+    - #656 BUG MEDIUM: SearchResult.total 返回截断后计数 — 分页无法检测更多结果
+    - LOW: 解密失败回退为原始密文 — 下游发送 ENC:v1:... 给 LLM provider
+    - MINOR: ensure_schema 重复设置 PRAGMA — 连接池 with_init 已设置
+    - MINOR: export_all_notes 使用 fs::write 非 atomic_write
+  - C# 前端 (BackendClient/MainWindow/NotesView):
+    - #657 BUG HIGH: StartProcess() async void re-throw 崩溃 — Process.Start 失败时 app crash
+    - MEDIUM: _reconnectLock.WaitAsync 缺少 ODE guard — 与 _writeLock 模式不一致
+    - MEDIUM: NotesView ProgressRing RowSpan=2 不覆盖内容区域
+    - MEDIUM: NotesView ApplyFilter 替换 ItemsSource 导致选中笔记丢失
+    - MEDIUM: NotesView 删除笔记期间搜索双重过滤
+    - LOW: PumpStdoutAsync 停止时 stale process 引用导致异常抖动
+    - LOW: NotesView fire-and-forget LoadNoteDetailAsync 丢弃 Task
+    - LOW: NotesView 缺少 Unloaded handler — CTS 对象泄漏
+- 修复结果: 3/3 全部完成
+  - PR #658 (#655 + #656): LIKE 通配符转义 + total 计算修复 — cargo build/test/fmt/clippy 全通过，6/6 CI 通过
+  - PR #659 (#657): StartProcess async void 优雅错误处理 — cargo build/test/fmt/clippy 全通过，6/6 CI 通过
+- 审核结果:
+  - PR #658 — 审核通过，已合并（squash）
+  - PR #659 — 审核通过，已合并（squash）
+  - PR #646 (#597 CI WinUI 测试) — 5/6 CI 通过，winui-build 仍排队，继续等待
+- CI 状态: 本地 370 tests 全通过 (358+12), 0 clippy warnings, cargo build 成功
+- 项目状态: **1 open issue (#597), 1 open PR (#646), 268 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 5 个核心模块 (~10K行)，覆盖 Rust storage.rs + C# BackendClient/MainWindow/NotesView。发现 3 个可操作 BUG 并全部修复。代码库持续保持高质量 — 370 tests 全通过, 0 clippy warnings。

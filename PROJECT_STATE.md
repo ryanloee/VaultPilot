@@ -500,3 +500,25 @@
 - CI 状态: PR #646 winui-build 仍 pending (阻塞项)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 272 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 9 个模块 (~5.1K行)。Rust 后端: vaultpilot-cli.rs (2953行) 全文审查 — MCP server/HTTP bridge/CLI 三大组件安全实践完整；vaultpilot-agent.rs (670行) 全文审查 — stdin 逐字节读取、120s 请求超时、panic hook sanitize_error；search_rules.rs (439行) — ASCII 全词匹配 + CJK 子串匹配正确。C# 前端: App.xaml.cs (176行) 全文审查 — 单实例 Mutex、tray icon、Interlocked 竞态保护；BackendClient.cs (677行) — 线程安全、Process 泄漏防护、HandleEvent try-catch；WrapPanel.cs (176行) — 纯布局代码无问题。381+ Rust 测试全部通过。
+
+## 本轮循环状态 (循环#158)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#158
+- 本轮时间: 2026-06-17
+- 审查模块: ai.rs (2245行), models.rs (987行), crypto.rs (318行)
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #670 SECURITY (ai.rs error 泄露), #671 SECURITY (ProviderConfig Debug 泄露), #672 BUG (from_utf8_lossy)
+  - ai.rs: 仅 3/20+ 错误路径调用 sanitize_error(), LLM/用户数据直接嵌入错误消息
+  - models.rs: #[derive(Debug)] 导致 ProviderConfig.api_key 在日志/panic 中明文泄露
+  - ai.rs: from_utf8_lossy 静默损坏非 UTF-8 API 响应
+- 修复结果:
+  - #670 → PR #673 已合并 (CI 6/6 通过): 修复 6 个错误路径的 sanitize_error + from_utf8 + endpoint URL + image path
+  - #671 → PR #674 已合并 (CI 6/6 通过): 手动 Debug 实现掩码 api_key
+  - #672 关闭: 已由 PR #673 修复 (from_utf8_lossy → from_utf8)
+- 审核结果: PR #673 和 #674 全部 CI 6/6 通过并合并
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 274 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 ai.rs (2245行) + models.rs (987行) + crypto.rs (318行) = 3550行。
+  - ai.rs: SSRF 防护完整 (DNS pinning + private IP blocking), prompt 注入防护, 原子文件写入, 但错误路径 sanitize 不一致
+  - models.rs: 数据结构设计合理, serde 配置正确, 但 Debug derive 泄露敏感字段
+  - crypto.rs: AES-GCM nonce 正确 (CSPRNG), PBKDF2 600k 迭代符合 OWASP, 但自定义 HMAC 实现和无密钥清零是潜在风险
+  - 正面发现: 0 unsafe, 0 生产 unwrap, 381+ tests 全通过, 所有 async void 有 try-catch

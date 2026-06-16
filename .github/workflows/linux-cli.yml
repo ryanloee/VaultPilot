@@ -36,7 +36,7 @@ jobs:
           echo "$HOME/.local/zig/zig-linux-x86_64-0.14.0" >> "$GITHUB_PATH"
 
       - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
 
       - name: Build Linux CLI artifacts
         run: |

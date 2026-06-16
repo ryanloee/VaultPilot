@@ -264,6 +264,9 @@
 - #660: constant_time_eq 256 字节截断 — subtle::ConstantTimeEq 直接比较字节切片 (PR #663 已合并)
 - #661: agent handler 错误路径 sanitize_error 一致性 (PR #663 已合并)
 - #662: CLI exit_error sanitize_error 绕过 (PR #663 已合并)
+- #664: NotesView 搜索-清除竞态 — await 后验证 _searchQuery 未变 (PR #667 已合并)
+- #665: SettingsDialog 数值字段上界校验 — timeoutMs/contextWindowTokens/autoWakeInterval (PR #668 已合并)
+- #666: CI workflow concurrency 控制 — PR 推送取消旧运行 (PR #669 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -460,6 +463,10 @@
 - #634: BackendClient.DisposeAsync _writeLock TOCTOU — WaitAsync ODE 防护 (PR #637 已合并)
 - #635: BackendClient.DisposeProcessAsync 并发调用 NRE — Interlocked.Exchange 原子捕获 (PR #637 已合并)
 - #636: OnClosed hide-to-tray 取消活跃 AI 请求 — 移除 CTS 取消逻辑 (PR #638 已合并)
+- 2026-06-16 [循环#156]: 深度审查 lib.rs (3068行) + storage.rs (4998行) + BackendClient.cs (677行) + MainWindow.xaml.cs (3655行) + NotesView.xaml.cs (354行) + SettingsDialog.xaml.cs (312行) + ci.yml (151行)，创建 3 个 issue (#664 BUG, #665 ENHANCEMENT, #666 ENHANCEMENT)，3/3 全部修复
+- 2026-06-16 [循环#156]: #664 搜索-清除竞态 — await 后验证 _searchQuery 未变 (PR #667 已合并, CI 6/6 通过)
+- 2026-06-16 [循环#156]: #665 SettingsDialog 上界校验 — timeoutMs ≤ 300s, contextWindowTokens ≤ 2M, autoWakeInterval ≤ 1440min (PR #668 已合并, CI 6/6 通过)
+- 2026-06-16 [循环#156]: #666 CI concurrency 控制 — PR 推送取消旧运行 (PR #669 已合并, CI 6/6 通过)
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
@@ -479,46 +486,25 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#155
+- 循环编号: 循环#156
 - 本轮时间: 2026-06-16
-- 审查模块: ai.rs (2245行), prompting.rs (871行), crypto.rs (318行), search_rules.rs (439行), vaultpilot-cli.rs (2953行), vaultpilot-agent.rs (670行), App.xaml.cs (176行), MainWindow.Updates.cs (130行), Models/*.cs, WrapPanel.cs, Program.cs
+- 审查模块: lib.rs (3068行), storage.rs (4998行), BackendClient.cs (677行), MainWindow.xaml.cs (3655行), NotesView.xaml.cs (354行), SettingsDialog.xaml.cs (312行), ci.yml (151行)
 - 讨论阶段发现:
-  - 无新 issue — 代码库处于「零实质缺陷」状态
-  - Rust 后端 (ai.rs, prompting.rs, crypto.rs, search_rules.rs):
-    - ai.rs: SSRF 防护完整 — validate_base_url DNS 解析 + pinning + IPv4/IPv6 私有地址检测 + 10s DNS 超时
-    - ai.rs: 提取 JSON — extract_json_block 尝试所有花括号位置 + serde_json 校验 + backslash_count 处理嵌套转义
-    - ai.rs: 重试逻辑 — 3 次重试 + 指数退避 + 可重试状态码/错误检测 + body.clone() Bytes 引用计数
-    - ai.rs: Provider 分支 — Anthropic/OpenAI 请求/响应格式正确分离，headers provider-aware
-    - ai.rs: CACHED_CLIENT Mutex 中毒恢复 + 重建条件检查完整 (api_key + timeout + provider + base_url)
-    - ai.rs: 图片限制 — 20MB 单文件 + 50MB 响应体 + 支持 png/jpg/webp/gif
-    - prompting.rs: 所有用户内容 XML delimiter 包裹 — user_input, tool_result, note_content, conversation_history
-    - prompting.rs: escape_xml_close_tags `</` → `<//` 转义 + 所有系统提示包含 PROMPT_INJECTION_DEFENSE
-    - prompting.rs: tool_result_user_prompt 中 tool_name 通过 escape_xml_close_tags 转义 (第472行)
-    - prompting.rs: render_manual_for_model OnceLock 缓存 + 硬编码内容无需转义
-    - crypto.rs: AES-256-GCM + PBKDF2-HMAC-SHA256 600k iterations + OsRng 12-byte nonce
-    - crypto.rs: machine_salt 含 hostname + OS + arch + /etc/machine-id (Linux) + MachineGuid (Windows)
-    - crypto.rs: derive_machine_key OnceLock 缓存避免 ~600ms PBKDF2 重复计算
-    - search_rules.rs: ASCII 全词匹配 (trigger_matches) + CJK 子串匹配，无假阳性
-    - 无新发现
-  - Binary 入口 (vaultpilot-cli.rs, vaultpilot-agent.rs):
-    - CLI: read_stdin_json 10MB cap + MCP read_line_bounded 逐字节 read_exact 限流
-    - CLI: HTTP bridge — CORS 仅允许 localhost + 非回环必须 --token + constant_time_eq (subtle::ConstantTimeEq)
-    - CLI: RateLimiter — 60 req/60s per-key + stale entry 清理 + lock poisoned 恢复
-    - CLI: MCP sanitize_mcp_prompt_content — `</` → `<//` + `<user_content>` → `< user_content>` 三重转义
-    - CLI: MCP 所有 prompts/get 用户内容均通过 sanitize_mcp_prompt_content 包裹
-    - Agent: MAX_LINE_BYTES 10MB 逐字节读取 + REQUEST_TIMEOUT 120s + panic hook sanitize_error
-    - 无新发现
-  - C# 前端 (App.xaml.cs, MainWindow.Updates.cs, Models, Controls, Converters, Program.cs):
-    - App.xaml.cs: 单实例 Mutex + Interlocked _exitInProgress guard + ExitApplication try-catch + finally 清理
-    - App.xaml.cs: BeginExitForUpdate + ExitApplication 竞态 — Interlocked.CompareExchange 原子 guard (#534)
-    - MainWindow.Updates.cs: _updateCheckStarted Interlocked guard (#542) + PromptToInstallUpdateAsync pattern matching 防 NRE (#541)
-    - Models: 所有 sealed record 不可变类型 + ProviderConfig.ToString() API Key [REDACTED] (#462)
-    - WrapPanel.cs: 标准 WinUI 布局面板，MeasureOverride/ArrangeOverride 正确
-    - Program.cs: 标准 WinUI 入口 + VelopackApp 初始化
-    - 无新发现
-- 修复结果: 无（无可操作 issue）
+  - 创建 3 个 issue:
+    - #664 BUG: NotesView 搜索-清除竞态 — OnSearchQuerySubmitted await 期间用户清空搜索框，返回后覆盖已恢复的列表
+    - #665 ENHANCEMENT: SettingsDialog 数值字段缺少上界校验 — timeoutMs/contextWindowTokens/autoWakeInterval 可输入极大值
+    - #666 ENHANCEMENT: CI workflow 缺少 concurrency 控制 — 快速推送浪费 runner 分钟
+  - Rust 后端 (lib.rs + storage.rs): 无新发现 — 参数化 SQL、路径穿越防护、原子写入、r2d2 连接池、错误处理均正确
+  - C# 前端 (BackendClient.cs + MainWindow.xaml.cs): 无新发现 — 17 个 async void 全部有 try-catch、无 .Result/.Wait()、线程安全完整
+- 修复结果:
+  - #664 → PR #667 (搜索-清除竞态: capturedQuery 比对) — 已合并, CI 6/6 通过
+  - #665 → PR #668 (SettingsDialog 上界校验: 300s/2M/1440min) — 已合并, CI 6/6 通过
+  - #666 → PR #669 (CI concurrency 控制) — 已合并, CI 6/6 通过
 - 审核结果:
-  - PR #646 (#597 CI WinUI 测试) — 继续等待，5/6 CI 通过 (winui-build pending)
-- CI 状态: PR #646 CI 5/6 通过 (cargo audit/fmt/test/clippy + linux-cli-build pass, winui-build pending)
-- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 269 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
-- 代码审查: 深度审查 12 个模块 (~15.6K行)，覆盖 ai.rs 全文 (2245行) + prompting.rs 全文 (871行) + crypto.rs 全文 (318行) + search_rules.rs 全文 (439行) + vaultpilot-cli.rs 全文 (2953行) + vaultpilot-agent.rs 全文 (670行) + App.xaml.cs 全文 (176行) + MainWindow.Updates.cs 全文 (130行) + Models/*.cs (115行) + WrapPanel.cs (176行) + StringToVisibilityConverter.cs (23行) + Program.cs (23行)。所有安全防护、线程安全、错误处理、资源清理均正确。381 个 Rust 测试全部通过。代码库持续保持「零实质缺陷」状态。
+  - PR #667 — 搜索-清除竞态修复, 2 行改动, CI 6/6 通过, 已合并
+  - PR #668 — SettingsDialog 上界校验, 18 行改动, CI 6/6 通过, 已合并
+  - PR #669 — CI concurrency, 4 行改动, CI 6/6 通过, 已合并
+  - PR #646 (#597 CI WinUI 测试) — 继续等待, winui-build 持续 pending
+- CI 状态: PR #646 winui-build 仍 pending (阻塞项)
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 272 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 7 个模块 (~12.6K行)。Rust 后端: lib.rs (3068行) + storage.rs (4998行) 全文审查，所有安全防护、SQL 参数化、路径穿越、原子写入、错误处理均正确。C# 前端: BackendClient.cs (677行) + MainWindow.xaml.cs (3655行) + NotesView.xaml.cs (354行) + SettingsDialog.xaml.cs (312行) 全文审查，所有 async void 有 try-catch、线程安全正确、无 .Result/.Wait()。CI: ci.yml (151行) 审查发现缺少 concurrency 控制。381 个 Rust 测试全部通过。

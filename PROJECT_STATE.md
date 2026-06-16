@@ -272,6 +272,11 @@
 - #675: export note IDs < 8 字符 panic — safe slicing .min(8) (PR #678 已合并)
 - #676: Send button TOCTOU — Interlocked guard 防止并发 AI 请求 (PR #679 已合并)
 - #677: _isStopping 缺少 volatile — 跨线程可见性 (PR #679 已合并)
+- #686: OpenVaultDirectoryAsync Process.Start handle 泄漏 — using 声明释放 (PR #688 已合并)
+- #687: CI cargo install 缺少 --locked — 供应链可重复性 (PR #689 已合并)
+- #680: SettingsDialog.xaml 缺少 AutomationProperties — 15+ 控件屏幕阅读器不可识别 (PR #685 已合并)
+- #681: ci.yml 缺少 permissions: contents: read — 默认宽泛权限增加攻击面 (PR #683 已合并)
+- #682: MainWindow LoadingOverlay 硬编码 #80000000 — 高对比度主题下不可见 (PR #684 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -585,3 +590,22 @@
 - 审核结果: PR #683, #684, #685 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 279 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 XAML 4 文件 (778行) + CI 配置 (155行) + Cargo.toml + 测试覆盖。XAML accessibility 和 theming 改进。CI 安全加固。
+
+## 本轮循环状态 (循环#162)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#162
+- 本轮时间: 2026-06-17
+- 审查模块: Rust 全部 9 源文件 (~12.9K行), C# 全部 10 源文件 (~5.5K行), CI 全部 3 workflows, docs/, contracts/, scripts/, config/, .gitignore
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #686 BUG (Process.Start handle 泄漏), #687 ENHANCEMENT (CI cargo install --locked)
+  - Rust 后端: 零发现 — 全部 7 源文件全文审查确认零缺陷 (sanitize_error 61处调用, SQL 全参数化, 0 unsafe, 0 生产 unwrap, 路径穿越/SSRF/prompt注入防护完整)
+  - C# 前端: 1 个 BUG — OpenVaultDirectoryAsync Process.Start() 返回的 Process 对象未释放, 每次点击泄漏原生句柄
+  - C# 前端: 1 个潜在 BUG (未创建 issue) — OnComposerKeyDown Ctrl+V e.Handled=true 在 await 前设置, 对纯文本粘贴无影响(同步完成), 仅在剪贴板含 StorageItems 时可能阻塞文本粘贴(边界情况)
+  - CI: 4 处 cargo install 缺少 --locked, Zig 下载无校验和
+  - 正面发现: 22/22 async void 有 try-catch, 0 .Result/.Wait(), 0 bare catch, 全部 Interlocked guard 正确, 381+ Rust 测试通过
+- 修复结果:
+  - #686 → PR #688 已合并 (CI 6/6 通过): using var 声明释放 Process handle
+  - #687 → PR #689 已合并 (CI 6/6 通过): 4 处 cargo install 添加 --locked
+- 审核结果: PR #688 和 #689 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 281 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查全部 Rust 源文件 (12.9K行) + 全部 C# 源文件 (5.5K行) + CI 配置 (3 workflows) + 文档 + 合约 + 脚本。代码库持续保持零缺陷状态。

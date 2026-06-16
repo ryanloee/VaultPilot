@@ -552,7 +552,7 @@ fn render_notes(docs: &[NoteDocument]) -> String {
                 escape_xml_close_tags(&doc.meta.tags.join(", ")),
                 escape_xml_close_tags(&doc.meta.keywords.join(", ")),
                 snippet_section,
-                doc.body
+                escape_xml_close_tags(&doc.body)
             )
         })
         .collect::<Vec<_>>()

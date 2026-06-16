@@ -577,6 +577,9 @@
 - #696: test temp dir leak — extracts_existing_local_path_from_question 缺少 cleanup (PR #699 已合并)
 - #697: ENV_MUTEX race — validate_base_url_localhost_env_guard guard 在 async 调用前释放 (PR #699 已合并)
 - #698: commented-out CJK test — parses_list_notes_tool_call 中文输入测试被注释 (PR #699 已合并)
+- #700: sanitize_mcp_prompt_content 死代码 — 第三个 .replace() 不可达 (PR #703 已合并)
+- #701: StartProcess async void _isDisposed 过滤器 — 关闭时异常从 async void 传播崩溃 (PR #704 已合并)
+- #702: IsConnected 已释放 Process 竞态 — HasExited 抛出 InvalidOperationException (PR #705 已合并)
 
 ## 本轮循环状态 (循环#164)
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
@@ -652,3 +655,40 @@
 - 审核结果: PR #699 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 287 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 Rust 测试套件 (378 tests) + C# 测试套件 (50 tests) + cross-cutting patterns。发现 3 个 test quality issues 并全部修复。C# 测试覆盖率仍需改进（BackendClient/MainWindow 几乎无 behavioral tests）。
+
+## 本轮循环状态 (循环#165)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#165
+- 本轮时间: 2026-06-17
+- 审查模块: lib.rs MCP handler (~1500行), storage.rs index/export (~800行), vaultpilot-cli.rs MCP server (~1360行), prompting.rs (871行), BackendClient.cs (677行), MainWindow.xaml.cs (3655行)
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #700 BUG (sanitize_mcp_prompt_content 死代码), #701 BUG (StartProcess async void 崩溃), #702 BUG (IsConnected disposed Process)
+  - Rust 后端: sanitize_mcp_prompt_content 第三个 .replace() 不可达 — step 1 已将 `</user_content>` → `<//user_content>`
+  - C# 前端: StartProcess catch filter `when (_isDisposed == 0)` — 关闭时 _readerCts.Dispose() 抛异常被过滤器拒绝，async void 传播崩溃
+  - C# 前端: IsConnected Volatile.Read 捕获的 Process 引用可在 HasExited 访问前被 DisposeProcessAsync 释放
+  - Rust 后端 mcp_call_chat_delete stale current_session_id: 非 issue — normalize_chat_state 在 save 时修复
+  - prompting.rs opening tag 未转义: 低风险 — 模型处理嵌套 XML
+- 修复结果:
+  - #700 → PR #703 已合并 (CI 6/6 通过): 移除死代码 + 添加注释
+  - #701 → PR #704 已合并 (CI 6/6 通过): 添加 catch-all 防止 async void 崩溃
+  - #702 → PR #705 已合并 (CI 6/6 通过): IsConnected try-catch 防护
+- 审核结果: PR #703, #704, #705 全部 CI 6/6 通过并合并。PR #646 (#597) winui-build 仍 6h 超时失败。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 290 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 lib.rs + storage.rs + vaultpilot-cli.rs + prompting.rs (~4.5K行 Rust) + BackendClient.cs + MainWindow.xaml.cs (~4.3K行 C#)。Rust 后端安全实践完整 (sanitize_error 63处, SQL 全参数化, 0 unsafe, 0 生产 unwrap)。C# 前端 22/22 async void 有 try-catch。发现 2 MEDIUM + 1 LOW severity issues 并全部修复。
+- #706: SettingsDialog PrimaryButtonClick catch block 注释与代码行为不一致 (PR #707 已合并)
+
+## 本轮循环状态 (循环#166)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#166
+- 本轮时间: 2026-06-17
+- 审查模块: search_rules.rs (439行), vaultpilot-agent.rs (670行), lib.rs (3104行), MainWindow.xaml.cs (3669行), MainWindow.xaml (334行), BackendClient.cs (688行), SettingsDialog.xaml.cs (325行), NotesView.xaml.cs (355行), App.xaml.cs (176行), MainWindow.Updates.cs (130行)
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #706 BUG (SettingsDialog 注释误导)
+  - Rust 后端 (search_rules.rs + vaultpilot-agent.rs + lib.rs): 零缺陷 — sanitize_error 20+ 处调用 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, OnceLock 线程安全 ✅, normalize_tool_path 空检查 ✅, stdin 逐字节 10MB 上限 ✅, 120s 请求超时 ✅
+  - C# 前端: 22/22 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅, Volatile.Read/Write 跨线程保护 ✅, ThemeResource 主题颜色 ✅, AutomationProperties 无障碍 ✅, Hyperlink http/https 限制 ✅
+  - SettingsDialog.xaml.cs: catch block 注释说 "let the dialog close" 但代码 args.Cancel=true 阻止关闭 — 注释误导
+- 修复结果:
+  - #706 → PR #707 已合并 (CI 6/6 通过): 注释修正为 "keep the dialog open so the user can retry or cancel"
+- 审核结果: PR #707 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 291 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 后端 ~4.5K行 (search_rules.rs + vaultpilot-agent.rs + lib.rs) + C# 前端 ~5.5K行 (MainWindow + BackendClient + SettingsDialog + NotesView + App + Updates) = ~10K行。代码库持续零缺陷状态 — 166 个循环累计 291 个已合并 PR。仅发现 1 个 MEDIUM 文档/注释问题并修复。

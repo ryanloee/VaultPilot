@@ -99,9 +99,10 @@ public sealed partial class NotesView : UserControl
             _searchCts?.Cancel();
             _searchCts?.Dispose();
             _searchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var submittedQuery = _searchQuery;
             var results = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>(
                 "searchNotes", new { query = _searchQuery, limit = 50 }, _searchCts.Token);
-            if (results is not null)
+            if (results is not null && _searchQuery == submittedQuery)
             {
                 _allNotesBeforeSearch ??= _allNotes;
                 _allNotes = results;

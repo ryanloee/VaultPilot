@@ -438,6 +438,10 @@
 - 2026-06-16 [循环#140]: #611 render_history() 缺少 conversation_history XML delimiter — 新增 sanitize_history() 包裹 7 处调用
 - 2026-06-16 [循环#140]: #612 NotesView.xaml SystemAccentColor (Color) → SystemControlHighlightAccentBrush (Brush) 类型修复
 - #631: 删除笔记后清除搜索框已删除笔记重现 — _allNotesBeforeSearch 同步过滤 (PR #632 已合并)
+- #633: PRAGMA busy_timeout 设置顺序 — 在 journal_mode WAL 之前设置 (PR #633 已合并)
+- #634: BackendClient.DisposeAsync _writeLock TOCTOU — WaitAsync ODE 防护 (PR #637 已合并)
+- #635: BackendClient.DisposeProcessAsync 并发调用 NRE — Interlocked.Exchange 原子捕获 (PR #637 已合并)
+- #636: OnClosed hide-to-tray 取消活跃 AI 请求 — 移除 CTS 取消逻辑 (PR #638 已合并)
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
@@ -457,19 +461,22 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#144
+- 循环编号: 循环#145
 - 本轮时间: 2026-06-16
-- 审查模块: Rust vaultpilot-cli.rs (2909行), vaultpilot-agent.rs (645行); C# NotesView.xaml.cs, SettingsDialog.xaml.cs, BackendClient.cs, MainWindow.xaml.cs, prompting.rs, search_rules.rs, models.rs
+- 审查模块: Rust 全文件 (lib.rs, ai.rs, storage.rs, crypto.rs, prompting.rs, search_rules.rs, models.rs, vaultpilot-cli.rs, vaultpilot-agent.rs ~16.6K行); C# 全文件 (BackendClient.cs, MainWindow.xaml.cs, MainWindow.Updates.cs, App.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs, Models/*, Converters/* ~5.5K行)
 - 讨论阶段发现:
-  - **创建 1 个 issue**: #631 (BUG)
-  - #631: NotesView 删除笔记后清除搜索框，已删除笔记重新出现 — _allNotesBeforeSearch 未同步过滤
-  - 其他 MEDIUM 发现（已验证为非问题）：BackendClient PowerModeChanged 双重订阅（实际 Start() 仅调用一次）、notes.import 路径限制（已有 validate_import_path 阻止敏感目录）
-  - 其他 LOW 发现（未创建 issue）：SettingsDialog timeout 无上限、FormatRelativeTime bare catch、vaultpilot-agent 日志轮转非原子、MCP/HTTP bridge 无集成测试
-  - Rust 后端总体评估：0 unsafe、0 生产 unwrap、参数化 SQL、SSRF/路径穿越/prompt 注入防护完整、validate_import_path 阻止敏感目录导入
-  - C# 前端总体评估：所有 async void 有 try-catch、Interlocked 原子操作、volatile 可见性、CTS 生命周期管理正确
+  - **创建 3 个 issue**: #634 (BUG HIGH), #635 (BUG HIGH), #636 (BUG HIGH)
+  - #634: BackendClient.DisposeAsync _writeLock TOCTOU — SendAsync 的 _isDisposed 检查与 WaitAsync 之间被 DisposeAsync 打断导致 ODE
+  - #635: BackendClient.DisposeProcessAsync 并发调用 NRE — _process 未捕获到局部变量，concurrent callers 的 finally 互相覆盖
+  - #636: OnClosed hide-to-tray 取消活跃 AI 请求 — 用户关闭窗口到托盘时 AI 请求被取消
+  - 其他 MEDIUM 发现（未创建 issue）：_chatState 无锁读路径 UI 闪烁、MessagesPanel 无界增长、OnClosed 后 AI 请求取消写回会话
+  - 其他 LOW 发现（未创建 issue）：_updateManager 未 dispose、PowerModeChanged 事件重复注册、DragFinish 不在 try-finally 中、AppSettings 非空约定不一致
+  - Rust 后端总体评估：0 unsafe、0 生产 unwrap、参数化 SQL、SSRF/路径穿越/prompt 注入防护完整、std::sync::Mutex 在 async 上下文中可优化但非关键
+  - C# 前端总体评估：所有 async void 有 try-catch、Interlocked 原子操作、volatile 可见性正确
 - 修复结果:
-  - PR #632 (#631) ✅ 已合并 — CI 6/6 全通过
-  - #631: OnDeleteNoteClicked 新增 _allNotesBeforeSearch 同步过滤
+  - PR #633 (PRAGMA busy_timeout 顺序) ✅ 已合并 — CI 6/6 全通过
+  - PR #637 (#634 + #635 BackendClient dispose races) ✅ 已合并 — CI 6/6 全通过
+  - PR #638 (#636 OnClosed hide-to-tray) ✅ 已合并 — CI 6/6 全通过
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 257 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust 3 文件 (~8.4K行) + C# 7 文件 (~8K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位
+- 项目状态: **1 open issue (#597), 0 open PR, 260 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust 9 文件 (~16.6K行) + C# 13 文件 (~5.5K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位

@@ -107,7 +107,7 @@ impl StorageContext {
 
         let manager = SqliteConnectionManager::file(&db_path).with_init(|conn| {
             conn.execute_batch(
-                "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
+                "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
             )
         });
         let pool = Pool::builder()
@@ -972,16 +972,16 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
     if version >= 1 {
         // Schema already exists; enable foreign keys, WAL mode, and busy timeout.
         connection.execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
+            "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
         return Ok(());
     }
 
     connection.execute_batch(
         r#"
+        PRAGMA busy_timeout = 5000;
         PRAGMA foreign_keys = ON;
         PRAGMA journal_mode = WAL;
-        PRAGMA busy_timeout = 5000;
         CREATE TABLE IF NOT EXISTS notes (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,

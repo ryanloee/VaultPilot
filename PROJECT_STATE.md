@@ -574,8 +574,11 @@
 - #690: render_history/render_notes/render_candidate_notes 双重 XML 转义 — sanitize 包装器已转义 (PR #693 已合并)
 - #691: sanitize_error 不脱敏 x-api-key header — 自定义 provider 密钥可泄露 (PR #694 已合并)
 - #692: BackendClient._process 字段缺少 volatile — IsConnected 跨线程读取可能过时 (PR #695 已合并)
+- #696: test temp dir leak — extracts_existing_local_path_from_question 缺少 cleanup (PR #699 已合并)
+- #697: ENV_MUTEX race — validate_base_url_localhost_env_guard guard 在 async 调用前释放 (PR #699 已合并)
+- #698: commented-out CJK test — parses_list_notes_tool_call 中文输入测试被注释 (PR #699 已合并)
 
-## 本轮循环状态 (循环#161)
+## 本轮循环状态 (循环#164)
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
 - 循环编号: 循环#161
 - 本轮时间: 2026-06-17
@@ -631,3 +634,21 @@
 - 审核结果: PR #693, #694, #695 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 284 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 prompting.rs + lib.rs sanitize_error + BackendClient.cs + NotesView.xaml.cs + ai.rs + models.rs + crypto.rs + storage.rs。发现 1 MEDIUM data corruption + 1 MEDIUM security + 1 LOW-MEDIUM thread safety，全部修复。
+
+## 本轮循环状态 (循环#164)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#164
+- 本轮时间: 2026-06-17
+- 审查模块: Rust 测试套件 (378 tests across 8 files), C# WinUI 测试套件 (50 tests across 8 files), cross-cutting concerns
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #696 BUG (temp dir leak), #697 BUG (ENV_MUTEX race), #698 BUG (commented-out CJK test)
+  - Rust 测试: temp dir 泄漏 — `extracts_existing_local_path_from_question` 未清理; ENV_MUTEX guard 在 async 调用前释放导致竞态; CJK 测试被注释
+  - C# 测试: ~50 tests 但 BackendClient (677行) 几乎无测试, MainWindow (3659行) 仅静态 helper 测试, 无 mock/接口抽象
+  - 正面发现: Rust 387 tests 全通过, 0 unsafe, 0 生产 unwrap, sanitize_error 63处调用
+- 修复结果:
+  - #696 → PR #699 已合并 (CI 6/6 通过): temp dir cleanup `fs::remove_dir_all`
+  - #697 → PR #699 已合并 (CI 6/6 通过): sync test + dedicated Runtime inside guard scope
+  - #698 → PR #699 已合并 (CI 6/6 通过): CJK test 恢复为独立 `parses_list_notes_tool_call_cjk`
+- 审核结果: PR #699 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 287 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 测试套件 (378 tests) + C# 测试套件 (50 tests) + cross-cutting patterns。发现 3 个 test quality issues 并全部修复。C# 测试覆盖率仍需改进（BackendClient/MainWindow 几乎无 behavioral tests）。

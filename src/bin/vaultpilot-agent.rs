@@ -165,11 +165,7 @@ fn main() {
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
         let line = line.to_string();
         let response = match runtime.block_on(async {
-            tokio::time::timeout(
-                REQUEST_TIMEOUT,
-                handle_line(&context, &line, &mut stdout),
-            )
-            .await
+            tokio::time::timeout(REQUEST_TIMEOUT, handle_line(&context, &line, &mut stdout)).await
         }) {
             Ok(response) => response,
             Err(_elapsed) => {

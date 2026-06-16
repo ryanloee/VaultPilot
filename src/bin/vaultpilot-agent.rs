@@ -294,9 +294,10 @@ async fn handle_request(
         "getSettings" => {
             let mut settings = initialize_storage_async(context)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
             settings.provider = settings.provider.masked();
-            serde_json::to_value(&settings).map_err(|e| e.to_string())
+            serde_json::to_value(&settings)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
         "saveSettings" => {
             let params: SaveSettingsParams = parse_params(&request.params)?;
@@ -317,21 +318,24 @@ async fn handle_request(
             let params: PathParams = parse_params(&request.params)?;
             let settings = initialize_storage_async(context)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
             let vault_root = Path::new(&settings.vault_dir);
-            let confined =
-                normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;
-            read_image_preview(&confined.to_string_lossy()).map(Value::String)
+            let confined = normalize_tool_path(&params.path, vault_root)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            read_image_preview(&confined.to_string_lossy())
+                .map(Value::String)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e))
         }
         "openVaultDirectory" => {
             let params: PathParams = parse_params(&request.params)?;
             let settings = initialize_storage_async(context)
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
             let vault_root = Path::new(&settings.vault_dir);
-            let confined =
-                normalize_tool_path(&params.path, vault_root).map_err(|e| e.to_string())?;
-            open_vault_directory(&confined.to_string_lossy())?;
+            let confined = normalize_tool_path(&params.path, vault_root)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            open_vault_directory(&confined.to_string_lossy())
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e))?;
             Ok(serde_json::json!({ "ok": true }))
         }
         "askWithAi" => {

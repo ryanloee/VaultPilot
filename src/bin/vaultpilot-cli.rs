@@ -16,7 +16,6 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use subtle::ConstantTimeEq;
 use tokio::runtime::Runtime;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
@@ -538,7 +537,11 @@ fn main() {
     let result = runtime.block_on(handle_command(&context, &cli));
     match result {
         Ok(value) => exit_ok(&cli.pretty, value),
-        Err(err) => exit_error(&cli.pretty, "command_failed", err.to_string()),
+        Err(err) => exit_error(
+            &cli.pretty,
+            "command_failed",
+            vaultpilot_lib::sanitize_error(&err.to_string()),
+        ),
     }
 }
 
@@ -1224,7 +1227,7 @@ fn render_openai_message_content(
 
 fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, String> {
     if url.starts_with("file://") {
-        let path = url.trim_start_matches("file://");
+        let path = url.strip_prefix("file://").unwrap_or(url);
         // Validate path is within the vault directory
         let resolved = normalize_tool_path(path, vault_root).map_err(|e| e.to_string())?;
         return Ok(resolved.to_string_lossy().to_string());
@@ -1268,21 +1271,18 @@ fn validate_http_bridge_binding(ip: IpAddr, token: Option<&str>) -> Result<()> {
 }
 
 /// Constant-time byte-slice comparison to prevent timing side-channel attacks.
-/// Always iterates over a fixed 256-byte buffer regardless of input lengths,
-/// so the comparison never leaks the expected token length via timing.
+/// Length comparison is not constant-time (length is not secret), but the
+/// byte-level comparison uses `subtle::ConstantTimeEq` to prevent leaking
+/// the token content via timing.  The previous 256-byte fixed-buffer approach
+/// had a correctness bug: tokens longer than 256 bytes that differed only
+/// after byte 256 were incorrectly reported as equal (#660).
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    // Fixed buffer size — must be >= any realistic token length.
-    const FIXED_LEN: usize = 256;
-    let mut a_padded = [0u8; FIXED_LEN];
-    let mut b_padded = [0u8; FIXED_LEN];
-    let a_copy = a.len().min(FIXED_LEN);
-    let b_copy = b.len().min(FIXED_LEN);
-    a_padded[..a_copy].copy_from_slice(&a[..a_copy]);
-    b_padded[..b_copy].copy_from_slice(&b[..b_copy]);
-    // Compare full padded buffers in constant time, then combine with length equality.
-    let eq: bool = a_padded.ct_eq(&b_padded).into();
-    let len_eq: bool = a.len().ct_eq(&b.len()).into();
-    eq && len_eq
+    use subtle::ConstantTimeEq;
+    if a.len() != b.len() {
+        return false;
+    }
+    // When lengths match, compare every byte in constant time.
+    bool::from(a.ct_eq(b))
 }
 
 fn require_bridge_token(
@@ -2908,6 +2908,20 @@ mod tests {
         assert!(!constant_time_eq(b"secret", b"Secret"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(!constant_time_eq(b"short", b"longer"));
+    }
+
+    #[test]
+    fn constant_time_eq_long_tokens() {
+        // Regression test for #660: tokens > 256 bytes that differ
+        // only after byte 256 must NOT be reported as equal.
+        let a = vec![b'x'; 300];
+        let mut b = vec![b'x'; 300];
+        assert!(constant_time_eq(&a, &b));
+        b[299] = b'y'; // differ at byte 299
+        assert!(!constant_time_eq(&a, &b));
+        // Also test > 256 bytes with different lengths
+        let c = vec![b'x'; 301];
+        assert!(!constant_time_eq(&a, &c));
     }
 
     #[test]

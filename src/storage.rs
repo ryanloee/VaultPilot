@@ -1157,7 +1157,9 @@ fn validate_import_path(path: &Path) -> Result<()> {
     }
 
     // Reject sensitive system directories to prevent exfiltration via import.
+    let path_str = canonical.to_string_lossy();
     let blocked_prefixes: &[&str] = &[
+        // Unix system directories
         "/etc",
         "/proc",
         "/sys",
@@ -1168,7 +1170,6 @@ fn validate_import_path(path: &Path) -> Result<()> {
         "/private/etc",
         "/private/var",
     ];
-    let path_str = canonical.to_string_lossy();
     for prefix in blocked_prefixes {
         if path_str.starts_with(prefix)
             && (path_str.len() == prefix.len() || path_str.as_bytes()[prefix.len()] == b'/')
@@ -1180,8 +1181,37 @@ fn validate_import_path(path: &Path) -> Result<()> {
         }
     }
 
+    // Windows system directories — canonicalize() produces backslash paths on Windows.
+    #[cfg(windows)]
+    {
+        let windows_blocked: &[&str] = &[
+            "C:\\Windows",
+            "C:\\Program Files",
+            "C:\\Program Files (x86)",
+            "C:\\ProgramData",
+        ];
+        // Case-insensitive comparison for Windows paths.
+        let path_lower = path_str.to_lowercase();
+        for prefix in windows_blocked {
+            let prefix_lower = prefix.to_lowercase();
+            if path_lower.starts_with(&prefix_lower)
+                && (path_lower.len() == prefix_lower.len()
+                    || path_str.as_bytes()[prefix_lower.len()] == b'\\')
+            {
+                return Err(anyhow::anyhow!(
+                    "access denied: cannot import from system directory '{}'",
+                    prefix
+                ));
+            }
+        }
+    }
+
     // Also block common sensitive user paths.
-    if let Ok(home) = std::env::var("HOME").map(std::path::PathBuf::from) {
+    // On Windows, HOME is typically unset; USERPROFILE is the standard env var.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from);
+    if let Ok(home) = home {
         let sensitive: &[&str] = &[".ssh", ".gnupg", ".aws", ".config/gh"];
         for rel in sensitive {
             let sensitive_path = home.join(rel);

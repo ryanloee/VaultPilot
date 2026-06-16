@@ -254,11 +254,12 @@
 - #639: GetConversationHistory/CompressSession 使用 live _currentSessionId — FindSessionById 参数化 (PR #642 已合并)
 - #640: validate_import_path Windows 无效 — 添加 Windows blocked 前缀 + USERPROFILE 回退 (PR #643 已合并)
 - #641: vaultpilot-agent read_line 在 size check 前缓冲全行 — 改用 read_exact 逐字节限制 (PR #644 已合并)
+- #645: render_notes body 字段未 XML 转义 — 防御纵深补齐 (PR #647 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
-（无 — 0 open PR, 1 open issue #597 — CI WinUI 测试，需要 WindowsAppSDK 基础设施支持）
+- #597: CI WinUI 测试 — PR #646 开放中，修复 GlobalUsings.cs + BackendClientTests.cs 编译错误 + 使用 dotnet vstest 执行测试
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->

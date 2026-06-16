@@ -418,7 +418,11 @@ public sealed class BackendClient : IAsyncDisposable
             }
             finally
             {
-                _writeLock.Release();
+                // Issue #653: _writeLock may be disposed by DisposeAsync between
+                // WaitAsync succeeding and Release — catch ODE to avoid masking
+                // the real exception with a finally-block crash.
+                try { _writeLock.Release(); }
+                catch (ObjectDisposedException) { /* shutting down — safe to ignore */ }
             }
 
             try

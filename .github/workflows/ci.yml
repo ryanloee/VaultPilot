@@ -151,4 +151,4 @@ jobs:
         run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /restore /p:Configuration=Release /p:Platform=x64
 
       - name: Run C# unit tests
-        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Release --no-restore --logger "console;verbosity=normal"
+        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Release --logger "console;verbosity=normal"

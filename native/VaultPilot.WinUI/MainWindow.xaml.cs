@@ -958,13 +958,12 @@ public sealed partial class MainWindow : Window
         }
 
         // We are NOT truly exiting — this is a hide-to-tray close.
-        // Only cancel the active request; do NOT dispose the backend or
-        // unsubscribe events so the window can be re-shown from the tray.
+        // Do NOT cancel the active request — let it complete in the background
+        // so the user doesn't lose their in-flight AI response (issue #636).
+        // Do NOT dispose the backend or unsubscribe events so the window
+        // can be re-shown from the tray.
         try
         {
-            var oldCts = Interlocked.Exchange(ref _activeRequestCts, null);
-            oldCts?.Cancel();
-            oldCts?.Dispose();
             RemoveThinkingIndicator();
         }
         catch (Exception error)

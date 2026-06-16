@@ -108,6 +108,7 @@ public sealed partial class MainWindow : Window
     private int _thinkingDotStep;
     private CancellationTokenSource? _activeRequestCts;
     private volatile Task? _activeRequestTask;
+    private int _requestInProgress; // #676: guard against concurrent ExecuteAiRequestAsync calls
 
     public MainWindow()
     {
@@ -861,6 +862,14 @@ public sealed partial class MainWindow : Window
         string statusDetail,
         string errorTitle)
     {
+        // #676: Guard against concurrent requests from rapid button clicks
+        if (Interlocked.CompareExchange(ref _requestInProgress, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
         ComposerBox.Text = string.Empty;
         _attachments.Clear();
         RefreshAttachments();
@@ -944,6 +953,11 @@ public sealed partial class MainWindow : Window
             CancelButton.Visibility = Visibility.Collapsed;
             HideLoadingOverlay();
             RefreshSessions();
+        }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _requestInProgress, 0);
         }
     }
 
@@ -2425,7 +2439,7 @@ public sealed partial class MainWindow : Window
 
     private DateTime? _lastAutoWakeTime;
     private volatile int _autoWakeInProgress;
-    private bool _isStopping;
+    private volatile bool _isStopping; // #677: volatile for cross-thread visibility
 
     /// <summary>
     /// Called by App during shutdown to prevent the auto-wake timer

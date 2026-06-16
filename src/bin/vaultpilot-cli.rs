@@ -1349,7 +1349,7 @@ fn run_mcp_server(context: &StorageContext, runtime: &Runtime) -> Result<()> {
 }
 
 async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::BufReader;
 
     const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     const SHUTDOWN_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -1390,21 +1390,51 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
 
     loop {
         // Helper: read one line with a size cap to prevent OOM from
-        // unbounded stdin input (#596).
+        // unbounded stdin input (#596, #649).
+        // Read byte-by-byte, enforcing the limit *during* reading rather
+        // than after.  BufReader::read_line() buffers the entire payload
+        // before returning, making a post-read size check ineffective
+        // against payloads that never contain a newline (#649).
         let read_line_bounded = async {
-            let mut line = String::new();
-            let bytes = reader.read_line(&mut line).await?;
-            if bytes == 0 {
+            use tokio::io::AsyncReadExt;
+            let mut buf = Vec::new();
+            let mut exceeded = false;
+            loop {
+                let mut byte = [0u8; 1];
+                match reader.read_exact(&mut byte).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        // EOF or read error
+                        break;
+                    }
+                }
+                if buf.len() >= MAX_MCP_LINE_BYTES {
+                    exceeded = true;
+                    // Keep draining until newline so the stream stays in sync
+                    // for the next request, but don't buffer the excess.
+                    if byte[0] == b'\n' {
+                        break;
+                    }
+                    continue;
+                }
+                buf.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            if buf.is_empty() && !exceeded {
                 return Ok(None); // EOF
             }
-            if line.len() > MAX_MCP_LINE_BYTES {
+            if exceeded {
                 return Err(anyhow::anyhow!(
                     "stdin line exceeds {}MB limit",
                     MAX_MCP_LINE_BYTES / (1024 * 1024)
                 ));
             }
-            // Strip trailing newline for consistent handling.
-            Ok::<_, anyhow::Error>(Some(line.trim_end_matches('\n').to_string()))
+            let line = String::from_utf8_lossy(&buf);
+            // Strip trailing \r\n or \n for consistent handling across platforms.
+            let line = line.trim_end_matches('\n').trim_end_matches('\r');
+            Ok::<_, anyhow::Error>(Some(line.to_string()))
         };
 
         // Before initialize, enforce a timeout so we don't block forever

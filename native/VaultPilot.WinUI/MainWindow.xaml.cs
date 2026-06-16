@@ -889,8 +889,8 @@ public sealed partial class MainWindow : Window
             ShowLoadingOverlay(statusTitle);
             UpdateStatusBar("info", statusTitle, statusDetail);
 
-            await CompressCurrentSessionIfNeededAsync(prompt, pendingAttachments);
-            var history = GetConversationHistory();
+            await CompressCurrentSessionIfNeededAsync(requestSessionId, prompt, pendingAttachments);
+            var history = GetConversationHistory(requestSessionId);
             await AddTurnAsync("user", userDisplay, attachments: pendingAttachments, sessionId: requestSessionId);
             RenderCurrentSession();
             ScrollToLatest();
@@ -3150,9 +3150,14 @@ public sealed partial class MainWindow : Window
             ?? _chatState.Sessions.FirstOrDefault();
     }
 
-    private ConversationTurn[] GetConversationHistory()
+    private ChatSession? FindSessionById(string sessionId)
     {
-        var session = CurrentSession();
+        return _chatState.Sessions.FirstOrDefault(session => session.Id == sessionId);
+    }
+
+    private ConversationTurn[] GetConversationHistory(string sessionId)
+    {
+        var session = FindSessionById(sessionId) ?? CurrentSession();
         if (session is null)
         {
             return Array.Empty<ConversationTurn>();
@@ -3170,11 +3175,11 @@ public sealed partial class MainWindow : Window
         return history.ToArray();
     }
 
-    private async Task CompressCurrentSessionIfNeededAsync(
+    private async Task CompressCurrentSessionIfNeededAsync(string sessionId,
         string pendingText,
         IReadOnlyList<ChatAttachment> pendingAttachments)
     {
-        var session = CurrentSession();
+        var session = FindSessionById(sessionId) ?? CurrentSession();
         if (session is null)
         {
             return;

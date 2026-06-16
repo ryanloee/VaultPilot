@@ -246,6 +246,14 @@
 - #625: render_notes/render_candidate_notes/render_history note metadata XML 转义 (PR #628 已合并)
 - #626: ExecuteAiRequestAsync session ID 竞态 — AddTurnAsync sessionId 参数 (PR #629 已合并)
 - #627: OnComposerKeyDown Ctrl+V e.Handled 提前到 await 前 (PR #630 已合并)
+- #631: 删除笔记后清除搜索框已删除笔记重现 — _allNotesBeforeSearch 同步过滤 (PR #632 已合并)
+- #633: PRAGMA busy_timeout 设置顺序 — 在 journal_mode WAL 之前设置 (PR #633 已合并)
+- #634: BackendClient.DisposeAsync _writeLock TOCTOU — WaitAsync ODE 防护 (PR #637 已合并)
+- #635: BackendClient.DisposeProcessAsync 并发调用 NRE — Interlocked.Exchange 原子捕获 (PR #637 已合并)
+- #636: OnClosed hide-to-tray 取消活跃 AI 请求 — 移除 CTS 取消逻辑 (PR #638 已合并)
+- #639: GetConversationHistory/CompressSession 使用 live _currentSessionId — FindSessionById 参数化 (PR #642 已合并)
+- #640: validate_import_path Windows 无效 — 添加 Windows blocked 前缀 + USERPROFILE 回退 (PR #643 已合并)
+- #641: vaultpilot-agent read_line 在 size check 前缓冲全行 — 改用 read_exact 逐字节限制 (PR #644 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -461,22 +469,20 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#145
+- 循环编号: 循环#146
 - 本轮时间: 2026-06-16
-- 审查模块: Rust 全文件 (lib.rs, ai.rs, storage.rs, crypto.rs, prompting.rs, search_rules.rs, models.rs, vaultpilot-cli.rs, vaultpilot-agent.rs ~16.6K行); C# 全文件 (BackendClient.cs, MainWindow.xaml.cs, MainWindow.Updates.cs, App.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs, Models/*, Converters/* ~5.5K行)
+- 审查模块: Rust 全文件 (search_rules.rs, crypto.rs, vaultpilot-agent.rs, storage.rs, ai.rs ~10.9K行); C# 全文件 (BackendClient.cs, MainWindow.xaml.cs ~4.3K行)
 - 讨论阶段发现:
-  - **创建 3 个 issue**: #634 (BUG HIGH), #635 (BUG HIGH), #636 (BUG HIGH)
-  - #634: BackendClient.DisposeAsync _writeLock TOCTOU — SendAsync 的 _isDisposed 检查与 WaitAsync 之间被 DisposeAsync 打断导致 ODE
-  - #635: BackendClient.DisposeProcessAsync 并发调用 NRE — _process 未捕获到局部变量，concurrent callers 的 finally 互相覆盖
-  - #636: OnClosed hide-to-tray 取消活跃 AI 请求 — 用户关闭窗口到托盘时 AI 请求被取消
-  - 其他 MEDIUM 发现（未创建 issue）：_chatState 无锁读路径 UI 闪烁、MessagesPanel 无界增长、OnClosed 后 AI 请求取消写回会话
-  - 其他 LOW 发现（未创建 issue）：_updateManager 未 dispose、PowerModeChanged 事件重复注册、DragFinish 不在 try-finally 中、AppSettings 非空约定不一致
-  - Rust 后端总体评估：0 unsafe、0 生产 unwrap、参数化 SQL、SSRF/路径穿越/prompt 注入防护完整、std::sync::Mutex 在 async 上下文中可优化但非关键
-  - C# 前端总体评估：所有 async void 有 try-catch、Interlocked 原子操作、volatile 可见性正确
+  - **创建 3 个 issue**: #639 (BUG HIGH), #640 (SECURITY HIGH), #641 (BUG MEDIUM)
+  - #639: GetConversationHistory/CompressSession 使用 live _currentSessionId — AI 请求期间切换会话导致发送错误会话的上下文
+  - #640: validate_import_path Windows 无效 — 所有 blocked 前缀为 Unix 路径，HOME 在 Windows 上未设置
+  - #641: vaultpilot-agent read_line 在 size check 前缓冲全行 — MAX_LINE_BYTES guard 对无换行 payload 无效
+  - 其他 MEDIUM 发现（未创建 issue）：BackendClient.Start() 无 _isDisposed 检查、PowerModeChanged 双重注册、SendAsync _process TOCTOU、DisposeAsync 未 await pump tasks、EnsureCurrentSession 无锁修改 _chatState、LIKE 通配符未转义、split_frontmatter 无尾换行失败、FTS offset 先于过滤
+  - 其他 LOW 发现（未创建 issue）：derive_machine_key 未 zeroize、open_vault_directory zombie 进程、搜索双向子串误匹配、rebuild_index 静默吞错、图片 OOM
 - 修复结果:
-  - PR #633 (PRAGMA busy_timeout 顺序) ✅ 已合并 — CI 6/6 全通过
-  - PR #637 (#634 + #635 BackendClient dispose races) ✅ 已合并 — CI 6/6 全通过
-  - PR #638 (#636 OnClosed hide-to-tray) ✅ 已合并 — CI 6/6 全通过
+  - PR #642 (#639 GetConversationHistory/CompressSession session ID) ✅ 已合并 — CI 6/6 全通过
+  - PR #643 (#640 validate_import_path Windows) ✅ 已合并 — CI 6/6 全通过
+  - PR #644 (#641 read_line size guard) ✅ 已合并 — CI 6/6 全通过
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 0 open PR, 260 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust 9 文件 (~16.6K行) + C# 13 文件 (~5.5K行)。代码库持续保持极高质量 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位
+- 项目状态: **1 open issue (#597), 0 open PR, 263 已合并 PR, 0 阻塞项**
+- 代码审查: 深度审查 Rust 5 文件 (~10.9K行) + C# 2 文件 (~4.3K行)。代码库持续保持高质量。发现 session ID 传播遗漏 (#639) 和跨平台路径验证盲区 (#640) 两个重要问题并修复。

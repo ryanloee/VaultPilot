@@ -107,6 +107,21 @@ public sealed class BackendClient : IAsyncDisposable
             return;
         }
 
+        // Issue #708: After _process.Start() succeeds, verify we haven't been
+        // disposed in the gap between the initial _isDisposed check (line 73)
+        // and now.  If DisposeAsync ran concurrently, the new process would
+        // otherwise be orphaned with nobody to kill it.
+        if (Volatile.Read(ref _isDisposed) != 0)
+        {
+            var orphaned = Interlocked.Exchange(ref _process, null);
+            if (orphaned is not null)
+            {
+                try { orphaned.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                orphaned.Dispose();
+            }
+            return;
+        }
+
         try
         {
             _readerCts?.Cancel();

@@ -513,7 +513,8 @@ pub async fn compress_conversation(
     let json = extract_json(&response.text)
         .map_err(|_| anyhow!("model did not return valid JSON for conversation compression"))?;
     let parsed: CompressionResponse = serde_json::from_str(&json)
-        .map_err(|e| anyhow!("failed to parse conversation compression response: {e}"))?;
+        .map_err(|e| anyhow!("failed to parse conversation compression response: {}",
+            crate::sanitize_error(&e.to_string())))?;
     let summary = parsed.summary.trim();
     if summary.is_empty() {
         return Err(anyhow!("model returned an empty conversation summary"));
@@ -924,7 +925,7 @@ fn parse_record_response(
 
     Err(anyhow!(
         "model did not return a valid note draft for record request: {}",
-        truncate(raw_input, 80)
+        crate::sanitize_error(&truncate(raw_input, 80))
     ))
 }
 
@@ -962,7 +963,8 @@ fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToolCall> {
                 draft: Box::new(draft),
             })
         }
-        other => Err(anyhow!("unknown tool selected by model: {other}")),
+        other => Err(anyhow!("unknown tool selected by model: {}",
+            crate::sanitize_error(other))),
     }
 }
 
@@ -1261,7 +1263,9 @@ async fn send_request_with_temperature(
             }
             buf.extend_from_slice(&chunk);
         }
-        let text = String::from_utf8_lossy(&buf).to_string();
+        let text = String::from_utf8(buf.to_vec())
+            .map_err(|e| anyhow!("API response is not valid UTF-8 (invalid byte at position {})",
+                e.utf8_error().valid_up_to()))?;
 
         if !status.is_success() {
             // Try to extract a human-readable error message from the response,
@@ -1362,16 +1366,22 @@ fn should_retry_transport_error(error: &reqwest::Error) -> bool {
 }
 
 fn format_transport_error(error: &reqwest::Error, endpoint: &str) -> String {
+    // Extract just the host from the endpoint URL to avoid leaking API paths
+    let host = endpoint
+        .split("://")
+        .nth(1)
+        .and_then(|s| s.split('/').next())
+        .unwrap_or("(unknown)");
     if error.is_timeout() {
-        return format!("请求超时。模型服务长时间没有响应：{}", endpoint);
+        return format!("请求超时。模型服务长时间没有响应：{}", host);
     }
     if error.is_connect() {
-        return format!("网络连接失败，无法连接到模型服务：{}", endpoint);
+        return format!("网络连接失败，无法连接到模型服务：{}", host);
     }
     if error.is_request() {
         return format!(
             "请求发送失败，请检查 Base URL、网络或代理配置：{}",
-            endpoint
+            host
         );
     }
     if error.is_decode() {
@@ -1397,17 +1407,19 @@ async fn build_input_blocks(
         const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
         let metadata = tokio::fs::metadata(path)
             .await
-            .with_context(|| format!("failed to stat image: {path}"))?;
+            .with_context(|| format!("failed to stat image: {}",
+                std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy()))?;
         if metadata.len() > MAX_IMAGE_SIZE {
             return Err(anyhow!(
                 "image file too large: {} ({} MB > 20 MB limit)",
-                path,
+                std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy(),
                 metadata.len() / (1024 * 1024)
             ));
         }
         let data = tokio::fs::read(path)
             .await
-            .with_context(|| format!("failed to read image: {path}"))?;
+            .with_context(|| format!("failed to read image: {}",
+                std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy()))?;
         blocks.push(AnthropicInputBlock::Image {
             source: AnthropicImageSource {
                 kind: "base64".to_string(),
@@ -1454,17 +1466,19 @@ async fn build_openai_messages(
             const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024;
             let metadata = tokio::fs::metadata(path)
                 .await
-                .with_context(|| format!("failed to stat image: {path}"))?;
+                .with_context(|| format!("failed to stat image: {}",
+                    std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy()))?;
             if metadata.len() > MAX_IMAGE_SIZE {
                 return Err(anyhow!(
                     "image file too large: {} ({} MB > 20 MB limit)",
-                    path,
+                    std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy(),
                     metadata.len() / (1024 * 1024)
                 ));
             }
             let data = tokio::fs::read(path)
                 .await
-                .with_context(|| format!("failed to read image: {path}"))?;
+                .with_context(|| format!("failed to read image: {}",
+                    std::path::Path::new(path).file_name().unwrap_or_default().to_string_lossy()))?;
             parts.push(OpenAiContentPart::ImageUrl {
                 image_url: OpenAiImageUrl {
                     url: format!("data:{};base64,{}", media_type, STANDARD.encode(data)),

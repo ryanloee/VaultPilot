@@ -147,8 +147,8 @@ jobs:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('native/VaultPilot.WinUI/VaultPilot.WinUI.csproj') }}
 
-      - name: Build WinUI project
-        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /restore /p:Configuration=Release /p:Platform=x64
+      - name: Build WinUI solution
+        run: msbuild VaultPilot.sln /restore /p:Configuration=Release /p:Platform=x64
 
       - name: Run C# unit tests
-        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Release --logger "console;verbosity=normal"
+        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal"

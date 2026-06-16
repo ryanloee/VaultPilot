@@ -82,6 +82,22 @@ pub fn sanitize_error(message: &str) -> String {
             }
         }
 
+        // 2c. Redact x-api-key header values (used by Anthropic and custom
+        //     providers).  Match "x-api-key:" followed by optional space and
+        //     8+ non-whitespace characters.
+        if i + 10 <= len && bytes[i..i + 10].eq_ignore_ascii_case(b"x-api-key:") {
+            let mut val_start = i + 10;
+            if val_start < len && bytes[val_start] == b' ' {
+                val_start += 1;
+            }
+            let val_end = scan_until_whitespace(bytes, val_start);
+            if val_end - val_start >= 8 {
+                out.push_str("x-api-key: [REDACTED]");
+                i = val_end;
+                continue;
+            }
+        }
+
         // 3. Redact URL query parameters that carry secrets:
         //    "api_key=", "api-key=", "access_token=", "secret=", "token=", "key="
         //    Only when preceded by '?' or '&' (or start-of-string).
@@ -2295,6 +2311,25 @@ mod tests {
         let msg = "Auth: Basic short";
         let sanitized = sanitize_error(msg);
         assert_eq!(sanitized, msg);
+    }
+
+    #[test]
+    fn sanitize_redacts_x_api_key_header() {
+        let msg = "Request failed with headers: x-api-key: sk-ant-custom-key-1234567890abcdef";
+        let sanitized = sanitize_error(msg);
+        assert!(sanitized.contains("x-api-key: [REDACTED]"));
+        assert!(!sanitized.contains("sk-ant-custom-key-1234567890abcdef"));
+    }
+
+    #[test]
+    fn sanitize_redacts_x_api_key_header_case_insensitive() {
+        let msg = "Error: X-Api-Key: my-custom-provider-key-abcdefghij";
+        let sanitized = sanitize_error(msg);
+        assert!(
+            sanitized.contains("x-api-key: [REDACTED]")
+                || sanitized.contains("X-Api-Key: [REDACTED]")
+        );
+        assert!(!sanitized.contains("my-custom-provider-key-abcdefghij"));
     }
 
     #[test]

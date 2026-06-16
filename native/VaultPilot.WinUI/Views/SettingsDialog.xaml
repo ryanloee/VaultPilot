@@ -27,41 +27,49 @@
                 Title="设置校验失败"
                 IsOpen="False"
                 IsClosable="False"
-                HorizontalAlignment="Stretch" />
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="设置校验错误提示" />
 
             <!-- Vault directory -->
             <TextBox
                 x:Name="VaultBox"
                 Header="知识库目录"
                 PlaceholderText="例如 D:\KnowledgeVault"
-                HorizontalAlignment="Stretch" />
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="知识库目录路径" />
             <Button
                 x:Name="OpenVaultButton"
-                Content="打开目录" />
+                Content="打开目录"
+                AutomationProperties.Name="打开知识库目录"
+                AutomationProperties.HelpText="打开文件选择对话框选择知识库目录" />
 
             <!-- Provider settings -->
             <PasswordBox
                 x:Name="ApiKeyBox"
                 Header="API Key"
                 PlaceholderText="输入模型服务 API Key"
-                HorizontalAlignment="Stretch" />
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="API Key" />
             <TextBox
                 x:Name="BaseUrlBox"
                 Header="接口地址"
                 PlaceholderText="例如 https://api.openai.com/v1"
-                HorizontalAlignment="Stretch" />
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="模型服务接口地址" />
             <TextBox
                 x:Name="ModelBox"
                 Header="模型"
                 PlaceholderText="例如 gpt-4o-mini"
-                HorizontalAlignment="Stretch" />
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="模型名称" />
 
             <!-- Timeout -->
             <TextBox
                 x:Name="TimeoutBox"
                 Header="请求超时（毫秒）"
                 HorizontalAlignment="Stretch"
-                LostFocus="OnTimeoutLostFocus" />
+                LostFocus="OnTimeoutLostFocus"
+                AutomationProperties.Name="请求超时毫秒数" />
             <TextBlock
                 x:Name="TimeoutError"
                 Foreground="{ThemeResource StatusErrorBrush}"
@@ -74,7 +82,8 @@
                 x:Name="ContextWindowBox"
                 Header="上下文窗口 Token 数（可选）"
                 HorizontalAlignment="Stretch"
-                LostFocus="OnContextWindowLostFocus" />
+                LostFocus="OnContextWindowLostFocus"
+                AutomationProperties.Name="上下文窗口 Token 数" />
             <TextBlock
                 x:Name="ContextWindowError"
                 Foreground="{ThemeResource StatusErrorBrush}"
@@ -95,13 +104,16 @@
                 Content="启用自动唤醒（定时调用 API 保持会话活跃）"
                 HorizontalAlignment="Left"
                 Checked="OnAutoWakeToggled"
-                Unchecked="OnAutoWakeToggled" />
+                Unchecked="OnAutoWakeToggled"
+                AutomationProperties.Name="启用自动唤醒"
+                AutomationProperties.HelpText="定时调用 API 保持会话活跃" />
             <TextBox
                 x:Name="AutoWakeIntervalBox"
                 Header="唤醒间隔（分钟）"
                 PlaceholderText="30"
                 HorizontalAlignment="Stretch"
-                LostFocus="OnAutoWakeIntervalLostFocus" />
+                LostFocus="OnAutoWakeIntervalLostFocus"
+                AutomationProperties.Name="唤醒间隔分钟" />
             <TextBlock
                 x:Name="AutoWakeIntervalError"
                 Foreground="{ThemeResource StatusErrorBrush}"
@@ -112,13 +124,15 @@
                 x:Name="AutoWakeModelBox"
                 Header="唤醒使用的模型（留空使用默认模型）"
                 HorizontalAlignment="Stretch"
-                IsEditable="True" />
+                IsEditable="True"
+                AutomationProperties.Name="唤醒使用的模型" />
             <TextBox
                 x:Name="AutoWakeStartTimeBox"
                 Header="开始时间（HH:mm，留空不限）"
                 PlaceholderText="05:00"
                 HorizontalAlignment="Stretch"
-                LostFocus="OnAutoWakeStartTimeLostFocus" />
+                LostFocus="OnAutoWakeStartTimeLostFocus"
+                AutomationProperties.Name="自动唤醒开始时间" />
             <TextBlock
                 x:Name="AutoWakeStartTimeError"
                 Foreground="{ThemeResource StatusErrorBrush}"
@@ -130,7 +144,8 @@
                 Header="结束时间（HH:mm，留空不限）"
                 PlaceholderText="23:00"
                 HorizontalAlignment="Stretch"
-                LostFocus="OnAutoWakeEndTimeLostFocus" />
+                LostFocus="OnAutoWakeEndTimeLostFocus"
+                AutomationProperties.Name="自动唤醒结束时间" />
             <TextBlock
                 x:Name="AutoWakeEndTimeError"
                 Foreground="{ThemeResource StatusErrorBrush}"
@@ -154,12 +169,15 @@
                     x:Name="AutoCheckUpdatesBox"
                     Grid.Column="0"
                     Content="启动时自动检查更新"
-                    HorizontalAlignment="Left" />
+                    HorizontalAlignment="Left"
+                    AutomationProperties.Name="启动时自动检查更新" />
                 <Button
                     x:Name="ProjectLinkButton"
                     Grid.Column="1"
                     Content="项目地址"
-                    HorizontalAlignment="Left" />
+                    HorizontalAlignment="Left"
+                    AutomationProperties.Name="打开项目地址"
+                    AutomationProperties.HelpText="在浏览器中打开 VaultPilot 项目页面" />
                 <TextBlock
                     x:Name="VersionLabel"
                     Grid.Column="2"

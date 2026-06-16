@@ -283,7 +283,7 @@ public sealed partial class SettingsDialog : ContentDialog
         }
         catch (Exception error)
         {
-            // Show error but let the dialog close — the caller checks UpdatedSettings == null.
+            // Show error and keep the dialog open so the user can retry or cancel.
             ErrorInfoBar.Message = $"保存设置失败：{error.Message}";
             ErrorInfoBar.IsOpen = true;
             args.Cancel = true;

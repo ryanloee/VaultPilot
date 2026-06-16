@@ -164,10 +164,13 @@ fn main() {
         let line = String::from_utf8_lossy(&stdin_buf);
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
         let line = line.to_string();
-        let response = match runtime.block_on(tokio::time::timeout(
-            REQUEST_TIMEOUT,
-            handle_line(&context, &line, &mut stdout),
-        )) {
+        let response = match runtime.block_on(async {
+            tokio::time::timeout(
+                REQUEST_TIMEOUT,
+                handle_line(&context, &line, &mut stdout),
+            )
+            .await
+        }) {
             Ok(response) => response,
             Err(_elapsed) => {
                 log_agent_event(

@@ -816,7 +816,8 @@ pub fn export_all_notes_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let path = output_dir.join(format!("{}-{}.md", filename, &meta.id[..8]));
+                let id_prefix = &meta.id[..meta.id.len().min(8)];
+                let path = output_dir.join(format!("{}-{}.md", filename, id_prefix));
                 match fs::write(&path, &markdown) {
                     Ok(()) => result.exported += 1,
                     Err(e) => result
@@ -3134,7 +3135,8 @@ pub fn vault_export_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let entry_name = format!("notes/{}-{}.md", filename, &meta.id[..8]);
+                let id_prefix = &meta.id[..meta.id.len().min(8)];
+                let entry_name = format!("notes/{}-{}.md", filename, id_prefix);
                 zip.start_file(entry_name, options)?;
                 std::io::Write::write_all(&mut zip, markdown.as_bytes())?;
                 result.notes_exported += 1;
@@ -4994,5 +4996,25 @@ mod tests {
             .sessions
             .iter()
             .any(|s| s.id == normalized.current_session_id));
+    }
+
+    #[test]
+    fn export_id_prefix_safe_for_short_ids() {
+        // Regression test for #675: [..8] panics on IDs shorter than 8 bytes
+        let short_id = "ab";
+        let id_prefix = &short_id[..short_id.len().min(8)];
+        assert_eq!(id_prefix, "ab");
+
+        let exact_8 = "12345678";
+        let id_prefix = &exact_8[..exact_8.len().min(8)];
+        assert_eq!(id_prefix, "12345678");
+
+        let long_id = "1234567890abcdef";
+        let id_prefix = &long_id[..long_id.len().min(8)];
+        assert_eq!(id_prefix, "12345678");
+
+        let empty_id = "";
+        let id_prefix = &empty_id[..empty_id.len().min(8)];
+        assert_eq!(id_prefix, "");
     }
 }

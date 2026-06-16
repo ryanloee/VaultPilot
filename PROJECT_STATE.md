@@ -571,6 +571,9 @@
 - #680: SettingsDialog.xaml 缺少 AutomationProperties — 15+ 控件屏幕阅读器不可识别 (PR #685 已合并)
 - #681: ci.yml 缺少 permissions: contents: read — 默认宽泛权限增加攻击面 (PR #683 已合并)
 - #682: MainWindow LoadingOverlay 硬编码 #80000000 — 高对比度主题下不可见 (PR #684 已合并)
+- #690: render_history/render_notes/render_candidate_notes 双重 XML 转义 — sanitize 包装器已转义 (PR #693 已合并)
+- #691: sanitize_error 不脱敏 x-api-key header — 自定义 provider 密钥可泄露 (PR #694 已合并)
+- #692: BackendClient._process 字段缺少 volatile — IsConnected 跨线程读取可能过时 (PR #695 已合并)
 
 ## 本轮循环状态 (循环#161)
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
@@ -609,3 +612,22 @@
 - 审核结果: PR #688 和 #689 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 281 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查全部 Rust 源文件 (12.9K行) + 全部 C# 源文件 (5.5K行) + CI 配置 (3 workflows) + 文档 + 合约 + 脚本。代码库持续保持零缺陷状态。
+
+## 本轮循环状态 (循环#163)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#163
+- 本轮时间: 2026-06-17
+- 审查模块: prompting.rs (871行), lib.rs sanitize_error (129行), BackendClient.cs (677行), NotesView.xaml.cs (355行), ai.rs, models.rs, crypto.rs, storage.rs
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #690 BUG (双重 XML 转义), #691 SECURITY (x-api-key 脱敏), #692 BUG (_process volatile)
+  - prompting.rs: render_history/render_notes/render_candidate_notes 内部 escape_xml_close_tags + 外部 sanitize_* 包装器再次 escape → 双重转义 `</note>` → `<//note>` → `<////note>`
+  - lib.rs sanitize_error: 不匹配 x-api-key header（10字节非11字节），自定义 provider 非 sk- 前缀 key 泄露
+  - BackendClient.cs: _process 字段无 volatile，IsConnected 从 health check timer 跨线程读取可能过时
+  - 正面发现: render_tool_results 不做内部转义（正确模式）✅, Interlocked.Exchange 在 DisposeProcessAsync 中正确 ✅, 22/22 async void 有 try-catch ✅
+- 修复结果:
+  - #690 → PR #693 已合并 (CI 6/6 通过): 移除 render_* 内部 escape_xml_close_tags + 2 回归测试
+  - #691 → PR #694 已合并 (CI 6/6 通过): x-api-key header 脱敏 + 2 测试
+  - #692 → PR #695 已合并 (CI 6/6 通过): Volatile.Read/Write 8 处 _process 访问点
+- 审核结果: PR #693, #694, #695 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 284 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 prompting.rs + lib.rs sanitize_error + BackendClient.cs + NotesView.xaml.cs + ai.rs + models.rs + crypto.rs + storage.rs。发现 1 MEDIUM data corruption + 1 MEDIUM security + 1 LOW-MEDIUM thread safety，全部修复。

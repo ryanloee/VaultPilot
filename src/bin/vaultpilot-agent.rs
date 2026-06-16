@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Read, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -105,20 +105,41 @@ fn main() {
     /// unbounded payload without a newline delimiter (#596).
     const MAX_LINE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 
-    let mut stdin_buf = String::new();
+    let mut stdin_buf = Vec::new();
     loop {
         stdin_buf.clear();
-        let bytes_read = match stdin.lock().read_line(&mut stdin_buf) {
-            Ok(n) => n,
-            Err(error) => {
-                log_agent_event("stdin_error", &format!("{error}"));
+        // Read byte-by-byte until newline, enforcing the size limit during
+        // reading rather than after.  `read_line()` buffers the entire line
+        // before returning, making the post-read size check ineffective
+        // against payloads that never contain a newline (#641).
+        let mut byte = [0u8; 1];
+        let mut exceeded = false;
+        loop {
+            match stdin.lock().read_exact(&mut byte) {
+                Ok(()) => {}
+                Err(_) => {
+                    // EOF or read error
+                    break;
+                }
+            }
+            if stdin_buf.len() >= MAX_LINE_BYTES {
+                exceeded = true;
+                // Keep draining until newline so the stream stays in sync
+                // for the next request, but don't buffer the excess.
+                if byte[0] == b'\n' {
+                    break;
+                }
+                continue;
+            }
+            stdin_buf.push(byte[0]);
+            if byte[0] == b'\n' {
                 break;
             }
-        };
-        if bytes_read == 0 {
+        }
+        if stdin_buf.is_empty() && !exceeded {
             break; // EOF
         }
-        if stdin_buf.len() > MAX_LINE_BYTES {
+        if exceeded {
             log_agent_event(
                 "stdin_error",
                 &format!(
@@ -140,7 +161,8 @@ fn main() {
             }
             continue;
         }
-        let line = stdin_buf.trim_end_matches('\n').trim_end_matches('\r');
+        let line = String::from_utf8_lossy(&stdin_buf);
+        let line = line.trim_end_matches('\n').trim_end_matches('\r');
         let line = line.to_string();
         let response = match runtime.block_on(tokio::time::timeout(
             REQUEST_TIMEOUT,

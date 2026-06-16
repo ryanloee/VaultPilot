@@ -479,31 +479,38 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#153
+- 循环编号: 循环#154
 - 本轮时间: 2026-06-16
-- 审查模块: ai.rs (2245行), prompting.rs (871行), search_rules.rs (439行), crypto.rs (318行), App.xaml.cs (176行), SettingsDialog.xaml.cs (312行), MainWindow.Updates.cs (130行), AppSettings.cs (24行), vaultpilot-agent.rs (666行), vaultpilot-cli.rs (2954行)
+- 审查模块: storage.rs (4998行), models.rs (987行), lib.rs (3068行), BackendClient.cs (677行), MainWindow.xaml.cs (3655行), NotesView.xaml.cs (354行)
 - 讨论阶段发现:
-  - 创建 3 个 issue — #660 (SECURITY MEDIUM), #661 (BUG LOW-MEDIUM), #662 (BUG LOW)
-  - Rust 后端 (ai.rs, prompting.rs, search_rules.rs, crypto.rs):
-    - ai.rs: 结构良好 — SSRF 防护、DNS pinning、重试逻辑、sanitize_error 均正确
-    - prompting.rs: 优秀的 prompt 注入防御（XML 转义 + 分隔符 + SECURITY INSTRUCTIONS）
-    - search_rules.rs: ASCII 全词匹配、CJK 子串匹配逻辑正确
-    - crypto.rs: PBKDF2-HMAC-SHA256 600k + AES-256-GCM + machine_salt (Windows MachineGuid) 均正确
+  - 无新 issue — 代码库处于「零实质缺陷」状态
+  - Rust 后端 (storage.rs, models.rs, lib.rs):
+    - storage.rs: atomic_write UUID 临时文件 + 0o600 权限 + fsync + rename 均正确
+    - storage.rs: r2d2 连接池 max_size=5, WAL mode + busy_timeout + foreign_keys PRAGMA 顺序正确
+    - storage.rs: search_notes_with_context — FTS5 + LIKE fallback + SQL 级过滤 + 内存级过滤路径一致
+    - storage.rs: query_filtered_note_metas 参数化 SQL + escape_like_pattern + ESCAPE 子句均正确
+    - storage.rs: validate_import_path 阻止敏感目录 (Unix/Windows/用户路径)，canonicalize 后比较
+    - storage.rs: auto_backup_database WAL checkpoint + 3 份旋转备份逻辑正确
+    - storage.rs: extract_image_text_with_windows_ocr — 路径作为独立参数传递，无命令注入风险
+    - models.rs: 所有结构体 serde camelCase 序列化，validate() 校验完整，12 个测试覆盖全面
+    - lib.rs: sanitize_error 覆盖 sk-/Bearer/Basic/URL query params，多字节 UTF-8 安全
+    - lib.rs: spawn_blocking 包装所有同步 IO 操作，防止阻塞 Tokio 运行时
+    - lib.rs: ask_with_ai_with_context 工具调用循环 (max 4 rounds) + 强制搜索 + 会话记忆问题检测
     - 无新发现
-  - C# 前端 (App.xaml.cs, SettingsDialog.xaml.cs, MainWindow.Updates.cs, Models):
-    - 所有 async void handler 有 try-catch，Interlocked guard，资源清理正确
+  - C# 前端 (BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs):
+    - BackendClient.cs: 线程安全完整 — Volatile.Read, Interlocked.CompareExchange, SemaphoreSlim
+    - BackendClient.cs: DisposeAsync 顺序正确 — cancel reader → fail pending → dispose process → dispose locks
+    - BackendClient.cs: 重连逻辑 — 指数退避 5s-60s, 6 次重试, degraded mode 3 次失败后切换
+    - MainWindow.xaml.cs: ExecuteAiRequestAsync session ID 快照 (#626), CTS Interlocked.Exchange (#588)
+    - MainWindow.xaml.cs: ShutdownAsync 35s 等待活跃请求完成后再释放资源 (#446)
+    - MainWindow.xaml.cs: OnClosed hide-to-tray 不取消活跃请求 (#636)
+    - MainWindow.xaml.cs: AppendInlineMarkdown forward-progress guard (#464), Hyperlink scheme 限制 http/https (#392)
+    - NotesView.xaml.cs: _loadDetailCts 竞态取消 (#584), _searchCts 竞态取消 (#621)
+    - NotesView.xaml.cs: 删除笔记检查后端返回值 (#622), _allNotesBeforeSearch 同步过滤 (#631)
     - 无新发现
-  - 二进制入口点 (vaultpilot-agent.rs, vaultpilot-cli.rs):
-    - #660 SECURITY MEDIUM: constant_time_eq 256 字节截断 — token > 256 字节时误报相等
-    - #661 BUG LOW-MEDIUM: agent handler 5 处错误路径绕过 sanitize_error
-    - #662 BUG LOW: CLI exit_error 绕过 sanitize_error
-    - INFO: trim_start_matches → strip_prefix (代码质量)
-    - INFO: Rate limiter 无 key 上限 (低风险)
-- 修复结果: 3/3 全部完成
-  - PR #663 (#660 + #661 + #662): constant_time_eq 修复 + sanitize_error 一致性 — cargo build/test/fmt/clippy 全通过，6/6 CI 通过
+- 修复结果: 无（无可操作 issue）
 - 审核结果:
-  - PR #663 — 审核通过，已合并（squash）
-  - PR #646 (#597 CI WinUI 测试) — 继续等待
-- CI 状态: 本地 381 tests 全通过 (358+10+13), 0 clippy warnings, cargo build 成功
-- 项目状态: **1 open issue (#597), 1 open PR (#646), 269 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
-- 代码审查: 深度审查 10 个模块 (~8K行)，覆盖 Rust 后端全部核心文件 + C# 前端关键模块 + 两个二进制入口点。发现 3 个可操作问题并全部修复。ai.rs 和 prompting.rs 安全实践优秀，crypto.rs 实现正确，C# 前端线程安全到位。
+  - PR #646 (#597 CI WinUI 测试) — 继续等待，5/6 CI 通过 (winui-build pending)
+- CI 状态: PR #646 CI 5/6 通过 (cargo audit/fmt/test/clippy + linux-cli-build pass, winui-build pending)
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 269 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 6 个核心模块 (~16K行)，覆盖 storage.rs 全文 (4998行) + models.rs 全文 (987行) + lib.rs 全文 (3068行) + BackendClient.cs 全文 (677行) + MainWindow.xaml.cs (3655行) + NotesView.xaml.cs 全文 (354行)。所有安全防护、线程安全、错误处理、资源清理均正确。代码库处于「零实质缺陷」状态。

@@ -2325,7 +2325,10 @@ mod tests {
     fn sanitize_redacts_x_api_key_header_case_insensitive() {
         let msg = "Error: X-Api-Key: my-custom-provider-key-abcdefghij";
         let sanitized = sanitize_error(msg);
-        assert!(sanitized.contains("x-api-key: [REDACTED]") || sanitized.contains("X-Api-Key: [REDACTED]"));
+        assert!(
+            sanitized.contains("x-api-key: [REDACTED]")
+                || sanitized.contains("X-Api-Key: [REDACTED]")
+        );
         assert!(!sanitized.contains("my-custom-provider-key-abcdefghij"));
     }
 

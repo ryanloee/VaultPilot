@@ -220,6 +220,10 @@ public sealed partial class SettingsDialog : ContentDialog
             {
                 validationErrors.Add("请求超时必须是大于 0 的数字。");
             }
+            else if (timeoutMs > 300_000)
+            {
+                validationErrors.Add("请求超时不能超过 300,000 毫秒 (5 分钟)。");
+            }
 
             ulong? contextWindowTokens = null;
             if (!string.IsNullOrWhiteSpace(ContextWindowBox.Text))
@@ -228,10 +232,24 @@ public sealed partial class SettingsDialog : ContentDialog
                 {
                     validationErrors.Add("上下文窗口 Token 数必须是数字。");
                 }
+                else if (parsedContextWindow > 2_000_000)
+                {
+                    validationErrors.Add("上下文窗口 Token 数不能超过 2,000,000。");
+                }
                 else
                 {
                     contextWindowTokens = parsedContextWindow;
                 }
+            }
+
+            ulong autoWakeInterval;
+            if (!ulong.TryParse(AutoWakeIntervalBox.Text?.Trim() ?? "30", out autoWakeInterval) || autoWakeInterval == 0)
+            {
+                autoWakeInterval = 30;
+            }
+            else if (autoWakeInterval > 1440)
+            {
+                validationErrors.Add("自动唤醒间隔不能超过 1,440 分钟 (24 小时)。");
             }
 
             if (validationErrors.Count > 0)
@@ -243,11 +261,6 @@ public sealed partial class SettingsDialog : ContentDialog
             }
 
             ErrorInfoBar.IsOpen = false;
-
-            if (!ulong.TryParse(AutoWakeIntervalBox.Text?.Trim() ?? "30", out var autoWakeInterval) || autoWakeInterval == 0)
-            {
-                autoWakeInterval = 30;
-            }
 
             var autoWakeModel = (AutoWakeModelBox.SelectedItem as string ?? AutoWakeModelBox.Text ?? string.Empty).Trim();
 

@@ -627,7 +627,7 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var launched = Process.Start(new ProcessStartInfo
+            using var launched = Process.Start(new ProcessStartInfo
             {
                 FileName = vaultDir,
                 UseShellExecute = true,

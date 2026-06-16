@@ -233,6 +233,10 @@ public sealed partial class NotesView : UserControl
 
             // Remove from local list and refresh
             _allNotes = _allNotes.Where(n => n.Id != note.Id).ToArray();
+            if (_allNotesBeforeSearch is not null)
+            {
+                _allNotesBeforeSearch = _allNotesBeforeSearch.Where(n => n.Id != note.Id).ToArray();
+            }
             _selectedNote = null;
             DeleteNoteButton.IsEnabled = false;
             ApplyFilter();

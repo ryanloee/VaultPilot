@@ -44,7 +44,14 @@ public sealed class BackendClient : IAsyncDisposable
     private volatile bool _degradedMode;
     private int _healthCheckInProgress;
 
-    public bool IsConnected => Volatile.Read(ref _process) is { HasExited: false };
+    public bool IsConnected
+    {
+        get
+        {
+            try { return Volatile.Read(ref _process) is { HasExited: false }; }
+            catch { return false; }
+        }
+    }
     public event Action<AgentStatusEvent>? AgentStatusReceived;
     public event Action<bool>? ConnectionStateChanged;
 

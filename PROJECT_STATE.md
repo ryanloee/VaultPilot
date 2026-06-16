@@ -563,3 +563,25 @@
 - 审核结果: PR #678 和 #679 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 276 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 storage.rs (4998行) + MainWindow.xaml.cs (3655行) = 8653行。发现 1 MEDIUM + 2 LOW severity issues 并全部修复。
+- #680: SettingsDialog.xaml 缺少 AutomationProperties — 15+ 控件屏幕阅读器不可识别 (PR #685 已合并)
+- #681: ci.yml 缺少 permissions: contents: read — 默认宽泛权限增加攻击面 (PR #683 已合并)
+- #682: MainWindow LoadingOverlay 硬编码 #80000000 — 高对比度主题下不可见 (PR #684 已合并)
+
+## 本轮循环状态 (循环#161)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#161
+- 本轮时间: 2026-06-17
+- 审查模块: XAML 全部 4 文件 (MainWindow.xaml, NotesView.xaml, SettingsDialog.xaml, App.xaml), CI/CD pipeline (.github/workflows), Cargo.toml, config/, test coverage
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #680 BUG (SettingsDialog AutomationProperties), #681 SECURITY (CI permissions), #682 BUG (LoadingOverlay 硬编码颜色)
+  - XAML: 零 x:Uid 本地化 (~70+ 硬编码中文字符串), SettingsDialog 15+ 控件缺少 AutomationProperties, LoadingOverlay #80000000 硬编码
+  - CI: ci.yml 缺少 permissions 声明 (linux-cli.yml 和 windows-installers.yml 已有)
+  - Test coverage: 374 Rust tests (storage:128, lib:113, ai:46), C# 测试项目已建立
+  - Cargo.toml: 无废弃依赖, 版本合理
+- 修复结果:
+  - #680 → PR #685 已合并 (CI 6/6 通过): 15+ 控件添加 AutomationProperties.Name + HelpText
+  - #681 → PR #683 已合并 (CI 6/6 通过): permissions: contents: read
+  - #682 → PR #684 已合并 (CI 6/6 通过): OverlayBackgroundBrush ThemeResource
+- 审核结果: PR #683, #684, #685 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 279 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 XAML 4 文件 (778行) + CI 配置 (155行) + Cargo.toml + 测试覆盖。XAML accessibility 和 theming 改进。CI 安全加固。

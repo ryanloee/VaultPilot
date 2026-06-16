@@ -119,6 +119,10 @@ public sealed class BackendClient : IAsyncDisposable
         {
             Trace.TraceError($"StartProcess pump setup error: {ex}");
         }
+        catch
+        {
+            // Shutting down — swallow to prevent async void crash when _isDisposed is 1
+        }
     }
 
     private void StartHealthCheck()

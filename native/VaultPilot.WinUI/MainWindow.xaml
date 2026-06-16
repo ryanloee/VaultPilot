@@ -305,7 +305,7 @@
         <Grid
             x:Name="LoadingOverlay"
             Grid.RowSpan="2"
-            Background="#80000000"
+            Background="{ThemeResource OverlayBackgroundBrush}"
             Visibility="Collapsed"
             Canvas.ZIndex="100">
             <StackPanel

@@ -26,7 +26,7 @@ impl ProviderType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
     #[serde(default)]
@@ -72,6 +72,20 @@ impl Default for ProviderConfig {
             max_output_tokens: None,
             provider_type: None,
         }
+    }
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("api_key", &mask_secret(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("request_timeout_ms", &self.request_timeout_ms)
+            .field("context_window_tokens", &self.context_window_tokens)
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("provider_type", &self.provider_type)
+            .finish()
     }
 }
 

@@ -260,7 +260,10 @@
 - #653: SendAsync _writeLock.Release() 在 finally 块中可抛出 ObjectDisposedException — 添加 try-catch 保护 (PR #654 已合并)
 - #655: query_filtered_note_metas LIKE 通配符未转义 — 应用 escape_like_pattern() + ESCAPE 子句 (PR #658 已合并)
 - #656: SearchResult.total 返回截断后计数 — 移至 truncate() 前计算 (PR #658 已合并)
-- #657: StartProcess() async void re-throw 崩溃 — 替换为 Trace.TraceError + ConnectionStateChanged + return (PR #659 已合并)
+- #657: StartProcess async void re-throw 崩溃 — Trace.TraceError + ConnectionStateChanged + return (PR #659 已合并)
+- #660: constant_time_eq 256 字节截断 — subtle::ConstantTimeEq 直接比较字节切片 (PR #663 已合并)
+- #661: agent handler 错误路径 sanitize_error 一致性 (PR #663 已合并)
+- #662: CLI exit_error sanitize_error 绕过 (PR #663 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -476,33 +479,31 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#152
+- 循环编号: 循环#153
 - 本轮时间: 2026-06-16
-- 审查模块: storage.rs (4993行), BackendClient.cs (673行), MainWindow.xaml.cs (3655行), NotesView.xaml.cs (354行), NotesView.xaml
+- 审查模块: ai.rs (2245行), prompting.rs (871行), search_rules.rs (439行), crypto.rs (318行), App.xaml.cs (176行), SettingsDialog.xaml.cs (312行), MainWindow.Updates.cs (130行), AppSettings.cs (24行), vaultpilot-agent.rs (666行), vaultpilot-cli.rs (2954行)
 - 讨论阶段发现:
-  - 创建 3 个 issue — #655 (BUG MEDIUM), #656 (BUG MEDIUM), #657 (BUG HIGH)
-  - Rust 后端 (storage.rs):
-    - #655 BUG MEDIUM: query_filtered_note_metas LIKE 通配符未转义 — tag/keyword 搜索中 % 和 _ 匹配意外行
-    - #656 BUG MEDIUM: SearchResult.total 返回截断后计数 — 分页无法检测更多结果
-    - LOW: 解密失败回退为原始密文 — 下游发送 ENC:v1:... 给 LLM provider
-    - MINOR: ensure_schema 重复设置 PRAGMA — 连接池 with_init 已设置
-    - MINOR: export_all_notes 使用 fs::write 非 atomic_write
-  - C# 前端 (BackendClient/MainWindow/NotesView):
-    - #657 BUG HIGH: StartProcess() async void re-throw 崩溃 — Process.Start 失败时 app crash
-    - MEDIUM: _reconnectLock.WaitAsync 缺少 ODE guard — 与 _writeLock 模式不一致
-    - MEDIUM: NotesView ProgressRing RowSpan=2 不覆盖内容区域
-    - MEDIUM: NotesView ApplyFilter 替换 ItemsSource 导致选中笔记丢失
-    - MEDIUM: NotesView 删除笔记期间搜索双重过滤
-    - LOW: PumpStdoutAsync 停止时 stale process 引用导致异常抖动
-    - LOW: NotesView fire-and-forget LoadNoteDetailAsync 丢弃 Task
-    - LOW: NotesView 缺少 Unloaded handler — CTS 对象泄漏
+  - 创建 3 个 issue — #660 (SECURITY MEDIUM), #661 (BUG LOW-MEDIUM), #662 (BUG LOW)
+  - Rust 后端 (ai.rs, prompting.rs, search_rules.rs, crypto.rs):
+    - ai.rs: 结构良好 — SSRF 防护、DNS pinning、重试逻辑、sanitize_error 均正确
+    - prompting.rs: 优秀的 prompt 注入防御（XML 转义 + 分隔符 + SECURITY INSTRUCTIONS）
+    - search_rules.rs: ASCII 全词匹配、CJK 子串匹配逻辑正确
+    - crypto.rs: PBKDF2-HMAC-SHA256 600k + AES-256-GCM + machine_salt (Windows MachineGuid) 均正确
+    - 无新发现
+  - C# 前端 (App.xaml.cs, SettingsDialog.xaml.cs, MainWindow.Updates.cs, Models):
+    - 所有 async void handler 有 try-catch，Interlocked guard，资源清理正确
+    - 无新发现
+  - 二进制入口点 (vaultpilot-agent.rs, vaultpilot-cli.rs):
+    - #660 SECURITY MEDIUM: constant_time_eq 256 字节截断 — token > 256 字节时误报相等
+    - #661 BUG LOW-MEDIUM: agent handler 5 处错误路径绕过 sanitize_error
+    - #662 BUG LOW: CLI exit_error 绕过 sanitize_error
+    - INFO: trim_start_matches → strip_prefix (代码质量)
+    - INFO: Rate limiter 无 key 上限 (低风险)
 - 修复结果: 3/3 全部完成
-  - PR #658 (#655 + #656): LIKE 通配符转义 + total 计算修复 — cargo build/test/fmt/clippy 全通过，6/6 CI 通过
-  - PR #659 (#657): StartProcess async void 优雅错误处理 — cargo build/test/fmt/clippy 全通过，6/6 CI 通过
+  - PR #663 (#660 + #661 + #662): constant_time_eq 修复 + sanitize_error 一致性 — cargo build/test/fmt/clippy 全通过，6/6 CI 通过
 - 审核结果:
-  - PR #658 — 审核通过，已合并（squash）
-  - PR #659 — 审核通过，已合并（squash）
-  - PR #646 (#597 CI WinUI 测试) — 5/6 CI 通过，winui-build 仍排队，继续等待
-- CI 状态: 本地 370 tests 全通过 (358+12), 0 clippy warnings, cargo build 成功
-- 项目状态: **1 open issue (#597), 1 open PR (#646), 268 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
-- 代码审查: 深度审查 5 个核心模块 (~10K行)，覆盖 Rust storage.rs + C# BackendClient/MainWindow/NotesView。发现 3 个可操作 BUG 并全部修复。代码库持续保持高质量 — 370 tests 全通过, 0 clippy warnings。
+  - PR #663 — 审核通过，已合并（squash）
+  - PR #646 (#597 CI WinUI 测试) — 继续等待
+- CI 状态: 本地 381 tests 全通过 (358+10+13), 0 clippy warnings, cargo build 成功
+- 项目状态: **1 open issue (#597), 1 open PR (#646), 269 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 10 个模块 (~8K行)，覆盖 Rust 后端全部核心文件 + C# 前端关键模块 + 两个二进制入口点。发现 3 个可操作问题并全部修复。ai.rs 和 prompting.rs 安全实践优秀，crypto.rs 实现正确，C# 前端线程安全到位。

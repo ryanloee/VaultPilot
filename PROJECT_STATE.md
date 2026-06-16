@@ -267,6 +267,11 @@
 - #664: NotesView 搜索-清除竞态 — await 后验证 _searchQuery 未变 (PR #667 已合并)
 - #665: SettingsDialog 数值字段上界校验 — timeoutMs/contextWindowTokens/autoWakeInterval (PR #668 已合并)
 - #666: CI workflow concurrency 控制 — PR 推送取消旧运行 (PR #669 已合并)
+- #670: ai.rs error 泄露 — sanitize_error 6 个错误路径 (PR #673 已合并)
+- #671: ProviderConfig Debug 泄露 api_key — 手动 Debug 实现掩码 (PR #674 已合并)
+- #675: export note IDs < 8 字符 panic — safe slicing .min(8) (PR #678 已合并)
+- #676: Send button TOCTOU — Interlocked guard 防止并发 AI 请求 (PR #679 已合并)
+- #677: _isStopping 缺少 volatile — 跨线程可见性 (PR #679 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -539,3 +544,22 @@
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 274 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 ~3500行 Rust + ~1000行 C# + CI 配置。所有 .unwrap()/.expect() 均在测试代码中。Cargo.toml 依赖版本合理。CI workflow concurrency 控制正常。
   - 正面发现: 381+ Rust 测试全通过, 0 unsafe, 0 生产 unwrap, 全部 async void 有 try-catch, SSRF/路径穿越/prompt 注入/加密存储防护完整
+
+## 本轮循环状态 (循环#160)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#160
+- 本轮时间: 2026-06-17
+- 审查模块: storage.rs (4998行), MainWindow.xaml.cs (3655行)
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #675 BUG (export 短 ID panic), #676 BUG (Send button TOCTOU), #677 BUG (_isStopping 缺少 volatile)
+  - storage.rs: `[..8]` 字节切片在 ID 短于 8 字符时 panic — 用户可通过 frontmatter id 字段引入短 ID
+  - MainWindow.xaml.cs: SendButton.IsEnabled TOCTOU — 两次快速点击可通过检查导致并发 AI 请求
+  - MainWindow.xaml.cs: _isStopping 缺少 volatile — 与 _autoWakeInProgress 不一致
+  - storage.rs 正面发现: SQL 全参数化 ✅, 路径穿越防护 ✅, 0 unsafe ✅, atomic_write 正确 ✅, LIKE 转义 ✅
+  - MainWindow.xaml.cs 正面发现: 22/22 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked 竞态保护 ✅
+- 修复结果:
+  - #675 → PR #678 已合并 (CI 6/6 通过): safe slicing `.min(8)` + 回归测试
+  - #676 + #677 → PR #679 已合并 (CI 6/6 通过): Interlocked guard + volatile
+- 审核结果: PR #678 和 #679 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 276 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 storage.rs (4998行) + MainWindow.xaml.cs (3655行) = 8653行。发现 1 MEDIUM + 2 LOW severity issues 并全部修复。

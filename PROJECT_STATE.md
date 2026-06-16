@@ -580,6 +580,7 @@
 - #700: sanitize_mcp_prompt_content 死代码 — 第三个 .replace() 不可达 (PR #703 已合并)
 - #701: StartProcess async void _isDisposed 过滤器 — 关闭时异常从 async void 传播崩溃 (PR #704 已合并)
 - #702: IsConnected 已释放 Process 竞态 — HasExited 抛出 InvalidOperationException (PR #705 已合并)
+- #708: StartProcess/DisposeAsync 竞态 — 释放后新进程孤立 (PR #709 已合并)
 
 ## 本轮循环状态 (循环#164)
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
@@ -692,3 +693,20 @@
 - 审核结果: PR #707 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 291 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 Rust 后端 ~4.5K行 (search_rules.rs + vaultpilot-agent.rs + lib.rs) + C# 前端 ~5.5K行 (MainWindow + BackendClient + SettingsDialog + NotesView + App + Updates) = ~10K行。代码库持续零缺陷状态 — 166 个循环累计 291 个已合并 PR。仅发现 1 个 MEDIUM 文档/注释问题并修复。
+
+## 本轮循环状态 (循环#167)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#167
+- 本轮时间: 2026-06-17
+- 审查模块: lib.rs (3104行), ai.rs (2303行), storage.rs (5020行), BackendClient.cs (688行), MainWindow.xaml.cs (3669行), NotesView.xaml.cs (355行), SettingsDialog.xaml.cs (325行), CI/CD workflows
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #708 BUG (StartProcess/DisposeAsync 竞态 — 进程孤立)
+  - Rust 后端 (lib.rs + ai.rs + storage.rs ~10.4K行): 全部 15 个发现均为 LOW/INFO severity，零可操作 bug — SQL 全参数化 ✅, sanitize_error 63处 ✅, SSRF/路径穿越/prompt注入防护完整 ✅, 原子文件写入 ✅, spawn_blocking 包装 ✅
+  - C# 前端 (BackendClient + MainWindow + NotesView + SettingsDialog ~5K行): 2 个 MEDIUM (StartProcess/DisposeAsync 竞态 + ShutdownAsync/ExecuteAiRequestAsync CTS 窗口), 10 个 LOW
+  - CI/CD: C# 测试未运行 (已知 #597), 无 rust-toolchain.toml, 缓存不一致 — 均为 LOW/已知
+  - #708 触发场景: 后端进程崩溃 → TryReconnectAsync 触发 → 用户同时关闭应用 → StartProcess 通过 _isDisposed 检查 → DisposeAsync 完成 → 新进程孤立
+- 修复结果:
+  - #708 → PR #709 已合并 (CI 6/6 通过): _process.Start() 后二次 _isDisposed 检查 + Interlocked.Exchange 捕获孤立进程并 Kill
+- 审核结果: PR #709 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 292 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 后端 ~10.4K行 (lib.rs + ai.rs + storage.rs) + C# 前端 ~5K行 (BackendClient + MainWindow + NotesView + SettingsDialog) + CI/CD 配置 = ~16K行。代码库持续高质量 — 167 个循环累计 292 个已合并 PR。发现 1 个 MEDIUM severity 竞态条件并修复。

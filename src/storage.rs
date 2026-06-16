@@ -4993,9 +4993,9 @@ mod tests {
         // current_session_id should have been updated to a surviving session
         assert!(normalized.current_session_id != "old-current");
         assert!(normalized
-                .sessions
-                .iter()
-                .any(|s| s.id == normalized.current_session_id));
+            .sessions
+            .iter()
+            .any(|s| s.id == normalized.current_session_id));
     }
 
     #[test]

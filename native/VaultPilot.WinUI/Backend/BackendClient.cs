@@ -66,7 +66,9 @@ public sealed class BackendClient : IAsyncDisposable
         if (Volatile.Read(ref _isDisposed) != 0) return;
         if (string.IsNullOrWhiteSpace(_executablePath))
         {
-            throw new InvalidOperationException("Rust 后端路径尚未设置。");
+            Trace.TraceError("StartProcess: Rust backend path not set.");
+            ConnectionStateChanged?.Invoke(false);
+            return;
         }
 
         _process = new Process
@@ -89,11 +91,13 @@ public sealed class BackendClient : IAsyncDisposable
         {
             _process.Start();
         }
-        catch
+        catch (Exception ex)
         {
             _process.Dispose();
             _process = null!;
-            throw;
+            Trace.TraceError($"StartProcess: process failed to start: {ex}");
+            ConnectionStateChanged?.Invoke(false);
+            return;
         }
 
         try

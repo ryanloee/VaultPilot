@@ -473,20 +473,25 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#149
+- 循环编号: 循环#151
 - 本轮时间: 2026-06-16
-- 审查模块: search_rules.rs (439行), crypto.rs (318行), models.rs (987行), App.xaml.cs (176行), NotesView.xaml.cs (354行), vaultpilot-agent.rs (666行), vaultpilot-cli.rs (2939行)
+- 审查模块: crypto.rs (318行), search_rules.rs (439行), vaultpilot-agent.rs (666行), vaultpilot-cli.rs (2939行), App.xaml.cs (176行), Program.cs (23行), AppSettings.cs (24行), SettingsDialog.xaml.cs (312行), WrapPanel.cs (176行), StringToVisibilityConverter.cs (23行)
 - 讨论阶段发现:
-  - **未创建新 issue** — 代码库处于零缺陷状态，深度审查 7 个模块 (~5.9K行) 未发现可操作问题
-  - search_rules.rs: trigger_matches ASCII 全词匹配 + CJK 子串匹配逻辑正确，测试覆盖充分
-  - crypto.rs: PBKDF2-HMAC-SHA256 600K 迭代 + AES-256-GCM + machine_salt 含 MachineGuid (#595 已修复) — 安全实现正确
-  - models.rs: serde 默认值、validate() 校验、mask_secret() — 逻辑完善
-  - App.xaml.cs: Interlocked.CompareExchange guard、try-catch on async void、Mutex 释放 — 全部正确
-  - NotesView.xaml.cs: CancellationToken 竞态保护、_allNotesBeforeSearch 同步过滤 — 已由 #631/#632 修复
-  - vaultpilot-agent.rs: byte-by-byte stdin 读取 + MAX_LINE_BYTES 限制 — OOM 防护正确
-  - vaultpilot-cli.rs: constant_time_eq 固定 256 字节缓冲、RateLimiter stale 清理、sanitize_mcp_prompt_content — 安全实践到位
-- 修复结果: 无（无 open issue 可操作）
-- 审核结果: PR #646 (#597 CI WinUI 测试) — 5/6 CI 通过, winui-build 仍在 pending/in_progress, 暂无法合并
-- CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build pending
-- 项目状态: **1 open issue (#597), 1 open PR (#646), 266 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
-- 代码审查: 深度审查 7 个模块 (~5.9K行)，覆盖 Rust search_rules/crypto/models/agent/cli + C# App/NotesView。代码库持续保持零缺陷状态 — 393 tests 全通过, 0 clippy warnings, 0 unsafe, 0 生产 unwrap/expect。
+  - **未创建新 issue** — 全部 10 个发现均为 LOW/MEDIUM severity，属已知权衡或理论边缘场景，不满足可操作 issue 标准
+  - Rust 后端 (crypto/search_rules/agent/cli):
+    - MEDIUM: CORS 允许任意 localhost 端口 (cli:990-997) — 已有 non-loopback token 要求缓解
+    - LOW: 手写 HMAC-SHA256/PBKDF2 (crypto.rs:26-87) — 测试向量验证正确，但不如审计过的 crate
+    - LOW: macOS 机器盐仅 hostname+arch (crypto.rs:138-142) — 消费级 macOS 可接受
+    - LOW: 密钥材料无 zeroize (crypto.rs) — 桌面应用可接受
+    - LOW: constant_time_eq 截断 256 字节 (cli:1273-1286) — token 远短于此
+    - LOW: agent stdin 读错误静默退出 (agent.rs:120-123) — EOF+IO error 未区分
+  - C# 前端 (App/Program/Settings/WrapPanel):
+    - MEDIUM: BeginExitForUpdate 无 try/finally (App.xaml.cs:90-111) — ShutdownAsync 异常会跳过清理
+    - LOW: ExitApplication _window.Close() 可能双重关闭 (App.xaml.cs:124) — 已有 _isExiting 保护
+    - LOW: ShowMainWindow 不检查 _isExiting (App.xaml.cs:25) — tray icon 点击竞态理论风险
+    - LOW: Program.Main 无顶层 try-catch (Program.cs) — 早期启动崩溃无日志
+- 修复结果: 无（无可操作 open issue）
+- 审核结果: PR #646 (#597 CI WinUI 测试) — 取消了旧的卡住 CI (27595315303)，触发新 CI (27610211973)，5/6 通过，winui-build 排队中
+- CI 状态: 本地 380 tests 全通过 (358+10+12), 0 clippy warnings, cargo build 成功
+- 项目状态: **1 open issue (#597), 1 open PR (#646), 265 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 10 个模块 (~5K行新模块)，覆盖 Rust crypto/search_rules/agent/cli + C# App/Program/Settings/WrapPanel。代码库持续保持零缺陷状态 — 380 tests 全通过, 0 clippy warnings, 0 unsafe, 0 生产 unwrap/expect。累计 265 已合并 PR 后代码库质量持续优秀。

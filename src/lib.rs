@@ -1701,6 +1701,7 @@ mod tests {
 
         let extracted = extract_explicit_local_path(&question).expect("path");
         assert_eq!(Path::new(&extracted), path.as_path());
+        let _ = fs::remove_dir_all(&path);
     }
 
     // ── 2.1 dangerous command detection ──

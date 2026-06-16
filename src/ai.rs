@@ -1955,17 +1955,20 @@ mod tests {
 
     #[test]
     fn parses_list_notes_tool_call() {
-        /*
-        let tool = parse_tool_call(
-            "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
-            "资料库里有什么",
-        )
-        .expect("tool");
-        assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
-        */
+        // English input
         let tool = parse_tool_call(
             "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
             "list notes",
+        )
+        .expect("tool");
+        assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
+    }
+
+    #[test]
+    fn parses_list_notes_tool_call_cjk() {
+        let tool = parse_tool_call(
+            "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
+            "资料库里有什么",
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
@@ -2182,24 +2185,34 @@ mod tests {
         assert!(validate_base_url("file:///etc/passwd").await.is_err());
     }
 
-    #[tokio::test]
-    async fn validate_base_url_localhost_env_guard() {
+    #[test]
+    fn validate_base_url_localhost_env_guard() {
         // Combines "rejects localhost without env" and "allows with env" into one
         // test to avoid parallel env-var race conditions (flaky in CI).
+        // Uses a dedicated runtime inside each guard scope so the Mutex guard
+        // is held across the async call, preventing parallel tests from
+        // mutating the env var between set/remove and the read inside
+        // validate_base_url.
 
         // Without env var → reject localhost
         {
             let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            assert!(rt
+                .block_on(validate_base_url("http://localhost:8080"))
+                .is_err());
         }
-        assert!(validate_base_url("http://localhost:8080").await.is_err());
 
         // With env var → allow localhost
         {
             let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            assert!(rt
+                .block_on(validate_base_url("http://localhost:8080"))
+                .is_ok());
         }
-        assert!(validate_base_url("http://localhost:8080").await.is_ok());
 
         // Cleanup
         {

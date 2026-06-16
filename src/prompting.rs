@@ -510,13 +510,7 @@ fn render_history(history: &[ConversationTurn]) -> String {
 
     history
         .iter()
-        .map(|turn| {
-            format!(
-                "{}: {}",
-                escape_xml_close_tags(&turn.role),
-                escape_xml_close_tags(&turn.text)
-            )
-        })
+        .map(|turn| format!("{}: {}", turn.role, turn.text))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -546,13 +540,13 @@ fn render_notes(docs: &[NoteDocument]) -> String {
             };
             format!(
                 "NOTE_ID: {}\nTITLE: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\n{}CONTENT:\n{}\n",
-                escape_xml_close_tags(&doc.meta.id),
-                escape_xml_close_tags(&doc.meta.title),
-                escape_xml_close_tags(&doc.meta.path),
-                escape_xml_close_tags(&doc.meta.tags.join(", ")),
-                escape_xml_close_tags(&doc.meta.keywords.join(", ")),
+                doc.meta.id,
+                doc.meta.title,
+                doc.meta.path,
+                doc.meta.tags.join(", "),
+                doc.meta.keywords.join(", "),
                 snippet_section,
-                escape_xml_close_tags(&doc.body)
+                doc.body
             )
         })
         .collect::<Vec<_>>()
@@ -569,11 +563,11 @@ fn render_candidate_notes(candidates: &[NoteMeta]) -> String {
         .map(|note| {
             format!(
                 "NOTE_ID: {}\nTITLE: {}\nSUMMARY: {}\nKEYWORDS: {}\nPATH: {}\n",
-                escape_xml_close_tags(&note.id),
-                escape_xml_close_tags(&note.title),
-                escape_xml_close_tags(&note.summary),
-                escape_xml_close_tags(&note.keywords.join(", ")),
-                escape_xml_close_tags(&note.path)
+                note.id,
+                note.title,
+                note.summary,
+                note.keywords.join(", "),
+                note.path
             )
         })
         .collect::<Vec<_>>()
@@ -867,5 +861,61 @@ mod tests {
         assert!(start < end);
         let wrapped_content = &prompt[start..end + "</user_input>".len()];
         assert!(wrapped_content.contains(malicious));
+    }
+
+    #[test]
+    fn render_history_no_double_escaping() {
+        // Regression: render_history should NOT escape internally;
+        // sanitize_history handles escaping. Double escaping would turn
+        // </note> → <//note> → <////note>.
+        let turns = vec![ConversationTurn {
+            role: "user".to_string(),
+            text: "see </note> reference".to_string(),
+        }];
+        let rendered = render_history(&turns);
+        // render_history should pass through raw text
+        assert!(
+            rendered.contains("</note>"),
+            "render_history should not escape"
+        );
+
+        // sanitize_history should escape exactly once
+        let sanitized = sanitize_history(&rendered);
+        assert!(
+            sanitized.contains("<//note>"),
+            "sanitize_history should escape once"
+        );
+        assert!(
+            !sanitized.contains("<////note>"),
+            "should not double-escape"
+        );
+    }
+
+    #[test]
+    fn render_notes_no_double_escaping() {
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                id: "n1".to_string(),
+                title: "Test".to_string(),
+                path: "/vault/test.md".to_string(),
+                tags: vec![],
+                keywords: vec![],
+                ..Default::default()
+            },
+            body: "body with </content> tag".to_string(),
+            search_snippet: None,
+        }];
+        let rendered = render_notes(&docs);
+        assert!(
+            rendered.contains("</content>"),
+            "render_notes should not escape"
+        );
+
+        let sanitized = sanitize_note_content(&rendered);
+        assert!(sanitized.contains("<//content>"), "should escape once");
+        assert!(
+            !sanitized.contains("<////content>"),
+            "should not double-escape"
+        );
     }
 }

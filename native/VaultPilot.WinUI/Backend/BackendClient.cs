@@ -44,7 +44,7 @@ public sealed class BackendClient : IAsyncDisposable
     private volatile bool _degradedMode;
     private int _healthCheckInProgress;
 
-    public bool IsConnected => _process is { HasExited: false };
+    public bool IsConnected => Volatile.Read(ref _process) is { HasExited: false };
     public event Action<AgentStatusEvent>? AgentStatusReceived;
     public event Action<bool>? ConnectionStateChanged;
 
@@ -71,7 +71,7 @@ public sealed class BackendClient : IAsyncDisposable
             return;
         }
 
-        _process = new Process
+        Volatile.Write(ref _process, new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -85,7 +85,7 @@ public sealed class BackendClient : IAsyncDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true
             }
-        };
+        });
 
         try
         {
@@ -94,7 +94,7 @@ public sealed class BackendClient : IAsyncDisposable
         catch (Exception ex)
         {
             _process.Dispose();
-            _process = null!;
+            Volatile.Write(ref _process, null);
             Trace.TraceError($"StartProcess: process failed to start: {ex}");
             ConnectionStateChanged?.Invoke(false);
             return;
@@ -344,7 +344,7 @@ public sealed class BackendClient : IAsyncDisposable
 
             // Verify process actually started
             await Task.Delay(500, cancellationToken);
-            return _process is { HasExited: false };
+            return Volatile.Read(ref _process) is { HasExited: false };
         }
         catch (OperationCanceledException)
         {
@@ -373,16 +373,16 @@ public sealed class BackendClient : IAsyncDisposable
         if (Volatile.Read(ref _isDisposed) != 0)
             throw new InvalidOperationException("Backend client disposed.");
 
-        if (!IsConnected || _process?.StandardInput is null || _process.StandardOutput is null)
+        if (!IsConnected || Volatile.Read(ref _process)?.StandardInput is null || Volatile.Read(ref _process)?.StandardOutput is null)
         {
             var reconnected = await EnsureConnectedAsync(cancellationToken);
-            if (!reconnected || _process?.StandardInput is null || _process.StandardOutput is null)
+            if (!reconnected || Volatile.Read(ref _process)?.StandardInput is null || Volatile.Read(ref _process)?.StandardOutput is null)
             {
                 throw new InvalidOperationException("Rust 后端尚未连接。");
             }
         }
 
-        var process = _process;
+        var process = Volatile.Read(ref _process);
         if (process is null)
         {
             throw new InvalidOperationException("Rust 后端尚未连接。");
@@ -535,7 +535,7 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async Task PumpStdoutAsync(CancellationToken token)
     {
-        var process = _process;
+        var process = Volatile.Read(ref _process);
         if (process?.StandardOutput is null)
         {
             return;
@@ -641,7 +641,7 @@ public sealed class BackendClient : IAsyncDisposable
 
     private async Task PumpStderrAsync(CancellationToken token)
     {
-        var process = _process;
+        var process = Volatile.Read(ref _process);
         if (process?.StandardError is null)
         {
             return;

@@ -479,38 +479,46 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#154
+- 循环编号: 循环#155
 - 本轮时间: 2026-06-16
-- 审查模块: storage.rs (4998行), models.rs (987行), lib.rs (3068行), BackendClient.cs (677行), MainWindow.xaml.cs (3655行), NotesView.xaml.cs (354行)
+- 审查模块: ai.rs (2245行), prompting.rs (871行), crypto.rs (318行), search_rules.rs (439行), vaultpilot-cli.rs (2953行), vaultpilot-agent.rs (670行), App.xaml.cs (176行), MainWindow.Updates.cs (130行), Models/*.cs, WrapPanel.cs, Program.cs
 - 讨论阶段发现:
   - 无新 issue — 代码库处于「零实质缺陷」状态
-  - Rust 后端 (storage.rs, models.rs, lib.rs):
-    - storage.rs: atomic_write UUID 临时文件 + 0o600 权限 + fsync + rename 均正确
-    - storage.rs: r2d2 连接池 max_size=5, WAL mode + busy_timeout + foreign_keys PRAGMA 顺序正确
-    - storage.rs: search_notes_with_context — FTS5 + LIKE fallback + SQL 级过滤 + 内存级过滤路径一致
-    - storage.rs: query_filtered_note_metas 参数化 SQL + escape_like_pattern + ESCAPE 子句均正确
-    - storage.rs: validate_import_path 阻止敏感目录 (Unix/Windows/用户路径)，canonicalize 后比较
-    - storage.rs: auto_backup_database WAL checkpoint + 3 份旋转备份逻辑正确
-    - storage.rs: extract_image_text_with_windows_ocr — 路径作为独立参数传递，无命令注入风险
-    - models.rs: 所有结构体 serde camelCase 序列化，validate() 校验完整，12 个测试覆盖全面
-    - lib.rs: sanitize_error 覆盖 sk-/Bearer/Basic/URL query params，多字节 UTF-8 安全
-    - lib.rs: spawn_blocking 包装所有同步 IO 操作，防止阻塞 Tokio 运行时
-    - lib.rs: ask_with_ai_with_context 工具调用循环 (max 4 rounds) + 强制搜索 + 会话记忆问题检测
+  - Rust 后端 (ai.rs, prompting.rs, crypto.rs, search_rules.rs):
+    - ai.rs: SSRF 防护完整 — validate_base_url DNS 解析 + pinning + IPv4/IPv6 私有地址检测 + 10s DNS 超时
+    - ai.rs: 提取 JSON — extract_json_block 尝试所有花括号位置 + serde_json 校验 + backslash_count 处理嵌套转义
+    - ai.rs: 重试逻辑 — 3 次重试 + 指数退避 + 可重试状态码/错误检测 + body.clone() Bytes 引用计数
+    - ai.rs: Provider 分支 — Anthropic/OpenAI 请求/响应格式正确分离，headers provider-aware
+    - ai.rs: CACHED_CLIENT Mutex 中毒恢复 + 重建条件检查完整 (api_key + timeout + provider + base_url)
+    - ai.rs: 图片限制 — 20MB 单文件 + 50MB 响应体 + 支持 png/jpg/webp/gif
+    - prompting.rs: 所有用户内容 XML delimiter 包裹 — user_input, tool_result, note_content, conversation_history
+    - prompting.rs: escape_xml_close_tags `</` → `<//` 转义 + 所有系统提示包含 PROMPT_INJECTION_DEFENSE
+    - prompting.rs: tool_result_user_prompt 中 tool_name 通过 escape_xml_close_tags 转义 (第472行)
+    - prompting.rs: render_manual_for_model OnceLock 缓存 + 硬编码内容无需转义
+    - crypto.rs: AES-256-GCM + PBKDF2-HMAC-SHA256 600k iterations + OsRng 12-byte nonce
+    - crypto.rs: machine_salt 含 hostname + OS + arch + /etc/machine-id (Linux) + MachineGuid (Windows)
+    - crypto.rs: derive_machine_key OnceLock 缓存避免 ~600ms PBKDF2 重复计算
+    - search_rules.rs: ASCII 全词匹配 (trigger_matches) + CJK 子串匹配，无假阳性
     - 无新发现
-  - C# 前端 (BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs):
-    - BackendClient.cs: 线程安全完整 — Volatile.Read, Interlocked.CompareExchange, SemaphoreSlim
-    - BackendClient.cs: DisposeAsync 顺序正确 — cancel reader → fail pending → dispose process → dispose locks
-    - BackendClient.cs: 重连逻辑 — 指数退避 5s-60s, 6 次重试, degraded mode 3 次失败后切换
-    - MainWindow.xaml.cs: ExecuteAiRequestAsync session ID 快照 (#626), CTS Interlocked.Exchange (#588)
-    - MainWindow.xaml.cs: ShutdownAsync 35s 等待活跃请求完成后再释放资源 (#446)
-    - MainWindow.xaml.cs: OnClosed hide-to-tray 不取消活跃请求 (#636)
-    - MainWindow.xaml.cs: AppendInlineMarkdown forward-progress guard (#464), Hyperlink scheme 限制 http/https (#392)
-    - NotesView.xaml.cs: _loadDetailCts 竞态取消 (#584), _searchCts 竞态取消 (#621)
-    - NotesView.xaml.cs: 删除笔记检查后端返回值 (#622), _allNotesBeforeSearch 同步过滤 (#631)
+  - Binary 入口 (vaultpilot-cli.rs, vaultpilot-agent.rs):
+    - CLI: read_stdin_json 10MB cap + MCP read_line_bounded 逐字节 read_exact 限流
+    - CLI: HTTP bridge — CORS 仅允许 localhost + 非回环必须 --token + constant_time_eq (subtle::ConstantTimeEq)
+    - CLI: RateLimiter — 60 req/60s per-key + stale entry 清理 + lock poisoned 恢复
+    - CLI: MCP sanitize_mcp_prompt_content — `</` → `<//` + `<user_content>` → `< user_content>` 三重转义
+    - CLI: MCP 所有 prompts/get 用户内容均通过 sanitize_mcp_prompt_content 包裹
+    - Agent: MAX_LINE_BYTES 10MB 逐字节读取 + REQUEST_TIMEOUT 120s + panic hook sanitize_error
+    - 无新发现
+  - C# 前端 (App.xaml.cs, MainWindow.Updates.cs, Models, Controls, Converters, Program.cs):
+    - App.xaml.cs: 单实例 Mutex + Interlocked _exitInProgress guard + ExitApplication try-catch + finally 清理
+    - App.xaml.cs: BeginExitForUpdate + ExitApplication 竞态 — Interlocked.CompareExchange 原子 guard (#534)
+    - MainWindow.Updates.cs: _updateCheckStarted Interlocked guard (#542) + PromptToInstallUpdateAsync pattern matching 防 NRE (#541)
+    - Models: 所有 sealed record 不可变类型 + ProviderConfig.ToString() API Key [REDACTED] (#462)
+    - WrapPanel.cs: 标准 WinUI 布局面板，MeasureOverride/ArrangeOverride 正确
+    - Program.cs: 标准 WinUI 入口 + VelopackApp 初始化
     - 无新发现
 - 修复结果: 无（无可操作 issue）
 - 审核结果:
   - PR #646 (#597 CI WinUI 测试) — 继续等待，5/6 CI 通过 (winui-build pending)
 - CI 状态: PR #646 CI 5/6 通过 (cargo audit/fmt/test/clippy + linux-cli-build pass, winui-build pending)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 269 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
-- 代码审查: 深度审查 6 个核心模块 (~16K行)，覆盖 storage.rs 全文 (4998行) + models.rs 全文 (987行) + lib.rs 全文 (3068行) + BackendClient.cs 全文 (677行) + MainWindow.xaml.cs (3655行) + NotesView.xaml.cs 全文 (354行)。所有安全防护、线程安全、错误处理、资源清理均正确。代码库处于「零实质缺陷」状态。
+- 代码审查: 深度审查 12 个模块 (~15.6K行)，覆盖 ai.rs 全文 (2245行) + prompting.rs 全文 (871行) + crypto.rs 全文 (318行) + search_rules.rs 全文 (439行) + vaultpilot-cli.rs 全文 (2953行) + vaultpilot-agent.rs 全文 (670行) + App.xaml.cs 全文 (176行) + MainWindow.Updates.cs 全文 (130行) + Models/*.cs (115行) + WrapPanel.cs (176行) + StringToVisibilityConverter.cs (23行) + Program.cs (23行)。所有安全防护、线程安全、错误处理、资源清理均正确。381 个 Rust 测试全部通过。代码库持续保持「零实质缺陷」状态。

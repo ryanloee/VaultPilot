@@ -613,10 +613,11 @@ pub fn search_notes_with_context(
         );
     }
 
+    let total = notes.len();
+
     // Trim to requested limit after filtering
     notes.truncate(limit);
 
-    let total = notes.len();
     Ok(SearchResult { notes, total })
 }
 
@@ -1927,8 +1928,9 @@ fn query_filtered_note_metas(
     for tag in &query.tags {
         let trimmed = tag.trim();
         if !trimmed.is_empty() {
-            conditions.push(format!("LOWER(tags) LIKE LOWER(?{param_idx})"));
-            params.push(Box::new(format!("%{trimmed}%")));
+            let escaped = escape_like_pattern(trimmed);
+            conditions.push(format!("LOWER(tags) LIKE LOWER(?{param_idx}) ESCAPE '\\'"));
+            params.push(Box::new(format!("%{escaped}%")));
             param_idx += 1;
         }
     }
@@ -1937,8 +1939,9 @@ fn query_filtered_note_metas(
     for kw in &query.keywords {
         let trimmed = kw.trim();
         if !trimmed.is_empty() {
-            conditions.push(format!("LOWER(keywords) LIKE LOWER(?{param_idx})"));
-            params.push(Box::new(format!("%{trimmed}%")));
+            let escaped = escape_like_pattern(trimmed);
+            conditions.push(format!("LOWER(keywords) LIKE LOWER(?{param_idx}) ESCAPE '\\'"));
+            params.push(Box::new(format!("%{escaped}%")));
             param_idx += 1;
         }
     }

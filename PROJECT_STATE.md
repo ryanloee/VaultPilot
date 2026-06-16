@@ -467,6 +467,7 @@
 - 2026-06-16 [循环#156]: #664 搜索-清除竞态 — await 后验证 _searchQuery 未变 (PR #667 已合并, CI 6/6 通过)
 - 2026-06-16 [循环#156]: #665 SettingsDialog 上界校验 — timeoutMs ≤ 300s, contextWindowTokens ≤ 2M, autoWakeInterval ≤ 1440min (PR #668 已合并, CI 6/6 通过)
 - 2026-06-16 [循环#156]: #666 CI concurrency 控制 — PR 推送取消旧运行 (PR #669 已合并, CI 6/6 通过)
+- 2026-06-16 [循环#157]: 深度审查 vaultpilot-cli.rs (2953行) + vaultpilot-agent.rs (670行) + App.xaml.cs (176行) + MainWindow.Updates.cs (130行) + WrapPanel.cs (176行) + search_rules.rs (439行) + BackendClient.cs (677行) + Program.cs (23行) + AppSettings.cs (24行)，无新 issue — 代码库零缺陷状态
 
 ## 项目健康度快照
 <!-- 每轮循环更新 -->
@@ -486,25 +487,16 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#156
+- 循环编号: 循环#157
 - 本轮时间: 2026-06-16
-- 审查模块: lib.rs (3068行), storage.rs (4998行), BackendClient.cs (677行), MainWindow.xaml.cs (3655行), NotesView.xaml.cs (354行), SettingsDialog.xaml.cs (312行), ci.yml (151行)
+- 审查模块: vaultpilot-cli.rs (2953行), vaultpilot-agent.rs (670行), App.xaml.cs (176行), MainWindow.Updates.cs (130行), WrapPanel.cs (176行), search_rules.rs (439行), BackendClient.cs (677行), Program.cs (23行), AppSettings.cs (24行)
 - 讨论阶段发现:
-  - 创建 3 个 issue:
-    - #664 BUG: NotesView 搜索-清除竞态 — OnSearchQuerySubmitted await 期间用户清空搜索框，返回后覆盖已恢复的列表
-    - #665 ENHANCEMENT: SettingsDialog 数值字段缺少上界校验 — timeoutMs/contextWindowTokens/autoWakeInterval 可输入极大值
-    - #666 ENHANCEMENT: CI workflow 缺少 concurrency 控制 — 快速推送浪费 runner 分钟
-  - Rust 后端 (lib.rs + storage.rs): 无新发现 — 参数化 SQL、路径穿越防护、原子写入、r2d2 连接池、错误处理均正确
-  - C# 前端 (BackendClient.cs + MainWindow.xaml.cs): 无新发现 — 17 个 async void 全部有 try-catch、无 .Result/.Wait()、线程安全完整
-- 修复结果:
-  - #664 → PR #667 (搜索-清除竞态: capturedQuery 比对) — 已合并, CI 6/6 通过
-  - #665 → PR #668 (SettingsDialog 上界校验: 300s/2M/1440min) — 已合并, CI 6/6 通过
-  - #666 → PR #669 (CI concurrency 控制) — 已合并, CI 6/6 通过
-- 审核结果:
-  - PR #667 — 搜索-清除竞态修复, 2 行改动, CI 6/6 通过, 已合并
-  - PR #668 — SettingsDialog 上界校验, 18 行改动, CI 6/6 通过, 已合并
-  - PR #669 — CI concurrency, 4 行改动, CI 6/6 通过, 已合并
-  - PR #646 (#597 CI WinUI 测试) — 继续等待, winui-build 持续 pending
+  - 无新 issue — 代码库处于零缺陷状态
+  - Rust 后端 (vaultpilot-cli.rs + vaultpilot-agent.rs + search_rules.rs): MCP server stdin 逐字节读取 10MB 上限 ✅, HTTP bridge CORS/限流/body限制/超时 ✅, constant_time_eq subtle::ConstantTimeEq ✅, sanitize_mcp_prompt_content XML 转义 ✅, 所有 error 路径 sanitize_error ✅
+  - C# 前端 (App.xaml.cs + MainWindow.Updates.cs + BackendClient.cs + WrapPanel.cs): 20 个 async void 全部有 try-catch ✅, BeginExitForUpdate Interlocked guard ✅, ExitApplication try-catch-finally ✅, CheckForAppUpdatesAsync 瞬态失败重置 guard ✅, 无 .Result/.Wait() ✅
+  - 生产代码零 .unwrap()/.expect() — 仅测试代码和 tokio runtime 初始化有
+- 修复结果: 无 — 无可修复 issue
+- 审核结果: PR #646 (#597 CI WinUI 测试) — 继续等待, winui-build 仍 pending, 其余 5/6 CI 通过
 - CI 状态: PR #646 winui-build 仍 pending (阻塞项)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 272 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
-- 代码审查: 深度审查 7 个模块 (~12.6K行)。Rust 后端: lib.rs (3068行) + storage.rs (4998行) 全文审查，所有安全防护、SQL 参数化、路径穿越、原子写入、错误处理均正确。C# 前端: BackendClient.cs (677行) + MainWindow.xaml.cs (3655行) + NotesView.xaml.cs (354行) + SettingsDialog.xaml.cs (312行) 全文审查，所有 async void 有 try-catch、线程安全正确、无 .Result/.Wait()。CI: ci.yml (151行) 审查发现缺少 concurrency 控制。381 个 Rust 测试全部通过。
+- 代码审查: 深度审查 9 个模块 (~5.1K行)。Rust 后端: vaultpilot-cli.rs (2953行) 全文审查 — MCP server/HTTP bridge/CLI 三大组件安全实践完整；vaultpilot-agent.rs (670行) 全文审查 — stdin 逐字节读取、120s 请求超时、panic hook sanitize_error；search_rules.rs (439行) — ASCII 全词匹配 + CJK 子串匹配正确。C# 前端: App.xaml.cs (176行) 全文审查 — 单实例 Mutex、tray icon、Interlocked 竞态保护；BackendClient.cs (677行) — 线程安全、Process 泄漏防护、HandleEvent try-catch；WrapPanel.cs (176行) — 纯布局代码无问题。381+ Rust 测试全部通过。

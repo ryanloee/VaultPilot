@@ -64,10 +64,13 @@ const MARKDOWN_CLOSE_TAG: &str = "</vp-markdown>";
 /// Defense-in-depth: escapes both closing tags (`</` → `<//`) and the specific wrapper
 /// tag names (`<user_content>`, `</user_content>`) to prevent nested delimiter breakout.
 fn sanitize_mcp_prompt_content(content: &str) -> String {
+    // Step 1: Escape ALL closing tags (</ → <//) — this also handles </user_content>.
+    // Step 2: Escape the specific opening tag name to prevent nested delimiter breakout.
+    // Note: A separate </user_content> replacement is unnecessary because Step 1 already
+    // transforms it to <//user_content>.
     let escaped = content
         .replace("</", "<//")
-        .replace("<user_content>", "< user_content>")
-        .replace("</user_content>", "< /user_content>");
+        .replace("<user_content>", "< user_content>");
     format!("<user_content>\n{}\n</user_content>", escaped)
 }
 

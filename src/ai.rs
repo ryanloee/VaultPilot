@@ -2199,7 +2199,9 @@ mod tests {
             let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
             let rt = tokio::runtime::Runtime::new().unwrap();
-            assert!(rt.block_on(validate_base_url("http://localhost:8080")).is_err());
+            assert!(rt
+                .block_on(validate_base_url("http://localhost:8080"))
+                .is_err());
         }
 
         // With env var → allow localhost
@@ -2207,7 +2209,9 @@ mod tests {
             let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
             let rt = tokio::runtime::Runtime::new().unwrap();
-            assert!(rt.block_on(validate_base_url("http://localhost:8080")).is_ok());
+            assert!(rt
+                .block_on(validate_base_url("http://localhost:8080"))
+                .is_ok());
         }
 
         // Cleanup

@@ -1940,7 +1940,9 @@ fn query_filtered_note_metas(
         let trimmed = kw.trim();
         if !trimmed.is_empty() {
             let escaped = escape_like_pattern(trimmed);
-            conditions.push(format!("LOWER(keywords) LIKE LOWER(?{param_idx}) ESCAPE '\\'"));
+            conditions.push(format!(
+                "LOWER(keywords) LIKE LOWER(?{param_idx}) ESCAPE '\\'"
+            ));
             params.push(Box::new(format!("%{escaped}%")));
             param_idx += 1;
         }

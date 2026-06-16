@@ -257,6 +257,7 @@
 - #645: render_notes body 字段未 XML 转义 — 防御纵深补齐 (PR #647 已合并)
 - #649: MCP server read_line_bounded BufReader::read_line() 全行缓冲 OOM — 改用逐字节 read_exact() (PR #652 已合并)
 - #650: MCP server read_line 仅 trim `\n` 不 trim `\r` — Windows CRLF 支持 (PR #652 已合并)
+- #653: SendAsync _writeLock.Release() 在 finally 块中可抛出 ObjectDisposedException — 添加 try-catch 保护 (PR #654 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -472,16 +473,15 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#147
+- 循环编号: 循环#148
 - 本轮时间: 2026-06-16
-- 审查模块: Rust MCP server (vaultpilot-cli.rs ~2.9K行), vaultpilot-agent.rs (~670行), C# Models/Converters/Controls (AiModels.cs, ChatModels.cs, NoteModels.cs, OperationModels.cs, StringToVisibilityConverter.cs, WrapPanel.cs, Program.cs, SettingsDialog.xaml.cs, MainWindow.Updates.cs)
+- 审查模块: Rust 后端全模块 (storage.rs ~5K行, ai.rs ~2.2K行, lib.rs ~3K行, prompting.rs ~871行) + C# BackendClient.cs (~669行) + vaultpilot-cli.rs (~2.9K行)
 - 讨论阶段发现:
-  - **创建 2 个 issue**: #649 (BUG HIGH), #650 (BUG MEDIUM)
-  - #649: MCP server read_line_bounded 使用 BufReader::read_line() — 在 size check 前缓冲全行，与 #641 agent 同一漏洞模式
-  - #650: MCP server read_line 仅 trim `\n` 不 trim `\r` — Windows CRLF 客户端会导致 JSON 解析失败
-  - 其他发现（未创建 issue）：WrapPanel ItemWidth/ItemHeight 无负值校验 (LOW)
+  - **创建 1 个 issue**: #653 (BUG MEDIUM)
+  - #653: SendAsync _writeLock.Release() 在 finally 块中无 ObjectDisposedException 保护 — DisposeAsync 竞态可导致 finally 块崩溃
+  - 其他发现（未创建 issue）：atomic_write 未 fsync 父目录 (LOW/极端场景), token 估算 div_ceil(4) 合理性已验证, render_manual_for_model XML 转义 (硬编码数据/LOW), Start() 无并发守卫 (理论性/UI 单线程调用), byte-by-byte stdin 读取 (OOM 防护的有意设计权衡)
 - 修复结果:
-  - PR #652 (#649 MCP server read_line OOM + #650 CRLF trim) ✅ 已合并 — CI 6/6 全通过
+  - PR #654 (#653 _writeLock.Release ODE guard) ✅ 已合并 — CI 6/6 全通过
 - CI 状态: cargo clippy ✅, cargo fmt ✅, cargo test ✅, cargo audit ✅, linux-cli-build ✅, winui-build ✅ — 6/6 全通过
-- 项目状态: **1 open issue (#597), 1 open PR (#646), 265 已合并 PR, 0 阻塞项**
-- 代码审查: 深度审查 Rust MCP server + agent (~3.6K行) + C# Models/Controls/Converters (~1K行)。发现 MCP server 遗留了与 #641 相同的 read_line OOM 漏洞模式，已修复。C# Models 代码质量优秀（纯 record 类型、无状态 converter、正确的 WrapPanel 布局算法）。
+- 项目状态: **1 open issue (#597), 1 open PR (#646), 266 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 全后端 (~12K行) + C# BackendClient + MCP server CLI (~3.6K行)。代码库质量极高 — 0 unsafe、0 生产 unwrap、所有 async void 有 try-catch、SSRF/路径穿越/prompt 注入防护均到位。发现的 _writeLock.Release() 竞态是 #634 修复的遗漏 — WaitAsync 已有 ODE 保护但 Release 被遗漏。

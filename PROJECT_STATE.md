@@ -292,6 +292,8 @@
 - #746: ai.rs 重试线性退避 → 指数退避 (PR #748 已合并)
 - #749: ai.rs 重试退避添加 jitter 防 thundering herd (PR #752 已合并)
 - #750: BackendClient.SendAsync _process 单次捕获避免 stale read (PR #751 已合并)
+- #753: tag/keyword SQL LIKE 子串匹配 → json_each 精确匹配 (PR #756 已合并)
+- #754: NotesView OnDeleteNoteClicked 取消 in-flight detail load 防 stale UI (PR #755 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -969,3 +971,22 @@
 - 审核结果: PR #751 和 PR #752 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 303 已合并 PR, 394 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 ~16K行 (storage.rs 5K行 + ai.rs 2.4K行 + C# 前端 5.2K行 + XAML)。storage.rs 20 个发现全部 LOW severity (TOCTOU exists/read、export 文件名碰撞、split_frontmatter EOF 边界、import 原始 source 丢失)。ai.rs 4 个 MEDIUM (jitter + extract_json fallback + is_request 范围宽 + 解析错误无上下文) 中 1 个可操作修复。C# 前端 2 个 MEDIUM (triple-read + non-atomic guard) 中 1 个修复。代码库经过 181 个审查循环和 303 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#182)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#182
+- 本轮时间: 2026-06-17
+- 审查模块: ai.rs (2431行), lib.rs (3104行), storage.rs (5045行), search_rules.rs (446行), BackendClient.cs (712行), MainWindow.xaml.cs (3674行), NotesView.xaml.cs (355行), SettingsDialog.xaml.cs (325行)
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #753 BUG (tag/keyword SQL 子串匹配 vs 内存精确匹配不一致), #754 BUG (NotesView 删除不取消 in-flight detail load)
+  - storage.rs: query_filtered_note_metas SQL LIKE '%tag%' 子串匹配 JSON 数组 — "sd" 匹配 "sdcard" 误报; 与 in-memory has_all_terms() 精确匹配不一致
+  - NotesView.xaml.cs: OnDeleteNoteClicked 不取消 _loadDetailCts — 删除后 in-flight LoadNoteDetailAsync 覆写已清空的 detail pane
+  - ai.rs: 零可操作 bug — jitter 计算无溢出 ✅, provider 路径一致性 ✅, 工具循环去重正确 ✅, session 管理无 TOCTOU ✅
+  - lib.rs: 零可操作 bug — 工具编排 4 轮上限 ✅, 已执行工具去重 ✅, context_status_from_usage 除零保护 ✅
+  - 正面发现: 395 Rust 测试全通过 ✅, sanitize_error 63处 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, 22/22 C# async void 有 try-catch ✅
+- 修复结果:
+  - #753 → PR #756 已合并 (CI 6/6 通过): json_each 精确匹配 + 回归测试 search_notes_tag_filter_exact_match
+  - #754 → PR #755 已合并 (CI 6/6 通过): _loadDetailCts?.Cancel() + Dispose + null
+- 审核结果: PR #755 和 PR #756 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 305 已合并 PR, 395 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 ~16K行 (ai.rs 2.4K + lib.rs 3.1K + storage.rs 5K + search_rules.rs 446 + C# 前端 5.2K)。ai.rs/lib.rs: 零可操作 bug — jitter 退避、provider 路径、工具编排、session 管理全部正确。storage.rs: 发现 2 个 MEDIUM (tag 子串匹配 + 分页偏移前过滤) + 3 个 LOW。C# 前端: 发现 7 个 LOW (FailPending 未清理、delete 不取消 detail load、Process 创建在 try-catch 外等)。代码库经过 182 个审查循环和 305 个已合并 PR 后维持极高成熟度。

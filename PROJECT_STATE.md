@@ -581,6 +581,7 @@
 - #701: StartProcess async void _isDisposed 过滤器 — 关闭时异常从 async void 传播崩溃 (PR #704 已合并)
 - #702: IsConnected 已释放 Process 竞态 — HasExited 抛出 InvalidOperationException (PR #705 已合并)
 - #708: StartProcess/DisposeAsync 竞态 — 释放后新进程孤立 (PR #709 已合并)
+- #710: BackendClient.SendAsync 90s 硬编码 IPC 超时忽略用户 RequestTimeoutMs (PR #711 已合并)
 
 ## 本轮循环状态 (循环#164)
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
@@ -710,3 +711,21 @@
 - 审核结果: PR #709 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 292 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 Rust 后端 ~10.4K行 (lib.rs + ai.rs + storage.rs) + C# 前端 ~5K行 (BackendClient + MainWindow + NotesView + SettingsDialog) + CI/CD 配置 = ~16K行。代码库持续高质量 — 167 个循环累计 292 个已合并 PR。发现 1 个 MEDIUM severity 竞态条件并修复。
+
+## 本轮循环状态 (循环#168)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#168
+- 本轮时间: 2026-06-17
+- 审查模块: lib.rs (3104行), ai.rs (2303行), storage.rs (5020行), BackendClient.cs (703行), MainWindow.xaml.cs (3669行), MainWindow.Updates.cs (130行), NotesView.xaml.cs (355行), SettingsDialog.xaml.cs (325行), XAML 3文件
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #710 BUG (BackendClient.SendAsync 90s 硬编码 IPC 超时忽略用户 RequestTimeoutMs)
+  - Rust 后端 (lib.rs + ai.rs + storage.rs ~10.4K行): 仅 1 个 LOW — storage.rs:1768 生产代码有 expect 但数学上不可触发 (SHA-256 固定 32 字节)
+  - Rust 后端: is_openai_reasoning_model 数字后缀误匹配 — LOW，当前命名约定不会触发
+  - C# 前端: 1 个 MEDIUM — BackendClient.SendAsync 硬编码 90s 超时，用户配置的 RequestTimeoutMs (最高 600s) 不影响前端 IPC 超时，长推理请求被误杀并触发后端进程重启
+  - C# 前端: 1 个 LOW — NotesView 无 Unloaded handler，_loadDetailCts/_searchCts 未在视图销毁时释放
+  - 正面发现: Rust 387 tests 全通过 ✅, 0 unsafe ✅, 0 生产 unwrap (除不可触发 expect) ✅, SQL 全参数化 ✅, sanitize_error 63处 ✅, C# 22/22 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅
+- 修复结果:
+  - #710 → PR #711 已合并 (CI 6/6 通过): SendAsync 添加可选 requestTimeout 参数，askWithAi 使用用户配置的 RequestTimeoutMs + 30s buffer
+- 审核结果: PR #711 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) winui-build 仍 6h 超时失败。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 293 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 后端 ~10.4K行 (lib.rs + ai.rs + storage.rs) + C# 前端 ~5K行 (BackendClient + MainWindow + NotesView + SettingsDialog + XAML) = ~15.5K行。发现 1 个 MEDIUM severity UX bug (硬编码超时) 并修复。代码库持续高质量 — 168 个循环累计 293 个已合并 PR。

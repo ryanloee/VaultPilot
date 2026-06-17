@@ -1243,11 +1243,11 @@ fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, Strin
         return Ok(resolved.to_string_lossy().to_string());
     }
 
+    // Validate path confinement BEFORE checking existence to prevent
+    // file-existence probing via differing error messages (#768).
     let path_str = url;
-    let path = PathBuf::from(path_str);
-    if path.exists() {
-        // Validate path is within the vault directory
-        let resolved = normalize_tool_path(path_str, vault_root).map_err(|e| e.to_string())?;
+    let resolved = normalize_tool_path(path_str, vault_root).map_err(|e| e.to_string())?;
+    if resolved.exists() {
         return Ok(resolved.to_string_lossy().to_string());
     }
 

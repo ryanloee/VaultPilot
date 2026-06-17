@@ -545,7 +545,11 @@ public sealed class BackendClient : IAsyncDisposable
                 process.Kill(entireProcessTree: true);
             }
 
-            await process.WaitForExitAsync();
+            // Issue #713: WaitForExitAsync with timeout — Kill() may fail on
+            // zombie/unkillable processes, which would hang disposal indefinitely.
+            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try { await process.WaitForExitAsync(exitCts.Token); }
+            catch (OperationCanceledException) { /* timeout — proceed with dispose */ }
         }
         catch
         {

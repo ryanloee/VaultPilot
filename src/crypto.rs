@@ -193,20 +193,37 @@ pub fn encrypt_secret(plaintext: &str) -> Result<String> {
 ///
 /// If the value does not start with [`ENCRYPTED_PREFIX`] it is returned
 /// as-is (transparent plaintext migration).
+///
+/// If the value starts with the prefix but decryption fails (e.g., the value
+/// is a plaintext key that coincidentally starts with "ENC:v1:", or the
+/// machine key has changed), the original value is returned as-is to avoid
+/// data loss.
 pub fn decrypt_secret(value: &str) -> Result<String> {
-    let b64_part = value.strip_prefix(ENCRYPTED_PREFIX).unwrap_or(value);
-
     // If no prefix, treat as legacy plaintext.
     if !value.starts_with(ENCRYPTED_PREFIX) {
         return Ok(value.to_string());
     }
 
-    let decoded = B64
-        .decode(b64_part)
-        .map_err(|e| anyhow!("failed to decode base64 encrypted secret: {e}"))?;
+    let b64_part = &value[ENCRYPTED_PREFIX.len()..];
+
+    let decoded = match B64.decode(b64_part) {
+        Ok(d) => d,
+        Err(_) => {
+            // Not valid base64 — likely a plaintext key that starts with the prefix.
+            // Return as-is rather than erroring.
+            tracing::warn!(
+                "Value starts with ENC:v1: prefix but is not valid base64 — treating as plaintext"
+            );
+            return Ok(value.to_string());
+        }
+    };
 
     if decoded.len() < 12 {
-        anyhow::bail!("encrypted payload too short (no room for nonce)");
+        // Payload too short for nonce — treat as malformed plaintext.
+        tracing::warn!(
+            "Value starts with ENC:v1: prefix but payload is too short — treating as plaintext"
+        );
+        return Ok(value.to_string());
     }
 
     let (nonce_bytes, ciphertext) = decoded.split_at(12);
@@ -216,11 +233,16 @@ pub fn decrypt_secret(value: &str) -> Result<String> {
         .map_err(|e| anyhow!("failed to create AES-256-GCM cipher: {e}"))?;
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|e| {
-        anyhow!("AES-GCM decryption failed — key may have changed or data is corrupt: {e}")
-    })?;
-
-    String::from_utf8(plaintext).map_err(|e| anyhow!("decrypted secret is not valid UTF-8: {e}"))
+    match cipher.decrypt(nonce, ciphertext) {
+        Ok(plaintext) => String::from_utf8(plaintext)
+            .map_err(|e| anyhow!("decrypted secret is not valid UTF-8: {e}")),
+        Err(_) => {
+            // Decryption failed — likely a plaintext key with the prefix, or
+            // the machine key has changed. Return original value as-is.
+            tracing::warn!("Value starts with ENC:v1: prefix but AES-GCM decryption failed — treating as plaintext");
+            Ok(value.to_string())
+        }
+    }
 }
 
 /// Returns `true` if the value appears to be encrypted by this module.
@@ -299,14 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn tampered_ciphertext_fails() {
+    fn tampered_ciphertext_returns_original_value() {
         let encrypted = encrypt_secret("secret").unwrap();
         // Flip a character in the base64 portion.
         let mut tampered = encrypted.clone();
         let last = tampered.pop().unwrap();
         tampered.push(if last == 'A' { 'B' } else { 'A' });
-        let result = decrypt_secret(&tampered);
-        assert!(result.is_err());
+        // #731: Tampered ciphertext falls back to returning the original value
+        // as-is (graceful degradation) rather than erroring.
+        let result = decrypt_secret(&tampered).unwrap();
+        assert_eq!(result, tampered);
     }
 
     #[test]

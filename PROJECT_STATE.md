@@ -298,6 +298,8 @@
 - #758: StartProcess catch block NRE — _process 字段并发 DisposeAsync 竞态 → 局部变量捕获 (PR #759 已合并)
 - #760: CompressCurrentSessionIfNeededAsync CancellationToken 链接到外层请求 — 用户取消立即停止压缩 (PR #762 已合并)
 - #761: ComposerBox.Text 清除移入 inner try-catch — RefreshAttachments 异常不再丢失用户输入 (PR #762 已合并)
+- #763: docs 向量每轮覆盖 → 累积 + HashSet 去重 — 多轮工具执行引用完整 (PR #765 已合并)
+- #764: prompting.rs XML 转义补齐开标签 — escape_xml_tags 统一防御纵深 (PR #766 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1091,3 +1093,20 @@
 - 审核结果: PR #762 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) winui-build 仍 6h 超时失败，其余 5/6 通过。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 308 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~7.9K行 (ai.rs + storage.rs) + C# 前端 ~5.2K行 (MainWindow + BackendClient + NotesView) = ~13K行。发现 2 个 C# 前端 bug (1 MEDIUM + 1 LOW) 并修复。Rust 后端经 2 路并行审查 (ai.rs 2431行 + storage.rs 5045行) 维持零缺陷。代码库经过 187 个审查循环和 308 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#188)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#188
+- 本轮时间: 2026-06-18
+- 审查模块: lib.rs 工具编排循环 + ai.rs 请求管道 + storage.rs 搜索管道 + vaultpilot-cli.rs MCP server + vaultpilot-agent.rs agent + prompting.rs 提示渲染 + BackendClient.cs 进程生命周期 + MainWindow.xaml.cs 状态管理
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #763 BUG (docs 向量每轮覆盖 — 多轮工具执行引用丢失), #764 SECURITY (prompting.rs XML 转义不转义开标签)
+  - #763 MEDIUM BUG: ask_with_ai_with_context 中 docs 向量在 SearchNotes/ListNotes 每轮重新赋值 — 多轮搜索时早期搜索结果被丢弃，finalize_grounded_answer 仅使用最后一轮的 docs 生成引用
+  - #764 LOW SECURITY: prompting.rs::escape_xml_close_tags 仅转义 `</` 闭标签，vaultpilot-cli.rs::escape_xml_content 还转义 `<user_content>` 开标签 — 用户内容含 `<user_input>` 可创建嵌套标签，防御纵深不一致
+  - 正面发现: Rust 395 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, SSRF/路径穿越/prompt注入防护完整 ✅, C# 19/19 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅
+- 修复结果:
+  - #763 → PR #765 已合并 (CI 6/6 通过): docs 累积 + HashSet 去重 by meta.id
+  - #764 → PR #766 已合并 (CI 6/6 通过): escape_xml_tags(content, open_tag) + 4 个 sanitize_* 函数更新 + 回归测试
+- 审核结果: PR #765 和 PR #766 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 310 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~12K行 (lib.rs 3.1K + ai.rs 2.4K + storage.rs 5K + vaultpilot-cli.rs 3K + prompting.rs 921 + vaultpilot-agent.rs 673) + C# 前端 ~5.3K行 (BackendClient + MainWindow + NotesView + SettingsDialog + App) = ~17K行。发现 2 个 MEDIUM severity 可操作 bug 并修复。代码库经过 188 个审查循环和 310 个已合并 PR 后维持极高成熟度。

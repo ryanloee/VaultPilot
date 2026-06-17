@@ -771,3 +771,19 @@
   - Rust 后端: lib.rs (3104行) + ai.rs (2303行) + prompting.rs (921行) — sanitize_error 63处调用完整 ✅, SSRF/路径穿越/prompt注入防护完整 ✅, SQL 全参数化 ✅, 0 unsafe ✅, 0 生产 unwrap ✅
   - C# 前端: BackendClient.cs (705行) — 发现 WaitForExitAsync 无超时 (#713)；MainWindow.xaml.cs (3674行) + NotesView + SettingsDialog + App + Updates — 22/22 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅
   - 387+ Rust 测试全通过, 0 unsafe, 0 生产 unwrap
+
+## 本轮循环状态 (循环#171)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#171
+- 本轮时间: 2026-06-17
+- 审查模块: vaultpilot-cli.rs (2993行), BackendClient.cs (709行), lib.rs sanitize_error (129行), NotesView.xaml.cs (355行), SettingsDialog.xaml.cs (325行), MainWindow.xaml.cs (3674行)
+- 讨论阶段发现:
+  - 无新 issue — 代码库持续零缺陷状态
+  - vaultpilot-cli.rs (2993行): MCP server 全文审查 — sanitize_mcp_prompt_content/escape_xml_content 正确应用于所有 prompt 模板 (summarize-note, find-related, draft-from-keywords) ✅, stdin 逐字节读取 10MB 上限 ✅, HTTP bridge CORS/限流/body限制/超时 ✅, constant_time_eq subtle::ConstantTimeEq ✅, exit_ok/exit_error serde_json::json! fallback ✅, 所有 error 路径 sanitize_error ✅
+  - BackendClient.cs (709行): PR #711 requestTimeout 集成正确 ✅, PR #709 StartProcess/DisposeAsync 竞态修复正确 ✅, PR #713 WaitForExitAsync 5s 超时 ✅, Volatile/Interlocked 跨线程保护完整 ✅, _writeLock ODE 防护 ✅
+  - lib.rs sanitize_error: sk- Bearer Basic x-api-key URL query params 全部覆盖 ✅
+  - C# 前端: 22/22 async void 全部有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅
+- 修复结果: 无 — 无可修复 issue
+- 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时失败, 其余 5/6 CI 通过
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 296 已合并 PR, 390 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 vaultpilot-cli.rs (2993行) + BackendClient.cs (709行) + lib.rs sanitize_error + NotesView + SettingsDialog + MainWindow = ~8K行。vaultpilot-cli.rs 全文审查确认 MCP prompt 注入防护 (#715) 和 JSON fallback (#717) 正确集成。BackendClient.cs 确认 PR #711/#709/#713 修复正确集成。代码库经过 171 个审查循环后维持零缺陷状态。

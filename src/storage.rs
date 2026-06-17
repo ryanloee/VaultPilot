@@ -565,14 +565,18 @@ pub fn search_notes_with_context(
         || query.modified_before.is_some();
     debug!(text = %query.text, limit = limit, offset = offset, has_filters = has_filters, "searching notes");
 
-    let mut notes = if query.text.trim().is_empty() {
+    let (notes, total) = if query.text.trim().is_empty() {
         if has_filters {
             // SQL-level filtering when text is empty but filters are specified.
             // This avoids the bug where query_recent_note_metas returns only
             // the N most recent notes and post-filtering silently drops results.
-            query_filtered_note_metas(&connection, &query, limit, offset)?
+            let filtered = query_filtered_note_metas(&connection, &query, limit, offset)?;
+            let count = count_filtered_notes(&connection, &query)?;
+            (filtered, count)
         } else {
-            query_recent_note_metas(&connection, limit, offset)?
+            let recent = query_recent_note_metas(&connection, limit, offset)?;
+            let count = count_all_notes(&connection)?;
+            (recent, count)
         }
     } else {
         // When filters are active, over-fetch to compensate for post-filtering attrition.
@@ -585,16 +589,19 @@ pub fn search_notes_with_context(
         };
         let fts_results = rank_note_metas(context, &connection, &query.text, &[], fetch_limit)?;
         let fts_results = fts_results.into_iter().skip(offset).collect::<Vec<_>>();
-        if fts_results.is_empty() {
+        let notes = if fts_results.is_empty() {
             // Fuzzy/approximate fallback: split query into words and use LIKE
             let like_results = query_like_note_metas(&connection, &query.text, fetch_limit)?;
             like_results.into_iter().skip(offset).collect::<Vec<_>>()
         } else {
             fts_results
-        }
+        };
+        // Total will be computed after in-memory filtering below (approximate).
+        (notes, 0usize)
     };
 
     // In-memory filtering (for FTS path where SQL filtering isn't applied)
+    let mut notes = notes;
     if !query.tags.is_empty() && !query.text.trim().is_empty() {
         notes.retain(|note| has_all_terms(&note.tags, &query.tags));
     }
@@ -613,7 +620,13 @@ pub fn search_notes_with_context(
         );
     }
 
-    let total = notes.len();
+    // For SQL paths, total was computed via COUNT(*) above.
+    // For FTS path, total is the post-filtering count (approximate, acceptable).
+    let total = if query.text.trim().is_empty() {
+        total
+    } else {
+        notes.len()
+    };
 
     // Trim to requested limit after filtering
     notes.truncate(limit);
@@ -2021,6 +2034,72 @@ fn query_filtered_note_metas(
         .query_map(param_refs.as_slice(), row_to_meta)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Count all notes matching the SQL-level filters (tags, keywords, date ranges)
+/// without LIMIT/OFFSET. Used alongside `query_filtered_note_metas` to report
+/// the true total for pagination.
+fn count_filtered_notes(connection: &Connection, query: &SearchQuery) -> Result<usize> {
+    let mut conditions = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut param_idx = 1usize;
+
+    for tag in &query.tags {
+        let trimmed = tag.trim();
+        if !trimmed.is_empty() {
+            conditions.push(format!(
+                "EXISTS (SELECT 1 FROM json_each(tags) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
+            ));
+            params.push(Box::new(trimmed.to_string()));
+            param_idx += 1;
+        }
+    }
+
+    for kw in &query.keywords {
+        let trimmed = kw.trim();
+        if !trimmed.is_empty() {
+            conditions.push(format!(
+                "EXISTS (SELECT 1 FROM json_each(keywords) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
+            ));
+            params.push(Box::new(trimmed.to_string()));
+            param_idx += 1;
+        }
+    }
+
+    let date_filters: [(&str, &str, Option<&str>); 4] = [
+        ("created_at", ">=", query.created_after.as_deref()),
+        ("created_at", "<=", query.created_before.as_deref()),
+        ("updated_at", ">=", query.modified_after.as_deref()),
+        ("updated_at", "<=", query.modified_before.as_deref()),
+    ];
+    for (col, op, val) in date_filters {
+        if let Some(v) = val {
+            if !v.is_empty() {
+                conditions.push(format!("{col} {op} ?{param_idx}"));
+                params.push(Box::new(v.to_string()));
+                param_idx += 1;
+            }
+        }
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!("SELECT COUNT(*) FROM notes {where_clause}");
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut statement = connection.prepare(&sql)?;
+    let count: i64 = statement.query_row(param_refs.as_slice(), |row| row.get(0))?;
+    Ok(count as usize)
+}
+
+/// Count all notes in the database (no filters).
+fn count_all_notes(connection: &Connection) -> Result<usize> {
+    let mut statement = connection.prepare("SELECT COUNT(*) FROM notes")?;
+    let count: i64 = statement.query_row([], |row| row.get(0))?;
+    Ok(count as usize)
 }
 
 /// List all note metas without any LIMIT clause. Used by export functions
@@ -4811,6 +4890,73 @@ mod tests {
             "tag 'sd' should not match tag 'sdcard', got {} results",
             results.notes.len()
         );
+    }
+
+    #[test]
+    fn search_total_count_not_capped_by_limit() {
+        // Regression: total must reflect the full matching set, not just
+        // the LIMIT-clamped page.  See issue #769.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        for i in 0..5 {
+            save_note_with_context(
+                &ctx,
+                NoteDocument {
+                    meta: NoteMeta {
+                        title: format!("Note {i}"),
+                        ..Default::default()
+                    },
+                    body: format!("Body {i}"),
+                    search_snippet: None,
+                },
+            )
+            .expect("save");
+        }
+
+        // No text, no filters → query_recent_note_metas path.
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        assert_eq!(results.notes.len(), 2, "page should contain 2 notes");
+        assert_eq!(
+            results.total, 5,
+            "total should reflect all 5 notes, not the LIMIT"
+        );
+
+        // With tag filter → query_filtered_note_metas path.
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "Tagged".to_string(),
+                    tags: vec!["important".to_string()],
+                    ..Default::default()
+                },
+                body: "tagged body".to_string(),
+                search_snippet: None,
+            },
+        )
+        .expect("save tagged");
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["important".to_string()],
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .expect("search filtered");
+        assert_eq!(results.notes.len(), 1, "page should contain 1 note");
+        assert_eq!(results.total, 1, "total should reflect the 1 matching note");
     }
 
     #[test]

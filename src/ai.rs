@@ -1,6 +1,10 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
-use std::{collections::HashSet, path::Path, time::{Duration, SystemTime}};
+use std::{
+    collections::HashSet,
+    path::Path,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};

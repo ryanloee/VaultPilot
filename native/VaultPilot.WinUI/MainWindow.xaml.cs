@@ -2549,7 +2549,7 @@ public sealed partial class MainWindow : Window
         if (_autoWakeInProgress != 0) return;
         if (!IsInAutoWakeWindow()) return;
 
-        var interval = TimeSpan.FromMinutes(Math.Max(1, (int)(_settings?.AutoWakeIntervalMinutes ?? 30)));
+        var interval = TimeSpan.FromMinutes((int)Math.Clamp((long)(_settings?.AutoWakeIntervalMinutes ?? 30), 1, 1440));
         var now = DateTime.Now;
         if (_lastAutoWakeTime.HasValue && (now - _lastAutoWakeTime.Value) < interval) return;
 
@@ -2578,7 +2578,7 @@ public sealed partial class MainWindow : Window
         var settings = _settings;
         if (settings == null || !settings.AutoWakeEnabled) return null;
 
-        var intervalMinutes = Math.Max(1, (int)settings.AutoWakeIntervalMinutes);
+        var intervalMinutes = (int)Math.Clamp((long)settings.AutoWakeIntervalMinutes, 1, 1440);
         var interval = TimeSpan.FromMinutes(intervalMinutes);
         var now = DateTime.Now;
 

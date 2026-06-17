@@ -79,8 +79,8 @@ try {
     exit 1
 }
 
-$pid = $process.Id
-Write-Host "Process started with PID: $pid"
+$processId = $process.Id
+Write-Host "Process started with PID: $processId"
 
 # Poll: if process exits within timeout → crash
 $crashed = $false
@@ -118,13 +118,13 @@ for ($i = 0; $i -lt $TimeoutSeconds; $i++) {
         break
     }
 
-    Write-Host "  ... ${i}s elapsed, process still running (PID $pid)"
+    Write-Host "  ... ${i}s elapsed, process still running (PID $processId)"
 }
 
 if (-not $crashed) {
     # Process survived the timeout → healthy
     Write-Host ""
-    Write-Host "Process survived ${TimeoutSeconds}s — app starts OK."
+    Write-Host "Process survived ${TimeoutSeconds}s -- app starts OK."
 
     # Kill it gracefully
     try {

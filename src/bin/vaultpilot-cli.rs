@@ -1039,6 +1039,12 @@ async fn rate_limit_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // Exempt /health from rate limiting — monitoring polls should not
+    // consume the API rate budget (#774).
+    if request.uri().path() == "/health" {
+        return next.run(request).await;
+    }
+
     // Use client IP as rate-limit key to prevent token-rotation bypass (#767).
     // Previously the bearer token was used, allowing attackers to send
     // unlimited requests with unique random tokens.
@@ -1240,9 +1246,15 @@ fn render_openai_message_content(
 
 fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, String> {
     if url.starts_with("file://") {
-        let path = url.strip_prefix("file://").unwrap_or(url);
+        // Parse as URL to properly decode percent-encoded characters (#773).
+        // RFC 8089 file:// URLs encode spaces as %20, Unicode as %XX sequences, etc.
+        let parsed = url::Url::parse(url).map_err(|e| format!("invalid file URL: {}", e))?;
+        let path = parsed
+            .to_file_path()
+            .map_err(|_| "invalid file URL path".to_string())?;
         // Validate path is within the vault directory
-        let resolved = normalize_tool_path(path, vault_root).map_err(|e| e.to_string())?;
+        let resolved =
+            normalize_tool_path(&path.to_string_lossy(), vault_root).map_err(|e| e.to_string())?;
         return Ok(resolved.to_string_lossy().to_string());
     }
 

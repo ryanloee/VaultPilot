@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -461,6 +461,7 @@ fn open_vault_directory(path: &str) -> Result<(), String> {
     {
         Command::new("explorer")
             .arg(path)
+            .stdin(Stdio::null())
             .spawn()
             .map_err(|error| error.to_string())?;
         return Ok(());
@@ -470,6 +471,7 @@ fn open_vault_directory(path: &str) -> Result<(), String> {
     {
         Command::new("open")
             .arg(path)
+            .stdin(Stdio::null())
             .spawn()
             .map_err(|error| error.to_string())?;
         return Ok(());
@@ -479,6 +481,7 @@ fn open_vault_directory(path: &str) -> Result<(), String> {
     {
         Command::new("xdg-open")
             .arg(path)
+            .stdin(Stdio::null())
             .spawn()
             .map_err(|error| error.to_string())?;
         return Ok(());

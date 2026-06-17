@@ -1826,8 +1826,8 @@ mod tests {
         generate_programmatic_snippet, heuristic_note_from_input, is_openai_reasoning_model,
         is_private_ip, is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
         parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
-        resolve_context_window, validate_base_url, AssistantToolCall, OpenAiContent,
-        OpenAiMessage, OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
+        resolve_context_window, validate_base_url, AssistantToolCall, OpenAiContent, OpenAiMessage,
+        OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -2195,8 +2195,14 @@ mod tests {
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["model"], "o3-mini");
         assert_eq!(json["max_completion_tokens"], 16384);
-        assert!(json.get("max_tokens").is_none(), "reasoning models must not include max_tokens");
-        assert!(json.get("temperature").is_none(), "reasoning models must not include temperature");
+        assert!(
+            json.get("max_tokens").is_none(),
+            "reasoning models must not include max_tokens"
+        );
+        assert!(
+            json.get("temperature").is_none(),
+            "reasoning models must not include temperature"
+        );
     }
 
     #[test]

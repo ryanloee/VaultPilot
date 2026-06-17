@@ -283,6 +283,9 @@
 - #729: search_rules relevance_term_matches 长 ASCII 针双向子串匹配 → 仅保留 term.contains(needle) (PR #732 已合并)
 - #730: _updateDownloadVersion 缺少 volatile — 跨线程可见性 (PR #733 已合并)
 - #731: decrypt_secret ENC:v1: 前缀碰撞 → 解密失败回退返回原始值 (PR #734 已合并)
+- #736: open_vault_directory 子进程继承 stdin → Stdio::null() 重定向 (PR #738 已合并)
+- #735: C# model record 类型缺少 null-safe 反序列化 — 14+ 类型添加 [JsonConstructor] + init defaults (PR #740 已合并)
+- #737: ChatSession/ChatState positional constructor null 漏洞 — 已由 PR #740 修复
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -814,3 +817,22 @@
 - 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时失败, 其余 5/6 CI 通过
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 296 已合并 PR, 390 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 跨模块基础设施审查 (Cargo.toml + CI/CD + scripts + contracts + docs + XAML + .gitignore + 测试覆盖) = ~1K行配置/脚本/文档 + ~2K行 XAML + 390 Rust tests + 51 C# tests。经过 172 个审查循环，代码库所有主要模块 (Rust 12.9K行 + C# 5.5K行) 均已多次深度审查。仅发现 LOW severity 信息级项，无新 bug/安全/性能问题。项目持续维持零缺陷状态。
+
+## 本轮循环状态 (循环#175)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#175
+- 本轮时间: 2026-06-17
+- 审查模块: prompting.rs (921行), vaultpilot-agent.rs (670行), ai.rs (2367行), storage.rs (5045行), AiModels.cs (40行), NoteModels.cs (18行), OperationModels.cs (11行), ChatModels.cs (75行), AppSettings.cs (24行), StringToVisibilityConverter.cs (23行), Program.cs (23行)
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #735 BUG (C# model null-safe deserialization), #736 BUG (open_vault_directory stdin inheritance), #737 BUG (ChatSession constructor null gap)
+  - Rust 后端 (prompting.rs + vaultpilot-agent.rs + ai.rs + storage.rs ~8.8K行): 零可操作 bug — sanitize_error 63处调用完整 ✅, SQL 全参数化 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, SSRF/路径穿越/prompt注入防护完整 ✅, atomic_write 正确 ✅
+  - C# 模型层: 14+ 类型缺少 [JsonConstructor] + init defaults (NoteMeta 13字段, ChatTurn, AnswerCitation 等), ChatSession/ChatState positional constructor null 漏洞, open_vault_directory 子进程继承 stdin
+  - 低优先级: serialize_result/serialize_string_result 重复函数, render_manual_for_model XML 属性未转义 (当前硬编码安全), ContextStatus.UsagePercent 无界约束, timestamps 为 string 类型
+- 修复结果:
+  - #736 → PR #738 已合并 (CI 6/6 通过): Stdio::null() 重定向 stdin
+  - #735 → PR #740 已合并 (CI 6/6 通过): 14+ 类型 [JsonConstructor] + init defaults
+  - #737 → 已由 PR #740 修复, 关闭
+  - PR #739 关闭 (被 PR #740 覆盖)
+- 审核结果: PR #738 和 PR #740 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 298 已合并 PR, 392 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 后端 ~8.8行 (prompting.rs + vaultpilot-agent.rs + ai.rs + storage.rs) + C# 模型层 ~191行 (6 个文件) + 跨切面审查。Rust 后端经过 175 个审查循环后零缺陷。C# 模型层发现 3 个 MEDIUM severity null safety issues 并全部修复。项目累计 298 个已合并 PR。

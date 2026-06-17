@@ -117,14 +117,24 @@ function Download-ReleaseHistory {
     )
 
     if (-not [string]::IsNullOrWhiteSpace($GitHubToken)) {
-        $arguments += @("--token", $GitHubToken)
+        # Pass token via environment variable instead of CLI argument to avoid
+        # exposing it in process listing (issue #725).
+        $previousToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", "Process")
+        try {
+            [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $GitHubToken, "Process")
+            & $Vpk @arguments | Out-Host
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousToken, "Process")
+        }
     }
-
-    try {
-        & $Vpk @arguments | Out-Host
-    }
-    catch {
-        Write-Warning "Unable to download existing release history for channel '$Channel'. Continuing without delta history."
+    else {
+        try {
+            & $Vpk @arguments | Out-Host
+        }
+        catch {
+            Write-Warning "Unable to download existing release history for channel '$Channel'. Continuing without delta history."
+        }
     }
 }
 

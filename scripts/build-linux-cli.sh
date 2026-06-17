@@ -116,6 +116,8 @@ package_deb() {
   local output_dir="${ARTIFACTS_ROOT}/packages/${channel}"
   local staging_root
   staging_root="$(mktemp -d)"
+  # Clean up temp directory on function return (success or failure) — issue #726
+  trap 'rm -rf "${staging_root}"' RETURN
   local staging_dir="${staging_root}/vaultpilot-cli"
   local package_name="vaultpilot-cli_${version}_${deb_arch}.deb"
 
@@ -149,7 +151,6 @@ EOF
 
   mkdir -p "${output_dir}"
   dpkg-deb --build "${staging_dir}" "${output_dir}/${package_name}"
-  rm -rf "${staging_root}"
 }
 
 mkdir -p "${ARTIFACTS_ROOT}/bin" "${ARTIFACTS_ROOT}/packages"

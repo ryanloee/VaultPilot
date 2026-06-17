@@ -303,6 +303,8 @@
 - #767: HTTP bridge rate limiter token 轮换绕过 → 客户端 IP 作为限流 key (PR #771 已合并)
 - #768: resolve_local_image_url 文件存在性探测 → 路径限制前置 (PR #770 已合并)
 - #769: search_notes_with_context total 受 SQL LIMIT 截断 → COUNT(*) 查询 (PR #772 已合并)
+- #773: file:// URL percent-encoding 未解码 → url::Url::parse() + to_file_path() (PR #775 已合并)
+- #774: HTTP bridge rate limiter 对 /health 端点限流 → 豁免健康检查 (PR #775 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1216,3 +1218,24 @@
 - 审核结果: PR #646 (#597 CI WinUI 测试) — 继续等待中
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 313 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~12K行 (ai.rs + storage.rs + lib.rs) + C# 前端 ~6.5K行 (BackendClient + MainWindow + NotesView + SettingsDialog + App + Updates + 模型文件) = ~18.5K行。C# 前端经过完整 3 路并行审查确认零 MEDIUM/HIGH 缺陷。全部 async void try-catch 覆盖从 22/22 提升到 24/24。代码库经过 193 个审查循环和 313 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#194)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#194
+- 本轮时间: 2026-06-18
+- 审查模块: storage.rs (5233行) COUNT 查询 + 搜索管道 + 备份, vaultpilot-cli.rs (2996行) HTTP bridge + rate limiter + MCP server, vaultpilot-agent.rs (673行), ai.rs (2431行), lib.rs (3124行), prompting.rs (946行), search_rules.rs (446行), CI/CD workflows, Cargo.toml
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #773 BUG (file:// URL percent-encoding 未解码), #774 BUG (rate limiter 对 /health 限流)
+  - #773 MEDIUM BUG: resolve_local_image_url strip file:// 前缀但不解码 percent-encoding — 空格 %20 等字符导致路径匹配失败
+  - #774 LOW-MEDIUM BUG: rate_limit_middleware 应用于整个 Router 包括 /health — 监控轮询消耗 20% 限流预算
+  - storage.rs: count_filtered_notes COUNT(*) SQL 与 query_filtered_note_metas WHERE 完全一致 ✅, FTS+filter 路径 total 为近似值 (已知设计权衡, fetch_limit*4 补偿), DRY 违反 (count_filtered_notes 与 query_filtered_note_metas 重复 ~50 行 filter 构建逻辑 — LOW 维护风险)
+  - storage.rs: backup race window (checkpoint→copy 之间可写入 — LOW), checkpoint 绕过连接池 (LOW), let _ = swallows busy_timeout (LOW), offset 未 clamped (LOW)
+  - vaultpilot-cli.rs: file:// percent-encoding 未解码 (MEDIUM — 已修复), rate limiter 无上限 (LOW — localhost 限定), /health 限流 (LOW — 已修复), file:// URL 未 percent-decode (已修复)
+  - ai.rs/lib.rs/prompting.rs/search_rules.rs: 零缺陷 — SSRF 防护 ✅, 指数退避+jitter ✅, 工具编排去重 ✅, docs 累积 ✅, XML 转义统一 ✅, 搜索规则全词边界 ✅
+  - 397 Rust 测试全通过, clippy clean, cargo audit 2 allowed warnings, 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #773 → PR #775 已合并 (CI 6/6 通过): url::Url::parse() + to_file_path() 解码 percent-encoding
+  - #774 → PR #775 已合并 (CI 6/6 通过): /health 路径豁免限流
+- 审核结果: PR #775 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待 (winui-build 6h 超时)。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 315 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~15K行 (storage.rs 5.2K + vaultpilot-cli.rs 3K + vaultpilot-agent.rs 673 + ai.rs 2.4K + lib.rs 3.1K + prompting.rs 946 + search_rules.rs 446) + CI/CD + Cargo.toml = ~16K行。发现 2 个 MEDIUM/LOW severity bug 并修复。ai.rs/lib.rs/prompting.rs/search_rules.rs 经过完整审查确认零缺陷。代码库经过 194 个审查循环和 315 个已合并 PR 后维持极高成熟度。

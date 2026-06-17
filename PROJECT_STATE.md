@@ -280,6 +280,9 @@
 - #680: SettingsDialog.xaml 缺少 AutomationProperties — 15+ 控件屏幕阅读器不可识别 (PR #685 已合并)
 - #681: ci.yml 缺少 permissions: contents: read — 默认宽泛权限增加攻击面 (PR #683 已合并)
 - #682: MainWindow LoadingOverlay 硬编码 #80000000 — 高对比度主题下不可见 (PR #684 已合并)
+- #729: search_rules relevance_term_matches 长 ASCII 针双向子串匹配 → 仅保留 term.contains(needle) (PR #732 已合并)
+- #730: _updateDownloadVersion 缺少 volatile — 跨线程可见性 (PR #733 已合并)
+- #731: decrypt_secret ENC:v1: 前缀碰撞 → 解密失败回退返回原始值 (PR #734 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->

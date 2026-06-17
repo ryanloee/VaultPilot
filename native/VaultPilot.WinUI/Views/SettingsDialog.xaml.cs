@@ -216,9 +216,9 @@ public sealed partial class SettingsDialog : ContentDialog
                 validationErrors.Add("自动唤醒结束时间格式无效，请使用 HH:mm 格式。");
             }
 
-            if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs == 0)
+            if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs < 1_000)
             {
-                validationErrors.Add("请求超时必须是大于 0 的数字。");
+                validationErrors.Add("请求超时不能少于 1,000 毫秒 (1 秒)。");
             }
             else if (timeoutMs > 300_000)
             {

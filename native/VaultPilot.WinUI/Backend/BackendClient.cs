@@ -400,16 +400,19 @@ public sealed class BackendClient : IAsyncDisposable
         if (Volatile.Read(ref _isDisposed) != 0)
             throw new InvalidOperationException("Backend client disposed.");
 
-        if (!IsConnected || Volatile.Read(ref _process)?.StandardInput is null || Volatile.Read(ref _process)?.StandardOutput is null)
+        // Issue #750: capture _process once into a local variable to avoid
+        // stale reads if DisposeProcessAsync runs between checks.
+        var process = Volatile.Read(ref _process);
+        if (!IsConnected || process?.StandardInput is null || process?.StandardOutput is null)
         {
             var reconnected = await EnsureConnectedAsync(cancellationToken);
-            if (!reconnected || Volatile.Read(ref _process)?.StandardInput is null || Volatile.Read(ref _process)?.StandardOutput is null)
+            process = Volatile.Read(ref _process);
+            if (!reconnected || process?.StandardInput is null || process?.StandardOutput is null)
             {
                 throw new InvalidOperationException("Rust 后端尚未连接。");
             }
         }
 
-        var process = Volatile.Read(ref _process);
         if (process is null)
         {
             throw new InvalidOperationException("Rust 后端尚未连接。");

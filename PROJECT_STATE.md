@@ -290,6 +290,8 @@
 - #742: OpenAI reasoning models 使用 role system + resolve_max_output_tokens 默认 8192 不足 — developer role + 32768 (PR #743 已合并)
 - #744: SettingsDialog timeout 允许 1ms — 最小值 1000ms (PR #747 已合并)
 - #746: ai.rs 重试线性退避 → 指数退避 (PR #748 已合并)
+- #749: ai.rs 重试退避添加 jitter 防 thundering herd (PR #752 已合并)
+- #750: BackendClient.SendAsync _process 单次捕获避免 stale read (PR #751 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -947,3 +949,23 @@
 - 审核结果: PR #747 和 PR #748 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 301 已合并 PR, 394 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 Rust 后端 ~12.8K行 (ai.rs + storage.rs + vaultpilot-cli.rs) + C# 前端 ~5.3K行 (BackendClient + MainWindow + NotesView + SettingsDialog) = ~18K行。3 路并行审查。代码库经过 180 个审查循环和 301 个已合并 PR 后维持极高成熟度。发现 2 个 MEDIUM severity 可操作改进并修复, 1 个因设计权衡关闭。
+
+## 本轮循环状态 (循环#181)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#181
+- 本轮时间: 2026-06-17
+- 审查模块: storage.rs (5045行), ai.rs (2413行), BackendClient.cs (709行), MainWindow.xaml.cs (3674行), NotesView.xaml.cs (355行), SettingsDialog.xaml.cs (325行), MainWindow.Updates.cs (130行)
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #749 BUG (重试退避无 jitter — thundering herd), #750 BUG (SendAsync _process 四次 Volatile.Read stale read)
+  - ai.rs: 重试指数退避 (PR #748) 缺少 jitter — 所有客户端在 429 风暴中同时重试
+  - BackendClient.cs: SendAsync 连接检查调用 Volatile.Read(ref _process) 4 次, 每次可返回不同 Process 引用, DisposeProcessAsync 并发时触发不必要的重连
+  - storage.rs: 零可操作 bug — SQL 全参数化 ✅, FTS5 转义正确 ✅, 原子写入 ✅, WAL checkpoint ✅, cascade delete ✅
+  - MainWindow/NotesView/SettingsDialog/Updates: 全部 async void 有 try-catch ✅, Interlocked guard 全覆盖 ✅, Volatile 跨线程保护完整 ✅
+  - #745 (extract_json fallback) 已在之前关闭为设计决策，跳过
+  - 正面发现: 394 Rust 测试全通过 ✅, sanitize_error 63处 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, 22/22 C# async void 有 try-catch ✅
+- 修复结果:
+  - #749 → PR #752 已合并 (CI 6/6 通过): SystemTime 纳秒 jitter — 退避范围从 [base] 扩展到 [base, 2*base)
+  - #750 → PR #751 已合并 (CI 6/6 通过): _process 单次捕获到局部变量 + EnsureConnectedAsync 后重新捕获
+- 审核结果: PR #751 和 PR #752 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 303 已合并 PR, 394 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 ~16K行 (storage.rs 5K行 + ai.rs 2.4K行 + C# 前端 5.2K行 + XAML)。storage.rs 20 个发现全部 LOW severity (TOCTOU exists/read、export 文件名碰撞、split_frontmatter EOF 边界、import 原始 source 丢失)。ai.rs 4 个 MEDIUM (jitter + extract_json fallback + is_request 范围宽 + 解析错误无上下文) 中 1 个可操作修复。C# 前端 2 个 MEDIUM (triple-read + non-atomic guard) 中 1 个修复。代码库经过 181 个审查循环和 303 个已合并 PR 后维持极高成熟度。

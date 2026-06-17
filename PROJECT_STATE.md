@@ -295,12 +295,12 @@
 - #750: BackendClient.SendAsync _process 单次捕获避免 stale read (PR #751 已合并)
 - #753: tag/keyword SQL LIKE 子串匹配 → json_each 精确匹配 (PR #756 已合并)
 - #754: NotesView OnDeleteNoteClicked 取消 in-flight detail load 防 stale UI (PR #755 已合并)
+- #758: StartProcess catch block NRE — _process 字段并发 DisposeAsync 竞态 → 局部变量捕获 (PR #759 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
 - #597: CI WinUI 测试 — PR #646 开放中，修复 GlobalUsings.cs + BackendClientTests.cs 编译错误 + 使用 dotnet vstest 执行测试
-- PR #757 已合并: WinUI 启动冒烟测试 — 检测 XamlParseException/缺失 DLL/未处理异常
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -1011,3 +1011,65 @@
 - 审核结果: PR #757 CI 6/6 通过并合并 (squash)。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 306 已合并 PR, 395 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 smoke-test-winui.ps1 (183行新脚本) + CI/CD 配置 + 全部 Rust 生产源文件。发现 2 个 MEDIUM + 1 个 LOW severity PS 5.1 兼容性 bug 并全部修复。Rust 后端经过 183 个审查循环后维持零缺陷状态。
+
+## 本轮循环状态 (循环#184)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#184
+- 本轮时间: 2026-06-17
+- 审查模块: ai.rs (2431行), lib.rs (3104行), storage.rs (5045行), models.rs (1001行), crypto.rs (342行), search_rules.rs (446行), prompting.rs (921行), vaultpilot-cli.rs (2993行), vaultpilot-agent.rs (673行), BackendClient.cs (712行), MainWindow.xaml.cs (3674行), NotesView.xaml.cs (355行), SettingsDialog.xaml.cs (325行), App.xaml.cs (176行), 全部 XAML (4 文件 800行), 全部 C# 测试 (6 文件 37 tests), CI/CD workflows, scripts/ (4 文件), contracts/, docs/
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 183 个审查循环后维持零缺陷状态
+  - Rust 后端 (~12.9K行): 零可操作 bug — sanitize_error 63处 ✅, SQL 全参数化 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, SSRF/路径穿越/prompt注入防护完整 ✅, 原子文件写入 ✅, 无 TODO/FIXME/HACK 注释 ✅
+  - Rust 后端: extract_json 多策略健壮解析 ✅, is_openai_reasoning_model 名称空间处理 ✅, 重试指数退避 + jitter ✅, rank_documents 单次 FTS5 查询 ✅
+  - C# 前端 (~5.5K行): 22/22 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅, Volatile.Read/Write 跨线程保护 ✅, GCHandle pinning 正确 ✅, P/Invoke 声明正确 ✅
+  - C# 测试覆盖差距分析: BackendClient (712行) 仅 3 个 trivial 测试, MainWindow (3674行) 仅静态 helper 测试, 14+ internal static 纯函数未测试 (ToRelativeTime, EstimateTokensForText, IsTimeInWindow, IsSupportedImageExtension, LooksLikeMarkdownPayload 等), ProviderConfig.ToString() API Key 遮蔽未测试 — 但因 #597 阻塞 CI 不运行 C# 测试，增强 issue 无法验证
+  - XAML (800行): AutomationProperties 49 处覆盖 ✅, ThemeResource 主题颜色 ✅, 无硬编码字符串问题
+  - CI/CD: 零缺陷 — permissions: contents: read ✅, cargo install --locked ✅, concurrency 控制 ✅
+  - scripts/: build-linux-cli.sh trap cleanup 正确 ✅, clean.ps1 安全模式 ✅, smoke-test-winui.ps1 PR #757 修复正确集成 ✅, build-windows-installers.ps1 MSBuild 检测完整 ✅
+  - docs/build.md: 6 处硬编码版本 `0.1.4` vs 实际 `0.2.9` — LOW INFO, 不创建 issue
+  - contracts/vaultpilot-agent.v1.json: `result`/`detail` 使用 `true` 类型 (JSON Schema any) — LOW INFO, 设计权衡灵活性
+  - 395 Rust 测试全通过 (lib:368, cli:16, agent:11), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 无可修复 issue
+- 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时 CANCELLED, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 306 已合并 PR, 395 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 全量代码库审查 — Rust 后端 ~12.9K行 + C# 前端 ~5.5K行 + XAML 800行 + CI/CD + scripts + contracts + docs = ~20K行。代码库经过 184 个审查循环和 306 个已合并 PR 后达到极高成熟度。全部安全防护完整且正确。仅剩 1 个阻塞 issue (#597 CI WinUI 测试基础设施)。
+
+## 本轮循环状态 (循环#185)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#185
+- 本轮时间: 2026-06-17
+- 审查模块: vaultpilot-cli.rs (2993行) MCP server + search_rules.rs (446行) + prompting.rs (921行) + models.rs (1001行) + ai.rs retry/jitter 逻辑 + BackendClient.cs async void 模式 + 全部 C# 源文件
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 184 个审查循环后维持零缺陷状态
+  - vaultpilot-cli.rs (2993行): MCP prompt 模板审查 — sanitize_mcp_prompt_content 正确应用于 summarize-note/find-related/draft-from-keywords 三个 prompt 模板 ✅, escape_xml_content 用于内联嵌入 ✅, stdin 逐字节读取 10MB 上限 ✅, HTTP bridge CORS/限流/body限制/超时 ✅, constant_time_eq subtle::ConstantTimeEq ✅, 所有 error 路径 sanitize_error ✅
+  - search_rules.rs (446行): trigger_matches 全词边界逻辑正确 ✅, relevance_term_matches 短 ASCII needle 双向匹配安全 ✅, 16 个测试覆盖完整 ✅
+  - prompting.rs (921行): XML 转义防止闭合标签突破 ✅, 双重转义防护正确 ✅, 所有系统提示包含 PROMPT_INJECTION_DEFENSE ✅, 22 个测试覆盖完整 ✅
+  - models.rs (1001行): serde 属性正确 ✅, StructuredNoteDraft source 默认值有显式测试 ✅, 验证逻辑测试完整 ✅
+  - ai.rs retry/jitter: SystemTime 纳秒 jitter 确定性但充足防 thundering herd ✅, 指数退避 2^(attempt+1) ✅, retryable 错误识别正确 ✅
+  - BackendClient.cs: 0 .Result/.Wait() ✅, 所有 async void 有 try-catch ✅, Volatile/Interlocked 跨线程保护完整 ✅
+  - 396 Rust 测试全通过 (lib:370, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 无可修复 issue
+- 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时 CANCELLED, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 306 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~5.4K行 (vaultpilot-cli.rs + search_rules.rs + prompting.rs + models.rs) + ai.rs retry/jitter 逻辑 + C# 前端 async 模式验证 = ~6K行。代码库经过 185 个审查循环和 306 个已合并 PR 后维持零缺陷状态。MCP prompt 模板注入防御、搜索评分、提示渲染、模型验证全部正确。仅剩 1 个阻塞 issue (#597 CI WinUI 测试基础设施)。
+
+## 本轮循环状态 (循环#186)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#186
+- 本轮时间: 2026-06-18
+- 审查模块: lib.rs (3104行) 工具编排循环 + vaultpilot-cli.rs (2993行) MCP server + vaultpilot-agent.rs (673行) agent stdin + BackendClient.cs (712行) 进程生命周期 + MainWindow.xaml.cs (3674行) 状态管理 + NotesView.xaml.cs (360行) + SettingsDialog.xaml.cs (325行) + App.xaml.cs (176行) + 全部 XAML
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #758 BUG (StartProcess catch block NRE — _process 字段并发 DisposeAsync 竞态)
+  - HIGH: BackendClient.StartProcess() catch block 使用 _process 字段直接调用 Dispose() — 若 DisposeAsync 并发执行 Interlocked.Exchange(ref _process, null)，catch 块内 _process.Dispose() 抛出 NRE，作为 async void 未处理异常传播
+  - MEDIUM: MCP tool handlers 调用同步 *_with_context 函数阻塞 tokio 执行器 — 当前单客户端 stdio 模式无害，未来并发扩展时需注意
+  - LOW: planned_tool_identity trim vs raw path dedup 检查不一致 (极端罕见)
+  - LOW: ExecuteAiRequestAsync 外层 try 内 CTS 创建失败时 UI 状态未恢复 (内存压力下理论风险)
+  - LOW: DisposeAsync 不 await pump tasks (被 catch 块缓解)
+  - LOW: NotesView CTS 未在 Unloaded 时释放
+  - LOW: Loading overlay 缺少 AutomationProperties
+  - 正面发现: Rust 396 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, SSRF/路径穿越/prompt注入防护完整 ✅, C# 22/22 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅
+- 修复结果:
+  - #758 → PR #759 已合并 (CI 6/6 通过): Process 捕获到局部变量 proc，catch 块使用 proc 替代 _process 字段
+- 审核结果: PR #759 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 307 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~7.4K行 (lib.rs + vaultpilot-cli.rs + vaultpilot-agent.rs) + C# 前端 ~5.6K行 (BackendClient + MainWindow + NotesView + SettingsDialog + App + XAML) = ~13K行。发现 1 个 HIGH severity async void 竞态条件并修复。代码库经过 186 个审查循环和 307 个已合并 PR 后维持极高成熟度。

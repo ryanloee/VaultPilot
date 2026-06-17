@@ -1950,26 +1950,29 @@ fn query_filtered_note_metas(
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut param_idx = 1usize;
 
-    // Tag filtering: each required tag must appear in the comma-separated tags column
+    // Tag filtering: each required tag must appear as an exact item in the
+    // JSON array stored in the tags column.  Uses json_each to avoid
+    // substring false-positives (e.g. "sd" matching "sdcard").
     for tag in &query.tags {
         let trimmed = tag.trim();
         if !trimmed.is_empty() {
-            let escaped = escape_like_pattern(trimmed);
-            conditions.push(format!("LOWER(tags) LIKE LOWER(?{param_idx}) ESCAPE '\\'"));
-            params.push(Box::new(format!("%{escaped}%")));
+            conditions.push(format!(
+                "EXISTS (SELECT 1 FROM json_each(tags) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
+            ));
+            params.push(Box::new(trimmed.to_string()));
             param_idx += 1;
         }
     }
 
-    // Keyword filtering: each required keyword must appear in the comma-separated keywords column
+    // Keyword filtering: each required keyword must appear as an exact item in
+    // the JSON array stored in the keywords column (same json_each approach).
     for kw in &query.keywords {
         let trimmed = kw.trim();
         if !trimmed.is_empty() {
-            let escaped = escape_like_pattern(trimmed);
             conditions.push(format!(
-                "LOWER(keywords) LIKE LOWER(?{param_idx}) ESCAPE '\\'"
+                "EXISTS (SELECT 1 FROM json_each(keywords) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
             ));
-            params.push(Box::new(format!("%{escaped}%")));
+            params.push(Box::new(trimmed.to_string()));
             param_idx += 1;
         }
     }
@@ -4769,6 +4772,45 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.tags.contains(&"kernel".to_string())));
+    }
+
+    #[test]
+    fn search_notes_tag_filter_exact_match() {
+        // Regression: tag filter must use exact match, not substring.
+        // Searching for tag "sd" must NOT match a note tagged "sdcard".
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "SDCard Note".to_string(),
+                    tags: vec!["sdcard".to_string()],
+                    ..Default::default()
+                },
+                body: "content".to_string(),
+                search_snippet: None,
+            },
+        )
+        .expect("save");
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["sd".to_string()],
+                keywords: vec![],
+                limit: Some(10),
+                ..Default::default()
+            },
+        )
+        .expect("search by tag");
+        assert!(
+            results.notes.is_empty(),
+            "tag 'sd' should not match tag 'sdcard', got {} results",
+            results.notes.len()
+        );
     }
 
     #[test]

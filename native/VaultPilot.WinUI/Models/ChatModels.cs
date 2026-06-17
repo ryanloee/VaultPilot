@@ -45,12 +45,12 @@ public sealed record ChatSession
         string CreatedAt,
         string UpdatedAt)
     {
-        this.Id = Id;
-        this.Title = Title;
+        this.Id = Id ?? string.Empty;
+        this.Title = Title ?? string.Empty;
         this.Turns = Turns ?? Array.Empty<ChatTurn>();
         this.Summary = Summary;
-        this.CreatedAt = CreatedAt;
-        this.UpdatedAt = UpdatedAt;
+        this.CreatedAt = CreatedAt ?? string.Empty;
+        this.UpdatedAt = UpdatedAt ?? string.Empty;
     }
 }
 
@@ -69,7 +69,7 @@ public sealed record ChatState
         string CurrentSessionId,
         IReadOnlyList<ChatSession> Sessions)
     {
-        this.CurrentSessionId = CurrentSessionId;
+        this.CurrentSessionId = CurrentSessionId ?? string.Empty;
         this.Sessions = Sessions ?? Array.Empty<ChatSession>();
     }
 }

@@ -2786,10 +2786,12 @@ impl McpResponse {
 }
 
 fn exit_ok(pretty: &bool, value: Value) -> ! {
+    // Issue #714: use serde_json::json! fallback for correct escaping
+    let fallback = serde_json::to_string(&serde_json::json!({"error": "serialization failed"})).unwrap_or_default();
     let output = if *pretty {
-        serde_json::to_string_pretty(&value).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| fallback.clone())
     } else {
-        serde_json::to_string(&value).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+        serde_json::to_string(&value).unwrap_or_else(|_| fallback)
     };
     println!("{output}");
     process::exit(0);
@@ -2797,10 +2799,11 @@ fn exit_ok(pretty: &bool, value: Value) -> ! {
 
 fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
     let error = serde_json::json!({ "error": { "code": code, "message": message } });
+    let fallback = serde_json::to_string(&serde_json::json!({"error": {"code": code, "message": message}})).unwrap_or_default();
     let output = if *pretty {
-        serde_json::to_string_pretty(&error).unwrap_or_else(|e| e.to_string())
+        serde_json::to_string_pretty(&error).unwrap_or_else(|_| fallback.clone())
     } else {
-        serde_json::to_string(&error).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
+        serde_json::to_string(&error).unwrap_or_else(|_| fallback)
     };
     eprintln!("{output}");
     process::exit(1);

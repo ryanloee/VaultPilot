@@ -1280,7 +1280,7 @@ async fn send_request_with_temperature(
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
                     warn!(attempt = attempt + 1, error = %error, "transport error, retrying");
-                    sleep(Duration::from_secs((attempt + 1) as u64 * 2)).await;
+                    sleep(Duration::from_secs(2u64.pow(attempt as u32 + 1))).await;
                     continue;
                 }
                 return Err(anyhow!(format_transport_error(&error, &endpoint)));
@@ -1333,7 +1333,7 @@ async fn send_request_with_temperature(
                     status = status.as_u16(),
                     "retryable API error, retrying"
                 );
-                sleep(Duration::from_secs((attempt + 1) as u64 * 2)).await;
+                sleep(Duration::from_secs(2u64.pow(attempt as u32 + 1))).await;
                 continue;
             }
 

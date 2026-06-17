@@ -84,6 +84,13 @@ jobs:
             throw "H.NotifyIcon.WinUI.dll not found in build output"
           }
 
+      - name: Smoke test WinUI app
+        shell: powershell
+        run: |
+          ./scripts/smoke-test-winui.ps1 `
+            -ExePath "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe" `
+            -TimeoutSeconds 8
+
       - name: Upload validation diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

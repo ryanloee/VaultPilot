@@ -156,3 +156,10 @@ jobs:
 
       - name: Build WinUI project
         run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /restore /p:Configuration=Release /p:Platform=x64
+
+      - name: Smoke test WinUI app
+        shell: powershell
+        run: |
+          ./scripts/smoke-test-winui.ps1 `
+            -ExePath "native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe" `
+            -TimeoutSeconds 8

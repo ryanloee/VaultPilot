@@ -95,7 +95,7 @@ public sealed partial class MainWindow : Window
     private double _contextUsagePercent;
     private string _startupStep = "初始化";
     private volatile int _updateDownloadPercent = -1;
-    private string _updateDownloadVersion = string.Empty;
+    private volatile string _updateDownloadVersion = string.Empty;
     private DispatcherTimer? _autoWakeTimer;
     private Views.NotesView? _notesView;
     private bool _notesViewLoaded;

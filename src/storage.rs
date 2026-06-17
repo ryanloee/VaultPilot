@@ -1581,6 +1581,31 @@ fn extract_note_image_refs(body: &str) -> Vec<String> {
 }
 
 fn compute_image_perceptual_hash(path: &Path) -> Option<u64> {
+    // Guard: skip files larger than 50 MB to prevent OOM from crafted images (#718)
+    const MAX_IMAGE_FILE_SIZE: u64 = 50 * 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() > MAX_IMAGE_FILE_SIZE {
+        tracing::warn!(
+            path = %path.display(),
+            size = meta.len(),
+            "image too large for perceptual hash, skipping"
+        );
+        return None;
+    }
+
+    // Guard: check decoded dimensions before full decode to prevent OOM from
+    // gigapixel images with small compressed size (#718)
+    const MAX_PIXELS: u64 = 4096 * 4096; // ~16 megapixels
+    let (w, h) = image::image_dimensions(path).ok()?;
+    if (w as u64).saturating_mul(h as u64) > MAX_PIXELS {
+        tracing::warn!(
+            path = %path.display(),
+            width = w,
+            height = h,
+            "image dimensions too large for perceptual hash, skipping"
+        );
+        return None;
+    }
     let image = ImageReader::open(path).ok()?.decode().ok()?;
     let grayscale = image
         .resize_exact(9, 8, FilterType::Triangle)

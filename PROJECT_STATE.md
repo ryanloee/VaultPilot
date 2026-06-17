@@ -288,6 +288,8 @@
 - #737: ChatSession/ChatState positional constructor null 漏洞 — 已由 PR #740 修复
 - #741: is_openai_reasoning_model 名称空间模型名不匹配 — rsplit('/') 提取有效名称 (PR #743 已合并)
 - #742: OpenAI reasoning models 使用 role system + resolve_max_output_tokens 默认 8192 不足 — developer role + 32768 (PR #743 已合并)
+- #744: SettingsDialog timeout 允许 1ms — 最小值 1000ms (PR #747 已合并)
+- #746: ai.rs 重试线性退避 → 指数退避 (PR #748 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -924,3 +926,24 @@
 - 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时失败, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 299 已合并 PR, 394 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 Rust 后端 ~7.5K行 (lib.rs 工具编排 + storage.rs 搜索管道 + ai.rs 请求/重试/解析 + vaultpilot-cli.rs MCP server 全文 + vaultpilot-agent.rs 全文) + C# 前端 ~350行 (App.xaml.cs + WrapPanel.cs) = ~8K行。代码库经过 179 个审查循环和 299 个已合并 PR 后达到极高成熟度。全部安全防护 (sanitize_error 63处, SQL 全参数化, SSRF/路径穿越/prompt注入防护, 原子文件写入, 跨线程保护) 完整且正确。
+
+## 本轮循环状态 (循环#180)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#180
+- 本轮时间: 2026-06-17
+- 审查模块: ai.rs (2413行) OpenAI reasoning + 重试循环, BackendClient.cs (709行) 进程生命周期, MainWindow.xaml.cs (3674行) 状态管理, NotesView.xaml.cs (355行) 搜索竞态, SettingsDialog.xaml.cs (325行) 输入校验, vaultpilot-cli.rs (2993行) MCP server + HTTP bridge, storage.rs (5045行) 搜索管道 + 备份
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #744 BUG (SettingsDialog timeout 最小值), #745 BUG (extract_json fallback), #746 PERF (重试指数退避)
+  - ai.rs: OpenAI reasoning model PR #743 集成正确 ✅, 3 次重试线性退避改为指数退避, extract_json fallback 因 repair_json_string_escapes 依赖而保持宽松
+  - BackendClient.cs: StartProcess async void 无互斥锁 (理论风险, 当前调用模式不触发), PumpStdoutAsync 捕获 stale _process (已由 PR #709 部分修复)
+  - SettingsDialog: timeout 允许 1ms — 所有后端请求会失败
+  - vaultpilot-cli.rs: MCP prompt 注入防护完整 ✅, HTTP bridge 安全完整 ✅, 零可操作 bug
+  - storage.rs: 搜索管道正确 ✅, 备份一致性 ✅, WalkDir 静默跳过错误 (LOW)
+  - 正面发现: 394 Rust 测试全通过 ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, C# 22/22 async void 有 try-catch ✅
+- 修复结果:
+  - #744 → PR #747 已合并 (CI 6/6 通过): timeout 最小值 1000ms
+  - #745 → 关闭: extract_json fallback 宽松是设计决策 (parse_tool_call_response 有 repair_json_string_escapes)
+  - #746 → PR #748 已合并 (CI 6/6 通过): 2^(attempt+1) 指数退避
+- 审核结果: PR #747 和 PR #748 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 301 已合并 PR, 394 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 后端 ~12.8K行 (ai.rs + storage.rs + vaultpilot-cli.rs) + C# 前端 ~5.3K行 (BackendClient + MainWindow + NotesView + SettingsDialog) = ~18K行。3 路并行审查。代码库经过 180 个审查循环和 301 个已合并 PR 后维持极高成熟度。发现 2 个 MEDIUM severity 可操作改进并修复, 1 个因设计权衡关闭。

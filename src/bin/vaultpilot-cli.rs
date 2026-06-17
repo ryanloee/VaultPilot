@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -1025,21 +1025,20 @@ async fn run_http_bridge(
     );
 
     let listener = tokio::net::TcpListener::bind(address).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }
 
 async fn rate_limit_middleware(
     State(rate_limiter): State<Arc<RateLimiter>>,
-    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    // Extract a rate-limit key: use the bearer token if present, otherwise
-    // fall back to a generic key.
-    let key = bridge_token_from_headers(&headers)
-        .map(str::to_string)
-        .unwrap_or_else(|| "anonymous".to_string());
+    // Use client IP as rate-limit key to prevent token-rotation bypass (#767).
+    // Previously the bearer token was used, allowing attackers to send
+    // unlimited requests with unique random tokens.
+    let key = format!("{}", addr.ip());
 
     if !rate_limiter.check(&key) {
         return (

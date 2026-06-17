@@ -2816,8 +2816,8 @@ fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        bridge_token_from_headers, constant_time_eq, normalize_bridge_token,
-        sanitize_mcp_prompt_content, escape_xml_content, simplify_cli_text, strip_cli_markdown_from_chat_state,
+        bridge_token_from_headers, constant_time_eq, escape_xml_content, normalize_bridge_token,
+        sanitize_mcp_prompt_content, simplify_cli_text, strip_cli_markdown_from_chat_state,
         strip_markdown_wrapper_tags, validate_http_bridge_binding,
     };
     use axum::http::{HeaderMap, HeaderValue};

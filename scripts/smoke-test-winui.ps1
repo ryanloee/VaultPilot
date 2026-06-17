@@ -8,7 +8,7 @@
     This script:
     1. Launches VaultPilot.WinUI.exe
     2. Monitors the process for $TimeoutSeconds
-    3. If the process exits within that window → startup crash detected
+    3. If the process exits within that window -> startup crash detected
     4. Checks crash.log for unhandled exceptions
     5. Returns exit code 0 on success, 1 on failure
 
@@ -41,7 +41,7 @@ $processName = [System.IO.Path]::GetFileNameWithoutExtension($ExePath)
 $fakeLocalAppData = Join-Path $env:TEMP "vaultpilot-smoke-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $fakeLocalAppData | Out-Null
 
-$logDir = Join-Path $fakeLocalAppData "com.local.vaultpilot" "logs"
+$logDir = Join-Path (Join-Path $fakeLocalAppData "com.local.vaultpilot") "logs"
 
 Write-Host "=== VaultPilot WinUI Smoke Test ==="
 Write-Host "Exe:      $ExePath"
@@ -82,7 +82,7 @@ try {
 $processId = $process.Id
 Write-Host "Process started with PID: $processId"
 
-# Poll: if process exits within timeout → crash
+# Poll: if process exits within timeout -> crash
 $crashed = $false
 $exitCode = $null
 $stderrOutput = ""
@@ -122,7 +122,7 @@ for ($i = 0; $i -lt $TimeoutSeconds; $i++) {
 }
 
 if (-not $crashed) {
-    # Process survived the timeout → healthy
+    # Process survived the timeout -> healthy
     Write-Host ""
     Write-Host "Process survived ${TimeoutSeconds}s -- app starts OK."
 

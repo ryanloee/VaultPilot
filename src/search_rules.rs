@@ -84,8 +84,15 @@ fn relevance_term_matches(term: &str, needle: &str) -> bool {
     if needle.is_ascii() && needle.len() < 5 {
         // Short ASCII needle: whole-word match in both directions
         trigger_matches(term, needle) || trigger_matches(needle, term)
-    } else {
+    } else if !needle.is_ascii() {
+        // CJK / non-ASCII: bidirectional substring match is appropriate
         term.contains(needle) || needle.contains(term)
+    } else {
+        // Long ASCII needle (>=5 chars): only check if term contains needle.
+        // The reverse direction (needle.contains(term)) would cause short terms
+        // like "sd" to match long needles like "sdmmc_controller_driver", inflating
+        // relevance scores for unrelated documents.
+        term.contains(needle)
     }
 }
 

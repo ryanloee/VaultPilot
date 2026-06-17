@@ -900,3 +900,27 @@
 - 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时失败, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 299 已合并 PR, 394 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 vaultpilot-cli.rs HTTP bridge + CLI (~1630行) + C# 测试套件 (8 文件) + models.rs (1001行) + crypto.rs (342行) = ~3K行代码 + ~50 测试。vaultpilot-cli.rs HTTP bridge 安全实践完整 (constant_time_eq + CORS + rate limiting + body limit + timeout + SSRF 防护)。C# 测试覆盖有显著差距 (BackendClient/MainWindow 95%+ 未测试) 但属增强项。models.rs/crypto.rs 发现均为 LOW severity 设计权衡。代码库经过 178 个审查循环后维持零缺陷状态。
+
+## 本轮循环状态 (循环#179)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#179
+- 本轮时间: 2026-06-17
+- 审查模块: lib.rs 工具编排循环 (323-579行) + 搜索路径 + 压缩逻辑, storage.rs search_notes_with_context + rank_documents + query_filtered/query_like, ai.rs send_request_with_temperature 重试循环 + extract_json + build_input_blocks + is_openai_reasoning_model, vaultpilot-cli.rs MCP server 全文 (handle_mcp_request + 全部 mcp_call_* handler + HTTP bridge + prompts/get), vaultpilot-agent.rs 全文 (673行), App.xaml.cs (176行), WrapPanel.cs (176行)
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 178 个审查循环和 299 个已合并 PR 后维持零缺陷状态
+  - lib.rs 工具编排: 4 轮工具循环上限 ✅, 已执行工具去重 ✅, search_notes 空知识库 fallback ✅, load_context_notes limit.saturating_mul(3).max(8) ✅, compress 95% 阈值 + RECENT_TURNS_AFTER_COMPRESSION 保护 ✅, finalize 多参数函数正确传递 ✅
+  - storage.rs 搜索管道: search_notes_with_context SQL/FTS 双路径 ✅, has_filters 时 SQL 级过滤 ✅, 无 text 有 filters 走 query_filtered ✅, FTS 结果后 in-memory tag/keyword/date 过滤 ✅, total 在 truncate 前计算 ✅, escape_like_pattern 转义 %_/ ✅, query_like_note_metas .take(20) 限制 ✅
+  - storage.rs rank_documents: 单次 FTS5 查询 ✅, candidate 合并去重 ✅, 多维评分 (FTS + attachment + semantic + visual + recency) ✅, 排序后 truncate ✅
+  - ai.rs send_request_with_temperature: 3 次重试 + 指数退避 ✅, retryable 错误识别 ✅, MAX_RESPONSE_SIZE 限制 ✅, from_utf8 (非 lossy) ✅, Anthropic/OpenAI 双协议解析 ✅, reasoning model max_completion_tokens ✅
+  - ai.rs extract_json: extract_json_block 全位置尝试 + serde_json 校验 ✅, fallback starts_with/ends_with ✅
+  - ai.rs build_input_blocks: 图片 20MB 限制 ✅, detect_image_media_type 白名单扩展名 ✅
+  - vaultpilot-cli.rs MCP server: initialize/tools/list/resources/list+read/prompts/list+get/tools/call 全覆盖 ✅, sanitize_mcp_prompt_content + escape_xml_content 应用于所有 prompt 模板 ✅, notes.search limit.min(200) ✅, resources 分页 cursor ✅, unknown method 返回错误 ✅
+  - vaultpilot-cli.rs HTTP bridge: CORS localhost-only ✅, rate limiter 60/60s ✅, 10MB body ✅, 180s timeout ✅, non-loopback requires token ✅, resolve_local_image_url 路径穿越防护 ✅
+  - vaultpilot-agent.rs: 逐字节 stdin 读取 10MB 上限 ✅, 120s 请求超时 ✅, panic hook sanitize_error ✅, log rotation 512KB ✅, all error paths sanitize_error ✅
+  - App.xaml.cs: _exitInProgress Interlocked guard ✅, _isExiting UI 线程单线程访问无需 volatile ✅, single instance Mutex ✅, BeginExitForUpdate + ExitApplication 竞态保护 ✅
+  - WrapPanel.cs: 标准 Panel 实现，MeasureOverride/ArrangeOverride 正确 ✅
+  - 394 Rust 测试全通过 (lib:368, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 无可修复 issue
+- 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时失败, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 299 已合并 PR, 394 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 Rust 后端 ~7.5K行 (lib.rs 工具编排 + storage.rs 搜索管道 + ai.rs 请求/重试/解析 + vaultpilot-cli.rs MCP server 全文 + vaultpilot-agent.rs 全文) + C# 前端 ~350行 (App.xaml.cs + WrapPanel.cs) = ~8K行。代码库经过 179 个审查循环和 299 个已合并 PR 后达到极高成熟度。全部安全防护 (sanitize_error 63处, SQL 全参数化, SSRF/路径穿越/prompt注入防护, 原子文件写入, 跨线程保护) 完整且正确。

@@ -908,6 +908,10 @@ public sealed partial class MainWindow : Window
             ShowThinkingIndicator();
             ScrollToLatest();
 
+            // Issue #710: use the user-configured request timeout (plus buffer for
+            // IPC overhead) instead of the hardcoded 90s default.
+            var aiTimeout = TimeSpan.FromMilliseconds(
+                (_settings?.Provider.RequestTimeoutMs ?? 60_000) + 30_000);
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                     "askWithAi",
                     new
@@ -916,7 +920,8 @@ public sealed partial class MainWindow : Window
                         history,
                         imagePaths = pendingAttachments.Select(item => item.Path).ToArray()
                     },
-                    cancellationToken);
+                    cancellationToken,
+                    aiTimeout);
             RemoveThinkingIndicator();
             _lastAiAnswer = answer;
 

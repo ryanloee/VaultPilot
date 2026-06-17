@@ -300,6 +300,8 @@
 - #761: ComposerBox.Text 清除移入 inner try-catch — RefreshAttachments 异常不再丢失用户输入 (PR #762 已合并)
 - #763: docs 向量每轮覆盖 → 累积 + HashSet 去重 — 多轮工具执行引用完整 (PR #765 已合并)
 - #764: prompting.rs XML 转义补齐开标签 — escape_xml_tags 统一防御纵深 (PR #766 已合并)
+- #767: HTTP bridge rate limiter token 轮换绕过 → 客户端 IP 作为限流 key (PR #771 已合并)
+- #768: resolve_local_image_url 文件存在性探测 → 路径限制前置 (PR #770 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1128,3 +1130,29 @@
 - 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时失败, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 310 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 ~18K行 (Rust 后端 ~12.9K行 + C# 前端 ~5.5K行 + CI/CD 配置)。Rust 后端: 零可操作 bug — sanitize_error 63处完整, SQL 全参数化, 0 unsafe, SSRF/路径穿越/prompt注入防护完整。C# 前端: 零可操作 bug — async void 保护完整, 跨线程保护完整。代码库经过 189 个审查循环和 310 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#190)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#190
+- 本轮时间: 2026-06-18
+- 审查模块: vaultpilot-cli.rs (2993行) MCP server + HTTP bridge, vaultpilot-agent.rs (673行), storage.rs (5087行) 搜索管道, search_rules.rs (446行)
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #767 SECURITY (rate limiter token 轮换绕过), #768 SECURITY (resolve_local_image_url 文件存在性探测), #769 BUG (SearchResult.total SQL LIMIT 截断)
+  - #767 MEDIUM SECURITY: HTTP bridge rate limiter 使用 bearer token 作为 key，攻击者发送随机 token 绕过限流 — 改用客户端 IP
+  - #768 MEDIUM SECURITY: resolve_local_image_url 先检查 path.exists() 再 normalize_tool_path()，不同错误消息泄露文件存在性 — 改为先限制路径再检查存在性
+  - #769 LOW-MEDIUM BUG: search_notes_with_context SQL 路径 total = notes.len() 受 SQL LIMIT 截断，分页 UI 显示不正确总计数
+  - LOW: MCP JSON parse error 未 sanitize_error (vaultpilot-cli.rs L1504)
+  - LOW: resources/read note ID 未格式验证 (vaultpilot-cli.rs L1776)
+  - LOW: MCP notifications 初始化前接受 (vaultpilot-cli.rs L2039)
+  - LOW: agent 日志轮转 TOCTOU (vaultpilot-agent.rs L237)
+  - LOW: auto_backup_database 未 fsync 备份文件 (storage.rs L3117)
+  - LOW: rebuild_index 路径规范化不一致 (storage.rs L880)
+  - LOW: rank_documents O(N) 文件读取用于 body 评分 (storage.rs L2471)
+  - LOW: vault_export 非原子输出 (storage.rs L3147)
+  - search_rules.rs: 零缺陷 — trigger_matches 全词边界正确 ✅, relevance_term_matches 三路逻辑正确 ✅
+- 修复结果:
+  - #768 → PR #770 已合并 (CI 6/6 通过): normalize_tool_path 前置于 path.exists()
+  - #767 → PR #771 已合并 (CI 6/6 通过): ConnectInfo<SocketAddr> 客户端 IP 作为限流 key + into_make_service_with_connect_info
+- 审核结果: PR #770 和 PR #771 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **2 open issue (#597 阻塞 + #769), 1 open PR (#646), 312 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 vaultpilot-cli.rs (2993行) + vaultpilot-agent.rs (673行) + storage.rs (5087行) + search_rules.rs (446行) = ~9.2K行。发现 2 个 MEDIUM security issues 并修复。C# 前端审查因 API 限流未完成。代码库经过 190 个审查循环和 312 个已合并 PR 后维持极高成熟度。

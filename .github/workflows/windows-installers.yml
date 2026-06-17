@@ -84,6 +84,13 @@ jobs:
             throw "H.NotifyIcon.WinUI.dll not found in build output"
           }
 
+      - name: Smoke test WinUI app
+        shell: powershell
+        run: |
+          ./scripts/smoke-test-winui.ps1 `
+            -ExePath "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe" `
+            -TimeoutSeconds 8
+
       - name: Upload validation diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -157,6 +164,17 @@ jobs:
             -RepoUrl "https://github.com/${{ github.repository }}" `
             -GitHubToken "$env:GITHUB_TOKEN" `
             -FetchReleaseHistory:$fetchReleaseHistory
+
+      - name: Smoke test published app
+        shell: powershell
+        run: |
+          $publishDir = "artifacts/velopack/publish/${{ matrix.platform == 'x64' && 'win-x64' || 'win-x86' }}"
+          $exePath = Join-Path $publishDir "VaultPilot.WinUI.exe"
+          if (Test-Path $exePath) {
+            ./scripts/smoke-test-winui.ps1 -ExePath $exePath -TimeoutSeconds 8
+          } else {
+            Write-Host "Published exe not found at $exePath, skipping smoke test"
+          }
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

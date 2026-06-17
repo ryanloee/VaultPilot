@@ -79,7 +79,9 @@ public sealed class BackendClient : IAsyncDisposable
             return;
         }
 
-        Volatile.Write(ref _process, new Process
+        // Issue #758: Capture to local variable so the catch block can safely
+        // dispose it even if DisposeAsync nulls _process concurrently.
+        var proc = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -93,15 +95,16 @@ public sealed class BackendClient : IAsyncDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true
             }
-        });
+        };
+        Volatile.Write(ref _process, proc);
 
         try
         {
-            _process.Start();
+            proc.Start();
         }
         catch (Exception ex)
         {
-            _process.Dispose();
+            proc.Dispose();
             Volatile.Write(ref _process, null);
             Trace.TraceError($"StartProcess: process failed to start: {ex}");
             ConnectionStateChanged?.Invoke(false);

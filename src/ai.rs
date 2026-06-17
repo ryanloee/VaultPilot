@@ -1,6 +1,10 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::HashSet,
+    path::Path,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -1280,7 +1284,14 @@ async fn send_request_with_temperature(
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
                     warn!(attempt = attempt + 1, error = %error, "transport error, retrying");
-                    sleep(Duration::from_secs(2u64.pow(attempt as u32 + 1))).await;
+                    // Issue #749: add jitter to prevent thundering herd
+                    let base = 2u64.pow(attempt as u32 + 1);
+                    let jitter = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos() as u64
+                        % base;
+                    sleep(Duration::from_secs(base + jitter)).await;
                     continue;
                 }
                 return Err(anyhow!(format_transport_error(&error, &endpoint)));
@@ -1333,7 +1344,14 @@ async fn send_request_with_temperature(
                     status = status.as_u16(),
                     "retryable API error, retrying"
                 );
-                sleep(Duration::from_secs(2u64.pow(attempt as u32 + 1))).await;
+                // Issue #749: add jitter to prevent thundering herd
+                let base = 2u64.pow(attempt as u32 + 1);
+                let jitter = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64
+                    % base;
+                sleep(Duration::from_secs(base + jitter)).await;
                 continue;
             }
 

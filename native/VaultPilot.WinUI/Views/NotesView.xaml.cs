@@ -205,6 +205,11 @@ public sealed partial class NotesView : UserControl
     {
         if (_selectedNote is null) return;
 
+        // Cancel any in-flight detail load to prevent stale UI overwrite
+        _loadDetailCts?.Cancel();
+        _loadDetailCts?.Dispose();
+        _loadDetailCts = null;
+
         try
         {
             var note = _selectedNote;

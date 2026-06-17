@@ -576,10 +576,15 @@ pub async fn select_relevant_note_ids(
 
 /// Check if a model name refers to an OpenAI reasoning model (o1, o3, o4 series).
 /// Uses word-boundary-aware matching to avoid false positives like "phi-1", "co1der".
+///
+/// Handles namespaced model names (e.g. "openai/o1-mini", "together/o3-mini") by
+/// extracting the effective name after the last `/`. (#741)
 fn is_openai_reasoning_model(model: &str) -> bool {
+    // #741: Handle namespaced model names from proxy services (OpenRouter, Together, etc.)
+    let effective_name = model.rsplit('/').next().unwrap_or(model);
     // Known reasoning model prefixes: o1, o3, o4 (with optional suffixes like -mini, -preview)
     for prefix in &["o1", "o3", "o4"] {
-        if let Some(rest) = model.strip_prefix(prefix) {
+        if let Some(rest) = effective_name.strip_prefix(prefix) {
             // Exact match or followed by a separator (not a letter)
             if rest.is_empty() || !rest.as_bytes()[0].is_ascii_alphabetic() {
                 return true;
@@ -707,6 +712,10 @@ pub fn resolve_max_output_tokens(model: &str, configured: Option<u32>) -> u32 {
         || model_lower.contains("gpt-5")
     {
         return 16384;
+    }
+    // #742: Reasoning models (o1/o3/o4) support 32768+ output tokens
+    if is_openai_reasoning_model(&model_lower) {
+        return 32768;
     }
 
     8192
@@ -1234,7 +1243,8 @@ async fn send_request_with_temperature(
             serde_json::to_vec(&payload)?.into()
         }
         crate::models::ProviderType::OpenAi => {
-            let messages = build_openai_messages(system, prompt, image_paths).await?;
+            let messages =
+                build_openai_messages(&provider.model, system, prompt, image_paths).await?;
             let max_output = resolve_max_output_tokens(&provider.model, provider.max_output_tokens);
             let body_bytes = if is_openai_reasoning_model(&provider.model) {
                 // Reasoning models (o1/o3/o4) require max_completion_tokens
@@ -1474,10 +1484,12 @@ async fn build_input_blocks(
 
 /// Build the messages array for an OpenAI-compatible request.
 ///
-/// The system prompt is emitted as a `system` role message. User content is a
-/// plain string when no images are attached, or an array of content parts when
-/// images are present.
+/// The system prompt is emitted as a `system` role message (or `developer` for
+/// OpenAI reasoning models o1/o3/o4 per #742). User content is a plain string
+/// when no images are attached, or an array of content parts when images are
+/// present.
 async fn build_openai_messages(
+    model: &str,
     system: &str,
     prompt: &str,
     image_paths: &[String],
@@ -1485,8 +1497,14 @@ async fn build_openai_messages(
     let mut messages = Vec::new();
 
     if !system.is_empty() {
+        // #742: Reasoning models (o1/o3/o4) require "developer" role instead of "system"
+        let system_role = if is_openai_reasoning_model(model) {
+            "developer"
+        } else {
+            "system"
+        };
         messages.push(OpenAiMessage {
-            role: "system".to_string(),
+            role: system_role.to_string(),
             content: OpenAiContent::Text(system.to_string()),
         });
     }
@@ -1826,8 +1844,8 @@ mod tests {
         generate_programmatic_snippet, heuristic_note_from_input, is_openai_reasoning_model,
         is_private_ip, is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
         parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
-        resolve_context_window, validate_base_url, AssistantToolCall, OpenAiContent, OpenAiMessage,
-        OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
+        resolve_context_window, resolve_max_output_tokens, validate_base_url, AssistantToolCall,
+        OpenAiContent, OpenAiMessage, OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -2180,6 +2198,34 @@ mod tests {
         assert!(!is_openai_reasoning_model("pro1"));
         assert!(!is_openai_reasoning_model("some-o3thing"));
         assert!(!is_openai_reasoning_model("mo4del"));
+    }
+
+    #[test]
+    fn is_openai_reasoning_model_handles_namespaced_names() {
+        // #741: Proxy services use namespaced model names
+        assert!(is_openai_reasoning_model("openai/o1-mini"));
+        assert!(is_openai_reasoning_model("openai/o1-preview"));
+        assert!(is_openai_reasoning_model("together/o3-mini"));
+        assert!(is_openai_reasoning_model("custom-provider/o4-mini"));
+        assert!(is_openai_reasoning_model("org/o1"));
+        // Namespaced non-reasoning models should NOT match
+        assert!(!is_openai_reasoning_model("openai/gpt-4o"));
+        assert!(!is_openai_reasoning_model("together/phi-1"));
+        assert!(!is_openai_reasoning_model("provider/pro1"));
+    }
+
+    #[test]
+    fn resolve_max_output_tokens_reasoning_models() {
+        // #742: Reasoning models should get 32768 default
+        assert_eq!(resolve_max_output_tokens("o1-mini", None), 32768);
+        assert_eq!(resolve_max_output_tokens("o3-mini", None), 32768);
+        assert_eq!(resolve_max_output_tokens("o4-mini", None), 32768);
+        assert_eq!(resolve_max_output_tokens("openai/o1-mini", None), 32768);
+        // Explicit config overrides
+        assert_eq!(resolve_max_output_tokens("o1-mini", Some(16384)), 16384);
+        // Non-reasoning models still get default
+        assert_eq!(resolve_max_output_tokens("gpt-4o", None), 16384);
+        assert_eq!(resolve_max_output_tokens("unknown-model", None), 8192);
     }
 
     #[test]

@@ -1248,8 +1248,7 @@ fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, Strin
     if url.starts_with("file://") {
         // Parse as URL to properly decode percent-encoded characters (#773).
         // RFC 8089 file:// URLs encode spaces as %20, Unicode as %XX sequences, etc.
-        let parsed =
-            url::Url::parse(url).map_err(|e| format!("invalid file URL: {}", e))?;
+        let parsed = url::Url::parse(url).map_err(|e| format!("invalid file URL: {}", e))?;
         let path = parsed
             .to_file_path()
             .map_err(|_| "invalid file URL path".to_string())?;

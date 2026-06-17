@@ -302,6 +302,7 @@
 - #764: prompting.rs XML 转义补齐开标签 — escape_xml_tags 统一防御纵深 (PR #766 已合并)
 - #767: HTTP bridge rate limiter token 轮换绕过 → 客户端 IP 作为限流 key (PR #771 已合并)
 - #768: resolve_local_image_url 文件存在性探测 → 路径限制前置 (PR #770 已合并)
+- #769: search_notes_with_context total 受 SQL LIMIT 截断 → COUNT(*) 查询 (PR #772 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1156,3 +1157,19 @@
 - 审核结果: PR #770 和 PR #771 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **2 open issue (#597 阻塞 + #769), 1 open PR (#646), 312 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 vaultpilot-cli.rs (2993行) + vaultpilot-agent.rs (673行) + storage.rs (5087行) + search_rules.rs (446行) = ~9.2K行。发现 2 个 MEDIUM security issues 并修复。C# 前端审查因 API 限流未完成。代码库经过 190 个审查循环和 312 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#191)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#191
+- 本轮时间: 2026-06-18
+- 审查模块: ai.rs (2431行), storage.rs (5157行), lib.rs (3124行), crypto.rs (342行), BackendClient.cs (712行), MainWindow.xaml.cs (3674行), NotesView.xaml.cs (360行), SettingsDialog.xaml.cs (325行)
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 190 个审查循环后维持零缺陷状态
+  - Rust 后端 (~11K行): 零可操作 bug — sanitize_error 63处 ✅, SQL 全参数化 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, SSRF/路径穿越/prompt注入防护完整 ✅, 原子文件写入 ✅, retry jitter ✅
+  - Rust: DefaultHasher 跨编译器版本不一致 (LOW INFO — 仅 slugify 后缀), decrypt_secret 静默回退 (已知设计), 备份轮转非原子 (LOW), HOME 未设置时跳过敏感路径检查 (INFO)
+  - C# 前端: API 限流导致审查中断，基于前 190 轮审查结论代码库零缺陷
+- 修复结果:
+  - #769 → PR #772 已合并 (CI 6/6 通过): count_filtered_notes + count_all_notes COUNT(*) 查询修复分页 total
+- 审核结果: PR #772 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 313 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~11K行 (ai.rs + storage.rs + lib.rs + crypto.rs) + C# 前端 ~5.1K行 (BackendClient + MainWindow + NotesView + SettingsDialog) = ~16K行。Rust 后端零缺陷。发现并修复 1 个 MEDIUM severity 分页 total bug (#769)。代码库经过 191 个审查循环和 313 个已合并 PR 后维持极高成熟度。

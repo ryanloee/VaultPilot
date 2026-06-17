@@ -582,6 +582,9 @@
 - #702: IsConnected 已释放 Process 竞态 — HasExited 抛出 InvalidOperationException (PR #705 已合并)
 - #708: StartProcess/DisposeAsync 竞态 — 释放后新进程孤立 (PR #709 已合并)
 - #710: BackendClient.SendAsync 90s 硬编码 IPC 超时忽略用户 RequestTimeoutMs (PR #711 已合并)
+- #712: MCP find-related prompt 模板 note ID 未 sanitize — prompt 注入绕过 (PR #715 已合并)
+- #713: BackendClient.DisposeProcessAsync WaitForExitAsync 无超时 — Kill() 失败导致无限挂起 (PR #716 已合并)
+- #714: exit_ok/exit_error JSON fallback 使用未转义 format! — 特殊字符产生畸形 JSON (PR #717 已合并)
 
 ## 本轮循环状态 (循环#164)
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
@@ -746,3 +749,25 @@
 - 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时失败, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 293 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 ~16.7K行 (Rust 11.6K行 + C# 4.4K行 + XAML)。代码库经过 169 个审查循环和 293 个已合并 PR 后达到极高成熟度。仅发现 2 个 LOW severity 理论问题（CachedClient 内存中 API key 存储 + 文件系统 TOCTOU），均为标准桌面应用开发权衡，不可操作。
+
+## 本轮循环状态 (循环#170)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#170
+- 本轮时间: 2026-06-17
+- 审查模块: vaultpilot-cli.rs (2956行), models.rs (1001行), crypto.rs (318行), search_rules.rs (439行), BackendClient.cs (705行), MainWindow.xaml.cs (3674行), MainWindow.Updates.cs (130行), NotesView.xaml.cs (355行), SettingsDialog.xaml.cs (325行), App.xaml.cs (176行), lib.rs (3104行), ai.rs (2303行), prompting.rs (921行), 全部测试文件
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #712 SECURITY (MCP prompt 注入 via note ID), #713 BUG (WaitForExitAsync 无超时), #714 BUG (JSON fallback 畸形输出)
+  - #712 HIGH SECURITY: find-related MCP prompt 模板 sanitize title/summary 但未 sanitize note ID — 用户可通过 notes.create 设置恶意 ID 突破 prompt 注入防护
+  - #713 MEDIUM BUG: DisposeProcessAsync WaitForExitAsync 无 CancellationToken — Kill() 失败时无限挂起阻塞应用退出
+  - #714 LOW BUG: exit_ok/exit_error JSON fallback 使用 format! 构造 JSON — 含引号/反斜杠的错误消息产生畸形 JSON
+- 修复结果:
+  - #712 → PR #715 已合并 (CI 6/6 通过): 提取 escape_xml_content() helper + 应用到 m.id + 3 回归测试
+  - #713 → PR #716 已合并 (CI 6/6 通过): 5s CancellationTokenSource 超时
+  - #714 → PR #717 已合并 (CI 6/6 通过): serde_json::json! fallback + unwrap_or
+- 审核结果: PR #715, #716, #717 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 296 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 ~16.7K行 (Rust 11.6K行 + C# 5K行 + 测试文件)。
+  - Rust 后端: vaultpilot-cli.rs (2956行) MCP server/HTTP bridge/CLI 三大组件 — 发现 prompt 注入漏洞 (#712) 和 JSON fallback 问题 (#714)；models.rs (1001行) 数据模型正确；crypto.rs (318行) AES-GCM nonce CSPRNG + PBKDF2 600k 正确；search_rules.rs (439行) ASCII 全词匹配 + CJK 子串匹配正确
+  - Rust 后端: lib.rs (3104行) + ai.rs (2303行) + prompting.rs (921行) — sanitize_error 63处调用完整 ✅, SSRF/路径穿越/prompt注入防护完整 ✅, SQL 全参数化 ✅, 0 unsafe ✅, 0 生产 unwrap ✅
+  - C# 前端: BackendClient.cs (705行) — 发现 WaitForExitAsync 无超时 (#713)；MainWindow.xaml.cs (3674行) + NotesView + SettingsDialog + App + Updates — 22/22 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅
+  - 387+ Rust 测试全通过, 0 unsafe, 0 生产 unwrap

@@ -205,6 +205,15 @@ struct OpenAiRequest<'a> {
     messages: Vec<OpenAiMessage>,
 }
 
+/// Request struct for OpenAI reasoning models (o1/o3/o4) which require
+/// `max_completion_tokens` instead of `max_tokens` and do not support `temperature`.
+#[derive(Debug, Serialize)]
+struct OpenAiReasoningRequest<'a> {
+    model: &'a str,
+    max_completion_tokens: u32,
+    messages: Vec<OpenAiMessage>,
+}
+
 #[derive(Debug, Serialize)]
 struct OpenAiMessage {
     role: String,
@@ -1226,13 +1235,26 @@ async fn send_request_with_temperature(
         }
         crate::models::ProviderType::OpenAi => {
             let messages = build_openai_messages(system, prompt, image_paths).await?;
-            let payload = OpenAiRequest {
-                model: &provider.model,
-                max_tokens: resolve_max_output_tokens(&provider.model, provider.max_output_tokens),
-                temperature,
-                messages,
+            let max_output = resolve_max_output_tokens(&provider.model, provider.max_output_tokens);
+            let body_bytes = if is_openai_reasoning_model(&provider.model) {
+                // Reasoning models (o1/o3/o4) require max_completion_tokens
+                // and do not support temperature.
+                let payload = OpenAiReasoningRequest {
+                    model: &provider.model,
+                    max_completion_tokens: max_output,
+                    messages,
+                };
+                serde_json::to_vec(&payload)?
+            } else {
+                let payload = OpenAiRequest {
+                    model: &provider.model,
+                    max_tokens: max_output,
+                    temperature,
+                    messages,
+                };
+                serde_json::to_vec(&payload)?
             };
-            serde_json::to_vec(&payload)?.into()
+            body_bytes.into()
         }
     };
 
@@ -1804,7 +1826,8 @@ mod tests {
         generate_programmatic_snippet, heuristic_note_from_input, is_openai_reasoning_model,
         is_private_ip, is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
         parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
-        resolve_context_window, validate_base_url, AssistantToolCall, RequestUsage,
+        resolve_context_window, validate_base_url, AssistantToolCall, OpenAiContent, OpenAiMessage,
+        OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -2157,6 +2180,47 @@ mod tests {
         assert!(!is_openai_reasoning_model("pro1"));
         assert!(!is_openai_reasoning_model("some-o3thing"));
         assert!(!is_openai_reasoning_model("mo4del"));
+    }
+
+    #[test]
+    fn openai_reasoning_request_uses_max_completion_tokens_and_omits_temperature() {
+        let payload = OpenAiReasoningRequest {
+            model: "o3-mini",
+            max_completion_tokens: 16384,
+            messages: vec![OpenAiMessage {
+                role: "user".to_string(),
+                content: OpenAiContent::Text("hello".to_string()),
+            }],
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["model"], "o3-mini");
+        assert_eq!(json["max_completion_tokens"], 16384);
+        assert!(
+            json.get("max_tokens").is_none(),
+            "reasoning models must not include max_tokens"
+        );
+        assert!(
+            json.get("temperature").is_none(),
+            "reasoning models must not include temperature"
+        );
+    }
+
+    #[test]
+    fn openai_standard_request_uses_max_tokens_and_temperature() {
+        let payload = OpenAiRequest {
+            model: "gpt-4o",
+            max_tokens: 4096,
+            temperature: 0.5,
+            messages: vec![OpenAiMessage {
+                role: "user".to_string(),
+                content: OpenAiContent::Text("hello".to_string()),
+            }],
+        };
+        let json = serde_json::to_value(&payload).unwrap();
+        assert_eq!(json["model"], "gpt-4o");
+        assert_eq!(json["max_tokens"], 4096);
+        assert_eq!(json["temperature"], 0.5);
+        assert!(json.get("max_completion_tokens").is_none());
     }
 
     // ── validate_base_url ─────────────────────────────────────────────

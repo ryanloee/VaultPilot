@@ -296,6 +296,8 @@
 - #753: tag/keyword SQL LIKE 子串匹配 → json_each 精确匹配 (PR #756 已合并)
 - #754: NotesView OnDeleteNoteClicked 取消 in-flight detail load 防 stale UI (PR #755 已合并)
 - #758: StartProcess catch block NRE — _process 字段并发 DisposeAsync 竞态 → 局部变量捕获 (PR #759 已合并)
+- #760: CompressCurrentSessionIfNeededAsync CancellationToken 链接到外层请求 — 用户取消立即停止压缩 (PR #762 已合并)
+- #761: ComposerBox.Text 清除移入 inner try-catch — RefreshAttachments 异常不再丢失用户输入 (PR #762 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1073,3 +1075,19 @@
 - 审核结果: PR #759 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 307 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~7.4K行 (lib.rs + vaultpilot-cli.rs + vaultpilot-agent.rs) + C# 前端 ~5.6K行 (BackendClient + MainWindow + NotesView + SettingsDialog + App + XAML) = ~13K行。发现 1 个 HIGH severity async void 竞态条件并修复。代码库经过 186 个审查循环和 307 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#187)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#187
+- 本轮时间: 2026-06-18
+- 审查模块: ai.rs (2431行), storage.rs (5045行), MainWindow.xaml.cs (3674行), BackendClient.cs (712行), NotesView.xaml.cs (360行)
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #760 BUG (CompressSession CancellationToken 未链接), #761 BUG (ComposerBox.Text 清除在 inner try 外)
+  - #760 MEDIUM BUG: CompressCurrentSessionIfNeededAsync 创建独立 30s CTS，不接收外层 cancellationToken — 用户取消 AI 请求后压缩后端调用继续运行 30 秒
+  - #761 LOW BUG: ExecuteAiRequestAsync 在 inner try 之前清除 ComposerBox.Text — RefreshAttachments() 抛异常时 inner catch 不执行，用户输入丢失且按钮禁用
+  - 正面发现: Rust 396 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, C# 22/22 async void 有 try-catch ✅, Interlocked guard 全覆盖 ✅
+- 修复结果:
+  - #760 + #761 → PR #762 已合并 (CI 6/6 通过): CreateLinkedTokenSource 链接 CancellationToken + ComposerBox.Text 移入 inner try-catch
+- 审核结果: PR #762 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) winui-build 仍 6h 超时失败，其余 5/6 通过。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 308 已合并 PR, 396 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~7.9K行 (ai.rs + storage.rs) + C# 前端 ~5.2K行 (MainWindow + BackendClient + NotesView) = ~13K行。发现 2 个 C# 前端 bug (1 MEDIUM + 1 LOW) 并修复。Rust 后端经 2 路并行审查 (ai.rs 2431行 + storage.rs 5045行) 维持零缺陷。代码库经过 187 个审查循环和 308 个已合并 PR 后维持极高成熟度。

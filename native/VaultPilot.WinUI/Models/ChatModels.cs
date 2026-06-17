@@ -1,4 +1,6 @@
-﻿namespace VaultPilot.WinUI.Models;
+﻿using System.Text.Json.Serialization;
+
+namespace VaultPilot.WinUI.Models;
 
 public sealed record ChatAttachment(string Path, string Name);
 
@@ -20,14 +22,54 @@ public sealed record ConversationSummary(
     ulong CoveredTurnCount,
     ulong CompressionCount);
 
-public sealed record ChatSession(
-    string Id,
-    string Title,
-    IReadOnlyList<ChatTurn> Turns,
-    ConversationSummary? Summary,
-    string CreatedAt,
-    string UpdatedAt);
+public sealed record ChatSession
+{
+    public string Id { get; init; } = string.Empty;
+    public string Title { get; init; } = string.Empty;
+    public IReadOnlyList<ChatTurn> Turns { get; init; } = Array.Empty<ChatTurn>();
+    public ConversationSummary? Summary { get; init; }
+    public string CreatedAt { get; init; } = string.Empty;
+    public string UpdatedAt { get; init; } = string.Empty;
 
-public sealed record ChatState(
-    string CurrentSessionId,
-    IReadOnlyList<ChatSession> Sessions);
+    [JsonConstructor]
+    public ChatSession() { }
+
+    /// <summary>
+    /// Positional constructor for backward compatibility with existing code.
+    /// </summary>
+    public ChatSession(
+        string Id,
+        string Title,
+        IReadOnlyList<ChatTurn> Turns,
+        ConversationSummary? Summary,
+        string CreatedAt,
+        string UpdatedAt)
+    {
+        this.Id = Id;
+        this.Title = Title;
+        this.Turns = Turns ?? Array.Empty<ChatTurn>();
+        this.Summary = Summary;
+        this.CreatedAt = CreatedAt;
+        this.UpdatedAt = UpdatedAt;
+    }
+}
+
+public sealed record ChatState
+{
+    public string CurrentSessionId { get; init; } = string.Empty;
+    public IReadOnlyList<ChatSession> Sessions { get; init; } = Array.Empty<ChatSession>();
+
+    [JsonConstructor]
+    public ChatState() { }
+
+    /// <summary>
+    /// Positional constructor for backward compatibility with existing code.
+    /// </summary>
+    public ChatState(
+        string CurrentSessionId,
+        IReadOnlyList<ChatSession> Sessions)
+    {
+        this.CurrentSessionId = CurrentSessionId;
+        this.Sessions = Sessions ?? Array.Empty<ChatSession>();
+    }
+}

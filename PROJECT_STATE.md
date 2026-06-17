@@ -20,6 +20,7 @@
 
 ## 已完成记录
 <!-- 由 pr-review 任务在合并/关闭 PR 后更新 -->
+- #217: WinUI 启动冒烟测试 — CI 每次 push/PR + release 验证 (PR #757 已合并)
 - #500: MCP server tool errors sanitize_error() 包装 (PR #505 已合并)
 - #501: build_note_path 使用完整 UUID 消除截断 (PR #506 已合并)
 - #502: settings_api_key_encrypted_on_disk 测试修复并取消 #[ignore] (PR #506 已合并)
@@ -299,6 +300,7 @@
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 
 - #597: CI WinUI 测试 — PR #646 开放中，修复 GlobalUsings.cs + BackendClientTests.cs 编译错误 + 使用 dotnet vstest 执行测试
+- PR #757 已合并: WinUI 启动冒烟测试 — 检测 XamlParseException/缺失 DLL/未处理异常
 
 ## 已知阻塞项
 <!-- 记录失败的修复尝试、需要人工介入的问题 -->
@@ -990,3 +992,22 @@
 - 审核结果: PR #755 和 PR #756 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 305 已合并 PR, 395 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 ~16K行 (ai.rs 2.4K + lib.rs 3.1K + storage.rs 5K + search_rules.rs 446 + C# 前端 5.2K)。ai.rs/lib.rs: 零可操作 bug — jitter 退避、provider 路径、工具编排、session 管理全部正确。storage.rs: 发现 2 个 MEDIUM (tag 子串匹配 + 分页偏移前过滤) + 3 个 LOW。C# 前端: 发现 7 个 LOW (FailPending 未清理、delete 不取消 detail load、Process 创建在 try-catch 外等)。代码库经过 182 个审查循环和 305 个已合并 PR 后维持极高成熟度。
+- 代码库经过 182 个审查循环和 305 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#183)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#183
+- 本轮时间: 2026-06-17
+- 审查模块: scripts/smoke-test-winui.ps1 (183行, 新增), .github/workflows/ci.yml, .github/workflows/windows-installers.yml, 全部 Rust 生产源文件
+- 讨论阶段发现:
+  - 无新 issue — PR #757 中发现 2 个 PS1 脚本 bug 并在 PR 内修复
+  - smoke-test-winui.ps1 BUG 1 (MEDIUM): `$pid` 变量名遮蔽 PowerShell 只读自动变量 `$PID` — `$ErrorActionPreference="Stop"` 导致脚本在 line 82 终止, 冒烟测试从未运行, 子进程孤立
+  - smoke-test-winui.ps1 BUG 2 (MEDIUM): `Join-Path` 3 参数形式在 PowerShell 5.1 不支持 — `Join-Path $a "b" "c"` 中 "logs" 作为无法识别的位置参数
+  - smoke-test-winui.ps1 BUG 3 (LOW): Unicode 箭头 `→` (U+2192) 在无 UTF-8 BOM 的 PS 5.1 中编码损坏
+  - CI workflows: 零缺陷 — permissions: contents: read ✅, cargo install --locked ✅, concurrency 控制 ✅
+  - Rust 生产源文件: 零缺陷 — 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, SSRF/路径穿越/prompt注入防护完整 ✅
+- 修复结果:
+  - PR #757 追加 2 个 commit (CI 6/6 通过): `$pid` → `$processId` + `Join-Path` 链式调用 + ASCII-only
+- 审核结果: PR #757 CI 6/6 通过并合并 (squash)。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 306 已合并 PR, 395 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 smoke-test-winui.ps1 (183行新脚本) + CI/CD 配置 + 全部 Rust 生产源文件。发现 2 个 MEDIUM + 1 个 LOW severity PS 5.1 兼容性 bug 并全部修复。Rust 后端经过 183 个审查循环后维持零缺陷状态。

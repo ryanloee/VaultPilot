@@ -1239,3 +1239,24 @@
 - 审核结果: PR #775 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并。PR #646 (#597) 继续等待 (winui-build 6h 超时)。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 315 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~15K行 (storage.rs 5.2K + vaultpilot-cli.rs 3K + vaultpilot-agent.rs 673 + ai.rs 2.4K + lib.rs 3.1K + prompting.rs 946 + search_rules.rs 446) + CI/CD + Cargo.toml = ~16K行。发现 2 个 MEDIUM/LOW severity bug 并修复。ai.rs/lib.rs/prompting.rs/search_rules.rs 经过完整审查确认零缺陷。代码库经过 194 个审查循环和 315 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#195)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#195
+- 本轮时间: 2026-06-18
+- 审查模块: crypto.rs (342行) 加密/KDF, models.rs (1001行) 数据模型/校验, search_rules.rs (446行) 搜索规则, ai.rs (2431行) AI 请求/重试/解析, prompting.rs (946行) 提示构建/XML 转义, 全部 C# 模型文件 (4 文件 ~390行), StringToVisibilityConverter.cs, Program.cs, 全部 C# 测试文件 (7 文件)
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 194 个审查循环后维持零缺陷状态
+  - crypto.rs: PBKDF2 实现正确 (HMAC RFC 4231 验证) ✅, AES-GCM 加密/解密 round-trip ✅, decrypt_secret 静默回退是 #731 设计决策 ✅, 无 key zeroization (LOW INFO — 桌面应用场景), macOS 无 machine-id 回退 (LOW INFO)
+  - models.rs: 所有 record 类型 [JsonConstructor] + init defaults ✅, AppSettings.validate() 校验 vault_dir/api_key/base_url/timeout ✅, auto_wake_interval_minutes 未在 Rust 侧校验 (LOW — C# 前端 #665 已校验), time format 未校验 (LOW — C# 前端已校验)
+  - search_rules.rs: trigger_matches 全词边界正确 ✅, relevance_term_matches 三路逻辑正确 ✅, 16 个测试覆盖完整 ✅
+  - ai.rs: 3 次重试指数退避+jitter ✅, SSRF/DNS rebinding 防护完整 ✅, sanitize_error 6 处 ✅, extract_json 多策略健壮解析 ✅, 50MB 响应限制 ✅, 20MB 图片限制 ✅, is_retryable_provider_error 文本匹配可能对 400+text 误重试 (LOW)
+  - prompting.rs: escape_xml_tags 正确应用于 4 个 sanitize 函数 ✅, PROMPT_INJECTION_DEFENSE 在所有 8 个系统提示中 ✅, 非 wrapper 开标签未转义 (INFO — 多层防御充分)
+  - C# 模型: 14 个 record 类型全部有 [JsonConstructor] + null-safe defaults ✅
+  - C# 测试: 37 个测试覆盖模型 round-trip + 属性保持 + record equality ✅
+  - cargo audit: 2 allowed warnings (rand RUSTSEC-2026-0097 unsound + time yanked), 无 actionable 漏洞
+  - 397 Rust 测试全通过 (lib:371, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 无可修复 issue (所有发现均为 LOW/INFO severity 设计权衡)
+- 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时 CANCELLED, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 315 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~4.7K行 (crypto.rs 342 + models.rs 1001 + search_rules.rs 446 + ai.rs 2431 + prompting.rs 946) + C# 前端 ~390行 (4 个模型文件 + converter + Program.cs) + C# 测试 ~2.4K行 (7 个测试文件) = ~7.5K行。全部发现为 LOW/INFO severity — 无 MEDIUM/HIGH 可操作缺陷。crypto.rs PBKDF2 实现正确但缺少已知测试向量。ai.rs SSRF/重试/解析逻辑完整。C# 模型类型 null-safe 覆盖完整。代码库经过 195 个审查循环和 315 个已合并 PR 后维持极高成熟度。

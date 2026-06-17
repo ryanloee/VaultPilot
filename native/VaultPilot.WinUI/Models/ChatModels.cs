@@ -2,25 +2,89 @@
 
 namespace VaultPilot.WinUI.Models;
 
-public sealed record ChatAttachment(string Path, string Name);
+public sealed record ChatAttachment
+{
+    public string Path { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
 
-public sealed record ConversationTurn(string Role, string Text);
+    [JsonConstructor]
+    public ChatAttachment() { }
 
-public sealed record ChatTurn(
-    string Id,
-    string Role,
-    string Text,
-    IReadOnlyList<AnswerCitation>? Citations,
-    NoteMeta? SavedNote,
-    ThinkingTrace? ThinkingTrace,
-    IReadOnlyList<ChatAttachment>? Attachments,
-    string? CreatedAt);
+    public ChatAttachment(string Path, string Name)
+    {
+        this.Path = Path ?? string.Empty;
+        this.Name = Name ?? string.Empty;
+    }
+}
 
-public sealed record ConversationSummary(
-    string Text,
-    string GeneratedAt,
-    ulong CoveredTurnCount,
-    ulong CompressionCount);
+public sealed record ConversationTurn
+{
+    public string Role { get; init; } = string.Empty;
+    public string Text { get; init; } = string.Empty;
+
+    [JsonConstructor]
+    public ConversationTurn() { }
+
+    public ConversationTurn(string Role, string Text)
+    {
+        this.Role = Role ?? string.Empty;
+        this.Text = Text ?? string.Empty;
+    }
+}
+
+public sealed record ChatTurn
+{
+    public string Id { get; init; } = string.Empty;
+    public string Role { get; init; } = string.Empty;
+    public string Text { get; init; } = string.Empty;
+    public IReadOnlyList<AnswerCitation>? Citations { get; init; }
+    public NoteMeta? SavedNote { get; init; }
+    public ThinkingTrace? ThinkingTrace { get; init; }
+    public IReadOnlyList<ChatAttachment>? Attachments { get; init; }
+    public string? CreatedAt { get; init; }
+
+    [JsonConstructor]
+    public ChatTurn() { }
+
+    public ChatTurn(
+        string Id,
+        string Role,
+        string Text,
+        IReadOnlyList<AnswerCitation>? Citations,
+        NoteMeta? SavedNote,
+        ThinkingTrace? ThinkingTrace,
+        IReadOnlyList<ChatAttachment>? Attachments,
+        string? CreatedAt)
+    {
+        this.Id = Id ?? string.Empty;
+        this.Role = Role ?? string.Empty;
+        this.Text = Text ?? string.Empty;
+        this.Citations = Citations;
+        this.SavedNote = SavedNote;
+        this.ThinkingTrace = ThinkingTrace;
+        this.Attachments = Attachments;
+        this.CreatedAt = CreatedAt;
+    }
+}
+
+public sealed record ConversationSummary
+{
+    public string Text { get; init; } = string.Empty;
+    public string GeneratedAt { get; init; } = string.Empty;
+    public ulong CoveredTurnCount { get; init; }
+    public ulong CompressionCount { get; init; }
+
+    [JsonConstructor]
+    public ConversationSummary() { }
+
+    public ConversationSummary(string Text, string GeneratedAt, ulong CoveredTurnCount, ulong CompressionCount)
+    {
+        this.Text = Text ?? string.Empty;
+        this.GeneratedAt = GeneratedAt ?? string.Empty;
+        this.CoveredTurnCount = CoveredTurnCount;
+        this.CompressionCount = CompressionCount;
+    }
+}
 
 public sealed record ChatSession
 {
@@ -45,12 +109,12 @@ public sealed record ChatSession
         string CreatedAt,
         string UpdatedAt)
     {
-        this.Id = Id;
-        this.Title = Title;
+        this.Id = Id ?? string.Empty;
+        this.Title = Title ?? string.Empty;
         this.Turns = Turns ?? Array.Empty<ChatTurn>();
         this.Summary = Summary;
-        this.CreatedAt = CreatedAt;
-        this.UpdatedAt = UpdatedAt;
+        this.CreatedAt = CreatedAt ?? string.Empty;
+        this.UpdatedAt = UpdatedAt ?? string.Empty;
     }
 }
 
@@ -69,7 +133,7 @@ public sealed record ChatState
         string CurrentSessionId,
         IReadOnlyList<ChatSession> Sessions)
     {
-        this.CurrentSessionId = CurrentSessionId;
+        this.CurrentSessionId = CurrentSessionId ?? string.Empty;
         this.Sessions = Sessions ?? Array.Empty<ChatSession>();
     }
 }

@@ -20,6 +20,7 @@ public sealed class BackendClient : IAsyncDisposable
     private const int DegradedFailureThreshold = 3; // consecutive health check cycles before switching to degraded mode
     private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DefaultIpcTimeout = TimeSpan.FromSeconds(90);
 
     private readonly ConcurrentQueue<string> _stderrLines = new();
 
@@ -386,15 +387,15 @@ public sealed class BackendClient : IAsyncDisposable
         }
     }
 
-    public async Task<T?> SendAsync<T>(string method, object? parameters, CancellationToken cancellationToken = default)
+    public async Task<T?> SendAsync<T>(string method, object? parameters, CancellationToken cancellationToken = default, TimeSpan? requestTimeout = null)
     {
-        var result = await SendAsync(method, parameters, cancellationToken);
+        var result = await SendAsync(method, parameters, cancellationToken, requestTimeout);
         return result.ValueKind == JsonValueKind.Undefined
             ? default
             : result.Deserialize<T>(_jsonOptions);
     }
 
-    public async Task<JsonElement> SendAsync(string method, object? parameters, CancellationToken cancellationToken = default)
+    public async Task<JsonElement> SendAsync(string method, object? parameters, CancellationToken cancellationToken = default, TimeSpan? requestTimeout = null)
     {
         if (Volatile.Read(ref _isDisposed) != 0)
             throw new InvalidOperationException("Backend client disposed.");
@@ -457,10 +458,11 @@ public sealed class BackendClient : IAsyncDisposable
 
             try
             {
-                // Use a per-request timeout to clean up stale TCS entries if the
-                // backend drops the request or never responds.
+                // Issue #710: use the caller-provided timeout (e.g. user-configured
+                // RequestTimeoutMs for AI requests) instead of a hardcoded 90s limit.
+                var ipcTimeout = requestTimeout ?? DefaultIpcTimeout;
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(90));
+                timeoutCts.CancelAfter(ipcTimeout);
                 try
                 {
                     var root = await completion.Task.WaitAsync(timeoutCts.Token);
@@ -481,7 +483,7 @@ public sealed class BackendClient : IAsyncDisposable
                     // The timeout fired (not the caller's token) — the backend
                     // likely dropped the request. Clean up and report.
                     throw new TimeoutException(
-                        $"后端请求 {method} 超时（90 秒无响应），后端可能已断开。");
+                        $"后端请求 {method} 超时（{ipcTimeout.TotalSeconds} 秒无响应），后端可能已断开。");
                 }
             }
             catch (TimeoutException)

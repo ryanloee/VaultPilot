@@ -870,10 +870,6 @@ public sealed partial class MainWindow : Window
 
         try
         {
-        ComposerBox.Text = string.Empty;
-        _attachments.Clear();
-        RefreshAttachments();
-
         var newCts = new CancellationTokenSource();
         var oldCts = Interlocked.Exchange(ref _activeRequestCts, newCts);
         oldCts?.Dispose();
@@ -895,10 +891,13 @@ public sealed partial class MainWindow : Window
             NewSessionButton.IsEnabled = false;
             DeleteSessionButton.IsEnabled = false;
             CancelButton.Visibility = Visibility.Visible;
+            ComposerBox.Text = string.Empty;
+            _attachments.Clear();
+            RefreshAttachments();
             ShowLoadingOverlay(statusTitle);
             UpdateStatusBar("info", statusTitle, statusDetail);
 
-            await CompressCurrentSessionIfNeededAsync(requestSessionId, prompt, pendingAttachments);
+            await CompressCurrentSessionIfNeededAsync(requestSessionId, prompt, pendingAttachments, cancellationToken);
             var history = GetConversationHistory(requestSessionId);
             await AddTurnAsync("user", userDisplay, attachments: pendingAttachments, sessionId: requestSessionId);
             RenderCurrentSession();
@@ -3196,7 +3195,8 @@ public sealed partial class MainWindow : Window
 
     private async Task CompressCurrentSessionIfNeededAsync(string sessionId,
         string pendingText,
-        IReadOnlyList<ChatAttachment> pendingAttachments)
+        IReadOnlyList<ChatAttachment> pendingAttachments,
+        CancellationToken cancellationToken = default)
     {
         var session = FindSessionById(sessionId) ?? CurrentSession();
         if (session is null)
@@ -3230,7 +3230,8 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
         var summary = await _backendClient.SendAsync<ConversationSummary>(
             "compressChatHistory",
             new

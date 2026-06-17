@@ -1025,7 +1025,11 @@ async fn run_http_bridge(
     );
 
     let listener = tokio::net::TcpListener::bind(address).await?;
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

@@ -119,8 +119,10 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private void OnTimeoutLostFocus(object sender, RoutedEventArgs e)
     {
-        if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var v) || v == 0)
-            SetFieldError(TimeoutBox, TimeoutError, "超时必须是大于 0 的数字");
+        if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var v) || v < 1_000)
+            SetFieldError(TimeoutBox, TimeoutError, "超时不能少于 1,000 毫秒");
+        else if (v > 300_000)
+            SetFieldError(TimeoutBox, TimeoutError, "超时不能超过 300,000 毫秒");
         else
             ClearFieldError(TimeoutBox, TimeoutError);
     }
@@ -128,8 +130,15 @@ public sealed partial class SettingsDialog : ContentDialog
     private void OnContextWindowLostFocus(object sender, RoutedEventArgs e)
     {
         var text = ContextWindowBox.Text.Trim();
-        if (!string.IsNullOrEmpty(text) && !ulong.TryParse(text, out _))
-            SetFieldError(ContextWindowBox, ContextWindowError, "Token 数必须是数字");
+        if (!string.IsNullOrEmpty(text))
+        {
+            if (!ulong.TryParse(text, out var v))
+                SetFieldError(ContextWindowBox, ContextWindowError, "Token 数必须是数字");
+            else if (v > 2_000_000)
+                SetFieldError(ContextWindowBox, ContextWindowError, "Token 数不能超过 2,000,000");
+            else
+                ClearFieldError(ContextWindowBox, ContextWindowError);
+        }
         else
             ClearFieldError(ContextWindowBox, ContextWindowError);
     }
@@ -138,6 +147,8 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         if (!ulong.TryParse(AutoWakeIntervalBox.Text.Trim(), out var v) || v == 0)
             SetFieldError(AutoWakeIntervalBox, AutoWakeIntervalError, "间隔必须是大于 0 的数字");
+        else if (v > 1440)
+            SetFieldError(AutoWakeIntervalBox, AutoWakeIntervalError, "间隔不能超过 1,440 分钟 (24 小时)");
         else
             ClearFieldError(AutoWakeIntervalBox, AutoWakeIntervalError);
     }

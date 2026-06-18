@@ -317,6 +317,7 @@
 - #792: is_retryable_provider_error 重试所有 5xx — 限制为 502/503/504 (PR #795 已合并)
 - #796: ai.rs format_transport_error URL userinfo 凭据泄露 + warn! 日志未 sanitize (PR #799 已合并)
 - #797: MCP chat.delete/notes.delete tool output 未转义用户内容 — 间接提示注入 (PR #798 已合并)
+- #800: save_settings_with_context 不调用 validate() — 无效设置可被持久化 (PR #801 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1430,3 +1431,22 @@
 - 审核结果: PR #798 和 PR #799 全部 CI 6/6 通过并合并 (squash)。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 327 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 ai.rs (2439行) + vaultpilot-cli.rs (3015行) + storage.rs (5276行, API 限流中断) = ~10.7K行。发现 2 个 MEDIUM SECURITY 可操作 bug (凭据泄露 + MCP 转义遗漏) 并修复。代码库经过 201 个审查循环和 327 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#202)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#202
+- 本轮时间: 2026-06-18
+- 审查模块: 全部 9 个 Rust 源文件 + contracts/ + CI/CD + C# 前端 (BackendClient, MainWindow, NotesView, SettingsDialog, App, models)
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #800 BUG (save_settings_with_context 不调用 validate() 校验)
+  - #800 MEDIUM BUG: save_settings_with_context (storage.rs:322) 和 agent saveSettings handler (vaultpilot-agent.rs:302) 以及 CLI settings set (vaultpilot-cli.rs:868) 都不调用 ProviderConfig::validate() — 无效设置 (timeout=0, base_url=ftp://bad) 可被持久化，导致后续 AI 请求出现难以诊断的运行时错误
+  - 其他审查发现 (LOW/INFO, 不创建 issue):
+    - MCP notes.import 路径: validate_import_path 已阻止系统目录 (/etc, /proc 等)，但允许导入任意用户目录 — 设计决策
+    - MCP protocol version negotiation 是装饰性的 — 不改变行为 (LOW)
+    - Contract schema drift — MCP 协议无正式 contract (LOW, 文档问题)
+  - 正面发现: Rust 397 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, C# 24/24 async void 有 try-catch ✅, Interlocked guard 全覆盖 ✅
+- 修复结果:
+  - #800 → PR #801 已合并 (CI 6/6 通过): save_settings_with_context 添加 settings.provider.validate() — 使用 provider.validate() 而非 AppSettings.validate() 因为 save 路径自身创建 vault_dir 且 api_key 可合法为空
+- 审核结果: PR #801 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 328 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 全量 9 个 Rust 源文件 (~18K行) + C# 前端 (~5.5K行) + contracts/ + CI/CD。发现 1 个 MEDIUM severity bug (save_settings 无校验) 并修复。代码库经过 202 个审查循环和 328 个已合并 PR 后维持极高成熟度。

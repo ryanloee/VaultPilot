@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload validation diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-validate-logs
           path: artifacts/logs
@@ -178,7 +178,7 @@ jobs:
           }
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-package-${{ matrix.platform }}
           path: artifacts/velopack/packages/${{ matrix.channel }}
@@ -231,7 +231,7 @@ jobs:
           compgen -G "artifacts/linux-cli/packages/linux-x64/*.deb" > /dev/null
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-package-x64
           path: |

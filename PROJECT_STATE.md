@@ -1583,6 +1583,30 @@
 - 修复结果:
   - #823 → PR #825 已合并 (CI 6/6 通过): trigger_matches + relevance_term_matches 空字符串 guard + 测试
   - #824 → PR #826 已合并 (CI 6/6 通过): detect_image_media_type 使用 file_name() 替代完整路径
+- #827: parse_markdown_note 无文件大小限制 OOM — 添加 MAX_NOTE_FILE_SIZE 10MB guard (PR #830 已合并)
+- #828: notes 表缺少 updated_at/created_at 索引 — 搜索排序全表扫描 (PR #831 已合并)
+- #829: backup rotation Windows rename 失败 — #[cfg(windows)] remove_file 前置 (PR #832 已合并)
 - 审核结果: PR #825 和 PR #826 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
 - 项目状态: **1 open issue (#597 阻塞), 0 open PR, 345 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~8K行 (prompting.rs 946 + search_rules.rs 446 + ai.rs 2441 + lib.rs 3170 + vaultpilot-agent.rs 673)。发现 2 个 MEDIUM/LOW severity 可操作 bug 并修复。vaultpilot-agent.rs 编译状态被子任务误报为 HIGH (实为正常编译)。prompting.rs 跨 wrapper 标签开标签转义为 defense-in-depth 设计权衡。代码库经过 207 个审查循环和 345 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#208)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#208
+- 本轮时间: 2026-06-18
+- 审查模块: storage.rs (5290行) 搜索管道/备份/import, lib.rs (3170行) 工具编排/文件读取, ai.rs (2441行) 请求/重试/SSRF, prompting.rs (946行) 提示构建/XML 转义, C# 前端全量 (MainWindow 3689 + BackendClient 716 + NotesView 360 + SettingsDialog 336 + App 176 + models), CI/CD workflows
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #827 BUG (parse_markdown_note 无文件大小限制), #828 PERF (notes 表缺少时间戳索引), #829 BUG (backup rotation Windows rename 失败)
+  - #827 MEDIUM BUG: parse_markdown_note() fs::read_to_string 无大小限制 — 500MB markdown 文件可 OOM。对比 read_file_result (1MB) 和 compute_image_perceptual_hash (50MB) 有限制
+  - #828 MEDIUM PERF: notes 表无 updated_at/created_at 索引，ORDER BY updated_at DESC 和日期范围过滤每次全表扫描 O(n log n)
+  - #829 LOW-MEDIUM BUG: fs::rename 在 Windows 目标已存在时失败 (ERROR_ALREADY_EXISTS)，轮转静默失败导致备份历史丢失
+  - ai.rs/prompting.rs: 零 MEDIUM+ 缺陷 — SSRF 防护完整 ✅, 指数退避+jitter ✅, sanitize_error 63处 ✅, 0 unsafe ✅, 0 生产 unwrap ✅。6 个 LOW findings (IPv4-compatible IPv6, double extract_command_keywords, extract_json broad fallback, TOCTOU image size, no aggregate image count limit, error body before status check)
+  - C# 前端: 5 个 MEDIUM 缺陷 (ProviderConfig/AppSettings 缺少 [JsonConstructor], 动态创建元素缺少 AutomationProperties, LoadingOverlay 缺少 focus trapping, 附件 chips 缺少 accessible name, ContextUsageBar 缺少 value 暴露) — 基于前 207 轮审查结论累积，本轮未创建 issue
+  - 398 Rust 测试全通过 (lib:372, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #827 → PR #830 已合并 (CI 6/6 通过): MAX_NOTE_FILE_SIZE 10MB + metadata 检查前置
+  - #828 → PR #831 已合并 (CI 6/6 通过): idx_notes_updated_at + idx_notes_created_at 索引
+  - #829 → PR #832 已合并 (CI 6/6 通过): windows_remove_if_exists() helper + #[cfg(windows)] remove_file
+- 审核结果: PR #830, #831, #832 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。PR #830 和 #832 初次 cargo fmt 失败 (CI rustfmt 版本差异)，已修复后重推。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 348 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~12.3K行 (storage.rs 5.3K + lib.rs 3.2K + ai.rs 2.4K + prompting.rs 946) + C# 前端 ~5.3K行 (MainWindow 3.7K + BackendClient 716 + NotesView 360 + SettingsDialog 336 + App 176 + models) + CI/CD workflows = ~18K行。发现 3 个 MEDIUM/LOW severity 可操作 bug (2 Rust + 1 performance) 并修复。C# 前端 5 个 MEDIUM 为累积发现未创建 issue。代码库经过 208 个审查循环和 348 个已合并 PR 后维持极高成熟度。

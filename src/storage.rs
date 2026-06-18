@@ -632,7 +632,11 @@ pub fn search_notes_with_context(
     // are correct. For non-FTS paths, offset was already applied in SQL.
     if !query.text.trim().is_empty() {
         let effective_offset = offset.min(notes.len());
-        notes = notes.into_iter().skip(effective_offset).take(limit).collect();
+        notes = notes
+            .into_iter()
+            .skip(effective_offset)
+            .take(limit)
+            .collect();
     } else {
         notes.truncate(limit);
     }

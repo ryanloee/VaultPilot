@@ -886,7 +886,7 @@ pub fn export_all_notes_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let id_prefix = &meta.id[..meta.id.len().min(8)];
+                let id_prefix: String = meta.id.chars().take(8).collect();
                 let path = output_dir.join(format!("{}-{}.md", filename, id_prefix));
                 match fs::write(&path, &markdown) {
                     Ok(()) => result.exported += 1,
@@ -1908,7 +1908,13 @@ fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     if let Some(end_index) = content[4..].find("\n---\n") {
         let yaml = &content[4..4 + end_index];
         let body = &content[4 + end_index + 5..];
-        let frontmatter = serde_yaml_ng::from_str::<Frontmatter>(yaml).unwrap_or_default();
+        let frontmatter = match serde_yaml_ng::from_str::<Frontmatter>(yaml) {
+            Ok(fm) => fm,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to parse frontmatter YAML, using defaults");
+                Frontmatter::default()
+            }
+        };
         return Ok((frontmatter, body));
     }
     Err(anyhow!("invalid frontmatter"))
@@ -3287,12 +3293,15 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
     // Checkpoint WAL before copying to ensure backup is consistent.
     // In WAL mode, committed transactions may reside in the -wal file
     // and won't be included in a plain file copy.
-    if let Ok(checkpoint_conn) = Connection::open(db_path) {
+    // Hold the checkpoint connection alive through fs::copy to prevent
+    // new WAL transactions from starting between checkpoint and copy.
+    let _checkpoint_guard = Connection::open(db_path).ok();
+    if let Some(ref conn) = _checkpoint_guard {
         // Set busy_timeout so the checkpoint retries on SQLITE_BUSY instead of
         // failing immediately when another connection has an active transaction.
-        let _ = checkpoint_conn.execute_batch("PRAGMA busy_timeout = 5000;");
+        let _ = conn.execute_batch("PRAGMA busy_timeout = 5000;");
         // TRUNCATE mode: flush WAL into main DB and truncate WAL file
-        if let Err(e) = checkpoint_conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
             tracing::warn!(error = %e, "WAL checkpoint before backup failed, proceeding with copy");
         }
     }
@@ -3347,7 +3356,7 @@ pub fn vault_export_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let id_prefix = &meta.id[..meta.id.len().min(8)];
+                let id_prefix: String = meta.id.chars().take(8).collect();
                 let entry_name = format!("notes/{}-{}.md", filename, id_prefix);
                 zip.start_file(entry_name, options)?;
                 std::io::Write::write_all(&mut zip, markdown.as_bytes())?;
@@ -5319,20 +5328,38 @@ mod tests {
     #[test]
     fn export_id_prefix_safe_for_short_ids() {
         // Regression test for #675: [..8] panics on IDs shorter than 8 bytes
+        // Updated for #843: chars().take(8) prevents UTF-8 boundary panic
         let short_id = "ab";
-        let id_prefix = &short_id[..short_id.len().min(8)];
+        let id_prefix: String = short_id.chars().take(8).collect();
         assert_eq!(id_prefix, "ab");
 
         let exact_8 = "12345678";
-        let id_prefix = &exact_8[..exact_8.len().min(8)];
+        let id_prefix: String = exact_8.chars().take(8).collect();
         assert_eq!(id_prefix, "12345678");
 
         let long_id = "1234567890abcdef";
-        let id_prefix = &long_id[..long_id.len().min(8)];
+        let id_prefix: String = long_id.chars().take(8).collect();
         assert_eq!(id_prefix, "12345678");
 
         let empty_id = "";
-        let id_prefix = &empty_id[..empty_id.len().min(8)];
+        let id_prefix: String = empty_id.chars().take(8).collect();
         assert_eq!(id_prefix, "");
+    }
+
+    #[test]
+    fn export_id_prefix_safe_for_cjk_ids() {
+        // Regression test for #843: byte-slice panics on non-ASCII note IDs
+        // CJK characters are 3 bytes each; byte [..8] would split 語
+        let cjk_id = "日本語abcdefghij";
+        let id_prefix: String = cjk_id.chars().take(8).collect();
+        assert_eq!(id_prefix, "日本語abcde"); // 日,本,語,a,b,c,d,e = 8 chars
+
+        let short_cjk = "日本語";
+        let id_prefix: String = short_cjk.chars().take(8).collect();
+        assert_eq!(id_prefix, "日本語");
+
+        let mixed_cjk = "abc日本語def";
+        let id_prefix: String = mixed_cjk.chars().take(8).collect();
+        assert_eq!(id_prefix, "abc日本語de"); // a,b,c,日,本,語,d,e = 8 chars
     }
 }

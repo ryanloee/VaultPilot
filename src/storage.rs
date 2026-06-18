@@ -594,10 +594,24 @@ pub fn search_notes_with_context(
         } else {
             fts_results
         };
-        // Total will be computed after in-memory filtering below (approximate).
         // NOTE: offset is NOT applied here — it must be applied AFTER in-memory
         // filtering so that page boundaries are correct for filtered results.
-        (notes, 0usize)
+        //
+        // Use FTS COUNT(*) for accurate pagination total when no in-memory filters
+        // are active. With filters, use the post-filtering count as an upper bound
+        // (some matches may be filtered out, making this an overcount).
+        let fts_total = if !notes.is_empty() {
+            count_fts_matches(&connection, &query.text).unwrap_or(notes.len())
+        } else {
+            0
+        };
+        let initial_total = if has_filters {
+            // Will be recomputed after in-memory filtering below.
+            0usize
+        } else {
+            fts_total
+        };
+        (notes, initial_total)
     };
 
     // In-memory filtering (for FTS path where SQL filtering isn't applied)
@@ -621,11 +635,16 @@ pub fn search_notes_with_context(
     }
 
     // For SQL paths, total was computed via COUNT(*) above.
-    // For FTS path, total is the post-filtering count (approximate, acceptable).
+    // For FTS path with filters: total = post-filtering count (upper bound approximation).
+    // For FTS path without filters: total = FTS COUNT(*) (accurate).
     let total = if query.text.trim().is_empty() {
         total
-    } else {
+    } else if has_filters {
         notes.len()
+    } else {
+        // total was set to fts_total (FTS COUNT(*)) above; use it directly.
+        // If the FTS count underestimates due to LIKE fallback, use max.
+        total.max(notes.len())
     };
 
     // For FTS path: apply offset AFTER in-memory filtering so page boundaries
@@ -2226,6 +2245,20 @@ fn filter_by_date_range(
         true
     });
     notes
+}
+
+/// Count total FTS5 matches for a query without fetching rows.
+fn count_fts_matches(connection: &Connection, text: &str) -> Result<usize> {
+    let fts_query = make_fts_query(text);
+    if fts_query.trim().is_empty() {
+        return Ok(0);
+    }
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM note_fts WHERE note_fts MATCH ?1",
+        params![fts_query],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
 }
 
 ///// Combined FTS5 query that returns both ordered note IDs and body snippets

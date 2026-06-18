@@ -66,9 +66,8 @@ jobs:
       - name: Build and run C# unit tests
         shell: powershell
         run: |
-          dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj -p:Platform=x64
-          dotnet build native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore --no-dependencies --configuration Debug -p:Platform=x64
-          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-build --no-restore --configuration Debug -p:Platform=x64 --verbosity normal
+          msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /restore /p:Configuration=Debug /p:Platform=x64
+          vstest.console.exe native/VaultPilot.WinUI.Tests/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.Tests.dll
 
       - name: Verify validation outputs
         shell: powershell

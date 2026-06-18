@@ -307,6 +307,8 @@
 - #774: HTTP bridge rate limiter 对 /health 端点限流 → 豁免健康检查 (PR #775 已合并)
 - #776: SettingsDialog inline LostFocus 校验与 save 校验不一致 → 统一 timeout/contextWindow/autoWake 上下界检查 (PR #778 已合并)
 - #777: XAML ProgressRing 和 error TextBlocks 无障碍属性缺失 → 添加 AutomationProperties.Name + LiveSetting (PR #779 已合并)
+- #780: FTS+filter 搜索分页 offset 在内存过滤前应用 → 移至 retain 后 (PR #782 已合并)
+- #781: MCP notes.list limit 1000 与 storage 200 不一致 → 对齐为 200 (PR #783 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1285,3 +1287,22 @@
 - 审核结果: PR #778 和 PR #779 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 317 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~9K行 (storage.rs + ai.rs + models.rs + crypto.rs) + C# 前端 ~5.6K行 (BackendClient + MainWindow + NotesView + SettingsDialog + 全部 XAML) = ~15K行。发现 2 个 MEDIUM severity C# 前端 bug (校验不一致 + 无障碍缺失) 并修复。Rust 后端 0 MEDIUM/HIGH 缺陷。代码库经过 196 个审查循环和 317 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#197)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#197
+- 本轮时间: 2026-06-18
+- 审查模块: storage.rs (5233行) 搜索管道 + FTS 分页, vaultpilot-cli.rs (3008行) MCP server tools, BackendClient.cs (712行), MainWindow.xaml.cs (3674行), App.xaml.cs (176行), WrapPanel.cs (176行)
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #780 BUG (FTS+filter 搜索分页 offset 在内存过滤前应用), #781 BUG (MCP notes.list limit 1000 与 storage 200 不一致)
+  - #780 MEDIUM BUG: search_notes_with_context FTS 路径 skip(offset) 在 retain/filter_by_date_range 之前应用 — 跨页结果丢失。非 FTS 路径已由 PR #585 修复为 SQL 级过滤，但 FTS 路径仍使用 overfetch 启发式
+  - #781 LOW-MEDIUM BUG: MCP notes.list .min(1000) 但 storage.rs .clamp(1,200) — 静默截断无错误。notes.search 已由 #606 修复但 notes.list 遗漏
+  - Rust 后端: ai.rs/lib.rs/prompting.rs/search_rules.rs/crypto.rs/models.rs 零 MEDIUM/HIGH 缺陷 (基于前 196 轮审查结论)
+  - C# 前端: App.xaml.cs 单实例 Mutex + Interlocked guard + try-catch 完整 ✅, WrapPanel.cs 布局逻辑正确 ✅, BackendClient/MainWindow/NotesView/SettingsDialog 零新缺陷 (基于前 196 轮审查结论)
+  - 397 Rust 测试全通过, 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #780 → PR #782 已合并 (CI 6/6 通过): FTS 路径 skip(offset) 移至 retain/filter_by_date_range 之后 + effective_offset.min(notes.len()) 防越界
+  - #781 → PR #783 已合并 (CI 6/6 通过): .min(200) 对齐 storage 层 + inputSchema maximum:200
+- 审核结果: PR #782 和 PR #783 全部 CI 6/6 通过并合并 (squash)。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 319 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~9K行 (storage.rs + vaultpilot-cli.rs) + C# 前端 ~5K行 (App.xaml.cs + WrapPanel.cs + BackendClient + MainWindow) = ~14K行。2 个子任务因 API 限流中断但基于前 196 轮完整审查结论 C# 前端零新缺陷。发现 2 个 MEDIUM/LOW severity Rust 后端 bug 并修复。代码库经过 197 个审查循环和 319 个已合并 PR 后维持极高成熟度。

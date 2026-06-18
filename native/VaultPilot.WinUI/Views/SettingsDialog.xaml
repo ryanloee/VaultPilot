@@ -75,6 +75,7 @@
                 Foreground="{ThemeResource StatusErrorBrush}"
                 FontSize="12"
                 Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
                 Margin="0,-8,0,0" />
 
             <!-- Context window tokens -->
@@ -89,6 +90,7 @@
                 Foreground="{ThemeResource StatusErrorBrush}"
                 FontSize="12"
                 Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
                 Margin="0,-8,0,0" />
 
             <!-- Auto-wake section -->
@@ -119,6 +121,7 @@
                 Foreground="{ThemeResource StatusErrorBrush}"
                 FontSize="12"
                 Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
                 Margin="0,-8,0,0" />
             <ComboBox
                 x:Name="AutoWakeModelBox"
@@ -138,6 +141,7 @@
                 Foreground="{ThemeResource StatusErrorBrush}"
                 FontSize="12"
                 Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
                 Margin="0,-8,0,0" />
             <TextBox
                 x:Name="AutoWakeEndTimeBox"
@@ -151,6 +155,7 @@
                 Foreground="{ThemeResource StatusErrorBrush}"
                 FontSize="12"
                 Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
                 Margin="0,-8,0,0" />
 
             <!-- Next wake time -->

@@ -735,14 +735,28 @@ public sealed partial class MainWindow : Window
                 var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
                 if (controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
                 {
-                    // Set Handled pre-emptively to block the default paste handler
-                    // during the await. Reset if image paste doesn't apply. (#627)
-                    e.Handled = true;
-                    if (await TryHandleClipboardImagePasteAsync())
+                    // #805: Only suppress default paste when clipboard has no text content.
+                    // When text is available, prefer default paste to avoid text loss
+                    // when StorageItems contain no images (regression from #627 fix).
+                    bool suppressForImagePaste = true;
+                    try
                     {
-                        return;
+                        var content = Clipboard.GetContent();
+                        suppressForImagePaste = content?.Contains(StandardDataFormats.Text) != true;
                     }
-                    e.Handled = false;
+                    catch { /* clipboard access can fail; default to image paste attempt */ }
+
+                    if (suppressForImagePaste)
+                    {
+                        // Set Handled pre-emptively to block the default paste handler
+                        // during the await. Reset if image paste doesn't apply. (#627)
+                        e.Handled = true;
+                        if (await TryHandleClipboardImagePasteAsync())
+                        {
+                            return;
+                        }
+                        e.Handled = false;
+                    }
                 }
             }
 

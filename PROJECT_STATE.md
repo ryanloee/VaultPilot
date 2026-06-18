@@ -1585,6 +1585,8 @@
 - #833: json_each corrupted/non-JSON tags 崩溃搜索 — json_valid() CASE guard (PR #836 已合并)
 - #834: read_file_result head/tail 截断 off-by-one — `>` 改 `>=` (PR #837 已合并)
 - #835: AppSettings/ProviderConfig 缺少 [JsonConstructor] — null-safe defaults (PR #838 已合并)
+- #839: saveSettings agent 响应泄露明文 API key — 添加 .masked() (PR #841 已合并)
+- #840: load_note_body_from_meta 缺少 MAX_NOTE_FILE_SIZE 大小限制 — 添加 fs::metadata 检查 (PR #842 已合并)
 - 审核结果: PR #825 和 PR #826 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
 - 项目状态: **1 open issue (#597 阻塞), 0 open PR, 345 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~8K行 (prompting.rs 946 + search_rules.rs 446 + ai.rs 2441 + lib.rs 3170 + vaultpilot-agent.rs 673)。发现 2 个 MEDIUM/LOW severity 可操作 bug 并修复。vaultpilot-agent.rs 编译状态被子任务误报为 HIGH (实为正常编译)。prompting.rs 跨 wrapper 标签开标签转义为 defense-in-depth 设计权衡。代码库经过 207 个审查循环和 345 个已合并 PR 后维持极高成熟度。
@@ -1685,3 +1687,75 @@
 - 审核结果: 无 open PR 待审核
 - 项目状态: **1 open issue (#597 阻塞), 0 open PR, 351 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 全量审查 9 个 Rust 源文件 (~18K行) + C# 前端 (~6K行) + CI/CD workflows + C# 测试 = ~24K行。全部 MEDIUM/HIGH 缺陷零发现。prompting.rs XML 转义防御纵深经 210 轮修复后完整无遗漏。ai.rs JSON 解析、重试、SSRF 防护全链路健壮。vaultpilot-agent.rs stdin 处理和错误传播零缺陷。代码库经过 211 个审查循环和 351 个已合并 PR 后维持极高成熟度。剩余 1 个 open issue (#597) 为 CI 基础设施限制非代码缺陷。
+
+## 本轮循环状态 (循环#212)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#212
+- 本轮时间: 2026-06-18
+- 审查模块: vaultpilot-agent.rs (673行) saveSettings/getSettings 对比, storage.rs (5328行) load_note_body_from_meta 热路径
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #839 HIGH SECURITY (saveSettings 泄露明文 API key), #840 MEDIUM BUG (load_note_body_from_meta 缺少大小限制)
+  - #839 HIGH SECURITY: vaultpilot-agent.rs saveSettings handler (line 302-305) 通过 serialize_result() 返回完整 AppSettings 含明文 api_key。getSettings handler (line 294-301) 正确调用 .masked() 但 saveSettings 遗漏
+  - #840 MEDIUM BUG: load_note_body_from_meta (storage.rs:684) 无 fs::metadata 大小检查即 fs::read_to_string，对比 parse_markdown_note (line 1339) 正确检查 MAX_NOTE_FILE_SIZE (10MiB)。该函数是 rank_documents 的热路径，AI 搜索每次查询都会调用
+  - 正面发现: Rust 398 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅
+- 修复结果:
+  - #839 → PR #841 已合并 (CI 6/6 通过): saveSettings 添加 result.provider.masked() + sanitize_error 错误处理
+  - #840 → PR #842 已合并 (CI 6/6 通过): load_note_body_from_meta 添加 fs::metadata + MAX_NOTE_FILE_SIZE 检查
+- 审核结果: PR #841 和 PR #842 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 353 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 vaultpilot-agent.rs (673行) saveSettings/getSettings 对比 + storage.rs (5328行) load_note_body_from_meta 热路径 = ~6K行。发现 1 个 HIGH SECURITY (API key 泄露) 和 1 个 MEDIUM BUG (大小限制缺失) 并修复。代码库经过 212 个审查循环和 353 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#213)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#213
+- 本轮时间: 2026-06-18
+- 审查模块: MainWindow.Updates.cs (130行), WrapPanel.cs (176行), StringToVisibilityConverter.cs (23行), Program.cs (23行), contracts/vaultpilot-agent.v1.json (79行), storage.rs (5328行) export/import/backup/chat state, ai.rs (2445行) 请求/重试/SSRF
+- 竞品调研: Obsidian Copilot v4 (Summer 2026) — agent mode 集成 opencode/Claude Code/Codex，知识工作技能，vault-scoped agents。VaultPilot 的 MCP server 支持是强差异化优势。Ollama 本地 LLM + function calling 生态快速增长。
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #843 MEDIUM BUG (export id_prefix UTF-8 byte-slice panic), #844 MEDIUM BUG (split_frontmatter YAML parse error silently discards metadata), #845 LOW-MEDIUM BUG (auto_backup_database WAL checkpoint connection dropped before fs::copy)
+  - #843 MEDIUM BUG: export_note_markdown_with_context (L889) 和 export_all_notes_zip (L3350) 使用 `&meta.id[..8]` 字节索引，非 ASCII note ID (如 CJK 字符) 会在多字节边界处 panic
+  - #844 MEDIUM BUG: split_frontmatter (L1911) 使用 `unwrap_or_default()` 静默吞没 YAML 解析错误，rebuild_index 会将正确的 DB 元数据覆盖为空默认值
+  - #845 LOW-MEDIUM BUG: auto_backup_database (L3290-3298) 在 fs::copy 前丢弃 checkpoint 连接，新 WAL 事务可在 checkpoint 和 copy 之间开始
+  - 正面发现: C# MainWindow.Updates.cs Interlocked/volatile/DispatcherQueue 正确 ✅, WrapPanel.cs 布局算术正确 ✅, contracts schema 与 Rust 实现对齐 ✅, ai.rs SSRF/DNS rebinding 完整 ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅
+  - 399 Rust 测试全通过 (lib:373, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #843 → PR #846 已合并 (CI 6/6 通过): `chars().take(8).collect()` 替代字节索引 + CJK 测试
+  - #844 → PR #846 已合并 (CI 6/6 通过): `tracing::warn!` YAML 解析失败日志
+  - #845 → PR #846 已合并 (CI 6/6 通过): `_checkpoint_guard` 持有连接贯穿 fs::copy
+- 审核结果: PR #846 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 354 已合并 PR, 399 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 C# 前端辅助文件 (~352行) + Rust 后端 (contracts + ai.rs + storage.rs export/backup ~3K行) = ~3.4K行。发现 3 个 MEDIUM/LOW severity 可操作 bug 并修复。C# MainWindow.Updates.cs 和 WrapPanel.cs 经审查确认零缺陷。contracts schema 与实现对齐。代码库经过 213 个审查循环和 354 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#213)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#213
+- 本轮时间: 2026-06-18
+- 审查模块: MainWindow.Updates.cs (130行), WrapPanel.cs (176行), StringToVisibilityConverter.cs (23行), Program.cs (23行), contracts/vaultpilot-agent.v1.json (79行), storage.rs (5328行) export/import/backup/chat state, ai.rs (2445行) 请求/重试/SSRF
+- 竞品调研: Obsidian Copilot v4 (Summer 2026) — agent mode 集成 opencode/Claude Code/Codex，知识工作技能，vault-scoped agents。VaultPilot 的 MCP server 支持是强差异化优势。Ollama 本地 LLM + function calling 生态快速增长。
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #843 MEDIUM BUG (export id_prefix UTF-8 byte-slice panic), #844 MEDIUM BUG (split_frontmatter YAML parse error silently discards metadata), #845 LOW-MEDIUM BUG (auto_backup_database WAL checkpoint connection dropped before fs::copy)
+  - #843 MEDIUM BUG: export_note_markdown_with_context (L889) 和 export_all_notes_zip (L3350) 使用  字节索引，非 ASCII note ID (如 CJK 字符) 会在多字节边界处 panic
+  - #844 MEDIUM BUG: split_frontmatter (L1911) 使用  静默吞没 YAML 解析错误，rebuild_index 会将正确的 DB 元数据覆盖为空默认值
+  - #845 LOW-MEDIUM BUG: auto_backup_database (L3290-3298) 在 fs::copy 前丢弃 checkpoint 连接，新 WAL 事务可在 checkpoint 和 copy 之间开始
+  - 正面发现: C# MainWindow.Updates.cs Interlocked/volatile/DispatcherQueue 正确, WrapPanel.cs 布局算术正确, contracts schema 与 Rust 实现对齐, ai.rs SSRF/DNS rebinding 完整, sanitize_error 63处, SQL 全参数化
+  - 399 Rust 测试全通过 (lib:373, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #843 -> PR #846 已合并 (CI 6/6 通过):  替代字节索引 + CJK 测试
+  - #844 -> PR #846 已合并 (CI 6/6 通过):  YAML 解析失败日志
+  - #845 -> PR #846 已合并 (CI 6/6 通过):  持有连接贯穿 fs::copy
+- 审核结果: PR #846 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 354 已合并 PR, 399 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 C# 前端辅助文件 (~352行) + Rust 后端 (contracts + ai.rs + storage.rs export/backup ~3K行) = ~3.4K行。发现 3 个 MEDIUM/LOW severity 可操作 bug 并修复。C# MainWindow.Updates.cs 和 WrapPanel.cs 经审查确认零缺陷。contracts schema 与实现对齐。代码库经过 213 个审查循环和 354 个已合并 PR 后维持极高成熟度。
+## 本轮循环状态 (循环#213)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#213
+- 本轮时间: 2026-06-18
+- 审查模块: MainWindow.Updates.cs (130行), WrapPanel.cs (176行), contracts/vaultpilot-agent.v1.json (79行), storage.rs (5328行) export/import/backup, ai.rs (2445行) SSRF/retry
+- 竞品调研: Obsidian Copilot v4 (Summer 2026) agent mode 集成 opencode/Claude Code/Codex。VaultPilot MCP server 支持是强差异化优势。
+- 讨论阶段发现:
+  - 3 个新 issue: #843 MEDIUM (export UTF-8 panic), #844 MEDIUM (YAML silent metadata loss), #845 LOW-MEDIUM (WAL checkpoint race)
+  - 399 Rust 测试全通过, 0 unsafe, 0 生产 unwrap
+- 修复结果: #843+#844+#845 -> PR #846 已合并 (CI 6/6 通过)
+- 审核结果: PR #846 squash 合并。
+- 项目状态: **1 open issue (#597), 0 open PR, 354 已合并 PR, 399 Rust 测试, 1 阻塞项**
+- 代码审查: ~3.4K行深度审查。发现 3 个 MEDIUM/LOW bug 并修复。代码库经过 213 个审查循环和 354 个已合并 PR 后维持极高成熟度。

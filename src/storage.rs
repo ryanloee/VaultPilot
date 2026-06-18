@@ -1902,12 +1902,17 @@ fn image_similarity_score(query_hash: u64, candidate_hash: u64) -> i64 {
 }
 
 fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
+    // #847: Strip UTF-8 BOM that Windows editors (e.g. Notepad) may prepend.
+    // Without this, files with BOM have their frontmatter silently ignored.
+    let content = content.trim_start_matches('\u{feff}');
     if !content.starts_with("---\n") {
         return Ok((Frontmatter::default(), content));
     }
-    if let Some(end_index) = content[4..].find("\n---\n") {
-        let yaml = &content[4..4 + end_index];
-        let body = &content[4 + end_index + 5..];
+    let inner = &content[4..];
+    // First try: delimiter followed by newline (normal case).
+    if let Some(end_index) = inner.find("\n---\n") {
+        let yaml = &inner[..end_index];
+        let body = &inner[end_index + 5..];
         let frontmatter = match serde_yaml_ng::from_str::<Frontmatter>(yaml) {
             Ok(fm) => fm,
             Err(e) => {
@@ -1916,6 +1921,21 @@ fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
             }
         };
         return Ok((frontmatter, body));
+    }
+    // #848: Fallback — file ends with "\n---" and no trailing newline.
+    // Common with programmatic file generation or truncated files.
+    if let Some(end_index) = inner.rfind("\n---") {
+        if end_index + 4 == inner.len() {
+            let yaml = &inner[..end_index];
+            let frontmatter = match serde_yaml_ng::from_str::<Frontmatter>(yaml) {
+                Ok(fm) => fm,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to parse frontmatter YAML, using defaults");
+                    Frontmatter::default()
+                }
+            };
+            return Ok((frontmatter, ""));
+        }
     }
     Err(anyhow!("invalid frontmatter"))
 }
@@ -3970,6 +3990,46 @@ mod tests {
         let (fm, body) = split_frontmatter(content).expect("parse");
         assert!(fm.id.is_empty());
         assert!(body.contains("Body"));
+    }
+
+    // #847: UTF-8 BOM prefix should not prevent frontmatter parsing.
+    #[test]
+    fn split_frontmatter_with_bom_prefix_parses() {
+        let content = "\u{feff}---\nid: bom-test\ntitle: BOM Note\n---\nBody here";
+        let (fm, body) = split_frontmatter(content).expect("parse");
+        assert_eq!(fm.id, "bom-test");
+        assert_eq!(fm.title, "BOM Note");
+        assert_eq!(body, "Body here");
+    }
+
+    // #847: BOM + no frontmatter → defaults, content preserved (BOM stripped).
+    #[test]
+    fn split_frontmatter_bom_without_frontmatter_returns_defaults() {
+        let content = "\u{feff}No frontmatter here.";
+        let (fm, body) = split_frontmatter(content).expect("parse");
+        assert!(fm.id.is_empty());
+        // BOM is stripped before the check, so body is clean.
+        assert_eq!(body, "No frontmatter here.");
+    }
+
+    // #848: Closing --- without trailing newline should parse.
+    #[test]
+    fn split_frontmatter_no_trailing_newline_parses() {
+        let content = "---\nid: no-newline\ntitle: Edge Case\n---";
+        let (fm, body) = split_frontmatter(content).expect("parse");
+        assert_eq!(fm.id, "no-newline");
+        assert_eq!(fm.title, "Edge Case");
+        assert!(body.is_empty());
+    }
+
+    // #848: BOM + no trailing newline combination.
+    #[test]
+    fn split_frontmatter_bom_and_no_trailing_newline_parses() {
+        let content = "\u{feff}---\nid: combo\ntitle: Combo\n---";
+        let (fm, body) = split_frontmatter(content).expect("parse");
+        assert_eq!(fm.id, "combo");
+        assert_eq!(fm.title, "Combo");
+        assert!(body.is_empty());
     }
 
     // ── 1.2 compose_markdown ──

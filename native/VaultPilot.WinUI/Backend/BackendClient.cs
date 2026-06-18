@@ -386,7 +386,8 @@ public sealed class BackendClient : IAsyncDisposable
         }
         finally
         {
-            _reconnectLock.Release();
+            try { _reconnectLock.Release(); }
+            catch (ObjectDisposedException) { /* shutting down — safe to ignore */ }
         }
     }
 

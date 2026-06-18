@@ -315,6 +315,8 @@
 - #790: HTTP bridge rate limiter 内层 middleware — rate-limited 请求仍消耗 body read + timeout (PR #793 已合并)
 - #791: SaveNote tool error 中断整个请求 — 改为 graceful degradation (PR #794 已合并)
 - #792: is_retryable_provider_error 重试所有 5xx — 限制为 502/503/504 (PR #795 已合并)
+- #796: ai.rs format_transport_error URL userinfo 凭据泄露 + warn! 日志未 sanitize (PR #799 已合并)
+- #797: MCP chat.delete/notes.delete tool output 未转义用户内容 — 间接提示注入 (PR #798 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1411,3 +1413,20 @@
 - 审核结果: PR #793, #794, #795 全部 CI 6/6 通过并合并。PR #646 (#597) winui-build 仍 6h 超时，继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 325 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~13.8K行。发现 3 个 MEDIUM/LOW severity bug 并修复。代码库经过 200 个审查循环和 325 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#201)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#201
+- 本轮时间: 2026-06-18
+- 审查模块: ai.rs (2439行) 请求/重试/错误处理 + vaultpilot-cli.rs (3015行) MCP server tool handlers + storage.rs (5276行, API 限流中断)
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #796 SECURITY (ai.rs format_transport_error 凭据泄露), #797 SECURITY (MCP chat.delete/notes.delete 未转义用户内容)
+  - #796 MEDIUM SECURITY: format_transport_error 手动分割 URL 提取 host 时包含 userinfo (user:secret@host) — 用户可见错误消息泄露凭据; warn! 日志未 sanitize reqwest::Error 也泄露完整 URL
+  - #797 MEDIUM SECURITY: PR #786/#789 修复了 5 个 MCP handler 的 tool output 转义，但遗漏了 chat.delete 和 notes.delete — session_id/note id 直接嵌入 summary 文本
+  - 正面发现: Rust 397 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, SSRF/路径穿越防护完整 ✅
+- 修复结果:
+  - #797 → PR #798 已合并 (CI 6/6 通过): escape_xml_content() 应用于 chat.delete session_id 和 notes.delete note id
+  - #796 → PR #799 已合并 (CI 6/6 通过): .split('@').last() 剥离 userinfo + warn! 日志 sanitize_error
+- 审核结果: PR #798 和 PR #799 全部 CI 6/6 通过并合并 (squash)。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 327 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 ai.rs (2439行) + vaultpilot-cli.rs (3015行) + storage.rs (5276行, API 限流中断) = ~10.7K行。发现 2 个 MEDIUM SECURITY 可操作 bug (凭据泄露 + MCP 转义遗漏) 并修复。代码库经过 201 个审查循环和 327 个已合并 PR 后维持极高成熟度。

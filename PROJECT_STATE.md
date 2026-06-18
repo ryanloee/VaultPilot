@@ -1668,3 +1668,24 @@
 - 审核结果: PR #836, #837, #838 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
 - 项目状态: **1 open issue (#597 阻塞), 0 open PR, 351 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 C# 模型文件 (~650行) + storage.rs (5290行) json_each/FTS + ai.rs (2441行) + lib.rs (3170行) = ~12K行。发现 3 个 MEDIUM/LOW severity 可操作 bug 并修复。AppSettings 是 PR #740 遗漏的最后一个 null-unsafe 类型。json_each 防护是 PR #756 的 defense-in-depth 补强。代码库经过 210 个审查循环和 351 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#211)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#211
+- 本轮时间: 2026-06-18
+- 审查模块: prompting.rs (946行) XML 转义/提示构建, ai.rs (2445行) 请求/重试/JSON 解析/SSRF, vaultpilot-agent.rs (673行) stdin 处理/错误传播, models.rs (1001行) 数据模型/校验, lib.rs (3170行) 工具编排/错误处理, storage.rs (5328行) 设置/聊天状态/搜索, CI/CD workflows, C# 前端全量
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 210 个审查循环后维持零缺陷状态
+  - prompting.rs: escape_xml_tags/escape_xml_close_tags 双层防御正确 ✅, 8 个 sanitize_* 函数全部使用正确转义策略 ✅, 28 个测试覆盖完整 ✅, render_history/render_notes 不内部转义由外层 sanitize 处理 (设计正确) ✅, CACHED_MANUAL OnceLock 线程安全 ✅
+  - ai.rs: format_transport_error 凭据剥离正确 (PR #799) ✅, is_retryable_provider_error 限于 429/502/503/504 (PR #795) ✅, extract_json_block backslash tracking 正确 ✅, generate_programmatic_snippet 重叠 range 合并正确 ✅, is_openai_reasoning_model rsplit('/') 处理命名空间模型名 ✅, validate_base_url SSRF/DNS rebinding 完整 ✅, 重试指数退避+jitter ✅, sanitize_error 63 处 ✅
+  - vaultpilot-agent.rs: stdin 逐字节 10MB 上限 ✅, 120s 超时 ✅, panic hook sanitize_error ✅, 11 个错误路径 sanitize_error ✅, open_vault_directory Stdio::null() ✅, read_image_preview 10MB 限制 ✅, log_agent_event 旋转 512KB/256KB ✅
+  - models.rs: ProviderConfig Debug 掩码 ✅, validate() 校验完整 ✅, 所有 record [JsonConstructor] + null defaults ✅, 18 个测试覆盖 ✅
+  - lib.rs: 5 个 tool handler 全部 match Ok/Err graceful degradation (无 ? 中止) ✅, docs 累积 + HashSet 去重 (PR #763) ✅, normalize_tool_path 路径限制 ✅
+  - storage.rs: save_settings_with_context provider.validate() (PR #801) ✅, atomic_write 权限限制+TOCTOU 防护 ✅, json_each json_valid() guard (PR #836) ✅, updated_at/created_at 索引 (PR #831) ✅, 备份轮转 Windows 兼容 (PR #832) ✅, parse_markdown_note 10MB 限制 (PR #830) ✅, SQL 全参数化 ✅, 0 生产 unwrap ✅
+  - CI/CD: permissions: contents: read (PR #683) ✅, concurrency cancel-in-progress ✅, cargo install --locked (PR #689) ✅, Zig SHA256 校验 (PR #813) ✅, dependabot cargo/nuget/github-actions ✅, smoke-test 强制 exit 1 (PR #807) ✅
+  - C# 前端: 24/24 async void 有 try-catch ✅, 0 .Result/.Wait() ✅, Interlocked guard 全覆盖 ✅, _isShuttingDown volatile ✅, GetThemeBrush null-safe fallback ✅
+  - 398 Rust 测试全通过 (lib:372, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 无可修复 issue (#597 被 CI WinUI 构建超时阻塞)
+- 审核结果: 无 open PR 待审核
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 351 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 全量审查 9 个 Rust 源文件 (~18K行) + C# 前端 (~6K行) + CI/CD workflows + C# 测试 = ~24K行。全部 MEDIUM/HIGH 缺陷零发现。prompting.rs XML 转义防御纵深经 210 轮修复后完整无遗漏。ai.rs JSON 解析、重试、SSRF 防护全链路健壮。vaultpilot-agent.rs stdin 处理和错误传播零缺陷。代码库经过 211 个审查循环和 351 个已合并 PR 后维持极高成熟度。剩余 1 个 open issue (#597) 为 CI 基础设施限制非代码缺陷。

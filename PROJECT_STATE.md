@@ -317,7 +317,8 @@
 - #792: is_retryable_provider_error 重试所有 5xx — 限制为 502/503/504 (PR #795 已合并)
 - #796: ai.rs format_transport_error URL userinfo 凭据泄露 + warn! 日志未 sanitize (PR #799 已合并)
 - #797: MCP chat.delete/notes.delete tool output 未转义用户内容 — 间接提示注入 (PR #798 已合并)
-- #800: save_settings_with_context 不调用 validate() — 无效设置可被持久化 (PR #801 已合并)
+- #800: save_settings_with_context validate() 校验 (PR #801 已合并)
+- #802: SearchNotes/ListNotes 硬中止 → graceful degradation (PR #803 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1450,3 +1451,26 @@
 - 审核结果: PR #801 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 328 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 全量 9 个 Rust 源文件 (~18K行) + C# 前端 (~5.5K行) + contracts/ + CI/CD。发现 1 个 MEDIUM severity bug (save_settings 无校验) 并修复。代码库经过 202 个审查循环和 328 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#203)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#203
+- 本轮时间: 2026-06-18
+- 审查模块: lib.rs (3136行) 工具编排/错误处理, ai.rs (2441行) JSON 解析/重试, vaultpilot-agent.rs (673行) stdin/stdout 安全, CI/CD workflows
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #802 BUG (SearchNotes/ListNotes 硬中止 — 存储错误不一致处理)
+  - #802 MEDIUM BUG: lib.rs SearchNotes (line 449) 和 ListNotes (line 483) 使用 `?` 传播存储错误，导致整个聊天请求失败。而 ListDirectory/ReadFile/SaveNote 使用 graceful degradation 模式 (`is_error: true` + continue)，允许模型继续回答
+  - 其他审查发现 (LOW/INFO, 不创建 issue):
+    - ai.rs extract_json fallback 返回未验证 JSON (LOW — 调用方 serde_json 校验)
+    - ai.rs repair_json_string_escapes 始终返回 Some (LOW — API 清晰度)
+    - ai.rs select_tool_call 丢弃首次解析错误上下文 (LOW — 重试提示包含原始输出)
+    - ai.rs validate_base_url DNS 解析无缓存 (LOW — 性能优化)
+    - ai.rs retry jitter 使用 SystemTime (LOW — 仅退避用途)
+    - vaultpilot-agent.rs 120s 超时 ✅, 10MB stdin 上限 ✅, panic hook sanitize_error ✅, 所有 11 个错误路径 sanitize_error ✅
+  - 正面发现: Rust 397 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅
+- 修复结果:
+  - #802 → PR #803 已合并 (CI 6/6 通过): SearchNotes 和 ListNotes 改用 match Ok/Err + is_error: true + continue 模式，与 ListDirectory/ReadFile/SaveNote 一致
+  - #597 尝试修复: PR #646 关闭 (sln 构建 6h 超时), PR #804 关闭 (test csproj 通过 ProjectReference 触发 WinUI 重建超时) — CI Windows 基础设施限制，需进一步调查
+- 审核结果: PR #803 CI 6/6 通过并合并。PR #646 和 PR #804 关闭 (CI WinUI 构建超时)。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 329 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 lib.rs (3136行) 工具编排 + ai.rs (2441行) JSON 解析/重试 + vaultpilot-agent.rs (673行) = ~6.2K行。发现 1 个 MEDIUM severity 不一致错误处理 bug (#802) 并修复。vaultpilot-agent.rs 经过完整审查确认零缺陷。代码库经过 203 个审查循环和 329 个已合并 PR 后维持极高成熟度。

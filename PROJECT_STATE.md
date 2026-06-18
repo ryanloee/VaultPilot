@@ -324,6 +324,8 @@
 - #809: Dependabot 缺少 github-actions 生态 — CI action 版本永不自动更新 (PR #812 已合并)
 - #810: Zig 二进制下载缺少 SHA256 校验 — CI 供应链加固 (PR #813 已合并)
 - #811: XAML 硬编码 Opacity 值在高对比度模式下不可见 → SecondaryTextBrush 主题资源 (PR #814 已合并)
+- #823: trigger_matches 空字符串 panic — 添加空 guard + 测试 (PR #825 已合并)
+- #824: detect_image_media_type 错误消息泄露完整文件路径 — 使用 file_name() (PR #826 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1563,3 +1565,24 @@
   - 全部 8 个 Dependabot PR 已合并, 397 Rust 测试验证通过
 - 项目状态: **1 open issue (#597 阻塞), 0 open PR, 343 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~1,789行 (search_rules.rs 446 + crypto.rs 342 + models.rs 1001) + C# 前端 ~5,377行 (BackendClient 716 + MainWindow 3689 + NotesView 360 + SettingsDialog 336 + App 176) + 8 个 Dependabot PR 兼容性 = ~7.2K行。全部 MEDIUM/HIGH 缺陷零发现。crypto.rs PBKDF2 实现正确匹配 RFC 4231。搜索匹配逻辑 ASCII 全词 + CJK 子串双模式正确。C# 前端 async/concurrency 模式成熟。代码库经过 206 个审查循环和 343 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#207)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#207
+- 本轮时间: 2026-06-18
+- 审查模块: prompting.rs (946行) 提示构建/XML 转义, search_rules.rs (446行) 搜索匹配逻辑, ai.rs (2441行) AI 请求/重试/图片处理, lib.rs (3170行) 工具编排, vaultpilot-agent.rs (673行) stdin 处理
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #823 BUG (trigger_matches 空字符串 panic), #824 BUG (detect_image_media_type 路径泄露)
+  - #823 MEDIUM BUG: trigger_matches() 空 trigger 时 str::find("") 永远返回 Some(0) 导致 start 越界 panic。可通过用户自定义 JSON 配置 "triggers": [""] 触发
+  - #824 LOW BUG: detect_image_media_type() 错误消息包含完整文件路径，sanitize_error 不剥离路径信息
+  - prompting.rs: escape_xml_tags 仅转义特定开标签 + 所有闭标签 (LOW defense-in-depth — 跨 wrapper 标签开标签未转义), render_history turn.role 未单独 sanitize (LOW — 应用层控制), render_notes/search_snippet 无测试覆盖 (LOW)
+  - search_rules.rs: trigger_matches 空字符串 panic (已修复), evaluate_heuristic 空 pattern 永远匹配 (LOW — 同根因), relevance_term_matches 冗余第二分支 (INFO)
+  - ai.rs: detect_image_media_type 路径泄露 (已修复), retry jitter 使用 subsec_nanos (LOW), is_request() 过宽重试 (LOW), validate_base_url 字面 IP 无 DNS pinning (INFO)
+  - vaultpilot-agent.rs: 二进制正常编译并运行 10 个测试 ✅ (子任务 HIGH 发现被验证为误报), stdin 逐字节读取无 drain 上限 (LOW), open_vault_directory 路径传递无文档化前置条件 (INFO)
+  - 398 Rust 测试全通过 (lib:372, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #823 → PR #825 已合并 (CI 6/6 通过): trigger_matches + relevance_term_matches 空字符串 guard + 测试
+  - #824 → PR #826 已合并 (CI 6/6 通过): detect_image_media_type 使用 file_name() 替代完整路径
+- 审核结果: PR #825 和 PR #826 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 345 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~8K行 (prompting.rs 946 + search_rules.rs 446 + ai.rs 2441 + lib.rs 3170 + vaultpilot-agent.rs 673)。发现 2 个 MEDIUM/LOW severity 可操作 bug 并修复。vaultpilot-agent.rs 编译状态被子任务误报为 HIGH (实为正常编译)。prompting.rs 跨 wrapper 标签开标签转义为 defense-in-depth 设计权衡。代码库经过 207 个审查循环和 345 个已合并 PR 后维持极高成熟度。

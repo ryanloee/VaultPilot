@@ -1219,6 +1219,7 @@ public sealed partial class MainWindow : Window
             Opacity = 0.72,
             HorizontalAlignment = bubble.HorizontalAlignment
         };
+        AutomationProperties.SetName(bubble, isUser ? "用户消息" : "AI 消息");
 
         var stack = new StackPanel
         {
@@ -1358,6 +1359,7 @@ public sealed partial class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             MinWidth = 0
         };
+        AutomationProperties.SetName(copyButton, "复制 Markdown");
         copyButton.Click += (_, _) => CopyTextToClipboard(markdown);
         stack.Children.Add(copyButton);
 
@@ -1631,6 +1633,7 @@ public sealed partial class MainWindow : Window
             MinWidth = 0,
             HorizontalAlignment = HorizontalAlignment.Right
         };
+        AutomationProperties.SetName(copyButton, "复制代码");
         copyButton.Click += (_, _) => CopyTextToClipboard(code);
 
         Grid.SetColumn(label, 0);
@@ -2141,6 +2144,7 @@ public sealed partial class MainWindow : Window
             Margin = new Thickness(4, 0, 0, 0),
             Background = _transparentBrush
         };
+        AutomationProperties.SetName(removeButton, $"移除附件 {attachment.Name}");
         removeButton.Click += (_, _) =>
         {
             _attachments.RemoveAll(item => item.Path == attachment.Path);
@@ -3071,6 +3075,7 @@ public sealed partial class MainWindow : Window
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Style = GetThemeStyle("DefaultButtonStyle"),
                 };
+                AutomationProperties.SetName(btn, $"建议: {suggestion}");
                 btn.Click += (_, _) =>
                 {
                     ComposerBox.Text = suggestion;
@@ -3086,6 +3091,7 @@ public sealed partial class MainWindow : Window
                 Content = "打开设置",
                 HorizontalAlignment = HorizontalAlignment.Center,
             };
+            AutomationProperties.SetName(settingsBtn, "打开设置");
             settingsBtn.Click += (_, _) => OnSettingsClicked(settingsBtn, new RoutedEventArgs());
             container.Children.Add(settingsBtn);
         }
@@ -3116,6 +3122,7 @@ public sealed partial class MainWindow : Window
             MaxWidth = 680,
             Content = stepsPanel
         };
+        AutomationProperties.SetName(expander, $"思考过程: {trace.Steps.Count} 步");
 
         MessagesPanel.Children.Add(expander);
     }

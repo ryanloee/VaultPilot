@@ -1759,3 +1759,35 @@
 - 审核结果: PR #846 squash 合并。
 - 项目状态: **1 open issue (#597), 0 open PR, 354 已合并 PR, 399 Rust 测试, 1 阻塞项**
 - 代码审查: ~3.4K行深度审查。发现 3 个 MEDIUM/LOW bug 并修复。代码库经过 213 个审查循环和 354 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#214)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#214
+- 本轮时间: 2026-06-19
+- 审查模块: storage.rs (5365行) split_frontmatter/export/import, vaultpilot-cli.rs (3018行) MCP tool handlers, C# 前端全量 (MainWindow 3690 + NotesView 361 + 测试 755行)
+- 竞品调研: Obsidian Copilot v4 (Summer 2026) — agent mode, project mode, multimedia (PDF/EPUB/YouTube), API key OS keychain, mobile support, composer-style editing, time-aware queries。VaultPilot MCP server 是强差异化优势。
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #847 MEDIUM BUG (split_frontmatter 不剥离 UTF-8 BOM), #848 MEDIUM BUG (split_frontmatter 拒绝无尾换行的 --- 闭合标记)
+  - #847 MEDIUM BUG: split_frontmatter (storage.rs:1904) 不剥离 UTF-8 BOM (\\u{FEFF})。Windows Notepad 添加 BOM → starts_with("---\\n") 失败 → frontmatter 静默忽略 → 元数据丢失。load_settings_with_context (line 288) 正确剥离但 split_frontmatter 遗漏
+  - #848 MEDIUM BUG: split_frontmatter 查找 "\\n---\\n" 需要尾换行。程序生成或截断的文件以 "---" 结尾无尾换行 → Err("invalid frontmatter") → 笔记被拒绝
+  - 其他审查发现 (LOW/INFO, 不创建 issue):
+    - export_all_notes_with_context 文件名碰撞可能 (LOW — 1/2^32 概率)
+    - MCP server 缺少 notes.export 工具 (LOW — API 不一致)
+    - validate_import_path 遗漏 .docker/.kube/.npmrc 敏感路径 (LOW)
+    - MCP tool handlers 阻塞 async runtime 做同步 IO (LOW — 单客户端 stdin/stdout)
+    - split_frontmatter 无 BOM 测试覆盖 (已补充)
+    - split_frontmatter 无尾换行测试覆盖 (已补充)
+  - C# 前端审查发现 (累积, 不创建 issue):
+    - ~50+ 动态创建 UI 元素缺少 AutomationProperties (MEDIUM — 无障碍)
+    - EstimateTokensForText 低估英文文本 (LOW — 影响压缩时机)
+    - _loadDetailCts 无超时 (LOW — 对比其他 CTS 有 30s)
+    - BrushLimeGreen/BrushGreen 指向相同资源 (INFO)
+  - 正面发现: Rust 403 测试全通过 ✅ (lib:377, cli:16, agent:10), 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅
+  - C# 前端: 24/24 async void 有 try-catch ✅, Interlocked guard 全覆盖 ✅, _isShuttingDown volatile ✅
+- 修复结果:
+  - #847 → PR #849 已合并 (CI 6/6 通过): split_frontmatter trim_start_matches('\\u{feff}') BOM 剥离
+  - #848 → PR #849 已合并 (CI 6/6 通过): rfind("\\n---") + 尾部精确匹配回退
+  - 4 个新测试: BOM+frontmatter, BOM+no-frontmatter, no-trailing-newline, BOM+no-trailing-newline
+- 审核结果: PR #849 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 355 已合并 PR, 403 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 storage.rs (5365行) split_frontmatter/export/import + vaultpilot-cli.rs (3018行) MCP handlers + C# 前端全量 (~5K行) = ~13.4K行。发现 2 个 MEDIUM severity 可操作 bug (BOM + 尾换行) 并修复。竞品调研确认 VaultPilot MCP server 是强差异化。代码库经过 214 个审查循环和 355 个已合并 PR 后维持极高成熟度。

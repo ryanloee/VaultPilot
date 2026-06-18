@@ -322,7 +322,8 @@
                     IsActive="True"
                     Width="48"
                     Height="48"
-                    HorizontalAlignment="Center" />
+                    HorizontalAlignment="Center"
+                    AutomationProperties.Name="正在处理" />
                 <TextBlock
                     x:Name="LoadingMessage"
                     Text="正在处理..."

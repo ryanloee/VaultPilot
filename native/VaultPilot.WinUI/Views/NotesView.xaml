@@ -214,6 +214,7 @@
             Height="32"
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
+            AutomationProperties.Name="正在加载笔记"
             Visibility="Collapsed" />
     </Grid>
 </UserControl>

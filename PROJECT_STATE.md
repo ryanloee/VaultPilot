@@ -546,17 +546,13 @@
 
 ## 本轮循环状态
 <!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
-- 循环编号: 循环#157
-- 本轮时间: 2026-06-16
-- 审查模块: vaultpilot-cli.rs (2953行), vaultpilot-agent.rs (670行), App.xaml.cs (176行), MainWindow.Updates.cs (130行), WrapPanel.cs (176行), search_rules.rs (439行), BackendClient.cs (677行), Program.cs (23行), AppSettings.cs (24行)
-- 讨论阶段发现:
-  - 无新 issue — 代码库处于零缺陷状态
-  - Rust 后端 (vaultpilot-cli.rs + vaultpilot-agent.rs + search_rules.rs): MCP server stdin 逐字节读取 10MB 上限 ✅, HTTP bridge CORS/限流/body限制/超时 ✅, constant_time_eq subtle::ConstantTimeEq ✅, sanitize_mcp_prompt_content XML 转义 ✅, 所有 error 路径 sanitize_error ✅
-  - C# 前端 (App.xaml.cs + MainWindow.Updates.cs + BackendClient.cs + WrapPanel.cs): 20 个 async void 全部有 try-catch ✅, BeginExitForUpdate Interlocked guard ✅, ExitApplication try-catch-finally ✅, CheckForAppUpdatesAsync 瞬态失败重置 guard ✅, 无 .Result/.Wait() ✅
-  - 生产代码零 .unwrap()/.expect() — 仅测试代码和 tokio runtime 初始化有
-- 修复结果: 无 — 无可修复 issue
-- 审核结果: PR #646 (#597 CI WinUI 测试) — 继续等待, winui-build 仍 pending, 其余 5/6 CI 通过
-- CI 状态: PR #646 winui-build 仍 pending (阻塞项)
+- 循环编号: 循环#211
+- 本轮时间: 2026-06-18
+- 审查模块: prompting.rs (946行), ai.rs (2445行), vaultpilot-agent.rs (673行), models.rs (1001行), lib.rs (3170行), storage.rs (5328行), CI/CD workflows, C# 前端全量
+- 讨论阶段发现: 无新 issue — 代码库经过 210 个审查循环后维持零缺陷状态
+- 修复结果: 无 — 无可修复 issue (#597 被 CI WinUI 构建超时阻塞)
+- 审核结果: 无 open PR 待审核
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 351 已合并 PR, 398 Rust 测试全通过**
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 272 已合并 PR, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 9 个模块 (~5.1K行)。Rust 后端: vaultpilot-cli.rs (2953行) 全文审查 — MCP server/HTTP bridge/CLI 三大组件安全实践完整；vaultpilot-agent.rs (670行) 全文审查 — stdin 逐字节读取、120s 请求超时、panic hook sanitize_error；search_rules.rs (439行) — ASCII 全词匹配 + CJK 子串匹配正确。C# 前端: App.xaml.cs (176行) 全文审查 — 单实例 Mutex、tray icon、Interlocked 竞态保护；BackendClient.cs (677行) — 线程安全、Process 泄漏防护、HandleEvent try-catch；WrapPanel.cs (176行) — 纯布局代码无问题。381+ Rust 测试全部通过。
 

@@ -63,6 +63,10 @@ jobs:
           /p:Platform=x64
           /bl:artifacts/logs/release-validate-winui-debug-x64.binlog
 
+      - name: Build and run C# unit tests
+        shell: powershell
+        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Debug --verbosity normal
+
       - name: Verify validation outputs
         shell: powershell
         run: |

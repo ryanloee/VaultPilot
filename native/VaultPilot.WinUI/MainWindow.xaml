@@ -148,7 +148,7 @@
                                                         <TextBlock Text="{Binding Title}" TextWrapping="WrapWholeWords" />
                                                         <TextBlock
                                                             Text="{Binding Detail}"
-                                                            Opacity="0.7"
+                                                            Foreground="{ThemeResource SecondaryTextBrush}"
                                                             Style="{ThemeResource BodyTextBlockStyle}" />
                                                     </StackPanel>
                                                 </DataTemplate>

@@ -161,7 +161,7 @@
             <!-- Next wake time -->
             <TextBlock
                 x:Name="NextWakeLabel"
-                Opacity="0.7" />
+                Foreground="{ThemeResource SecondaryTextBrush}" />
 
             <!-- Footer row -->
             <Grid ColumnSpacing="12">
@@ -186,7 +186,7 @@
                 <TextBlock
                     x:Name="VersionLabel"
                     Grid.Column="2"
-                    Opacity="0.6"
+                    Foreground="{ThemeResource SecondaryTextBrush}"
                     VerticalAlignment="Center"
                     HorizontalAlignment="Right" />
             </Grid>

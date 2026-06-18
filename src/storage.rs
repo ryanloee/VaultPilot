@@ -683,6 +683,16 @@ pub fn search_notes_with_context(
 
 pub fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
     let path = Path::new(&meta.path);
+    let metadata =
+        fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if metadata.len() > MAX_NOTE_FILE_SIZE {
+        return Err(anyhow!(
+            "note file too large ({} bytes, limit {} bytes): {}",
+            metadata.len(),
+            MAX_NOTE_FILE_SIZE,
+            path.display()
+        ));
+    }
     let raw =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let normalized = raw.replace("\r\n", "\n");

@@ -3198,6 +3198,20 @@ fn make_fts_query(text: &str) -> String {
 
 /// Auto-backup the SQLite database, keeping the last 3 backups.
 /// Creates rotating backups: db.bak, db.bak.1, db.bak.2
+/// On Windows, `fs::rename` fails if the destination file already exists.
+/// This helper removes the file first on Windows; on Unix it is a no-op
+/// because `rename` atomically replaces the destination (#829).
+fn windows_remove_if_exists(path: &std::path::Path) {
+    #[cfg(windows)]
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path; // suppress unused variable warning
+    }
+}
+
 fn auto_backup_database(db_path: &Path) -> Result<()> {
     if !db_path.exists() {
         debug!("no existing database to backup");
@@ -3224,8 +3238,7 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
             } else {
                 // On Windows, rename fails if the destination already exists.
                 // Remove the destination first to ensure the rename succeeds.
-                #[cfg(windows)]
-                { let _ = fs::remove_file(&newer); }
+                windows_remove_if_exists(&newer);
                 if let Err(e) = fs::rename(&older, &newer) {
                     tracing::warn!(from = %older.display(), to = %newer.display(), error = %e, "Failed to rotate backup");
                 }
@@ -3238,8 +3251,7 @@ fn auto_backup_database(db_path: &Path) -> Result<()> {
     if current_bak.exists() {
         let bak1 = backup_dir.join(format!("{file_name_str}.bak.1"));
         // On Windows, rename fails if the destination already exists.
-        #[cfg(windows)]
-        { let _ = fs::remove_file(&bak1); }
+        windows_remove_if_exists(&bak1);
         if let Err(e) = fs::rename(&current_bak, &bak1) {
             tracing::warn!(from = %current_bak.display(), to = %bak1.display(), error = %e, "Failed to rotate current backup");
         }

@@ -440,19 +440,42 @@ pub async fn ask_with_ai_with_context(
                 }
 
                 emit_status("retrieving", format!("Searching notes: {}", query));
-                let mut new_docs = load_context_notes_async(
+                let mut new_docs = match load_context_notes_async(
                     context,
                     &query,
                     &images,
                     limit.saturating_mul(3).max(8),
                 )
-                .await?;
+                .await
+                {
+                    Ok(docs) => docs,
+                    Err(error) => {
+                        tool_results.push(ToolExecution::new(
+                            "search_notes",
+                            format!("query={} limit={}", query, limit),
+                            format!("tool error: {}", error),
+                            true,
+                        ));
+                        continue;
+                    }
+                };
                 if new_docs.is_empty() {
                     emit_status(
                         "retrieving",
                         "No direct match; listing recent notes".to_string(),
                     );
-                    new_docs = load_recent_notes_for_overview_async(context, limit.min(12)).await?;
+                    match load_recent_notes_for_overview_async(context, limit.min(12)).await {
+                        Ok(fallback_docs) => new_docs = fallback_docs,
+                        Err(error) => {
+                            tool_results.push(ToolExecution::new(
+                                "search_notes",
+                                format!("query={} limit={}", query, limit),
+                                format!("tool error: {}", error),
+                                true,
+                            ));
+                            continue;
+                        }
+                    }
                 } else {
                     emit_status(
                         "ranking",
@@ -480,7 +503,18 @@ pub async fn ask_with_ai_with_context(
             AssistantToolCall::ListNotes { limit } => {
                 emit_status("retrieving", "Loading recent notes".to_string());
                 // Issue #763: Accumulate docs across tool rounds instead of overwriting.
-                let new_docs = load_recent_notes_for_overview_async(context, limit).await?;
+                let new_docs = match load_recent_notes_for_overview_async(context, limit).await {
+                    Ok(docs) => docs,
+                    Err(error) => {
+                        tool_results.push(ToolExecution::new(
+                            "list_notes",
+                            format!("limit={}", limit),
+                            format!("tool error: {}", error),
+                            true,
+                        ));
+                        continue;
+                    }
+                };
                 let existing_ids: std::collections::HashSet<String> =
                     docs.iter().map(|d| d.meta.id.clone()).collect();
                 for doc in new_docs {

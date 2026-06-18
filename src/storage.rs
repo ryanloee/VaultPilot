@@ -1333,8 +1333,8 @@ fn import_single_markdown(
 }
 
 fn parse_markdown_note(path: &Path, default_source: &str) -> Result<NoteDocument> {
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?;
+    let metadata =
+        fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
     if metadata.len() > MAX_NOTE_FILE_SIZE {
         return Err(anyhow!(
             "note file too large ({} bytes, limit {} bytes): {}",

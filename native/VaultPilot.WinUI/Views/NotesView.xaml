@@ -110,7 +110,7 @@
                                     <TextBlock
                                         Grid.Row="1"
                                         Text="{Binding Summary}"
-                                        Opacity="0.7"
+                                        Foreground="{ThemeResource SecondaryTextBrush}"
                                         Style="{ThemeResource BodyTextBlockStyle}"
                                         TextWrapping="WrapWholeWords"
                                         MaxLines="2" />
@@ -128,7 +128,7 @@
                                         <TextBlock
                                             Text="{Binding UpdatedDisplay}"
                                             FontSize="11"
-                                            Opacity="0.5" />
+                                            Foreground="{ThemeResource SecondaryTextBrush}" />
                                     </StackPanel>
                                 </Grid>
                             </DataTemplate>
@@ -174,11 +174,11 @@
                         <TextBlock
                             x:Name="DetailUpdated"
                             FontSize="12"
-                            Opacity="0.6" />
+                            Foreground="{ThemeResource SecondaryTextBrush}" />
                         <TextBlock
                             x:Name="DetailPath"
                             FontSize="12"
-                            Opacity="0.4"
+                            Foreground="{ThemeResource SecondaryTextBrush}"
                             TextTrimming="CharacterEllipsis"
                             MaxLines="1" />
                     </StackPanel>

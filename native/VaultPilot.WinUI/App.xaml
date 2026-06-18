@@ -31,6 +31,8 @@
                     <SolidColorBrush x:Key="StatusInfoBrush" Color="#0078D4" />
                     <!-- Loading overlay (#682) -->
                     <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#80000000" />
+                    <!-- Secondary text brush (#811) — High Contrast safe -->
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#B31B1B1F" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#181C22" />
@@ -49,6 +51,26 @@
                     <SolidColorBrush x:Key="StatusInfoBrush" Color="#60CDFF" />
                     <!-- Loading overlay (#682) -->
                     <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#80FFFFFF" />
+                    <!-- Secondary text brush (#811) — High Contrast safe -->
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#B3FFFFFF" />
+                </ResourceDictionary>
+                <!-- High Contrast fallback (#811) — uses system gray text color -->
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="{ThemeResource SystemColorButtonTextColor}" />
+                    <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <SolidColorBrush x:Key="CodeInlineForegroundBrush" Color="{ThemeResource SystemColorButtonTextColor}" />
+                    <SolidColorBrush x:Key="ContextUsageTrackBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <SolidColorBrush x:Key="ContextUsageFillBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AttachmentDotBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AttachmentBorderBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="StatusBarIconBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+                    <SolidColorBrush x:Key="StatusErrorBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+                    <SolidColorBrush x:Key="StatusWarningBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+                    <SolidColorBrush x:Key="StatusSuccessBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+                    <SolidColorBrush x:Key="StatusInfoBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+                    <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="{ThemeResource SystemColorGrayTextColor}" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>

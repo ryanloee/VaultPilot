@@ -141,6 +141,10 @@ const ATTACHMENT_VECTOR_DIM: usize = 192;
 /// Older sessions beyond this limit are pruned during normalization.
 const MAX_SESSIONS: usize = 50;
 
+/// Maximum note file size (10 MiB) — prevents OOM from oversized markdown files
+/// during import or vault rebuild (#827).
+const MAX_NOTE_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 impl StorageContext {
     pub fn for_sidecar() -> Result<Self> {
         let config_root = std::env::var_os("APPDATA")
@@ -1333,11 +1337,20 @@ fn import_single_markdown(
 }
 
 fn parse_markdown_note(path: &Path, default_source: &str) -> Result<NoteDocument> {
+    let metadata =
+        fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if metadata.len() > MAX_NOTE_FILE_SIZE {
+        return Err(anyhow!(
+            "note file too large ({} bytes, limit {} bytes): {}",
+            metadata.len(),
+            MAX_NOTE_FILE_SIZE,
+            path.display()
+        ));
+    }
     let raw =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let normalized = raw.replace("\r\n", "\n");
     let (frontmatter, body) = split_frontmatter(&normalized)?;
-    let metadata = fs::metadata(path)?;
     let modified = metadata.modified().unwrap_or_else(|_| SystemTime::now());
     let modified_at = DateTime::<Utc>::from(modified).to_rfc3339();
     let created_at = metadata

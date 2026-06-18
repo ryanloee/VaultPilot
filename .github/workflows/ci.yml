@@ -160,9 +160,9 @@ jobs:
       - name: Build and run C# unit tests
         shell: powershell
         run: |
-          dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
-          dotnet build native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore --no-dependencies --configuration Release
-          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-build --no-restore --configuration Release --verbosity normal
+          dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj -p:Platform=x64
+          dotnet build native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-restore --no-dependencies --configuration Release -p:Platform=x64
+          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-build --no-restore --configuration Release -p:Platform=x64 --verbosity normal
 
       - name: Smoke test WinUI app
         shell: powershell

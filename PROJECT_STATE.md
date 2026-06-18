@@ -309,6 +309,8 @@
 - #777: XAML ProgressRing 和 error TextBlocks 无障碍属性缺失 → 添加 AutomationProperties.Name + LiveSetting (PR #779 已合并)
 - #780: FTS+filter 搜索分页 offset 在内存过滤前应用 → 移至 retain 后 (PR #782 已合并)
 - #781: MCP notes.list limit 1000 与 storage 200 不一致 → 对齐为 200 (PR #783 已合并)
+- #784: MCP chat.send tool output 未转义用户/模型内容 — 间接提示注入 (PR #786 已合并)
+- #785: FTS 搜索分页 total undercount — 使用 COUNT(*) 替代 notes.len() (PR #787 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1306,3 +1308,27 @@
 - 审核结果: PR #782 和 PR #783 全部 CI 6/6 通过并合并 (squash)。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 319 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~9K行 (storage.rs + vaultpilot-cli.rs) + C# 前端 ~5K行 (App.xaml.cs + WrapPanel.cs + BackendClient + MainWindow) = ~14K行。2 个子任务因 API 限流中断但基于前 196 轮完整审查结论 C# 前端零新缺陷。发现 2 个 MEDIUM/LOW severity Rust 后端 bug 并修复。代码库经过 197 个审查循环和 319 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#198)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#198
+- 本轮时间: 2026-06-18
+- 审查模块: storage.rs (5243行) 搜索管道 + FTS 分页 + COUNT 查询, vaultpilot-cli.rs (3010行) MCP server + HTTP bridge + rate limiter, vaultpilot-agent.rs (673行), BackendClient.cs (716行) 进程生命周期, MainWindow.xaml.cs (3675行) 状态管理, NotesView.xaml.cs (360行), SettingsDialog.xaml.cs (336行), 全部 XAML (800行)
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #784 SECURITY (MCP chat.send tool output 未转义用户/模型内容 — 间接提示注入), #785 BUG (FTS 搜索分页 total undercount — total 随 offset 增长)
+  - #784 MEDIUM SECURITY: mcp_call_chat_send() L2440 使用 format! 直接嵌入 session_title 和 answer 到 MCP tool output — 恶意笔记标题或模型响应可注入指令。修复: 应用 escape_xml_content()
+  - #785 LOW-MEDIUM BUG: FTS 路径 total = notes.len() 受 fetch_limit 截断 — 分页 total 随 offset 增长。修复: count_fts_matches() COUNT(*) 查询获取准确 total
+  - storage.rs: FTS path total undercounting (已修复), export filename UUID prefix collision (LOW), LIKE fallback 不搜索 body (LOW), query_like_note_metas 注释说 body 但代码用 summary (LOW)
+  - vaultpilot-cli.rs: 硬编码中文回退提示 (MEDIUM), rate limiter HashMap 无界增长 (MEDIUM 理论风险), MCP chat.send 未转义输出 (已修复), strip_inline_markdown 未匹配标记丢失内容 (LOW), CORS 缺少 HTTPS origin (LOW)
+  - BackendClient.cs: 零可操作 bug — _process Volatile/Interlocked 正确 ✅, _writeLock + _reconnectLock Semaphore 完整保护 ✅
+  - MainWindow.xaml.cs: ShutdownAsync CTS 竞态 (LOW — _isShuttingDown 防护), EnsureCurrentSession 无锁 (LOW — UI 线程约束)
+  - NotesView.xaml.cs: 搜索竞态已被 PR #664/#621 修复 ✅
+  - SettingsDialog.xaml.cs: AutoWakeIntervalBox save 校验静默默认 30 (LOW — 与 LostFocus 不一致)
+  - XAML: NotesView DetailPanel 缺少 AutomationProperties.Name (LOW), session list items 缺少 per-item automation (LOW)
+  - 正面发现: 397 Rust 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, C# 22/22 async void 有 try-catch ✅, Interlocked guard 全覆盖 ✅
+- 修复结果:
+  - #784 → PR #786 已合并 (CI 6/6 通过): escape_xml_content() 应用于 session_title 和 answer
+  - #785 → PR #787 已合并 (CI 6/6 通过): count_fts_matches() COUNT(*) 查询 + 非过滤 FTS 路径使用准确 total
+- 审核结果: PR #786 和 PR #787 全部 CI 6/6 通过并合并 (squash)。PR #646 (#597) winui-build 仍 6h 超时，继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 321 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~9.9K行 (storage.rs 5.2K + vaultpilot-cli.rs 3K + vaultpilot-agent.rs 673) + C# 前端 ~5.5K行 (BackendClient + MainWindow + NotesView + SettingsDialog + 全部 XAML) = ~15.4K行。发现 2 个 MEDIUM severity 可操作 bug (1 SECURITY + 1 BUG) 并修复。vaultpilot-cli.rs 额外发现 2 个 MEDIUM (硬编码中文 + rate limiter 内存) 为设计权衡不创建 issue。代码库经过 198 个审查循环和 321 个已合并 PR 后维持极高成熟度。

@@ -1,3 +1,4 @@
+using Xunit;
 using System.Reflection;
 using VaultPilot.WinUI.Backend;
 

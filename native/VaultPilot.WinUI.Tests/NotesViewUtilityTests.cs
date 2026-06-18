@@ -1,3 +1,4 @@
+using Xunit;
 using VaultPilot.WinUI.Views;
 
 namespace VaultPilot.WinUI.Tests;

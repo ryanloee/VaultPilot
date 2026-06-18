@@ -1586,6 +1586,9 @@
 - #827: parse_markdown_note 无文件大小限制 OOM — 添加 MAX_NOTE_FILE_SIZE 10MB guard (PR #830 已合并)
 - #828: notes 表缺少 updated_at/created_at 索引 — 搜索排序全表扫描 (PR #831 已合并)
 - #829: backup rotation Windows rename 失败 — #[cfg(windows)] remove_file 前置 (PR #832 已合并)
+- #833: json_each corrupted/non-JSON tags 崩溃搜索 — json_valid() CASE guard (PR #836 已合并)
+- #834: read_file_result head/tail 截断 off-by-one — `>` 改 `>=` (PR #837 已合并)
+- #835: AppSettings/ProviderConfig 缺少 [JsonConstructor] — null-safe defaults (PR #838 已合并)
 - 审核结果: PR #825 和 PR #826 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
 - 项目状态: **1 open issue (#597 阻塞), 0 open PR, 345 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~8K行 (prompting.rs 946 + search_rules.rs 446 + ai.rs 2441 + lib.rs 3170 + vaultpilot-agent.rs 673)。发现 2 个 MEDIUM/LOW severity 可操作 bug 并修复。vaultpilot-agent.rs 编译状态被子任务误报为 HIGH (实为正常编译)。prompting.rs 跨 wrapper 标签开标签转义为 defense-in-depth 设计权衡。代码库经过 207 个审查循环和 345 个已合并 PR 后维持极高成熟度。
@@ -1641,3 +1644,27 @@
 - 审核结果: 无 open PR 待审核
 - 项目状态: **1 open issue (#597 阻塞), 0 open PR, 348 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 vaultpilot-cli.rs (3018行) HTTP bridge/middleware/MCP + storage.rs (5290行) 备份/导出/import + C# 前端全量 (5.3K行) = ~13.6K行。全部 MEDIUM/HIGH 缺陷零发现。vaultpilot-cli.rs 中间件栈和 MCP 转义经 PR #793/#786/#789/#797 修复后完整。storage.rs 备份/导入/export 经 PR #830/#831/#832 修复后健壮。C# 前端 async/concurrency 模式成熟。代码库经过 209 个审查循环和 348 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#210)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#210
+- 本轮时间: 2026-06-18
+- 审查模块: C# 模型文件 (AiModels, ChatModels, NoteModels, OperationModels, AppSettings, Converters, Program, WrapPanel ~650行), storage.rs (5290行) json_each/FTS 分页/备份, ai.rs (2441行) 重试/SSRF, lib.rs (3170行) 工具编排/截断
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #833 BUG (json_each 损坏标签崩溃), #834 BUG (head/tail 截断 off-by-one), #835 BUG (AppSettings 缺少 [JsonConstructor])
+  - #833 MEDIUM BUG: json_each(tags/keywords) 在无效 JSON (空字符串/损坏数据) 上崩溃整个搜索查询 — 添加 json_valid() CASE guard
+  - #834 LOW-MEDIUM BUG: read_file_result head/tail 截断在 lines==HEAD+TAIL 精确边界丢弃尾部 — `>` 改 `>=`
+  - #835 MEDIUM BUG: AppSettings/ProviderConfig 缺少 [JsonConstructor] + null-safe defaults — PR #740 遗漏的 2 个类型
+  - 其他审查发现 (LOW/INFO, 不创建 issue):
+    - storage.rs: WAL checkpoint 失败后 fs::copy 仅复制主文件缺少 -wal/-shm (LOW), json_each 全词匹配正确 ✅, count_fts_matches COUNT(*) 正确 ✅
+    - ai.rs: is_request() 过宽重试 (已知 — 非新发现), format_transport_error 凭据剥离正确 (PR #799) ✅, 重试退避 502/503/504 限制正确 (PR #795) ✅
+    - lib.rs: SearchNotes/ListNotes graceful degradation 正确 (PR #803) ✅, normalize_tool_path 路径限制完整 ✅
+    - C# 前端: 其他 14+ 模型类型 [JsonConstructor] 完整 ✅, WrapPanel Infinity 边界 (LOW), Program.cs 无顶层 try-catch (LOW)
+  - 398 Rust 测试全通过 (lib:372, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #833 → PR #836 已合并 (CI 6/6 通过): json_each CASE WHEN json_valid() THEN tags ELSE '[]' END — 4 处修复
+  - #834 → PR #837 已合并 (CI 6/6 通过): tail_start >= head_count 单字符修复
+  - #835 → PR #838 已合并 (CI 6/6 通过): AppSettings/ProviderConfig [JsonConstructor] + init defaults + string.Empty
+- 审核结果: PR #836, #837, #838 全部 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。
+- 项目状态: **1 open issue (#597 阻塞), 0 open PR, 351 已合并 PR, 398 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 C# 模型文件 (~650行) + storage.rs (5290行) json_each/FTS + ai.rs (2441行) + lib.rs (3170行) = ~12K行。发现 3 个 MEDIUM/LOW severity 可操作 bug 并修复。AppSettings 是 PR #740 遗漏的最后一个 null-unsafe 类型。json_each 防护是 PR #756 的 defense-in-depth 补强。代码库经过 210 个审查循环和 351 个已合并 PR 后维持极高成熟度。

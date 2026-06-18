@@ -1283,7 +1283,7 @@ async fn send_request_with_temperature(
             Ok(response) => response,
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
-                    warn!(attempt = attempt + 1, error = %error, "transport error, retrying");
+                    warn!(attempt = attempt + 1, error = %crate::sanitize_error(&error.to_string()), "transport error, retrying");
                     // Issue #749: add jitter to prevent thundering herd
                     let base = 2u64.pow(attempt as u32 + 1);
                     let jitter = SystemTime::now()
@@ -1429,6 +1429,8 @@ fn format_transport_error(error: &reqwest::Error, endpoint: &str) -> String {
         .split("://")
         .nth(1)
         .and_then(|s| s.split('/').next())
+        // Strip userinfo (user:pass@host) to avoid leaking credentials in error messages
+        .and_then(|s| s.split('@').next_back())
         .unwrap_or("(unknown)");
     if error.is_timeout() {
         return format!("请求超时。模型服务长时间没有响应：{}", host);

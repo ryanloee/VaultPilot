@@ -1848,8 +1848,13 @@ fn normalize_messages_endpoint(base_url: &str) -> String {
 }
 
 fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
+    // #792: Only retry specific 5xx codes that indicate transient failures.
+    // 501 (Not Implemented), 505 (HTTP Version Not Supported), etc. are
+    // permanent failures that waste retry attempts with exponential backoff.
     status == 429
-        || status >= 500
+        || status == 502  // Bad Gateway
+        || status == 503  // Service Unavailable
+        || status == 504  // Gateway Timeout
         || detail.contains("访问量过大")
         || detail.to_ascii_lowercase().contains("too many requests")
         || detail.to_ascii_lowercase().contains("rate limit")
@@ -2177,10 +2182,13 @@ mod tests {
     }
 
     #[test]
-    fn is_retryable_detects_429_and_5xx() {
+    fn is_retryable_detects_429_and_specific_5xx() {
         assert!(is_retryable_provider_error(429, ""));
-        assert!(is_retryable_provider_error(500, ""));
-        assert!(is_retryable_provider_error(503, ""));
+        assert!(!is_retryable_provider_error(500, "")); // Internal Server Error — not retried
+        assert!(is_retryable_provider_error(502, "")); // Bad Gateway — transient
+        assert!(is_retryable_provider_error(503, "")); // Service Unavailable — transient
+        assert!(is_retryable_provider_error(504, "")); // Gateway Timeout — transient
+        assert!(!is_retryable_provider_error(501, "")); // Not Implemented — permanent
         assert!(!is_retryable_provider_error(400, ""));
         assert!(!is_retryable_provider_error(401, ""));
     }

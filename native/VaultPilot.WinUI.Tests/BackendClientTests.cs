@@ -31,14 +31,14 @@ public class BackendClientTests
     [Fact]
     public void NewBackendClient_IsNotConnected()
     {
-        using var client = new BackendClient();
+        var client = new BackendClient();
         Assert.False(client.IsConnected);
     }
 
     [Fact]
     public void GetStderrTail_EmptyClient_ReturnsEmpty()
     {
-        using var client = new BackendClient();
+        var client = new BackendClient();
         var tail = client.GetStderrTail();
         Assert.Equal(string.Empty, tail);
     }

@@ -70,7 +70,6 @@ jobs:
           /restore
           /t:Build
           /p:Configuration=Debug
-          /p:Platform=x64
 
       - name: Run C# unit tests
         shell: powershell

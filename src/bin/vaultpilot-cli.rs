@@ -2541,7 +2541,10 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
             let deleted = state.sessions.len() != original_len;
             match save_chat_state_with_context(context, &state) {
                 Ok(_) => mcp_tool_success(
-                    format!("Deleted={deleted}, id={}", args.session_id),
+                    format!(
+                        "Deleted={deleted}, id={}",
+                        escape_xml_content(&args.session_id)
+                    ),
                     serde_json::json!({ "deleted": deleted, "id": args.session_id }),
                 ),
                 Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
@@ -2618,7 +2621,7 @@ fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
     };
     match delete_note_with_context(context, &id) {
         Ok(deleted) => mcp_tool_success(
-            format!("Deleted={deleted}, id={id}"),
+            format!("Deleted={deleted}, id={}", escape_xml_content(&id)),
             serde_json::json!({ "deleted": deleted, "id": id }),
         ),
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),

@@ -305,6 +305,8 @@
 - #769: search_notes_with_context total 受 SQL LIMIT 截断 → COUNT(*) 查询 (PR #772 已合并)
 - #773: file:// URL percent-encoding 未解码 → url::Url::parse() + to_file_path() (PR #775 已合并)
 - #774: HTTP bridge rate limiter 对 /health 端点限流 → 豁免健康检查 (PR #775 已合并)
+- #776: SettingsDialog inline LostFocus 校验与 save 校验不一致 → 统一 timeout/contextWindow/autoWake 上下界检查 (PR #778 已合并)
+- #777: XAML ProgressRing 和 error TextBlocks 无障碍属性缺失 → 添加 AutomationProperties.Name + LiveSetting (PR #779 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1260,3 +1262,26 @@
 - 审核结果: PR #646 (#597 CI WinUI 测试) — winui-build 仍 6h 超时 CANCELLED, 其余 5/6 CI 通过 (cargo audit/fmt/test/clippy + linux-cli-build)
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 315 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~4.7K行 (crypto.rs 342 + models.rs 1001 + search_rules.rs 446 + ai.rs 2431 + prompting.rs 946) + C# 前端 ~390行 (4 个模型文件 + converter + Program.cs) + C# 测试 ~2.4K行 (7 个测试文件) = ~7.5K行。全部发现为 LOW/INFO severity — 无 MEDIUM/HIGH 可操作缺陷。crypto.rs PBKDF2 实现正确但缺少已知测试向量。ai.rs SSRF/重试/解析逻辑完整。C# 模型类型 null-safe 覆盖完整。代码库经过 195 个审查循环和 315 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#196)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#196
+- 本轮时间: 2026-06-18
+- 审查模块: storage.rs (5233行) 备份/导出, ai.rs (2431行) extract_json/重试, models.rs (1001行) 校验, crypto.rs (342行), BackendClient.cs (712行) 进程生命周期, MainWindow.xaml.cs (3674行) 状态管理, NotesView.xaml.cs (360行) 搜索, SettingsDialog.xaml.cs (325行) 校验, 全部 XAML 文件 (800行)
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #776 BUG (SettingsDialog inline 校验不一致), #777 BUG (XAML ProgressRing/error TextBlocks 无障碍属性缺失)
+  - #776 MEDIUM BUG: Timeout LostFocus 检查 v==0 但 save 检查 <1000; ContextWindow LostFocus 无上界但 save 检查 >2M; AutoWakeInterval LostFocus 无上界但 save 检查 >1440
+  - #777 MEDIUM BUG: NotesView ProgressRing 和 MainWindow LoadingProgressRing 缺少 AutomationProperties.Name; SettingsDialog 5 个 error TextBlocks 缺少 AutomationProperties.LiveSetting
+  - Rust 后端: 3 路并行审查 storage.rs + ai.rs + models.rs + crypto.rs — 0 HIGH, 0 MEDIUM, 3 LOW, 7 INFO
+  - storage.rs: export 使用 fs::write 而非 atomic_write (LOW), validate_import_path byte-indexing (LOW), FTS+filter 近似结果 (INFO)
+  - ai.rs: extract_json fallback 返回未验证 JSON (LOW), jitter SystemTime (INFO)
+  - crypto.rs/ models.rs: 零缺陷
+  - C# 前端: BackendClient _readerCts volatile read 缺失 (LOW), FailPending 可遗漏晚到 SendAsync (LOW), 静态事件生命周期 (LOW), CTS 未在 Unloaded 清理 (LOW), DragOver 接受非图片 (LOW)
+  - MCP/agent: 第三个审查任务因 API 限流中断
+  - 397 Rust 测试全通过, 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #776 → PR #778 已合并 (CI 6/6 通过): LostFocus 校验统一 timeout 1000-300000, contextWindow ≤2M, autoWake ≤1440
+  - #777 → PR #779 已合并 (CI 6/6 通过): NotesView/MainWindow ProgressRing AutomationProperties.Name + SettingsDialog 5 个 error TextBlocks LiveSetting
+- 审核结果: PR #778 和 PR #779 全部 CI 6/6 通过并合并。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 317 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~9K行 (storage.rs + ai.rs + models.rs + crypto.rs) + C# 前端 ~5.6K行 (BackendClient + MainWindow + NotesView + SettingsDialog + 全部 XAML) = ~15K行。发现 2 个 MEDIUM severity C# 前端 bug (校验不一致 + 无障碍缺失) 并修复。Rust 后端 0 MEDIUM/HIGH 缺陷。代码库经过 196 个审查循环和 317 个已合并 PR 后维持极高成熟度。

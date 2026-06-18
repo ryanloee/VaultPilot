@@ -588,15 +588,15 @@ pub fn search_notes_with_context(
             limit + offset
         };
         let fts_results = rank_note_metas(context, &connection, &query.text, &[], fetch_limit)?;
-        let fts_results = fts_results.into_iter().skip(offset).collect::<Vec<_>>();
         let notes = if fts_results.is_empty() {
             // Fuzzy/approximate fallback: split query into words and use LIKE
-            let like_results = query_like_note_metas(&connection, &query.text, fetch_limit)?;
-            like_results.into_iter().skip(offset).collect::<Vec<_>>()
+            query_like_note_metas(&connection, &query.text, fetch_limit)?
         } else {
             fts_results
         };
         // Total will be computed after in-memory filtering below (approximate).
+        // NOTE: offset is NOT applied here — it must be applied AFTER in-memory
+        // filtering so that page boundaries are correct for filtered results.
         (notes, 0usize)
     };
 
@@ -628,8 +628,14 @@ pub fn search_notes_with_context(
         notes.len()
     };
 
-    // Trim to requested limit after filtering
-    notes.truncate(limit);
+    // For FTS path: apply offset AFTER in-memory filtering so page boundaries
+    // are correct. For non-FTS paths, offset was already applied in SQL.
+    if !query.text.trim().is_empty() {
+        let effective_offset = offset.min(notes.len());
+        notes = notes.into_iter().skip(effective_offset).take(limit).collect();
+    } else {
+        notes.truncate(limit);
+    }
 
     Ok(SearchResult { notes, total })
 }

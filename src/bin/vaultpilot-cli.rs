@@ -2221,8 +2221,9 @@ fn mcp_tools() -> Vec<Value> {
                 "properties": {
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of notes to return.",
-                        "default": 20
+                        "description": "Maximum number of notes to return (max 200).",
+                        "default": 20,
+                        "maximum": 200
                     }
                 },
                 "additionalProperties": false
@@ -2546,11 +2547,12 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
 }
 
 fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
+    // Storage layer clamps to 200 (storage.rs:558), so align the MCP cap.
     let limit = arguments
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(20)
-        .min(1000) as usize;
+        .min(200) as usize;
     match search_notes_with_context(
         context,
         SearchQuery {

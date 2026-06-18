@@ -1072,6 +1072,10 @@ fn ensure_schema(connection: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_attachments_note_id ON attachments(note_id);
 
+        -- Indexes for ORDER BY updated_at DESC and date-range filters (#828)
+        CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);
+
         CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(
             note_id UNINDEXED,
             title,

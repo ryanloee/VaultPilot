@@ -1054,7 +1054,7 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
     // Avoid overlapping head and tail when file has fewer lines than the
     // combined head+tail budget but exceeds the character limit.
     let (skipped_lines, skipped_content, effective_head, effective_tail) =
-        if tail_start > head_count {
+        if tail_start >= head_count {
             let skipped = lines.len() - head_count - tail_count;
             let skipped_str = lines[head_count..tail_start].join("\n");
             (

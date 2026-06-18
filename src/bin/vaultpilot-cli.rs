@@ -2506,7 +2506,7 @@ fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
             state.sessions.insert(0, session.clone());
             match save_chat_state_with_context(context, &state) {
                 Ok(_) => mcp_tool_success(
-                    format!("Created session '{}'", session.title),
+                    format!("Created session '{}'", escape_xml_content(&session.title)),
                     serde_json::json!({ "session": session }),
                 ),
                 Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
@@ -2582,7 +2582,7 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
     };
     match load_note_with_context(context, &id) {
         Ok(note) => mcp_tool_success(
-            format!("Loaded note '{}'", note.meta.title),
+            format!("Loaded note '{}'", escape_xml_content(&note.meta.title)),
             serde_json::to_value(&note).unwrap_or_default(),
         ),
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
@@ -2600,7 +2600,7 @@ fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
     };
     match save_note_with_context(context, note) {
         Ok(saved) => mcp_tool_success(
-            format!("Created note '{}'", saved.meta.title),
+            format!("Created note '{}'", escape_xml_content(&saved.meta.title)),
             serde_json::to_value(&saved).unwrap_or_default(),
         ),
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
@@ -2698,7 +2698,7 @@ async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
     };
     match ask_with_ai_with_context(context, question, None, None, None, |_, _| ()).await {
         Ok(answer) => {
-            let summary = format!("Answer: {}", answer.answer);
+            let summary = format!("Answer: {}", escape_xml_content(&answer.answer));
             mcp_tool_success(summary, serde_json::to_value(&answer).unwrap_or_default())
         }
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),

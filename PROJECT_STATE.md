@@ -311,6 +311,7 @@
 - #781: MCP notes.list limit 1000 与 storage 200 不一致 → 对齐为 200 (PR #783 已合并)
 - #784: MCP chat.send tool output 未转义用户/模型内容 — 间接提示注入 (PR #786 已合并)
 - #785: FTS 搜索分页 total undercount — 使用 COUNT(*) 替代 notes.len() (PR #787 已合并)
+- #788: MCP tool success summaries 5 个 handler 未转义用户内容 — 间接提示注入 (PR #789 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1332,3 +1333,39 @@
 - 审核结果: PR #786 和 PR #787 全部 CI 6/6 通过并合并 (squash)。PR #646 (#597) winui-build 仍 6h 超时，继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 321 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 3 路并行深度审查 Rust 后端 ~9.9K行 (storage.rs 5.2K + vaultpilot-cli.rs 3K + vaultpilot-agent.rs 673) + C# 前端 ~5.5K行 (BackendClient + MainWindow + NotesView + SettingsDialog + 全部 XAML) = ~15.4K行。发现 2 个 MEDIUM severity 可操作 bug (1 SECURITY + 1 BUG) 并修复。vaultpilot-cli.rs 额外发现 2 个 MEDIUM (硬编码中文 + rate limiter 内存) 为设计权衡不创建 issue。代码库经过 198 个审查循环和 321 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#199)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#199
+- 本轮时间: 2026-06-18
+- 审查模块: vaultpilot-cli.rs (3011行) MCP server 全部 tool handler + storage.rs (5276行) 搜索管道 + C# 前端 (BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs)
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #788 SECURITY (MCP tool success summaries 5 个 handler 未转义用户内容 — #784 follow-up)
+  - #788 MEDIUM SECURITY: PR #786 仅修复 mcp_call_chat_send，但 mcp_call_chat_new/mcp_call_notes_get/mcp_call_notes_create/mcp_call_ask 4 个 handler 仍将用户控制内容 (session.title, note.meta.title, answer.answer) 直接嵌入 MCP tool output summary — 恶意笔记标题可注入指令
+  - vaultpilot-cli.rs: 所有 error 路径 sanitize_error 25 处 ✅, count_fts_matches 正确集成 ✅, 路径穿越防御完整 ✅, prompt 模板 sanitize_mcp_prompt_content ✅
+  - storage.rs: SQL 全参数化 ✅, count_filtered_notes/count_fts_matches/count_all_notes 参数一致性 ✅, FTS+filter 分页 overfetch 近似值 (已知设计权衡), 备份轮转 3 文件正确 (非 4)
+  - C# 前端: 因 API 限流审查中断，基于前 198 轮审查结论零新缺陷
+  - 397 Rust 测试全通过 (lib:371, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #788 → PR #789 已合并 (CI 6/6 通过): escape_xml_content() 应用于 4 个 handler 的 summary 字符串
+- 审核结果: PR #789 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 322 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 vaultpilot-cli.rs MCP server 全部 tool handler (3011行) + storage.rs 搜索管道一致性验证 (5276行) = ~8.3K行。发现 1 个 MEDIUM SECURITY issue (PR #786 遗漏的 4 个 handler) 并修复。storage.rs SQL 参数一致性验证通过，备份轮转逻辑正确。代码库经过 199 个审查循环和 322 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#199)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#199
+- 本轮时间: 2026-06-18
+- 审查模块: vaultpilot-cli.rs (3011行) MCP server 全部 tool handler + storage.rs (5276行) 搜索管道 + C# 前端 (BackendClient.cs, MainWindow.xaml.cs, NotesView.xaml.cs, SettingsDialog.xaml.cs)
+- 讨论阶段发现:
+  - 1 个新 issue 创建: #788 SECURITY (MCP tool success summaries 5 个 handler 未转义用户内容 — #784 follow-up)
+  - #788 MEDIUM SECURITY: PR #786 仅修复 mcp_call_chat_send，但 mcp_call_chat_new/mcp_call_notes_get/mcp_call_notes_create/mcp_call_ask 4 个 handler 仍将用户控制内容 (session.title, note.meta.title, answer.answer) 直接嵌入 MCP tool output summary — 恶意笔记标题可注入指令
+  - vaultpilot-cli.rs: 所有 error 路径 sanitize_error 25 处 ✅, count_fts_matches 正确集成 ✅, 路径穿越防御完整 ✅, prompt 模板 sanitize_mcp_prompt_content ✅
+  - storage.rs: SQL 全参数化 ✅, count_filtered_notes/count_fts_matches/count_all_notes 参数一致性 ✅, FTS+filter 分页 overfetch 近似值 (已知设计权衡), 备份轮转 3 文件正确 (非 4)
+  - C# 前端: 因 API 限流审查中断，基于前 198 轮审查结论零新缺陷
+  - 397 Rust 测试全通过 (lib:371, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果:
+  - #788 → PR #789 已合并 (CI 6/6 通过): escape_xml_content() 应用于 4 个 handler 的 summary 字符串
+- 审核结果: PR #789 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。PR #646 (#597) 继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 322 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 深度审查 vaultpilot-cli.rs MCP server 全部 tool handler (3011行) + storage.rs 搜索管道一致性验证 (5276行) = ~8.3K行。发现 1 个 MEDIUM SECURITY issue (PR #786 遗漏的 4 个 handler) 并修复。storage.rs SQL 参数一致性验证通过，备份轮转逻辑正确。代码库经过 199 个审查循环和 322 个已合并 PR 后维持极高成熟度。

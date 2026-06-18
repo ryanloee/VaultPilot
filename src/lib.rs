@@ -546,38 +546,50 @@ pub async fn ask_with_ai_with_context(
             }
             AssistantToolCall::SaveNote { draft } => {
                 emit_status("saving", "Saving generated note".to_string());
-                let saved =
-                    save_note_with_images_async(context, draft_to_note_document(*draft), &images)
-                        .await?;
-                let result = format!(
-                    "save_note completed.
-Saved title: {}
-Saved path: {}
-Saved summary: {}",
-                    saved.meta.title, saved.meta.path, saved.meta.summary
-                );
-                saved_note = Some(saved.meta.clone());
-                tool_results.push(ToolExecution::new(
-                    "save_note",
-                    "model_generated_note_draft".to_string(),
-                    result,
-                    false,
-                ));
+                match save_note_with_images_async(context, draft_to_note_document(*draft), &images)
+                    .await
+                {
+                    Ok(saved) => {
+                        let result = format!(
+                            "save_note completed.\nSaved title: {}\nSaved path: {}\nSaved summary: {}",
+                            saved.meta.title, saved.meta.path, saved.meta.summary
+                        );
+                        saved_note = Some(saved.meta.clone());
+                        tool_results.push(ToolExecution::new(
+                            "save_note",
+                            "model_generated_note_draft".to_string(),
+                            result,
+                            false,
+                        ));
 
-                emit_status("responding", "Preparing final answer".to_string());
-                return finalize_checked_grounded_answer(
-                    &settings,
-                    &raw_question,
-                    &effective_question,
-                    &history,
-                    &images,
-                    &docs,
-                    &tool_results,
-                    saved_note,
-                    usage,
-                    false,
-                )
-                .await;
+                        emit_status("responding", "Preparing final answer".to_string());
+                        return finalize_checked_grounded_answer(
+                            &settings,
+                            &raw_question,
+                            &effective_question,
+                            &history,
+                            &images,
+                            &docs,
+                            &tool_results,
+                            saved_note,
+                            usage,
+                            false,
+                        )
+                        .await;
+                    }
+                    Err(error) => {
+                        // #791: Record save failure as a tool error and continue
+                        // to finalize — the user still gets an answer with the
+                        // error context instead of an opaque request failure.
+                        let error_msg = format!("tool error: save_note failed: {}", error);
+                        tool_results.push(ToolExecution::new(
+                            "save_note",
+                            "model_generated_note_draft".to_string(),
+                            error_msg,
+                            true,
+                        ));
+                    }
+                }
             }
         }
     }

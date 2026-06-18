@@ -312,6 +312,9 @@
 - #784: MCP chat.send tool output 未转义用户/模型内容 — 间接提示注入 (PR #786 已合并)
 - #785: FTS 搜索分页 total undercount — 使用 COUNT(*) 替代 notes.len() (PR #787 已合并)
 - #788: MCP tool success summaries 5 个 handler 未转义用户内容 — 间接提示注入 (PR #789 已合并)
+- #790: HTTP bridge rate limiter 内层 middleware — rate-limited 请求仍消耗 body read + timeout (PR #793 已合并)
+- #791: SaveNote tool error 中断整个请求 — 改为 graceful degradation (PR #794 已合并)
+- #792: is_retryable_provider_error 重试所有 5xx — 限制为 502/503/504 (PR #795 已合并)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1369,3 +1372,42 @@
 - 审核结果: PR #789 CI 6/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build + winui-build) 并合并 (squash)。PR #646 (#597) 继续等待。
 - 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 322 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
 - 代码审查: 深度审查 vaultpilot-cli.rs MCP server 全部 tool handler (3011行) + storage.rs 搜索管道一致性验证 (5276行) = ~8.3K行。发现 1 个 MEDIUM SECURITY issue (PR #786 遗漏的 4 个 handler) 并修复。storage.rs SQL 参数一致性验证通过，备份轮转逻辑正确。代码库经过 199 个审查循环和 322 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#200)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#200
+- 本轮时间: 2026-06-18
+- 审查模块: vaultpilot-cli.rs (3011行) HTTP bridge middleware ordering + lib.rs (3124行) tool execution loop + ai.rs (2431行) retry logic + storage.rs (5276行, 子任务超时)
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #790 BUG, #791 BUG, #792 BUG
+  - #790 MODERATE BUG: HTTP bridge rate limiter 是最内层 middleware — rate-limited 请求仍消耗 10MB body read 和 180s timeout budget。修复: 重新排序 layer stack 使 rate limiter 在 body limit 和 timeout 之外
+  - #791 MEDIUM BUG: SaveNote tool handler 使用 ? 操作符传播错误 — 磁盘满/权限错误时丢弃所有已累积的 tool results 和 AI reasoning。修复: 改用 match 记录 is_error: true 并继续 finalize
+  - #792 LOW BUG: is_retryable_provider_error 使用 status >= 500 重试所有 5xx — 501 Not Implemented/505 HTTP Version 等永久性失败浪费 2 次重试。修复: 限制为 429/502/503/504
+  - 正面发现: Rust 397 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅, extract_json_block backslash tracking 正确 ✅, normalize_tool_path 路径限制完整 ✅, validate_base_url SSRF 防护完整 ✅
+- 修复结果:
+  - #790 → PR #793 已合并 (CI 6/6 通过): rate limiter 移至 body limit/timeout 之外
+  - #791 → PR #794 已合并 (CI 6/6 通过): SaveNote match Ok/Err graceful degradation
+  - #792 → PR #795 已合并 (CI 6/6 通过): is_retryable_provider_error 限制为 502/503/504
+- 审核结果: PR #793, #794, #795 全部 CI 6/6 通过并合并 (squash)。PR #646 (#597) winui-build 仍 6h 超时，继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 325 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~13.8K行 (vaultpilot-cli.rs 3K + lib.rs 3.1K + ai.rs 2.4K + storage.rs 5.3K 超时)。发现 3 个 MEDIUM/LOW severity bug 并修复。vaultpilot-cli.rs middleware ordering 问题导致 rate limiter 失效。lib.rs SaveNote error handling 不一致。ai.rs retry 逻辑过宽。代码库经过 200 个审查循环和 325 个已合并 PR 后维持极高成熟度。
+
+
+## 本轮循环状态 (循环#200)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#200
+- 本轮时间: 2026-06-18
+- 审查模块: vaultpilot-cli.rs (3011行) HTTP bridge middleware ordering + lib.rs (3124行) tool execution loop + ai.rs (2431行) retry logic + storage.rs (5276行, 子任务超时)
+- 讨论阶段发现:
+  - 3 个新 issue 创建: #790 BUG, #791 BUG, #792 BUG
+  - #790 MODERATE BUG: HTTP bridge rate limiter 是最内层 middleware — rate-limited 请求仍消耗 10MB body read 和 180s timeout budget
+  - #791 MEDIUM BUG: SaveNote tool handler 使用 ? 操作符传播错误 — 磁盘满/权限错误时丢弃所有已累积的 tool results 和 AI reasoning
+  - #792 LOW BUG: is_retryable_provider_error 使用 status >= 500 重试所有 5xx — 501/505 等永久性失败浪费重试
+  - 正面发现: Rust 397 测试全通过 ✅, 0 unsafe ✅, 0 生产 unwrap ✅, sanitize_error 63处 ✅, SQL 全参数化 ✅
+- 修复结果:
+  - #790 → PR #793 已合并 (CI 6/6 通过): rate limiter 移至 body limit/timeout 之外
+  - #791 → PR #794 已合并 (CI 6/6 通过): SaveNote match Ok/Err graceful degradation
+  - #792 → PR #795 已合并 (CI 6/6 通过): is_retryable_provider_error 限制为 502/503/504
+- 审核结果: PR #793, #794, #795 全部 CI 6/6 通过并合并。PR #646 (#597) winui-build 仍 6h 超时，继续等待。
+- 项目状态: **1 open issue (#597 阻塞), 1 open PR (#646), 325 已合并 PR, 397 Rust 测试全通过, 1 阻塞项 (#597 CI WinUI 测试)**
+- 代码审查: 3 路并行深度审查 Rust 后端 ~13.8K行。发现 3 个 MEDIUM/LOW severity bug 并修复。代码库经过 200 个审查循环和 325 个已合并 PR 后维持极高成熟度。

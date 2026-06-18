@@ -2914,13 +2914,14 @@ public sealed partial class MainWindow : Window
 
     private void ShowLoadingOverlay(string message = "正在处理...")
     {
-        LoadingMessage.Text = message;
-        LoadingOverlay.Visibility = Visibility.Visible;
+        ComposerProgressRing.IsActive = true;
+        ComposerProgressRing.Visibility = Visibility.Visible;
     }
 
     private void HideLoadingOverlay()
     {
-        LoadingOverlay.Visibility = Visibility.Collapsed;
+        ComposerProgressRing.IsActive = false;
+        ComposerProgressRing.Visibility = Visibility.Collapsed;
     }
 
     private static string StartupLogPath()

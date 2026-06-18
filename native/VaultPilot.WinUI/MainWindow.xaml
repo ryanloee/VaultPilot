@@ -224,9 +224,20 @@
                                             ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
                                             AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
                                         </TextBox>
+                                        <ProgressRing
+                                            x:Name="ComposerProgressRing"
+                                            Grid.Row="1"
+                                            IsActive="False"
+                                            Width="16"
+                                            Height="16"
+                                            Visibility="Collapsed"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            Margin="4,0,0,0"
+                                            AutomationProperties.Name="正在处理" />
                                         <TextBlock
                                             x:Name="ComposerHintText"
-                                            Grid.Row="1"
+                                            Grid.Row="2"
                                             Text="Enter 发送 · Shift+Enter 换行"
                                             FontSize="11"
                                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
@@ -234,7 +245,7 @@
                                             HorizontalAlignment="Right" />
                                         <Grid
                                             x:Name="ContextUsageBarHost"
-                                            Grid.Row="2"
+                                            Grid.Row="3"
                                             Height="8"
                                             MinWidth="120"
                                             HorizontalAlignment="Stretch"
@@ -260,7 +271,7 @@
                                         </Grid>
                                         <ScrollViewer
                                             x:Name="AttachmentScroller"
-                                            Grid.Row="3"
+                                            Grid.Row="4"
                                             Margin="0,4,0,0"
                                             HorizontalScrollBarVisibility="Auto"
                                             VerticalScrollBarVisibility="Disabled"
@@ -301,35 +312,6 @@
             </NavigationView.Content>
         </NavigationView>
 
-        <!-- Loading overlay with ProgressRing (#215) -->
-        <Grid
-            x:Name="LoadingOverlay"
-            Grid.RowSpan="2"
-            Background="{ThemeResource OverlayBackgroundBrush}"
-            Visibility="Collapsed"
-            Canvas.ZIndex="100">
-            <StackPanel
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Spacing="12"
-                Padding="24"
-                CornerRadius="8"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1">
-                <ProgressRing
-                    x:Name="LoadingProgressRing"
-                    IsActive="True"
-                    Width="48"
-                    Height="48"
-                    HorizontalAlignment="Center"
-                    AutomationProperties.Name="正在处理" />
-                <TextBlock
-                    x:Name="LoadingMessage"
-                    Text="正在处理..."
-                    HorizontalAlignment="Center"
-                    Style="{ThemeResource BodyTextBlockStyle}" />
-            </StackPanel>
-        </Grid>
+
     </Grid>
 </Window>

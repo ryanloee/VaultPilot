@@ -157,8 +157,11 @@ jobs:
       - name: Build WinUI project
         run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /restore /p:Configuration=Release /p:Platform=x64
 
-      - name: Build and run C# unit tests
-        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Release --verbosity normal
+      - name: Build C# test project
+        run: msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /restore /p:Configuration=Release /p:Platform=x64
+
+      - name: Run C# unit tests
+        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-build --configuration Release --verbosity normal
 
       - name: Smoke test WinUI app
         shell: powershell

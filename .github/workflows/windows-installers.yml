@@ -63,9 +63,18 @@ jobs:
           /p:Platform=x64
           /bl:artifacts/logs/release-validate-winui-debug-x64.binlog
 
-      - name: Build and run C# unit tests
+      - name: Build C# test project
         shell: powershell
-        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Debug --verbosity normal
+        run: >
+          MSBuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
+          /restore
+          /t:Build
+          /p:Configuration=Debug
+          /p:Platform=x64
+
+      - name: Run C# unit tests
+        shell: powershell
+        run: dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --no-build --configuration Debug --verbosity normal
 
       - name: Verify validation outputs
         shell: powershell

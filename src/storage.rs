@@ -2030,7 +2030,7 @@ fn query_filtered_note_metas(
         let trimmed = tag.trim();
         if !trimmed.is_empty() {
             conditions.push(format!(
-                "EXISTS (SELECT 1 FROM json_each(tags) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
+                "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
             ));
             params.push(Box::new(trimmed.to_string()));
             param_idx += 1;
@@ -2043,7 +2043,7 @@ fn query_filtered_note_metas(
         let trimmed = kw.trim();
         if !trimmed.is_empty() {
             conditions.push(format!(
-                "EXISTS (SELECT 1 FROM json_each(keywords) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
+                "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(keywords) THEN keywords ELSE '[]' END) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
             ));
             params.push(Box::new(trimmed.to_string()));
             param_idx += 1;
@@ -2108,7 +2108,7 @@ fn count_filtered_notes(connection: &Connection, query: &SearchQuery) -> Result<
         let trimmed = tag.trim();
         if !trimmed.is_empty() {
             conditions.push(format!(
-                "EXISTS (SELECT 1 FROM json_each(tags) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
+                "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
             ));
             params.push(Box::new(trimmed.to_string()));
             param_idx += 1;
@@ -2119,7 +2119,7 @@ fn count_filtered_notes(connection: &Connection, query: &SearchQuery) -> Result<
         let trimmed = kw.trim();
         if !trimmed.is_empty() {
             conditions.push(format!(
-                "EXISTS (SELECT 1 FROM json_each(keywords) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
+                "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(keywords) THEN keywords ELSE '[]' END) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
             ));
             params.push(Box::new(trimmed.to_string()));
             param_idx += 1;

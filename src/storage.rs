@@ -947,6 +947,11 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<IndexStats
         let tx = connection.transaction()?;
         for entry in chunk {
             stats.scanned += 1;
+            // #851: Add both canonical and non-canonical paths to handle Windows
+            // extended-length prefix mismatch (\\?\C:\... vs C:\...) and
+            // canonicalize failures (permissions, network drives).
+            let raw = entry.path().to_string_lossy().to_string();
+            indexed_paths.insert(raw);
             let canonical = entry
                 .path()
                 .canonicalize()

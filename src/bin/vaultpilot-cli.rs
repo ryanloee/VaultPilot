@@ -2439,7 +2439,8 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
         Ok(result) => {
             let summary = format!(
                 "Assistant reply from session \"{}\":\n{}",
-                result.session_title, result.answer.answer
+                escape_xml_content(&result.session_title),
+                escape_xml_content(&result.answer.answer)
             );
             let structured = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
             mcp_tool_success(summary, structured)

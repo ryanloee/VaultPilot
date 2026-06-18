@@ -330,6 +330,20 @@ pub fn save_settings_with_context(
     }
     fs::create_dir_all(&settings.vault_dir)?;
 
+    // Validate provider settings after normalization — reject invalid
+    // timeout/base_url values early rather than allowing them to cause
+    // confusing runtime failures later (#800).  We use provider.validate()
+    // rather than the full AppSettings.validate() because the save path
+    // creates vault_dir itself and api_key may legitimately be empty at
+    // save time.
+    let errors = settings.provider.validate();
+    if !errors.is_empty() {
+        return Err(anyhow::anyhow!(
+            "settings validation failed: {}",
+            errors.join("; ")
+        ));
+    }
+
     // Encrypt API key before persisting to disk.
     let api_key_plaintext = settings.provider.api_key.clone();
     if !api_key_plaintext.is_empty() && !crate::crypto::is_encrypted(&api_key_plaintext) {

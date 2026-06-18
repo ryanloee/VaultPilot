@@ -1587,18 +1587,22 @@ async fn build_openai_messages(
 }
 
 fn detect_image_media_type(path: &str) -> Result<&'static str> {
+    let fname = Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("unknown");
     let extension = Path::new(path)
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
-        .ok_or_else(|| anyhow!("unsupported image format: {path}"))?;
+        .ok_or_else(|| anyhow!("unsupported image format: {fname}"))?;
 
     match extension.as_str() {
         "png" => Ok("image/png"),
         "jpg" | "jpeg" => Ok("image/jpeg"),
         "webp" => Ok("image/webp"),
         "gif" => Ok("image/gif"),
-        _ => Err(anyhow!("unsupported image format: {path}")),
+        _ => Err(anyhow!("unsupported image format: {fname}")),
     }
 }
 

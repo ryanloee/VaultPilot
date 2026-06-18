@@ -989,15 +989,19 @@ async fn run_http_bridge(
         .route("/health", get(http_health))
         .route("/v1/models", get(http_models))
         .route("/v1/chat/completions", post(http_chat_completions))
-        .layer(axum::middleware::from_fn_with_state(
-            rate_limiter,
-            rate_limit_middleware,
-        ))
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
+        // #790: Rate limiter placed before body limit and timeout so
+        // rate-limited requests are rejected immediately without reading
+        // the body or consuming timeout budget. In Axum .layer() ordering,
+        // first .layer() = innermost, last .layer() = outermost.
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
             std::time::Duration::from_secs(180),
         )) // #605: overall request timeout
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_middleware,
+        ))
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|origin, _parts| {

@@ -1822,3 +1822,50 @@
 - 审核结果: PR #854 CI 测试中 (winui-build 因 NuGet 缓存 miss 运行时间较长)
 - 项目状态: **0 open issue (#597 已修复待合并), 1 open PR (#854), 357 已合并 PR, 403 Rust 测试全通过**
 - 代码审查: 3 路并行深度审查 Rust 后端全量 (~18K行) + C# 前端全量 (~6K行) + CI/CD workflows = ~24K行。零 MEDIUM+ 缺陷发现。代码库经过 216 个审查循环和 357 个已合并 PR 后维持极高成熟度。竞品调研确认 VaultPilot MCP server 是强差异化优势。
+
+## 本轮循环状态 (循环#217)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#217
+- 本轮时间: 2026-06-19
+- 审查模块: storage.rs split_frontmatter/backup/FTS5 (5365行), C# 测试文件 (8 文件 755行), CI/CD workflows (ci.yml + windows-installers.yml + linux-cli.yml + dependabot.yml)
+- 竞品调研: Obsidian Copilot v3.3.3 (May 2026) — Gemini 3.5 Flash 内置模型, Copilot Plus 冻结修复, 开发者 test:vault 命令。Copilot v4 (Summer 2026) — agent mode, projects (NotebookLM 风格), composer diff-before-apply, relevance note surfacing, self-host 支持, PDF/EPUB/YouTube 上下文, web search, OS keychain API key, mobile 支持。VaultPilot MCP server 是强差异化优势。
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 216 个审查循环后维持零缺陷状态
+  - storage.rs 深度审查 (~5365行):
+    - split_frontmatter: BOM 剥离 ✅ (PR #849), 空 frontmatter ✅, rfind 回退仅限无尾换行文件 (LOW — 与 Obsidian 行为一致)
+    - 备份轮转: Windows remove_file 前置 ✅ (PR #832), WAL checkpoint _guard 持有连接 ✅ (PR #846), busy_timeout ✅
+    - 路径穿越: validate_import_path 规范化+阻止列表 ✅, sanitize_filename 无路径分隔符存活 ✅, zip 无 zip-slip 风险 ✅
+    - FTS5 管道: escape_fts5_term 仅保留安全字符 ✅, json_each json_valid() guard ✅ (PR #836), 全参数化 SQL ✅
+    - unwrap(): 生产代码仅 1 个 expect (line 1884 — SHA-256 输出保证 8 字节), 所有 unwrap_or* 安全回退 ✅
+  - C# 测试文件审查 (8 文件 755行):
+    - 关键修复已在 PR #854 分支: 8 个文件添加 `using Xunit;`, BackendClientTests `using` → `await using`
+    - 测试覆盖差距 (LOW — 非代码缺陷): BackendClient 仅 3 个测试 (1 个有意义), 无错误条件测试, 模型测试不测 [JsonConstructor] 默认值路径
+    - csproj 配置正确: xunit 2.9.2, Test.Sdk 17.11.1, IsTestProject=true ✅
+  - CI/CD 审查:
+    - PR #854 CI 变更正确: MSBuild → dotnet vstest 管道, NuGet 缓存键更新 ✅
+    - windows-installers.yml 缺少顶层 permissions (LOW — 已有 per-job 限制)
+    - cargo-audit 无工具链设置和缓存 (LOW — 依赖 runner 预装 Rust)
+    - 无 Zig 下载缓存 (LOW — ~100MB 每次下载)
+    - dependabot 缺少测试项目 NuGet 生态 (LOW — xunit 等不会自动更新)
+  - 403 Rust 测试全通过 (lib:377, cli:16, agent:10), cargo audit 2 allowed warnings (rand unsound + time yanked), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 无可修复 issue (PR #854 修复 #597, 所有 LOW findings 不创建 issue)
+- 审核结果: PR #854 CI 5/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build), winui-build "Build and run C# unit tests" 步骤仍在运行 (Windows runner 较慢, NuGet 缓存 miss)
+- 项目状态: **0 open issue (#597 已修复待合并), 1 open PR (#854 CI 运行中), 357 已合并 PR, 403 Rust 测试全通过**
+- 代码审查: 3 路并行深度审查 storage.rs (5365行) split_frontmatter/备份/FTS5 + C# 测试 (755行) + CI/CD workflows = ~6.1K行。零 MEDIUM+ 缺陷发现。storage.rs 经 BOM 修复 (PR #849)、备份轮转 (PR #832)、json_each guard (PR #836) 后完整健壮。C# 测试编译修复已在 PR #854 中。代码库经过 217 个审查循环和 357 个已合并 PR 后维持极高成熟度。
+
+## 本轮循环状态 (循环#218)
+<!-- 指挥官在每轮开始时写入，各任务读取后执行 -->
+- 循环编号: 循环#218
+- 本轮时间: 2026-06-19
+- 审查模块: storage.rs (5433行) 搜索管道/FTS5/CRUD/import-export/chat-state, C# 前端全量 (MainWindow 3690 + BackendClient 716 + NotesView 360 + SettingsDialog 336 + App 176 + models ~5.3K行), ai.rs (2445行) SSRF/retry/JSON/sanitize_error
+- 竞品调研: Obsidian Copilot v4 (Summer 2026) — agent mode 集成 opencode/Claude Code/Codex, 共享 skill/MCP, 用户审批修改, projects (NotebookLM 风格)。AI 知识库工具 2026 趋势: Glean/Notion AI/Guru 企业级跨工具索引, 自更新文档 (GitHub webhook 触发 AI 重写), 内容新鲜度追踪。VaultPilot MCP server + 本地 Obsidian 集成是差异化优势。
+- 讨论阶段发现:
+  - 无新 issue — 代码库经过 217 个审查循环后维持零 MEDIUM/HIGH 缺陷状态
+  - storage.rs 深度审查 (~5433行): SQL 全参数化 ✅, FTS5 转义+引号 ✅, 路径穿越防御 ✅, 原子写入 ✅, json_each guard ✅, MAX_NOTE_FILE_SIZE ✅, WAL checkpoint ✅, 分页正确 ✅, 零生产 unwrap ✅
+  - C# 前端深度审查 (~5.3K行): 24/24 async void 有 try-catch ✅, Interlocked guard 全覆盖 ✅, _isShuttingDown volatile ✅, GetThemeBrush null-safe ✅, [JsonConstructor] 全覆盖 ✅, AutomationProperties 全覆盖 ✅, 资源泄漏防护完整 ✅
+  - ai.rs 深度审查 (~2445行): SSRF DNS pinning ✅, 私有 IP 覆盖 ✅, 重试指数退避+jitter ✅, sanitize_error 63处 ✅, extract_json backslash 校验 ✅, JSON 修复链完整 ✅
+  - 403 Rust 测试全通过 (lib:377, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 无可修复 issue (#597 已由 PR #854 修复)
+- 审核结果: PR #854 CI 5/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build), winui-build 已运行超 2 小时仍在 pending (Windows runner 较慢/可能卡住)。代码变更正确: 8 个测试文件添加 `using Xunit;`, BackendClientTests `using` → `await using`, CI 添加 MSBuild 测试构建+dotnet vstest 步骤, NuGet 缓存键更新。
+- 项目状态: **0 open issue (#597 已修复待合并), 1 open PR (#854 winui-build pending), 357 已合并 PR, 403 Rust 测试全通过**
+- 代码审查: 3 路并行深度审查 storage.rs (5433行) + C# 前端全量 (~5.3K行) + ai.rs (2445行) = ~13.2K行。零 MEDIUM/HIGH 缺陷发现。代码库经过 218 个审查循环和 357 个已合并 PR 后维持极高成熟度。

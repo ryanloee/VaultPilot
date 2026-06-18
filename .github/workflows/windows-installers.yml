@@ -173,7 +173,8 @@ jobs:
           if (Test-Path $exePath) {
             ./scripts/smoke-test-winui.ps1 -ExePath $exePath -TimeoutSeconds 8
           } else {
-            Write-Host "Published exe not found at $exePath, skipping smoke test"
+            Write-Error "Published exe not found at $exePath — build/publish step may have failed"
+            exit 1
           }
 
       - name: Upload workflow artifact

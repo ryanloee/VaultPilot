@@ -71,7 +71,10 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&tmp_path);
     })?;
     drop(file);
-    fs::rename(&tmp_path, path)?;
+    fs::rename(&tmp_path, path).inspect_err(|_| {
+        // #850: Clean up temp file on rename failure (cross-device move, permissions, disk full)
+        let _ = fs::remove_file(&tmp_path);
+    })?;
     Ok(())
 }
 

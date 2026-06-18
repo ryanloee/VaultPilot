@@ -55,6 +55,9 @@ pub struct SearchRules {
 /// - CJK / mixed triggers (e.g. "刷机", "sd卡"): substring match since CJK
 ///   text has no word boundaries.
 fn trigger_matches(normalized_term: &str, trigger: &str) -> bool {
+    if trigger.is_empty() {
+        return false;
+    }
     if trigger.is_ascii() {
         // Whole-word matching: the trigger must appear as an entire token or
         // be bounded by non-alphanumeric characters.
@@ -81,6 +84,9 @@ fn trigger_matches(normalized_term: &str, trigger: &str) -> bool {
 /// Check whether a needle matches a term for relevance bonus scoring.
 /// Uses the same logic as trigger_matches for consistency.
 fn relevance_term_matches(term: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
     if needle.is_ascii() && needle.len() < 5 {
         // Short ASCII needle: whole-word match in both directions
         trigger_matches(term, needle) || trigger_matches(needle, term)
@@ -435,6 +441,13 @@ mod tests {
         assert!(!trigger_matches("consider", "sd"));
         // "desktop" should NOT match "sd"
         assert!(!trigger_matches("desktop", "sd"));
+    }
+
+    #[test]
+    fn trigger_matches_empty_trigger_returns_false() {
+        assert!(!trigger_matches("anything", ""));
+        assert!(!trigger_matches("", ""));
+        assert!(!trigger_matches("test string", ""));
     }
 
     #[test]

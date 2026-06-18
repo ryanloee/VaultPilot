@@ -257,19 +257,19 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Download x86 package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: windows-package-x86
           path: release-assets/win-x86
 
       - name: Download x64 package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: windows-package-x64
           path: release-assets/win-x64
 
       - name: Download Linux x64 package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: linux-package-x64
           path: release-assets/linux-x64

@@ -301,7 +301,12 @@ async fn handle_request(
         }
         "saveSettings" => {
             let params: SaveSettingsParams = parse_params(&request.params)?;
-            serialize_result(save_settings_async(context, params.settings).await)
+            let mut result = save_settings_async(context, params.settings)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            result.provider = result.provider.masked();
+            serde_json::to_value(&result)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
         "loadChatState" => serialize_result(load_chat_state_async(context).await),
         "saveChatState" => {

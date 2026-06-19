@@ -214,7 +214,7 @@
                                         <TextBox
                                             x:Name="ComposerBox"
                                             Grid.Row="0"
-                                            AcceptsReturn="True"
+                                            AcceptsReturn="False"
                                             MinHeight="88"
                                             MaxHeight="200"
                                             TextChanged="OnComposerTextChanged"

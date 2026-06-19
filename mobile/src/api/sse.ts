@@ -123,6 +123,17 @@ export async function parseSSEStreamWithReconnect(
   const maxRetries = options?.maxRetries ?? 3;
   const baseDelay = options?.baseDelay ?? 1000;
 
+  // Deduplicate done:true across retries — prevent caller from receiving
+  // multiple stream-end signals when a retry follows a partial completion.
+  let doneSignaled = false;
+  const wrappedOnChunk = (chunk: StreamChunk) => {
+    if (chunk.done) {
+      if (doneSignaled) return;
+      doneSignaled = true;
+    }
+    onChunk(chunk);
+  };
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (options?.signal?.aborted) {
       throw new DOMException('Aborted', 'AbortError');
@@ -138,7 +149,7 @@ export async function parseSSEStreamWithReconnect(
       }
       if (!res.body) throw new Error('No response body');
 
-      await parseSSEStream(res.body, onChunk, options);
+      await parseSSEStream(res.body, wrappedOnChunk, options);
       return; // Success
     } catch (err: any) {
       if (err.name === 'AbortError') throw err;

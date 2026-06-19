@@ -137,8 +137,57 @@ fn machine_salt() -> Vec<u8> {
     }
     #[cfg(target_os = "macos")]
     {
-        // macOS IOPlatformUUID is not directly accessible without IOKit;
-        // hostname + arch is sufficient on consumer macOS machines.
+        use std::process::Command;
+        // IOPlatformUUID — the macOS equivalent of /etc/machine-id or
+        // Windows MachineGuid.  Readable without IOKit via ioreg(8).
+        let ioreg_uuid = Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    // Extract the value of "IOPlatformUUID" = "XXXX-..."
+                    stdout
+                        .lines()
+                        .find(|l| l.contains("IOPlatformUUID"))
+                        .and_then(|line| {
+                            // Format:  |   "IOPlatformUUID" = "XXXXXXXX-XXXX-..."
+                            line.split('"').nth(3).map(String::from)
+                        })
+                } else {
+                    None
+                }
+            });
+
+        if let Some(uuid) = ioreg_uuid {
+            if !uuid.is_empty() {
+                salt.extend_from_slice(uuid.as_bytes());
+            }
+        } else {
+            // Fallback: persistent random UUID stored in the app support dir.
+            // This handles sandboxed environments where ioreg may be
+            // unavailable (e.g., App Sandbox, CI runners).
+            if let Some(home) = std::env::var_os("HOME") {
+                let id_path = std::path::PathBuf::from(&home)
+                    .join("Library/Application Support/VaultPilot/.machine-id");
+                match std::fs::read_to_string(&id_path) {
+                    Ok(id) if !id.trim().is_empty() => {
+                        salt.extend_from_slice(id.trim().as_bytes());
+                    }
+                    _ => {
+                        // Generate a random UUID and persist it.
+                        let new_id = uuid::Uuid::new_v4().to_string();
+                        // Best-effort: create dir and write file.
+                        if let Some(dir) = id_path.parent() {
+                            let _ = std::fs::create_dir_all(dir);
+                        }
+                        let _ = std::fs::write(&id_path, &new_id);
+                        salt.extend_from_slice(new_id.as_bytes());
+                    }
+                }
+            }
+        }
     }
 
     salt
@@ -338,5 +387,53 @@ mod tests {
         assert!(is_encrypted("ENC:v1:abc"));
         assert!(!is_encrypted("plaintext-key"));
         assert!(!is_encrypted(""));
+    }
+
+    #[test]
+    fn machine_salt_is_deterministic() {
+        // Calling machine_salt() twice must return the same bytes.
+        let s1 = machine_salt();
+        let s2 = machine_salt();
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn machine_salt_contains_application_namespace() {
+        let salt = machine_salt();
+        assert!(
+            salt.windows(b"vaultpilot-api-key-encryption-v2:".len())
+                .any(|w| w == b"vaultpilot-api-key-encryption-v2:"),
+            "machine_salt must contain the application namespace prefix"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn machine_salt_contains_linux_machine_id() {
+        let salt = machine_salt();
+        // On Linux, salt should include /etc/machine-id content.
+        if let Ok(id) = std::fs::read_to_string("/etc/machine-id") {
+            let id = id.trim();
+            if !id.is_empty() {
+                assert!(
+                    salt.windows(id.len()).any(|w| w == id.as_bytes()),
+                    "machine_salt must contain /etc/machine-id on Linux"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn machine_salt_contains_hostname() {
+        let salt = machine_salt();
+        if let Ok(name) = hostname::get() {
+            let name = name.to_string_lossy();
+            if !name.is_empty() {
+                assert!(
+                    salt.windows(name.len()).any(|w| w == name.as_bytes()),
+                    "machine_salt must contain the hostname"
+                );
+            }
+        }
     }
 }

@@ -82,7 +82,6 @@ export default function ChatScreen({ navigation }: any) {
       const history: ChatMessage[] = [
         { role: 'system', content: '你是 VaultPilot AI 助手，知识渊博、乐于助人。用中文回答。' },
         ...msgsRef.current.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).map(m => ({ role: m.role as any, content: m.content })),
-        { role: 'user', content: userText },
       ];
 
       abortRef.current = new AbortController();

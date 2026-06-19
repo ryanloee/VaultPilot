@@ -1,5 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Re-export unified SSE types from sse.ts (single implementation)
+export type { StreamChunk } from './sse';
+export { parseSSEStream } from './sse';
+
 // Settings keys
 const KEYS = {
   apiBase: 'cfg_api_base',
@@ -12,6 +16,9 @@ const DEFAULTS = {
   apiBase: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
 };
+
+/** Chat request timeout in ms (2 minutes) */
+const CHAT_TIMEOUT_MS = 120_000;
 
 // ── Settings ──────────────────────────────────────────────
 export async function getSettings() {
@@ -48,56 +55,38 @@ export async function chat(
   const { apiBase, apiKey, model } = await getSettings();
   if (!apiKey) throw new Error('请先在设置中填写 API Key');
 
-  const res = await fetch(`${apiBase}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model, messages, stream: true }),
-    signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`API ${res.status}: ${text}`);
+  // Combine user signal with timeout
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  if (signal) {
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
   }
-  if (!res.body) throw new Error('No response body');
-  return res.body;
-}
 
-// ── SSE Parser ────────────────────────────────────────────
-export interface StreamChunk {
-  content?: string;
-  done: boolean;
-}
-
-export async function readStream(
-  stream: ReadableStream<Uint8Array>,
-  onChunk: (c: StreamChunk) => void
-): Promise<void> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
   try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') { onChunk({ done: true }); return; }
-        try {
-          const delta = JSON.parse(data).choices?.[0]?.delta;
-          if (delta?.content) onChunk({ content: delta.content, done: false });
-        } catch {}
-      }
+    const res = await fetch(`${apiBase}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model, messages, stream: true }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`API ${res.status}: ${text}`);
     }
+    if (!res.body) throw new Error('No response body');
+    return res.body;
+  } catch (e: any) {
+    clearTimeout(timeout);
+    if (e.name === 'AbortError' && !signal?.aborted) {
+      throw new Error('请求超时（2 分钟），请检查网络或服务端状态');
+    }
+    throw e;
   } finally {
-    reader.releaseLock();
+    clearTimeout(timeout);
   }
 }
 

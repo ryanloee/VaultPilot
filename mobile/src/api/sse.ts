@@ -28,6 +28,10 @@ export function parseSSEStream(
     let buffer = '';
     let doneReceived = false;
 
+    // Propagate AbortSignal to reader so reader.read() unblocks on abort
+    const onAbort = () => { reader.cancel('abort'); };
+    options?.signal?.addEventListener('abort', onAbort, { once: true });
+
     function processBuffer() {
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -59,14 +63,8 @@ export function parseSSEStream(
     (async () => {
       try {
         while (true) {
-          if (options?.signal?.aborted) {
-            reader.releaseLock();
-            reject(new DOMException('Aborted', 'AbortError'));
-            return;
-          }
           const { value, done } = await reader.read();
           if (done) {
-            // Flush any remaining bytes in the TextDecoder (multi-byte tail)
             buffer += decoder.decode();
             break;
           }
@@ -74,12 +72,9 @@ export function parseSSEStream(
           processBuffer();
           if (doneReceived) break;
         }
-        // Process any remaining data left in the buffer after the stream ends.
-        // This handles the case where the last SSE message doesn't end with \n.
         if (!doneReceived && buffer.trim().length > 0) {
           processBuffer();
         }
-        // Stream ended without [DONE] — emit done callback so UI can recover
         if (!doneReceived) {
           console.warn('[SSE] Stream ended without [DONE] signal');
           onChunk({ done: true });
@@ -88,7 +83,13 @@ export function parseSSEStream(
         resolve();
       } catch (err) {
         reader.releaseLock();
-        reject(err);
+        if (options?.signal?.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+        } else {
+          reject(err);
+        }
+      } finally {
+        options?.signal?.removeEventListener('abort', onAbort);
       }
     })();
   });

@@ -22,13 +22,17 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       if (note) {
         setTitle(note.title);
         setContent(note.content);
+      } else {
+        Alert.alert('笔记不存在', '该笔记可能已被删除', [
+          { text: '返回', onPress: () => navigation.goBack() },
+        ]);
       }
     })();
   }, [noteId]);
 
-  const save = async (t?: string, c?: string) => {
+  const save = async (t?: string, ct?: string) => {
     setSaving(true);
-    await updateNote(noteId, t ?? title, c ?? content);
+    await updateNote(noteId, t ?? title, ct ?? content);
     setSaving(false);
   };
 

@@ -21,14 +21,20 @@ export default function NotesScreen({ navigation }: any) {
   useEffect(() => { load(); }, [load]);
 
   const handleNew = async () => {
-    const id = await createNote();
-    navigation.navigate('NoteEdit', { noteId: id });
+    try {
+      const id = await createNote();
+      navigation.navigate('NoteEdit', { noteId: id });
+    } catch (e: any) {
+      Alert.alert('创建失败', e.message || '请重试');
+    }
   };
 
   const handleDelete = (id: string) => {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: async () => { await deleteNote(id); load(); } },
+      { text: '删除', style: 'destructive', onPress: async () => {
+        try { await deleteNote(id); load(); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
+      }},
     ]);
   };
 

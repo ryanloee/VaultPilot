@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { StatusBar, useColorScheme, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -62,6 +62,7 @@ function TabIcon({ label }: { label: string }) {
 export default function App() {
   const { isDark, setIsDark, themeMode, accentColor } = useAppStore();
   const systemScheme = useColorScheme();
+  const loadedRef = useRef(false);
 
   // Load saved settings on startup
   useEffect(() => {
@@ -96,12 +97,13 @@ export default function App() {
       } catch (e) {
         console.warn('[App] Failed to load settings:', e);
       }
+      loadedRef.current = true;
     })();
   }, []);
 
-  // Follow system theme
+  // Follow system theme — only after initial load to avoid overriding saved preference
   useEffect(() => {
-    if (themeMode === 'system') {
+    if (loadedRef.current && themeMode === 'system') {
       setIsDark(systemScheme === 'dark');
     }
   }, [systemScheme, themeMode]);

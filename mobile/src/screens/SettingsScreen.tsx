@@ -3,8 +3,12 @@ import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator,
 } from 'react-native';
 import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS } from '../store';
-import { checkApi } from '../api/client';
+import { checkApi, getSettings, saveSettings } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Theme keys — stored separately from API settings (cfg_* keys)
+const THEME_KEY = 'cfg_theme_mode';
+const ACCENT_KEY = 'cfg_accent_color';
 
 export default function SettingsScreen() {
   const store = useAppStore();
@@ -16,33 +20,35 @@ export default function SettingsScreen() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
 
-  // Load saved settings
+  // Load saved settings from the same source the API client uses
   useEffect(() => {
     (async () => {
-      const saved = await AsyncStorage.getItem('app_settings');
-      if (saved) {
-        try {
-          const s = JSON.parse(saved);
-          if (s.apiBase) { setApiBase(s.apiBase); store.setApiSettings({ apiBase: s.apiBase }); }
-          if (s.apiKey) { setApiKey(s.apiKey); store.setApiSettings({ apiKey: s.apiKey }); }
-          if (s.model) { setModel(s.model); store.setApiSettings({ model: s.model }); }
-          if (s.themeMode) store.setThemeMode(s.themeMode);
-          if (s.accentColor) store.setAccentColor(s.accentColor);
-        } catch (e) {
-          console.warn('[Settings] Corrupt settings in AsyncStorage, using defaults:', e);
-          // Clear corrupt data so it doesn't fail again on next open
-          await AsyncStorage.removeItem('app_settings');
-        }
+      try {
+        const [api, themeMode, accentColor] = await Promise.all([
+          getSettings(),
+          AsyncStorage.getItem(THEME_KEY),
+          AsyncStorage.getItem(ACCENT_KEY),
+        ]);
+        if (api.apiBase) { setApiBase(api.apiBase); store.setApiSettings({ apiBase: api.apiBase }); }
+        if (api.apiKey) { setApiKey(api.apiKey); store.setApiSettings({ apiKey: api.apiKey }); }
+        if (api.model) { setModel(api.model); store.setApiSettings({ model: api.model }); }
+        if (themeMode) store.setThemeMode(themeMode as any);
+        if (accentColor) store.setAccentColor(accentColor);
+      } catch (e) {
+        console.warn('[Settings] Failed to load settings, using defaults:', e);
       }
     })();
   }, []);
 
   const saveAll = async () => {
     store.setApiSettings({ apiBase, apiKey, model });
-    await AsyncStorage.setItem('app_settings', JSON.stringify({
-      apiBase, apiKey, model,
-      themeMode: store.themeMode, accentColor: store.accentColor,
-    }));
+    await Promise.all([
+      // Use the same cfg_* keys that client.ts reads
+      saveSettings({ apiBase, apiKey, model }),
+      // Theme settings stored under dedicated keys
+      AsyncStorage.setItem(THEME_KEY, store.themeMode),
+      AsyncStorage.setItem(ACCENT_KEY, store.accentColor),
+    ]);
     Alert.alert('已保存', '设置已保存');
   };
 
@@ -50,7 +56,9 @@ export default function SettingsScreen() {
     setTesting(true);
     setTestResult(null);
     try {
+      // Persist settings before testing so checkApi() reads the values the user just entered
       store.setApiSettings({ apiBase, apiKey, model });
+      await saveSettings({ apiBase, apiKey, model });
       const res = await checkApi();
       setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
     } catch (e: any) {

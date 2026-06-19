@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { StatusBar, useColorScheme } from 'react-native';
+import { StatusBar, useColorScheme, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -66,7 +66,13 @@ export default function App() {
   // Load saved settings on startup
   useEffect(() => {
     (async () => {
-      await getDb(); // Initialize database
+      try {
+        await getDb(); // Initialize database
+      } catch (e) {
+        console.error('[App] DB init failed:', e);
+        Alert.alert('数据库错误', '数据库初始化失败，请重启应用');
+        return;
+      }
       try {
         // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
         const apiSettings = await getSettings();

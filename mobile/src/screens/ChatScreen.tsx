@@ -55,6 +55,11 @@ export default function ChatScreen({ navigation }: any) {
   // Keep ref in sync with state so send() reads latest messages
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
+  // Abort any in-flight stream on unmount (tab navigation, screen dismissal)
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
+
   const send = useCallback(async () => {
     if (!input.trim() || streaming || !sessionId) return;
     const userText = input.trim();
@@ -73,7 +78,14 @@ export default function ChatScreen({ navigation }: any) {
     setMsgs(prev => [...prev, userMsg]);
 
     // Save AI placeholder to DB upfront — stable id, no key change later
-    const aiId = await addMessage(sessionId, 'assistant', '');
+    let aiId: string;
+    try {
+      aiId = await addMessage(sessionId, 'assistant', '');
+    } catch (e) {
+      console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
+      Alert.alert('发送失败', '无法创建 AI 回复记录');
+      return;
+    }
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);

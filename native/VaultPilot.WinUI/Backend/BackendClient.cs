@@ -64,17 +64,17 @@ public sealed class BackendClient : IAsyncDisposable
         }
 
         _executablePath = executablePath;
-        StartProcess();
+        StartProcessAsync();
         StartHealthCheck();
         RegisterPowerModeHandler();
     }
 
-    private async void StartProcess()
+    private async Task StartProcessAsync()
     {
         if (Volatile.Read(ref _isDisposed) != 0) return;
         if (string.IsNullOrWhiteSpace(_executablePath))
         {
-            Trace.TraceError("StartProcess: Rust backend path not set.");
+            Trace.TraceError("StartProcessAsync: Rust backend path not set.");
             ConnectionStateChanged?.Invoke(false);
             return;
         }
@@ -106,7 +106,7 @@ public sealed class BackendClient : IAsyncDisposable
         {
             proc.Dispose();
             Volatile.Write(ref _process, null);
-            Trace.TraceError($"StartProcess: process failed to start: {ex}");
+            Trace.TraceError($"StartProcessAsync: process failed to start: {ex}");
             ConnectionStateChanged?.Invoke(false);
             return;
         }
@@ -143,7 +143,7 @@ public sealed class BackendClient : IAsyncDisposable
         }
         catch (Exception ex) when (Volatile.Read(ref _isDisposed) == 0)
         {
-            Trace.TraceError($"StartProcess pump setup error: {ex}");
+            Trace.TraceError($"StartProcessAsync pump setup error: {ex}");
         }
         catch
         {
@@ -370,7 +370,7 @@ public sealed class BackendClient : IAsyncDisposable
 
             if (Volatile.Read(ref _isDisposed) != 0) return false;
 
-            StartProcess();
+            _ = StartProcessAsync();
 
             // Verify process actually started
             await Task.Delay(500, cancellationToken);

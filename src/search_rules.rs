@@ -87,18 +87,22 @@ fn relevance_term_matches(term: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return false;
     }
-    if needle.is_ascii() && needle.len() < 5 {
+    // Normalize to lowercase for case-insensitive matching (#902)
+    let needle_lower = needle.to_lowercase();
+    let term_lower = term.to_lowercase();
+    if needle_lower.is_ascii() && needle_lower.len() < 5 {
         // Short ASCII needle: whole-word match in both directions
-        trigger_matches(term, needle) || trigger_matches(needle, term)
-    } else if !needle.is_ascii() {
+        trigger_matches(&term_lower, &needle_lower)
+            || trigger_matches(&needle_lower, &term_lower)
+    } else if !needle_lower.is_ascii() {
         // CJK / non-ASCII: bidirectional substring match is appropriate
-        term.contains(needle) || needle.contains(term)
+        term_lower.contains(&needle_lower) || needle_lower.contains(&term_lower)
     } else {
         // Long ASCII needle (>=5 chars): only check if term contains needle.
         // The reverse direction (needle.contains(term)) would cause short terms
         // like "sd" to match long needles like "sdmmc_controller_driver", inflating
         // relevance scores for unrelated documents.
-        term.contains(needle)
+        term_lower.contains(&needle_lower)
     }
 }
 
@@ -455,5 +459,29 @@ mod tests {
         // CJK triggers use substring matching
         assert!(trigger_matches("帮我刷机一下", "刷机"));
         assert!(!trigger_matches("没有匹配", "刷机"));
+    }
+
+    #[test]
+    fn relevance_term_matches_case_insensitive() {
+        // Mixed-case needle should match lowercase term (#902)
+        assert!(relevance_term_matches("sd", "SD"));
+        assert!(relevance_term_matches("SD", "sd"));
+        assert!(relevance_term_matches("flash", "Flash"));
+        assert!(relevance_term_matches("Flash", "flash"));
+        // Long ASCII needle should also be case-insensitive
+        assert!(relevance_term_matches("sdmmc_controller_driver", "SDMMC"));
+    }
+
+    #[test]
+    fn domain_relevance_bonus_case_insensitive() {
+        let rules = SearchRules {
+            config: default_config(),
+        };
+        // Default config has lowercase "sd" in query_terms and "sdmmc" in doc_terms
+        // Mixed-case input should still match (#902)
+        let query = vec!["SD".to_string()];
+        let doc = vec!["SDMMC".to_string()];
+        let bonus = rules.domain_relevance_bonus(&query, &doc);
+        assert_eq!(bonus, 120, "Expected 120 bonus for SD+SDMMC, got {bonus}");
     }
 }

@@ -89,9 +89,13 @@ function sanitizeApiError(status: number, rawBody: string): string {
 }
 
 // ── API Base Normalization ────────────────────────────────
-/** Ensure apiBase ends with /v1 for consistent path construction */
+/** Ensure apiBase ends with /v1 for consistent path construction.
+ *  Preserves existing versioned paths (e.g. /v2) and validates input. */
 function normalizeApiBase(raw: string): string {
-  return raw.replace(/\/+$/, '').replace(/\/v1$/, '') + '/v1';
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  if (!trimmed) return DEFAULTS.apiBase;
+  if (/\/v\d+($|\/)/.test(trimmed)) return trimmed;
+  return trimmed + '/v1';
 }
 
 // ── Chat ──────────────────────────────────────────────────

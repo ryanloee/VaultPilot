@@ -27,6 +27,7 @@ export function parseSSEStream(
     const decoder = new TextDecoder();
     let buffer = '';
     let doneReceived = false;
+    const dataParts: string[] = [];
 
     // Propagate AbortSignal to reader so reader.read() unblocks on abort
     const onAbort = () => { reader.cancel('abort'); };
@@ -37,25 +38,32 @@ export function parseSSEStream(
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trimStart();
-        if (data === '[DONE]') {
-          doneReceived = true;
-          onChunk({ done: true });
-          return;
+        if (line.startsWith('data:')) {
+          dataParts.push(line.slice(5).trimStart());
+          continue;
         }
-        try {
-          const parsed = JSON.parse(data);
-          const delta = parsed.choices?.[0]?.delta;
-          if (delta) {
-            onChunk({
-              content: delta.content,
-              tool_calls: delta.tool_calls,
-              done: false,
-            });
+        // Empty line = end of event; process accumulated data parts
+        if (line.trim() === '' && dataParts.length > 0) {
+          const data = dataParts.join('\n');
+          dataParts.length = 0;
+          if (data === '[DONE]') {
+            doneReceived = true;
+            onChunk({ done: true });
+            return;
           }
-        } catch (e) {
-          console.warn('[SSE] Failed to parse chunk:', data.slice(0, 100), e);
+          try {
+            const parsed = JSON.parse(data);
+            const delta = parsed.choices?.[0]?.delta;
+            if (delta) {
+              onChunk({
+                content: delta.content,
+                tool_calls: delta.tool_calls,
+                done: false,
+              });
+            }
+          } catch (e) {
+            console.warn('[SSE] Failed to parse chunk:', data.slice(0, 100), e);
+          }
         }
       }
     }

@@ -84,10 +84,8 @@ export async function renameSession(id: string, title: string): Promise<void> {
 
 export async function deleteSession(id: string): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
-    await db.runAsync('DELETE FROM messages WHERE session_id = ?', [id]);
-    await db.runAsync('DELETE FROM sessions WHERE id = ?', [id]);
-  });
+  // ON DELETE CASCADE on messages FK handles message cleanup
+  await db.runAsync('DELETE FROM sessions WHERE id = ?', [id]);
 }
 
 export async function togglePin(id: string): Promise<void> {

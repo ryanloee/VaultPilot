@@ -20,7 +20,10 @@
             Severity="Error"
             IsOpen="False"
             IsClosable="True"
-            Margin="0,0,0,4" />
+            Margin="0,0,0,4"
+            AutomationProperties.Name="错误信息"
+            AutomationProperties.HelpText="显示笔记操作的错误信息"
+            AutomationProperties.LiveSetting="Assertive" />
 
         <!-- Search bar -->
         <Grid Grid.Row="1" ColumnSpacing="8">
@@ -170,17 +173,20 @@
                         <TextBlock
                             x:Name="DetailTags"
                             FontSize="12"
-                            Foreground="{ThemeResource SystemControlHighlightAccentBrush}" />
+                            Foreground="{ThemeResource SystemControlHighlightAccentBrush}"
+                            AutomationProperties.Name="笔记标签" />
                         <TextBlock
                             x:Name="DetailUpdated"
                             FontSize="12"
-                            Foreground="{ThemeResource SecondaryTextBrush}" />
+                            Foreground="{ThemeResource SecondaryTextBrush}"
+                            AutomationProperties.Name="笔记更新时间" />
                         <TextBlock
                             x:Name="DetailPath"
                             FontSize="12"
                             Foreground="{ThemeResource SecondaryTextBrush}"
                             TextTrimming="CharacterEllipsis"
-                            MaxLines="1" />
+                            MaxLines="1"
+                            AutomationProperties.Name="笔记文件路径" />
                     </StackPanel>
 
                     <Border

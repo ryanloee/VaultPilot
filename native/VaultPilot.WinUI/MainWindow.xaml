@@ -118,7 +118,8 @@
                                             <RowDefinition Height="*" />
                                         </Grid.RowDefinitions>
                                         <TextBlock Grid.Row="0" Text="会话" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                                        <TextBlock Grid.Row="1" x:Name="NotesText" Text="笔记：正在加载..." />
+                                        <TextBlock Grid.Row="1" x:Name="NotesText" Text="笔记：正在加载..."
+                                            AutomationProperties.Name="笔记状态" AutomationProperties.HelpText="显示笔记同步状态信息" />
                                         <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
                                             <Button x:Name="NewSessionButton"
                                                 AutomationProperties.Name="新建对话" AutomationProperties.HelpText="创建一个新的聊天会话">
@@ -204,7 +205,9 @@
                                         RowSpacing="6"
                                         AllowDrop="True"
                                         DragOver="OnComposerDropZoneDragOver"
-                                        Drop="OnComposerDropZoneDrop">
+                                        Drop="OnComposerDropZoneDrop"
+                                        AutomationProperties.Name="消息编辑区域"
+                                        AutomationProperties.HelpText="支持拖放文件作为附件">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
@@ -276,12 +279,15 @@
                                             HorizontalScrollBarVisibility="Auto"
                                             VerticalScrollBarVisibility="Disabled"
                                             VerticalAlignment="Center"
-                                            Visibility="Collapsed">
+                                            Visibility="Collapsed"
+                                            AutomationProperties.Name="附件列表"
+                                            AutomationProperties.HelpText="已添加的附件，可左右滚动浏览">
                                             <StackPanel
                                                 x:Name="AttachmentPanel"
                                                 Orientation="Horizontal"
                                                 Spacing="6"
-                                                VerticalAlignment="Center" />
+                                                VerticalAlignment="Center"
+                                                AutomationProperties.Name="附件面板" />
                                         </ScrollViewer>
                                     </Grid>
                                     <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="8" HorizontalAlignment="Center">

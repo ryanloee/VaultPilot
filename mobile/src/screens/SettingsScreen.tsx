@@ -58,10 +58,7 @@ export default function SettingsScreen() {
     setTesting(true);
     setTestResult(null);
     try {
-      // Persist settings before testing so checkApi() reads the values the user just entered
-      store.setApiSettings({ apiBase, apiKey, model });
-      await saveSettings({ apiBase, apiKey, model });
-      const res = await checkApi();
+      const res = await checkApi({ apiBase, apiKey });
       setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
     } catch (e: any) {
       setTestResult(`❌ ${e.message || '连接失败'}`);

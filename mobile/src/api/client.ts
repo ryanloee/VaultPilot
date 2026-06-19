@@ -170,9 +170,11 @@ export async function chat(
 }
 
 // ── Health Check ──────────────────────────────────────────
-export async function checkApi(): Promise<{ ok: boolean; error?: string }> {
+export async function checkApi(params?: { apiBase?: string; apiKey?: string }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const { apiBase, apiKey, model } = await getSettings();
+    const settings = params ?? await getSettings();
+    const { apiKey } = settings;
+    const apiBase = settings.apiBase ?? '';
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
     const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },

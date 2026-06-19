@@ -194,10 +194,9 @@ pub fn encrypt_secret(plaintext: &str) -> Result<String> {
 /// If the value does not start with [`ENCRYPTED_PREFIX`] it is returned
 /// as-is (transparent plaintext migration).
 ///
-/// If the value starts with the prefix but decryption fails (e.g., the value
-/// is a plaintext key that coincidentally starts with "ENC:v1:", or the
-/// machine key has changed), the original value is returned as-is to avoid
-/// data loss.
+/// If the value starts with the prefix but decryption fails (e.g., the
+/// machine key has changed), an error is returned so callers can
+/// distinguish between successful decryption and failure (#867).
 pub fn decrypt_secret(value: &str) -> Result<String> {
     // If no prefix, treat as legacy plaintext.
     if !value.starts_with(ENCRYPTED_PREFIX) {
@@ -206,24 +205,15 @@ pub fn decrypt_secret(value: &str) -> Result<String> {
 
     let b64_part = &value[ENCRYPTED_PREFIX.len()..];
 
-    let decoded = match B64.decode(b64_part) {
-        Ok(d) => d,
-        Err(_) => {
-            // Not valid base64 — likely a plaintext key that starts with the prefix.
-            // Return as-is rather than erroring.
-            tracing::warn!(
-                "Value starts with ENC:v1: prefix but is not valid base64 — treating as plaintext"
-            );
-            return Ok(value.to_string());
-        }
-    };
+    let decoded = B64
+        .decode(b64_part)
+        .map_err(|e| anyhow!("ENC:v1: value is not valid base64: {e}"))?;
 
     if decoded.len() < 12 {
-        // Payload too short for nonce — treat as malformed plaintext.
-        tracing::warn!(
-            "Value starts with ENC:v1: prefix but payload is too short — treating as plaintext"
-        );
-        return Ok(value.to_string());
+        return Err(anyhow!(
+            "ENC:v1: payload too short ({decoded_len} bytes, need >= 12)",
+            decoded_len = decoded.len()
+        ));
     }
 
     let (nonce_bytes, ciphertext) = decoded.split_at(12);
@@ -233,16 +223,24 @@ pub fn decrypt_secret(value: &str) -> Result<String> {
         .map_err(|e| anyhow!("failed to create AES-256-GCM cipher: {e}"))?;
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    match cipher.decrypt(nonce, ciphertext) {
-        Ok(plaintext) => String::from_utf8(plaintext)
-            .map_err(|e| anyhow!("decrypted secret is not valid UTF-8: {e}")),
-        Err(_) => {
-            // Decryption failed — likely a plaintext key with the prefix, or
-            // the machine key has changed. Return original value as-is.
-            tracing::warn!("Value starts with ENC:v1: prefix but AES-GCM decryption failed — treating as plaintext");
-            Ok(value.to_string())
-        }
-    }
+    let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+        anyhow!(
+            "AES-GCM decryption failed — the machine key may have changed; \
+             please re-enter your API key in Settings"
+        )
+    })?;
+
+    String::from_utf8(plaintext).map_err(|e| anyhow!("decrypted secret is not valid UTF-8: {e}"))
+}
+
+/// Like [`decrypt_secret`], but returns the raw value as-is when
+/// decryption fails instead of propagating the error.  Use this in
+/// contexts where a graceful fallback is acceptable (e.g. display).
+pub fn decrypt_secret_lossy(value: &str) -> String {
+    decrypt_secret(value).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "decrypt_secret_lossy: returning raw value");
+        value.to_string()
+    })
 }
 
 /// Returns `true` if the value appears to be encrypted by this module.
@@ -321,16 +319,49 @@ mod tests {
     }
 
     #[test]
-    fn tampered_ciphertext_returns_original_value() {
+    fn tampered_ciphertext_returns_error() {
         let encrypted = encrypt_secret("secret").unwrap();
         // Flip a character in the base64 portion.
         let mut tampered = encrypted.clone();
         let last = tampered.pop().unwrap();
         tampered.push(if last == 'A' { 'B' } else { 'A' });
-        // #731: Tampered ciphertext falls back to returning the original value
-        // as-is (graceful degradation) rather than erroring.
-        let result = decrypt_secret(&tampered).unwrap();
+        // #867: Tampered ciphertext should return an error so callers can
+        // distinguish decryption failure from success.
+        let result = decrypt_secret(&tampered);
+        assert!(result.is_err(), "decryption of tampered ciphertext must fail");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("decryption failed") || err_msg.contains("not valid UTF-8") || err_msg.contains("not valid base64") || err_msg.contains("too short"),
+            "error should indicate decryption failure, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn decrypt_secret_lossy_returns_raw_on_failure() {
+        let encrypted = encrypt_secret("secret").unwrap();
+        let mut tampered = encrypted.clone();
+        let last = tampered.pop().unwrap();
+        tampered.push(if last == 'A' { 'B' } else { 'A' });
+        // decrypt_secret_lossy returns the raw value on failure
+        let result = decrypt_secret_lossy(&tampered);
         assert_eq!(result, tampered);
+    }
+
+    #[test]
+    fn invalid_base64_returns_error() {
+        let bad = format!("{}not-valid-base64!!!", ENCRYPTED_PREFIX);
+        let result = decrypt_secret(&bad);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not valid base64"));
+    }
+
+    #[test]
+    fn payload_too_short_returns_error() {
+        // Encode just 5 bytes (< 12 required for nonce)
+        let short_payload = format!("{}{}", ENCRYPTED_PREFIX, B64.encode(&[0u8; 5]));
+        let result = decrypt_secret(&short_payload);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too short"));
     }
 
     #[test]

@@ -48,6 +48,11 @@ function uuid(): string {
   });
 }
 
+/** Escape SQL LIKE special characters (%, _, [) so they match literally. */
+function escapeLikePattern(pattern: string): string {
+  return pattern.replace(/[%_[]/g, ch => `[${ch}]`);
+}
+
 export interface DbSession {
   id: string; title: string; created_at: number; updated_at: number; pinned: number; archived: number;
 }
@@ -90,12 +95,13 @@ export async function toggleArchive(id: string): Promise<void> {
 
 export async function searchSessions(query: string): Promise<DbSession[]> {
   const db = await getDb();
+  const escaped = escapeLikePattern(query);
   return db.getAllAsync<DbSession>(
     `SELECT DISTINCT s.* FROM sessions s
      LEFT JOIN messages m ON s.id = m.session_id
      WHERE s.title LIKE ? OR m.content LIKE ?
      ORDER BY s.updated_at DESC LIMIT 50`,
-    [`%${query}%`, `%${query}%`]
+    [`%${escaped}%`, `%${escaped}%`]
   );
 }
 
@@ -173,8 +179,9 @@ export async function toggleStar(id: string): Promise<void> {
 
 export async function searchNotes(query: string): Promise<DbNote[]> {
   const db = await getDb();
+  const escaped = escapeLikePattern(query);
   return db.getAllAsync<DbNote>(
     'SELECT * FROM notes WHERE title LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 50',
-    [`%${query}%`, `%${query}%`]
+    [`%${escaped}%`, `%${escaped}%`]
   );
 }

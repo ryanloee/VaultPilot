@@ -1453,24 +1453,22 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                 if want == 0 {
                     // Already at limit — drain byte-by-byte until newline.
                     exceeded = true;
-                    match reader.read_exact(&mut chunk_buf[..1]).await {
+                    match reader.read(&mut chunk_buf[..1]).await {
+                        Ok(0) | Err(_) => break,
                         Ok(_) => {}
-                        Err(_) => break,
                     }
                     if chunk_buf[0] == b'\n' {
                         break;
                     }
                     continue;
                 }
-                match reader.read_exact(&mut chunk_buf[..want]).await {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // EOF or read error
-                        break 'read;
-                    }
-                }
+                let n = match reader.read(&mut chunk_buf[..want]).await {
+                    Ok(0) => break 'read, // EOF
+                    Ok(n) => n,
+                    Err(_) => break 'read,
+                };
                 // Scan the chunk for newline.
-                if let Some(nl_pos) = chunk_buf[..want].iter().position(|&b| b == b'\n') {
+                if let Some(nl_pos) = chunk_buf[..n].iter().position(|&b| b == b'\n') {
                     let end = nl_pos + 1; // include the newline
                     let room = MAX_MCP_LINE_BYTES - buf.len();
                     let take = end.min(room);
@@ -1478,7 +1476,7 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                     break 'read;
                 }
                 // No newline found — append the whole chunk.
-                buf.extend_from_slice(&chunk_buf[..want]);
+                buf.extend_from_slice(&chunk_buf[..n]);
             }
             if buf.is_empty() && !exceeded {
                 return Ok(None); // EOF

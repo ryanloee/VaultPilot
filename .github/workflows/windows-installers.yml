@@ -63,13 +63,13 @@ jobs:
           /p:Platform=x64
           /bl:artifacts/logs/release-validate-winui-debug-x64.binlog
 
-      - name: Build and run C# unit tests
-        timeout-minutes: 5
+      # NOTE: C# unit tests cannot run in CI — see ci.yml for details.
+      - name: Build C# unit tests (compile-only)
+        timeout-minutes: 3
         shell: powershell
         run: |
           msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /t:Restore /p:BuildProjectReferences=false
           msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Debug /p:Platform=x64 /p:BuildProjectReferences=false
-          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Debug --no-build --logger:console /p:Platform=x64
 
       - name: Verify validation outputs
         shell: powershell

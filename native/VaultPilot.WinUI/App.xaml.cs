@@ -93,21 +93,26 @@ public partial class App : Application
         if (Interlocked.CompareExchange(ref _exitInProgress, 1, 0) != 0) return;
         _isExiting = true;
 
-        if (_window != null)
+        try
         {
-            _window.SignalStopping();
-            _window.Closed -= OnWindowClosed;
-            await _window.ShutdownAsync();
+            if (_window != null)
+            {
+                _window.SignalStopping();
+                _window.Closed -= OnWindowClosed;
+                await _window.ShutdownAsync();
+            }
         }
+        finally
+        {
+            // #532: Dispose tray icon so the process can exit after window closes.
+            // Without this, WaitExitThenApplyUpdates never sees the process exit.
+            _trayIcon?.Dispose();
+            _trayIcon = null;
 
-        // #532: Dispose tray icon so the process can exit after window closes.
-        // Without this, WaitExitThenApplyUpdates never sees the process exit.
-        _trayIcon?.Dispose();
-        _trayIcon = null;
-
-        // #563: Release single-instance mutex so the updated process can acquire it.
-        try { _instanceMutex?.ReleaseMutex(); } catch { }
-        try { _instanceMutex?.Dispose(); } catch { }
+            // #563: Release single-instance mutex so the updated process can acquire it.
+            try { _instanceMutex?.ReleaseMutex(); } catch { }
+            try { _instanceMutex?.Dispose(); } catch { }
+        }
     }
 
     private async void ExitApplication()

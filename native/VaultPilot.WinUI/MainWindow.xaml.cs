@@ -152,26 +152,26 @@ public sealed partial class MainWindow : Window
         try
         {
             await LogStartup("Window loaded");
-            UpdateStartupStep("启动后端");
+            await UpdateStartupStepAsync("启动后端");
             var backendPath = ResolveBackendPath();
             await LogStartup($"Backend path: {backendPath}");
             _backendClient.Start(backendPath);
             await LogStartup("Backend process started");
-            UpdateStartupStep("检查后端响应");
+            await UpdateStartupStepAsync("检查后端响应");
             await SendWithTimeoutAsync(
                 (token) => _backendClient.SendAsync("ping", new { }, token),
                 "ping");
             await LogStartup("Ping ok");
 
-            UpdateStartupStep("读取设置");
+            await UpdateStartupStepAsync("读取设置");
             _settings = await SendWithTimeoutAsync(
                 (token) => _backendClient.SendAsync<AppSettings>("getSettings", new { }, token),
                 "getSettings");
 
-            UpdateStartupStep("读取聊天记录");
+            await UpdateStartupStepAsync("读取聊天记录");
             _chatState = await TryLoadChatStateAsync();
 
-            UpdateStartupStep("读取笔记列表");
+            await UpdateStartupStepAsync("读取笔记列表");
             _noteCount = await TryLoadNoteCountAsync();
             EnsureCurrentSession();
 
@@ -2919,7 +2919,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void UpdateStartupStep(string step)
+    private async Task UpdateStartupStepAsync(string step)
     {
         try
         {
@@ -2929,7 +2929,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            System.Diagnostics.Debug.WriteLine($"[UpdateStartupStep] Error: {error}");
+            System.Diagnostics.Debug.WriteLine($"[UpdateStartupStepAsync] Error: {error}");
         }
     }
 

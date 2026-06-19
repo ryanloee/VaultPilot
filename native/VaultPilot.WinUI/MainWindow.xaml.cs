@@ -2181,7 +2181,7 @@ public sealed partial class MainWindow : Window
             Child = chip
         };
 
-        ToolTipService.SetToolTip(chipBorder, $"{attachment.Name}\n单击预览，右键移除");
+        ToolTipService.SetToolTip(chipBorder, $"{attachment.Name}\n单击预览");
         chipBorder.Tapped += async (_, _) =>
         {
             try

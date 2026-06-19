@@ -32,6 +32,22 @@ export const PROVIDERS = [
   { name: '自定义', base: '', models: [] },
 ];
 
+const LIGHT_COLORS = {
+  bg: '#FFFFFF', bgSecondary: '#F3F4F6', text: '#111827', textSecondary: '#6B7280',
+  border: '#E5E7EB', card: '#FFFFFF', inputBg: '#F9FAFB',
+  userBubble: '#3B82F6', userText: '#FFFFFF', aiBubble: '#F3F4F6', aiText: '#111827',
+};
+
+const DARK_COLORS = {
+  bg: '#000000', bgSecondary: '#111111', text: '#F9FAFB', textSecondary: '#9CA3AF',
+  border: '#1F2937', card: '#111111', inputBg: '#1F2937',
+  userBubble: '#3B82F6', userText: '#FFFFFF', aiBubble: '#1F2937', aiText: '#F9FAFB',
+};
+
+export function getColors(isDark: boolean, accent: string) {
+  return { ...(isDark ? DARK_COLORS : LIGHT_COLORS), accent };
+}
+
 export const useAppStore = create<AppState>((set) => ({
   themeMode: 'system',
   isDark: false,

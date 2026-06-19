@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet,
 } from 'react-native';
 import { useAppStore, getColors } from '../store';
-import { chat, readStream, ChatMessage } from '../api/client';
+import { chat, parseSSEStream, ChatMessage } from '../api/client';
 import { getMessages, addMessage, updateMessage, createSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; }
@@ -56,7 +56,7 @@ export default function ChatScreen({ navigation }: any) {
       const stream = await chat(history, abortRef.current.signal);
       let full = '';
 
-      await readStream(stream, (chunk) => {
+      await parseSSEStream(stream, (chunk) => {
         if (chunk.done) return;
         if (chunk.content) {
           full += chunk.content;

@@ -194,8 +194,7 @@ fn main() {
 }
 
 fn install_panic_hook() {
-    let default_hook = panic::take_hook();
-    panic::set_hook(Box::new(move |info| {
+    panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("<unnamed>");
 
@@ -216,7 +215,9 @@ fn install_panic_hook() {
         let message = format!("panic on thread '{thread_name}': {sanitized_payload} at {location}");
         log_agent_event("panic", &message);
 
-        default_hook(info);
+        // Write sanitized output to stderr instead of calling the default hook,
+        // which would print the raw (unsanitized) payload and leak secrets. (#924)
+        eprintln!("{message}");
     }));
 }
 

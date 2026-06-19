@@ -351,11 +351,12 @@ struct HttpBridgeState {
     token: Option<String>,
 }
 
-/// Simple per-key fixed-window rate limiter.
+/// Simple per-key fixed-window rate limiter with bounded memory.
 struct RateLimiter {
     entries: std::sync::Mutex<HashMap<String, (u32, Instant)>>,
     max_requests: u32,
     window: std::time::Duration,
+    max_entries: usize,
 }
 
 impl RateLimiter {
@@ -364,6 +365,7 @@ impl RateLimiter {
             entries: std::sync::Mutex::new(HashMap::new()),
             max_requests,
             window,
+            max_entries: 10_000,
         }
     }
 
@@ -381,6 +383,18 @@ impl RateLimiter {
         // Purge entries older than 2 window durations to prevent unbounded growth.
         let stale_threshold = self.window * 2;
         entries.retain(|_, (_, last)| now.duration_since(*last) < stale_threshold);
+
+        // Evict oldest entries if we exceed max_entries to prevent OOM from spoofed IPs.
+        if entries.len() >= self.max_entries {
+            // Find and remove the entry with the oldest last-access timestamp.
+            if let Some(oldest_key) = entries
+                .iter()
+                .min_by_key(|(_, (_, last))| *last)
+                .map(|(k, _)| k.clone())
+            {
+                entries.remove(&oldest_key);
+            }
+        }
 
         let entry = entries.entry(key.to_string()).or_insert((0, now));
 

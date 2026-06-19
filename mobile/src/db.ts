@@ -2,6 +2,12 @@ import * as SQLite from 'expo-sqlite';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
+const SCHEMA_VERSION = 1;
+
+const MIGRATIONS: Record<number, string[]> = {
+  1: [], // v1 = baseline schema, no migration needed
+};
+
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = (async () => {
@@ -40,6 +46,18 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
+
+      // Schema migration via PRAGMA user_version
+      const [{ user_version }] = await db.getAllAsync<{ user_version: number }>('PRAGMA user_version');
+      for (let v = user_version + 1; v <= SCHEMA_VERSION; v++) {
+        for (const stmt of MIGRATIONS[v] ?? []) {
+          await db.execAsync(stmt);
+        }
+      }
+      if (user_version < SCHEMA_VERSION) {
+        await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      }
+
       return db;
     })().catch(err => {
       dbPromise = null; // Reset so next call retries instead of caching the failure

@@ -13,6 +13,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<any>(null);
+  const pendingRef = useRef<{ title: string; content: string } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -32,8 +33,24 @@ export default function NoteEditorScreen({ route, navigation }: any) {
 
   const autoSave = (newTitle: string, newContent: string) => {
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => save(newTitle, newContent), 1000);
+    pendingRef.current = { title: newTitle, content: newContent };
+    timerRef.current = setTimeout(async () => {
+      pendingRef.current = null;
+      await save(newTitle, newContent);
+    }, 1000);
   };
+
+  // Cleanup: flush pending save on unmount
+  useEffect(() => {
+    return () => {
+      clearTimeout(timerRef.current);
+      if (pendingRef.current) {
+        // Fire-and-forget save on unmount — component state is already gone
+        updateNote(noteId, pendingRef.current.title, pendingRef.current.content);
+        pendingRef.current = null;
+      }
+    };
+  }, [noteId]);
 
   const handleDelete = () => {
     Alert.alert('删除笔记', '确定要删除吗？', [

@@ -42,6 +42,32 @@ export async function saveSettings(s: { apiBase?: string; apiKey?: string; model
   await Promise.all(ops);
 }
 
+// ── Error Sanitization ───────────────────────────────────
+const STATUS_MESSAGES: Record<number, string> = {
+  400: '请求格式错误',
+  401: 'API Key 无效或已过期',
+  403: '访问被拒绝，请检查权限',
+  404: '请求的资源不存在',
+  408: '请求超时，请稍后重试',
+  429: '请求过于频繁，请稍后重试',
+  500: '服务器内部错误',
+  502: '服务暂时不可用',
+  503: '服务暂时不可用，请稍后重试',
+  504: '服务响应超时，请稍后重试',
+};
+
+function sanitizeApiError(status: number, rawBody: string): string {
+  // Log full error in development for debugging
+  if (__DEV__) {
+    console.warn(`[API Error ${status}]`, rawBody);
+  }
+  const friendly = STATUS_MESSAGES[status];
+  if (friendly) return `API 错误 (${status}): ${friendly}`;
+  if (status >= 500) return `API 错误 (${status}): 服务端异常，请稍后重试`;
+  if (status >= 400) return `API 错误 (${status}): 请求有误，请检查参数`;
+  return `API 错误 (${status})`;
+}
+
 // ── Chat ──────────────────────────────────────────────────
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -75,7 +101,7 @@ export async function chat(
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`API ${res.status}: ${text}`);
+      throw new Error(sanitizeApiError(res.status, text));
     }
     if (!res.body) throw new Error('No response body');
     return res.body;

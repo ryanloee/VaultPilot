@@ -32,8 +32,14 @@ export default function NoteEditorScreen({ route, navigation }: any) {
 
   const save = async (t?: string, ct?: string) => {
     setSaving(true);
-    await updateNote(noteId, t ?? title, ct ?? content);
-    setSaving(false);
+    try {
+      await updateNote(noteId, t ?? title, ct ?? content);
+    } catch (e) {
+      console.warn('[NoteEditor] Save failed:', e);
+      Alert.alert('保存失败', String(e));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const autoSave = (newTitle: string, newContent: string) => {

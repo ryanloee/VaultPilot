@@ -111,8 +111,8 @@ export default function ChatScreen({ navigation }: any) {
         try { await updateMessage(aiId, partial); } catch { /* best-effort */ }
       }
       if (err.name === 'AbortError') {
-        if (full) {
-          try { await addMessage(sessionId, 'assistant', full + '\n\n_[响应被中止]_'); } catch {}
+        if (partial) {
+          try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch {}
         }
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
       } else {

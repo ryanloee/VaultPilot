@@ -768,6 +768,12 @@ public sealed partial class MainWindow : Window
             var shiftState = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
             if (shiftState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
             {
+                // #859: AcceptsReturn is false so we manually insert a newline
+                // at the cursor position for Shift+Enter.
+                var cursorPos = ComposerBox.SelectionStart;
+                ComposerBox.Text = ComposerBox.Text.Insert(cursorPos, Environment.NewLine);
+                ComposerBox.SelectionStart = cursorPos + Environment.NewLine.Length;
+                e.Handled = true;
                 return;
             }
 

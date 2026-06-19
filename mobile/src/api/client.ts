@@ -157,7 +157,30 @@ export async function chat(
     }
 
     if (!res.body) throw new Error('No response body');
-    return res.body;
+    // Wrap body so the timeout still applies during stream reading
+    const body = res.body;
+    const timeoutController = controller;
+    return new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        const reader = body.getReader();
+        const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
+        timeoutController.signal.addEventListener('abort', onTimeout, { once: true });
+        (async () => {
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              ctrl.enqueue(value);
+            }
+            ctrl.close();
+          } catch (e) { ctrl.error(e); }
+          finally {
+            clearTimeout(timeout);
+            timeoutController.signal.removeEventListener('abort', onTimeout);
+          }
+        })();
+      },
+    });
   } catch (e: any) {
     clearTimeout(timeout);
     if (e.name === 'AbortError' && !signal?.aborted) {

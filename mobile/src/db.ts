@@ -6,7 +6,6 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = (async () => {
       const db = await SQLite.openDatabaseAsync('vaultpilot.db');
-      // Enable foreign key enforcement (OFF by default in SQLite)
       await db.execAsync('PRAGMA foreign_keys = ON;');
       await db.execAsync(`
         CREATE TABLE IF NOT EXISTS sessions (
@@ -40,22 +39,23 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
       `);
+      await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
       return db;
-    })();
+    })().catch(err => {
+      dbPromise = null; // Reset so next call retries instead of caching the failure
+      throw err;
+    });
   }
   return dbPromise;
 }
 
 function uuid(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
+  return crypto.randomUUID();
 }
 
-/** Escape SQL LIKE special characters (%, _, [) so they match literally. */
+/** Escape SQL LIKE special characters (%, _, [, ]) so they match literally. */
 function escapeLikePattern(pattern: string): string {
-  return pattern.replace(/[%_[]/g, ch => `[${ch}]`);
+  return pattern.replace(/[%_\[\]]/g, ch => `[${ch}]`);
 }
 
 export interface DbSession {
@@ -84,8 +84,10 @@ export async function renameSession(id: string, title: string): Promise<void> {
 
 export async function deleteSession(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('DELETE FROM messages WHERE session_id = ?', [id]);
-  await db.runAsync('DELETE FROM sessions WHERE id = ?', [id]);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM messages WHERE session_id = ?', [id]);
+    await db.runAsync('DELETE FROM sessions WHERE id = ?', [id]);
+  });
 }
 
 export async function togglePin(id: string): Promise<void> {
@@ -124,11 +126,13 @@ export async function getMessages(sessionId: string): Promise<DbMessage[]> {
 export async function addMessage(sessionId: string, role: string, content: string): Promise<string> {
   const db = await getDb();
   const id = uuid();
-  await db.runAsync(
-    'INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)',
-    [id, sessionId, role, content]
-  );
-  await db.runAsync('UPDATE sessions SET updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [sessionId]);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      'INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)',
+      [id, sessionId, role, content]
+    );
+    await db.runAsync('UPDATE sessions SET updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [sessionId]);
+  });
   return id;
 }
 

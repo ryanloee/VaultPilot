@@ -34,7 +34,7 @@ export function parseSSEStream(
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6);
+        const data = line.slice(6).trim();
         if (data === '[DONE]') {
           doneReceived = true;
           onChunk({ done: true });

@@ -2,6 +2,26 @@ import * as SQLite from 'expo-sqlite';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
+/** Ensure columns added after the initial schema exist on existing installs. */
+async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+  const columns = async (table: string): Promise<Set<string>> => {
+    const info = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+    return new Set(info.map(c => c.name));
+  };
+
+  const ensureColumn = async (table: string, col: string, decl: string) => {
+    const cols = await columns(table);
+    if (!cols.has(col)) {
+      await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+    }
+  };
+
+  await ensureColumn('sessions', 'pinned', 'INTEGER DEFAULT 0');
+  await ensureColumn('sessions', 'archived', 'INTEGER DEFAULT 0');
+  await ensureColumn('notes', 'folder_id', 'TEXT');
+  await ensureColumn('notes', 'starred', 'INTEGER DEFAULT 0');
+}
+
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = (async () => {
@@ -40,6 +60,7 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
+      await migrateSchema(db);
       return db;
     })().catch(err => {
       dbPromise = null; // Reset so next call retries instead of caching the failure

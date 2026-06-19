@@ -65,10 +65,19 @@ export function parseSSEStream(
             return;
           }
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+            // Flush any remaining bytes in the TextDecoder (multi-byte tail)
+            buffer += decoder.decode();
+            break;
+          }
           buffer += decoder.decode(value, { stream: true });
           processBuffer();
           if (doneReceived) break;
+        }
+        // Process any remaining data left in the buffer after the stream ends.
+        // This handles the case where the last SSE message doesn't end with \n.
+        if (!doneReceived && buffer.trim().length > 0) {
+          processBuffer();
         }
         // Stream ended without [DONE] — emit done callback so UI can recover
         if (!doneReceived) {

@@ -73,6 +73,9 @@ export default function ChatScreen({ navigation }: any) {
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, id: savedId, streaming: false } : m));
     } catch (err: any) {
       if (err.name === 'AbortError') {
+        if (full) {
+          try { await addMessage(sessionId, 'assistant', full + '\n\n_[响应被中止]_'); } catch {}
+        }
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
       } else {
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: `❌ ${err.message}`, streaming: false } : m));

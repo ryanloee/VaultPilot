@@ -158,6 +158,7 @@ export default function SettingsScreen() {
             onPress={() => {
               store.setThemeMode(mode);
               if (mode !== 'system') store.setIsDark(mode === 'dark');
+              AsyncStorage.setItem(THEME_KEY, mode);
             }}
           >
             <Text style={{ color: store.themeMode === mode ? store.accentColor : c.text }}>
@@ -177,7 +178,10 @@ export default function SettingsScreen() {
               borderWidth: store.accentColor === ac.value ? 3 : 0,
               borderColor: '#FFF',
             }]}
-            onPress={() => store.setAccentColor(ac.value)}
+            onPress={() => {
+              store.setAccentColor(ac.value);
+              AsyncStorage.setItem(ACCENT_KEY, ac.value);
+            }}
           />
         ))}
       </View>

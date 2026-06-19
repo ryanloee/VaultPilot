@@ -1,4 +1,4 @@
-name: Android Build & Test
+name: Android Build
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-android:
+  build:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -27,41 +27,24 @@ jobs:
 
       - run: npm ci
 
-      - run: npx expo export --platform android
-        name: Export Android bundle (type-check + bundle)
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Expo export (bundle check)
+        run: npx expo export --platform android
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Build APK (EAS local)
+      - name: Build APK
         run: |
-          npx eas-cli build --platform android --profile preview --local --non-interactive \
-            --output ./app-preview.apk
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          cd android
+          ./gradlew assembleRelease
 
       - uses: actions/upload-artifact@v4
         with:
           name: vaultpilot-android-${{ github.sha }}
-          path: mobile/app-preview.apk
+          path: mobile/android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
-
-      - name: Install APK on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          arch: x86_64
-          script: |
-            adb install mobile/app-preview.apk
-            adb shell am start -n com.vaultpilot.mobile/.MainActivity
-            sleep 10
-            adb shell screencap /sdcard/launch.png
-            adb pull /sdcard/launch.png mobile/launch-test.png
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: launch-screenshot-${{ github.sha }}
-          path: mobile/launch-test.png

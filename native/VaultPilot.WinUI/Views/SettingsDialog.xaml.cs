@@ -86,7 +86,28 @@ public sealed partial class SettingsDialog : ContentDialog
         }
         else
         {
-            AutoWakeModelBox.Text = settings.AutoWakeModel;
+            // #860: If the saved model is not in the preset list, add it so
+            // SelectedIndex can resolve it reliably.  Using .Text alone on an
+            // IsEditable ComboBox is unreliable in WinUI 3 — the text may be
+            // reset during layout if no matching item exists.
+            var matchIndex = -1;
+            for (var i = 0; i < AutoWakeModelBox.Items.Count; i++)
+            {
+                if (string.Equals(AutoWakeModelBox.Items[i] as string, settings.AutoWakeModel, StringComparison.Ordinal))
+                {
+                    matchIndex = i;
+                    break;
+                }
+            }
+            if (matchIndex >= 0)
+            {
+                AutoWakeModelBox.SelectedIndex = matchIndex;
+            }
+            else
+            {
+                AutoWakeModelBox.Items.Add(settings.AutoWakeModel);
+                AutoWakeModelBox.SelectedIndex = AutoWakeModelBox.Items.Count - 1;
+            }
         }
 
         AutoWakeStartTimeBox.Text = settings.AutoWakeStartTime ?? string.Empty;

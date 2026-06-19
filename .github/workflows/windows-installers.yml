@@ -66,7 +66,7 @@ jobs:
       - name: Build and run C# unit tests
         shell: powershell
         run: |
-          dotnet restore native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj
+          msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /t:Restore /p:BuildProjectReferences=false
           msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Debug /p:Platform=x64 /p:BuildProjectReferences=false
           dotnet vstest native/VaultPilot.WinUI.Tests/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.Tests.dll --logger:console
 

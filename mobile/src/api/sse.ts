@@ -81,6 +81,7 @@ export function parseSSEStream(
           if (doneReceived) break;
         }
         if (!doneReceived && buffer.trim().length > 0) {
+          buffer += '\n\n'; // Ensure last data line is processed even without trailing newline
           processBuffer();
         }
         if (!doneReceived) {

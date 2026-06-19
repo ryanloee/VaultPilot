@@ -377,10 +377,16 @@ mod tests {
         // #867: Tampered ciphertext should return an error so callers can
         // distinguish decryption failure from success.
         let result = decrypt_secret(&tampered);
-        assert!(result.is_err(), "decryption of tampered ciphertext must fail");
+        assert!(
+            result.is_err(),
+            "decryption of tampered ciphertext must fail"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("decryption failed") || err_msg.contains("not valid UTF-8") || err_msg.contains("not valid base64") || err_msg.contains("too short"),
+            err_msg.contains("decryption failed")
+                || err_msg.contains("not valid UTF-8")
+                || err_msg.contains("not valid base64")
+                || err_msg.contains("too short"),
             "error should indicate decryption failure, got: {err_msg}"
         );
     }
@@ -407,7 +413,7 @@ mod tests {
     #[test]
     fn payload_too_short_returns_error() {
         // Encode just 5 bytes (< 12 required for nonce)
-        let short_payload = format!("{}{}", ENCRYPTED_PREFIX, B64.encode(&[0u8; 5]));
+        let short_payload = format!("{}{}", ENCRYPTED_PREFIX, B64.encode([0u8; 5]));
         let result = decrypt_secret(&short_payload);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too short"));

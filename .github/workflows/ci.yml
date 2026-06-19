@@ -163,7 +163,7 @@ jobs:
         run: |
           msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /t:Restore /p:BuildProjectReferences=false
           msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Release /p:Platform=x64 /p:BuildProjectReferences=false
-          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Release --no-build --logger:console
+          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Release --no-build --logger:console /p:Platform=x64
 
       - name: Smoke test WinUI app
         shell: powershell

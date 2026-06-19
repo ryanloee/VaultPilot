@@ -69,7 +69,7 @@ jobs:
         run: |
           msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /t:Restore /p:BuildProjectReferences=false
           msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Debug /p:Platform=x64 /p:BuildProjectReferences=false
-          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Debug --no-build --logger:console
+          dotnet test native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj --configuration Debug --no-build --logger:console /p:Platform=x64
 
       - name: Verify validation outputs
         shell: powershell

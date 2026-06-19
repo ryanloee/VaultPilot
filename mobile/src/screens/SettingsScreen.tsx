@@ -23,16 +23,20 @@ export default function SettingsScreen() {
   // Load saved settings from the same source the API client uses
   useEffect(() => {
     (async () => {
-      const [api, themeMode, accentColor] = await Promise.all([
-        getSettings(),
-        AsyncStorage.getItem(THEME_KEY),
-        AsyncStorage.getItem(ACCENT_KEY),
-      ]);
-      if (api.apiBase) { setApiBase(api.apiBase); store.setApiSettings({ apiBase: api.apiBase }); }
-      if (api.apiKey) { setApiKey(api.apiKey); store.setApiSettings({ apiKey: api.apiKey }); }
-      if (api.model) { setModel(api.model); store.setApiSettings({ model: api.model }); }
-      if (themeMode) store.setThemeMode(themeMode as any);
-      if (accentColor) store.setAccentColor(accentColor);
+      try {
+        const [api, themeMode, accentColor] = await Promise.all([
+          getSettings(),
+          AsyncStorage.getItem(THEME_KEY),
+          AsyncStorage.getItem(ACCENT_KEY),
+        ]);
+        if (api.apiBase) { setApiBase(api.apiBase); store.setApiSettings({ apiBase: api.apiBase }); }
+        if (api.apiKey) { setApiKey(api.apiKey); store.setApiSettings({ apiKey: api.apiKey }); }
+        if (api.model) { setModel(api.model); store.setApiSettings({ model: api.model }); }
+        if (themeMode) store.setThemeMode(themeMode as any);
+        if (accentColor) store.setAccentColor(accentColor);
+      } catch (e) {
+        console.warn('[Settings] Failed to load settings, using defaults:', e);
+      }
     })();
   }, []);
 
@@ -51,12 +55,17 @@ export default function SettingsScreen() {
   const testConnection = async () => {
     setTesting(true);
     setTestResult(null);
-    // Persist settings before testing so checkApi() reads the values the user just entered
-    store.setApiSettings({ apiBase, apiKey, model });
-    await saveSettings({ apiBase, apiKey, model });
-    const res = await checkApi();
-    setTesting(false);
-    setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
+    try {
+      // Persist settings before testing so checkApi() reads the values the user just entered
+      store.setApiSettings({ apiBase, apiKey, model });
+      await saveSettings({ apiBase, apiKey, model });
+      const res = await checkApi();
+      setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
+    } catch (e: any) {
+      setTestResult(`❌ ${e.message || '连接失败'}`);
+    } finally {
+      setTesting(false);
+    }
   };
 
   const selectProvider = (p: typeof PROVIDERS[0]) => {

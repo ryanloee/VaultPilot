@@ -1,44 +1,49 @@
 import * as SQLite from 'expo-sqlite';
 
-let db: SQLite.SQLiteDatabase | null = null;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!db) {
-    db = await SQLite.openDatabaseAsync('vaultpilot.db');
-    await db.execAsync(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL DEFAULT '新对话',
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        pinned INTEGER DEFAULT 0,
-        archived INTEGER DEFAULT 0
-      );
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-      );
-      CREATE TABLE IF NOT EXISTS notes (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL DEFAULT '无标题',
-        content TEXT NOT NULL DEFAULT '',
-        folder_id TEXT,
-        starred INTEGER DEFAULT 0,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-        updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-      );
-      CREATE TABLE IF NOT EXISTS folders (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-      );
-    `);
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      const db = await SQLite.openDatabaseAsync('vaultpilot.db');
+      // Enable foreign key enforcement (OFF by default in SQLite)
+      await db.execAsync('PRAGMA foreign_keys = ON;');
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT '新对话',
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+          updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+          pinned INTEGER DEFAULT 0,
+          archived INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS notes (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL DEFAULT '无标题',
+          content TEXT NOT NULL DEFAULT '',
+          folder_id TEXT,
+          starred INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+          updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+        CREATE TABLE IF NOT EXISTS folders (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+      `);
+      return db;
+    })();
   }
-  return db;
+  return dbPromise;
 }
 
 function uuid(): string {

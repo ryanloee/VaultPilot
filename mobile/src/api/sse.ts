@@ -65,10 +65,19 @@ export function parseSSEStream(
             return;
           }
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+            // Flush any remaining bytes in the TextDecoder (multi-byte tail)
+            buffer += decoder.decode();
+            break;
+          }
           buffer += decoder.decode(value, { stream: true });
           processBuffer();
           if (doneReceived) break;
+        }
+        // Process any remaining data left in the buffer after the stream ends.
+        // This handles the case where the last SSE message doesn't end with \n.
+        if (!doneReceived && buffer.trim().length > 0) {
+          processBuffer();
         }
         // Stream ended without [DONE] — emit done callback so UI can recover
         if (!doneReceived) {
@@ -113,7 +122,9 @@ export async function parseSSEStreamWithReconnect(
       const res = await fetch(url, { ...fetchInit, signal: options?.signal });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        throw new Error(`API ${res.status}: ${text}`);
+        const err: any = new Error(`API ${res.status}: ${text}`);
+        err.status = res.status;
+        throw err;
       }
       if (!res.body) throw new Error('No response body');
 
@@ -121,6 +132,9 @@ export async function parseSSEStreamWithReconnect(
       return; // Success
     } catch (err: any) {
       if (err.name === 'AbortError') throw err;
+
+      // Don't retry client errors (4xx) — they won't succeed on retry
+      if (err.status >= 400 && err.status < 500) throw err;
 
       if (attempt < maxRetries) {
         const delay = baseDelay * Math.pow(2, attempt);

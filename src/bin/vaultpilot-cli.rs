@@ -1442,28 +1442,43 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
             use tokio::io::AsyncReadExt;
             let mut buf = Vec::new();
             let mut exceeded = false;
-            loop {
-                let mut byte = [0u8; 1];
-                match reader.read_exact(&mut byte).await {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // EOF or read error
-                        break;
-                    }
-                }
-                if buf.len() >= MAX_MCP_LINE_BYTES {
+            // Read in 8 KB chunks instead of byte-by-byte to reduce
+            // syscall count from O(n) to O(n/8192) (#907).
+            const CHUNK_SIZE: usize = 8 * 1024;
+            let mut chunk_buf = [0u8; CHUNK_SIZE];
+            'read: loop {
+                // Determine how many bytes we can still accept.
+                let capacity_left = MAX_MCP_LINE_BYTES.saturating_sub(buf.len());
+                let want = capacity_left.min(CHUNK_SIZE);
+                if want == 0 {
+                    // Already at limit — drain byte-by-byte until newline.
                     exceeded = true;
-                    // Keep draining until newline so the stream stays in sync
-                    // for the next request, but don't buffer the excess.
-                    if byte[0] == b'\n' {
+                    match reader.read_exact(&mut chunk_buf[..1]).await {
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                    if chunk_buf[0] == b'\n' {
                         break;
                     }
                     continue;
                 }
-                buf.push(byte[0]);
-                if byte[0] == b'\n' {
-                    break;
+                match reader.read_exact(&mut chunk_buf[..want]).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        // EOF or read error
+                        break 'read;
+                    }
                 }
+                // Scan the chunk for newline.
+                if let Some(nl_pos) = chunk_buf[..want].iter().position(|&b| b == b'\n') {
+                    let end = nl_pos + 1; // include the newline
+                    let room = MAX_MCP_LINE_BYTES - buf.len();
+                    let take = end.min(room);
+                    buf.extend_from_slice(&chunk_buf[..take]);
+                    break 'read;
+                }
+                // No newline found — append the whole chunk.
+                buf.extend_from_slice(&chunk_buf[..want]);
             }
             if buf.is_empty() && !exceeded {
                 return Ok(None); // EOF
@@ -1474,7 +1489,12 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                     MAX_MCP_LINE_BYTES / (1024 * 1024)
                 ));
             }
-            let line = String::from_utf8_lossy(&buf);
+            let line = std::str::from_utf8(&buf).map_err(|e| {
+                anyhow::anyhow!(
+                    "{}",
+                    vaultpilot_lib::sanitize_error(&format!("invalid UTF-8 in request: {e}"))
+                )
+            })?;
             // Strip trailing \r\n or \n for consistent handling across platforms.
             let line = line.trim_end_matches('\n').trim_end_matches('\r');
             Ok::<_, anyhow::Error>(Some(line.to_string()))

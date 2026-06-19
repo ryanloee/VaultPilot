@@ -21,12 +21,18 @@ export default function SettingsScreen() {
     (async () => {
       const saved = await AsyncStorage.getItem('app_settings');
       if (saved) {
-        const s = JSON.parse(saved);
-        if (s.apiBase) { setApiBase(s.apiBase); store.setApiSettings({ apiBase: s.apiBase }); }
-        if (s.apiKey) { setApiKey(s.apiKey); store.setApiSettings({ apiKey: s.apiKey }); }
-        if (s.model) { setModel(s.model); store.setApiSettings({ model: s.model }); }
-        if (s.themeMode) store.setThemeMode(s.themeMode);
-        if (s.accentColor) store.setAccentColor(s.accentColor);
+        try {
+          const s = JSON.parse(saved);
+          if (s.apiBase) { setApiBase(s.apiBase); store.setApiSettings({ apiBase: s.apiBase }); }
+          if (s.apiKey) { setApiKey(s.apiKey); store.setApiSettings({ apiKey: s.apiKey }); }
+          if (s.model) { setModel(s.model); store.setApiSettings({ model: s.model }); }
+          if (s.themeMode) store.setThemeMode(s.themeMode);
+          if (s.accentColor) store.setAccentColor(s.accentColor);
+        } catch (e) {
+          console.warn('[Settings] Corrupt settings in AsyncStorage, using defaults:', e);
+          // Clear corrupt data so it doesn't fail again on next open
+          await AsyncStorage.removeItem('app_settings');
+        }
       }
     })();
   }, []);
@@ -43,10 +49,15 @@ export default function SettingsScreen() {
   const testConnection = async () => {
     setTesting(true);
     setTestResult(null);
-    store.setApiSettings({ apiBase, apiKey, model });
-    const res = await checkApi();
-    setTesting(false);
-    setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
+    try {
+      store.setApiSettings({ apiBase, apiKey, model });
+      const res = await checkApi();
+      setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
+    } catch (e: any) {
+      setTestResult(`❌ ${e.message || '连接失败'}`);
+    } finally {
+      setTesting(false);
+    }
   };
 
   const selectProvider = (p: typeof PROVIDERS[0]) => {

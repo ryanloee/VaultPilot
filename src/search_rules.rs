@@ -92,8 +92,7 @@ fn relevance_term_matches(term: &str, needle: &str) -> bool {
     let term_lower = term.to_lowercase();
     if needle_lower.is_ascii() && needle_lower.len() < 5 {
         // Short ASCII needle: whole-word match in both directions
-        trigger_matches(&term_lower, &needle_lower)
-            || trigger_matches(&needle_lower, &term_lower)
+        trigger_matches(&term_lower, &needle_lower) || trigger_matches(&needle_lower, &term_lower)
     } else if !needle_lower.is_ascii() {
         // CJK / non-ASCII: bidirectional substring match is appropriate
         term_lower.contains(&needle_lower) || needle_lower.contains(&term_lower)

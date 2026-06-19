@@ -108,6 +108,9 @@ pub struct AppSettings {
     pub auto_wake_start_time: String,
     #[serde(default = "default_auto_wake_end_time")]
     pub auto_wake_end_time: String,
+    /// Prompt sent to the AI when auto-wake fires (#861).
+    #[serde(default = "default_auto_wake_prompt")]
+    pub auto_wake_prompt: String,
 }
 
 impl Default for AppSettings {
@@ -121,6 +124,7 @@ impl Default for AppSettings {
             auto_wake_model: default_auto_wake_model(),
             auto_wake_start_time: default_auto_wake_start_time(),
             auto_wake_end_time: default_auto_wake_end_time(),
+            auto_wake_prompt: default_auto_wake_prompt(),
         }
     }
 }
@@ -274,6 +278,9 @@ pub struct ChatTurn {
     pub attachments: Vec<ChatAttachment>,
     #[serde(default)]
     pub created_at: String,
+    /// Origin of this turn: empty for manual, "scheduled_wake" for auto-wake (#861).
+    #[serde(default)]
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -609,6 +616,10 @@ pub fn default_auto_wake_end_time() -> String {
     String::new()
 }
 
+pub fn default_auto_wake_prompt() -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,6 +643,7 @@ mod tests {
             auto_wake_model: "claude-3-5-haiku-latest".to_string(),
             auto_wake_start_time: "05:00".to_string(),
             auto_wake_end_time: "23:00".to_string(),
+            auto_wake_prompt: String::new(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -709,6 +721,7 @@ mod tests {
                     }),
                     attachments: vec![],
                     created_at: "2026-01-01T00:00:00Z".to_string(),
+                    source: String::new(),
                 }],
                 summary: Some(ConversationSummary {
                     text: "summary".to_string(),
@@ -830,6 +843,7 @@ mod tests {
         assert!(settings.auto_wake_model.is_empty());
         assert!(settings.auto_wake_start_time.is_empty());
         assert!(settings.auto_wake_end_time.is_empty());
+        assert!(settings.auto_wake_prompt.is_empty());
         assert_eq!(default_model(), "claude-3-5-sonnet-latest");
         assert_eq!(default_timeout_ms(), 60_000);
         assert_eq!(default_ai_source(), "captured");

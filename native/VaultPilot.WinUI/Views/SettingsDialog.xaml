@@ -157,6 +157,16 @@
                 Visibility="Collapsed"
                 AutomationProperties.LiveSetting="Polite"
                 Margin="0,-8,0,0" />
+            <TextBox
+                x:Name="AutoWakePromptBox"
+                Header="唤醒提问内容（留空使用默认提示）"
+                PlaceholderText="请简要回顾一下最近的知识库内容，给我一个简短的今日摘要。"
+                HorizontalAlignment="Stretch"
+                TextWrapping="Wrap"
+                AcceptsReturn="True"
+                MinHeight="60"
+                MaxHeight="120"
+                AutomationProperties.Name="唤醒提问内容" />
 
             <!-- Next wake time -->
             <TextBlock

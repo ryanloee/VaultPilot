@@ -2580,13 +2580,56 @@ public sealed partial class MainWindow : Window
         try
         {
             await _backendClient.EnsureConnectedAsync();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await _backendClient.SendAsync("ping", new { }, cts.Token);
+
+            // #861: Send an actual AI prompt and display both the prompt and
+            // response in the chat dialog instead of a silent "ping".
+            var wakePrompt = _settings?.AutoWakePrompt?.Trim();
+            if (string.IsNullOrEmpty(wakePrompt))
+            {
+                wakePrompt = "请简要回顾一下最近的知识库内容，给我一个简短的今日摘要。";
+            }
+
+            // Add the wake prompt as a user message with ⏰ marker
+            var requestSessionId = _currentSessionId;
+            await AddTurnAsync("user", $"⏰ {wakePrompt}", sessionId: requestSessionId, source: "scheduled_wake");
+            RenderCurrentSession();
+            ScrollToLatest();
+            await SaveChatStateAsync();
+
+            // Send to AI
+            var history = GetConversationHistory(requestSessionId);
+            using var cts = new CancellationTokenSource(
+                TimeSpan.FromMilliseconds((_settings?.Provider.RequestTimeoutMs ?? 60_000) + 30_000));
+            var answer = await _backendClient.SendAsync<GroundedAnswer>(
+                "askWithAi",
+                new
+                {
+                    question = wakePrompt,
+                    history,
+                    imagePaths = Array.Empty<string>()
+                },
+                cts.Token);
+
+            // Add the AI response as an assistant message
+            await AddTurnAsync("assistant", answer?.Answer ?? "(无回复)", answer, sessionId: requestSessionId, source: "scheduled_wake");
+            RenderCurrentSession();
+            ScrollToLatest();
+            await SaveChatStateAsync();
+
             _lastAutoWakeTime = DateTime.Now;
-            await LogStartup("自动唤醒完成: ping ok");
+            await LogStartup("自动唤醒完成: 已发送提问并收到回复");
         }
         catch (Exception error)
         {
+            // Add error as assistant message so user can see what happened
+            var errorSessionId = _currentSessionId;
+            await AddTurnAsync("assistant", $"⏰ 自动唤醒失败: {LocalizeError(error.Message)}", sessionId: errorSessionId, source: "scheduled_wake");
+            RenderCurrentSession();
+            ScrollToLatest();
+            if (!_isShuttingDown)
+            {
+                await SaveChatStateAsync();
+            }
             await LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
         }
         finally
@@ -2995,7 +3038,11 @@ public sealed partial class MainWindow : Window
 
         foreach (var turn in session.Turns)
         {
-            AppendMessage(turn.Role == "user" ? "你" : "助手", turn.Text);
+            var isScheduledWake = turn.Source == "scheduled_wake";
+            var author = turn.Role == "user"
+                ? (isScheduledWake ? "⏰ 定时唤醒" : "你")
+                : (isScheduledWake && turn.Text.StartsWith("⏰") ? "⏰ 定时唤醒" : "助手");
+            AppendMessage(author, turn.Text);
             if (turn.Attachments is { Count: > 0 })
             {
                 AppendAttachmentPreviews(turn.Attachments, turn.Role);
@@ -3486,7 +3533,8 @@ public sealed partial class MainWindow : Window
         string text,
         GroundedAnswer? answer = null,
         IReadOnlyList<ChatAttachment>? attachments = null,
-        string? sessionId = null)
+        string? sessionId = null,
+        string? source = null)
     {
         await _chatStateLock.WaitAsync();
         try
@@ -3522,7 +3570,8 @@ public sealed partial class MainWindow : Window
                 answer?.SavedNote,
                 answer?.ThinkingTrace,
                 attachments ?? Array.Empty<ChatAttachment>(),
-                now);
+                now,
+                source);
 
             var turns = new List<ChatTurn>(session.Turns.Count + 1);
             turns.AddRange(session.Turns);

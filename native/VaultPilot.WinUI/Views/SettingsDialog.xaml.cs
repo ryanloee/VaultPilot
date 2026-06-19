@@ -112,6 +112,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
         AutoWakeStartTimeBox.Text = settings.AutoWakeStartTime ?? string.Empty;
         AutoWakeEndTimeBox.Text = settings.AutoWakeEndTime ?? string.Empty;
+        AutoWakePromptBox.Text = settings.AutoWakePrompt ?? string.Empty;
 
         // Next wake label
         NextWakeLabel.Text = nextWakeText ?? string.Empty;
@@ -311,7 +312,8 @@ public sealed partial class SettingsDialog : ContentDialog
                 autoWakeInterval,
                 autoWakeModel,
                 trimmedWakeStart,
-                trimmedWakeEnd);
+                trimmedWakeEnd,
+                AutoWakePromptBox.Text?.Trim() ?? string.Empty);
         }
         catch (Exception error)
         {

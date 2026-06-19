@@ -19,6 +19,7 @@ export default function ChatScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<FlatList>(null);
+  const msgsRef = useRef<Msg[]>([]);
 
   // Init session
   useEffect(() => {
@@ -28,6 +29,9 @@ export default function ChatScreen({ navigation }: any) {
       setLoading(false);
     })();
   }, []);
+
+  // Keep ref in sync with state so send() reads latest messages
+  useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
   const send = useCallback(async () => {
     if (!input.trim() || streaming || !sessionId) return;
@@ -48,7 +52,7 @@ export default function ChatScreen({ navigation }: any) {
     try {
       const history: ChatMessage[] = [
         { role: 'system', content: '你是 VaultPilot AI 助手，知识渊博、乐于助人。用中文回答。' },
-        ...msgs.filter(m => m.role !== 'assistant' || !m.streaming).map(m => ({ role: m.role as any, content: m.content })),
+        ...msgsRef.current.filter(m => m.role !== 'assistant' || !m.streaming).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
 
@@ -77,7 +81,7 @@ export default function ChatScreen({ navigation }: any) {
       setStreaming(false);
       abortRef.current = null;
     }
-  }, [input, streaming, sessionId, msgs, apiKey, apiBase, model]);
+  }, [input, streaming, sessionId, apiKey, apiBase, model]);
 
   const stop = () => {
     abortRef.current?.abort();

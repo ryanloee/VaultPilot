@@ -1901,3 +1901,11 @@
 - 审核结果: PR #871 仍 OPEN (cargo fmt/clippy 失败待作者修复), #867 和 #868 仍 OPEN
 - 项目状态: **2 open issue (#867, #868) + 2 new (#874, #875), 1 open PR (#871 待格式修复), 362 已合并 PR, 403 Rust 测试全通过, v0.3.1 已发布**
 - 代码审查: 3 路并行深度审查 crypto.rs (342行) + models.rs+C# (1665行) + XAML (743行) = ~2.8K行。发现 1 个 MEDIUM SECURITY (macOS machine-id) 和 1 个 MEDIUM UI (XAML 无障碍) 并创建 issue。C# NoteDocument SearchSnippet 缺失经核实为非问题。代码库经过 221 个审查循环和 362 个已合并 PR 后维持极高成熟度。
+
+- 2026-06-19 [PR审核轮#109]: 审核 4 个 open PR
+  - #904 SSE trim → 合并（Rust CI 6/6 pass，build-android EXPO_TOKEN 基础设施问题）
+  - #905 search_rules 大小写归一化 → 留言要求 cargo fmt 修复
+  - #899 SecureStore API Key → 留言要求更新 package-lock.json
+  - #871 crypto decrypt 错误处理 → 留言要求 cargo fmt + clippy 修复
+- 2026-06-19 [PR审核轮#109]: 发版 v0.3.2（6 PRs since v0.3.1: #906 Zip Slip, #900 SSE统一, #904 SSE trim, #898 CJK截断, #876 macOS ID, #877 无障碍）
+- 2026-06-19 [PR审核轮#109]: GitHub Release https://github.com/ryanloee/VaultPilot/releases/tag/v0.3.2

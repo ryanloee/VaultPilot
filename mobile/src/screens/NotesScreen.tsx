@@ -36,7 +36,7 @@ export default function NotesScreen({ navigation }: any) {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteNote(id); load(); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
+        try { await deleteNote(id); await load(); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
       }},
     ]);
   };

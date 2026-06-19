@@ -14,6 +14,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [saving, setSaving] = useState(false);
   const timerRef = useRef<any>(null);
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
+  const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
   useEffect(() => {
     (async () => {
@@ -69,7 +70,12 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   ];
 
   const insertFormat = (syntax: string) => {
-    setContent(prev => prev + syntax);
+    const { start, end } = selectionRef.current;
+    setContent(prev => {
+      const before = prev.slice(0, start);
+      const after = prev.slice(end);
+      return before + syntax + after;
+    });
   };
 
   return (
@@ -101,6 +107,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         style={[s.contentInput, { color: c.text }]}
         value={content}
         onChangeText={(t) => { setContent(t); autoSave(title, t); }}
+        onSelectionChange={(e) => { selectionRef.current = e.nativeEvent.selection; }}
         placeholder="开始写作..."
         placeholderTextColor={c.textSecondary}
         multiline

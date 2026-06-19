@@ -19,6 +19,7 @@ export default function SettingsScreen() {
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Load saved settings from the same source the API client uses
   useEffect(() => {
@@ -36,6 +37,7 @@ export default function SettingsScreen() {
         if (accentColor) store.setAccentColor(accentColor);
       } catch (e) {
         console.warn('[Settings] Failed to load settings, using defaults:', e);
+        setLoadError('设置加载失败，显示默认值');
       }
     })();
   }, []);
@@ -75,6 +77,14 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={[s.container, { backgroundColor: c.bg }]} contentContainerStyle={{ padding: 16 }}>
+      {loadError && (
+        <View style={[s.errorBanner, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
+          <Text style={{ color: '#92400E', fontSize: 14 }}>⚠️ {loadError}</Text>
+          <TouchableOpacity onPress={() => setLoadError(null)}>
+            <Text style={{ color: '#92400E', fontSize: 14 }}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {/* API Section */}
       <Text style={[s.sectionTitle, { color: c.text }]}>API 配置</Text>
 
@@ -214,4 +224,8 @@ const s = StyleSheet.create({
   colorRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
   version: { textAlign: 'center', fontSize: 12, marginTop: 20, marginBottom: 40 },
+  errorBanner: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 16,
+  },
 });

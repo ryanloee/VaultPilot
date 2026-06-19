@@ -34,7 +34,7 @@ export function parseSSEStream(
     options?.signal?.addEventListener('abort', onAbort, { once: true });
 
     function processBuffer() {
-      const lines = buffer.split('\n');
+      const lines = buffer.split(/\r\n|\r|\n/);
       buffer = lines.pop() || '';
 
       for (const line of lines) {

@@ -2007,3 +2007,133 @@
 - 审核结果: 5 个 PR 合并 (#990-#994), 3 个 open PR 待 CI 修复 (#910, #899, #871)
 - 项目状态: **65 open issue, 3 open PR (CI 待修复), 367+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
 - 代码审查: 3 路并行审查 mobile (~472行) + Rust (~11K行) = ~11.5K行。Rust 后端零新缺陷 (成熟度极高)。mobile 新发现均被现有 issue 覆盖，无新增 issue。backlog 65 个 issue 过大，讨论阶段聚焦 PR 合并和优先级指导。
+
+## 本轮循环状态 (循环#225)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#225
+- 本轮时间: 2026-06-19
+- 审查模块: mobile 全量 (~2000行, 11文件), Rust 后端 (ai.rs, storage.rs, lib.rs, vaultpilot-agent.rs, vaultpilot-cli.rs, crypto.rs ~15K行)
+- 竞品调研: Obsidian Copilot v4 预览 (13-tool Agent Mode, ACP 协议, opencode/Claude Code/Codex 集成, 官方移动端), Notion AI (Custom Agents, MCP Server, 前沿模型自动路由), Capacities (object-based PKM, offline-first), Logseq+AI (社区 MCP server), KnowMine (AI-native PKM + MCP)
+- 讨论阶段发现:
+  - 12 个新 issue 创建 (#1019-#1030): 9 BUG, 2 PERF, 1 REFACTOR
+  - **MEDIUM BUG (6)**:
+    - #1019: client.ts 400 降级时第一个 response body 未关闭 — 连接池泄漏
+    - #1020: NoteEditorScreen 标题/内容快速交替编辑时标题修改丢失（闭包 stale）
+    - #1021: ChatScreen 发送给 API 的历史消息无上限 — 长对话超出模型上下文窗口
+    - #1022: client.ts 非流式 fallback 丢失 tool_calls/function_call 等元数据
+    - #1023: client.ts normalizeApiBase 对非 /v1 路径处理错误
+    - #1024: ChatScreen 错误消息被当作 assistant 上下文发送给模型
+  - **LOW-MEDIUM BUG (4)**:
+    - #1025: client.ts chat 超时仅覆盖初始请求，流式读取阶段无超时保护
+    - #1027: sse.ts 不处理 \r\n 换行 — JSON 解析失败
+    - #1028: sse.ts 不支持 SSE 多行 data 字段拼接
+    - #1029: NoteEditorScreen 格式化按钮替换选中文本而非包裹
+  - **PERF (2)**:
+    - #1030: client.ts 每次 chat 调用重新从原生桥读取设置 — 5-15ms 延迟
+    - (FlatList/streaming re-renders 已被 #1011 覆盖)
+  - **REFACTOR (1)**:
+    - #1026: db.ts folders 表死代码 + notes.folder_id 无外键约束
+- Rust 后端审查: 零新缺陷。#1009 (stdin read_exact 死锁) 修复 PR #1013 存在且正确但未合并。#929 (SQL 构建重复) 仍是唯一的代码质量 issue。代码库极度成熟。
+- 竞品差距分析:
+  - **最大差距**: Agent Mode — Obsidian Copilot v4 有 13-tool 自主 agent + ACP 协议，Notion 有 Custom Agents。VaultPilot 无 agent 能力 (#913 已规划)
+  - **Web 搜索**: 竞品支持 Firecrawl/Perplexity 网页搜索，VaultPilot 无
+  - **知识图谱/双向链接**: Obsidian/Logseq/Capacities 均有，VaultPilot 无
+  - **跨设备同步**: VaultPilot 无同步机制
+  - **VaultPilot 差异化优势**: 本地优先 SQLite + MCP server 内置 + 三端原生 (非 Electron) + 免费自托管
+- PR 状态:
+  - 6 个新 PR (#1013-#1018) 修复本轮及上轮发现的问题
+  - 2 个旧 PR 待 CI 修复 (#910, #871)
+  - 新 PR 需要验证 CI 状态后合并
+- 优先级指导 (80 open issue):
+  - P0 阻塞: #934 (会话创建), #916 (缺少依赖), #1010 (启动白屏), #1009 (stdin 死锁)
+  - P1 安全: #894 (API Key 加密)
+  - P1 稳定: #1019 (连接泄漏), #1020 (标题丢失), #1021 (上下文溢出), #1022 (tool_calls 丢失), #1024 (错误污染历史)
+  - P2 体验: #1023 (API 路径), #1025 (超时), #959 (键盘遮挡), #938 (自动滚动), #986 (debounce), #987 (FlatList)
+  - P3 低优先: #1027 (CRLF), #1028 (多行 data), #1029 (格式化), #1030 (settings 缓存), #1026 (死代码)
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 6 个新 PR 待验证 CI (#1013-#1018), 2 个旧 PR 待修复 (#910, #871)
+- 项目状态: **80 open issue (+15), 8 open PR (+5), 372+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
+- 代码审查: 3 路并行深度审查 mobile 全量 (~2000行, 11文件) + Rust 全量 (~15K行, 6文件) = ~17K行。发现 12 个新缺陷 (6 MEDIUM BUG + 4 LOW-MEDIUM BUG + 2 PERF + 1 REFACTOR)。client.ts 是本轮发现最密集的模块 (5 个 issue: 连接泄漏、路径处理、tool_calls 丢失、超时范围、settings 缓存)。Rust 后端零新缺陷 (极度成熟)。竞品分析显示 Agent Mode 和知识图谱是最大差距。
+
+## 本轮循环状态 (循环#226)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#226
+- 本轮时间: 2026-06-19
+- 审查模块: mobile 全量 (client.ts, sse.ts, db.ts, store.ts, ChatScreen.tsx, NotesScreen.tsx, NoteEditorScreen.tsx, SettingsScreen.tsx, App.tsx ~2000行), Rust 后端全量 (ai.rs 2455行, storage.rs 5443行, lib.rs 3214行, prompting.rs 946行, crypto.rs 439行, vaultpilot-cli.rs 3052行, vaultpilot-agent.rs 737行 ~16K行)
+- 竞品调研: Obsidian Copilot v3.3.3 稳定 + v3.2.5 新增 Composer V2 editing, drag-to-insert wikilinks, Obsidian Bases support, LM Studio Responses API, Gemini Embedding 2, GitHub Copilot Chat tool calling。Notion AI 2026: Custom Agents 自主运行 20 分钟, MCP Server 官方支持, 前沿模型自动路由 (GPT-5.2/Claude Opus 4.5/Gemini 3 Pro), 移动端完整 Agent 能力。VaultPilot MCP server + 三端原生架构是差异化优势。
+- 讨论阶段发现:
+  - 8 个新 issue 创建 (#1031-#1038): 1 HIGH, 3 MEDIUM, 4 LOW
+  - **HIGH BUG (1)**:
+    - #1031: NoteEditorScreen save() 缺少 try-catch — 失败后 UI 永久卡在「保存中」
+  - **MEDIUM BUG (3)**:
+    - #1032: SettingsScreen 测试连接静默覆盖已保存设置 — 无法先试后存
+    - #1033: SettingsScreen 主题/强调色切换不立即持久化 — 导航离开后丢失
+    - #1034: client.ts AbortSignal listener 正常完成时未移除 — 长生命周期 signal 泄漏
+  - **LOW (4)**:
+    - #1035: App.tsx TabIcon 忽略 color 参数 — 选中/未选中 tab 视觉无区别
+    - #1036: client.ts normalizeApiBase 空/空白输入产生无效 URL
+    - #1037: SettingsScreen themeMode 使用 as any 强转 — 损坏数据可破坏主题逻辑
+    - #1038: ChatScreen send useCallback 多余依赖
+  - Rust 后端审查: 零新缺陷。经过 225 轮审查和 372+ 已合并 PR 后极度成熟。所有安全模式完整: sanitize_error 63处 ✅, SQL 全参数化 ✅, SSRF/DNS pinning ✅, 路径穿越防御 ✅, 原子写入 ✅, FTS5 转义 ✅, XML 转义 ✅, 常量时间比较 ✅, OOM 防护 ✅, 0 unsafe ✅, 0 生产 unwrap ✅
+  - 403 Rust 测试全通过 (lib:377, cli:16, agent:10)
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 3 个 open PR (#1018, #910, #871) — #1018 新 PR 待 CI 验证, #910 和 #871 旧 PR 待 CI 修复
+- 项目状态: **83 open issue (+8), 3 open PR, 372+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
+- 代码审查: 2 路并行深度审查 mobile 全量 (~2000行) + Rust 全量 (~16K行) = ~18K行。Rust 后端零新缺陷 (极度成熟)。mobile 发现 8 个新缺陷 (1 HIGH + 3 MEDIUM + 4 LOW)。NoteEditorScreen save 无错误处理是最高优先级新发现。
+
+## 本轮循环状态 (循环#226)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#226
+- 本轮时间: 2026-06-19
+- 审查模块: mobile ChatScreen.tsx + NoteEditorScreen.tsx + store.ts + SettingsScreen.tsx + App.tsx (~800行), Rust 后端不需本轮审查 (225轮后零缺陷)
+- 竞品调研: Obsidian Copilot v3.3.3 (Gemini 3.5 Flash 内置, OS Keychain, mobile 正式支持) + v4 预览 (Agent Mode 13-tool, ACP 协议, opencode/Claude Code/Codex 集成, vault-scoped agents)。Notion AI (Custom Agents + Workers Beta, MCP Server 4.4k stars, Enterprise Search)。VaultPilot MCP server + 三端原生仍是差异化优势。
+- 讨论阶段发现:
+  - 9 个新 issue 创建 (#1039-#1047): 6 HIGH, 3 MEDIUM
+  - **HIGH BUG (6)**:
+    - #1039: ChatScreen createSession 异常时 loading 永远不消失 — 用户困在 spinner
+    - #1040: ChatScreen addMessage 失败时用户输入丢失 — input 在持久化前被清空
+    - #1041: NoteEditorScreen save() 异常时 "保存中..." 永久显示
+    - #1042: NoteEditorScreen 笔记加载期间用户编辑被静默覆盖 — 竞态条件
+    - #1043: App.tsx 启动时 isDark 竞态 — system-theme useEffect 覆盖用户保存的主题
+  - **MEDIUM BUG (3)**:
+    - #1044: NoteEditorScreen deleteNote 失败无处理
+    - #1045: NoteEditorScreen selectionRef 格式化后快速连续操作插入位置错误
+    - #1046: SettingsScreen 主题/强调色修改未持久化 — 应用被杀后设置丢失
+    - #1047: SettingsScreen testConnection 静默保存设置为副作用
+  - 正面发现: 已有 #934 (createSession 每次 mount), #938 (auto-scroll), #959 (键盘遮挡), #1011 (FlatList key), #1029 (insertFormat) 已覆盖部分问题
+  - Rust 后端: 403 测试全通过, 0 unsafe, 0 生产 unwrap (经 225 轮审查后零缺陷)
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 3 个 open PR (#1018 CI Rust pass + build-android fail, #910 fmt+clippy fail, #871 fmt+clippy fail)
+- 项目状态: **92 open issue, 3 open PR (CI 待修复), 372+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
+- 代码审查: 深度审查 mobile 5 个核心文件 (~800行)。发现 9 个新缺陷 (6 HIGH + 3 MEDIUM)。核心问题是错误处理缺失 (4 个) 和状态管理/竞态 (4 个)。Rust 后端无需本轮审查。竞品分析确认 VaultPilot MCP server + 三端原生仍是差异化优势，但 Obsidian Copilot v4 Agent Mode 是最大威胁。
+
+## 本轮循环状态 (循环#227)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#227
+- 本轮时间: 2026-06-19
+- 审查模块: mobile 全量 (client.ts, sse.ts, db.ts, store.ts, ChatScreen.tsx, NotesScreen.tsx, NoteEditorScreen.tsx, SettingsScreen.tsx, App.tsx ~2000行)
+- 竞品调研: Obsidian Copilot v3.0+ (Agent Mode 13-tool, MCP 支持, Project Mode, 多媒体上下文), Notion AI 3.0/3.2 (Custom Agents 20分钟自主运行, 移动端 Agent, MCP Server 18-tool, GPT-5.2/Claude Opus 4.5/Gemini 3 自动路由), Capacities (AI Chat Connectors, 多模型选择, 对象化 PKM), KnowMine (MCP-native 知识库, 双向 MCP, 语音转知识, AI 自动结构化), Mem (AI 自动组织, Voice Mode), Reflect (E2E 加密, 双向链接)
+- 讨论阶段发现:
+  - 8 个新 issue 创建 (#1054-#1061): 4 BUG, 1 PERF, 3 LOW
+  - **HIGH BUG (1)**:
+    - #1061: db.ts escapeLikePattern 使用 SQL Server 方括号语法 — SQLite 不支持，搜索结果错误
+  - **MEDIUM BUG (2)**:
+    - #1056: NoteEditorScreen useEffect getNote() 缺少 try-catch — DB 异常时永久 spinner
+    - #1057: sse.ts 重试退避延迟不响应 AbortSignal — 用户取消需等待退避完成
+  - **PERF (1)**:
+    - #1054: store.ts getColors() 每次调用返回新对象引用 — 级联重渲染
+  - **LOW (4)**:
+    - #1055: NotesScreen load() 缺少 try-catch + loading 状态为死代码
+    - #1058: sse.ts abort 仅 releaseLock 不 cancel — 流继续缓冲数据到内存
+    - #1059: NoteEditorScreen save()/setSaving 在 unmount 后执行
+    - #1060: App.tsx savedTheme 强转 ThemeMode 无校验
+  - Rust 后端: 403 测试全通过, 0 unsafe, 0 生产 unwrap (经 226 轮审查后零缺陷)
+  - 竞品差距分析:
+    - **最大差距**: Agent Mode — Obsidian Copilot v3.0+ 有 13-tool 自主 agent + MCP 工具集成, Notion AI 有 20 分钟自主 Custom Agents + 移动端 Agent
+    - **MCP 生态**: KnowMine 全面 MCP-native (双向读写), Notion 官方 18-tool MCP Server, Obsidian Copilot 消费外部 MCP。VaultPilot 有 MCP server 但定位不够突出
+    - **语音输入**: KnowMine (语音→知识), Mem (Voice Mode), VaultPilot 无
+    - **VaultPilot 差异化优势**: 本地优先 SQLite + MCP server 内置 + 三端原生 (非 Electron) + 免费自托管 + Android 原生 App
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 9 个 open PR (#1048-#1053 新, #1018, #910, #871 旧)
+- 项目状态: **109 open issue, 9 open PR, 372+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
+- 代码审查: 深度审查 mobile 全量 (~2000行, 9 文件)。发现 8 个新缺陷 (1 HIGH + 2 MEDIUM + 1 PERF + 4 LOW)。最高优先级: #1061 escapeLikePattern SQLite 语法根本性错误导致搜索结果不正确。Rust 后端经 226 轮审查后零新缺陷。竞品分析确认 MCP 生态和 Agent Mode 是 2026 年最大趋势，VaultPilot MCP server 定位需加强。

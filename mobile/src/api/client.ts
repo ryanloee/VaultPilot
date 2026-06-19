@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 // Settings keys
 const KEYS = {
@@ -13,16 +14,35 @@ const DEFAULTS = {
   model: 'gpt-4o-mini',
 };
 
+// ── Secure helpers ───────────────────────────────────────
+async function getApiKey(): Promise<string> {
+  try {
+    return (await SecureStore.getItemAsync(KEYS.apiKey)) || '';
+  } catch (e: any) {
+    console.warn('[SecureStore] Failed to read API key:', e.message);
+    return '';
+  }
+}
+
+async function setApiKey(value: string): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(KEYS.apiKey, value);
+  } catch (e: any) {
+    console.warn('[SecureStore] Failed to write API key:', e.message);
+    throw new Error('无法安全存储 API Key，请检查设备安全设置');
+  }
+}
+
 // ── Settings ──────────────────────────────────────────────
 export async function getSettings() {
   const [base, key, model] = await Promise.all([
     AsyncStorage.getItem(KEYS.apiBase),
-    AsyncStorage.getItem(KEYS.apiKey),
+    getApiKey(),
     AsyncStorage.getItem(KEYS.model),
   ]);
   return {
     apiBase: base || DEFAULTS.apiBase,
-    apiKey: key || '',
+    apiKey: key,
     model: model || DEFAULTS.model,
   };
 }
@@ -30,7 +50,7 @@ export async function getSettings() {
 export async function saveSettings(s: { apiBase?: string; apiKey?: string; model?: string }) {
   const ops: Promise<void>[] = [];
   if (s.apiBase !== undefined) ops.push(AsyncStorage.setItem(KEYS.apiBase, s.apiBase));
-  if (s.apiKey !== undefined) ops.push(AsyncStorage.setItem(KEYS.apiKey, s.apiKey));
+  if (s.apiKey !== undefined) ops.push(setApiKey(s.apiKey));
   if (s.model !== undefined) ops.push(AsyncStorage.setItem(KEYS.model, s.model));
   await Promise.all(ops);
 }

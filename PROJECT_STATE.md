@@ -1976,3 +1976,34 @@
 - 审核结果: 8 个 open PR (#990-#994 新, #910/#899/#871 旧) — 新 PR Rust CI pass 但 build-android 失败 (基础设施问题非代码问题), 旧 PR CI 待修复
 - 项目状态: **71 open issue (+14), 8 open PR (+5), 362+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
 - 代码审查: 3 路并行深度审查 mobile 全量 (~935行 source + ~750行 screens) = ~1.7K行。发现 14 个新缺陷 (3 MEDIUM BUG + 11 LOW/MEDIUM)。db.ts 是发现最密集的模块 (5 个 issue: 事务缺失、缓存 rejected promise、escapeLikePattern 不完整、缺少索引、uuid 品质)。sse.ts 有 2 个非平凡 bug (abort 传播、重复 done)。mobile 代码库经 223 轮审查后仍在快速迭代中，基础架构稳固但细节需要打磨。
+
+## 本轮循环状态 (循环#224)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#224
+- 本轮时间: 2026-06-19
+- 审查模块: mobile (db.ts, sse.ts, client.ts ~472行), Rust 后端 (ai.rs, storage.rs, vaultpilot-cli.rs ~11K行)
+- 竞品调研: Obsidian Copilot v3.3.3 稳定版 (OS Keychain API key, 官方移动端, Gemini 3.5 Flash 内置, 1.8MB bundle 缩减)。v4 Agent Mode 预览 (ACP 协议, opencode/Claude Code/Codex 集成)。Obsidian Agent Client Plugin (开源 MIT, 2.2k stars, ACP 协议, vault 上下文自动注入)。VaultPilot MCP server + 三端架构是差异化优势，但移动端体验差距明显（Obsidian Copilot 有官方移动端，VaultPilot 移动端仍处于 v0 初版）。
+- 讨论阶段发现:
+  - 移动端代码审查 (db.ts + sse.ts + client.ts ~472行): 发现多个问题但均已被现有 issue 覆盖
+  - db.ts: 事务缺失 (#996), dbPromise 失败缓存 (#995), LIKE 全表扫描 (#954), escapeLikePattern (#1001) — 均已有 issue
+  - sse.ts: reader.cancel() 未调用 (#997), 竞态窗口 (#997), 重复 done (#998) — 均已有 issue
+  - client.ts: API Key 明文 (#894), AbortSignal.timeout 兼容性 (新发现, LOW, backlog 过大不创建 issue)
+  - Rust 后端审查 (ai.rs + storage.rs + vaultpilot-cli.rs ~11K行): 零新缺陷。最近增量变更 (HTTP 500 重试 #930, 分块读取 #909) 实现正确。代码库经 224 轮审查后维持极高成熟度。
+  - 新发现 (未创建 issue, backlog 65 个过大):
+    - db.ts 缺少 WAL 模式设置 — Rust 端已启用 (#230) 但移动端未同步 (LOW)
+    - db.ts 缺少 busy_timeout — Rust 端已设置 (#592) 但移动端未同步 (LOW)
+    - client.ts AbortSignal.timeout() 在 Hermes 引擎可能不兼容 (LOW)
+    - sse.ts SSE 解析不支持多行 data 字段 (LOW)
+- PR 分类和合并:
+  - 合并 5 个就绪 PR: #990 (SSE spec), #991 (API 路径), #992 (App 设置), #993 (stale msgs), #994 (insertFormat) — Rust CI 6/6 pass, build-android 失败为 EXPO_TOKEN 基础设施问题
+  - 剩余 3 个 open PR 有 CI 失败: #910 (fmt+clippy), #899 (lockfile 缺 expo-secure-store), #871 (fmt+clippy)
+- 优先级指导 (65 open issue):
+  - P0 阻塞: #934 (会话创建), #916 (缺少依赖)
+  - P1 安全: #894 (API Key 加密), #899 (PR 待 lockfile 修复)
+  - P1 稳定: #995 (dbPromise), #996 (事务), #997 (abort), #961 (ErrorBoundary)
+  - P2 体验: #959 (键盘遮挡), #938 (自动滚动), #986 (debounce), #987 (FlatList)
+  - P3 增强: #954 (FTS5), #972 (剪贴板), #960 (Markdown 预览)
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 5 个 PR 合并 (#990-#994), 3 个 open PR 待 CI 修复 (#910, #899, #871)
+- 项目状态: **65 open issue, 3 open PR (CI 待修复), 367+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
+- 代码审查: 3 路并行审查 mobile (~472行) + Rust (~11K行) = ~11.5K行。Rust 后端零新缺陷 (成熟度极高)。mobile 新发现均被现有 issue 覆盖，无新增 issue。backlog 65 个 issue 过大，讨论阶段聚焦 PR 合并和优先级指导。

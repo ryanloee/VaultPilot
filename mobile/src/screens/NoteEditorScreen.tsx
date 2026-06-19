@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator,
 } from 'react-native';
 import { useAppStore, getColors } from '../store';
 import { getNote, updateNote, deleteNote } from '../db';
@@ -12,13 +12,16 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
   const timerRef = useRef<any>(null);
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const note = await getNote(noteId);
+      if (cancelled) return;
       if (note) {
         setTitle(note.title);
         setContent(note.content);
@@ -27,7 +30,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           { text: '返回', onPress: () => navigation.goBack() },
         ]);
       }
+      setLoading(false);
     })();
+    return () => { cancelled = true; };
   }, [noteId]);
 
   const save = async (t?: string, ct?: string) => {
@@ -81,6 +86,14 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       return before + syntax + after;
     });
   };
+
+  if (loading) {
+    return (
+      <View style={[s.container, { backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator color={accentColor} size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={[s.container, { backgroundColor: c.bg }]}>

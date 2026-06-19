@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert,
 } from 'react-native';
@@ -11,9 +11,12 @@ export default function NotesScreen({ navigation }: any) {
   const [notes, setNotes] = useState<DbNote[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    const currentId = ++requestIdRef.current;
     const data = search ? await searchNotes(search) : await getNotes();
+    if (requestIdRef.current !== currentId) return; // stale, discard
     setNotes(data);
     setLoading(false);
   }, [search]);

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity,
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet,
@@ -8,6 +8,22 @@ import { chat, parseSSEStream, ChatMessage } from '../api/client';
 import { getMessages, addMessage, updateMessage, createSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; }
+
+const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }: {
+  item: Msg; isDark: boolean; accentColor: string;
+}) {
+  const c = getColors(isDark, accentColor);
+  return (
+    <View style={[s.bubble, item.role === 'user'
+      ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
+      : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
+      <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
+        {item.content || (item.streaming ? '思考中...' : '')}
+        {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
+      </Text>
+    </View>
+  );
+});
 
 export default function ChatScreen({ navigation }: any) {
   const { isDark, accentColor, apiBase, apiKey, model } = useAppStore();
@@ -43,8 +59,8 @@ export default function ChatScreen({ navigation }: any) {
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
     setMsgs(prev => [...prev, userMsg]);
 
-    // Prepare AI message placeholder
-    const aiId = `stream-${Date.now()}`;
+    // Save AI placeholder to DB upfront — stable id, no key change later
+    const aiId = await addMessage(sessionId, 'assistant', '');
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
@@ -68,14 +84,26 @@ export default function ChatScreen({ navigation }: any) {
         }
       });
 
-      // Save AI message to DB
-      const savedId = await addMessage(sessionId, 'assistant', full);
-      setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, id: savedId, streaming: false } : m));
+      // Persist streamed content — separate try-catch so UI content is preserved on failure
+      try {
+        await updateMessage(aiId, full);
+      } catch {
+        // DB save failed; content stays in UI, user still sees the response
+      }
+      setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
     } catch (err: any) {
+      // Save whatever partial content was received before the error
+      const partial = msgsRef.current.find(m => m.id === aiId)?.content ?? '';
+      if (partial) {
+        try { await updateMessage(aiId, partial); } catch { /* best-effort */ }
+      }
       if (err.name === 'AbortError') {
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
       } else {
-        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: `❌ ${err.message}`, streaming: false } : m));
+        // Append error marker without discarding streamed content
+        setMsgs(prev => prev.map(m => m.id === aiId
+          ? { ...m, content: m.content ? `${m.content}\n\n❌ ${err.message}` : `❌ ${err.message}`, streaming: false }
+          : m));
       }
     } finally {
       setStreaming(false);
@@ -95,24 +123,13 @@ export default function ChatScreen({ navigation }: any) {
     );
   }
 
-  const renderMsg = ({ item }: { item: Msg }) => (
-    <View style={[s.bubble, item.role === 'user'
-      ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
-      : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
-      <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
-        {item.content || (item.streaming ? '思考中...' : '')}
-        {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
-      </Text>
-    </View>
-  );
-
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
       {/* Message list */}
       <FlatList
         ref={listRef}
         data={msgs}
-        renderItem={renderMsg}
+        renderItem={({ item }) => <MessageBubble item={item} isDark={isDark} accentColor={accentColor} />}
         keyExtractor={item => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}

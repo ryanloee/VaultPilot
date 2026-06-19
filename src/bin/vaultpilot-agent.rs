@@ -186,9 +186,7 @@ fn main() {
                 let response = AgentResponse::error(
                     String::new(),
                     "invalid_encoding",
-                    vaultpilot_lib::sanitize_error(&format!(
-                        "invalid UTF-8 in request: {e}"
-                    )),
+                    vaultpilot_lib::sanitize_error(&format!("invalid UTF-8 in request: {e}")),
                 );
                 if let Ok(serialized) = serde_json::to_string(&response) {
                     let _ = writeln!(stdout, "{serialized}");

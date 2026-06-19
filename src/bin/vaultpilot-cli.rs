@@ -1476,7 +1476,10 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                 ));
             }
             let line = std::str::from_utf8(&buf).map_err(|e| {
-                anyhow::anyhow!("{}", vaultpilot_lib::sanitize_error(&format!("invalid UTF-8 in request: {e}")))
+                anyhow::anyhow!(
+                    "{}",
+                    vaultpilot_lib::sanitize_error(&format!("invalid UTF-8 in request: {e}"))
+                )
             })?;
             // Strip trailing \r\n or \n for consistent handling across platforms.
             let line = line.trim_end_matches('\n').trim_end_matches('\r');

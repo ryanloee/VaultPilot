@@ -124,24 +124,22 @@ fn main() {
             if want == 0 {
                 // Already at limit — drain byte-by-byte until newline.
                 exceeded = true;
-                match stdin.lock().read_exact(&mut chunk_buf[..1]) {
-                    Ok(()) => {}
-                    Err(_) => break,
+                match stdin.lock().read(&mut chunk_buf[..1]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
                 }
                 if chunk_buf[0] == b'\n' {
                     break;
                 }
                 continue;
             }
-            match stdin.lock().read_exact(&mut chunk_buf[..want]) {
-                Ok(()) => {}
-                Err(_) => {
-                    // EOF or read error
-                    break 'read;
-                }
-            }
+            let n = match stdin.lock().read(&mut chunk_buf[..want]) {
+                Ok(0) => break 'read, // EOF
+                Ok(n) => n,
+                Err(_) => break 'read,
+            };
             // Scan the chunk for newline.
-            if let Some(nl_pos) = chunk_buf[..want].iter().position(|&b| b == b'\n') {
+            if let Some(nl_pos) = chunk_buf[..n].iter().position(|&b| b == b'\n') {
                 let end = nl_pos + 1; // include the newline
                 let room = MAX_LINE_BYTES - stdin_buf.len();
                 let take = end.min(room);
@@ -149,7 +147,7 @@ fn main() {
                 break 'read;
             }
             // No newline found in this chunk — append the whole thing.
-            stdin_buf.extend_from_slice(&chunk_buf[..want]);
+            stdin_buf.extend_from_slice(&chunk_buf[..n]);
         }
         if stdin_buf.is_empty() && !exceeded {
             break; // EOF

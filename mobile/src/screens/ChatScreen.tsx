@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity,
-  KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet,
+  KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet, Alert,
 } from 'react-native';
 import { useAppStore, getColors } from '../store';
 import { chat, parseSSEStream, ChatMessage } from '../api/client';
@@ -24,9 +24,15 @@ export default function ChatScreen({ navigation }: any) {
   // Init session
   useEffect(() => {
     (async () => {
-      const id = await createSession('新对话');
-      setSessionId(id);
-      setLoading(false);
+      try {
+        const id = await createSession('新对话');
+        setSessionId(id);
+      } catch (e) {
+        console.warn('[Chat] createSession failed:', e);
+        Alert.alert('创建会话失败', String(e));
+      } finally {
+        setLoading(false);
+      }
     })();
   }, []);
 
@@ -36,10 +42,17 @@ export default function ChatScreen({ navigation }: any) {
   const send = useCallback(async () => {
     if (!input.trim() || streaming || !sessionId) return;
     const userText = input.trim();
-    setInput('');
 
-    // Add user message
-    const userId = await addMessage(sessionId, 'user', userText);
+    // Add user message — only clear input after persistence succeeds
+    let userId: string;
+    try {
+      userId = await addMessage(sessionId, 'user', userText);
+    } catch (e) {
+      console.warn('[Chat] addMessage failed:', e);
+      Alert.alert('发送失败', String(e));
+      return;
+    }
+    setInput('');
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
     setMsgs(prev => [...prev, userMsg]);
 

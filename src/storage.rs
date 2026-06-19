@@ -293,12 +293,11 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
             .with_context(|| format!("failed to parse {}", paths.settings_path.display()))?;
 
         // Decrypt API key if it was stored encrypted.
+        // #867: Propagate decryption errors so callers can distinguish
+        // between "no key" and "key present but undecryptable".
         if !parsed.provider.api_key.is_empty() {
             parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
-                .unwrap_or_else(|e| {
-                    warn!(error = %e, "failed to decrypt API key, using raw value");
-                    parsed.provider.api_key.clone()
-                });
+                .context("Failed to decrypt stored API key — the machine key may have changed. Please re-enter your API key in Settings")?;
         }
 
         normalize_settings(&mut parsed, paths);

@@ -3,9 +3,10 @@ import { StatusBar, useColorScheme } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useAppStore } from './src/store';
+import { useAppStore, ThemeMode } from './src/store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
+import { getSettings } from './src/api/client';
 
 import ChatScreen from './src/screens/ChatScreen';
 import NotesScreen from './src/screens/NotesScreen';
@@ -66,21 +67,28 @@ export default function App() {
   useEffect(() => {
     (async () => {
       await getDb(); // Initialize database
-      const saved = await AsyncStorage.getItem('app_settings');
-      if (saved) {
-        const s = JSON.parse(saved);
-        if (s.themeMode) {
-          useAppStore.getState().setThemeMode(s.themeMode);
-          if (s.themeMode === 'system') {
+      try {
+        // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
+        const apiSettings = await getSettings();
+        useAppStore.getState().setApiSettings(apiSettings);
+
+        // Load theme settings from cfg_* keys
+        const [savedTheme, savedColor] = await Promise.all([
+          AsyncStorage.getItem('cfg_theme_mode'),
+          AsyncStorage.getItem('cfg_accent_color'),
+        ]);
+        if (savedTheme) {
+          const mode = savedTheme as ThemeMode;
+          useAppStore.getState().setThemeMode(mode);
+          if (mode === 'system') {
             setIsDark(systemScheme === 'dark');
           } else {
-            setIsDark(s.themeMode === 'dark');
+            setIsDark(mode === 'dark');
           }
         }
-        if (s.accentColor) useAppStore.getState().setAccentColor(s.accentColor);
-        if (s.apiBase) useAppStore.getState().setApiSettings({ apiBase: s.apiBase });
-        if (s.apiKey) useAppStore.getState().setApiSettings({ apiKey: s.apiKey });
-        if (s.model) useAppStore.getState().setApiSettings({ model: s.model });
+        if (savedColor) useAppStore.getState().setAccentColor(savedColor);
+      } catch (e) {
+        console.warn('[App] Failed to load settings:', e);
       }
     })();
   }, []);

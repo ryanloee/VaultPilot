@@ -65,7 +65,14 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const handleDelete = () => {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: async () => { await deleteNote(noteId); navigation.goBack(); } },
+      { text: '删除', style: 'destructive', onPress: async () => {
+        try {
+          await deleteNote(noteId);
+          navigation.goBack();
+        } catch (e) {
+          Alert.alert('删除失败', String(e));
+        }
+      } },
     ]);
   };
 

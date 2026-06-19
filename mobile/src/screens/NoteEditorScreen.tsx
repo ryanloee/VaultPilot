@@ -102,10 +102,14 @@ export default function NoteEditorScreen({ route, navigation }: any) {
 
   const insertFormat = (syntax: string) => {
     const { start, end } = selectionRef.current;
+    const isPrefix = syntax.endsWith(' ');
     setContent(prev => {
       const before = prev.slice(0, start);
+      const selected = prev.slice(start, end);
       const after = prev.slice(end);
-      return before + syntax + after;
+      return isPrefix
+        ? before + syntax + selected + after
+        : before + syntax + selected + syntax + after;
     });
   };
 

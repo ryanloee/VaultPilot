@@ -42,12 +42,13 @@ export default function SettingsScreen() {
 
   const saveAll = async () => {
     try {
-      store.setApiSettings({ apiBase, apiKey, model });
       await Promise.all([
         saveSettings({ apiBase, apiKey, model }),
         AsyncStorage.setItem(THEME_KEY, store.themeMode),
         AsyncStorage.setItem(ACCENT_KEY, store.accentColor),
       ]);
+      // Update store only after persistence succeeds — avoid state inconsistency on failure
+      store.setApiSettings({ apiBase, apiKey, model });
       Alert.alert('已保存', '设置已保存');
     } catch (e: any) {
       Alert.alert('保存失败', e.message || '请重试');

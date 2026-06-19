@@ -41,15 +41,17 @@ export default function SettingsScreen() {
   }, []);
 
   const saveAll = async () => {
-    store.setApiSettings({ apiBase, apiKey, model });
-    await Promise.all([
-      // Use the same cfg_* keys that client.ts reads
-      saveSettings({ apiBase, apiKey, model }),
-      // Theme settings stored under dedicated keys
-      AsyncStorage.setItem(THEME_KEY, store.themeMode),
-      AsyncStorage.setItem(ACCENT_KEY, store.accentColor),
-    ]);
-    Alert.alert('已保存', '设置已保存');
+    try {
+      store.setApiSettings({ apiBase, apiKey, model });
+      await Promise.all([
+        saveSettings({ apiBase, apiKey, model }),
+        AsyncStorage.setItem(THEME_KEY, store.themeMode),
+        AsyncStorage.setItem(ACCENT_KEY, store.accentColor),
+      ]);
+      Alert.alert('已保存', '设置已保存');
+    } catch (e: any) {
+      Alert.alert('保存失败', e.message || '请重试');
+    }
   };
 
   const testConnection = async () => {

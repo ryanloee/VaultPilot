@@ -1415,6 +1415,7 @@ fn build_chat_turn(
         thinking_trace: answer.and_then(|item| item.thinking_trace.clone()),
         attachments: attachments.to_vec(),
         created_at: Utc::now().to_rfc3339(),
+        source: String::new(),
     }
 }
 

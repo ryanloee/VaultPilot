@@ -47,6 +47,11 @@ public sealed record AppSettings
     public string AutoWakeModel { get; init; } = string.Empty;
     public string AutoWakeStartTime { get; init; } = string.Empty;
     public string AutoWakeEndTime { get; init; } = string.Empty;
+    /// <summary>
+    /// Prompt sent to the AI when the auto-wake timer fires (#861).
+    /// If empty, a default prompt is used.
+    /// </summary>
+    public string AutoWakePrompt { get; init; } = string.Empty;
 
     [JsonConstructor]
     public AppSettings() { }
@@ -59,7 +64,8 @@ public sealed record AppSettings
         ulong AutoWakeIntervalMinutes,
         string AutoWakeModel,
         string AutoWakeStartTime,
-        string AutoWakeEndTime)
+        string AutoWakeEndTime,
+        string? AutoWakePrompt = null)
     {
         this.VaultDir = VaultDir ?? string.Empty;
         this.Provider = Provider ?? new ProviderConfig();
@@ -69,5 +75,6 @@ public sealed record AppSettings
         this.AutoWakeModel = AutoWakeModel ?? string.Empty;
         this.AutoWakeStartTime = AutoWakeStartTime ?? string.Empty;
         this.AutoWakeEndTime = AutoWakeEndTime ?? string.Empty;
+        this.AutoWakePrompt = AutoWakePrompt ?? string.Empty;
     }
 }

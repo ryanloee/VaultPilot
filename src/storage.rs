@@ -5181,6 +5181,7 @@ mod tests {
             auto_wake_model: "claude-3-5-haiku-latest".to_string(),
             auto_wake_start_time: "05:00".to_string(),
             auto_wake_end_time: "23:00".to_string(),
+            auto_wake_prompt: String::new(),
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

@@ -20,17 +20,26 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const note = await getNote(noteId);
-      if (cancelled) return;
-      if (note) {
-        setTitle(note.title);
-        setContent(note.content);
-      } else {
-        Alert.alert('笔记不存在', '该笔记可能已被删除', [
+      try {
+        const note = await getNote(noteId);
+        if (cancelled) return;
+        if (note) {
+          setTitle(note.title);
+          setContent(note.content);
+        } else {
+          Alert.alert('笔记不存在', '该笔记可能已被删除', [
+            { text: '返回', onPress: () => navigation.goBack() },
+          ]);
+        }
+      } catch (e: any) {
+        if (cancelled) return;
+        Alert.alert('加载失败', e.message || '请重试', [
           { text: '返回', onPress: () => navigation.goBack() },
         ]);
+        return;
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [noteId]);

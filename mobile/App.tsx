@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { StatusBar, useColorScheme, Alert } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { StatusBar, useColorScheme, View, Text, ActivityIndicator } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -63,17 +63,20 @@ export default function App() {
   const { isDark, setIsDark, themeMode, accentColor } = useAppStore();
   const systemScheme = useColorScheme();
   const loadedRef = useRef(false);
+  const [dbReady, setDbReady] = useState(false);
+  const [dbError, setDbError] = useState<string | null>(null);
 
   // Load saved settings on startup
   useEffect(() => {
     (async () => {
       try {
         await getDb(); // Initialize database
-      } catch (e) {
+      } catch (e: any) {
         console.error('[App] DB init failed:', e);
-        Alert.alert('数据库错误', '数据库初始化失败，请重启应用');
+        setDbError(e.message ?? '数据库初始化失败');
         return;
       }
+      setDbReady(true);
       try {
         // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
         const apiSettings = await getSettings();
@@ -107,6 +110,25 @@ export default function App() {
       setIsDark(systemScheme === 'dark');
     }
   }, [systemScheme, themeMode]);
+
+  if (dbError) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF' }}>
+        <Text style={{ color: '#EF4444', fontSize: 16, textAlign: 'center', paddingHorizontal: 32 }}>
+          数据库初始化失败：{dbError}
+        </Text>
+        <Text style={{ color: isDark ? '#9CA3AF' : '#6B7280', marginTop: 8 }}>请重启应用重试</Text>
+      </View>
+    );
+  }
+
+  if (!dbReady) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF' }}>
+        <ActivityIndicator size="large" color={accentColor} />
+      </View>
+    );
+  }
 
   return (
     <>

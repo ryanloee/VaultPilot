@@ -53,9 +53,9 @@ function uuid(): string {
   return crypto.randomUUID();
 }
 
-/** Escape SQL LIKE special characters (%, _, [, ]) so they match literally. */
+/** Escape SQL LIKE special characters (%, _, \) so they match literally. */
 function escapeLikePattern(pattern: string): string {
-  return pattern.replace(/[%_\[\]]/g, ch => `[${ch}]`);
+  return pattern.replace(/[\\%_]/g, ch => `\\${ch}`);
 }
 
 export interface DbSession {
@@ -106,7 +106,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
   return db.getAllAsync<DbSession>(
     `SELECT DISTINCT s.* FROM sessions s
      LEFT JOIN messages m ON s.id = m.session_id
-     WHERE s.title LIKE ? OR m.content LIKE ?
+     WHERE s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\'
      ORDER BY s.updated_at DESC LIMIT 50`,
     [`%${escaped}%`, `%${escaped}%`]
   );
@@ -190,7 +190,7 @@ export async function searchNotes(query: string): Promise<DbNote[]> {
   const db = await getDb();
   const escaped = escapeLikePattern(query);
   return db.getAllAsync<DbNote>(
-    'SELECT * FROM notes WHERE title LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 50',
+    "SELECT * FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50",
     [`%${escaped}%`, `%${escaped}%`]
   );
 }

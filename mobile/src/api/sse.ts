@@ -113,7 +113,9 @@ export async function parseSSEStreamWithReconnect(
       const res = await fetch(url, { ...fetchInit, signal: options?.signal });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        throw new Error(`API ${res.status}: ${text}`);
+        const err: any = new Error(`API ${res.status}: ${text}`);
+        err.status = res.status;
+        throw err;
       }
       if (!res.body) throw new Error('No response body');
 
@@ -121,6 +123,9 @@ export async function parseSSEStreamWithReconnect(
       return; // Success
     } catch (err: any) {
       if (err.name === 'AbortError') throw err;
+
+      // Don't retry client errors (4xx) — they won't succeed on retry
+      if (err.status >= 400 && err.status < 500) throw err;
 
       if (attempt < maxRetries) {
         const delay = baseDelay * Math.pow(2, attempt);

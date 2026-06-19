@@ -1035,10 +1035,11 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
 
     let content = fs::read_to_string(&file_path)?;
     let total_bytes = content.len();
+    let total_chars = content.chars().count();
     let total_lines = content.lines().count();
 
     // If content fits within both limits, return as-is (no truncation needed).
-    if total_bytes <= READ_FILE_MAX_CHARS && total_lines <= READ_FILE_MAX_LINES {
+    if total_chars <= READ_FILE_MAX_CHARS && total_lines <= READ_FILE_MAX_LINES {
         return Ok(format!(
             "read_file returned content for {}:\n{}",
             display, content
@@ -1068,8 +1069,14 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
             (0usize, String::new(), &lines[..head_count], &lines[0..0])
         };
 
-    let shown_chars: usize = effective_head.iter().map(|l| l.len()).sum::<usize>()
-        + effective_tail.iter().map(|l| l.len()).sum::<usize>();
+    let shown_chars: usize = effective_head
+        .iter()
+        .map(|l| l.chars().count())
+        .sum::<usize>()
+        + effective_tail
+            .iter()
+            .map(|l| l.chars().count())
+            .sum::<usize>();
 
     let mut output = format!(
         "read_file returned content for {} ({} bytes, {} lines total):\n",
@@ -1083,11 +1090,11 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
         output.push_str(&format!(
             "\n... [{skipped_lines} lines / {skipped_chars} chars omitted — showing {} of {} total chars; first {head_lines} and last {tail_lines} lines kept] ...\n\n",
             shown_chars,
-            total_bytes,
+            total_chars,
             head_lines = READ_FILE_HEAD_LINES,
             tail_lines = READ_FILE_TAIL_LINES,
             skipped_lines = skipped_lines,
-            skipped_chars = skipped_content.len(),
+            skipped_chars = skipped_content.chars().count(),
         ));
         for line in effective_tail {
             output.push_str(line);
@@ -1692,10 +1699,11 @@ mod tests {
         estimate_tokens_for_text, estimate_turn_tokens, extract_explicit_local_path,
         has_matching_tool_execution, list_directory_result, looks_like_record_request,
         looks_like_session_memory_question, looks_like_small_talk, merge_usage,
-        normalize_tool_path, planned_tool_identity, require_saved_note_for_record_request,
-        resolve_or_create_chat_session, sanitize_error, summarize_docs_for_tool_result,
-        truncate_for_trace, ChatAttachment, ChatSession, ChatState, ChatTurn, ConversationSummary,
-        ThinkingTrace, ToolExecution, IMAGE_ONLY_PROMPT, OCR_SECTION_HEADER,
+        normalize_tool_path, planned_tool_identity, read_file_result,
+        require_saved_note_for_record_request, resolve_or_create_chat_session, sanitize_error,
+        summarize_docs_for_tool_result, truncate_for_trace, ChatAttachment, ChatSession, ChatState,
+        ChatTurn, ConversationSummary, ThinkingTrace, ToolExecution, IMAGE_ONLY_PROMPT,
+        OCR_SECTION_HEADER,
     };
     use crate::ai::{AssistantToolCall, RequestUsage};
     use crate::models::{GroundedAnswer, NoteDocument, NoteMeta, StructuredNoteDraft};
@@ -3166,6 +3174,41 @@ mod tests {
         ));
         let _ctx = crate::storage::StorageContext::for_test(&temp);
         // Just verify it creates without panic
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    // ── 2.24 read_file_result CJK character counting ──
+
+    #[test]
+    fn read_file_result_cjk_not_prematurely_truncated() {
+        // Create a temp vault dir and a CJK file with 30,000 Chinese characters
+        // (≈90,000 bytes in UTF-8). The old code used .len() (bytes) which would
+        // truncate at ~16,667 chars. The fix uses .chars().count() so 30K chars
+        // should fit within the 50K char limit.
+        let temp = env::temp_dir().join(format!(
+            "vaultpilot-cjk-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let vault = temp.join("vault");
+        fs::create_dir_all(&vault).unwrap();
+        // 30,000 CJK chars — each is 3 bytes in UTF-8 = 90,000 bytes
+        let cjk_content: String = "中文测试".repeat(7_500); // 7500 × 4 = 30,000 chars
+        let file_path = vault.join("cjk-note.md");
+        fs::write(&file_path, &cjk_content).unwrap();
+
+        let result = read_file_result(file_path.to_str().unwrap(), &vault).unwrap();
+
+        // Should contain the full content (not truncated) since 30K chars < 50K limit
+        assert!(
+            !result.contains("omitted"),
+            "CJK file with 30K chars should NOT be truncated (90K bytes), but got: {}",
+            &result[result.len().saturating_sub(200)..]
+        );
+        assert!(result.contains("中文测试"));
+
         let _ = fs::remove_dir_all(&temp);
     }
 }

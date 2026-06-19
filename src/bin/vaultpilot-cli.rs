@@ -351,11 +351,12 @@ struct HttpBridgeState {
     token: Option<String>,
 }
 
-/// Simple per-key fixed-window rate limiter.
+/// Simple per-key fixed-window rate limiter with bounded memory.
 struct RateLimiter {
     entries: std::sync::Mutex<HashMap<String, (u32, Instant)>>,
     max_requests: u32,
     window: std::time::Duration,
+    max_entries: usize,
 }
 
 impl RateLimiter {
@@ -364,6 +365,7 @@ impl RateLimiter {
             entries: std::sync::Mutex::new(HashMap::new()),
             max_requests,
             window,
+            max_entries: 10_000,
         }
     }
 
@@ -381,6 +383,18 @@ impl RateLimiter {
         // Purge entries older than 2 window durations to prevent unbounded growth.
         let stale_threshold = self.window * 2;
         entries.retain(|_, (_, last)| now.duration_since(*last) < stale_threshold);
+
+        // Evict oldest entries if we exceed max_entries to prevent OOM from spoofed IPs.
+        if entries.len() >= self.max_entries {
+            // Find and remove the entry with the oldest last-access timestamp.
+            if let Some(oldest_key) = entries
+                .iter()
+                .min_by_key(|(_, (_, last))| *last)
+                .map(|(k, _)| k.clone())
+            {
+                entries.remove(&oldest_key);
+            }
+        }
 
         let entry = entries.entry(key.to_string()).or_insert((0, now));
 
@@ -1428,28 +1442,43 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
             use tokio::io::AsyncReadExt;
             let mut buf = Vec::new();
             let mut exceeded = false;
-            loop {
-                let mut byte = [0u8; 1];
-                match reader.read_exact(&mut byte).await {
-                    Ok(_) => {}
-                    Err(_) => {
-                        // EOF or read error
-                        break;
-                    }
-                }
-                if buf.len() >= MAX_MCP_LINE_BYTES {
+            // Read in 8 KB chunks instead of byte-by-byte to reduce
+            // syscall count from O(n) to O(n/8192) (#907).
+            const CHUNK_SIZE: usize = 8 * 1024;
+            let mut chunk_buf = [0u8; CHUNK_SIZE];
+            'read: loop {
+                // Determine how many bytes we can still accept.
+                let capacity_left = MAX_MCP_LINE_BYTES.saturating_sub(buf.len());
+                let want = capacity_left.min(CHUNK_SIZE);
+                if want == 0 {
+                    // Already at limit — drain byte-by-byte until newline.
                     exceeded = true;
-                    // Keep draining until newline so the stream stays in sync
-                    // for the next request, but don't buffer the excess.
-                    if byte[0] == b'\n' {
+                    match reader.read_exact(&mut chunk_buf[..1]).await {
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                    if chunk_buf[0] == b'\n' {
                         break;
                     }
                     continue;
                 }
-                buf.push(byte[0]);
-                if byte[0] == b'\n' {
-                    break;
+                match reader.read_exact(&mut chunk_buf[..want]).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        // EOF or read error
+                        break 'read;
+                    }
                 }
+                // Scan the chunk for newline.
+                if let Some(nl_pos) = chunk_buf[..want].iter().position(|&b| b == b'\n') {
+                    let end = nl_pos + 1; // include the newline
+                    let room = MAX_MCP_LINE_BYTES - buf.len();
+                    let take = end.min(room);
+                    buf.extend_from_slice(&chunk_buf[..take]);
+                    break 'read;
+                }
+                // No newline found — append the whole chunk.
+                buf.extend_from_slice(&chunk_buf[..want]);
             }
             if buf.is_empty() && !exceeded {
                 return Ok(None); // EOF
@@ -1460,7 +1489,12 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                     MAX_MCP_LINE_BYTES / (1024 * 1024)
                 ));
             }
-            let line = String::from_utf8_lossy(&buf);
+            let line = std::str::from_utf8(&buf).map_err(|e| {
+                anyhow::anyhow!(
+                    "{}",
+                    vaultpilot_lib::sanitize_error(&format!("invalid UTF-8 in request: {e}"))
+                )
+            })?;
             // Strip trailing \r\n or \n for consistent handling across platforms.
             let line = line.trim_end_matches('\n').trim_end_matches('\r');
             Ok::<_, anyhow::Error>(Some(line.to_string()))

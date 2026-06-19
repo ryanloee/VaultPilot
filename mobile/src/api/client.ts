@@ -1,6 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
+// Re-export unified SSE types from sse.ts (single implementation)
+export type { StreamChunk } from './sse';
+export { parseSSEStream } from './sse';
+
 // Settings keys
 const KEYS = {
   apiBase: 'cfg_api_base',
@@ -33,6 +37,9 @@ async function setApiKey(value: string): Promise<void> {
   }
 }
 
+/** Chat request timeout in ms (2 minutes) */
+const CHAT_TIMEOUT_MS = 120_000;
+
 // ── Settings ──────────────────────────────────────────────
 export async function getSettings() {
   const [base, key, model] = await Promise.all([
@@ -55,6 +62,38 @@ export async function saveSettings(s: { apiBase?: string; apiKey?: string; model
   await Promise.all(ops);
 }
 
+// ── Error Sanitization ───────────────────────────────────
+const STATUS_MESSAGES: Record<number, string> = {
+  400: '请求格式错误',
+  401: 'API Key 无效或已过期',
+  403: '访问被拒绝，请检查权限',
+  404: '请求的资源不存在',
+  408: '请求超时，请稍后重试',
+  429: '请求过于频繁，请稍后重试',
+  500: '服务器内部错误',
+  502: '服务暂时不可用',
+  503: '服务暂时不可用，请稍后重试',
+  504: '服务响应超时，请稍后重试',
+};
+
+function sanitizeApiError(status: number, rawBody: string): string {
+  // Log full error in development for debugging
+  if (__DEV__) {
+    console.warn(`[API Error ${status}]`, rawBody);
+  }
+  const friendly = STATUS_MESSAGES[status];
+  if (friendly) return `API 错误 (${status}): ${friendly}`;
+  if (status >= 500) return `API 错误 (${status}): 服务端异常，请稍后重试`;
+  if (status >= 400) return `API 错误 (${status}): 请求有误，请检查参数`;
+  return `API 错误 (${status})`;
+}
+
+// ── API Base Normalization ────────────────────────────────
+/** Ensure apiBase ends with /v1 for consistent path construction */
+function normalizeApiBase(raw: string): string {
+  return raw.replace(/\/+$/, '').replace(/\/v1$/, '') + '/v1';
+}
+
 // ── Chat ──────────────────────────────────────────────────
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -68,56 +107,65 @@ export async function chat(
   const { apiBase, apiKey, model } = await getSettings();
   if (!apiKey) throw new Error('请先在设置中填写 API Key');
 
-  const res = await fetch(`${apiBase}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({ model, messages, stream: true }),
-    signal,
-  });
+  const base = normalizeApiBase(apiBase);
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`API ${res.status}: ${text}`);
+  // Combine user signal with timeout
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  if (signal) {
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
   }
-  if (!res.body) throw new Error('No response body');
-  return res.body;
-}
 
-// ── SSE Parser ────────────────────────────────────────────
-export interface StreamChunk {
-  content?: string;
-  done: boolean;
-}
-
-export async function readStream(
-  stream: ReadableStream<Uint8Array>,
-  onChunk: (c: StreamChunk) => void
-): Promise<void> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
   try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const data = line.slice(6).trim();
-        if (data === '[DONE]') { onChunk({ done: true }); return; }
-        try {
-          const delta = JSON.parse(data).choices?.[0]?.delta;
-          if (delta?.content) onChunk({ content: delta.content, done: false });
-        } catch {}
-      }
+    // Try streaming first; fall back to non-streaming on 400
+    // (VaultPilot HTTP bridge doesn't support stream=true yet)
+    let res = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model, messages, stream: true }),
+      signal: controller.signal,
+    });
+
+    if (res.status === 400) {
+      res = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ model, messages, stream: false }),
+        signal: controller.signal,
+      });
     }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(sanitizeApiError(res.status, text));
+    }
+
+    // If non-streaming fallback, wrap JSON response as a single-chunk SSE stream
+    if (!res.headers.get('content-type')?.includes('text/event-stream')) {
+      const json = await res.json();
+      const content = json.choices?.[0]?.message?.content ?? '';
+      const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`);
+      return new ReadableStream({
+        start(controller) { controller.enqueue(encoded); controller.close(); },
+      });
+    }
+
+    if (!res.body) throw new Error('No response body');
+    return res.body;
+  } catch (e: any) {
+    clearTimeout(timeout);
+    if (e.name === 'AbortError' && !signal?.aborted) {
+      throw new Error('请求超时（2 分钟），请检查网络或服务端状态');
+    }
+    throw e;
   } finally {
-    reader.releaseLock();
+    clearTimeout(timeout);
   }
 }
 
@@ -126,7 +174,7 @@ export async function checkApi(): Promise<{ ok: boolean; error?: string }> {
   try {
     const { apiBase, apiKey, model } = await getSettings();
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
-    const res = await fetch(`${apiBase}/models`, {
+    const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(8000),
     });

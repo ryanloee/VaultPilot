@@ -889,7 +889,7 @@ pub fn export_all_notes_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let id_prefix: String = meta.id.chars().take(8).collect();
+                let id_prefix = sanitize_id_prefix(&meta.id);
                 let path = output_dir.join(format!("{}-{}.md", filename, id_prefix));
                 match fs::write(&path, &markdown) {
                     Ok(()) => result.exported += 1,
@@ -925,6 +925,15 @@ fn sanitize_filename(title: &str) -> String {
     } else {
         slug
     }
+}
+
+/// Sanitize a note ID prefix for safe use in file/ZIP entry names (#901).
+/// Strips path traversal characters (`.`, `/`, `\`) to prevent Zip Slip attacks.
+fn sanitize_id_prefix(id: &str) -> String {
+    id.chars()
+        .take(8)
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect()
 }
 
 #[instrument(skip(context))]
@@ -3384,7 +3393,7 @@ pub fn vault_export_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let id_prefix: String = meta.id.chars().take(8).collect();
+                let id_prefix = sanitize_id_prefix(&meta.id);
                 let entry_name = format!("notes/{}-{}.md", filename, id_prefix);
                 zip.start_file(entry_name, options)?;
                 std::io::Write::write_all(&mut zip, markdown.as_bytes())?;

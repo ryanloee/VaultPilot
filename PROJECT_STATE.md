@@ -1901,3 +1901,109 @@
 - 审核结果: PR #871 仍 OPEN (cargo fmt/clippy 失败待作者修复), #867 和 #868 仍 OPEN
 - 项目状态: **2 open issue (#867, #868) + 2 new (#874, #875), 1 open PR (#871 待格式修复), 362 已合并 PR, 403 Rust 测试全通过, v0.3.1 已发布**
 - 代码审查: 3 路并行深度审查 crypto.rs (342行) + models.rs+C# (1665行) + XAML (743行) = ~2.8K行。发现 1 个 MEDIUM SECURITY (macOS machine-id) 和 1 个 MEDIUM UI (XAML 无障碍) 并创建 issue。C# NoteDocument SearchSnippet 缺失经核实为非问题。代码库经过 221 个审查循环和 362 个已合并 PR 后维持极高成熟度。
+
+- 2026-06-19 [PR审核轮#109]: 审核 4 个 open PR
+  - #904 SSE trim → 合并（Rust CI 6/6 pass，build-android EXPO_TOKEN 基础设施问题）
+  - #905 search_rules 大小写归一化 → 留言要求 cargo fmt 修复
+  - #899 SecureStore API Key → 留言要求更新 package-lock.json
+  - #871 crypto decrypt 错误处理 → 留言要求 cargo fmt + clippy 修复
+- 2026-06-19 [PR审核轮#109]: 发版 v0.3.2（6 PRs since v0.3.1: #906 Zip Slip, #900 SSE统一, #904 SSE trim, #898 CJK截断, #876 macOS ID, #877 无障碍）
+- 2026-06-19 [PR审核轮#109]: GitHub Release https://github.com/ryanloee/VaultPilot/releases/tag/v0.3.2
+
+## 循环#222 讨论阶段状态
+- 时间: 2026-06-19
+- 重点: 移动端积压清理 + 竞品分析 + PR 分类
+- 关闭重复/已修复 issue: 13 个
+  - 已修复未关闭: #915, #933 (PR #950), #944, #953 (PR #952), #935 (PR #951)
+  - 重复 package.json 依赖: #963-#970, #948 (合并到 #916)
+  - 重复安全 issue: #947, #957 (合并到 #894)
+- 创建 issue: #985 (App.tsx 启动设置路径回归 — PR #950 后遗症)
+- PR 状态:
+  - #899 SecureStore: Rust CI 6/6 pass, build-android fail (lockfile 缺 expo-secure-store)
+  - #910 agent UTF-8: cargo fmt + clippy fail (trivially-true test)
+  - #871 crypto decrypt: cargo fmt + clippy fail (needless borrow)
+- 竞品: Obsidian Copilot v3.3.3 稳定, v4 Agent Mode 预览 (ACP 协议, CLI agent 集成)
+- Open issue: 53 (从 65 降至 53)
+
+## 本轮循环状态 (循环#222)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#222
+- 本轮时间: 2026-06-19
+- 审查模块: mobile 全量 (App.tsx, ChatScreen, NotesScreen, NoteEditorScreen, SettingsScreen, store.ts, client.ts, sse.ts, db.ts, package.json, app.json ~935行), Rust 后端 HTTP bridge (vaultpilot-cli.rs), storage.rs, ai.rs
+- 竞品调研: Obsidian Copilot v3.3.x (mobile 正式支持, Keychain API key, Agent Mode Plus tier), Notion AI (Custom Agents, Enterprise Search, 完整移动端), Capacities (object-based PKM)
+- 讨论阶段发现:
+  - 6 个新 issue 创建: #982 CRITICAL (stream:true 被后端 400 拒致 chat 完全不可用), #983 HIGH (API 路径 /v1 不匹配), #984 HIGH (send 闭包 stale msgs), #986 PERF (搜索无 debounce), #987 PERF (FlatList 缺优化), #988 BUG (SSE spec 不合规), #989 BUG (insertFormat 追加末尾)
+  - #982 CRITICAL: mobile/client.ts 硬编码 stream:true 但后端 HTTP bridge 拒绝 stream=true (返回 400)。此外后端无 SSE 流式实现。mobile 对话功能完全不可用
+  - #983 HIGH: mobile apiBase 默认 https://api.openai.com/v1，改为 VaultPilot 地址时通常不含 /v1，后端路由在 /v1/* 下导致 404
+  - #984 HIGH: ChatScreen send 闭包捕获 msgs，快速连续发送时 history 使用旧状态
+  - #986 PERF: NotesScreen 搜索每次按键触发 SQL 查询无 debounce
+  - #987 PERF: ChatScreen FlatList 无 keyExtractor/memo/initialNumToRender
+  - #988 BUG: sse.ts parseSSEStream 要求 data: 后有空格，不符合 SSE 规范
+  - #989 BUG: NoteEditorScreen insertFormat 追加到末尾而非光标位置
+  - 已存在 issue 覆盖: API Key 明文 (#894/#947/#957), 缺少依赖 (#948/#963-970), 键盘遮挡 (#959), 无 ErrorBoundary (#961), Zustand 未 persist (#955), 会话创建 (#934), 权限声明 (#920), stale closure (#927), SSE buffer (#935 已修复)
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 3 个 open PR (#910, #899, #871) 均有 CI 失败待作者修复
+- 项目状态: **57 open issue, 3 open PR (CI 待修复), 362+ 已合并 PR, v0.3.3 已发布**
+- 代码审查: 深度审查 mobile 全量 (~935行) + Rust HTTP bridge + storage + ai (~11K行) = ~12K行。发现 1 个 CRITICAL (stream:true 阻塞) 和 2 个 HIGH (路径不匹配 + stale closure) 可操作缺陷并创建 issue。mobile 代码库处于早期阶段 (v0 初版)，基础架构已搭建但存在多个阻塞性 bug。
+
+## 本轮循环状态 (循环#223)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#223
+- 本轮时间: 2026-06-19
+- 审查模块: mobile 全量深度审查 (store.ts 67行, db.ts 192行, sse.ts 148行, ChatScreen.tsx ~150行, NotesScreen.tsx ~100行, NoteEditorScreen.tsx ~130行, SettingsScreen.tsx ~190行, App.tsx ~90行), client.ts API 路径修复 (PR #991), CI/CD workflows
+- 竞品调研: Obsidian Copilot v3.3.3 (Gemini 3.5 Flash 内置, mobile 正式支持, 1.8MB bundle 缩减, CJK 修复) + v4 预览 (Agent Mode ACP 协议, 项目 vault 化, composer diff)。新竞品: Obsidian Agent Client Plugin (开源 MIT, ACP 协议连接 Claude Code/Codex/Gemini CLI, vault 上下文自动注入, 多会话并行)。VaultPilot MCP server + 三端架构是差异化优势。
+- 讨论阶段发现:
+  - 14 个新 issue 创建 (#995-#1008): 3 个 db.ts BUG, 2 个 sse.ts BUG, 3 个 NotesScreen, 2 个 NoteEditorScreen, 1 个 SettingsScreen, 1 个 ChatScreen UX, 1 个 db.ts PERF, 1 个 db.ts uuid
+  - #995 MEDIUM BUG: db.ts getDb() 初始化失败后永久缓存 rejected promise — 应用无法恢复
+  - #996 MEDIUM BUG: db.ts 多语句操作缺少事务保护 — deleteSession/addMessage 崩溃导致数据不一致
+  - #997 MEDIUM BUG: sse.ts AbortSignal 未传播到 reader.read() — 取消可能挂起
+  - #998 MEDIUM BUG: sse.ts parseSSEStreamWithReconnect 重试时重复发出 done:true 信号
+  - #999 LOW-MEDIUM UX: NotesScreen 长按直接删除笔记 — 应改为上下文菜单
+  - #1000 LOW UX: ChatScreen 新对话无空状态引导
+  - #1001 LOW BUG: db.ts escapeLikePattern 未转义 ] 字符
+  - #1002 LOW PERF: db.ts messages 表缺少 session_id 索引
+  - #1003 LOW BUG: NotesScreen DB 操作缺少错误处理
+  - #1004 LOW FEAT: NotesScreen 缺少下拉刷新
+  - #1005 LOW BUG: NoteEditorScreen getNote 返回 null 时静默显示空编辑器
+  - #1006 LOW BUG: NoteEditorScreen save 参数名 c 遮蔽外部颜色变量
+  - #1007 LOW BUG: SettingsScreen saveAll 缺少错误处理
+  - #1008 LOW PERF: db.ts uuid() 使用 Math.random()
+  - PR 状态: 5 个新 PR (#990-#994) 修复 cycle#222 发现的 7 个 issue — Rust CI 6/6 pass, build-android FAILURE (EXPO_TOKEN 基础设施问题), winui-build IN_PROGRESS
+  - 已存在 PR 覆盖: #982/#983 → PR #991, #984 → PR #993, #985 → PR #992, #988 → PR #990, #989 → PR #994
+  - 关键发现: ChatScreen stale msgs (#984) 在 main 上仍未修复（PR #993 未合并）
+  - 403 Rust 测试全通过 (lib:377, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 8 个 open PR (#990-#994 新, #910/#899/#871 旧) — 新 PR Rust CI pass 但 build-android 失败 (基础设施问题非代码问题), 旧 PR CI 待修复
+- 项目状态: **71 open issue (+14), 8 open PR (+5), 362+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
+- 代码审查: 3 路并行深度审查 mobile 全量 (~935行 source + ~750行 screens) = ~1.7K行。发现 14 个新缺陷 (3 MEDIUM BUG + 11 LOW/MEDIUM)。db.ts 是发现最密集的模块 (5 个 issue: 事务缺失、缓存 rejected promise、escapeLikePattern 不完整、缺少索引、uuid 品质)。sse.ts 有 2 个非平凡 bug (abort 传播、重复 done)。mobile 代码库经 223 轮审查后仍在快速迭代中，基础架构稳固但细节需要打磨。
+
+## 本轮循环状态 (循环#224)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#224
+- 本轮时间: 2026-06-19
+- 审查模块: mobile (db.ts, sse.ts, client.ts ~472行), Rust 后端 (ai.rs, storage.rs, vaultpilot-cli.rs ~11K行)
+- 竞品调研: Obsidian Copilot v3.3.3 稳定版 (OS Keychain API key, 官方移动端, Gemini 3.5 Flash 内置, 1.8MB bundle 缩减)。v4 Agent Mode 预览 (ACP 协议, opencode/Claude Code/Codex 集成)。Obsidian Agent Client Plugin (开源 MIT, 2.2k stars, ACP 协议, vault 上下文自动注入)。VaultPilot MCP server + 三端架构是差异化优势，但移动端体验差距明显（Obsidian Copilot 有官方移动端，VaultPilot 移动端仍处于 v0 初版）。
+- 讨论阶段发现:
+  - 移动端代码审查 (db.ts + sse.ts + client.ts ~472行): 发现多个问题但均已被现有 issue 覆盖
+  - db.ts: 事务缺失 (#996), dbPromise 失败缓存 (#995), LIKE 全表扫描 (#954), escapeLikePattern (#1001) — 均已有 issue
+  - sse.ts: reader.cancel() 未调用 (#997), 竞态窗口 (#997), 重复 done (#998) — 均已有 issue
+  - client.ts: API Key 明文 (#894), AbortSignal.timeout 兼容性 (新发现, LOW, backlog 过大不创建 issue)
+  - Rust 后端审查 (ai.rs + storage.rs + vaultpilot-cli.rs ~11K行): 零新缺陷。最近增量变更 (HTTP 500 重试 #930, 分块读取 #909) 实现正确。代码库经 224 轮审查后维持极高成熟度。
+  - 新发现 (未创建 issue, backlog 65 个过大):
+    - db.ts 缺少 WAL 模式设置 — Rust 端已启用 (#230) 但移动端未同步 (LOW)
+    - db.ts 缺少 busy_timeout — Rust 端已设置 (#592) 但移动端未同步 (LOW)
+    - client.ts AbortSignal.timeout() 在 Hermes 引擎可能不兼容 (LOW)
+    - sse.ts SSE 解析不支持多行 data 字段 (LOW)
+- PR 分类和合并:
+  - 合并 5 个就绪 PR: #990 (SSE spec), #991 (API 路径), #992 (App 设置), #993 (stale msgs), #994 (insertFormat) — Rust CI 6/6 pass, build-android 失败为 EXPO_TOKEN 基础设施问题
+  - 剩余 3 个 open PR 有 CI 失败: #910 (fmt+clippy), #899 (lockfile 缺 expo-secure-store), #871 (fmt+clippy)
+- 优先级指导 (65 open issue):
+  - P0 阻塞: #934 (会话创建), #916 (缺少依赖)
+  - P1 安全: #894 (API Key 加密), #899 (PR 待 lockfile 修复)
+  - P1 稳定: #995 (dbPromise), #996 (事务), #997 (abort), #961 (ErrorBoundary)
+  - P2 体验: #959 (键盘遮挡), #938 (自动滚动), #986 (debounce), #987 (FlatList)
+  - P3 增强: #954 (FTS5), #972 (剪贴板), #960 (Markdown 预览)
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: 5 个 PR 合并 (#990-#994), 3 个 open PR 待 CI 修复 (#910, #899, #871)
+- 项目状态: **65 open issue, 3 open PR (CI 待修复), 367+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
+- 代码审查: 3 路并行审查 mobile (~472行) + Rust (~11K行) = ~11.5K行。Rust 后端零新缺陷 (成熟度极高)。mobile 新发现均被现有 issue 覆盖，无新增 issue。backlog 65 个 issue 过大，讨论阶段聚焦 PR 合并和优先级指导。

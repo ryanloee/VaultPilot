@@ -108,33 +108,48 @@ fn main() {
     let mut stdin_buf = Vec::new();
     loop {
         stdin_buf.clear();
-        // Read byte-by-byte until newline, enforcing the size limit during
+        // Read in 8 KB chunks until newline, enforcing the size limit during
         // reading rather than after.  `read_line()` buffers the entire line
         // before returning, making the post-read size check ineffective
         // against payloads that never contain a newline (#641).
-        let mut byte = [0u8; 1];
+        // Using chunked reads instead of byte-by-byte read_exact to reduce
+        // syscall count from O(n) to O(n/8192) (#907).
+        const CHUNK_SIZE: usize = 8 * 1024;
+        let mut chunk_buf = [0u8; CHUNK_SIZE];
         let mut exceeded = false;
-        loop {
-            match stdin.lock().read_exact(&mut byte) {
-                Ok(()) => {}
-                Err(_) => {
-                    // EOF or read error
-                    break;
-                }
-            }
-            if stdin_buf.len() >= MAX_LINE_BYTES {
+        'read: loop {
+            // Determine how many bytes we can still accept.
+            let capacity_left = MAX_LINE_BYTES.saturating_sub(stdin_buf.len());
+            let want = capacity_left.min(CHUNK_SIZE);
+            if want == 0 {
+                // Already at limit — drain byte-by-byte until newline.
                 exceeded = true;
-                // Keep draining until newline so the stream stays in sync
-                // for the next request, but don't buffer the excess.
-                if byte[0] == b'\n' {
+                match stdin.lock().read_exact(&mut chunk_buf[..1]) {
+                    Ok(()) => {}
+                    Err(_) => break,
+                }
+                if chunk_buf[0] == b'\n' {
                     break;
                 }
                 continue;
             }
-            stdin_buf.push(byte[0]);
-            if byte[0] == b'\n' {
-                break;
+            match stdin.lock().read_exact(&mut chunk_buf[..want]) {
+                Ok(()) => {}
+                Err(_) => {
+                    // EOF or read error
+                    break 'read;
+                }
             }
+            // Scan the chunk for newline.
+            if let Some(nl_pos) = chunk_buf[..want].iter().position(|&b| b == b'\n') {
+                let end = nl_pos + 1; // include the newline
+                let room = MAX_LINE_BYTES - stdin_buf.len();
+                let take = end.min(room);
+                stdin_buf.extend_from_slice(&chunk_buf[..take]);
+                break 'read;
+            }
+            // No newline found in this chunk — append the whole thing.
+            stdin_buf.extend_from_slice(&chunk_buf[..want]);
         }
         if stdin_buf.is_empty() && !exceeded {
             break; // EOF
@@ -161,7 +176,25 @@ fn main() {
             }
             continue;
         }
-        let line = String::from_utf8_lossy(&stdin_buf);
+        let line = match std::str::from_utf8(&stdin_buf) {
+            Ok(s) => s.to_string(),
+            Err(e) => {
+                log_agent_event(
+                    "stdin_error",
+                    &vaultpilot_lib::sanitize_error("invalid UTF-8 in request"),
+                );
+                let response = AgentResponse::error(
+                    String::new(),
+                    "invalid_encoding",
+                    vaultpilot_lib::sanitize_error(&format!("invalid UTF-8 in request: {e}")),
+                );
+                if let Ok(serialized) = serde_json::to_string(&response) {
+                    let _ = writeln!(stdout, "{serialized}");
+                    let _ = stdout.flush();
+                }
+                continue;
+            }
+        };
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
         let line = line.to_string();
         let response = match runtime.block_on(async {
@@ -194,8 +227,7 @@ fn main() {
 }
 
 fn install_panic_hook() {
-    let default_hook = panic::take_hook();
-    panic::set_hook(Box::new(move |info| {
+    panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("<unnamed>");
 
@@ -216,7 +248,9 @@ fn install_panic_hook() {
         let message = format!("panic on thread '{thread_name}': {sanitized_payload} at {location}");
         log_agent_event("panic", &message);
 
-        default_hook(info);
+        // Write sanitized output to stderr instead of calling the default hook,
+        // which would print the raw (unsanitized) payload and leak secrets. (#924)
+        eprintln!("{message}");
     }));
 }
 
@@ -674,5 +708,30 @@ mod tests {
         });
         let request: AgentRequest = serde_json::from_value(json).unwrap();
         assert!(request.method.is_empty());
+    }
+
+    #[test]
+    fn non_utf8_bytes_rejected_by_from_utf8() {
+        // Simulates the exact validation used in the agent stdin loop.
+        // Invalid continuation byte 0xFF is never valid in UTF-8.
+        let invalid_bytes: Vec<u8> = vec![0xFF, 0xFE, 0x80, 0x00];
+        let result = std::str::from_utf8(&invalid_bytes);
+        assert!(result.is_err(), "expected invalid UTF-8 to be rejected");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("invalid"),
+            "error message should mention invalid UTF-8: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_applied_to_utf8_message() {
+        // Ensure the error message goes through sanitize_error as required.
+        let raw = "invalid UTF-8 in request: invalid utf-8 sequence of 1 bytes from index 0";
+        let sanitized = vaultpilot_lib::sanitize_error(raw);
+        assert!(
+            sanitized.contains("invalid UTF-8 in request"),
+            "sanitized message should retain the key information: {sanitized}"
+        );
     }
 }

@@ -83,6 +83,25 @@ export function parseSSEStream(
         if (!doneReceived && buffer.trim().length > 0) {
           processBuffer();
         }
+        // Flush any remaining dataParts accumulated without a trailing empty line
+        if (!doneReceived && dataParts.length > 0) {
+          const data = dataParts.join('\n');
+          dataParts.length = 0;
+          if (data === '[DONE]') {
+            doneReceived = true;
+            onChunk({ done: true });
+          } else {
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta;
+              if (delta) {
+                onChunk({ content: delta.content, tool_calls: delta.tool_calls, done: false });
+              }
+            } catch (e) {
+              console.warn('[SSE] Failed to parse trailing chunk:', data.slice(0, 100), e);
+            }
+          }
+        }
         if (!doneReceived) {
           console.warn('[SSE] Stream ended without [DONE] signal');
           onChunk({ done: true });

@@ -70,6 +70,9 @@ export default function ChatScreen({ navigation }: any) {
     }
     setInput('');
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
+    // Snapshot before state update — msgsRef may or may not be flushed by React
+    // before we build the API history, so pin it here.
+    const prevMsgs = [...msgsRef.current];
     setMsgs(prev => [...prev, userMsg]);
 
     // Save AI placeholder to DB upfront — stable id, no key change later
@@ -81,7 +84,7 @@ export default function ChatScreen({ navigation }: any) {
     try {
       const history: ChatMessage[] = [
         { role: 'system', content: '你是 VaultPilot AI 助手，知识渊博、乐于助人。用中文回答。' },
-        ...msgsRef.current.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).map(m => ({ role: m.role as any, content: m.content })),
+        ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
 

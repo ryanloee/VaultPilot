@@ -700,10 +700,7 @@ mod tests {
 
     #[test]
     fn empty_method_name_parses() {
-        let json = json!({
-            "id": "req-004",
-            "method": ""
-        });
+        let json = json!({ "id": "req-004", "method": "" });
         let request: AgentRequest = serde_json::from_value(json).unwrap();
         assert!(request.method.is_empty());
     }

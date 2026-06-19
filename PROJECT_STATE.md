@@ -1869,3 +1869,24 @@
 - 审核结果: PR #854 CI 5/6 通过 (cargo fmt/clippy/test/audit + linux-cli-build), winui-build 已运行超 2 小时仍在 pending (Windows runner 较慢/可能卡住)。代码变更正确: 8 个测试文件添加 `using Xunit;`, BackendClientTests `using` → `await using`, CI 添加 MSBuild 测试构建+dotnet vstest 步骤, NuGet 缓存键更新。
 - 项目状态: **0 open issue (#597 已修复待合并), 1 open PR (#854 winui-build pending), 357 已合并 PR, 403 Rust 测试全通过**
 - 代码审查: 3 路并行深度审查 storage.rs (5433行) + C# 前端全量 (~5.3K行) + ai.rs (2445行) = ~13.2K行。零 MEDIUM/HIGH 缺陷发现。代码库经过 218 个审查循环和 357 个已合并 PR 后维持极高成熟度。
+## 本轮循环状态 (循环#221)
+<!-- 讨论团队在每轮开始时写入 -->
+- 循环编号: 循环#221
+- 本轮时间: 2026-06-19
+- 审查模块: crypto.rs (342行) 密钥派生/加解密, models.rs (1015行) + C# 模型文件 (~650行), XAML UI 文件 (MainWindow.xaml 317 + NotesView.xaml 220 + SettingsDialog.xaml 206 = 743行)
+- 竞品调研: Obsidian Copilot v3.3.0-3.3.3 (May 2026) — OS Keychain API key 存储, 官方移动端支持, 项目数据迁移至 vault Markdown, Gemini 3.5 Flash 内置, Bundle 缩减 1.8MB, Composer V2 editFile。Copilot v4 agent mode 集成 opencode/Claude Code/Codex。VaultPilot MCP server 是强差异化优势。
+- 讨论阶段发现:
+  - 2 个新 issue 创建: #874 UI (XAML 无障碍 5 处遗漏), #875 SECURITY (macOS crypto machine-id)
+  - #874 MEDIUM UI: 5 个 XAML 控件缺少 AutomationProperties — ErrorInfoBar, AttachmentScroller/Panel, ComposerDropZone, DetailTags/Updated/Path, NotesText 状态标签
+  - #875 MEDIUM SECURITY: crypto.rs macOS 仅用 hostname+arch 作 salt, 无平台唯一标识符。Windows 有 MachineGuid (PR #595), Linux 有 /etc/machine-id, macOS 缺失。建议使用 IOPlatformUUID
+  - C# NoteDocument 缺少 SearchSnippet — 核实为非问题, search_snippet 仅 Rust 内部 search_notes_with_context 使用, C# loadNote 不返回该字段
+  - C# ChatTurn Citations/Attachments 无默认值 (LOW-MED) — 程序化构造时可能 NPE
+  - crypto.rs 栈上密钥无零化 (LOW) — defense-in-depth, 非阻塞
+  - crypto.rs AES-GCM 无 AAD (INFO) — 单一上下文场景, 风险可忽略
+  - crypto.rs to_string_lossy hostname (LOW) — 非 UTF8 hostname 可能改变 salt
+  - C# models: default_model() 使用旧名 "claude-3-5-sonnet-latest" (INFO) — 别名仍有效
+  - 403 Rust 测试全通过 (lib:377, cli:16, agent:10), 0 unsafe, 0 生产 unwrap
+- 修复结果: 无 — 本轮为讨论角色, 不直接修复
+- 审核结果: PR #871 仍 OPEN (cargo fmt/clippy 失败待作者修复), #867 和 #868 仍 OPEN
+- 项目状态: **2 open issue (#867, #868) + 2 new (#874, #875), 1 open PR (#871 待格式修复), 362 已合并 PR, 403 Rust 测试全通过, v0.3.1 已发布**
+- 代码审查: 3 路并行深度审查 crypto.rs (342行) + models.rs+C# (1665行) + XAML (743行) = ~2.8K行。发现 1 个 MEDIUM SECURITY (macOS machine-id) 和 1 个 MEDIUM UI (XAML 无障碍) 并创建 issue。C# NoteDocument SearchSnippet 缺失经核实为非问题。代码库经过 221 个审查循环和 362 个已合并 PR 后维持极高成熟度。

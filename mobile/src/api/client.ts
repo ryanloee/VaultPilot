@@ -117,6 +117,10 @@ export async function chat(
   messages: ChatMessage[],
   signal?: AbortSignal
 ): Promise<ReadableStream<Uint8Array>> {
+  if (signal?.aborted) {
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }
+
   const { apiBase, apiKey, model } = await getSettings();
   if (!apiKey) throw new Error('请先在设置中填写 API Key');
 
@@ -145,6 +149,7 @@ export async function chat(
     });
 
     if (res.status === 400) {
+      await res.body?.cancel(); // Release connection back to pool
       res = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: {

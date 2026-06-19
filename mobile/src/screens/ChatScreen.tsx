@@ -7,7 +7,7 @@ import { useAppStore, getColors } from '../store';
 import { chat, parseSSEStream, ChatMessage } from '../api/client';
 import { getMessages, addMessage, updateMessage, createSession } from '../db';
 
-interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; }
+interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
 const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }: {
   item: Msg; isDark: boolean; accentColor: string;
@@ -68,7 +68,7 @@ export default function ChatScreen({ navigation }: any) {
     try {
       const history: ChatMessage[] = [
         { role: 'system', content: '你是 VaultPilot AI 助手，知识渊博、乐于助人。用中文回答。' },
-        ...msgsRef.current.filter(m => m.role !== 'assistant' || !m.streaming).map(m => ({ role: m.role as any, content: m.content })),
+        ...msgsRef.current.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
 
@@ -103,9 +103,9 @@ export default function ChatScreen({ navigation }: any) {
         }
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
       } else {
-        // Append error marker without discarding streamed content
+        // Append error marker without discarding streamed content; mark as error to filter from API history
         setMsgs(prev => prev.map(m => m.id === aiId
-          ? { ...m, content: m.content ? `${m.content}\n\n❌ ${err.message}` : `❌ ${err.message}`, streaming: false }
+          ? { ...m, content: m.content ? `${m.content}\n\n❌ ${err.message}` : `❌ ${err.message}`, streaming: false, isError: true }
           : m));
       }
     } finally {

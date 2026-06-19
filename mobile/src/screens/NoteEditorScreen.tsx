@@ -105,6 +105,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
     setContent(prev => {
       const before = prev.slice(0, start);
       const after = prev.slice(end);
+      const newPos = start + syntax.length;
+      selectionRef.current = { start: newPos, end: newPos };
       return before + syntax + after;
     });
   };

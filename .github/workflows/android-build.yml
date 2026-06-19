@@ -38,6 +38,9 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - name: Expo prebuild (generate native project)
+        run: npx expo prebuild --platform android --no-install
+
       - name: Build APK
         run: |
           cd android

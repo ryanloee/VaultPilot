@@ -68,6 +68,12 @@ function sanitizeApiError(status: number, rawBody: string): string {
   return `API 错误 (${status})`;
 }
 
+// ── API Base Normalization ────────────────────────────────
+/** Ensure apiBase ends with /v1 for consistent path construction */
+function normalizeApiBase(raw: string): string {
+  return raw.replace(/\/+$/, '').replace(/\/v1$/, '') + '/v1';
+}
+
 // ── Chat ──────────────────────────────────────────────────
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -81,6 +87,8 @@ export async function chat(
   const { apiBase, apiKey, model } = await getSettings();
   if (!apiKey) throw new Error('请先在设置中填写 API Key');
 
+  const base = normalizeApiBase(apiBase);
+
   // Combine user signal with timeout
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -89,7 +97,9 @@ export async function chat(
   }
 
   try {
-    const res = await fetch(`${apiBase}/chat/completions`, {
+    // Try streaming first; fall back to non-streaming on 400
+    // (VaultPilot HTTP bridge doesn't support stream=true yet)
+    let res = await fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -99,10 +109,33 @@ export async function chat(
       signal: controller.signal,
     });
 
+    if (res.status === 400) {
+      res = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ model, messages, stream: false }),
+        signal: controller.signal,
+      });
+    }
+
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(sanitizeApiError(res.status, text));
     }
+
+    // If non-streaming fallback, wrap JSON response as a single-chunk SSE stream
+    if (!res.headers.get('content-type')?.includes('text/event-stream')) {
+      const json = await res.json();
+      const content = json.choices?.[0]?.message?.content ?? '';
+      const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`);
+      return new ReadableStream({
+        start(controller) { controller.enqueue(encoded); controller.close(); },
+      });
+    }
+
     if (!res.body) throw new Error('No response body');
     return res.body;
   } catch (e: any) {
@@ -121,7 +154,7 @@ export async function checkApi(): Promise<{ ok: boolean; error?: string }> {
   try {
     const { apiBase, apiKey, model } = await getSettings();
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
-    const res = await fetch(`${apiBase}/models`, {
+    const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(8000),
     });

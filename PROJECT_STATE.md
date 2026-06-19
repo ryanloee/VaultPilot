@@ -2166,3 +2166,27 @@
 - 审核结果: 6 个 open PR (#1048-#1053), 3 个旧 PR (#1018, #910, #871)
 - 项目状态: **114 open issue (+5), 9 open PR, 372+ 已合并 PR, 403 Rust 测试全通过, v0.3.3 已发布**
 - 代码审查: 4 路并行深度审查 mobile 核心模块 (~1200行) + Rust 后端 + C# 前端 + 竞品调研。发现 5 个新缺陷 (1 HIGH + 4 MEDIUM)。最高优先级: #1062 ChatScreen AI 响应数据丢失。Rust 后端和 C# 前端经 227 轮审查后零新缺陷。mobile 代码库错误处理和竞态防护仍是主要薄弱环节。
+
+## 审核阶段 (2026-06-20)
+
+### 合并的 PR（13 个）
+| PR | 描述 | Issue |
+|----|------|-------|
+| #1071 | NotesScreen 搜索竞态 requestId | #1064 |
+| #1070 | ChatScreen 中止保存部分内容 | #1063 |
+| #1069 | NotesScreen await load() | #1065 |
+| #1068 | ChatScreen streaming 稳定 id | #1062, #1011 |
+| #1067 | db.ts ESCAPE 语法 | #1061 |
+| #1053 | 错误消息 isError 标记 | #1024 |
+| #1052 | 系统主题 loadedRef | #1043 |
+| #1051 | NoteEditor loading spinner | #1042 |
+| #1050 | NoteEditor delete 错误处理 | #1044 |
+| #1049 | ChatScreen addMessage 错误处理 | #1039, #1040 |
+| #1048 | NoteEditor save try-catch | #1031 |
+| #1018 | sse.ts AbortSignal listener | #997 |
+| #910 | agent from_utf8 替代 lossy | #908 |
+| #871 | crypto decrypt 错误传播 | #867 |
+
+### 发版
+- v0.3.6 发布，包含 13 个修复
+- 下一个周期从 discussion 开始

@@ -183,7 +183,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
       [`%${escaped}%`]
     );
   }
-  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t}"`).join(' OR ');
+  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
   if (!ftsQuery) return [];
   const escaped = escapeLikePattern(query);
   // FTS5 on message content + LIKE on session title (titles are short, LIKE is fine)
@@ -280,7 +280,7 @@ export async function searchNotes(query: string): Promise<DbNote[]> {
       [`%${escaped}%`, `%${escaped}%`]
     );
   }
-  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t}"`).join(' OR ');
+  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
   if (!ftsQuery) return [];
   return db.getAllAsync<DbNote>(
     `SELECT n.* FROM notes n

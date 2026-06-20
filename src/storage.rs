@@ -5169,6 +5169,7 @@ mod tests {
         let custom = AppSettings {
             vault_dir: _temp.join("my-vault").to_string_lossy().to_string(),
             provider: ProviderConfig {
+                name: String::new(),
                 api_key: "test-key".to_string(),
                 base_url: "https://custom.api.com".to_string(),
                 model: "custom-model".to_string(),
@@ -5177,6 +5178,8 @@ mod tests {
                 max_output_tokens: None,
                 provider_type: None,
             },
+            providers: Vec::new(),
+            active_provider_index: 0,
             auto_check_updates: false,
             auto_wake_enabled: true,
             auto_wake_interval_minutes: 60,
@@ -5200,6 +5203,7 @@ mod tests {
         let custom = AppSettings {
             vault_dir: _temp.join("vault-enc").to_string_lossy().to_string(),
             provider: ProviderConfig {
+                name: String::new(),
                 api_key: "sk-sec...2345".to_string(),
                 base_url: "https://custom.api.com".to_string(),
                 model: "custom-model".to_string(),

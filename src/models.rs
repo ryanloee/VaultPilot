@@ -681,6 +681,7 @@ mod tests {
         let settings = AppSettings {
             vault_dir: "D:\\Vault".to_string(),
             provider: ProviderConfig {
+                name: String::new(),
                 api_key: "test-key".to_string(),
                 base_url: "https://api.example.com".to_string(),
                 model: "test-model".to_string(),
@@ -689,6 +690,8 @@ mod tests {
                 max_output_tokens: Some(16384),
                 provider_type: None,
             },
+            providers: Vec::new(),
+            active_provider_index: 0,
             auto_check_updates: false,
             auto_wake_enabled: true,
             auto_wake_interval_minutes: 60,

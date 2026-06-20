@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { useAppStore, getColors } from '../store';
 import { chat, parseSSEStream, ChatMessage } from '../api/client';
-import { getMessages, addMessage, updateMessage, createSession } from '../db';
+import { getMessages, addMessage, updateMessage, createSession, getLatestSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
@@ -40,15 +40,24 @@ export default function ChatScreen({ navigation }: any) {
   const listRef = useRef<FlatList>(null);
   const msgsRef = useRef<Msg[]>([]);
 
-  // Init session
+  // Init session — reuse latest active session or create new one
   useEffect(() => {
     (async () => {
       try {
-        const id = await createSession('新对话');
-        setSessionId(id);
+        const existing = await getLatestSession();
+        if (existing) {
+          setSessionId(existing.id);
+          const history = await getMessages(existing.id);
+          setMsgs(history.map(m => ({
+            id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+          })));
+        } else {
+          const id = await createSession('新对话');
+          setSessionId(id);
+        }
       } catch (e) {
-        console.warn('[Chat] createSession failed:', e);
-        Alert.alert('创建会话失败', String(e));
+        console.warn('[Chat] session init failed:', e);
+        Alert.alert('初始化失败', String(e));
       } finally {
         setLoading(false);
       }
@@ -145,6 +154,18 @@ export default function ChatScreen({ navigation }: any) {
     }
   }, [input, streaming, sessionId, apiKey, apiBase, model]);
 
+  // Create a new conversation
+  const newChat = useCallback(async () => {
+    try {
+      abortRef.current?.abort();
+      const id = await createSession('新对话');
+      setSessionId(id);
+      setMsgs([]);
+    } catch (e) {
+      console.warn('[Chat] newChat failed:', e);
+    }
+  }, []);
+
   const stop = () => {
     abortRef.current?.abort();
   };
@@ -159,6 +180,11 @@ export default function ChatScreen({ navigation }: any) {
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+      {/* New chat button */}
+      <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}>
+        <Text style={{ color: accentColor, fontSize: 14 }}>＋ 新对话</Text>
+      </TouchableOpacity>
+
       {/* Message list */}
       <FlatList
         ref={listRef}
@@ -219,4 +245,8 @@ const s = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center', marginLeft: 8,
   },
   sendText: { color: '#FFF', fontSize: 18 },
+  newChatBtn: {
+    alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 16,
+    borderWidth: 1, borderRadius: 16, marginTop: 8,
+  },
 });

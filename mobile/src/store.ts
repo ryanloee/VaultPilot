@@ -9,6 +9,8 @@ export function isValidThemeMode(v: string): v is ThemeMode {
   return (VALID_THEME_MODES as string[]).includes(v);
 }
 
+export type ApiFormat = 'openai' | 'anthropic';
+
 interface AppState {
   themeMode: ThemeMode;
   isDark: boolean;
@@ -20,7 +22,8 @@ interface AppState {
   apiBase: string;
   apiKey: string;
   model: string;
-  setApiSettings: (s: { apiBase?: string; apiKey?: string; model?: string }) => void;
+  apiFormat: ApiFormat;
+  setApiSettings: (s: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }) => void;
 }
 
 export const ACCENT_COLORS = [
@@ -33,10 +36,9 @@ export const ACCENT_COLORS = [
 ];
 
 export const PROVIDERS = [
-  { name: 'OpenAI', base: 'https://api.openai.com/v1', models: ['gpt-4o', 'gpt-4o-mini', 'o1-mini'] },
-  { name: 'DeepSeek', base: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { name: '通义千问', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-plus', 'qwen-turbo'] },
-  { name: '自定义', base: '', models: [] },
+  { name: 'OpenAI', base: 'https://api.openai.com/v1', format: 'openai' as const, models: ['gpt-4o', 'gpt-4o-mini', 'o1-mini'] },
+  { name: 'Anthropic', base: 'https://api.anthropic.com', format: 'anthropic' as const, models: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022'] },
+  { name: '自定义', base: '', format: 'openai' as const, models: [] },
 ];
 
 const LIGHT_COLORS = {
@@ -80,10 +82,12 @@ export const useAppStore = create<AppState>()(
       apiBase: 'https://api.openai.com/v1',
       apiKey: '',
       model: 'gpt-4o-mini',
+      apiFormat: 'openai' as ApiFormat,
       setApiSettings: (s) => set((state) => ({
         apiBase: s.apiBase ?? state.apiBase,
         apiKey: s.apiKey ?? state.apiKey,
         model: s.model ?? state.model,
+        apiFormat: s.apiFormat ?? state.apiFormat,
       })),
     }),
     {
@@ -94,6 +98,7 @@ export const useAppStore = create<AppState>()(
         accentColor: state.accentColor,
         apiBase: state.apiBase,
         model: state.model,
+        apiFormat: state.apiFormat,
         // apiKey excluded — stored separately in SecureStore
       }),
     }

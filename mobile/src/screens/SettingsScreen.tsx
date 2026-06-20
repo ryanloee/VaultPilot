@@ -3,7 +3,7 @@ import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode } from '../store';
+import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, ApiFormat } from '../store';
 import { checkApi, getSettings, saveSettings } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -17,6 +17,7 @@ export default function SettingsScreen() {
   const [apiBase, setApiBase] = useState(store.apiBase);
   const [apiKey, setApiKey] = useState(store.apiKey);
   const [model, setModel] = useState(store.model);
+  const [apiFormat, setApiFormat] = useState<ApiFormat>(store.apiFormat);
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
@@ -34,6 +35,7 @@ export default function SettingsScreen() {
         if (api.apiBase) { setApiBase(api.apiBase); store.setApiSettings({ apiBase: api.apiBase }); }
         if (api.apiKey) { setApiKey(api.apiKey); store.setApiSettings({ apiKey: api.apiKey }); }
         if (api.model) { setModel(api.model); store.setApiSettings({ model: api.model }); }
+        if (api.apiFormat) { setApiFormat(api.apiFormat); store.setApiSettings({ apiFormat: api.apiFormat }); }
         if (themeMode && isValidThemeMode(themeMode)) store.setThemeMode(themeMode);
         if (accentColor) store.setAccentColor(accentColor);
       } catch (e) {
@@ -46,12 +48,12 @@ export default function SettingsScreen() {
   const saveAll = async () => {
     try {
       await Promise.all([
-        saveSettings({ apiBase, apiKey, model }),
+        saveSettings({ apiBase, apiKey, model, apiFormat }),
         AsyncStorage.setItem(THEME_KEY, store.themeMode),
         AsyncStorage.setItem(ACCENT_KEY, store.accentColor),
       ]);
       // Update store only after persistence succeeds — avoid state inconsistency on failure
-      store.setApiSettings({ apiBase, apiKey, model });
+      store.setApiSettings({ apiBase, apiKey, model, apiFormat });
       Alert.alert('已保存', '设置已保存');
     } catch (e: any) {
       Alert.alert('保存失败', e.message || '请重试');
@@ -62,7 +64,7 @@ export default function SettingsScreen() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await checkApi({ apiBase, apiKey });
+      const res = await checkApi({ apiBase, apiKey, apiFormat });
       setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
     } catch (e: any) {
       setTestResult(`❌ ${e.message || '连接失败'}`);
@@ -74,6 +76,7 @@ export default function SettingsScreen() {
   const selectProvider = (p: typeof PROVIDERS[0]) => {
     if (p.name === '自定义') return;
     setApiBase(p.base);
+    setApiFormat(p.format);
     if (p.models.length) setModel(p.models[0]);
   };
 
@@ -97,12 +100,12 @@ export default function SettingsScreen() {
           <TouchableOpacity
             key={p.name}
             style={[s.providerBtn, {
-              borderColor: apiBase === p.base ? store.accentColor : c.border,
-              backgroundColor: apiBase === p.base ? store.accentColor + '20' : 'transparent',
+              borderColor: (apiBase === p.base && apiFormat === p.format) ? store.accentColor : c.border,
+              backgroundColor: (apiBase === p.base && apiFormat === p.format) ? store.accentColor + '20' : 'transparent',
             }]}
             onPress={() => selectProvider(p)}
           >
-            <Text style={{ color: apiBase === p.base ? store.accentColor : c.text, fontWeight: '500' }}>
+            <Text style={{ color: (apiBase === p.base && apiFormat === p.format) ? store.accentColor : c.text, fontWeight: '500' }}>
               {p.name}
             </Text>
           </TouchableOpacity>

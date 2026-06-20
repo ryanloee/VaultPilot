@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
+import { ApiFormat } from '../store';
+
 // Re-export unified SSE types from sse.ts (single implementation)
 export type { StreamChunk } from './sse';
 export { parseSSEStream } from './sse';
@@ -10,6 +12,7 @@ const KEYS = {
   apiBase: 'cfg_api_base',
   apiKey: 'cfg_api_key',
   model: 'cfg_model',
+  apiFormat: 'cfg_api_format',
 } as const;
 
 // Defaults
@@ -49,7 +52,7 @@ function isRetryable(status: number): boolean {
 }
 
 // ── Settings ──────────────────────────────────────────────
-let _settingsCache: { apiBase: string; apiKey: string; model: string } | null = null;
+let _settingsCache: { apiBase: string; apiKey: string; model: string; apiFormat: ApiFormat } | null = null;
 
 export function invalidateSettingsCache() {
   _settingsCache = null;
@@ -57,24 +60,27 @@ export function invalidateSettingsCache() {
 
 export async function getSettings() {
   if (_settingsCache) return _settingsCache;
-  const [base, key, model] = await Promise.all([
+  const [base, key, model, fmt] = await Promise.all([
     AsyncStorage.getItem(KEYS.apiBase),
     getApiKey(),
     AsyncStorage.getItem(KEYS.model),
+    AsyncStorage.getItem(KEYS.apiFormat),
   ]);
   _settingsCache = {
     apiBase: base || DEFAULTS.apiBase,
     apiKey: key,
     model: model || DEFAULTS.model,
+    apiFormat: (fmt as ApiFormat) || 'openai',
   };
   return _settingsCache;
 }
 
-export async function saveSettings(s: { apiBase?: string; apiKey?: string; model?: string }) {
+export async function saveSettings(s: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }) {
   const ops: Promise<void>[] = [];
   if (s.apiBase !== undefined) ops.push(AsyncStorage.setItem(KEYS.apiBase, s.apiBase));
   if (s.apiKey !== undefined) ops.push(setApiKey(s.apiKey));
   if (s.model !== undefined) ops.push(AsyncStorage.setItem(KEYS.model, s.model));
+  if (s.apiFormat !== undefined) ops.push(AsyncStorage.setItem(KEYS.apiFormat, s.apiFormat));
   await Promise.all(ops);
   invalidateSettingsCache();
 }
@@ -129,9 +135,121 @@ export async function chat(
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
 
-  const { apiBase, apiKey, model } = await getSettings();
+  const { apiBase, apiKey, model, apiFormat } = await getSettings();
   if (!apiKey) throw new Error('请先在设置中填写 API Key');
 
+  if (apiFormat === 'anthropic') {
+    return chatAnthropic(apiBase, apiKey, model, messages, signal);
+  }
+  return chatOpenAI(apiBase, apiKey, model, messages, signal);
+}
+
+// ── Anthropic Messages API ────────────────────────────────
+async function chatAnthropic(
+  apiBase: string, apiKey: string, model: string,
+  messages: ChatMessage[], signal?: AbortSignal
+): Promise<ReadableStream<Uint8Array>> {
+  const systemMsgs = messages.filter(m => m.role === 'system');
+  const nonSystem = messages.filter(m => m.role !== 'system');
+  const systemText = systemMsgs.map(m => m.content).join('\n') || undefined;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  if (signal) {
+    const onAbort = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
+
+  const base = apiBase.replace(/\/+$/, '');
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: 4096,
+    messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
+    stream: true,
+  };
+  if (systemText) body.system = systemText;
+
+  let res: Response;
+  try {
+    res = await fetch(`${base}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (e: any) {
+    clearTimeout(timeout);
+    if (e.name === 'AbortError') throw e;
+    throw new Error('网络请求失败，请检查连接');
+  }
+
+  if (!res.ok) {
+    clearTimeout(timeout);
+    const text = await res.text().catch(() => '');
+    throw new Error(sanitizeApiError(res.status, text));
+  }
+
+  if (!res.body) { clearTimeout(timeout); throw new Error('No response body'); }
+
+  // Wrap Anthropic SSE into OpenAI-compatible format so parseSSEStream works
+  const anthropicBody = res.body;
+  return new ReadableStream<Uint8Array>({
+    start(ctrl) {
+      const reader = anthropicBody.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
+      controller.signal.addEventListener('abort', onTimeout, { once: true });
+
+      (async () => {
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split(/\r\n|\r|\n/);
+            buffer = lines.pop() || '';
+
+            let currentEvent = '';
+            for (const line of lines) {
+              if (line.startsWith('event:')) {
+                currentEvent = line.slice(6).trim();
+                continue;
+              }
+              if (!line.startsWith('data:')) continue;
+              const data = line.slice(5).trimStart();
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+                  // Convert to OpenAI format
+                  const openai = JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] });
+                  ctrl.enqueue(new TextEncoder().encode(`data: ${openai}\n\n`));
+                } else if (parsed.type === 'message_stop') {
+                  ctrl.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+                }
+              } catch {}
+            }
+          }
+          ctrl.close();
+        } catch (e) { ctrl.error(e); }
+        finally {
+          clearTimeout(timeout);
+          controller.signal.removeEventListener('abort', onTimeout);
+        }
+      })();
+    },
+  });
+}
+
+// ── OpenAI-compatible Chat Completions API ─────────────────
+async function chatOpenAI(
+  apiBase: string, apiKey: string, model: string,
+  messages: ChatMessage[], signal?: AbortSignal
+): Promise<ReadableStream<Uint8Array>> {
   const base = normalizeApiBase(apiBase);
 
   // Combine user signal with timeout
@@ -250,12 +368,31 @@ export async function chat(
 }
 
 // ── Health Check ──────────────────────────────────────────
-export async function checkApi(params?: { apiBase?: string; apiKey?: string }): Promise<{ ok: boolean; error?: string }> {
+export async function checkApi(params?: { apiBase?: string; apiKey?: string; apiFormat?: ApiFormat }): Promise<{ ok: boolean; error?: string }> {
   try {
     const settings = params ?? await getSettings();
     const { apiKey } = settings;
     const apiBase = settings.apiBase ?? '';
+    const format = ('apiFormat' in settings) ? (settings as any).apiFormat : 'openai';
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
+
+    if (format === 'anthropic') {
+      // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
+      const base = apiBase.replace(/\/+$/, '');
+      const res = await fetch(`${base}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+        signal: AbortSignal.timeout(8000),
+      });
+      // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error
+      return { ok: res.ok || res.status === 400, error: res.ok || res.status === 400 ? undefined : `HTTP ${res.status}` };
+    }
+
     const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(8000),

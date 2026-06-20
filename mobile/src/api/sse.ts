@@ -140,7 +140,7 @@ export async function parseSSEStreamWithReconnect(
       const res = await fetch(url, { ...fetchInit, signal: options?.signal });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        const err: any = new Error(`API ${res.status}: ${text}`);
+        const err = new Error(`API ${res.status}: ${text}`) as Error & { status: number };
         err.status = res.status;
         throw err;
       }
@@ -149,15 +149,16 @@ export async function parseSSEStreamWithReconnect(
       const streamBody = options?.transformBody ? options.transformBody(res.body) : res.body;
       await parseSSEStream(streamBody, wrappedOnChunk, options);
       return; // Success
-    } catch (err: any) {
-      if (err.name === 'AbortError') throw err;
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
 
       // Don't retry client errors (4xx) — they won't succeed on retry
-      if (err.status >= 400 && err.status < 500) throw err;
+      const status = (err as { status?: number }).status;
+      if (status !== undefined && status >= 400 && status < 500) throw err;
 
       if (attempt < maxRetries) {
         const delay = baseDelay * Math.pow(2, attempt);
-        console.warn(`[SSE] Connection lost (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms:`, err.message);
+        console.warn(`[SSE] Connection lost (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms:`, err instanceof Error ? err.message : String(err));
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, delay);
           options?.signal?.addEventListener('abort', () => {

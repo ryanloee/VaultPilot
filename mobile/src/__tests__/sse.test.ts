@@ -159,4 +159,48 @@ describe('parseSSEStreamWithReconnect', () => {
       parseSSEStreamWithReconnect('http://test.com', {}, () => {}, { signal: controller.signal })
     ).rejects.toThrow();
   });
+
+  // Regression: issue #1198 — catch(err: unknown) must handle non-Error thrown values
+  it('handles non-Error thrown values gracefully (e.g. string)', async () => {
+    const mockFetch = jest.fn().mockImplementation(() => { throw 'raw string error'; });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
+
+    await expect(
+      parseSSEStreamWithReconnect('http://test.com', {}, () => {}, { maxRetries: 0, baseDelay: 1 })
+    ).rejects.toBeDefined();
+  });
+
+  it('handles thrown plain object without status', async () => {
+    const mockFetch = jest.fn().mockImplementation(() => { throw { code: 'NETWORK_ERR' }; });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
+
+    // Should retry (no status = not a 4xx), then fail after max retries
+    await expect(
+      parseSSEStreamWithReconnect('http://test.com', {}, () => {}, { maxRetries: 1, baseDelay: 1 })
+    ).rejects.toBeDefined();
+    expect(mockFetch).toHaveBeenCalledTimes(2); // 1 initial + 1 retry
+  });
+
+  it('re-throws DOMException AbortError without retry', async () => {
+    const mockFetch = jest.fn().mockImplementation(() => {
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
+
+    await expect(
+      parseSSEStreamWithReconnect('http://test.com', {}, () => {}, { maxRetries: 3, baseDelay: 1 })
+    ).rejects.toThrow('Aborted');
+    expect(mockFetch).toHaveBeenCalledTimes(1); // No retries for abort
+  });
+
+  it('4xx error with status property is not retried (typed catch)', async () => {
+    const errorWithStatus = Object.assign(new Error('Forbidden'), { status: 403 });
+    const mockFetch = jest.fn().mockRejectedValue(errorWithStatus);
+    jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
+
+    await expect(
+      parseSSEStreamWithReconnect('http://test.com', {}, () => {}, { maxRetries: 3, baseDelay: 1 })
+    ).rejects.toThrow('Forbidden');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
 });

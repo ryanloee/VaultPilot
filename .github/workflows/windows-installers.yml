@@ -239,31 +239,8 @@ jobs:
 
       - name: Smoke test Linux CLI
         run: |
-          CLI=artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
-          chmod +x "$CLI"
-
-          # 1. Binary is executable and not corrupted
-          file "$CLI" | grep -q "ELF"
-
-          # 2. --version or --help exits cleanly (exit 0 or 1, not crash/signal)
-          set +e
-          "$CLI" --version 2>&1
-          VERSION_EXIT=$?
-          "$CLI" --help 2>&1
-          HELP_EXIT=$?
-          set -e
-
-          # Accept 0 (normal) or 1 (CLI may require vault dir), reject >1 (crash/signal)
-          if [ "$VERSION_EXIT" -gt 1 ]; then
-            echo "FAILED: vaultpilot-cli --version exited with signal/code $VERSION_EXIT"
-            exit 1
-          fi
-          if [ "$HELP_EXIT" -gt 1 ]; then
-            echo "FAILED: vaultpilot-cli --help exited with signal/code $HELP_EXIT"
-            exit 1
-          fi
-
-          echo "PASSED: Linux CLI smoke test"
+          chmod +x scripts/smoke-test-linux-cli.sh
+          ./scripts/smoke-test-linux-cli.sh artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7

@@ -135,12 +135,27 @@ export default function ChatScreen({ navigation, route }: any) {
 
     // Add user message — only clear input after persistence succeeds
     let userId: string;
+    let activeSessionId = sessionId;
     try {
-      userId = await addMessage(sessionId, 'user', userText);
-    } catch (e) {
-      console.warn('[Chat] addMessage failed:', e);
-      Alert.alert('发送失败', String(e));
-      return;
+      userId = await addMessage(activeSessionId, 'user', userText);
+    } catch (e: any) {
+      // FOREIGN KEY = session was deleted/reset; recreate and retry
+      if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
+        try {
+          const newId = await createSession('新对话');
+          setSessionId(newId);
+          activeSessionId = newId;
+          userId = await addMessage(newId, 'user', userText);
+        } catch (e2) {
+          console.warn('[Chat] addMessage retry failed:', e2);
+          Alert.alert('发送失败', '无法创建对话，请重试');
+          return;
+        }
+      } else {
+        console.warn('[Chat] addMessage failed:', e);
+        Alert.alert('发送失败', String(e));
+        return;
+      }
     }
     setInput('');
     setInputHeight(0);
@@ -153,7 +168,7 @@ export default function ChatScreen({ navigation, route }: any) {
     // Save AI placeholder to DB upfront — stable id, no key change later
     let aiId: string;
     try {
-      aiId = await addMessage(sessionId, 'assistant', '');
+      aiId = await addMessage(activeSessionId, 'assistant', '');
     } catch (e) {
       console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
       Alert.alert('发送失败', '无法创建 AI 回复记录');
@@ -280,7 +295,7 @@ export default function ChatScreen({ navigation, route }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior="height" keyboardVerticalOffset={0}>
       {/* Header */}
       <View style={[s.header, { borderBottomColor: c.border }]}>
         <TouchableOpacity onPress={() => navigation.navigate('Sessions')} style={s.sessionsBtn}>
@@ -345,9 +360,11 @@ export default function ChatScreen({ navigation, route }: any) {
           onContentSizeChange={e => setInputHeight(e.nativeEvent.contentSize.height)}
           placeholder="输入消息..."
           placeholderTextColor={c.textSecondary}
-          multiline
           maxLength={4000}
           editable={!streaming}
+          returnKeyType="send"
+          blurOnSubmit
+          onSubmitEditing={send}
         />
         {streaming ? (
           <TouchableOpacity onPress={stop} style={[s.sendBtn, { backgroundColor: '#EF4444' }]}>

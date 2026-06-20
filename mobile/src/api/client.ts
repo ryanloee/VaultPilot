@@ -156,12 +156,14 @@ async function chatAnthropic(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  let onSignalAbort: (() => void) | undefined;
   if (signal) {
-    const onAbort = () => controller.abort(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
+    onSignalAbort = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', onSignalAbort, { once: true });
   }
 
-  const base = apiBase.replace(/\/+$/, '');
+  // Strip /v1 suffix to avoid double /v1 path when appending /v1/messages
+  const base = normalizeApiBase(apiBase).replace(/\/v\d+.*$/, '');
   const body: Record<string, unknown> = {
     model,
     max_tokens: 4096,
@@ -184,17 +186,19 @@ async function chatAnthropic(
     });
   } catch (e: any) {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', onSignalAbort!);
     if (e.name === 'AbortError') throw e;
     throw new Error('网络请求失败，请检查连接');
   }
 
   if (!res.ok) {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', onSignalAbort!);
     const text = await res.text().catch(() => '');
     throw new Error(sanitizeApiError(res.status, text));
   }
 
-  if (!res.body) { clearTimeout(timeout); throw new Error('No response body'); }
+  if (!res.body) { clearTimeout(timeout); signal?.removeEventListener('abort', onSignalAbort!); throw new Error('No response body'); }
 
   // Wrap Anthropic SSE into OpenAI-compatible format so parseSSEStream works
   const anthropicBody = res.body;
@@ -414,7 +418,8 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; api
 
     if (format === 'anthropic') {
       // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
-      const base = apiBase.replace(/\/+$/, '');
+      // Strip /v1 suffix to avoid double /v1 path
+      const base = normalizeApiBase(apiBase).replace(/\/v\d+.*$/, '');
       const res = await fetch(`${base}/v1/messages`, {
         method: 'POST',
         headers: {

@@ -122,6 +122,11 @@ function normalizeApiBase(raw: string): string {
   return trimmed + '/v1';
 }
 
+/** Strip trailing version suffix (e.g. /v1, /v1beta) for APIs that append their own versioned paths. */
+function stripVersionSuffix(raw: string): string {
+  return raw.trim().replace(/\/+$/, '').replace(/\/v\d+[\w-]*$/, '');
+}
+
 // ── Chat ──────────────────────────────────────────────────
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -156,12 +161,12 @@ async function chatAnthropic(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-  if (signal) {
-    const onAbort = () => controller.abort(signal.reason);
+  const onAbort = signal ? () => controller.abort(signal.reason) : undefined;
+  if (signal && onAbort) {
     signal.addEventListener('abort', onAbort, { once: true });
   }
 
-  const base = apiBase.replace(/\/+$/, '');
+  const base = stripVersionSuffix(apiBase);
   const body: Record<string, unknown> = {
     model,
     max_tokens: 4096,
@@ -240,6 +245,7 @@ async function chatAnthropic(
         finally {
           clearTimeout(timeout);
           controller.signal.removeEventListener('abort', onTimeout);
+          if (onAbort) signal?.removeEventListener('abort', onAbort);
         }
       })();
     },
@@ -414,7 +420,8 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; api
 
     if (format === 'anthropic') {
       // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
-      const base = apiBase.replace(/\/+$/, '');
+      const base = stripVersionSuffix(apiBase);
+      const model = settings.model || 'claude-sonnet-4-20250514';
       const res = await fetch(`${base}/v1/messages`, {
         method: 'POST',
         headers: {
@@ -422,7 +429,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; api
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
         },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+        body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
         signal: AbortSignal.timeout(8000),
       });
       // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error

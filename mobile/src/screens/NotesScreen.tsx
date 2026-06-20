@@ -11,6 +11,7 @@ export default function NotesScreen({ navigation }: any) {
   const [notes, setNotes] = useState<DbNote[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
 
   const load = useCallback(async (query: string) => {
@@ -41,6 +42,12 @@ export default function NotesScreen({ navigation }: any) {
     } catch (e: any) {
       Alert.alert('创建失败', e.message || '请重试');
     }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await load(search);
+    setRefreshing(false);
   };
 
   const handleDelete = (id: string) => {
@@ -105,6 +112,8 @@ export default function NotesScreen({ navigation }: any) {
         renderItem={renderItem}
         keyExtractor={item => item.id}
         contentContainerStyle={{ padding: 16 }}
+        refreshing={refreshing}
+        onRefresh={handleRefresh}
         ListEmptyComponent={
           <View style={s.empty}>
             <Text style={[s.emptyText, { color: c.textSecondary }]}>

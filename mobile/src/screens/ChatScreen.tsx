@@ -12,6 +12,7 @@ import MarkdownPreview from '../components/MarkdownPreview';
 import { chatWithReconnect, ChatMessage } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
+import type { ChatScreenProps } from '../navigation/types';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
@@ -27,7 +28,7 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
   const handleLongPress = () => {
     if (!item.content) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const actions: any[] = [
+    const actions: { text: string; onPress?: () => void; style?: 'default' | 'cancel' | 'destructive' }[] = [
       { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
     ];
     if (onResend) actions.push({ text: '重新发送', onPress: onResend });
@@ -56,7 +57,7 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
   );
 });
 
-export default function ChatScreen({ navigation, route }: any) {
+export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -148,7 +149,7 @@ export default function ChatScreen({ navigation, route }: any) {
     let activeSessionId = sessionId;
     try {
       userId = await addMessage(activeSessionId, 'user', userText);
-    } catch (e: any) {
+    } catch (e: unknown) {
       // FOREIGN KEY = session was deleted/reset; recreate and retry
       if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
         try {
@@ -195,7 +196,7 @@ export default function ChatScreen({ navigation, route }: any) {
 
       const history: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
-        ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
+        ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
         { role: 'user', content: userText },
       ];
 
@@ -228,13 +229,15 @@ export default function ChatScreen({ navigation, route }: any) {
         // DB save failed; content stays in UI, user still sees the response
       }
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Save whatever partial content was received before the error
       const partial = msgsRef.current.find(m => m.id === aiId)?.content ?? '';
       if (partial) {
         try { await updateMessage(aiId, partial); } catch { /* best-effort */ }
       }
-      if (err.name === 'AbortError') {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errName = err instanceof Error ? err.name : '';
+      if (errName === 'AbortError') {
         if (partial) {
           try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch {}
         }
@@ -242,7 +245,7 @@ export default function ChatScreen({ navigation, route }: any) {
       } else {
         // Append error marker without discarding streamed content; mark as error to filter from API history
         setMsgs(prev => prev.map(m => m.id === aiId
-          ? { ...m, content: m.content ? `${m.content}\n\n❌ ${err.message}` : `❌ ${err.message}`, streaming: false, isError: true }
+          ? { ...m, content: m.content ? `${m.content}\n\n❌ ${errMsg}` : `❌ ${errMsg}`, streaming: false, isError: true }
           : m));
       }
     } finally {

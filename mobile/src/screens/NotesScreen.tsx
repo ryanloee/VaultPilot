@@ -7,8 +7,9 @@ import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
+import type { NotesScreenProps } from '../navigation/types';
 
-export default function NotesScreen({ navigation }: any) {
+export default function NotesScreen({ navigation }: NotesScreenProps) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [notes, setNotes] = useState<DbNote[]>([]);
@@ -27,10 +28,10 @@ export default function NotesScreen({ navigation }: any) {
       if (requestIdRef.current !== currentId) return;
       setNotes(data);
       setFolders(folderList);
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (requestIdRef.current !== currentId) return;
       console.warn('[Notes] load failed:', e);
-      Alert.alert('加载失败', e.message || '请重试');
+      Alert.alert('加载失败', e instanceof Error ? e.message : '请重试');
     } finally {
       if (requestIdRef.current === currentId) setLoading(false);
     }
@@ -47,8 +48,8 @@ export default function NotesScreen({ navigation }: any) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const id = await createNote();
       navigation.navigate('NoteEdit', { noteId: id });
-    } catch (e: any) {
-      Alert.alert('创建失败', e.message || '请重试');
+    } catch (e: unknown) {
+      Alert.alert('创建失败', e instanceof Error ? e.message : '请重试');
     }
   };
 
@@ -62,7 +63,7 @@ export default function NotesScreen({ navigation }: any) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert(item.title || '笔记操作', '', [
       { text: item.starred ? '取消收藏' : '收藏', onPress: async () => {
-        try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
+        try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '请重试'); }
       }},
       { text: '复制内容', onPress: () => {
         const text = item.content ? (item.title ? `${item.title}\n\n${item.content}` : item.content) : '';
@@ -77,7 +78,7 @@ export default function NotesScreen({ navigation }: any) {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteNote(id); await load(search, activeFolder); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
+        try { await deleteNote(id); await load(search, activeFolder); } catch (e: unknown) { Alert.alert('删除失败', e instanceof Error ? e.message : '请重试'); }
       }},
     ]);
   };

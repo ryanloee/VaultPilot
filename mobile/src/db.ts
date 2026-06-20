@@ -21,6 +21,27 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureColumn('notes', 'starred', 'INTEGER DEFAULT 0');
 }
 
+/** Populate FTS tables from existing data (runs once, idempotent via content= sync). */
+async function migrateFts(db: SQLite.SQLiteDatabase): Promise<void> {
+  // Rebuild FTS content from source tables — safe to run on every open
+  // because content= tables auto-sync via triggers for new writes.
+  // This only catches rows inserted before triggers were created.
+  const msgCount = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM messages_fts');
+  const noteCount = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM notes_fts');
+  if (msgCount && msgCount.c === 0) {
+    const msgs = await db.getAllAsync<{ rowid: number; content: string }>('SELECT rowid, content FROM messages');
+    for (const m of msgs) {
+      await db.runAsync('INSERT INTO messages_fts(rowid, content) VALUES (?, ?)', [m.rowid, m.content]);
+    }
+  }
+  if (noteCount && noteCount.c === 0) {
+    const notes = await db.getAllAsync<{ rowid: number; title: string; content: string }>('SELECT rowid, title, content FROM notes');
+    for (const n of notes) {
+      await db.runAsync('INSERT INTO notes_fts(rowid, title, content) VALUES (?, ?, ?)', [n.rowid, n.title, n.content]);
+    }
+  }
+}
+
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = (async () => {
@@ -53,7 +74,36 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
+      // FTS5 virtual tables for full-text search
+      await db.execAsync(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=rowid);
+        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(title, content, content=notes, content_rowid=rowid);
+      `);
+      // Triggers to keep FTS in sync
+      await db.execAsync(`
+        CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+          INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+          INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+          INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+          INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+          INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+          INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+          INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
+          INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+        END;
+      `);
       await migrateSchema(db);
+      await migrateFts(db);
       return db;
     })().catch(err => {
       dbPromise = null; // Reset so next call retries instead of caching the failure
@@ -121,13 +171,17 @@ export async function toggleArchive(id: string): Promise<void> {
 
 export async function searchSessions(query: string): Promise<DbSession[]> {
   const db = await getDb();
+  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t}"`).join(' OR ');
+  if (!ftsQuery) return [];
   const escaped = escapeLikePattern(query);
+  // FTS5 on message content + LIKE on session title (titles are short, LIKE is fine)
   return db.getAllAsync<DbSession>(
     `SELECT DISTINCT s.* FROM sessions s
      LEFT JOIN messages m ON s.id = m.session_id
-     WHERE s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\'
+     LEFT JOIN messages_fts fts ON m.rowid = fts.rowid
+     WHERE messages_fts MATCH ? OR s.title LIKE ? ESCAPE '\\'
      ORDER BY s.updated_at DESC LIMIT 50`,
-    [`%${escaped}%`, `%${escaped}%`]
+    [ftsQuery, `%${escaped}%`]
   );
 }
 
@@ -207,9 +261,13 @@ export async function toggleStar(id: string): Promise<void> {
 
 export async function searchNotes(query: string): Promise<DbNote[]> {
   const db = await getDb();
-  const escaped = escapeLikePattern(query);
+  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t}"`).join(' OR ');
+  if (!ftsQuery) return [];
   return db.getAllAsync<DbNote>(
-    "SELECT * FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50",
-    [`%${escaped}%`, `%${escaped}%`]
+    `SELECT n.* FROM notes n
+     INNER JOIN notes_fts fts ON n.rowid = fts.rowid
+     WHERE notes_fts MATCH ?
+     ORDER BY n.updated_at DESC LIMIT 50`,
+    [ftsQuery]
   );
 }

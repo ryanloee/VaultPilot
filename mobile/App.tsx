@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { StatusBar, useColorScheme, Alert, Text } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -63,6 +63,8 @@ function TabIcon({ label, color }: { label: string; color: string }) {
 export default function App() {
   const { isDark, setIsDark, themeMode, accentColor } = useAppStore();
   const systemScheme = useColorScheme();
+  const [initState, setInitState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [errorMsg, setErrorMsg] = useState('');
   const loadedRef = useRef(false);
 
   // Load saved settings on startup
@@ -72,7 +74,8 @@ export default function App() {
         await getDb(); // Initialize database
       } catch (e) {
         console.error('[App] DB init failed:', e);
-        Alert.alert('数据库错误', '数据库初始化失败，请重启应用');
+        setErrorMsg(String(e));
+        setInitState('error');
         return;
       }
       try {
@@ -98,6 +101,7 @@ export default function App() {
         console.warn('[App] Failed to load settings:', e);
       }
       loadedRef.current = true;
+      setInitState('ready');
     })();
   }, []);
 
@@ -107,6 +111,29 @@ export default function App() {
       setIsDark(systemScheme === 'dark');
     }
   }, [systemScheme, themeMode]);
+
+  if (initState === 'loading') {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF' }}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+
+  if (initState === 'error') {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF', padding: 24 }}>
+        <Text style={{ fontSize: 18, fontWeight: '600', color: isDark ? '#F87171' : '#DC2626', marginBottom: 8 }}>数据库初始化失败</Text>
+        <Text style={{ fontSize: 14, color: isDark ? '#9CA3AF' : '#6B7280', textAlign: 'center', marginBottom: 16 }}>{errorMsg}</Text>
+        <TouchableOpacity
+          onPress={() => { setInitState('loading'); setErrorMsg(''); }}
+          style={{ paddingHorizontal: 24, paddingVertical: 12, backgroundColor: '#3B82F6', borderRadius: 8 }}
+        >
+          <Text style={{ color: '#FFF', fontWeight: '600' }}>重试</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <ErrorBoundary>

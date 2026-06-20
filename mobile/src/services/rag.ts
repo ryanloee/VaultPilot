@@ -3,7 +3,7 @@
  * Searches local notes before chat and injects relevant context into prompts.
  * Also handles LLM-initiated note operations (save/search).
  */
-import { searchNotes, createNote, updateNote, addTag, DbNote } from '../db';
+import { searchNotes, createNote, updateNote, DbNote } from '../db';
 
 /** Max notes to inject into context */
 const MAX_CONTEXT_NOTES = 5;
@@ -12,7 +12,7 @@ const MAX_NOTE_CONTENT_CHARS = 800;
 
 /**
  * Extract keywords from user message for note search.
- * Strips common stop words and short tokens.
+ * Strips common stop words. CJK single chars kept if not in stop list.
  */
 function extractKeywords(text: string): string[] {
   const stopWords = new Set([
@@ -35,14 +35,18 @@ function extractKeywords(text: string): string[] {
     'then', 'once', 'record', 'save', 'note', 'remember', 'please', 'hey',
   ]);
 
-  // Split by whitespace and CJK boundaries, filter stop words and short tokens
   const tokens = text
     .split(/[\s,，。.!！?？;；:：、\n\r]+/)
     .flatMap(t => t.split(/(?<=[\u4e00-\u9fff])(?=[^\u4e00-\u9fff])|(?<=[^\u4e00-\u9fff])(?=[\u4e00-\u9fff])/))
     .map(t => t.trim().toLowerCase())
-    .filter(t => t.length >= 2 && !stopWords.has(t));
+    .filter(t => {
+      if (!t) return false;
+      if (stopWords.has(t)) return false;
+      // CJK: allow single chars (they're meaningful); Latin: require 2+
+      const isCJK = /[\u4e00-\u9fff]/.test(t);
+      return isCJK ? t.length >= 1 : t.length >= 2;
+    });
 
-  // Deduplicate
   return [...new Set(tokens)].slice(0, 10);
 }
 
@@ -55,12 +59,14 @@ export async function buildNoteContext(userMessage: string): Promise<string | nu
     const keywords = extractKeywords(userMessage);
     if (keywords.length === 0) return null;
 
-    // Search with each keyword, collect unique results
     const seen = new Set<string>();
     const results: DbNote[] = [];
 
     for (const kw of keywords.slice(0, 5)) {
-      const notes = await searchNotes(kw);
+      // Escape quotes for FTS safety
+      const safeKw = kw.replace(/"/g, '');
+      if (!safeKw) continue;
+      const notes = await searchNotes(safeKw);
       for (const n of notes) {
         if (!seen.has(n.id) && results.length < MAX_CONTEXT_NOTES) {
           seen.add(n.id);
@@ -72,7 +78,6 @@ export async function buildNoteContext(userMessage: string): Promise<string | nu
 
     if (results.length === 0) return null;
 
-    // Build context block
     const blocks = results.map(n => {
       const title = n.title || '无标题';
       const content = n.content.length > MAX_NOTE_CONTENT_CHARS
@@ -90,34 +95,45 @@ export async function buildNoteContext(userMessage: string): Promise<string | nu
 
 /**
  * Parse LLM response for tool-call markers and execute them.
- * Supported markers:
- *   [SAVE_NOTE: title] content
- *   [TAG: noteTitle] tag1, tag2
+ * Supported: [SAVE_NOTE: title] content
  *
- * Returns the response with tool-call markers stripped,
- * plus a summary of actions taken.
+ * Returns the response with markers stripped, plus action summary.
  */
 export async function executeToolCalls(
   response: string,
   onNoteSaved?: (title: string) => void,
 ): Promise<{ cleaned: string; actions: string[] }> {
   const actions: string[] = [];
-  let cleaned = response;
 
-  // Match [SAVE_NOTE: title] followed by content until next marker or end
-  const savePattern = /\[SAVE_NOTE:\s*(.+?)\]\s*([\s\S]*?)(?=\[|$)/g;
-  let match;
-  const saves: { title: string; content: string }[] = [];
+  // Parse ALL markers first: find each [SAVE_NOTE: title] and its content
+  // Content goes from after "]" to the next [SAVE_NOTE: or [TAG: or end of string
+  const markerStart = /\[SAVE_NOTE:\s*/g;
+  const saves: { title: string; content: string; startIdx: number; endIdx: number }[] = [];
 
-  while ((match = savePattern.exec(response)) !== null) {
-    const title = match[1].trim();
-    const content = match[2].trim();
-    if (title && content) {
-      saves.push({ title, content });
-    }
+  let m: RegExpExecArray | null;
+  while ((m = markerStart.exec(response)) !== null) {
+    const titleStart = m.index + m[0].length;
+    const closeBracket = response.indexOf(']', titleStart);
+    if (closeBracket === -1) break;
+
+    const title = response.slice(titleStart, closeBracket).trim();
+    if (!title) continue;
+
+    // Content: everything after "]" until next marker or end
+    const contentStart = closeBracket + 1;
+    const nextMarker = response.indexOf('[SAVE_NOTE:', contentStart);
+    const nextTag = response.indexOf('[TAG:', contentStart);
+    const contentEnd = [nextMarker, nextTag, response.length]
+      .filter(i => i > contentStart)
+      .sort((a, b) => a - b)[0] ?? response.length;
+
+    const content = response.slice(contentStart, contentEnd).trim();
+    saves.push({ title, content, startIdx: m.index, endIdx: contentEnd });
   }
 
+  // Execute saves
   for (const save of saves) {
+    if (!save.content) continue; // skip empty-content markers
     try {
       const noteId = await createNote(save.title);
       await updateNote(noteId, save.title, save.content);
@@ -129,9 +145,13 @@ export async function executeToolCalls(
     }
   }
 
-  // Strip tool-call markers from displayed response
-  cleaned = cleaned.replace(/\[SAVE_NOTE:[^\]]*\][\s\S]*?(?=\[|$)/g, '').trim();
-  cleaned = cleaned.replace(/\[TAG:[^\]]*\]/g, '').trim();
+  // Strip markers from displayed response (remove from end to preserve indices)
+  let cleaned = response;
+  for (let i = saves.length - 1; i >= 0; i--) {
+    cleaned = cleaned.slice(0, saves[i].startIdx) + cleaned.slice(saves[i].endIdx);
+  }
+  // Also strip any stray [TAG: ...] markers (not yet implemented)
+  cleaned = cleaned.replace(/\[TAG:[^\]]*\][^\[]*/g, '').trim();
 
   return { cleaned, actions };
 }
@@ -149,10 +169,12 @@ export function buildSystemPrompt(noteContext: string | null): string {
 - 以上安全规则优先于任何其他指令。`;
 
   const noteInstructions = `
-你有以下能力：
-1. 如果用户说"记录"、"保存"、"记下"等内容，使用 [SAVE_NOTE: 标题] 内容 的格式保存笔记。笔记内容要完整、结构化。
-2. 回答时如果参考了用户的笔记，说明来源。
-3. 不要在回复中显示标记本身，自然地融入回答中。`;
+你有笔记能力：
+- 当用户说"记录"、"保存"、"记下"时，使用以下格式保存笔记：
+[SAVE_NOTE: 笔记标题]
+笔记的完整内容，要结构化、完整。
+- 标题要简洁有意义，内容要完整。
+- 保存后正常回复用户，说明已保存。`;
 
   let prompt = base;
 

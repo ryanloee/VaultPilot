@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -18,6 +19,26 @@ export interface ProviderConfig {
   apiKey: string;
   model: string;
   apiFormat: ApiFormat;
+}
+
+// ── Secure provider key storage ───────────────────────────
+// API keys are stored in SecureStore (encrypted), not AsyncStorage (plain text).
+const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
+
+async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void> {
+  const keys = providers.map(p => p.apiKey);
+  try {
+    await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+  } catch (e) {
+    console.warn('[SecureStore] Failed to save provider keys:', e);
+  }
+}
+
+async function loadProviderKeysSecure(): Promise<string[]> {
+  try {
+    const raw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
 }
 
 interface AppState {
@@ -127,6 +148,7 @@ export const useAppStore = create<AppState>()(
         if (providers.length > 0) {
           const idx = Math.min(state.activeProviderIndex, providers.length - 1);
           providers[idx] = { ...providers[idx], ...newState };
+          saveProviderKeysSecure(providers);
         }
         return { ...newState, providers };
       }),
@@ -137,8 +159,8 @@ export const useAppStore = create<AppState>()(
       addProvider: (p) => set((state) => {
         const providers = [...state.providers, p];
         const activeProviderIndex = providers.length - 1;
-        // Sync legacy fields
         setTimeout(() => syncLegacyFields(set, providers, activeProviderIndex), 0);
+        saveProviderKeysSecure(providers);
         return { providers, activeProviderIndex };
       }),
 
@@ -151,6 +173,7 @@ export const useAppStore = create<AppState>()(
         if (providers.length > 0) {
           setTimeout(() => syncLegacyFields(set, providers, activeProviderIndex), 0);
         }
+        saveProviderKeysSecure(providers);
         return { providers, activeProviderIndex };
       }),
 
@@ -160,6 +183,7 @@ export const useAppStore = create<AppState>()(
         if (index === Math.min(state.activeProviderIndex, providers.length - 1)) {
           setTimeout(() => syncLegacyFields(set, providers, state.activeProviderIndex), 0);
         }
+        saveProviderKeysSecure(providers);
         return { providers };
       }),
 
@@ -176,12 +200,25 @@ export const useAppStore = create<AppState>()(
         themeMode: state.themeMode,
         accentColor: state.accentColor,
         apiBase: state.apiBase,
-        apiKey: state.apiKey,
+        // apiKey excluded — stored in SecureStore instead
         model: state.model,
         apiFormat: state.apiFormat,
-        providers: state.providers,
+        providers: state.providers.map(p => ({ ...p, apiKey: '' })),
         activeProviderIndex: state.activeProviderIndex,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        // Restore API keys from SecureStore after hydration
+        loadProviderKeysSecure().then(keys => {
+          if (keys.length === 0) return;
+          const providers = state.providers.map((p, i) => ({
+            ...p,
+            apiKey: keys[i] ?? '',
+          }));
+          state.providers = providers;
+          syncLegacyFields(useAppStore.setState, providers, state.activeProviderIndex);
+        });
+      },
     }
   )
 );

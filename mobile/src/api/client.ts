@@ -112,8 +112,10 @@ export async function chat(
   // Combine user signal with timeout
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-  if (signal) {
-    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  const sig = signal;
+  const onSignalAbort = sig ? () => controller.abort(sig.reason) : undefined;
+  if (sig && onSignalAbort) {
+    sig.addEventListener('abort', onSignalAbort, { once: true });
   }
 
   try {
@@ -166,6 +168,7 @@ export async function chat(
     throw e;
   } finally {
     clearTimeout(timeout);
+    if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
   }
 }
 

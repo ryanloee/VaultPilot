@@ -155,8 +155,13 @@ export async function chat(
     // If non-streaming fallback, wrap JSON response as a single-chunk SSE stream
     if (!res.headers.get('content-type')?.includes('text/event-stream')) {
       const json = await res.json();
-      const content = json.choices?.[0]?.message?.content ?? '';
-      const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`);
+      const message = json.choices?.[0]?.message ?? {};
+      const delta: Record<string, unknown> = {};
+      if (message.content) delta.content = message.content;
+      if (message.tool_calls) delta.tool_calls = message.tool_calls;
+      if (message.function_call) delta.function_call = message.function_call;
+      const finish_reason = json.choices?.[0]?.finish_reason;
+      const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\ndata: [DONE]\n\n`);
       return new ReadableStream({
         start(controller) { controller.enqueue(encoded); controller.close(); },
       });

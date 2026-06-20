@@ -7,6 +7,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { chatWithReconnect, ChatMessage } from '../api/client';
@@ -15,6 +17,7 @@ import { getMessages, addMessage, updateMessage, deleteMessage, createSession, g
 import type { ChatScreenProps } from '../navigation/types';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
+interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
 
 /** Max messages sent to API to avoid exceeding model context window */
 const MAX_HISTORY_MESSAGES = 50;
@@ -78,6 +81,40 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  const pickImage = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setAttachments(prev => [...prev, { name: asset.fileName || 'photo.jpg', uri: asset.uri, type: 'image' }]);
+    }
+  };
+
+  const takePhoto = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) { Alert.alert('权限不足', '需要相机权限才能拍照'); return; }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setAttachments(prev => [...prev, { name: asset.fileName || 'photo.jpg', uri: asset.uri, type: 'image' }]);
+    }
+  };
+
+  const pickDocument = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const result = await DocumentPicker.getDocumentAsync({ multiple: false });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setAttachments(prev => [...prev, { name: asset.name, uri: asset.uri, type: 'file' }]);
+    }
+  };
 
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
@@ -184,6 +221,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     }
     setInput('');
     setInputHeight(0);
+    setAttachments([]);
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
     // Snapshot before state update — msgsRef may or may not be flushed by React
     // before we build the API history, so pin it here.
@@ -421,8 +459,38 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         </TouchableOpacity>
       )}
 
+      {/* Attachment preview chips */}
+      {attachments.length > 0 && (
+        <View style={[s.attachRow, { backgroundColor: c.bgSecondary }]}>
+          {attachments.map((att, i) => (
+            <View key={i} style={[s.attachChip, { borderColor: c.border }]}>
+              <Text style={[s.attachName, { color: c.text }]} numberOfLines={1}>
+                {att.type === 'image' ? '🖼' : '📄'} {att.name}
+              </Text>
+              <TouchableOpacity onPress={() => setAttachments(prev => prev.filter((_, j) => j !== i))}>
+                <Text style={{ color: '#EF4444', fontSize: 14 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      )}
+
       {/* Input bar */}
       <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
+        <TouchableOpacity
+          style={[s.attachBtn, { borderColor: c.border }]}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            Alert.alert('添加附件', '', [
+              { text: '📷 拍照', onPress: takePhoto },
+              { text: '🖼 相册', onPress: pickImage },
+              { text: '📄 文件', onPress: pickDocument },
+              { text: '取消', style: 'cancel' },
+            ]);
+          }}
+        >
+          <Text style={{ color: c.textSecondary, fontSize: 18 }}>📎</Text>
+        </TouchableOpacity>
         <TextInput
           style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
           value={input}
@@ -445,8 +513,8 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         ) : (
           <TouchableOpacity
             onPress={send}
-            style={[s.sendBtn, { backgroundColor: input.trim() ? accentColor : c.border }]}
-            disabled={!input.trim()}
+            style={[s.sendBtn, { backgroundColor: (input.trim() || attachments.length > 0) ? accentColor : c.border }]}
+            disabled={!input.trim() && attachments.length === 0}
             accessibilityRole="button" accessibilityLabel="发送消息"
           >
             <Text style={s.sendText}>➤</Text>
@@ -468,6 +536,21 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-end',
     padding: 8, borderTopWidth: 1,
   },
+  attachBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    justifyContent: 'center', alignItems: 'center',
+    marginRight: 6,
+  },
+  attachRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  attachChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 12, borderWidth: 1,
+  },
+  attachName: { fontSize: 12, maxWidth: 150 },
   textInput: {
     flex: 1, borderWidth: 1, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 10,

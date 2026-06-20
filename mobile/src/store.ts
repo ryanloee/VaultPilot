@@ -51,8 +51,20 @@ const DARK_COLORS = {
   userBubble: '#3B82F6', userText: '#FFFFFF', aiBubble: '#1F2937', aiText: '#F9FAFB',
 };
 
-export function getColors(isDark: boolean, accent: string) {
-  return { ...(isDark ? DARK_COLORS : LIGHT_COLORS), accent };
+type ColorScheme = typeof LIGHT_COLORS & { accent: string };
+
+let cachedColors: ColorScheme | null = null;
+let cachedIsDark = false;
+let cachedAccent = '';
+
+export function getColors(isDark: boolean, accent: string): ColorScheme {
+  if (isDark === cachedIsDark && accent === cachedAccent && cachedColors) {
+    return cachedColors;
+  }
+  cachedIsDark = isDark;
+  cachedAccent = accent;
+  cachedColors = { ...(isDark ? DARK_COLORS : LIGHT_COLORS), accent };
+  return cachedColors;
 }
 
 export const useAppStore = create<AppState>()(

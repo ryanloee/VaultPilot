@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -176,12 +177,24 @@ export const useAppStore = create<AppState>()(
         themeMode: state.themeMode,
         accentColor: state.accentColor,
         apiBase: state.apiBase,
-        apiKey: state.apiKey,
         model: state.model,
         apiFormat: state.apiFormat,
-        providers: state.providers,
+        // Strip apiKey from providers — stored in SecureStore only
+        providers: state.providers.map(({ apiKey, ...rest }) => rest),
         activeProviderIndex: state.activeProviderIndex,
       }),
+      onRehydrateStorage: () => (_state, _error) => {
+        // Restore apiKey from SecureStore after hydration
+        SecureStore.getItemAsync('cfg_api_key').then((key) => {
+          if (key) {
+            const store = useAppStore.getState();
+            const providers = store.providers.map((p, i) =>
+              i === store.activeProviderIndex ? { ...p, apiKey: key } : p
+            );
+            useAppStore.setState({ apiKey: key, providers });
+          }
+        }).catch(() => {});
+      },
     }
   )
 );

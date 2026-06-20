@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import { chat, parseSSEStream, ChatMessage } from '../api/client';
 import { getMessages, addMessage, updateMessage, createSession, getLatestSession } from '../db';
@@ -17,15 +18,24 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }:
   item: Msg; isDark: boolean; accentColor: string;
 }) {
   const c = getColors(isDark, accentColor);
+  const handleLongPress = () => {
+    if (!item.content) return;
+    Alert.alert('复制消息', '将消息内容复制到剪贴板？', [
+      { text: '取消', style: 'cancel' },
+      { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
+    ]);
+  };
   return (
-    <View style={[s.bubble, item.role === 'user'
-      ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
-      : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
-      <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
-        {item.content || (item.streaming ? '思考中...' : '')}
-        {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
-      </Text>
-    </View>
+    <TouchableOpacity onLongPress={handleLongPress} activeOpacity={0.8}>
+      <View style={[s.bubble, item.role === 'user'
+        ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
+        : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
+        <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
+          {item.content || (item.streaming ? '思考中...' : '')}
+          {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
+        </Text>
+      </View>
+    </TouchableOpacity>
   );
 });
 

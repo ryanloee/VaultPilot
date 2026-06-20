@@ -5,6 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, ApiFormat, ProviderConfig } from '../store';
 import { checkApi, getSettings, saveSettings } from '../api/client';
+import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
 
@@ -32,16 +33,28 @@ export default function SettingsScreen() {
   const [apiFormat, setApiFormat] = useState<ApiFormat>(active?.apiFormat ?? store.apiFormat);
   const [providerName, setProviderName] = useState(active?.name ?? '');
 
-  // Sync local state when active provider changes
+  // Sync local state when active provider changes or key is restored from SecureStore
   useEffect(() => {
     if (active) {
       setApiBase(active.apiBase);
-      setApiKey(active.apiKey);
+      if (active.apiKey) {
+        setApiKey(active.apiKey);
+      } else {
+        // Key may not be restored yet from SecureStore; try loading directly
+        SecureStore.getItemAsync('vaultpilot_provider_keys').then(raw => {
+          if (!raw) return;
+          try {
+            const keys: string[] = JSON.parse(raw);
+            const key = keys[activeIdx] ?? '';
+            if (key) setApiKey(key);
+          } catch {}
+        });
+      }
       setModel(active.model);
       setApiFormat(active.apiFormat);
       setProviderName(active.name);
     }
-  }, [activeIdx]);
+  }, [activeIdx, active?.apiKey]);
 
   // Load saved settings on mount
   useEffect(() => {

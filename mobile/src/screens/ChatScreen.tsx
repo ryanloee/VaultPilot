@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect, useCallback, memo, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity,
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet, Alert,
+  NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
@@ -41,6 +42,8 @@ export default function ChatScreen({ navigation }: any) {
   const listRef = useRef<FlatList>(null);
   const msgsRef = useRef<Msg[]>([]);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nearBottomRef = useRef(true);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   // Init session — reuse latest active session or create new one
   useEffect(() => {
@@ -175,16 +178,29 @@ export default function ChatScreen({ navigation }: any) {
     abortRef.current?.abort();
   };
 
-  // Debounced scroll-to-end — avoids per-chunk scroll during streaming
-  const scrollToEndDebounced = useCallback(() => {
+  // Debounced scroll-to-end — only when user is near bottom
+  const scrollToEndDebounced = useCallback((force = false) => {
+    if (!force && !nearBottomRef.current) return;
     if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
     scrollTimerRef.current = setTimeout(() => {
       listRef.current?.scrollToEnd({ animated: true });
     }, 100);
   }, []);
 
-  // Also scroll when msgs change (covers new user message + AI start)
-  useEffect(() => { scrollToEndDebounced(); }, [msgs.length]);
+  // Wrapper for onContentSizeChange (ignores width/height params)
+  const onContentSizeChange = useCallback(() => { scrollToEndDebounced(); }, [scrollToEndDebounced]);
+
+  // Track whether user is near the bottom
+  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+    const near = distanceFromBottom < 120;
+    nearBottomRef.current = near;
+    setShowScrollBtn(!near && msgs.length > 0);
+  }, [msgs.length]);
+
+  // Scroll when new messages arrive (user sends → force scroll)
+  useEffect(() => { scrollToEndDebounced(true); }, [msgs.length]);
 
   if (loading) {
     return (
@@ -209,12 +225,23 @@ export default function ChatScreen({ navigation }: any) {
         renderItem={({ item }) => <MessageBubble item={item} isDark={isDark} accentColor={accentColor} />}
         keyExtractor={item => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
-        onContentSizeChange={scrollToEndDebounced}
+        onContentSizeChange={() => scrollToEndDebounced()}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         removeClippedSubviews={Platform.OS === 'android'}
         initialNumToRender={15}
         maxToRenderPerBatch={10}
         windowSize={11}
       />
+
+      {showScrollBtn && (
+        <TouchableOpacity
+          onPress={() => { nearBottomRef.current = true; setShowScrollBtn(false); listRef.current?.scrollToEnd({ animated: true }); }}
+          style={[s.scrollBtn, { backgroundColor: c.inputBg, borderColor: c.border }]}
+        >
+          <Text style={{ color: accentColor, fontSize: 16 }}>↓</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Input bar */}
       <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
@@ -270,5 +297,13 @@ const s = StyleSheet.create({
   newChatBtn: {
     alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 16,
     borderWidth: 1, borderRadius: 16, marginTop: 8,
+  },
+  scrollBtn: {
+    position: 'absolute', bottom: 70, alignSelf: 'center',
+    width: 36, height: 36, borderRadius: 18,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, elevation: 2,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15, shadowRadius: 2,
   },
 });

@@ -4,13 +4,15 @@ export interface StreamChunk {
   done: boolean;
 }
 
-interface ParseSSEOptions {
+export interface ParseSSEOptions {
   /** Maximum reconnection attempts on network error (default: 3) */
   maxRetries?: number;
   /** Base delay for exponential backoff in ms (default: 1000) */
   baseDelay?: number;
   /** AbortSignal for cancellation */
   signal?: AbortSignal;
+  /** Transform the raw response body before SSE parsing (e.g. Anthropic→OpenAI wrapper) */
+  transformBody?: (body: ReadableStream<Uint8Array>) => ReadableStream<Uint8Array>;
 }
 
 /**
@@ -144,7 +146,8 @@ export async function parseSSEStreamWithReconnect(
       }
       if (!res.body) throw new Error('No response body');
 
-      await parseSSEStream(res.body, wrappedOnChunk, options);
+      const streamBody = options?.transformBody ? options.transformBody(res.body) : res.body;
+      await parseSSEStream(streamBody, wrappedOnChunk, options);
       return; // Success
     } catch (err: any) {
       if (err.name === 'AbortError') throw err;

@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert,
   ActivityIndicator, PanResponder, Animated, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
-import { getSessions, deleteSession, toggleArchive, togglePin, renameSession, DbSession } from '../db';
+import { getSessions, deleteSession, toggleArchive, togglePin, renameSession, searchSessions, DbSession } from '../db';
 
 const SWIPE_THRESHOLD = -80;
 const ACTION_WIDTH = 160;
@@ -80,9 +80,11 @@ export default function SessionsScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (query?: string) => {
     try {
-      const data = await getSessions(showArchived);
+      const data = query?.trim()
+        ? await searchSessions(query.trim())
+        : await getSessions(showArchived);
       setSessions(data);
     } catch (e: any) {
       console.warn('[Sessions] load failed:', e);
@@ -94,15 +96,15 @@ export default function SessionsScreen({ navigation }: any) {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return sessions;
-    const q = search.toLowerCase();
-    return sessions.filter(s => s.title.toLowerCase().includes(q));
-  }, [sessions, search]);
+  // Debounce search: wait 300ms after last keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => load(search), 300);
+    return () => clearTimeout(timer);
+  }, [search, load]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await load();
+    await load(search);
     setRefreshing(false);
   };
 
@@ -175,7 +177,7 @@ export default function SessionsScreen({ navigation }: any) {
       </View>
 
       <FlatList
-        data={filtered}
+        data={sessions}
         keyExtractor={item => item.id}
         contentContainerStyle={{ paddingHorizontal: 16 }}
         refreshing={refreshing}

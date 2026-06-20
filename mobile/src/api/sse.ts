@@ -149,7 +149,13 @@ export async function parseSSEStreamWithReconnect(
       if (attempt < maxRetries) {
         const delay = baseDelay * Math.pow(2, attempt);
         console.warn(`[SSE] Connection lost (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms:`, err.message);
-        await new Promise(r => setTimeout(r, delay));
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, delay);
+          options?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(new DOMException('Aborted', 'AbortError'));
+          }, { once: true });
+        });
       } else {
         throw err;
       }

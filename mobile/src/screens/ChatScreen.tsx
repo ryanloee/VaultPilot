@@ -11,7 +11,7 @@ import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { chatWithReconnect, ChatMessage } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
-import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
+import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession, renameSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
@@ -65,6 +65,8 @@ export default function ChatScreen({ navigation, route }: any) {
   const [streaming, setStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [title, setTitle] = useState('新对话');
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleInput, setTitleInput] = useState('');
   const [loading, setLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<FlatList>(null);
@@ -284,6 +286,21 @@ export default function ChatScreen({ navigation, route }: any) {
     if (!msg || !sessionId) return;
     setInput(msg.content);
   }, [sessionId]);
+  // Rename the current session
+  const handleRename = useCallback(async (newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed || !sessionId || trimmed === title) {
+      setEditingTitle(false);
+      return;
+    }
+    try {
+      await renameSession(sessionId, trimmed);
+      setTitle(trimmed);
+    } catch (e) {
+      console.warn('[Chat] rename failed:', e);
+    }
+    setEditingTitle(false);
+  }, [sessionId, title]);
 
   // Debounced scroll-to-end — only when user is near bottom
   const scrollToEndDebounced = useCallback((force = false) => {
@@ -322,10 +339,22 @@ export default function ChatScreen({ navigation, route }: any) {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior="height" keyboardVerticalOffset={0}>
       {/* Header */}
       <View style={[s.header, { borderBottomColor: c.border }]}>
-        <TouchableOpacity onPress={() => navigation.navigate('Sessions')} style={s.sessionsBtn}>
-          <Text style={{ color: accentColor, fontSize: 14 }}>☰ 对话</Text>
-        </TouchableOpacity>
-        <Text style={[s.titleText, { color: c.text }]} numberOfLines={1}>{title}</Text>
+        {editingTitle ? (
+          <TextInput
+            style={[s.titleInput, { color: c.text, borderColor: accentColor }]}
+            value={titleInput}
+            onChangeText={setTitleInput}
+            onBlur={() => handleRename(titleInput)}
+            onSubmitEditing={() => handleRename(titleInput)}
+            autoFocus
+            selectTextOnFocus
+          />
+        ) : (
+          <TouchableOpacity onPress={() => { setTitleInput(title); setEditingTitle(true); }} style={s.titleBtn}>
+            <Text style={[s.titleText, { color: c.text }]} numberOfLines={1}>{title}</Text>
+            <Text style={[s.editHint, { color: c.textSecondary }]}>✏️</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}>
           <Text style={{ color: accentColor, fontSize: 14 }}>＋</Text>
         </TouchableOpacity>
@@ -437,11 +466,19 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1,
   },
-  sessionsBtn: {
-    paddingVertical: 6, paddingHorizontal: 10,
+  titleBtn: {
+    flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8,
   },
   titleText: {
-    fontSize: 17, fontWeight: '600', flex: 1, textAlign: 'center',
+    fontSize: 17, fontWeight: '600', flex: 1,
+  },
+  editHint: {
+    fontSize: 14, marginLeft: 6,
+  },
+  titleInput: {
+    flex: 1, fontSize: 17, fontWeight: '600',
+    borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 4, marginRight: 8,
   },
   emptyContainer: {
     flex: 1, justifyContent: 'center', alignItems: 'center',

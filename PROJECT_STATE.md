@@ -499,17 +499,16 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#231)
+## 本轮循环状态 (循环#232)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#231
+- 循环编号: 循环#232
 - 本轮时间: 2026-06-20
 - 审查模块: mobile 全量 (~1129行, 8文件), Rust 后端全量 (~17.8K行, 9文件), WinUI (~6.9K行, ~20文件)
-- 竞品调研: Obsidian 1.13.0 (Settings revamp + search, CodeMirror upgrade, Bases column resize)。Obsidian AI plugin 生态碎片化(Smart Connections, Copilot, Text Generator 各解决一部分问题, 无原生 MCP bridge)。Notion MCP Server (OAuth + 全 workspace 读写, 与 Claude Code/Cursor/ChatGPT 集成)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key。
+- 竞品调研: Obsidian 1.13.1 (Settings inline slider values, search filtering, back navigation, keyboard shortcuts, mouse back button)。Notion v3.5 Developer Platform (External Agents API Alpha, CLI, Agent SDK, MCP 91% token reduction, webhook triggers)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key。
 - 讨论阶段发现: 零新 issue
-  - Rust 后端: 388 测试全通过, 0 unsafe, 0 生产 unwrap, 0 TODO/FIXME, cargo audit 全通过(0 漏洞)
-  - C# WinUI: 所有 21 个 async void handler 均有 try-catch 保护, 无 .Result/.Wait() 同步阻塞
-  - mobile: 已有 issue 全面覆盖所有已知缺陷, 代码质量持续改善
-  - 近期合并 PR: #1098-#1103 (abort-on-unmount, SSE flush, format wraps selection, duplicate msg, saveAll, schema migration) 已关闭对应 issue
-  - 7 open PR (#1085-#1090, #1093): #1093 CI 全通过, #1085-#1090 TypeScript 类型检查失败(基于旧 main 分支, 需 rebase)
-- 项目状态: **50 open issue, 7 open PR, ~1103 PR 编号, 388 Rust 测试全通过, cargo audit clean**
+  - Rust 后端: 16 测试全通过, 0 unsafe, 0 生产 unwrap, 0 TODO/FIXME, cargo audit clean(0 漏洞), cargo clippy 0 warnings
+  - C# WinUI: 所有 22 个 async void handler 均有 try-catch 保护, 无 .Result/.Wait() 同步阻塞
+  - mobile: TypeScript 编译零错误, 已有 issue 覆盖所有已知缺陷
+  - 关闭 5 个过期 PR: #1085(#1083 已由 #1128 修复), #1086(#1080 已关闭+冲突), #1087(#1084 已关闭), #1088(#1082 已关闭+冲突), #1089(#1081 冲突需新 PR)
+- 项目状态: **45 open issue, 1 open PR (#1090, CI 失败需 rebase), ~1130 PR 编号, 16 Rust 测试全通过, cargo audit clean**
 - 代码审查: 3 路深度审查 mobile (~1129行) + Rust (~17.8K行) + WinUI (~6.9K行) = ~25.8K行。三端零新缺陷。

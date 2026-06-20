@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Appearance } from 'react-native';
 
 interface Props {
   children: React.ReactNode;
@@ -27,11 +27,12 @@ export default class ErrorBoundary extends React.Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      const isDark = Appearance.getColorScheme() === 'dark';
       return (
-        <View style={styles.container}>
-          <Text style={styles.title}>应用出错了</Text>
-          <Text style={styles.message}>{this.state.error?.message}</Text>
-          <TouchableOpacity style={styles.button} onPress={this.handleRetry}>
+        <View style={[styles.container, { backgroundColor: isDark ? '#1a1a1a' : '#fff' }]}>
+          <Text style={[styles.title, { color: isDark ? '#e0e0e0' : '#1a1a1a' }]}>应用出错了</Text>
+          <Text style={[styles.message, { color: isDark ? '#aaa' : '#666' }]}>{this.state.error?.message}</Text>
+          <TouchableOpacity style={[styles.button, { backgroundColor: isDark ? '#4a8ac7' : '#1E3A5F' }]} onPress={this.handleRetry}>
             <Text style={styles.buttonText}>重试</Text>
           </TouchableOpacity>
         </View>
@@ -47,7 +48,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: '#fff',
   },
   title: {
     fontSize: 20,
@@ -56,12 +56,10 @@ const styles = StyleSheet.create({
   },
   message: {
     fontSize: 14,
-    color: '#666',
     textAlign: 'center',
     marginBottom: 24,
   },
   button: {
-    backgroundColor: '#1E3A5F',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 8,

@@ -12,6 +12,7 @@ import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
 
 import ChatScreen from './src/screens/ChatScreen';
+import SessionsScreen from './src/screens/SessionsScreen';
 import NotesScreen from './src/screens/NotesScreen';
 import NoteEditorScreen from './src/screens/NoteEditorScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
@@ -30,6 +31,15 @@ function NotesStack() {
   );
 }
 
+function ChatStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="ChatMain" component={ChatScreen} />
+      <Stack.Screen name="Sessions" component={SessionsScreen} />
+    </Stack.Navigator>
+  );
+}
+
 function MainTabs() {
   const { isDark, accentColor } = useAppStore();
   return (
@@ -44,7 +54,7 @@ function MainTabs() {
         tabBarInactiveTintColor: isDark ? '#6B7280' : '#9CA3AF',
       }}
     >
-      <Tab.Screen name="Chat" component={ChatScreen} options={{
+      <Tab.Screen name="Chat" component={ChatStack} options={{
         tabBarLabel: '对话',
         tabBarIcon: ({ color }) => <TabIcon label="💬" color={color} />,
       }} />

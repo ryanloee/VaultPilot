@@ -40,13 +40,14 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }:
   );
 });
 
-export default function ChatScreen({ navigation }: any) {
+export default function ChatScreen({ navigation, route }: any) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [title, setTitle] = useState('新对话');
   const [loading, setLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<FlatList>(null);
@@ -55,13 +56,36 @@ export default function ChatScreen({ navigation }: any) {
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
-  // Init session — reuse latest active session or create new one
+  // Load a specific session by ID
+  const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
+    abortRef.current?.abort();
+    setSessionId(sid);
+    setTitle(sessionTitle);
+    setMsgs([]);
+    setInput('');
+    try {
+      const history = await getMessages(sid);
+      setMsgs(history.map(m => ({
+        id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+      })));
+    } catch (e) {
+      console.warn('[Chat] loadSession failed:', e);
+    }
+  }, []);
+
+  // Init session — from route params or latest active session
   useEffect(() => {
     (async () => {
       try {
+        // If navigated from SessionsScreen with specific session
+        if (route.params?.sessionId) {
+          await loadSession(route.params.sessionId, route.params.title || '对话');
+          return;
+        }
         const existing = await getLatestSession();
         if (existing) {
           setSessionId(existing.id);
+          setTitle(existing.title);
           const history = await getMessages(existing.id);
           setMsgs(history.map(m => ({
             id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
@@ -81,6 +105,13 @@ export default function ChatScreen({ navigation }: any) {
 
   // Keep ref in sync with state so send() reads latest messages
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+
+  // Handle navigation params when returning from SessionsScreen
+  useEffect(() => {
+    if (route.params?.sessionId && route.params.sessionId !== sessionId) {
+      loadSession(route.params.sessionId, route.params.title || '对话');
+    }
+  }, [route.params?.sessionId]);
 
   // Abort any in-flight stream on unmount
   useEffect(() => {
@@ -178,6 +209,7 @@ export default function ChatScreen({ navigation }: any) {
       abortRef.current?.abort();
       const id = await createSession('新对话');
       setSessionId(id);
+      setTitle('新对话');
       setMsgs([]);
     } catch (e) {
       console.warn('[Chat] newChat failed:', e);
@@ -223,10 +255,16 @@ export default function ChatScreen({ navigation }: any) {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
-      {/* New chat button */}
-      <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}>
-        <Text style={{ color: accentColor, fontSize: 14 }}>＋ 新对话</Text>
-      </TouchableOpacity>
+      {/* Header */}
+      <View style={[s.header, { borderBottomColor: c.border }]}>
+        <TouchableOpacity onPress={() => navigation.navigate('Sessions')} style={s.sessionsBtn}>
+          <Text style={{ color: accentColor, fontSize: 14 }}>☰ 对话</Text>
+        </TouchableOpacity>
+        <Text style={[s.titleText, { color: c.text }]} numberOfLines={1}>{title}</Text>
+        <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}>
+          <Text style={{ color: accentColor, fontSize: 14 }}>＋</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Message list */}
       <FlatList
@@ -316,8 +354,18 @@ const s = StyleSheet.create({
   },
   sendText: { color: '#FFF', fontSize: 18 },
   newChatBtn: {
-    alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 16,
-    borderWidth: 1, borderRadius: 16, marginTop: 8,
+    paddingVertical: 6, paddingHorizontal: 12,
+    borderWidth: 1, borderRadius: 16,
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1,
+  },
+  sessionsBtn: {
+    paddingVertical: 6, paddingHorizontal: 10,
+  },
+  titleText: {
+    fontSize: 17, fontWeight: '600', flex: 1, textAlign: 'center',
   },
   emptyContainer: {
     flex: 1, justifyContent: 'center', alignItems: 'center',

@@ -117,6 +117,7 @@ fn main() {
         const CHUNK_SIZE: usize = 8 * 1024;
         let mut chunk_buf = [0u8; CHUNK_SIZE];
         let mut exceeded = false;
+        let mut lock = stdin.lock();
         'read: loop {
             // Determine how many bytes we can still accept.
             let capacity_left = MAX_LINE_BYTES.saturating_sub(stdin_buf.len());
@@ -124,7 +125,7 @@ fn main() {
             if want == 0 {
                 // Already at limit — drain byte-by-byte until newline.
                 exceeded = true;
-                match stdin.lock().read(&mut chunk_buf[..1]) {
+                match lock.read(&mut chunk_buf[..1]) {
                     Ok(0) | Err(_) => break,
                     Ok(_) => {}
                 }
@@ -133,7 +134,7 @@ fn main() {
                 }
                 continue;
             }
-            let n = match stdin.lock().read(&mut chunk_buf[..want]) {
+            let n = match lock.read(&mut chunk_buf[..want]) {
                 Ok(0) => break 'read, // EOF
                 Ok(n) => n,
                 Err(_) => break 'read,

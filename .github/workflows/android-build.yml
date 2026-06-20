@@ -40,6 +40,23 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${{ github.ref_name }}"  # e.g. v0.3.14
+          VERSION="${TAG#v}"             # 0.3.14
+          # Extract versionCode from tag: 0.3.14 -> 314 (major*100 + minor*10 + patch, but simpler: strip dots)
+          VERSION_CODE=$(echo "$VERSION" | tr -d '.')
+          echo "VERSION_NAME=$VERSION VERSION_CODE=$VERSION_CODE"
+          # Update app.json in-place
+          python3 -c "
+          import json
+          with open('app.json') as f: cfg = json.load(f)
+          cfg['expo']['version'] = '$VERSION'
+          cfg['expo']['android']['versionCode'] = int('$VERSION_CODE')
+          with open('app.json', 'w') as f: json.dump(cfg, f, indent=2)
+          "
+
       - name: Expo prebuild (generate native project)
         run: npx expo prebuild --platform android --no-install
 

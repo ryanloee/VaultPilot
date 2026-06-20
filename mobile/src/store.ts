@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -48,20 +50,35 @@ export function getColors(isDark: boolean, accent: string) {
   return { ...(isDark ? DARK_COLORS : LIGHT_COLORS), accent };
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  themeMode: 'system',
-  isDark: false,
-  accentColor: '#3B82F6',
-  setThemeMode: (themeMode) => set({ themeMode }),
-  setAccentColor: (accentColor) => set({ accentColor }),
-  setIsDark: (isDark) => set({ isDark }),
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
+      themeMode: 'system',
+      isDark: false,
+      accentColor: '#3B82F6',
+      setThemeMode: (themeMode) => set({ themeMode }),
+      setAccentColor: (accentColor) => set({ accentColor }),
+      setIsDark: (isDark) => set({ isDark }),
 
-  apiBase: 'https://api.openai.com/v1',
-  apiKey: '',
-  model: 'gpt-4o-mini',
-  setApiSettings: (s) => set((state) => ({
-    apiBase: s.apiBase ?? state.apiBase,
-    apiKey: s.apiKey ?? state.apiKey,
-    model: s.model ?? state.model,
-  })),
-}));
+      apiBase: 'https://api.openai.com/v1',
+      apiKey: '',
+      model: 'gpt-4o-mini',
+      setApiSettings: (s) => set((state) => ({
+        apiBase: s.apiBase ?? state.apiBase,
+        apiKey: s.apiKey ?? state.apiKey,
+        model: s.model ?? state.model,
+      })),
+    }),
+    {
+      name: 'vaultpilot-store',
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (state) => ({
+        themeMode: state.themeMode,
+        accentColor: state.accentColor,
+        apiBase: state.apiBase,
+        model: state.model,
+        // apiKey excluded — stored separately in SecureStore
+      }),
+    }
+  )
+);

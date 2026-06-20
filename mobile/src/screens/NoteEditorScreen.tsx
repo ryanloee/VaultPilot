@@ -114,6 +114,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       const next = isPrefix
         ? before + syntax + selected + after
         : before + syntax + selected + syntax + after;
+      const newPos = isPrefix ? start + syntax.length + selected.length : start + syntax.length + selected.length + syntax.length;
+      selectionRef.current = { start: newPos, end: newPos };
       contentRef.current = next;
       return next;
     });

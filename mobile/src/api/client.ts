@@ -378,6 +378,50 @@ async function chatOpenAI(
  * Unlike chat(), this does not wrap the response in a ReadableStream — it calls
  * onChunk directly via parseSSEStreamWithReconnect.
  */
+/**
+ * Wrap an Anthropic SSE response body into OpenAI-compatible SSE format,
+ * so parseSSEStream can consume it uniformly.
+ */
+function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = '';
+
+  return new ReadableStream<Uint8Array>({
+    async pull(ctrl) {
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) { ctrl.close(); return; }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r\n|\r|\n/);
+          buffer = lines.pop() || '';
+
+          let currentEvent = '';
+          for (const line of lines) {
+            if (line.startsWith('event:')) { currentEvent = line.slice(6).trim(); continue; }
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trimStart();
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+                const openai = JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] });
+                ctrl.enqueue(encoder.encode(`data: ${openai}\n\n`));
+              } else if (parsed.type === 'message_stop') {
+                ctrl.enqueue(encoder.encode('data: [DONE]\n\n'));
+                ctrl.close();
+                return;
+              }
+            } catch { /* skip unparseable */ }
+          }
+        }
+      } catch (e) { ctrl.error(e); }
+    },
+    cancel() { reader.cancel(); },
+  });
+}
+
 export async function chatWithReconnect(
   messages: ChatMessage[],
   onChunk: (chunk: import('./sse').StreamChunk) => void,
@@ -388,27 +432,57 @@ export async function chatWithReconnect(
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
 
-  const { apiBase, apiKey, model } = await getSettings();
+  const { apiBase, apiKey, model, apiFormat } = await getSettings();
   if (!apiKey) throw new Error('请先在设置中填写 API Key');
   const base = normalizeApiBase(apiBase);
 
-  const body = JSON.stringify({ model, messages, stream: true });
-  const fetchInit: RequestInit = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body,
-  };
+  if (apiFormat === 'anthropic') {
+    // Anthropic Messages API format
+    const systemMsgs = messages.filter(m => m.role === 'system');
+    const nonSystem = messages.filter(m => m.role !== 'system');
+    const systemText = systemMsgs.map(m => m.content).join('\n') || undefined;
+    const anthropicBase = base.replace(/\/v\d+.*$/, '');
+    const body: Record<string, unknown> = {
+      model,
+      max_tokens: 4096,
+      messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
+      stream: true,
+    };
+    if (systemText) body.system = systemText;
 
+    await parseSSEStreamWithReconnect(
+      `${anthropicBase}/v1/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(body),
+      },
+      onChunk,
+      { ...options, signal, transformBody: wrapAnthropicBody },
+    );
+    return;
+  }
+
+  // OpenAI-compatible format (default)
+  const body = JSON.stringify({ model, messages, stream: true });
   await parseSSEStreamWithReconnect(
     `${base}/chat/completions`,
-    fetchInit,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body,
+    },
     onChunk,
     { ...options, signal },
   );
 }
 
 // ── Health Check ──────────────────────────────────────────
-export async function checkApi(params?: { apiBase?: string; apiKey?: string; apiFormat?: ApiFormat }): Promise<{ ok: boolean; error?: string }> {
+export async function checkApi(params?: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }): Promise<{ ok: boolean; error?: string }> {
   try {
     const settings = params ?? await getSettings();
     const { apiKey } = settings;
@@ -427,7 +501,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; api
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
         },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+        body: JSON.stringify({ model: settings.model ?? 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
         signal: AbortSignal.timeout(8000),
       });
       // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error

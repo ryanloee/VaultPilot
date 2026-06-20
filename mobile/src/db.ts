@@ -343,3 +343,75 @@ export async function searchNotes(query: string): Promise<DbNote[]> {
     [ftsQuery]
   );
 }
+
+export interface GlobalSearchResult {
+  type: 'session' | 'note';
+  id: string;
+  title: string;
+  snippet: string;
+  updated_at: number;
+  sessionId?: string;  // for message matches: which session it belongs to
+}
+
+export async function globalSearch(query: string): Promise<GlobalSearchResult[]> {
+  const db = await getDb();
+  const limit = 20;
+  const escaped = escapeLikePattern(query);
+
+  // Search notes
+  let noteResults: GlobalSearchResult[];
+  if (ftsSupported) {
+    const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+    if (!ftsQuery) return [];
+    noteResults = await db.getAllAsync<GlobalSearchResult>(
+      `SELECT 'note' as type, n.id, n.title,
+              SUBSTR(n.content, 1, 120) as snippet, n.updated_at
+       FROM notes n
+       INNER JOIN notes_fts fts ON n.rowid = fts.rowid
+       WHERE notes_fts MATCH ?
+       ORDER BY n.updated_at DESC LIMIT ?`,
+      [ftsQuery, limit]
+    );
+  } else {
+    noteResults = await db.getAllAsync<GlobalSearchResult>(
+      `SELECT 'note' as type, id, title,
+              SUBSTR(content, 1, 120) as snippet, updated_at
+       FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
+       ORDER BY updated_at DESC LIMIT ?`,
+      [`%${escaped}%`, `%${escaped}%`, limit]
+    );
+  }
+
+  // Search session messages (join back to get session title)
+  let sessionResults: GlobalSearchResult[];
+  if (ftsSupported) {
+    const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+    sessionResults = await db.getAllAsync<GlobalSearchResult>(
+      `SELECT 'session' as type, m.id, s.title,
+              SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
+              s.id as sessionId
+       FROM messages m
+       INNER JOIN messages_fts fts ON m.rowid = fts.rowid
+       INNER JOIN sessions s ON m.session_id = s.id
+       WHERE messages_fts MATCH ?
+       ORDER BY m.created_at DESC LIMIT ?`,
+      [ftsQuery, limit]
+    );
+  } else {
+    sessionResults = await db.getAllAsync<GlobalSearchResult>(
+      `SELECT 'session' as type, m.id, s.title,
+              SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
+              s.id as sessionId
+       FROM messages m
+       INNER JOIN sessions s ON m.session_id = s.id
+       WHERE m.content LIKE ? ESCAPE '\\'
+       ORDER BY m.created_at DESC LIMIT ?`,
+      [`%${escaped}%`, limit]
+    );
+  }
+
+  // Merge and sort by updated_at descending
+  return [...noteResults, ...sessionResults]
+    .sort((a, b) => b.updated_at - a.updated_at)
+    .slice(0, limit);
+}

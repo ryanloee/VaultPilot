@@ -80,16 +80,8 @@ public sealed partial class SettingsDialog : ContentDialog
         {
             AutoWakeModelBox.Items.Add(model);
         }
-        if (string.IsNullOrEmpty(settings.AutoWakeModel))
+        if (!string.IsNullOrEmpty(settings.AutoWakeModel))
         {
-            AutoWakeModelBox.SelectedIndex = 0;
-        }
-        else
-        {
-            // #860: If the saved model is not in the preset list, add it so
-            // SelectedIndex can resolve it reliably.  Using .Text alone on an
-            // IsEditable ComboBox is unreliable in WinUI 3 — the text may be
-            // reset during layout if no matching item exists.
             var matchIndex = -1;
             for (var i = 0; i < AutoWakeModelBox.Items.Count; i++)
             {
@@ -99,16 +91,16 @@ public sealed partial class SettingsDialog : ContentDialog
                     break;
                 }
             }
-            if (matchIndex >= 0)
-            {
-                AutoWakeModelBox.SelectedIndex = matchIndex;
-            }
-            else
+            if (matchIndex < 0)
             {
                 AutoWakeModelBox.Items.Add(settings.AutoWakeModel);
-                AutoWakeModelBox.SelectedIndex = AutoWakeModelBox.Items.Count - 1;
+                matchIndex = AutoWakeModelBox.Items.Count - 1;
             }
+            AutoWakeModelBox.SelectedIndex = matchIndex;
         }
+        // Belt-and-suspenders: WinUI 3 editable ComboBox may not propagate
+        // SelectedIndex → Text reliably before Loaded.  Set Text explicitly.
+        AutoWakeModelBox.Text = settings.AutoWakeModel ?? string.Empty;
 
         AutoWakeStartTimeBox.Text = settings.AutoWakeStartTime ?? string.Empty;
         AutoWakeEndTimeBox.Text = settings.AutoWakeEndTime ?? string.Empty;
@@ -295,7 +287,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
             ErrorInfoBar.IsOpen = false;
 
-            var autoWakeModel = (AutoWakeModelBox.SelectedItem as string ?? AutoWakeModelBox.Text ?? string.Empty).Trim();
+            var autoWakeModel = (AutoWakeModelBox.Text ?? string.Empty).Trim();
 
             UpdatedSettings = new AppSettings(
                 VaultBox.Text.Trim(),

@@ -4,9 +4,11 @@ import {
   KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import { getNote, updateNote, deleteNote } from '../db';
+import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
@@ -14,6 +16,10 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const c = getColors(isDark, accentColor);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [folder, setFolder] = useState('');
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [tags, setTags] = useState<string[]>([]);
+  const [newTag, setNewTag] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [previewMode, setPreviewMode] = useState(false);
@@ -35,6 +41,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           contentRef.current = note.content;
           setTitle(note.title);
           setContent(note.content);
+          setFolder(note.folder || '');
+          const noteTags = await getNoteTags(noteId);
+          if (!cancelled) setTags(noteTags);
         } else {
           Alert.alert('笔记不存在', '该笔记可能已被删除', [
             { text: '返回', onPress: () => navigation.goBack() },
@@ -152,9 +161,80 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         <Text style={[s.headerTitle, { color: c.textSecondary }]}>
           {saving ? '保存中...' : '已保存'}
         </Text>
-        <TouchableOpacity onPress={handleDelete}>
-          <Text style={[s.headerBtn, { color: '#EF4444' }]}>删除</Text>
-        </TouchableOpacity>
+        <View style={s.headerActions}>
+          <TouchableOpacity onPress={() => {
+            const text = content ? (title ? `${title}\n\n${content}` : content) : '';
+            if (text) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); Clipboard.setStringAsync(text); }
+          }}>
+            <Text style={[s.headerBtn, { color: accentColor }]}>复制</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleDelete}>
+            <Text style={[s.headerBtn, { color: '#EF4444', marginLeft: 16 }]}>删除</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Folder bar */}
+      <TouchableOpacity
+        style={[s.folderBar, { borderBottomColor: c.border }]}
+        onPress={() => setShowFolderPicker(!showFolderPicker)}
+      >
+        <Text style={[s.folderLabel, { color: c.textSecondary }]}>
+          📁 {folder || '未分类'}
+        </Text>
+        <Text style={[s.folderLabel, { color: accentColor }]}>
+          {showFolderPicker ? '收起' : '编辑'}
+        </Text>
+      </TouchableOpacity>
+      {showFolderPicker && (
+        <View style={[s.folderPicker, { backgroundColor: c.card, borderBottomColor: c.border }]}>
+          <TextInput
+            style={[s.folderInput, { color: c.text, borderColor: c.border }]}
+            value={folder}
+            onChangeText={async (f) => {
+              setFolder(f);
+              await moveToFolder(noteId, f);
+            }}
+            placeholder="输入文件夹名称"
+            placeholderTextColor={c.textSecondary}
+          />
+        </View>
+      )}
+
+      {/* Tags bar */}
+      <View style={[s.tagsBar, { borderBottomColor: c.border }]}>
+        <View style={s.tagsRow}>
+          {tags.map(t => (
+            <TouchableOpacity
+              key={t}
+              style={[s.tagChip, { backgroundColor: accentColor + '20', borderColor: accentColor }]}
+              onLongPress={async () => {
+                await removeTag(noteId, t);
+                setTags(prev => prev.filter(x => x !== t));
+              }}
+            >
+              <Text style={[s.tagText, { color: accentColor }]}>#{t}</Text>
+            </TouchableOpacity>
+          ))}
+          <View style={s.tagInputRow}>
+            <TextInput
+              style={[s.tagInput, { color: c.text, borderColor: c.border }]}
+              value={newTag}
+              onChangeText={setNewTag}
+              placeholder="+ 标签"
+              placeholderTextColor={c.textSecondary}
+              onSubmitEditing={async () => {
+                const tag = newTag.trim();
+                if (tag && !tags.includes(tag)) {
+                  await addTag(noteId, tag);
+                  setTags(prev => [...prev, tag]);
+                  setNewTag('');
+                }
+              }}
+              returnKeyType="done"
+            />
+          </View>
+        </View>
       </View>
 
       {/* Title */}
@@ -216,7 +296,21 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1,
   },
   headerBtn: { fontSize: 16, fontWeight: '500' },
+  headerActions: { flexDirection: 'row', alignItems: 'center' },
   headerTitle: { fontSize: 13 },
+  folderBar: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1,
+  },
+  folderLabel: { fontSize: 14 },
+  folderPicker: { paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
+  folderInput: { fontSize: 14, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  tagsBar: { paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
+  tagsRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  tagChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1 },
+  tagText: { fontSize: 13 },
+  tagInputRow: { flexDirection: 'row', alignItems: 'center' },
+  tagInput: { fontSize: 13, borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, minWidth: 60 },
   titleInput: {
     fontSize: 22, fontWeight: '700', paddingHorizontal: 16,
     paddingTop: 16, paddingBottom: 8,

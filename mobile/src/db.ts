@@ -20,6 +20,7 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureColumn('sessions', 'pinned', 'INTEGER DEFAULT 0');
   await ensureColumn('sessions', 'archived', 'INTEGER DEFAULT 0');
   await ensureColumn('notes', 'starred', 'INTEGER DEFAULT 0');
+  await ensureColumn('notes', 'folder', 'TEXT NOT NULL DEFAULT \'\'');
 }
 
 /** Populate FTS tables from existing data (runs once, idempotent via content= sync). */
@@ -70,8 +71,15 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
           title TEXT NOT NULL DEFAULT '无标题',
           content TEXT NOT NULL DEFAULT '',
           starred INTEGER DEFAULT 0,
+          folder TEXT NOT NULL DEFAULT '',
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
           updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+        CREATE TABLE IF NOT EXISTS note_tags (
+          note_id TEXT NOT NULL,
+          tag TEXT NOT NULL,
+          PRIMARY KEY (note_id, tag),
+          FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
@@ -238,7 +246,7 @@ export async function deleteMessage(id: string): Promise<void> {
 
 export interface DbNote {
   id: string; title: string; content: string;
-  starred: number; created_at: number; updated_at: number;
+  starred: number; folder: string; created_at: number; updated_at: number;
 }
 
 export async function createNote(title = '无标题'): Promise<string> {
@@ -246,11 +254,6 @@ export async function createNote(title = '无标题'): Promise<string> {
   const id = uuid();
   await db.runAsync('INSERT INTO notes (id, title) VALUES (?, ?)', [id, title]);
   return id;
-}
-
-export async function getNotes(): Promise<DbNote[]> {
-  const db = await getDb();
-  return db.getAllAsync<DbNote>('SELECT * FROM notes ORDER BY starred DESC, updated_at DESC');
 }
 
 export async function getNote(id: string): Promise<DbNote | null> {
@@ -274,6 +277,51 @@ export async function deleteNote(id: string): Promise<void> {
 export async function toggleStar(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE notes SET starred = 1 - starred WHERE id = ?', [id]);
+}
+
+export async function getNotes(folder?: string): Promise<DbNote[]> {
+  const db = await getDb();
+  if (folder !== undefined) {
+    return db.getAllAsync<DbNote>(
+      'SELECT * FROM notes WHERE folder = ? ORDER BY starred DESC, updated_at DESC', [folder]
+    );
+  }
+  return db.getAllAsync<DbNote>('SELECT * FROM notes ORDER BY starred DESC, updated_at DESC');
+}
+
+export async function getFolders(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ folder: string }>(
+    "SELECT DISTINCT folder FROM notes WHERE folder != '' ORDER BY folder"
+  );
+  return rows.map(r => r.folder);
+}
+
+export async function moveToFolder(id: string, folder: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE notes SET folder = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [folder, id]);
+}
+
+export async function getNoteTags(noteId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ tag: string }>('SELECT tag FROM note_tags WHERE note_id = ? ORDER BY tag', [noteId]);
+  return rows.map(r => r.tag);
+}
+
+export async function addTag(noteId: string, tag: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
+}
+
+export async function removeTag(noteId: string, tag: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
+}
+
+export async function getAllTags(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ tag: string }>('SELECT DISTINCT tag FROM note_tags ORDER BY tag');
+  return rows.map(r => r.tag);
 }
 
 export async function searchNotes(query: string): Promise<DbNote[]> {

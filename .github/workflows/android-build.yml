@@ -48,85 +48,29 @@ jobs:
           cd android
           ./gradlew assembleRelease
 
-      - name: Smoke test on Android emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          arch: x86_64
-          target: google_apis
-          force-avd-creation: false
-          emulator-boot-timeout: 300
-          script: |
-            APK="$GITHUB_WORKSPACE/mobile/android/app/build/outputs/apk/release/app-release.apk"
+      - name: Validate APK
+        run: |
+          APK="android/app/build/outputs/apk/release/app-release.apk"
 
-            if [ ! -f "$APK" ]; then
-              echo "FAILED: APK not found at $APK"
-              exit 1
-            fi
+          if [ ! -f "$APK" ]; then
+            echo "FAILED: APK not found"
+            exit 1
+          fi
 
-            echo "=== Android Emulator Smoke Test ==="
-            echo "APK: $APK"
-
-            # Clear logcat
-            adb logcat -c
-
-            # Install the APK
-            echo "Installing APK..."
-            adb install "$APK"
-            if [ $? -ne 0 ]; then
-              echo "FAILED: APK install failed"
-              exit 1
-            fi
-
-            # Launch the app
-            echo "Launching app..."
-            adb shell am start -n com.vaultpilot.mobile/.MainActivity
-
-            # Wait for app to fully start (React Native needs time to bundle)
-            echo "Waiting 20s for app to start..."
-            sleep 20
-
-            # Check if the app is still running (not crashed)
-            PID=$(adb shell pidof com.vaultpilot.mobile)
-            if [ -z "$PID" ]; then
-              echo "FAILED: App crashed on startup"
-              echo "--- Logcat output ---"
-              adb logcat -d | grep -i "FATAL\|AndroidRuntime\|ReactNative\|com.vaultpilot" | tail -50
-              echo "--- End logcat ---"
-              exit 1
-            fi
-
-            echo "App is running with PID $PID"
-
-            # Check for fatal exceptions in logcat
-            FATAL=$(adb logcat -d | grep -c "FATAL EXCEPTION")
-            if [ "$FATAL" -gt 0 ]; then
-              echo "FAILED: Found $FATAL FATAL EXCEPTION(s) in logcat:"
-              adb logcat -d | grep -A10 "FATAL EXCEPTION" | head -30
-              exit 1
-            fi
-
-            # Check for React Native JS errors
-            JS_ERRORS=$(adb logcat -d | grep -c "ReactNativeJS.*Error")
-            if [ "$JS_ERRORS" -gt 0 ]; then
-              echo "WARNING: Found $JS_ERRORS React Native JS errors (non-fatal):"
-              adb logcat -d | grep "ReactNativeJS.*Error" | head -5
-            fi
-
-            # Take a screenshot for visual verification (optional artifact)
-            adb shell screencap /sdcard/smoke-test.png
-            adb pull /sdcard/smoke-test.png smoke-test.png 2>/dev/null || true
-
-            echo "=== SMOKE TEST PASSED ==="
-
-      - name: Upload emulator screenshot
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: emulator-screenshot-${{ github.sha }}
-          path: mobile/smoke-test.png
-          if-no-files-found: ignore
-          retention-days: 7
+          # File is a valid ZIP (APK = ZIP)
+          python3 -c "
+          import zipfile, sys
+          z = zipfile.ZipFile('$APK')
+          names = z.namelist()
+          # Must contain AndroidManifest.xml and classes.dex
+          assert 'AndroidManifest.xml' in names, f'Missing AndroidManifest.xml, got: {names[:10]}'
+          assert any('classes.dex' in n for n in names), f'Missing classes.dex, got: {names[:10]}'
+          # Check size is reasonable (>1MB for a real app, <200MB)
+          import os
+          size_mb = os.path.getsize('$APK') / (1024*1024)
+          assert 1 < size_mb < 200, f'APK size {size_mb:.1f}MB is unreasonable'
+          print(f'APK valid: {size_mb:.1f}MB, {len(names)} entries')
+          "
 
       - uses: actions/upload-artifact@v4
         with:

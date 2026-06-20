@@ -37,7 +37,12 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
     Alert.alert('消息操作', '', actions);
   };
   return (
-    <TouchableOpacity onLongPress={handleLongPress} activeOpacity={0.8}>
+    <TouchableOpacity
+      onLongPress={handleLongPress}
+      activeOpacity={0.8}
+      accessibilityRole="text"
+      accessibilityLabel={`${item.role === 'user' ? '你的消息' : 'AI 回复'}: ${item.content?.slice(0, 50) || '思考中'}`}
+    >
       <View style={[s.bubble, item.role === 'user'
         ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
         : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
@@ -349,11 +354,14 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior="height" keyboardVerticalOffset={0}>
       {/* Header */}
       <View style={[s.header, { borderBottomColor: c.border }]}>
-        <TouchableOpacity onPress={() => navigation.navigate('Sessions')} style={s.sessionsBtn}>
+        <TouchableOpacity onPress={() => navigation.navigate('Sessions')} style={s.sessionsBtn}
+          accessibilityRole="button" accessibilityLabel="打开对话列表">
           <Text style={{ color: accentColor, fontSize: 14 }}>☰ 对话</Text>
         </TouchableOpacity>
-        <Text style={[s.titleText, { color: c.text }]} numberOfLines={1}>{title}</Text>
-        <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}>
+        <Text style={[s.titleText, { color: c.text }]} numberOfLines={1}
+          accessibilityRole="header">{title}</Text>
+        <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}
+          accessibilityRole="button" accessibilityLabel="新建对话">
           <Text style={{ color: accentColor, fontSize: 14 }}>＋</Text>
         </TouchableOpacity>
       </View>
@@ -385,7 +393,8 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
             <Text style={[s.emptyTitle, { color: c.text }]}>👋 你好，我是 VaultPilot AI</Text>
             <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>有什么可以帮你的？试试这些问题：</Text>
             {['帮我总结一篇笔记', '解释一下这个概念', '写一段代码'].map((q) => (
-              <TouchableOpacity key={q} style={[s.suggestionBtn, { borderColor: c.border }]} onPress={() => setInput(q)}>
+              <TouchableOpacity key={q} style={[s.suggestionBtn, { borderColor: c.border }]} onPress={() => setInput(q)}
+                accessibilityRole="button" accessibilityLabel={`使用建议: ${q}`}>
                 <Text style={[s.suggestionText, { color: accentColor }]}>{q}</Text>
               </TouchableOpacity>
             ))}
@@ -397,6 +406,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         <TouchableOpacity
           onPress={() => { nearBottomRef.current = true; setShowScrollBtn(false); listRef.current?.scrollToEnd({ animated: true }); }}
           style={[s.scrollBtn, { backgroundColor: c.inputBg, borderColor: c.border }]}
+          accessibilityRole="button" accessibilityLabel="滚动到底部"
         >
           <Text style={{ color: accentColor, fontSize: 16 }}>↓</Text>
         </TouchableOpacity>
@@ -416,9 +426,11 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           returnKeyType="send"
           blurOnSubmit
           onSubmitEditing={send}
+          accessibilityLabel="消息输入框"
         />
         {streaming ? (
-          <TouchableOpacity onPress={stop} style={[s.sendBtn, { backgroundColor: '#EF4444' }]}>
+          <TouchableOpacity onPress={stop} style={[s.sendBtn, { backgroundColor: '#EF4444' }]}
+            accessibilityRole="button" accessibilityLabel="停止生成">
             <Text style={s.sendText}>■</Text>
           </TouchableOpacity>
         ) : (
@@ -426,6 +438,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
             onPress={send}
             style={[s.sendBtn, { backgroundColor: input.trim() ? accentColor : c.border }]}
             disabled={!input.trim()}
+            accessibilityRole="button" accessibilityLabel="发送消息"
           >
             <Text style={s.sendText}>➤</Text>
           </TouchableOpacity>

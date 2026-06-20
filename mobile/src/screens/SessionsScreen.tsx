@@ -55,10 +55,12 @@ function SwipeableRow({ children, onDelete, onArchive }: {
   return (
     <View style={swipeStyles.rowContainer}>
       <View style={swipeStyles.actions}>
-        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#F59E0B' }]} onPress={() => { openRowCloseRef.current = null; onArchive(); }}>
+        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#F59E0B' }]} onPress={() => { openRowCloseRef.current = null; onArchive(); }}
+          accessibilityRole="button" accessibilityLabel="归档对话">
           <Text style={swipeStyles.actionText}>归档</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#EF4444' }]} onPress={() => { openRowCloseRef.current = null; onDelete(); }}>
+        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#EF4444' }]} onPress={() => { openRowCloseRef.current = null; onDelete(); }}
+          accessibilityRole="button" accessibilityLabel="删除对话">
           <Text style={swipeStyles.actionText}>删除</Text>
         </TouchableOpacity>
       </View>
@@ -173,11 +175,13 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
       <View style={s.topBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => navigation.goBack()}
+          accessibilityRole="button" accessibilityLabel="返回">
           <Text style={{ color: accentColor, fontSize: 16 }}>← 返回</Text>
         </TouchableOpacity>
-        <Text style={[s.screenTitle, { color: c.text }]}>对话列表</Text>
-        <TouchableOpacity onPress={() => setShowArchived(v => !v)}>
+        <Text style={[s.screenTitle, { color: c.text }]} accessibilityRole="header">对话列表</Text>
+        <TouchableOpacity onPress={() => setShowArchived(v => !v)}
+          accessibilityRole="button" accessibilityLabel={showArchived ? '显示活跃对话' : '显示归档对话'}>
           <Text style={{ color: accentColor, fontSize: 14 }}>{showArchived ? '活跃' : '归档'}</Text>
         </TouchableOpacity>
       </View>
@@ -190,6 +194,7 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
           placeholderTextColor={c.textSecondary}
           value={search}
           onChangeText={setSearch}
+          accessibilityLabel="搜索对话"
         />
       </View>
 
@@ -209,6 +214,9 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
               onPress={() => handleSelect(item)}
               onLongPress={() => handleLongPress(item)}
               activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`${item.pinned ? '已置顶 ' : ''}${item.title}，${fmtTime(item.updated_at)}`}
+              accessibilityHint="点击打开对话，长按查看操作"
             >
               <View style={s.cardHeader}>
                 <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>

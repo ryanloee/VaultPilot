@@ -10,7 +10,7 @@ import * as Haptics from 'expo-haptics';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { chatWithReconnect, ChatMessage } from '../api/client';
-import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
+import { buildNoteContext, buildSystemPrompt, parseToolCalls, executeSave } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 import type { ChatScreenProps } from '../navigation/types';
 
@@ -211,8 +211,32 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         }
       }, abortRef.current.signal);
 
-      // Execute tool calls (save notes etc.) and clean up markers
-      const { cleaned, actions } = await executeToolCalls(full);
+      // Parse tool calls (save notes etc.) — don't execute yet
+      const { cleaned, pendingSaves } = parseToolCalls(full);
+
+      // Ask user to confirm each pending save
+      const actions: string[] = [];
+      for (const save of pendingSaves) {
+        const confirmed = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            '保存笔记？',
+            `AI 想要保存笔记「${save.title}」\n\n${save.content.slice(0, 200)}${save.content.length > 200 ? '...' : ''}`,
+            [
+              { text: '拒绝', style: 'cancel', onPress: () => resolve(false) },
+              { text: '保存', onPress: () => resolve(true) },
+            ],
+          );
+        });
+        if (confirmed) {
+          try {
+            const action = await executeSave(save);
+            actions.push(action);
+          } catch (e) {
+            actions.push(`保存笔记「${save.title}」失败`);
+          }
+        }
+      }
+
       const finalContent = actions.length > 0
         ? cleaned + '\n\n_' + actions.join('；') + '_'
         : cleaned;

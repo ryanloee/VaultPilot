@@ -109,56 +109,54 @@ export async function buildNoteContext(userMessage: string): Promise<string | nu
   }
 }
 
-/**
- * Parse LLM response for tool-call markers and execute them.
- * Supported: [SAVE_NOTE: title] content
- *
- * Returns the response with markers stripped, plus action summary.
- */
-export async function executeToolCalls(
-  response: string,
-  onNoteSaved?: (title: string) => void,
-): Promise<{ cleaned: string; actions: string[] }> {
-  const actions: string[] = [];
+/** A pending note save waiting for user confirmation. */
+export interface PendingSave {
+  title: string;
+  content: string;
+}
 
-  // Parse ALL markers first: find each [SAVE_NOTE: title] and its content
-  // Content goes from after "]" to the next [SAVE_NOTE: or [TAG: or end of string
-  const markerStart = /\[SAVE_NOTE:\s*/g;
+/**
+ * Parse LLM response for tool-call markers. Returns pending saves that
+ * require user confirmation before execution.
+ *
+ * Uses indexOf-based parsing (not regex) to correctly handle note content
+ * that contains '[' characters — fixes #1187.
+ *
+ * Supported marker:
+ *   [SAVE_NOTE: title] content
+ */
+export function parseToolCalls(response: string): {
+  cleaned: string;
+  pendingSaves: PendingSave[];
+} {
+  const pendingSaves: PendingSave[] = [];
   const saves: { title: string; content: string; startIdx: number; endIdx: number }[] = [];
 
-  let m: RegExpExecArray | null;
-  while ((m = markerStart.exec(response)) !== null) {
-    const titleStart = m.index + m[0].length;
+  // Parse ALL markers using indexOf (avoids regex truncation at '[')
+  const markerTag = '[SAVE_NOTE:';
+  let searchFrom = 0;
+  while (searchFrom < response.length) {
+    const markerIdx = response.indexOf(markerTag, searchFrom);
+    if (markerIdx === -1) break;
+
+    const titleStart = markerIdx + markerTag.length;
     const closeBracket = response.indexOf(']', titleStart);
     if (closeBracket === -1) break;
 
     const title = response.slice(titleStart, closeBracket).trim();
-    if (!title) continue;
+    if (!title) { searchFrom = closeBracket + 1; continue; }
 
     // Content: everything after "]" until next marker or end
     const contentStart = closeBracket + 1;
-    const nextMarker = response.indexOf('[SAVE_NOTE:', contentStart);
-    const nextTag = response.indexOf('[TAG:', contentStart);
-    const contentEnd = [nextMarker, nextTag, response.length]
-      .filter(i => i > contentStart)
-      .sort((a, b) => a - b)[0] ?? response.length;
-
+    const nextMarker = response.indexOf(markerTag, contentStart);
+    const contentEnd = nextMarker !== -1 ? nextMarker : response.length;
     const content = response.slice(contentStart, contentEnd).trim();
-    saves.push({ title, content, startIdx: m.index, endIdx: contentEnd });
-  }
 
-  // Execute saves
-  for (const save of saves) {
-    if (!save.content) continue; // skip empty-content markers
-    try {
-      const noteId = await createNote(save.title);
-      await updateNote(noteId, save.title, save.content);
-      actions.push(isChinese() ? `已保存笔记「${save.title}」` : `Saved note "${save.title}"`);
-      onNoteSaved?.(save.title);
-    } catch (e) {
-      console.warn('[RAG] Failed to save note:', e);
-      actions.push(isChinese() ? `保存笔记「${save.title}」失败` : `Failed to save note "${save.title}"`);
+    if (content) {
+      saves.push({ title, content, startIdx: markerIdx, endIdx: contentEnd });
+      pendingSaves.push({ title, content });
     }
+    searchFrom = contentEnd;
   }
 
   // Strip markers from displayed response (remove from end to preserve indices)
@@ -166,10 +164,18 @@ export async function executeToolCalls(
   for (let i = saves.length - 1; i >= 0; i--) {
     cleaned = cleaned.slice(0, saves[i].startIdx) + cleaned.slice(saves[i].endIdx);
   }
-  // Also strip any stray [TAG: ...] markers (not yet implemented)
-  cleaned = cleaned.replace(/\[TAG:[^\]]*\][^\[]*/g, '').trim();
+  cleaned = cleaned.trim();
 
-  return { cleaned, actions };
+  return { cleaned, pendingSaves };
+}
+
+/**
+ * Execute a single pending save after user confirmation.
+ */
+export async function executeSave(save: PendingSave): Promise<string> {
+  const noteId = await createNote(save.title);
+  await updateNote(noteId, save.title, save.content);
+  return `已保存笔记「${save.title}」`;
 }
 
 /**

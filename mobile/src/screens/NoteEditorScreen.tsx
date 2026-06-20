@@ -9,8 +9,9 @@ import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
+import type { NoteEditorScreenProps } from '../navigation/types';
 
-export default function NoteEditorScreen({ route, navigation }: any) {
+export default function NoteEditorScreen({ route, navigation }: NoteEditorScreenProps) {
   const { noteId } = route.params;
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
@@ -25,7 +26,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [previewMode, setPreviewMode] = useState(false);
   const titleRef = useRef('');
   const contentRef = useRef('');
-  const timerRef = useRef<any>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const currentFolderRef = useRef('');
   const originalFolderRef = useRef('');
@@ -53,9 +54,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
             { text: '返回', onPress: () => navigation.goBack() },
           ]);
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (cancelled) return;
-        Alert.alert('加载失败', e.message || '请重试', [
+        Alert.alert('加载失败', e instanceof Error ? e.message : '请重试', [
           { text: '返回', onPress: () => navigation.goBack() },
         ]);
         return;

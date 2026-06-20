@@ -110,7 +110,7 @@ export function getColors(isDark: boolean, accent: string): ColorScheme {
 }
 
 /** Sync legacy flat fields from the active provider so client.ts keeps working. */
-function syncLegacyFields(set: any, providers: ProviderConfig[], activeProviderIndex: number) {
+function syncLegacyFields(set: (partial: Partial<AppState>) => void, providers: ProviderConfig[], activeProviderIndex: number) {
   if (providers.length === 0) return;
   const idx = Math.min(activeProviderIndex, providers.length - 1);
   const p = providers[idx];

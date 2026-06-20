@@ -99,8 +99,8 @@ export default function SettingsScreen() {
     try {
       await saveSettings({ apiBase, apiKey, model, apiFormat });
       Alert.alert('已保存', '设置已保存');
-    } catch (e: any) {
-      Alert.alert('保存失败', e.message || '请重试');
+    } catch (e: unknown) {
+      Alert.alert('保存失败', e instanceof Error ? e.message : '请重试');
     }
   };
 
@@ -110,8 +110,8 @@ export default function SettingsScreen() {
     try {
       const res = await checkApi({ apiBase, apiKey, apiFormat });
       setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
-    } catch (e: any) {
-      setTestResult(`❌ ${e.message || '连接失败'}`);
+    } catch (e: unknown) {
+      setTestResult(`❌ ${e instanceof Error ? e.message : '连接失败'}`);
     } finally {
       setTesting(false);
     }

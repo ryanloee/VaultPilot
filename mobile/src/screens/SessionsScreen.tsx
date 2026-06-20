@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { getSessions, deleteSession, toggleArchive, togglePin, renameSession, searchSessions, DbSession } from '../db';
+import type { SessionsScreenProps } from '../navigation/types';
 
 const SWIPE_THRESHOLD = -80;
 const ACTION_WIDTH = 160;
@@ -71,7 +72,7 @@ function SwipeableRow({ children, onDelete, onArchive }: {
   );
 }
 
-export default function SessionsScreen({ navigation }: any) {
+export default function SessionsScreen({ navigation }: SessionsScreenProps) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [sessions, setSessions] = useState<DbSession[]>([]);
@@ -88,9 +89,9 @@ export default function SessionsScreen({ navigation }: any) {
         ? await searchSessions(query.trim())
         : await getSessions(showArchived);
       setSessions(data);
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.warn('[Sessions] load failed:', e);
-      Alert.alert('加载失败', e.message || '请重试');
+      Alert.alert('加载失败', e instanceof Error ? e.message : '请重试');
     } finally {
       setLoading(false);
     }
@@ -119,17 +120,17 @@ export default function SessionsScreen({ navigation }: any) {
     Alert.alert('删除对话', '确定要删除吗？此操作不可撤销。', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteSession(id); await load(); } catch (e: any) { Alert.alert('删除失败', e.message); }
+        try { await deleteSession(id); await load(); } catch (e: unknown) { Alert.alert('删除失败', e instanceof Error ? e.message : '操作失败'); }
       }},
     ]);
   };
 
   const handleArchive = async (id: string) => {
-    try { await toggleArchive(id); await load(); } catch (e: any) { Alert.alert('操作失败', e.message); }
+    try { await toggleArchive(id); await load(); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
   };
 
   const handlePin = async (id: string) => {
-    try { await togglePin(id); await load(); } catch (e: any) { Alert.alert('操作失败', e.message); }
+    try { await togglePin(id); await load(); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
   };
 
   const handleRename = async () => {
@@ -139,8 +140,8 @@ export default function SessionsScreen({ navigation }: any) {
       setRenameTarget(null);
       setRenameText('');
       await load(search);
-    } catch (e: any) {
-      Alert.alert('重命名失败', e.message);
+    } catch (e: unknown) {
+      Alert.alert('重命名失败', e instanceof Error ? e.message : '操作失败');
     }
   };
 

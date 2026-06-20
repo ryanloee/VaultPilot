@@ -26,8 +26,8 @@ const DEFAULTS = {
 async function getApiKey(): Promise<string> {
   try {
     return (await SecureStore.getItemAsync(KEYS.apiKey)) || '';
-  } catch (e: any) {
-    console.warn('[SecureStore] Failed to read API key:', e.message);
+  } catch (e: unknown) {
+    console.warn('[SecureStore] Failed to read API key:', e instanceof Error ? e.message : e);
     return '';
   }
 }
@@ -35,8 +35,8 @@ async function getApiKey(): Promise<string> {
 async function setApiKey(value: string): Promise<void> {
   try {
     await SecureStore.setItemAsync(KEYS.apiKey, value);
-  } catch (e: any) {
-    console.warn('[SecureStore] Failed to write API key:', e.message);
+  } catch (e: unknown) {
+    console.warn('[SecureStore] Failed to write API key:', e instanceof Error ? e.message : e);
     throw new Error('无法安全存储 API Key，请检查设备安全设置');
   }
 }
@@ -184,10 +184,10 @@ async function chatAnthropic(
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', onSignalAbort!);
-    if (e.name === 'AbortError') throw e;
+    if (e instanceof Error && e.name === 'AbortError') throw e;
     throw new Error('网络请求失败，请检查连接');
   }
 
@@ -285,9 +285,9 @@ async function chatOpenAI(
           body: JSON.stringify({ model, messages, stream: true }),
           signal: controller.signal,
         });
-      } catch (fetchErr: any) {
-        lastError = fetchErr;
-        if (fetchErr.name === 'AbortError') throw fetchErr;
+      } catch (fetchErr: unknown) {
+        lastError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
+        if (lastError.name === 'AbortError') throw fetchErr;
         continue; // network error → retry
       }
 
@@ -360,9 +360,9 @@ async function chatOpenAI(
         })();
       },
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     clearTimeout(timeout);
-    if (e.name === 'AbortError' && !signal?.aborted) {
+    if (e instanceof Error && e.name === 'AbortError' && !signal?.aborted) {
       throw new Error('请求超时（2 分钟），请检查网络或服务端状态');
     }
     throw e;
@@ -439,7 +439,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; api
       signal: AbortSignal.timeout(8000),
     });
     return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }

@@ -17,26 +17,29 @@ import NotesScreen from './src/screens/NotesScreen';
 import NoteEditorScreen from './src/screens/NoteEditorScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
+import type { ChatStackParamList, NotesStackParamList } from './src/navigation/types';
+
 const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator();
+const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
+const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
 
 SplashScreen.preventAutoHideAsync();
 
 function NotesStack() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="NotesList" component={NotesScreen} />
-      <Stack.Screen name="NoteEdit" component={NoteEditorScreen} />
-    </Stack.Navigator>
+    <NotesNativeStack.Navigator screenOptions={{ headerShown: false }}>
+      <NotesNativeStack.Screen name="NotesList" component={NotesScreen} />
+      <NotesNativeStack.Screen name="NoteEdit" component={NoteEditorScreen} />
+    </NotesNativeStack.Navigator>
   );
 }
 
 function ChatStack() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="ChatMain" component={ChatScreen} />
-      <Stack.Screen name="Sessions" component={SessionsScreen} />
-    </Stack.Navigator>
+    <ChatNativeStack.Navigator screenOptions={{ headerShown: false }}>
+      <ChatNativeStack.Screen name="ChatMain" component={ChatScreen} />
+      <ChatNativeStack.Screen name="Sessions" component={SessionsScreen} />
+    </ChatNativeStack.Navigator>
   );
 }
 

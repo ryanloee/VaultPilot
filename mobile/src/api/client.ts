@@ -41,17 +41,25 @@ async function setApiKey(value: string): Promise<void> {
 const CHAT_TIMEOUT_MS = 120_000;
 
 // ── Settings ──────────────────────────────────────────────
+let _settingsCache: { apiBase: string; apiKey: string; model: string } | null = null;
+
+export function invalidateSettingsCache() {
+  _settingsCache = null;
+}
+
 export async function getSettings() {
+  if (_settingsCache) return _settingsCache;
   const [base, key, model] = await Promise.all([
     AsyncStorage.getItem(KEYS.apiBase),
     getApiKey(),
     AsyncStorage.getItem(KEYS.model),
   ]);
-  return {
+  _settingsCache = {
     apiBase: base || DEFAULTS.apiBase,
     apiKey: key,
     model: model || DEFAULTS.model,
   };
+  return _settingsCache;
 }
 
 export async function saveSettings(s: { apiBase?: string; apiKey?: string; model?: string }) {
@@ -60,6 +68,7 @@ export async function saveSettings(s: { apiBase?: string; apiKey?: string; model
   if (s.apiKey !== undefined) ops.push(setApiKey(s.apiKey));
   if (s.model !== undefined) ops.push(AsyncStorage.setItem(KEYS.model, s.model));
   await Promise.all(ops);
+  invalidateSettingsCache();
 }
 
 // ── Error Sanitization ───────────────────────────────────

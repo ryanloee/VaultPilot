@@ -15,6 +15,7 @@ import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
 import NotesScreen from './src/screens/NotesScreen';
 import NoteEditorScreen from './src/screens/NoteEditorScreen';
+import SearchScreen from './src/screens/SearchScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
 import type { ChatStackParamList, NotesStackParamList } from './src/navigation/types';
@@ -60,6 +61,10 @@ function MainTabs() {
       <Tab.Screen name="Chat" component={ChatStack} options={{
         tabBarLabel: '对话',
         tabBarIcon: ({ color }) => <TabIcon label="💬" color={color} />,
+      }} />
+      <Tab.Screen name="Search" component={SearchScreen} options={{
+        tabBarLabel: '搜索',
+        tabBarIcon: ({ color }) => <TabIcon label="🔍" color={color} />,
       }} />
       <Tab.Screen name="Notes" component={NotesStack} options={{
         tabBarLabel: '笔记',

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, memo, useMemo } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity,
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet, Alert,
@@ -39,6 +39,7 @@ export default function ChatScreen({ navigation }: any) {
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<FlatList>(null);
   const msgsRef = useRef<Msg[]>([]);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Init session — reuse latest active session or create new one
   useEffect(() => {
@@ -67,9 +68,12 @@ export default function ChatScreen({ navigation }: any) {
   // Keep ref in sync with state so send() reads latest messages
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
-  // Abort any in-flight stream on unmount (tab navigation, screen dismissal)
+  // Abort any in-flight stream on unmount
   useEffect(() => {
-    return () => { abortRef.current?.abort(); };
+    return () => {
+      abortRef.current?.abort();
+      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    };
   }, []);
 
   const send = useCallback(async () => {
@@ -170,6 +174,17 @@ export default function ChatScreen({ navigation }: any) {
     abortRef.current?.abort();
   };
 
+  // Debounced scroll-to-end — avoids per-chunk scroll during streaming
+  const scrollToEndDebounced = useCallback(() => {
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    scrollTimerRef.current = setTimeout(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+  }, []);
+
+  // Also scroll when msgs change (covers new user message + AI start)
+  useEffect(() => { scrollToEndDebounced(); }, [msgs.length]);
+
   if (loading) {
     return (
       <View style={[s.center, { backgroundColor: c.bg }]}>
@@ -192,7 +207,11 @@ export default function ChatScreen({ navigation }: any) {
         renderItem={({ item }) => <MessageBubble item={item} isDark={isDark} accentColor={accentColor} />}
         keyExtractor={item => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+        onContentSizeChange={scrollToEndDebounced}
+        removeClippedSubviews={Platform.OS === 'android'}
+        initialNumToRender={15}
+        maxToRenderPerBatch={10}
+        windowSize={11}
       />
 
       {/* Input bar */}

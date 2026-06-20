@@ -76,8 +76,8 @@ export default function NotesScreen({ navigation }: any) {
   const fmtTime = (ts: number) => {
     const d = new Date(ts * 1000);
     const now = new Date();
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   };
 
   const renderItem = ({ item }: { item: DbNote }) => (

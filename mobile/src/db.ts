@@ -83,6 +83,13 @@ export async function createSession(title = '新对话'): Promise<string> {
   return id;
 }
 
+export async function getLatestSession(): Promise<DbSession | null> {
+  const db = await getDb();
+  return db.getFirstAsync<DbSession>(
+    'SELECT * FROM sessions WHERE archived = 0 ORDER BY updated_at DESC LIMIT 1'
+  );
+}
+
 export async function getSessions(archived = false): Promise<DbSession[]> {
   const db = await getDb();
   return db.getAllAsync<DbSession>(

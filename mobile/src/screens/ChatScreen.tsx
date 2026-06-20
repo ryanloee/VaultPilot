@@ -3,6 +3,7 @@ import {
   View, Text, TextInput, FlatList, TouchableOpacity,
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { chat, parseSSEStream, ChatMessage } from '../api/client';
 import { getMessages, addMessage, updateMessage, createSession, getLatestSession } from '../db';
@@ -187,14 +188,15 @@ export default function ChatScreen({ navigation }: any) {
 
   if (loading) {
     return (
-      <View style={[s.center, { backgroundColor: c.bg }]}>
+      <SafeAreaView style={[s.center, { backgroundColor: c.bg }]}>
         <ActivityIndicator color={accentColor} size="large" />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: c.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
       {/* New chat button */}
       <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}>
         <Text style={{ color: accentColor, fontSize: 14 }}>＋ 新对话</Text>
@@ -241,6 +243,7 @@ export default function ChatScreen({ navigation }: any) {
         )}
       </View>
     </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode } from '../store';
 import { checkApi, getSettings, saveSettings } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -77,7 +78,8 @@ export default function SettingsScreen() {
   };
 
   return (
-    <ScrollView style={[s.container, { backgroundColor: c.bg }]} contentContainerStyle={{ padding: 16 }}>
+    <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
       {loadError && (
         <View style={[s.errorBanner, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
           <Text style={{ color: '#92400E', fontSize: 14 }}>⚠️ {loadError}</Text>
@@ -196,6 +198,7 @@ export default function SettingsScreen() {
 
       <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v0.1.0</Text>
     </ScrollView>
+    </SafeAreaView>
   );
 }
 

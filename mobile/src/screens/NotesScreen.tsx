@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, DbNote } from '../db';
 
@@ -86,14 +87,14 @@ export default function NotesScreen({ navigation }: any) {
 
   if (loading) {
     return (
-      <View style={[s.container, { backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <SafeAreaView style={[s.container, { backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator color={accentColor} size="large" />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={[s.container, { backgroundColor: c.bg }]}>
+    <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
       {/* Search bar */}
       <View style={[s.searchBar, { borderColor: c.border }]}>
         <Text style={{ color: c.textSecondary, fontSize: 16 }}>🔍 </Text>
@@ -130,7 +131,7 @@ export default function NotesScreen({ navigation }: any) {
       >
         <Text style={s.fabText}>+</Text>
       </TouchableOpacity>
-    </View>
+    </SafeAreaView>
   );
 }
 

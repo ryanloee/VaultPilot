@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let ftsSupported = true;
 
 /** Ensure columns added after the initial schema exist on existing installs. */
 async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -74,36 +75,40 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
-      // FTS5 virtual tables for full-text search
-      await db.execAsync(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=rowid);
-        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(title, content, content=notes, content_rowid=rowid);
-      `);
-      // Triggers to keep FTS in sync
-      await db.execAsync(`
-        CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-          INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-        END;
-        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-          INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-        END;
-        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-          INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-          INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-          INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-          INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-          INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
-          INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
-        END;
-      `);
+      // FTS5 virtual tables — gracefully degrade if device SQLite lacks FTS5
+      try {
+        await db.execAsync(`
+          CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=rowid);
+          CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(title, content, content=notes, content_rowid=rowid);
+        `);
+        await db.execAsync(`
+          CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+            INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
+            INSERT INTO notes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+          END;
+        `);
+        await migrateFts(db);
+      } catch (ftsErr) {
+        ftsSupported = false;
+        console.warn('[DB] FTS5 not available, falling back to LIKE search:', ftsErr);
+      }
       await migrateSchema(db);
-      await migrateFts(db);
       return db;
     })().catch(err => {
       dbPromise = null; // Reset so next call retries instead of caching the failure
@@ -171,6 +176,13 @@ export async function toggleArchive(id: string): Promise<void> {
 
 export async function searchSessions(query: string): Promise<DbSession[]> {
   const db = await getDb();
+  if (!ftsSupported) {
+    const escaped = escapeLikePattern(query);
+    return db.getAllAsync<DbSession>(
+      `SELECT * FROM sessions WHERE title LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50`,
+      [`%${escaped}%`]
+    );
+  }
   const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t}"`).join(' OR ');
   if (!ftsQuery) return [];
   const escaped = escapeLikePattern(query);
@@ -261,6 +273,13 @@ export async function toggleStar(id: string): Promise<void> {
 
 export async function searchNotes(query: string): Promise<DbNote[]> {
   const db = await getDb();
+  if (!ftsSupported) {
+    const escaped = escapeLikePattern(query);
+    return db.getAllAsync<DbNote>(
+      `SELECT * FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50`,
+      [`%${escaped}%`, `%${escaped}%`]
+    );
+  }
   const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t}"`).join(' OR ');
   if (!ftsQuery) return [];
   return db.getAllAsync<DbNote>(

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -119,7 +120,7 @@ export default function App() {
 
   if (initState === 'error') {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF', padding: 24 }}>
+      <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF', padding: 24 }}>
         <Text style={{ fontSize: 18, fontWeight: '600', color: isDark ? '#F87171' : '#DC2626', marginBottom: 8 }}>数据库初始化失败</Text>
         <Text style={{ fontSize: 14, color: isDark ? '#9CA3AF' : '#6B7280', textAlign: 'center', marginBottom: 16 }}>{errorMsg}</Text>
         <TouchableOpacity
@@ -128,16 +129,18 @@ export default function App() {
         >
           <Text style={{ color: '#FFF', fontWeight: '600' }}>重试</Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <ErrorBoundary>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      <NavigationContainer>
-        <MainTabs />
-      </NavigationContainer>
-    </ErrorBoundary>
+    <SafeAreaProvider>
+      <ErrorBoundary>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <NavigationContainer>
+          <MainTabs />
+        </NavigationContainer>
+      </ErrorBoundary>
+    </SafeAreaProvider>
   );
 }

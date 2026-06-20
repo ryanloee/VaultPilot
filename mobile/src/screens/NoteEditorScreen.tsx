@@ -3,6 +3,7 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator,
   KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { getNote, updateNote, deleteNote } from '../db';
 
@@ -127,13 +128,14 @@ export default function NoteEditorScreen({ route, navigation }: any) {
 
   if (loading) {
     return (
-      <View style={[s.container, { backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <SafeAreaView style={[s.container, { backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator color={accentColor} size="large" />
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
     <KeyboardAvoidingView
       style={[s.container, { backgroundColor: c.bg }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -188,6 +190,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         </ScrollView>
       </View>
     </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 

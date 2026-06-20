@@ -209,7 +209,7 @@ public sealed partial class SettingsDialog : ContentDialog
             var trimmedApiKey = ApiKeyBox.Password.Trim();
             if (string.IsNullOrEmpty(trimmedApiKey))
             {
-                validationErrors.Add("API Key 不能为空。");
+                validationErrors.Add("API Key 不能为空。可在 opencode.ai/zen 或 openrouter.ai 免费获取。");
             }
 
             var trimmedBaseUrl = BaseUrlBox.Text.Trim();

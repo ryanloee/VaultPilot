@@ -573,6 +573,12 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
     match &cli.command {
         Commands::Init => {
             let settings = initialize_storage_with_context(context)?;
+            eprintln!("🎉 免费使用提示：");
+            eprintln!("  默认已配置 OpenCode Zen 免费模型（deepseek-v4-flash-free）");
+            eprintln!("  无需 API Key 即可开始对话！如需更多模型：");
+            eprintln!("  • OpenCode Zen：https://opencode.ai/zen（注册即送免费模型）");
+            eprintln!("  • OpenRouter：https://openrouter.ai（GitHub 登录，27 个免费模型）");
+            eprintln!();
             to_json(&settings)
         }
         Commands::Serve { .. } => Ok(serde_json::json!({

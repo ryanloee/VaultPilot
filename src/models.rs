@@ -577,11 +577,11 @@ fn mask_secret(s: &str) -> String {
 }
 
 pub fn default_base_url() -> String {
-    "https://api.anthropic.com/v1/messages".to_string()
+    "https://opencode.ai/zen/v1".to_string()
 }
 
 pub fn default_model() -> String {
-    "claude-3-5-sonnet-latest".to_string()
+    "deepseek-v4-flash-free".to_string()
 }
 
 pub fn default_timeout_ms() -> u64 {
@@ -844,7 +844,7 @@ mod tests {
         assert!(settings.auto_wake_start_time.is_empty());
         assert!(settings.auto_wake_end_time.is_empty());
         assert!(settings.auto_wake_prompt.is_empty());
-        assert_eq!(default_model(), "claude-3-5-sonnet-latest");
+        assert_eq!(default_model(), "deepseek-v4-flash-free");
         assert_eq!(default_timeout_ms(), 60_000);
         assert_eq!(default_ai_source(), "captured");
         assert!(default_auto_check_updates());

@@ -2506,12 +2506,16 @@ public sealed partial class MainWindow : Window
         // servers, and third-party gateways that expose the OpenAI API).
         return new[]
         {
+            "deepseek-v4-flash-free",
+            "mimo-v2.5-free",
+            "qwen3.6-plus-free",
+            "minimax-m3-free",
+            "big-pickle",
+            "google/gemma-4-31b-it:free",
             "gpt-4o-mini",
             "gpt-4o",
             "gpt-4.1-mini",
             "gpt-4.1",
-            "o3-mini",
-            "o4-mini",
         };
     }
 

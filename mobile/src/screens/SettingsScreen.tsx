@@ -93,6 +93,17 @@ export default function SettingsScreen() {
       {/* API Section */}
       <Text style={[s.sectionTitle, { color: c.text }]}>API 配置</Text>
 
+      {!apiKey && (
+        <View style={[s.hintBanner, { backgroundColor: store.isDark ? '#1E3A5F' : '#EFF6FF', borderColor: store.isDark ? '#2563EB' : '#93C5FD' }]}>
+          <Text style={[s.hintText, { color: store.isDark ? '#93C5FD' : '#1D4ED8' }]}>
+            🎉 免费使用：选「OpenCode Zen」或「OpenRouter」即可免费体验 AI 对话{'\n'}
+            {'\n'}
+            • OpenCode Zen：opencode.ai/zen（注册即送免费模型）{'\n'}
+            • OpenRouter：openrouter.ai（GitHub 登录，27 个免费模型）
+          </Text>
+        </View>
+      )}
+
       <Text style={[s.label, { color: c.textSecondary }]}>提供商</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
         {PROVIDERS.map(p => (
@@ -233,5 +244,11 @@ const s = StyleSheet.create({
   errorBanner: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 16,
+  },
+  hintBanner: {
+    padding: 14, borderRadius: 10, borderWidth: 1, marginBottom: 16,
+  },
+  hintText: {
+    fontSize: 13, lineHeight: 20,
   },
 });

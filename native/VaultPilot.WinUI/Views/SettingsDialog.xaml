@@ -44,22 +44,31 @@
                 AutomationProperties.HelpText="打开文件选择对话框选择知识库目录" />
 
             <!-- Provider settings -->
+            <InfoBar
+                x:Name="FreeTierHint"
+                Severity="Informational"
+                Title="🎉 免费使用"
+                Message="选 OpenCode Zen 或 OpenRouter 即可免费体验 AI 对话&#x0a;• OpenCode Zen：opencode.ai/zen（注册即送免费模型）&#x0a;• OpenRouter：openrouter.ai（GitHub 登录，27 个免费模型）"
+                IsOpen="True"
+                IsClosable="False"
+                HorizontalAlignment="Stretch"
+                Margin="0,8,0,4" />
             <PasswordBox
                 x:Name="ApiKeyBox"
                 Header="API Key"
-                PlaceholderText="输入模型服务 API Key"
+                PlaceholderText="在 opencode.ai/zen 或 openrouter.ai 获取"
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="API Key" />
             <TextBox
                 x:Name="BaseUrlBox"
                 Header="接口地址"
-                PlaceholderText="例如 https://api.openai.com/v1"
+                PlaceholderText="例如 https://opencode.ai/zen/v1"
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="模型服务接口地址" />
             <TextBox
                 x:Name="ModelBox"
                 Header="模型"
-                PlaceholderText="例如 gpt-4o-mini"
+                PlaceholderText="例如 deepseek-v4-flash-free"
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="模型名称" />
 

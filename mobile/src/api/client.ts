@@ -17,8 +17,8 @@ const KEYS = {
 
 // Defaults
 const DEFAULTS = {
-  apiBase: 'https://api.openai.com/v1',
-  model: 'gpt-4o-mini',
+  apiBase: 'https://opencode.ai/zen/v1',
+  model: 'deepseek-v4-flash-free',
 };
 
 // ── Secure helpers ───────────────────────────────────────

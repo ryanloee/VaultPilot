@@ -36,6 +36,8 @@ export const ACCENT_COLORS = [
 ];
 
 export const PROVIDERS = [
+  { name: 'OpenCode Zen', base: 'https://opencode.ai/zen/v1', format: 'openai' as const, models: ['deepseek-v4-flash-free', 'mimo-v2.5-free', 'qwen3.6-plus-free', 'minimax-m3-free', 'big-pickle'] },
+  { name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', format: 'openai' as const, models: ['google/gemma-4-31b-it:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'qwen/qwen3-coder:free'] },
   { name: 'OpenAI', base: 'https://api.openai.com/v1', format: 'openai' as const, models: ['gpt-4o', 'gpt-4o-mini', 'o1-mini'] },
   { name: 'Anthropic', base: 'https://api.anthropic.com', format: 'anthropic' as const, models: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022'] },
 ];
@@ -78,9 +80,9 @@ export const useAppStore = create<AppState>()(
       setAccentColor: (accentColor) => set({ accentColor }),
       setIsDark: (isDark) => set({ isDark }),
 
-      apiBase: 'https://api.openai.com/v1',
+      apiBase: 'https://opencode.ai/zen/v1',
       apiKey: '',
-      model: 'gpt-4o-mini',
+      model: 'deepseek-v4-flash-free',
       apiFormat: 'openai' as ApiFormat,
       setApiSettings: (s) => set((state) => ({
         apiBase: s.apiBase ?? state.apiBase,

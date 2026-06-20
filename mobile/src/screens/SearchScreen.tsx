@@ -5,8 +5,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { globalSearch, GlobalSearchResult } from '../db';
+import type { SearchScreenProps } from '../navigation/types';
 
-export default function SearchScreen({ navigation }: any) {
+export default function SearchScreen({ navigation }: SearchScreenProps) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [query, setQuery] = useState('');

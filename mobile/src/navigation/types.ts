@@ -1,4 +1,5 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
 export type ChatStackParamList = {
@@ -13,6 +14,7 @@ export type NotesStackParamList = {
 
 export type RootTabParamList = {
   Chat: NavigatorScreenParams<ChatStackParamList>;
+  Search: undefined;
   Notes: NavigatorScreenParams<NotesStackParamList>;
   Settings: undefined;
 };
@@ -21,3 +23,4 @@ export type ChatScreenProps = NativeStackScreenProps<ChatStackParamList, 'ChatMa
 export type SessionsScreenProps = NativeStackScreenProps<ChatStackParamList, 'Sessions'>;
 export type NotesScreenProps = NativeStackScreenProps<NotesStackParamList, 'NotesList'>;
 export type NoteEditorScreenProps = NativeStackScreenProps<NotesStackParamList, 'NoteEdit'>;
+export type SearchScreenProps = BottomTabScreenProps<RootTabParamList, 'Search'>;

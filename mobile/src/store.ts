@@ -2,6 +2,11 @@ import { create } from 'zustand';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
+const VALID_THEME_MODES: ThemeMode[] = ['light', 'dark', 'system'];
+export function isValidThemeMode(v: string): v is ThemeMode {
+  return (VALID_THEME_MODES as string[]).includes(v);
+}
+
 interface AppState {
   themeMode: ThemeMode;
   isDark: boolean;

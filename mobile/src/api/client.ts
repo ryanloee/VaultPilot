@@ -40,6 +40,14 @@ async function setApiKey(value: string): Promise<void> {
 /** Chat request timeout in ms (2 minutes) */
 const CHAT_TIMEOUT_MS = 120_000;
 
+/** Max retries for transient network/server errors */
+const MAX_RETRIES = 2;
+const RETRY_BASE_MS = 1000;
+
+function isRetryable(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
 // ── Settings ──────────────────────────────────────────────
 let _settingsCache: { apiBase: string; apiKey: string; model: string } | null = null;
 
@@ -117,6 +125,10 @@ export async function chat(
   messages: ChatMessage[],
   signal?: AbortSignal
 ): Promise<ReadableStream<Uint8Array>> {
+  if (signal?.aborted) {
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }
+
   const { apiBase, apiKey, model } = await getSettings();
   if (!apiKey) throw new Error('请先在设置中填写 API Key');
 
@@ -132,19 +144,43 @@ export async function chat(
   }
 
   try {
-    // Try streaming first; fall back to non-streaming on 400
-    // (VaultPilot HTTP bridge doesn't support stream=true yet)
-    let res = await fetch(`${base}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({ model, messages, stream: true }),
-      signal: controller.signal,
-    });
+    let res: Response | null = null;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+        await new Promise(r => setTimeout(r, delay));
+        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      }
+
+      // Try streaming first; fall back to non-streaming on 400
+      try {
+        res = await fetch(`${base}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ model, messages, stream: true }),
+          signal: controller.signal,
+        });
+      } catch (fetchErr: any) {
+        lastError = fetchErr;
+        if (fetchErr.name === 'AbortError') throw fetchErr;
+        continue; // network error → retry
+      }
+
+      // Retry on transient server errors
+      if (isRetryable(res.status)) {
+        lastError = new Error(sanitizeApiError(res.status, ''));
+        res = null;
+        continue;
+      }
+      break;
+    }
+
+    if (!res) throw lastError ?? new Error('请求失败，已重试多次');
 
     if (res.status === 400) {
+      await res.body?.cancel(); // Release connection back to pool
       res = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: {

@@ -51,6 +51,16 @@ export default function NotesScreen({ navigation }: any) {
     setRefreshing(false);
   };
 
+  const handleLongPress = (item: DbNote) => {
+    Alert.alert(item.title || '笔记操作', '', [
+      { text: item.starred ? '取消收藏' : '收藏', onPress: async () => {
+        try { await toggleStar(item.id); await load(search); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
+      }},
+      { text: '删除', style: 'destructive', onPress: () => handleDelete(item.id) },
+      { text: '取消', style: 'cancel' },
+    ]);
+  };
+
   const handleDelete = (id: string) => {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
@@ -71,7 +81,7 @@ export default function NotesScreen({ navigation }: any) {
     <TouchableOpacity
       style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}
       onPress={() => navigation.navigate('NoteEdit', { noteId: item.id })}
-      onLongPress={() => handleDelete(item.id)}
+      onLongPress={() => handleLongPress(item)}
     >
       <View style={s.cardHeader}>
         <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>

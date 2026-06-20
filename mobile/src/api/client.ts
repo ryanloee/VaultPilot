@@ -123,9 +123,13 @@ function normalizeApiBase(raw: string): string {
 }
 
 // ── Chat ──────────────────────────────────────────────────
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: string | ContentPart[];
 }
 
 export async function chat(
@@ -164,10 +168,20 @@ async function chatAnthropic(
 
   // Strip /v1 suffix to avoid double /v1 path when appending /v1/messages
   const base = normalizeApiBase(apiBase).replace(/\/v\d+.*$/, '');
+  // Convert OpenAI-style content parts to Anthropic format
+  const toAnthropicContent = (content: string | ContentPart[]) => {
+    if (typeof content === 'string') return content;
+    return content.map(p => {
+      if (p.type === 'text') return p;
+      const match = p.image_url.url.match(/^data:(image\/\w+);base64,(.+)$/);
+      if (match) return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
+      return { type: 'text', text: '[image unavailable]' };
+    });
+  };
   const body: Record<string, unknown> = {
     model,
     max_tokens: 4096,
-    messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
+    messages: nonSystem.map(m => ({ role: m.role, content: toAnthropicContent(m.content) })),
     stream: true,
   };
   if (systemText) body.system = systemText;

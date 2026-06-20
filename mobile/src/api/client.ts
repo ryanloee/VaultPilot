@@ -410,7 +410,7 @@ export async function chatWithReconnect(
 }
 
 // ── Health Check ──────────────────────────────────────────
-export async function checkApi(params?: { apiBase?: string; apiKey?: string; apiFormat?: ApiFormat }): Promise<{ ok: boolean; error?: string }> {
+export async function checkApi(params?: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }): Promise<{ ok: boolean; error?: string }> {
   try {
     const settings = params ?? await getSettings();
     const { apiKey } = settings;

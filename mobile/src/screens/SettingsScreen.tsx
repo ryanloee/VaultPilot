@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator,
 } from 'react-native';
-import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS } from '../store';
+import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode } from '../store';
 import { checkApi, getSettings, saveSettings } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -33,7 +33,7 @@ export default function SettingsScreen() {
         if (api.apiBase) { setApiBase(api.apiBase); store.setApiSettings({ apiBase: api.apiBase }); }
         if (api.apiKey) { setApiKey(api.apiKey); store.setApiSettings({ apiKey: api.apiKey }); }
         if (api.model) { setModel(api.model); store.setApiSettings({ model: api.model }); }
-        if (themeMode) store.setThemeMode(themeMode as any);
+        if (themeMode && isValidThemeMode(themeMode)) store.setThemeMode(themeMode);
         if (accentColor) store.setAccentColor(accentColor);
       } catch (e) {
         console.warn('[Settings] Failed to load settings, using defaults:', e);

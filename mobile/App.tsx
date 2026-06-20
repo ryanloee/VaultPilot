@@ -3,7 +3,7 @@ import { StatusBar, useColorScheme, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useAppStore, ThemeMode } from './src/store';
+import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
 import { getSettings } from './src/api/client';
@@ -84,13 +84,12 @@ export default function App() {
           AsyncStorage.getItem('cfg_theme_mode'),
           AsyncStorage.getItem('cfg_accent_color'),
         ]);
-        if (savedTheme) {
-          const mode = savedTheme as ThemeMode;
-          useAppStore.getState().setThemeMode(mode);
-          if (mode === 'system') {
+        if (savedTheme && isValidThemeMode(savedTheme)) {
+          useAppStore.getState().setThemeMode(savedTheme);
+          if (savedTheme === 'system') {
             setIsDark(systemScheme === 'dark');
           } else {
-            setIsDark(mode === 'dark');
+            setIsDark(savedTheme === 'dark');
           }
         }
         if (savedColor) useAppStore.getState().setAccentColor(savedColor);

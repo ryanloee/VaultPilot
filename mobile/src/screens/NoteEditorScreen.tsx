@@ -129,6 +129,33 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     { label: '🔗', insert: '[]()', desc: '链接' },
   ];
 
+  const AI_ACTIONS = [
+    { key: 'polish', label: '✨ 润色', prompt: '请帮我润色以下笔记内容，改善措辞和表达：' },
+    { key: 'summarize', label: '📋 总结', prompt: '请用简洁的语言总结以下笔记的要点：' },
+    { key: 'translate', label: '🌐 翻译成英文', prompt: '请将以下笔记翻译成英文：' },
+    { key: 'continue', label: '✍️ 续写', prompt: '请根据以下笔记内容，帮我继续写下去：' },
+  ];
+
+  const handleAiAction = (action: typeof AI_ACTIONS[0]) => {
+    const noteText = content || title || '';
+    if (!noteText.trim()) {
+      Alert.alert('提示', '笔记内容为空，无法使用 AI 助手');
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const prefill = `${action.prompt}\n\n${noteText.slice(0, 2000)}`;
+    // Navigate to Chat tab with pre-filled text
+    navigation.navigate('Chat', { screen: 'ChatMain', params: { prefillText: prefill } });
+  };
+
+  const showAiActions = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Alert.alert('AI 笔记助手', '选择操作', [
+      ...AI_ACTIONS.map(a => ({ text: a.label, onPress: () => handleAiAction(a) })),
+      { text: '取消', style: 'cancel' as const },
+    ]);
+  };
+
   const insertFormat = (syntax: string) => {
     const { start, end } = selectionRef.current;
     const isPrefix = syntax.endsWith(' ');
@@ -294,6 +321,12 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               <Text style={[s.toolLabel, { color: c.text }]}>{t.label}</Text>
             </TouchableOpacity>
           ))}
+          <TouchableOpacity
+            style={[s.toolBtn, { borderColor: accentColor, backgroundColor: accentColor + '15' }]}
+            onPress={showAiActions}
+          >
+            <Text style={[s.toolLabel, { color: accentColor }]}>🤖</Text>
+          </TouchableOpacity>
         </ScrollView>
       </View>
     </KeyboardAvoidingView>

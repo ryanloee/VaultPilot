@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useAppStore, getColors } from '../store';
 import { getNote, updateNote, deleteNote } from '../db';
@@ -133,7 +134,11 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   }
 
   return (
-    <View style={[s.container, { backgroundColor: c.bg }]}>
+    <KeyboardAvoidingView
+      style={[s.container, { backgroundColor: c.bg }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+    >
       {/* Header */}
       <View style={[s.header, { borderBottomColor: c.border }]}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
@@ -182,7 +187,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           ))}
         </ScrollView>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

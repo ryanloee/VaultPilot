@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useAppStore, getColors } from '../store';
+import MarkdownPreview from '../components/MarkdownPreview';
 import { chatWithReconnect, ChatMessage } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
@@ -22,6 +23,7 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
   onDelete?: () => void; onResend?: () => void;
 }) {
   const c = getColors(isDark, accentColor);
+  const isAssistant = item.role === 'assistant';
   const handleLongPress = () => {
     if (!item.content) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -38,10 +40,17 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
       <View style={[s.bubble, item.role === 'user'
         ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
         : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
-        <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
-          {item.content || (item.streaming ? '思考中...' : '')}
-          {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
-        </Text>
+        {isAssistant && item.content ? (
+          <>
+            <MarkdownPreview content={item.content} textColor={c.aiText} accentColor={accentColor} isDark={isDark} />
+            {item.streaming && <Text style={{ color: accentColor, fontSize: 15 }}> ▌</Text>}
+          </>
+        ) : (
+          <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
+            {item.content || (item.streaming ? '思考中...' : '')}
+            {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
+          </Text>
+        )}
       </View>
     </TouchableOpacity>
   );

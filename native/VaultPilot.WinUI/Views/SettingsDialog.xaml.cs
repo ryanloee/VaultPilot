@@ -151,8 +151,6 @@ public sealed partial class SettingsDialog : ContentDialog
             ProviderList.SelectedIndex = _activeProviderIndex;
     }
 
-    }
-
     private void WireUpButtons()
     {
         OpenVaultButton.Click += async (_, _) =>

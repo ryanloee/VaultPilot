@@ -32,6 +32,6 @@ mod tests {
     fn regression_example_placeholder() {
         // This test always passes. It exists only to verify the module
         // structure compiles correctly. Replace with a real regression test.
-        assert!(true, "Replace this with a real regression test");
+        // Intentionally empty — do not add assert!(true).
     }
 }

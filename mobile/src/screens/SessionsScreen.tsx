@@ -109,7 +109,8 @@ export default function SessionsScreen({ navigation }: any) {
   };
 
   const handleSelect = (session: DbSession) => {
-    navigation.navigate('Chat', { sessionId: session.id, title: session.title });
+    // Navigate to the ChatMain screen within the ChatStack (not the tab)
+    navigation.navigate('ChatMain', { sessionId: session.id, title: session.title });
   };
 
   const handleDelete = (id: string) => {

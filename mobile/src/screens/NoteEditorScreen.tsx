@@ -27,6 +27,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const contentRef = useRef('');
   const timerRef = useRef<any>(null);
   const mountedRef = useRef(true);
+  const currentFolderRef = useRef('');
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
@@ -42,6 +43,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           setTitle(note.title);
           setContent(note.content);
           setFolder(note.folder || '');
+          currentFolderRef.current = note.folder || '';
           const noteTags = await getNoteTags(noteId);
           if (!cancelled) setTags(noteTags);
         } else {
@@ -93,6 +95,10 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         // Fire-and-forget save on unmount — component state is already gone
         updateNote(noteId, pendingRef.current.title, pendingRef.current.content);
         pendingRef.current = null;
+      }
+      // Save folder on unmount if it was changed
+      if (currentFolderRef.current) {
+        moveToFolder(noteId, currentFolderRef.current).catch(() => {});
       }
     };
   }, [noteId]);
@@ -191,10 +197,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           <TextInput
             style={[s.folderInput, { color: c.text, borderColor: c.border }]}
             value={folder}
-            onChangeText={async (f) => {
-              setFolder(f);
-              await moveToFolder(noteId, f);
-            }}
+            onChangeText={(f) => { setFolder(f); currentFolderRef.current = f; }}
+            onBlur={() => { moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder failed:', e)); }}
+            onSubmitEditing={() => { moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder failed:', e)); }}
             placeholder="输入文件夹名称"
             placeholderTextColor={c.textSecondary}
           />

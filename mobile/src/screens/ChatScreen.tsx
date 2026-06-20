@@ -8,7 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useAppStore, getColors } from '../store';
-import { chat, parseSSEStream, ChatMessage } from '../api/client';
+import { chatWithReconnect, ChatMessage } from '../api/client';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
@@ -171,16 +171,15 @@ export default function ChatScreen({ navigation, route }: any) {
       ];
 
       abortRef.current = new AbortController();
-      const stream = await chat(history, abortRef.current.signal);
       let full = '';
 
-      await parseSSEStream(stream, (chunk) => {
+      await chatWithReconnect(history, (chunk) => {
         if (chunk.done) return;
         if (chunk.content) {
           full += chunk.content;
           setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full } : m));
         }
-      });
+      }, abortRef.current.signal);
 
       // Persist streamed content — separate try-catch so UI content is preserved on failure
       try {

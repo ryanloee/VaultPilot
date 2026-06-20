@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 // Re-export unified SSE types from sse.ts (single implementation)
 export type { StreamChunk } from './sse';
 export { parseSSEStream } from './sse';
+import { parseSSEStreamWithReconnect } from './sse';
 
 // Settings keys
 const KEYS = {
@@ -247,6 +248,41 @@ export async function chat(
     clearTimeout(timeout);
     if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
   }
+}
+
+/**
+ * Chat with SSE stream reconnection.
+ * If the stream drops mid-response, automatically re-fetches with exponential backoff.
+ * Unlike chat(), this does not wrap the response in a ReadableStream — it calls
+ * onChunk directly via parseSSEStreamWithReconnect.
+ */
+export async function chatWithReconnect(
+  messages: ChatMessage[],
+  onChunk: (chunk: import('./sse').StreamChunk) => void,
+  signal?: AbortSignal,
+  options?: { maxRetries?: number; baseDelay?: number },
+): Promise<void> {
+  if (signal?.aborted) {
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }
+
+  const { apiBase, apiKey, model } = await getSettings();
+  if (!apiKey) throw new Error('请先在设置中填写 API Key');
+  const base = normalizeApiBase(apiBase);
+
+  const body = JSON.stringify({ model, messages, stream: true });
+  const fetchInit: RequestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body,
+  };
+
+  await parseSSEStreamWithReconnect(
+    `${base}/chat/completions`,
+    fetchInit,
+    onChunk,
+    { ...options, signal },
+  );
 }
 
 // ── Health Check ──────────────────────────────────────────

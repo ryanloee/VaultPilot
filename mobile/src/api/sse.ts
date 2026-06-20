@@ -106,12 +106,6 @@ export function parseSSEStream(
 }
 
 /**
- * Backward-compatible alias for parseSSEStream.
- * @deprecated Use parseSSEStream directly.
- */
-export const readStream_compat = parseSSEStream;
-
-/**
  * Parse an SSE stream with reconnection on network errors.
  * Creates a new fetch for each retry attempt.
  */

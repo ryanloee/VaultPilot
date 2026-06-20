@@ -409,7 +409,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; api
     const settings = params ?? await getSettings();
     const { apiKey } = settings;
     const apiBase = settings.apiBase ?? '';
-    const format = ('apiFormat' in settings) ? (settings as any).apiFormat : 'openai';
+    const format = settings.apiFormat ?? 'openai';
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
 
     if (format === 'anthropic') {

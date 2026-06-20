@@ -4,6 +4,8 @@ import {
   KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
 
@@ -157,9 +159,17 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         <Text style={[s.headerTitle, { color: c.textSecondary }]}>
           {saving ? '保存中...' : '已保存'}
         </Text>
-        <TouchableOpacity onPress={handleDelete}>
-          <Text style={[s.headerBtn, { color: '#EF4444' }]}>删除</Text>
-        </TouchableOpacity>
+        <View style={s.headerActions}>
+          <TouchableOpacity onPress={() => {
+            const text = content ? (title ? `${title}\n\n${content}` : content) : '';
+            if (text) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); Clipboard.setStringAsync(text); }
+          }}>
+            <Text style={[s.headerBtn, { color: accentColor }]}>复制</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleDelete}>
+            <Text style={[s.headerBtn, { color: '#EF4444', marginLeft: 16 }]}>删除</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Folder bar */}
@@ -272,6 +282,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1,
   },
   headerBtn: { fontSize: 16, fontWeight: '500' },
+  headerActions: { flexDirection: 'row', alignItems: 'center' },
   headerTitle: { fontSize: 13 },
   folderBar: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

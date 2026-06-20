@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
 
@@ -62,6 +63,10 @@ export default function NotesScreen({ navigation }: any) {
     Alert.alert(item.title || '笔记操作', '', [
       { text: item.starred ? '取消收藏' : '收藏', onPress: async () => {
         try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
+      }},
+      { text: '复制内容', onPress: () => {
+        const text = item.content ? (item.title ? `${item.title}\n\n${item.content}` : item.content) : '';
+        if (text) Clipboard.setStringAsync(text);
       }},
       { text: '删除', style: 'destructive', onPress: () => handleDelete(item.id) },
       { text: '取消', style: 'cancel' },

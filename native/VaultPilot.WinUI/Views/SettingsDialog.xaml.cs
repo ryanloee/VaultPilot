@@ -77,36 +77,6 @@ public sealed partial class SettingsDialog : ContentDialog
         RefreshProviderList();
         LoadProviderFields(_providers[_activeProviderIndex]);
 
-    }
-
-    private void LoadProviderFields(ProviderConfig p)
-    {
-        ProviderNameBox.Text = p.Name ?? string.Empty;
-        ApiKeyBox.Password = p.ApiKey;
-        BaseUrlBox.Text = p.BaseUrl;
-        ModelBox.Text = p.Model;
-        TimeoutBox.Text = p.RequestTimeoutMs.ToString();
-        ContextWindowBox.Text = p.ContextWindowTokens?.ToString() ?? string.Empty;
-        // Provider type
-        var ptype = (p.ProviderType ?? "openai").ToLowerInvariant();
-        ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1 : 0;
-
-    }
-
-    private void RefreshProviderList()
-    {
-        ProviderList.Items.Clear();
-        for (int i = 0; i < _providers.Count; i++)
-        {
-            var p = _providers[i];
-            var label = string.IsNullOrEmpty(p.Name) ? $"提供商 {i + 1}" : p.Name;
-            if (i == _activeProviderIndex) label = "● " + label;
-            ProviderList.Items.Add(label);
-        }
-        if (_activeProviderIndex >= 0 && _activeProviderIndex < _providers.Count)
-            ProviderList.SelectedIndex = _activeProviderIndex;
-    }
-
         // General section
         AutoCheckUpdatesBox.IsChecked = settings.AutoCheckUpdates;
 
@@ -151,6 +121,36 @@ public sealed partial class SettingsDialog : ContentDialog
 
         // Footer
         VersionLabel.Text = versionText;
+    }
+
+    private void LoadProviderFields(ProviderConfig p)
+    {
+        ProviderNameBox.Text = p.Name ?? string.Empty;
+        ApiKeyBox.Password = p.ApiKey;
+        BaseUrlBox.Text = p.BaseUrl;
+        ModelBox.Text = p.Model;
+        TimeoutBox.Text = p.RequestTimeoutMs.ToString();
+        ContextWindowBox.Text = p.ContextWindowTokens?.ToString() ?? string.Empty;
+        // Provider type
+        var ptype = (p.ProviderType ?? "openai").ToLowerInvariant();
+        ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1 : 0;
+
+    }
+
+    private void RefreshProviderList()
+    {
+        ProviderList.Items.Clear();
+        for (int i = 0; i < _providers.Count; i++)
+        {
+            var p = _providers[i];
+            var label = string.IsNullOrEmpty(p.Name) ? $"提供商 {i + 1}" : p.Name;
+            if (i == _activeProviderIndex) label = "● " + label;
+            ProviderList.Items.Add(label);
+        }
+        if (_activeProviderIndex >= 0 && _activeProviderIndex < _providers.Count)
+            ProviderList.SelectedIndex = _activeProviderIndex;
+    }
+
     }
 
     private void WireUpButtons()

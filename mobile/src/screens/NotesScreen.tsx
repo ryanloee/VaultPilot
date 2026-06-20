@@ -95,6 +95,9 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
       style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}
       onPress={() => navigation.navigate('NoteEdit', { noteId: item.id })}
       onLongPress={() => handleLongPress(item)}
+      accessibilityRole="button"
+      accessibilityLabel={`${item.starred ? '已收藏 ' : ''}${item.title || '无标题'}${item.folder ? `，文件夹: ${item.folder}` : ''}`}
+      accessibilityHint="点击编辑，长按查看操作"
     >
       <View style={s.cardHeader}>
         <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>
@@ -127,6 +130,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
           placeholderTextColor={c.textSecondary}
           value={search}
           onChangeText={setSearch}
+          accessibilityLabel="搜索笔记"
         />
       </View>
 
@@ -136,6 +140,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
           <TouchableOpacity
             style={[s.chip, { backgroundColor: activeFolder === undefined ? accentColor : c.card, borderColor: c.border }]}
             onPress={() => setActiveFolder(undefined)}
+            accessibilityRole="button" accessibilityLabel="显示全部笔记"
           >
             <Text style={[s.chipText, { color: activeFolder === undefined ? '#FFF' : c.text }]}>全部</Text>
           </TouchableOpacity>
@@ -144,6 +149,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
               key={f}
               style={[s.chip, { backgroundColor: activeFolder === f ? accentColor : c.card, borderColor: c.border }]}
               onPress={() => setActiveFolder(activeFolder === f ? undefined : f)}
+              accessibilityRole="button" accessibilityLabel={`文件夹: ${f}`}
             >
               <Text style={[s.chipText, { color: activeFolder === f ? '#FFF' : c.text }]}>{f}</Text>
             </TouchableOpacity>
@@ -172,6 +178,8 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
       <TouchableOpacity
         style={[s.fab, { backgroundColor: accentColor }]}
         onPress={handleNew}
+        accessibilityRole="button"
+        accessibilityLabel="新建笔记"
       >
         <Text style={s.fabText}>+</Text>
       </TouchableOpacity>

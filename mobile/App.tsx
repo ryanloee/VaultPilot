@@ -7,6 +7,7 @@ import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
 import { getSettings } from './src/api/client';
+import ErrorBoundary from './src/components/ErrorBoundary';
 
 import ChatScreen from './src/screens/ChatScreen';
 import NotesScreen from './src/screens/NotesScreen';
@@ -108,11 +109,11 @@ export default function App() {
   }, [systemScheme, themeMode]);
 
   return (
-    <>
+    <ErrorBoundary>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       <NavigationContainer>
         <MainTabs />
       </NavigationContainer>
-    </>
+    </ErrorBoundary>
   );
 }

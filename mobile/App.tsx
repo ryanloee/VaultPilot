@@ -18,9 +18,9 @@ import NoteEditorScreen from './src/screens/NoteEditorScreen';
 import SearchScreen from './src/screens/SearchScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
-import type { ChatStackParamList, NotesStackParamList } from './src/navigation/types';
+import type { ChatStackParamList, NotesStackParamList, RootTabParamList } from './src/navigation/types';
 
-const Tab = createBottomTabNavigator();
+const Tab = createBottomTabNavigator<RootTabParamList>();
 const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
 const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
 

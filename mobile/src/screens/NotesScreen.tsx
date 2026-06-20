@@ -13,15 +13,19 @@ export default function NotesScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const requestIdRef = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (query: string) => {
     const currentId = ++requestIdRef.current;
-    const data = search ? await searchNotes(search) : await getNotes();
+    const data = query ? await searchNotes(query) : await getNotes();
     if (requestIdRef.current !== currentId) return; // stale, discard
     setNotes(data);
     setLoading(false);
-  }, [search]);
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Debounce search: wait 300ms after last keystroke before querying
+  useEffect(() => {
+    const timer = setTimeout(() => load(search), 300);
+    return () => clearTimeout(timer);
+  }, [search, load]);
 
   const handleNew = async () => {
     try {
@@ -36,7 +40,7 @@ export default function NotesScreen({ navigation }: any) {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteNote(id); await load(); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
+        try { await deleteNote(id); await load(search); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
       }},
     ]);
   };

@@ -10,7 +10,6 @@
 /// 1. Default constructors are valid
 /// 2. Minimal JSON deserialization works (serde defaults fill missing fields)
 /// 3. All struct fields round-trip through serialization
-
 #[cfg(test)]
 mod tests {
     use crate::models::{AppSettings, ProviderConfig};

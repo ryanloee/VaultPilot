@@ -9,24 +9,28 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useAppStore, getColors } from '../store';
 import { chat, parseSSEStream, ChatMessage } from '../api/client';
-import { getMessages, addMessage, updateMessage, createSession, getLatestSession } from '../db';
+import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
 /** Max messages sent to API to avoid exceeding model context window */
 const MAX_HISTORY_MESSAGES = 50;
 
-const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }: {
+const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, onDelete, onResend }: {
   item: Msg; isDark: boolean; accentColor: string;
+  onDelete?: () => void; onResend?: () => void;
 }) {
   const c = getColors(isDark, accentColor);
   const handleLongPress = () => {
     if (!item.content) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert('复制消息', '将消息内容复制到剪贴板？', [
-      { text: '取消', style: 'cancel' },
+    const actions: any[] = [
       { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
-    ]);
+    ];
+    if (onResend) actions.push({ text: '重新发送', onPress: onResend });
+    if (onDelete) actions.push({ text: '删除', style: 'destructive', onPress: onDelete });
+    actions.push({ text: '取消', style: 'cancel' });
+    Alert.alert('消息操作', '', actions);
   };
   return (
     <TouchableOpacity onLongPress={handleLongPress} activeOpacity={0.8}>
@@ -227,6 +231,21 @@ export default function ChatScreen({ navigation, route }: any) {
     abortRef.current?.abort();
   };
 
+  const handleDeleteMsg = useCallback(async (msgId: string) => {
+    try {
+      await deleteMessage(msgId);
+      setMsgs(prev => prev.filter(m => m.id !== msgId));
+    } catch (e) {
+      Alert.alert('删除失败', String(e));
+    }
+  }, []);
+
+  const handleResend = useCallback(async (msgId: string) => {
+    const msg = msgsRef.current.find(m => m.id === msgId);
+    if (!msg || !sessionId) return;
+    setInput(msg.content);
+  }, [sessionId]);
+
   // Debounced scroll-to-end — only when user is near bottom
   const scrollToEndDebounced = useCallback((force = false) => {
     if (!force && !nearBottomRef.current) return;
@@ -277,7 +296,15 @@ export default function ChatScreen({ navigation, route }: any) {
       <FlatList
         ref={listRef}
         data={msgs}
-        renderItem={({ item }) => <MessageBubble item={item} isDark={isDark} accentColor={accentColor} />}
+        renderItem={({ item }) => (
+          <MessageBubble
+            item={item}
+            isDark={isDark}
+            accentColor={accentColor}
+            onDelete={() => handleDeleteMsg(item.id)}
+            onResend={item.role === 'user' ? () => handleResend(item.id) : undefined}
+          />
+        )}
         keyExtractor={item => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
         onContentSizeChange={() => scrollToEndDebounced()}

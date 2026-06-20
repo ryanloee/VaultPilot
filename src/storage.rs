@@ -299,6 +299,15 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
             parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
                 .context("Failed to decrypt stored API key — the machine key may have changed. Please re-enter your API key in Settings")?;
         }
+        // Decrypt keys in multi-provider list.
+        for p in &mut parsed.providers {
+            if !p.api_key.is_empty() {
+                p.api_key = crate::crypto::decrypt_secret(&p.api_key)
+                    .context("Failed to decrypt provider API key")?;
+            }
+        }
+        // Migrate legacy single provider into providers list.
+        parsed.migrate_providers();
 
         normalize_settings(&mut parsed, paths);
         let warnings = parsed.validate();
@@ -342,7 +351,7 @@ pub fn save_settings_with_context(
     // rather than the full AppSettings.validate() because the save path
     // creates vault_dir itself and api_key may legitimately be empty at
     // save time.
-    let errors = settings.provider.validate();
+    let errors = settings.effective_provider().validate();
     if !errors.is_empty() {
         return Err(anyhow::anyhow!(
             "settings validation failed: {}",
@@ -355,13 +364,23 @@ pub fn save_settings_with_context(
     if !api_key_plaintext.is_empty() && !crate::crypto::is_encrypted(&api_key_plaintext) {
         settings.provider.api_key = crate::crypto::encrypt_secret(&api_key_plaintext)?;
     }
+    // Encrypt keys in multi-provider list.
+    let providers_plaintext: Vec<String> = settings.providers.iter().map(|p| p.api_key.clone()).collect();
+    for p in &mut settings.providers {
+        if !p.api_key.is_empty() && !crate::crypto::is_encrypted(&p.api_key) {
+            p.api_key = crate::crypto::encrypt_secret(&p.api_key)?;
+        }
+    }
 
     let content = serde_json::to_string_pretty(&settings)?;
     atomic_write(&paths.settings_path, content.as_bytes())
         .with_context(|| format!("failed to write {}", paths.settings_path.display()))?;
 
-    // Restore the plaintext key in the struct we return and cache.
+    // Restore the plaintext keys in the struct we return and cache.
     settings.provider.api_key = api_key_plaintext;
+    for (p, plain) in settings.providers.iter_mut().zip(providers_plaintext) {
+        p.api_key = plain;
+    }
 
     let connection = context
         .pool
@@ -1039,6 +1058,25 @@ fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     }
     if matches!(settings.provider.context_window_tokens, Some(0)) {
         settings.provider.context_window_tokens = None;
+    }
+    // Normalize each provider in the multi-provider list.
+    for p in &mut settings.providers {
+        if p.base_url.trim().is_empty() {
+            p.base_url = crate::models::default_base_url();
+        }
+        if p.model.trim().is_empty() {
+            p.model = crate::models::default_model();
+        }
+        if p.request_timeout_ms == 0 {
+            p.request_timeout_ms = crate::models::default_timeout_ms();
+        }
+        if matches!(p.context_window_tokens, Some(0)) {
+            p.context_window_tokens = None;
+        }
+    }
+    // Clamp active_provider_index.
+    if !settings.providers.is_empty() && settings.active_provider_index >= settings.providers.len() {
+        settings.active_provider_index = settings.providers.len() - 1;
     }
 }
 

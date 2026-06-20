@@ -1,30 +1,49 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, ApiFormat } from '../store';
+import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, ApiFormat, ProviderConfig } from '../store';
 import { checkApi, getSettings, saveSettings } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
 
-// Theme keys — stored separately from API settings (cfg_* keys)
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
 
 export default function SettingsScreen() {
   const store = useAppStore();
   const c = getColors(store.isDark, store.accentColor);
-  const [apiBase, setApiBase] = useState(store.apiBase);
-  const [apiKey, setApiKey] = useState(store.apiKey);
-  const [model, setModel] = useState(store.model);
-  const [apiFormat, setApiFormat] = useState<ApiFormat>(store.apiFormat);
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
-  // Load saved settings from the same source the API client uses
+  // Active provider values for editing
+  const activeIdx = store.providers.length > 0
+    ? Math.min(store.activeProviderIndex, store.providers.length - 1)
+    : -1;
+  const active = activeIdx >= 0 ? store.providers[activeIdx] : null;
+
+  const [apiBase, setApiBase] = useState(active?.apiBase ?? store.apiBase);
+  const [apiKey, setApiKey] = useState(active?.apiKey ?? store.apiKey);
+  const [model, setModel] = useState(active?.model ?? store.model);
+  const [apiFormat, setApiFormat] = useState<ApiFormat>(active?.apiFormat ?? store.apiFormat);
+  const [providerName, setProviderName] = useState(active?.name ?? '');
+
+  // Sync local state when active provider changes
+  useEffect(() => {
+    if (active) {
+      setApiBase(active.apiBase);
+      setApiKey(active.apiKey);
+      setModel(active.model);
+      setApiFormat(active.apiFormat);
+      setProviderName(active.name);
+    }
+  }, [activeIdx]);
+
+  // Load saved settings on mount
   useEffect(() => {
     (async () => {
       try {
@@ -33,28 +52,39 @@ export default function SettingsScreen() {
           AsyncStorage.getItem(THEME_KEY),
           AsyncStorage.getItem(ACCENT_KEY),
         ]);
-        if (api.apiBase) { setApiBase(api.apiBase); store.setApiSettings({ apiBase: api.apiBase }); }
-        if (api.apiKey) { setApiKey(api.apiKey); store.setApiSettings({ apiKey: api.apiKey }); }
-        if (api.model) { setModel(api.model); store.setApiSettings({ model: api.model }); }
-        if (api.apiFormat) { setApiFormat(api.apiFormat); store.setApiSettings({ apiFormat: api.apiFormat }); }
+        // If no providers yet, migrate from legacy flat fields
+        if (store.providers.length === 0 && api.apiBase) {
+          const migrated: ProviderConfig = {
+            name: '默认',
+            apiBase: api.apiBase,
+            apiKey: api.apiKey || '',
+            model: api.model || 'deepseek-v4-flash-free',
+            apiFormat: api.apiFormat || 'openai',
+          };
+          store.addProvider(migrated);
+        } else if (store.providers.length === 0) {
+          // Add default OpenCode Zen
+          store.addProvider({
+            name: 'OpenCode Zen',
+            apiBase: 'https://opencode.ai/zen/v1',
+            apiKey: '',
+            model: 'deepseek-v4-flash-free',
+            apiFormat: 'openai',
+          });
+        }
         if (themeMode && isValidThemeMode(themeMode)) store.setThemeMode(themeMode);
         if (accentColor) store.setAccentColor(accentColor);
       } catch (e) {
-        console.warn('[Settings] Failed to load settings, using defaults:', e);
-        setLoadError('设置加载失败，显示默认值');
+        console.warn('[Settings] Failed to load:', e);
       }
     })();
   }, []);
 
-  const saveAll = async () => {
+  const saveActiveProvider = async () => {
+    if (activeIdx < 0) return;
+    store.updateProvider(activeIdx, { name: providerName, apiBase, apiKey, model, apiFormat });
     try {
-      await Promise.all([
-        saveSettings({ apiBase, apiKey, model, apiFormat }),
-        AsyncStorage.setItem(THEME_KEY, store.themeMode),
-        AsyncStorage.setItem(ACCENT_KEY, store.accentColor),
-      ]);
-      // Update store only after persistence succeeds — avoid state inconsistency on failure
-      store.setApiSettings({ apiBase, apiKey, model, apiFormat });
+      await saveSettings({ apiBase, apiKey, model, apiFormat });
       Alert.alert('已保存', '设置已保存');
     } catch (e: any) {
       Alert.alert('保存失败', e.message || '请重试');
@@ -74,100 +104,178 @@ export default function SettingsScreen() {
     }
   };
 
-  const selectProvider = (p: typeof PROVIDERS[0]) => {
-    setApiBase(p.base);
-    setApiFormat(p.format);
-    if (p.models.length) setModel(p.models[0]);
+  const addFromPreset = (preset: typeof PROVIDERS[0]) => {
+    store.addProvider({
+      name: preset.name,
+      apiBase: preset.base,
+      apiKey: '',
+      model: preset.models[0] || '',
+      apiFormat: preset.format,
+    });
+    setShowAddModal(false);
+  };
+
+  const addCustom = () => {
+    store.addProvider({
+      name: '自定义',
+      apiBase: 'https://',
+      apiKey: '',
+      model: '',
+      apiFormat: 'openai',
+    });
+    setShowAddModal(false);
+  };
+
+  const deleteProvider = (index: number) => {
+    if (store.providers.length <= 1) {
+      Alert.alert('无法删除', '至少保留一个提供商');
+      return;
+    }
+    Alert.alert('删除', `确定删除「${store.providers[index].name}」？`, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: () => store.removeProvider(index) },
+    ]);
+  };
+
+  const selectPresetUrl = (preset: typeof PROVIDERS[0]) => {
+    setApiBase(preset.base);
+    setApiFormat(preset.format);
+    if (preset.models.length && !model) setModel(preset.models[0]);
   };
 
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
-      {loadError && (
-        <View style={[s.errorBanner, { backgroundColor: '#FEF3C7', borderColor: '#F59E0B' }]}>
-          <Text style={{ color: '#92400E', fontSize: 14 }}>⚠️ {loadError}</Text>
-          <TouchableOpacity onPress={() => setLoadError(null)}>
-            <Text style={{ color: '#92400E', fontSize: 14 }}>✕</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      {/* API Section */}
-      <Text style={[s.sectionTitle, { color: c.text }]}>API 配置</Text>
 
-      {!apiKey && (
-        <View style={[s.hintBanner, { backgroundColor: store.isDark ? '#1E3A5F' : '#EFF6FF', borderColor: store.isDark ? '#2563EB' : '#93C5FD' }]}>
-          <Text style={[s.hintText, { color: store.isDark ? '#93C5FD' : '#1D4ED8' }]}>
-            🎉 免费使用：选「OpenCode Zen」或「OpenRouter」即可免费体验 AI 对话{'\n'}
-            {'\n'}
-            • OpenCode Zen：opencode.ai/zen（注册即送免费模型）{'\n'}
-            • OpenRouter：openrouter.ai（GitHub 登录，27 个免费模型）
-          </Text>
-        </View>
-      )}
+      {/* ── Provider List ── */}
+      <View style={s.sectionHeader}>
+        <Text style={[s.sectionTitle, { color: c.text }]}>API 提供商</Text>
+        <TouchableOpacity onPress={() => setShowAddModal(true)} style={[s.addBtn, { borderColor: store.accentColor }]}>
+          <Text style={{ color: store.accentColor, fontWeight: '600' }}>+ 添加</Text>
+        </TouchableOpacity>
+      </View>
 
-      <Text style={[s.label, { color: c.textSecondary }]}>提供商</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-        {PROVIDERS.map(p => (
-          <TouchableOpacity
-            key={p.name}
-            style={[s.providerBtn, {
-              borderColor: (apiBase === p.base && apiFormat === p.format) ? store.accentColor : c.border,
-              backgroundColor: (apiBase === p.base && apiFormat === p.format) ? store.accentColor + '20' : 'transparent',
-            }]}
-            onPress={() => selectProvider(p)}
-          >
-            <Text style={{ color: (apiBase === p.base && apiFormat === p.format) ? store.accentColor : c.text, fontWeight: '500' }}>
-              {p.name}
+      {store.providers.map((p, i) => (
+        <TouchableOpacity
+          key={i}
+          style={[s.providerCard, {
+            backgroundColor: i === activeIdx ? store.accentColor + '15' : c.inputBg,
+            borderColor: i === activeIdx ? store.accentColor : c.border,
+          }]}
+          onPress={() => store.setActiveProvider(i)}
+        >
+          <View style={{ flex: 1 }}>
+            <View style={s.providerCardHeader}>
+              <Text style={[s.providerCardName, { color: c.text }]}>
+                {i === activeIdx ? '● ' : ''}{p.name}
+              </Text>
+              {store.providers.length > 1 && (
+                <TouchableOpacity onPress={() => deleteProvider(i)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Text style={{ color: '#EF4444', fontSize: 14 }}>删除</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <Text style={[s.providerCardDetail, { color: c.textSecondary }]} numberOfLines={1}>
+              {p.model} · {p.apiFormat.toUpperCase()}
             </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      <Text style={[s.label, { color: c.textSecondary }]}>API Base URL</Text>
-      <TextInput
-        style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
-        value={apiBase}
-        onChangeText={setApiBase}
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
-
-      <Text style={[s.label, { color: c.textSecondary }]}>API Key</Text>
-      <View style={s.keyRow}>
-        <TextInput
-          style={[s.input, { flex: 1, backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
-          value={apiKey}
-          onChangeText={setApiKey}
-          secureTextEntry={!showKey}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <TouchableOpacity onPress={() => setShowKey(!showKey)} style={s.eyeBtn}>
-          <Text style={{ color: c.textSecondary, fontSize: 18 }}>{showKey ? '🙈' : '👁'}</Text>
+          </View>
         </TouchableOpacity>
-      </View>
+      ))}
 
-      <Text style={[s.label, { color: c.textSecondary }]}>模型</Text>
-      <TextInput
-        style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
-        value={model}
-        onChangeText={setModel}
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
+      {/* ── Edit Active Provider ── */}
+      {active && (
+        <View style={[s.editSection, { borderColor: c.border }]}>
+          <Text style={[s.label, { color: c.textSecondary }]}>名称</Text>
+          <TextInput
+            style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+            value={providerName}
+            onChangeText={setProviderName}
+            autoCapitalize="none"
+          />
 
-      {/* Test & Save */}
-      <View style={s.btnRow}>
-        <TouchableOpacity style={[s.btn, { backgroundColor: c.inputBg, borderColor: c.border }]} onPress={testConnection} disabled={testing}>
-          {testing ? <ActivityIndicator color={store.accentColor} /> : <Text style={[s.btnText, { color: c.text }]}>测试连接</Text>}
-        </TouchableOpacity>
-        <TouchableOpacity style={[s.btn, { backgroundColor: store.accentColor }]} onPress={saveAll}>
-          <Text style={[s.btnText, { color: '#FFF' }]}>保存</Text>
-        </TouchableOpacity>
-      </View>
-      {testResult && <Text style={[s.testResult, { color: testResult.includes('✅') ? '#10B981' : '#EF4444' }]}>{testResult}</Text>}
+          <Text style={[s.label, { color: c.textSecondary }]}>快速选择</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+            {PROVIDERS.map(p => (
+              <TouchableOpacity
+                key={p.name}
+                style={[s.presetBtn, {
+                  borderColor: (apiBase === p.base) ? store.accentColor : c.border,
+                  backgroundColor: (apiBase === p.base) ? store.accentColor + '20' : 'transparent',
+                }]}
+                onPress={() => selectPresetUrl(p)}
+              >
+                <Text style={{ color: (apiBase === p.base) ? store.accentColor : c.text, fontWeight: '500', fontSize: 13 }}>
+                  {p.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
 
-      {/* Theme Section */}
+          <Text style={[s.label, { color: c.textSecondary }]}>API Base URL</Text>
+          <TextInput
+            style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+            value={apiBase}
+            onChangeText={setApiBase}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <Text style={[s.label, { color: c.textSecondary }]}>API Key</Text>
+          <View style={s.keyRow}>
+            <TextInput
+              style={[s.input, { flex: 1, backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+              value={apiKey}
+              onChangeText={setApiKey}
+              secureTextEntry={!showKey}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity onPress={() => setShowKey(!showKey)} style={s.eyeBtn}>
+              <Text style={{ color: c.textSecondary, fontSize: 18 }}>{showKey ? '🙈' : '👁'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={[s.label, { color: c.textSecondary }]}>格式</Text>
+          <View style={s.formatRow}>
+            {(['openai', 'anthropic'] as const).map(fmt => (
+              <TouchableOpacity
+                key={fmt}
+                style={[s.formatBtn, {
+                  borderColor: apiFormat === fmt ? store.accentColor : c.border,
+                  backgroundColor: apiFormat === fmt ? store.accentColor + '20' : 'transparent',
+                }]}
+                onPress={() => setApiFormat(fmt)}
+              >
+                <Text style={{ color: apiFormat === fmt ? store.accentColor : c.text }}>
+                  {fmt === 'openai' ? 'OpenAI' : 'Anthropic'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={[s.label, { color: c.textSecondary }]}>模型</Text>
+          <TextInput
+            style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+            value={model}
+            onChangeText={setModel}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          {/* Test & Save */}
+          <View style={s.btnRow}>
+            <TouchableOpacity style={[s.btn, { backgroundColor: c.inputBg, borderColor: c.border }]} onPress={testConnection} disabled={testing}>
+              {testing ? <ActivityIndicator color={store.accentColor} /> : <Text style={[s.btnText, { color: c.text }]}>测试连接</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.btn, { backgroundColor: store.accentColor }]} onPress={saveActiveProvider}>
+              <Text style={[s.btnText, { color: '#FFF' }]}>保存</Text>
+            </TouchableOpacity>
+          </View>
+          {testResult && <Text style={[s.testResult, { color: testResult.includes('✅') ? '#10B981' : '#EF4444' }]}>{testResult}</Text>}
+        </View>
+      )}
+
+      {/* ── Theme Section ── */}
       <Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>外观</Text>
 
       <Text style={[s.label, { color: c.textSecondary }]}>主题</Text>
@@ -212,13 +320,50 @@ export default function SettingsScreen() {
 
       <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
     </ScrollView>
+
+    {/* ── Add Provider Modal ── */}
+    <Modal visible={showAddModal} transparent animationType="slide">
+      <View style={s.modalOverlay}>
+        <View style={[s.modalContent, { backgroundColor: c.card }]}>
+          <Text style={[s.sectionTitle, { color: c.text }]}>添加提供商</Text>
+          <ScrollView>
+            {PROVIDERS.map(p => (
+              <TouchableOpacity
+                key={p.name}
+                style={[s.modalItem, { borderColor: c.border }]}
+                onPress={() => addFromPreset(p)}
+              >
+                <Text style={[s.modalItemName, { color: c.text }]}>{p.name}</Text>
+                <Text style={[s.modalItemDetail, { color: c.textSecondary }]}>
+                  {p.models.slice(0, 2).join(', ')}{p.models.length > 2 ? '...' : ''}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={[s.modalItem, { borderColor: c.border }]}
+              onPress={addCustom}
+            >
+              <Text style={[s.modalItemName, { color: store.accentColor }]}>✏️ 自定义提供商</Text>
+            </TouchableOpacity>
+          </ScrollView>
+          <TouchableOpacity
+            style={[s.modalClose, { borderColor: c.border }]}
+            onPress={() => setShowAddModal(false)}
+          >
+            <Text style={{ color: c.textSecondary }}>取消</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
   container: { flex: 1 },
-  sectionTitle: { fontSize: 20, fontWeight: '700', marginBottom: 16 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sectionTitle: { fontSize: 20, fontWeight: '700' },
+  addBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
   label: { fontSize: 13, fontWeight: '500', marginBottom: 6 },
   input: {
     borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10,
@@ -233,23 +378,28 @@ const s = StyleSheet.create({
   },
   btnText: { fontSize: 16, fontWeight: '600' },
   testResult: { textAlign: 'center', marginTop: 10, fontSize: 14 },
-  providerBtn: {
-    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
+  providerCard: {
+    borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 8,
+  },
+  providerCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  providerCardName: { fontSize: 16, fontWeight: '600' },
+  providerCardDetail: { fontSize: 13, marginTop: 4 },
+  editSection: { marginTop: 16, paddingTop: 16, borderTopWidth: 1 },
+  presetBtn: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18,
     borderWidth: 1, marginRight: 8,
   },
+  formatRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  formatBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   themeRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
   themeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   colorRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
   version: { textAlign: 'center', fontSize: 12, marginTop: 20, marginBottom: 40 },
-  errorBanner: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 16,
-  },
-  hintBanner: {
-    padding: 14, borderRadius: 10, borderWidth: 1, marginBottom: 16,
-  },
-  hintText: {
-    fontSize: 13, lineHeight: 20,
-  },
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
+  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '70%' },
+  modalItem: { borderBottomWidth: 1, paddingVertical: 14 },
+  modalItemName: { fontSize: 16, fontWeight: '600' },
+  modalItemDetail: { fontSize: 13, marginTop: 2 },
+  modalClose: { paddingVertical: 14, alignItems: 'center', marginTop: 8, borderTopWidth: 1 },
 });

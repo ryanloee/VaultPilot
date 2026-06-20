@@ -43,7 +43,27 @@
                 AutomationProperties.Name="打开知识库目录"
                 AutomationProperties.HelpText="打开文件选择对话框选择知识库目录" />
 
-            <!-- Provider settings -->
+            <!-- Provider list -->
+            <TextBlock Text="API 提供商" FontSize="16" FontWeight="SemiBold" Margin="0,4,0,0" />
+            <ListView
+                x:Name="ProviderList"
+                MaxHeight="140"
+                SelectionChanged="OnProviderSelectionChanged"
+                SelectionMode="Single"
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="提供商列表" />
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                <Button x:Name="AddProviderButton" Content="+ 添加" Click="OnAddProvider" />
+                <Button x:Name="RemoveProviderButton" Content="删除" Click="OnRemoveProvider" />
+            </StackPanel>
+
+            <!-- Provider edit fields -->
+            <TextBox
+                x:Name="ProviderNameBox"
+                Header="名称"
+                PlaceholderText="例如 OpenCode Zen"
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="提供商名称" />
             <InfoBar
                 x:Name="FreeTierHint"
                 Severity="Informational"
@@ -53,6 +73,13 @@
                 IsClosable="False"
                 HorizontalAlignment="Stretch"
                 Margin="0,8,0,4" />
+            <ComboBox
+                x:Name="ProviderTypeBox"
+                Header="格式"
+                HorizontalAlignment="Stretch">
+                <ComboBoxItem Content="OpenAI" IsSelected="True" />
+                <ComboBoxItem Content="Anthropic" />
+            </ComboBox>
             <PasswordBox
                 x:Name="ApiKeyBox"
                 Header="API Key"

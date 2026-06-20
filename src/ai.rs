@@ -663,7 +663,7 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
         return (explicit, "manual_override".to_string());
     }
 
-    let model = settings.provider.model.trim().to_ascii_lowercase();
+    let model = settings.effective_provider().model.trim().to_ascii_lowercase();
 
     // Priority 2: built-in registry (data-driven)
     for rule in MODEL_CONTEXT_RULES {
@@ -1206,7 +1206,7 @@ async fn send_request(
     send_request_with_temperature(settings, system, prompt, image_paths, 0.2).await
 }
 
-#[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.provider.model, temperature))]
+#[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.effective_provider().model, temperature))]
 async fn send_request_with_temperature(
     settings: &AppSettings,
     system: &str,
@@ -1214,7 +1214,7 @@ async fn send_request_with_temperature(
     image_paths: &[String],
     temperature: f32,
 ) -> Result<ModelResponse> {
-    let provider = &settings.provider;
+    let provider = settings.effective_provider();
     if provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
     }
@@ -1833,6 +1833,8 @@ fn normalize_endpoint(base_url: &str, provider_type: crate::models::ProviderType
             // like /custom/messages (issue #602).
             if trimmed.ends_with("/v1/messages") {
                 trimmed.to_string()
+            } else if trimmed.ends_with("/v1") {
+                format!("{trimmed}/messages")
             } else {
                 format!("{trimmed}/v1/messages")
             }
@@ -1840,6 +1842,8 @@ fn normalize_endpoint(base_url: &str, provider_type: crate::models::ProviderType
         ProviderType::OpenAi => {
             if trimmed.ends_with("/v1/chat/completions") {
                 trimmed.to_string()
+            } else if trimmed.ends_with("/v1") {
+                format!("{trimmed}/chat/completions")
             } else {
                 format!("{trimmed}/v1/chat/completions")
             }

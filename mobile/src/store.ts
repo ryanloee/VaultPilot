@@ -11,6 +11,15 @@ export function isValidThemeMode(v: string): v is ThemeMode {
 
 export type ApiFormat = 'openai' | 'anthropic';
 
+/** A saved API provider configuration. */
+export interface ProviderConfig {
+  name: string;
+  apiBase: string;
+  apiKey: string;
+  model: string;
+  apiFormat: ApiFormat;
+}
+
 interface AppState {
   themeMode: ThemeMode;
   isDark: boolean;
@@ -19,11 +28,20 @@ interface AppState {
   setAccentColor: (color: string) => void;
   setIsDark: (dark: boolean) => void;
 
+  // Legacy flat fields (kept for client.ts backward compat, synced from active provider)
   apiBase: string;
   apiKey: string;
   model: string;
   apiFormat: ApiFormat;
   setApiSettings: (s: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }) => void;
+
+  // Multi-provider
+  providers: ProviderConfig[];
+  activeProviderIndex: number;
+  addProvider: (p: ProviderConfig) => void;
+  removeProvider: (index: number) => void;
+  updateProvider: (index: number, p: Partial<ProviderConfig>) => void;
+  setActiveProvider: (index: number) => void;
 }
 
 export const ACCENT_COLORS = [
@@ -70,9 +88,22 @@ export function getColors(isDark: boolean, accent: string): ColorScheme {
   return cachedColors;
 }
 
+/** Sync legacy flat fields from the active provider so client.ts keeps working. */
+function syncLegacyFields(set: any, providers: ProviderConfig[], activeProviderIndex: number) {
+  if (providers.length === 0) return;
+  const idx = Math.min(activeProviderIndex, providers.length - 1);
+  const p = providers[idx];
+  set({
+    apiBase: p.apiBase,
+    apiKey: p.apiKey,
+    model: p.model,
+    apiFormat: p.apiFormat,
+  });
+}
+
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       themeMode: 'system',
       isDark: false,
       accentColor: '#3B82F6',
@@ -84,12 +115,59 @@ export const useAppStore = create<AppState>()(
       apiKey: '',
       model: 'deepseek-v4-flash-free',
       apiFormat: 'openai' as ApiFormat,
-      setApiSettings: (s) => set((state) => ({
-        apiBase: s.apiBase ?? state.apiBase,
-        apiKey: s.apiKey ?? state.apiKey,
-        model: s.model ?? state.model,
-        apiFormat: s.apiFormat ?? state.apiFormat,
-      })),
+      setApiSettings: (s) => set((state) => {
+        const newState = {
+          apiBase: s.apiBase ?? state.apiBase,
+          apiKey: s.apiKey ?? state.apiKey,
+          model: s.model ?? state.model,
+          apiFormat: s.apiFormat ?? state.apiFormat,
+        };
+        // Also sync to active provider
+        const providers = [...state.providers];
+        if (providers.length > 0) {
+          const idx = Math.min(state.activeProviderIndex, providers.length - 1);
+          providers[idx] = { ...providers[idx], ...newState };
+        }
+        return { ...newState, providers };
+      }),
+
+      providers: [],
+      activeProviderIndex: 0,
+
+      addProvider: (p) => set((state) => {
+        const providers = [...state.providers, p];
+        const activeProviderIndex = providers.length - 1;
+        // Sync legacy fields
+        setTimeout(() => syncLegacyFields(set, providers, activeProviderIndex), 0);
+        return { providers, activeProviderIndex };
+      }),
+
+      removeProvider: (index) => set((state) => {
+        const providers = state.providers.filter((_, i) => i !== index);
+        let activeProviderIndex = state.activeProviderIndex;
+        if (activeProviderIndex >= providers.length) {
+          activeProviderIndex = Math.max(0, providers.length - 1);
+        }
+        if (providers.length > 0) {
+          setTimeout(() => syncLegacyFields(set, providers, activeProviderIndex), 0);
+        }
+        return { providers, activeProviderIndex };
+      }),
+
+      updateProvider: (index, p) => set((state) => {
+        const providers = [...state.providers];
+        providers[index] = { ...providers[index], ...p };
+        if (index === Math.min(state.activeProviderIndex, providers.length - 1)) {
+          setTimeout(() => syncLegacyFields(set, providers, state.activeProviderIndex), 0);
+        }
+        return { providers };
+      }),
+
+      setActiveProvider: (index) => set((state) => {
+        const activeProviderIndex = Math.min(index, state.providers.length - 1);
+        setTimeout(() => syncLegacyFields(set, state.providers, activeProviderIndex), 0);
+        return { activeProviderIndex };
+      }),
     }),
     {
       name: 'vaultpilot-store',
@@ -98,9 +176,11 @@ export const useAppStore = create<AppState>()(
         themeMode: state.themeMode,
         accentColor: state.accentColor,
         apiBase: state.apiBase,
+        apiKey: state.apiKey,
         model: state.model,
         apiFormat: state.apiFormat,
-        // apiKey excluded — stored separately in SecureStore
+        providers: state.providers,
+        activeProviderIndex: state.activeProviderIndex,
       }),
     }
   )

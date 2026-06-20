@@ -330,7 +330,7 @@ pub async fn ask_with_ai_with_context(
 ) -> Result<GroundedAnswer, anyhow::Error> {
     let mut settings = initialize_storage_async(context).await?;
     if let Some(model) = model_override.filter(|m| !m.trim().is_empty()) {
-        settings.provider.model = model;
+        settings.effective_provider_mut().model = model;
     }
     let images = image_paths.unwrap_or_default();
     let raw_question = question.trim().to_string();
@@ -1200,7 +1200,7 @@ fn context_status_from_usage(
     let (context_window_tokens, source) = ai::resolve_context_window(settings);
     let live_tokens = input_tokens.unwrap_or_default() + output_tokens.unwrap_or_default();
     ContextStatus {
-        model: settings.provider.model.clone(),
+        model: settings.effective_provider().model.clone(),
         context_window_tokens,
         live_tokens,
         threshold_tokens: context_window_tokens * 95 / 100,

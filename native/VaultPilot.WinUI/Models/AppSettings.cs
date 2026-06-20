@@ -4,6 +4,7 @@ namespace VaultPilot.WinUI.Models;
 
 public sealed record ProviderConfig
 {
+    public string Name { get; init; } = string.Empty;
     public string ApiKey { get; init; } = string.Empty;
     public string BaseUrl { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
@@ -22,8 +23,10 @@ public sealed record ProviderConfig
         ulong RequestTimeoutMs,
         ulong? ContextWindowTokens,
         uint? MaxOutputTokens,
-        string? ProviderType)
+        string? ProviderType,
+        string? Name = null)
     {
+        this.Name = Name ?? string.Empty;
         this.ApiKey = ApiKey ?? string.Empty;
         this.BaseUrl = BaseUrl ?? string.Empty;
         this.Model = Model ?? string.Empty;
@@ -41,6 +44,8 @@ public sealed record AppSettings
 {
     public string VaultDir { get; init; } = string.Empty;
     public ProviderConfig Provider { get; init; } = new ProviderConfig();
+    public List<ProviderConfig> Providers { get; init; } = new();
+    public int ActiveProviderIndex { get; init; }
     public bool AutoCheckUpdates { get; init; } = true;
     public bool AutoWakeEnabled { get; init; }
     public ulong AutoWakeIntervalMinutes { get; init; }
@@ -65,10 +70,14 @@ public sealed record AppSettings
         string AutoWakeModel,
         string AutoWakeStartTime,
         string AutoWakeEndTime,
-        string? AutoWakePrompt = null)
+        string? AutoWakePrompt = null,
+        List<ProviderConfig>? Providers = null,
+        int ActiveProviderIndex = 0)
     {
         this.VaultDir = VaultDir ?? string.Empty;
         this.Provider = Provider ?? new ProviderConfig();
+        this.Providers = Providers ?? new();
+        this.ActiveProviderIndex = ActiveProviderIndex;
         this.AutoCheckUpdates = AutoCheckUpdates;
         this.AutoWakeEnabled = AutoWakeEnabled;
         this.AutoWakeIntervalMinutes = AutoWakeIntervalMinutes;

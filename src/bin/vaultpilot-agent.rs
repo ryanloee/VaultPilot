@@ -328,7 +328,12 @@ async fn handle_request(
             let mut settings = initialize_storage_async(context)
                 .await
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            // Set provider to the active one so legacy consumers get the right config.
+            settings.provider = settings.effective_provider().clone();
             settings.provider = settings.provider.masked();
+            for p in &mut settings.providers {
+                *p = p.masked();
+            }
             serde_json::to_value(&settings)
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
@@ -338,6 +343,9 @@ async fn handle_request(
                 .await
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
             result.provider = result.provider.masked();
+            for p in &mut result.providers {
+                *p = p.masked();
+            }
             serde_json::to_value(&result)
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }

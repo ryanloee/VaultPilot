@@ -17,6 +17,8 @@ public sealed partial class SettingsDialog : ContentDialog
     private readonly Func<Task> _openVaultDirectoryAsync;
     private readonly Func<Task> _openProjectHomepageAsync;
     private readonly AppSettings _originalSettings;
+    private List<ProviderConfig> _providers = new();
+    private int _activeProviderIndex;
 
     /// <summary>
     /// The updated settings after successful validation, or null if the user cancelled.
@@ -59,13 +61,51 @@ public sealed partial class SettingsDialog : ContentDialog
 
     private void LoadSettings(AppSettings settings, string[] models, string? nextWakeText, string versionText)
     {
-        // Provider section
+        // Provider list
         VaultBox.Text = settings.VaultDir;
-        ApiKeyBox.Password = settings.Provider.ApiKey;
-        BaseUrlBox.Text = settings.Provider.BaseUrl;
-        ModelBox.Text = settings.Provider.Model;
-        TimeoutBox.Text = settings.Provider.RequestTimeoutMs.ToString();
-        ContextWindowBox.Text = settings.Provider.ContextWindowTokens?.ToString() ?? string.Empty;
+        if (settings.Providers.Count > 0)
+        {
+            _providers = new List<ProviderConfig>(settings.Providers);
+            _activeProviderIndex = Math.Min(settings.ActiveProviderIndex, _providers.Count - 1);
+        }
+        else
+        {
+            // Migrate legacy single provider
+            _providers = new List<ProviderConfig> { settings.Provider };
+            _activeProviderIndex = 0;
+        }
+        RefreshProviderList();
+        LoadProviderFields(_providers[_activeProviderIndex]);
+
+    }
+
+    private void LoadProviderFields(ProviderConfig p)
+    {
+        ProviderNameBox.Text = p.Name ?? string.Empty;
+        ApiKeyBox.Password = p.ApiKey;
+        BaseUrlBox.Text = p.BaseUrl;
+        ModelBox.Text = p.Model;
+        TimeoutBox.Text = p.RequestTimeoutMs.ToString();
+        ContextWindowBox.Text = p.ContextWindowTokens?.ToString() ?? string.Empty;
+        // Provider type
+        var ptype = (p.ProviderType ?? "openai").ToLowerInvariant();
+        ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1 : 0;
+
+    }
+
+    private void RefreshProviderList()
+    {
+        ProviderList.Items.Clear();
+        for (int i = 0; i < _providers.Count; i++)
+        {
+            var p = _providers[i];
+            var label = string.IsNullOrEmpty(p.Name) ? $"提供商 {i + 1}" : p.Name;
+            if (i == _activeProviderIndex) label = "● " + label;
+            ProviderList.Items.Add(label);
+        }
+        if (_activeProviderIndex >= 0 && _activeProviderIndex < _providers.Count)
+            ProviderList.SelectedIndex = _activeProviderIndex;
+    }
 
         // General section
         AutoCheckUpdatesBox.IsChecked = settings.AutoCheckUpdates;
@@ -125,6 +165,56 @@ public sealed partial class SettingsDialog : ContentDialog
             try { await _openProjectHomepageAsync(); }
             catch (Exception ex) { Trace.TraceError($"ProjectLink error: {ex}"); }
         };
+    }
+
+    // ──────────────────────────────────────────────
+    //  Provider list management
+    // ──────────────────────────────────────────────
+
+    private void SaveCurrentProviderFields()
+    {
+        if (_activeProviderIndex < 0 || _activeProviderIndex >= _providers.Count) return;
+        var ptype = ProviderTypeBox.SelectedIndex == 1 ? "anthropic" : "openai";
+        _providers[_activeProviderIndex] = new ProviderConfig(
+            ApiKeyBox.Password.Trim(),
+            BaseUrlBox.Text.Trim(),
+            ModelBox.Text.Trim(),
+            ulong.TryParse(TimeoutBox.Text.Trim(), out var t) ? t : 60000,
+            ulong.TryParse(ContextWindowBox.Text.Trim(), out var cw) ? cw : null,
+            _providers[_activeProviderIndex].MaxOutputTokens,
+            ptype,
+            ProviderNameBox.Text.Trim());
+    }
+
+    private void OnProviderSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var idx = ProviderList.SelectedIndex;
+        if (idx < 0 || idx >= _providers.Count) return;
+        // Save current fields before switching
+        SaveCurrentProviderFields();
+        _activeProviderIndex = idx;
+        LoadProviderFields(_providers[idx]);
+    }
+
+    private void OnAddProvider(object sender, RoutedEventArgs e)
+    {
+        SaveCurrentProviderFields();
+        _providers.Add(new ProviderConfig(
+            string.Empty, string.Empty, string.Empty,
+            60000, null, null, "openai", "新提供商"));
+        _activeProviderIndex = _providers.Count - 1;
+        RefreshProviderList();
+        LoadProviderFields(_providers[_activeProviderIndex]);
+    }
+
+    private void OnRemoveProvider(object sender, RoutedEventArgs e)
+    {
+        if (_providers.Count <= 1) return;
+        _providers.RemoveAt(_activeProviderIndex);
+        if (_activeProviderIndex >= _providers.Count)
+            _activeProviderIndex = _providers.Count - 1;
+        RefreshProviderList();
+        LoadProviderFields(_providers[_activeProviderIndex]);
     }
 
     // ──────────────────────────────────────────────
@@ -289,23 +379,26 @@ public sealed partial class SettingsDialog : ContentDialog
 
             var autoWakeModel = (AutoWakeModelBox.Text ?? string.Empty).Trim();
 
+            // Save current provider fields back to the list
+            var ptype = ProviderTypeBox.SelectedIndex == 1 ? "anthropic" : "openai";
+            _providers[_activeProviderIndex] = new ProviderConfig(
+                trimmedApiKey, trimmedBaseUrl, trimmedModel,
+                timeoutMs, contextWindowTokens,
+                _providers[_activeProviderIndex].MaxOutputTokens,
+                ptype, ProviderNameBox.Text.Trim());
+
             UpdatedSettings = new AppSettings(
                 VaultBox.Text.Trim(),
-                new ProviderConfig(
-                    trimmedApiKey,
-                    trimmedBaseUrl,
-                    trimmedModel,
-                    timeoutMs,
-                    contextWindowTokens,
-                    _originalSettings.Provider.MaxOutputTokens,
-                    _originalSettings.Provider.ProviderType),
+                _providers[_activeProviderIndex],
                 AutoCheckUpdatesBox.IsChecked ?? true,
                 AutoWakeEnabledBox.IsChecked ?? false,
                 autoWakeInterval,
                 autoWakeModel,
                 trimmedWakeStart,
                 trimmedWakeEnd,
-                AutoWakePromptBox.Text?.Trim() ?? string.Empty);
+                AutoWakePromptBox.Text?.Trim() ?? string.Empty,
+                _providers,
+                _activeProviderIndex);
         }
         catch (Exception error)
         {

@@ -29,6 +29,9 @@ impl ProviderType {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
+    /// Display name for this provider (e.g. "OpenCode Zen", "OpenRouter").
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub api_key: String,
     #[serde(default = "default_base_url")]
@@ -50,6 +53,7 @@ impl ProviderConfig {
     /// Return a clone with the API key masked for safe serialization.
     pub fn masked(&self) -> Self {
         Self {
+            name: self.name.clone(),
             api_key: mask_secret(&self.api_key),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
@@ -64,6 +68,7 @@ impl ProviderConfig {
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
+            name: String::new(),
             api_key: String::new(),
             base_url: default_base_url(),
             model: default_model(),
@@ -94,8 +99,15 @@ impl std::fmt::Debug for ProviderConfig {
 pub struct AppSettings {
     #[serde(default)]
     pub vault_dir: String,
+    /// Legacy single-provider config (kept for backward compatibility).
     #[serde(default)]
     pub provider: ProviderConfig,
+    /// Multi-provider list. When non-empty, overrides `provider`.
+    #[serde(default)]
+    pub providers: Vec<ProviderConfig>,
+    /// Index into `providers` for the currently active provider.
+    #[serde(default)]
+    pub active_provider_index: usize,
     #[serde(default = "default_auto_check_updates")]
     pub auto_check_updates: bool,
     #[serde(default = "default_auto_wake_enabled")]
@@ -118,6 +130,8 @@ impl Default for AppSettings {
         Self {
             vault_dir: String::new(),
             provider: ProviderConfig::default(),
+            providers: Vec::new(),
+            active_provider_index: 0,
             auto_check_updates: default_auto_check_updates(),
             auto_wake_enabled: default_auto_wake_enabled(),
             auto_wake_interval_minutes: default_auto_wake_interval_minutes(),
@@ -125,6 +139,43 @@ impl Default for AppSettings {
             auto_wake_start_time: default_auto_wake_start_time(),
             auto_wake_end_time: default_auto_wake_end_time(),
             auto_wake_prompt: default_auto_wake_prompt(),
+        }
+    }
+}
+
+impl AppSettings {
+    /// Return the currently active provider config.
+    /// If `providers` list is non-empty, returns `providers[active_provider_index]`.
+    /// Otherwise falls back to the legacy single `provider` field.
+    pub fn effective_provider(&self) -> &ProviderConfig {
+        if !self.providers.is_empty() {
+            let idx = self.active_provider_index.min(self.providers.len() - 1);
+            &self.providers[idx]
+        } else {
+            &self.provider
+        }
+    }
+
+    /// Mutable version of effective_provider for runtime overrides.
+    pub fn effective_provider_mut(&mut self) -> &mut ProviderConfig {
+        if !self.providers.is_empty() {
+            let idx = self.active_provider_index.min(self.providers.len() - 1);
+            &mut self.providers[idx]
+        } else {
+            &mut self.provider
+        }
+    }
+
+    /// Migrate legacy single `provider` into `providers` list if empty.
+    /// Called after loading settings.
+    pub fn migrate_providers(&mut self) {
+        if self.providers.is_empty() && !self.provider.base_url.is_empty() {
+            self.provider.name = if self.provider.name.is_empty() {
+                "Default".to_string()
+            } else {
+                self.provider.name.clone()
+            };
+            self.providers.push(self.provider.clone());
         }
     }
 }
@@ -186,12 +237,13 @@ impl AppSettings {
         }
 
         // Validate api_key is non-empty.
-        if self.provider.api_key.trim().is_empty() {
+        let ep = self.effective_provider();
+        if ep.api_key.trim().is_empty() {
             errors.push("provider.api_key is empty; an API key is required".to_string());
         }
 
         // Delegate provider-specific validation.
-        errors.extend(self.provider.validate());
+        errors.extend(ep.validate());
 
         errors
     }

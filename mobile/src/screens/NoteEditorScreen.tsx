@@ -122,6 +122,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       const newPos = isPrefix ? start + syntax.length + selected.length : start + syntax.length + selected.length + syntax.length;
       selectionRef.current = { start: newPos, end: newPos };
       contentRef.current = next;
+      autoSave(titleRef.current, next);
       return next;
     });
   };

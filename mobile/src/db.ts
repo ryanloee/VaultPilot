@@ -18,7 +18,6 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
 
   await ensureColumn('sessions', 'pinned', 'INTEGER DEFAULT 0');
   await ensureColumn('sessions', 'archived', 'INTEGER DEFAULT 0');
-  await ensureColumn('notes', 'folder_id', 'TEXT');
   await ensureColumn('notes', 'starred', 'INTEGER DEFAULT 0');
 }
 
@@ -48,15 +47,9 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
           id TEXT PRIMARY KEY,
           title TEXT NOT NULL DEFAULT '无标题',
           content TEXT NOT NULL DEFAULT '',
-          folder_id TEXT,
           starred INTEGER DEFAULT 0,
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
           updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-        );
-        CREATE TABLE IF NOT EXISTS folders (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
@@ -166,7 +159,7 @@ export async function deleteMessage(id: string): Promise<void> {
 }
 
 export interface DbNote {
-  id: string; title: string; content: string; folder_id: string | null;
+  id: string; title: string; content: string;
   starred: number; created_at: number; updated_at: number;
 }
 

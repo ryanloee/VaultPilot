@@ -75,6 +75,12 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
           updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
+        CREATE TABLE IF NOT EXISTS note_tags (
+          note_id TEXT NOT NULL,
+          tag TEXT NOT NULL,
+          PRIMARY KEY (note_id, tag),
+          FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+        );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
       // FTS5 virtual tables — gracefully degrade if device SQLite lacks FTS5
@@ -294,6 +300,28 @@ export async function getFolders(): Promise<string[]> {
 export async function moveToFolder(id: string, folder: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE notes SET folder = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [folder, id]);
+}
+
+export async function getNoteTags(noteId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ tag: string }>('SELECT tag FROM note_tags WHERE note_id = ? ORDER BY tag', [noteId]);
+  return rows.map(r => r.tag);
+}
+
+export async function addTag(noteId: string, tag: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
+}
+
+export async function removeTag(noteId: string, tag: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
+}
+
+export async function getAllTags(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ tag: string }>('SELECT DISTINCT tag FROM note_tags ORDER BY tag');
+  return rows.map(r => r.tag);
 }
 
 export async function searchNotes(query: string): Promise<DbNote[]> {

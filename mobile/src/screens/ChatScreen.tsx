@@ -242,6 +242,17 @@ export default function ChatScreen({ navigation }: any) {
         initialNumToRender={15}
         maxToRenderPerBatch={10}
         windowSize={11}
+        ListEmptyComponent={
+          <View style={s.emptyContainer}>
+            <Text style={[s.emptyTitle, { color: c.text }]}>👋 你好，我是 VaultPilot AI</Text>
+            <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>有什么可以帮你的？试试这些问题：</Text>
+            {['帮我总结一篇笔记', '解释一下这个概念', '写一段代码'].map((q) => (
+              <TouchableOpacity key={q} style={[s.suggestionBtn, { borderColor: c.border }]} onPress={() => setInput(q)}>
+                <Text style={[s.suggestionText, { color: accentColor }]}>{q}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        }
       />
 
       {showScrollBtn && (
@@ -308,6 +319,17 @@ const s = StyleSheet.create({
     alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 16,
     borderWidth: 1, borderRadius: 16, marginTop: 8,
   },
+  emptyContainer: {
+    flex: 1, justifyContent: 'center', alignItems: 'center',
+    paddingTop: 80, paddingHorizontal: 32,
+  },
+  emptyTitle: { fontSize: 22, fontWeight: '700', marginBottom: 8 },
+  emptySubtitle: { fontSize: 15, marginBottom: 20, textAlign: 'center' },
+  suggestionBtn: {
+    borderWidth: 1, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 16,
+    marginBottom: 8, alignSelf: 'stretch',
+  },
+  suggestionText: { fontSize: 15 },
   scrollBtn: {
     position: 'absolute', bottom: 70, alignSelf: 'center',
     width: 36, height: 36, borderRadius: 18,

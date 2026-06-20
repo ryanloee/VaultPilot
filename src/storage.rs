@@ -2065,19 +2065,13 @@ fn query_recent_note_metas(
 /// SQL-level filtered note query for empty-text searches with active filters.
 /// Pushes tag, keyword, and date-range filters into the SQL WHERE clause so
 /// that pagination operates on the correctly filtered result set.
-fn query_filtered_note_metas(
-    connection: &Connection,
-    query: &SearchQuery,
-    limit: usize,
-    offset: usize,
-) -> Result<Vec<NoteMeta>> {
+/// Build the shared WHERE clause and params for note filtering (tags, keywords, date ranges).
+/// Returns (where_clause, params) — where_clause is empty string when no filters apply.
+fn build_note_filter_clause(query: &SearchQuery) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
     let mut conditions = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut param_idx = 1usize;
 
-    // Tag filtering: each required tag must appear as an exact item in the
-    // JSON array stored in the tags column.  Uses json_each to avoid
-    // substring false-positives (e.g. "sd" matching "sdcard").
     for tag in &query.tags {
         let trimmed = tag.trim();
         if !trimmed.is_empty() {
@@ -2089,8 +2083,6 @@ fn query_filtered_note_metas(
         }
     }
 
-    // Keyword filtering: each required keyword must appear as an exact item in
-    // the JSON array stored in the keywords column (same json_each approach).
     for kw in &query.keywords {
         let trimmed = kw.trim();
         if !trimmed.is_empty() {
@@ -2102,7 +2094,6 @@ fn query_filtered_note_metas(
         }
     }
 
-    // Date range filtering
     let date_filters: [(&str, &str, Option<&str>); 4] = [
         ("created_at", ">=", query.created_after.as_deref()),
         ("created_at", "<=", query.created_before.as_deref()),
@@ -2125,7 +2116,18 @@ fn query_filtered_note_metas(
         format!("WHERE {}", conditions.join(" AND "))
     };
 
-    // Add LIMIT and OFFSET params
+    (where_clause, params)
+}
+
+fn query_filtered_note_metas(
+    connection: &Connection,
+    query: &SearchQuery,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<NoteMeta>> {
+    let (where_clause, mut params) = build_note_filter_clause(query);
+    let mut param_idx = params.len() + 1;
+
     params.push(Box::new(limit as i64));
     let limit_idx = param_idx;
     param_idx += 1;
@@ -2152,53 +2154,7 @@ fn query_filtered_note_metas(
 /// without LIMIT/OFFSET. Used alongside `query_filtered_note_metas` to report
 /// the true total for pagination.
 fn count_filtered_notes(connection: &Connection, query: &SearchQuery) -> Result<usize> {
-    let mut conditions = Vec::new();
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    let mut param_idx = 1usize;
-
-    for tag in &query.tags {
-        let trimmed = tag.trim();
-        if !trimmed.is_empty() {
-            conditions.push(format!(
-                "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
-            ));
-            params.push(Box::new(trimmed.to_string()));
-            param_idx += 1;
-        }
-    }
-
-    for kw in &query.keywords {
-        let trimmed = kw.trim();
-        if !trimmed.is_empty() {
-            conditions.push(format!(
-                "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(keywords) THEN keywords ELSE '[]' END) WHERE LOWER(json_each.value) = LOWER(?{param_idx}))"
-            ));
-            params.push(Box::new(trimmed.to_string()));
-            param_idx += 1;
-        }
-    }
-
-    let date_filters: [(&str, &str, Option<&str>); 4] = [
-        ("created_at", ">=", query.created_after.as_deref()),
-        ("created_at", "<=", query.created_before.as_deref()),
-        ("updated_at", ">=", query.modified_after.as_deref()),
-        ("updated_at", "<=", query.modified_before.as_deref()),
-    ];
-    for (col, op, val) in date_filters {
-        if let Some(v) = val {
-            if !v.is_empty() {
-                conditions.push(format!("{col} {op} ?{param_idx}"));
-                params.push(Box::new(v.to_string()));
-                param_idx += 1;
-            }
-        }
-    }
-
-    let where_clause = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conditions.join(" AND "))
-    };
+    let (where_clause, params) = build_note_filter_clause(query);
 
     let sql = format!("SELECT COUNT(*) FROM notes {where_clause}");
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();

@@ -9,6 +9,9 @@ import { getMessages, addMessage, updateMessage, createSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
+/** Max messages sent to API to avoid exceeding model context window */
+const MAX_HISTORY_MESSAGES = 50;
+
 const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }: {
   item: Msg; isDark: boolean; accentColor: string;
 }) {
@@ -96,7 +99,7 @@ export default function ChatScreen({ navigation }: any) {
     try {
       const history: ChatMessage[] = [
         { role: 'system', content: '你是 VaultPilot AI 助手，知识渊博、乐于助人。用中文回答。' },
-        ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).map(m => ({ role: m.role as any, content: m.content })),
+        ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
 

@@ -663,7 +663,11 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
         return (explicit, "manual_override".to_string());
     }
 
-    let model = settings.effective_provider().model.trim().to_ascii_lowercase();
+    let model = settings
+        .effective_provider()
+        .model
+        .trim()
+        .to_ascii_lowercase();
 
     // Priority 2: built-in registry (data-driven)
     for rule in MODEL_CONTEXT_RULES {

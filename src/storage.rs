@@ -365,7 +365,11 @@ pub fn save_settings_with_context(
         settings.provider.api_key = crate::crypto::encrypt_secret(&api_key_plaintext)?;
     }
     // Encrypt keys in multi-provider list.
-    let providers_plaintext: Vec<String> = settings.providers.iter().map(|p| p.api_key.clone()).collect();
+    let providers_plaintext: Vec<String> = settings
+        .providers
+        .iter()
+        .map(|p| p.api_key.clone())
+        .collect();
     for p in &mut settings.providers {
         if !p.api_key.is_empty() && !crate::crypto::is_encrypted(&p.api_key) {
             p.api_key = crate::crypto::encrypt_secret(&p.api_key)?;
@@ -1075,7 +1079,8 @@ fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
         }
     }
     // Clamp active_provider_index.
-    if !settings.providers.is_empty() && settings.active_provider_index >= settings.providers.len() {
+    if !settings.providers.is_empty() && settings.active_provider_index >= settings.providers.len()
+    {
         settings.active_provider_index = settings.providers.len() - 1;
     }
 }
@@ -5169,6 +5174,7 @@ mod tests {
         let custom = AppSettings {
             vault_dir: _temp.join("my-vault").to_string_lossy().to_string(),
             provider: ProviderConfig {
+                name: "test".to_string(),
                 api_key: "test-key".to_string(),
                 base_url: "https://custom.api.com".to_string(),
                 model: "custom-model".to_string(),
@@ -5177,6 +5183,8 @@ mod tests {
                 max_output_tokens: None,
                 provider_type: None,
             },
+            providers: Vec::new(),
+            active_provider_index: 0,
             auto_check_updates: false,
             auto_wake_enabled: true,
             auto_wake_interval_minutes: 60,
@@ -5200,6 +5208,7 @@ mod tests {
         let custom = AppSettings {
             vault_dir: _temp.join("vault-enc").to_string_lossy().to_string(),
             provider: ProviderConfig {
+                name: "test".to_string(),
                 api_key: "sk-sec...2345".to_string(),
                 base_url: "https://custom.api.com".to_string(),
                 model: "custom-model".to_string(),

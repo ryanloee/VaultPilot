@@ -1,14 +1,140 @@
 import React from 'react';
-import { Text, View, StyleSheet } from 'react-native';
+import { Text, View, StyleSheet, ScrollView } from 'react-native';
 
 interface Props { content: string; textColor: string; accentColor: string; isDark: boolean; }
 
-/** Lightweight markdown renderer — handles headers, bold, italic, code, lists, links. */
+/**
+ * LaTeX-to-readable-text converter.
+ * Converts common LaTeX math expressions to Unicode/text equivalents.
+ */
+function renderLatex(tex: string): string {
+  let s = tex;
+  // Fractions: \frac{a}{b} → (a/b)
+  s = s.replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1/$2)');
+  // Square root: \sqrt{x} → √(x)
+  s = s.replace(/\\sqrt\{([^}]*)\}/g, '√($1)');
+  // Greek letters
+  const greek: Record<string, string> = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε',
+    zeta: 'ζ', eta: 'η', theta: 'θ', iota: 'ι', kappa: 'κ',
+    lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π',
+    rho: 'ρ', sigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ',
+    chi: 'χ', psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ',
+    Pi: 'Π', Sigma: 'Σ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+    varepsilon: 'ε', varphi: 'ϕ', vartheta: 'ϑ', varrho: 'ϱ',
+  };
+  for (const [name, char] of Object.entries(greek)) {
+    s = s.replace(new RegExp(`\\\\${name}\\b`, 'g'), char);
+  }
+  // Superscripts and subscripts (single char)
+  const sup: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻', '(': '⁽', ')': '⁾', n: 'ⁿ', i: 'ⁱ' };
+  const sub: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '(': '₍', ')': '₎', a: 'ₐ', e: 'ₑ', i: 'ᵢ', o: 'ₒ', u: 'ᵤ', x: 'ₓ' };
+  s = s.replace(/\^{([^}]*)}/g, (_, content) => content.split('').map((c: string) => sup[c] || c).join(''));
+  s = s.replace(/_{([^}]*)}/g, (_, content) => content.split('').map((c: string) => sub[c] || c).join(''));
+  s = s.replace(/\^(\w)/g, (_, c) => sup[c] || `^${c}`);
+  s = s.replace(/_(\w)/g, (_, c) => sub[c] || `_${c}`);
+  // Common operators
+  s = s.replace(/\\cdot/g, '·');
+  s = s.replace(/\\times/g, '×');
+  s = s.replace(/\\pm/g, '±');
+  s = s.replace(/\\mp/g, '∓');
+  s = s.replace(/\\leq?/g, '≤');
+  s = s.replace(/\\geq?/g, '≥');
+  s = s.replace(/\\neq?/g, '≠');
+  s = s.replace(/\\approx/g, '≈');
+  s = s.replace(/\\infty/g, '∞');
+  s = s.replace(/\\partial/g, '∂');
+  s = s.replace(/\\nabla/g, '∇');
+  s = s.replace(/\\int/g, '∫');
+  s = s.replace(/\\sum/g, '∑');
+  s = s.replace(/\\prod/g, '∏');
+  s = s.replace(/\\in/g, '∈');
+  s = s.replace(/\\notin/g, '∉');
+  s = s.replace(/\\subset/g, '⊂');
+  s = s.replace(/\\supset/g, '⊃');
+  s = s.replace(/\\cup/g, '∪');
+  s = s.replace(/\\cap/g, '∩');
+  s = s.replace(/\\forall/g, '∀');
+  s = s.replace(/\\exists/g, '∃');
+  s = s.replace(/\\rightarrow/g, '→');
+  s = s.replace(/\\leftarrow/g, '←');
+  s = s.replace(/\\Rightarrow/g, '⇒');
+  s = s.replace(/\\Leftarrow/g, '⇐');
+  s = s.replace(/\\ldots/g, '…');
+  s = s.replace(/\\cdots/g, '⋯');
+  // Remove remaining backslash commands (cleanup)
+  s = s.replace(/\\[a-zA-Z]+/g, '');
+  // Clean up braces
+  s = s.replace(/[{}]/g, '');
+  // Clean extra spaces
+  s = s.replace(/\s{2,}/g, ' ').trim();
+  return s;
+}
+
+/**
+ * Process text to find and render LaTeX expressions.
+ * Display math: $$...$$ or \[...\]
+ * Inline math: $...$ or \(...\)
+ * Returns an array of React nodes.
+ */
+function processLatexSegments(text: string, textColor: string, accentColor: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  // Match display math first, then inline math
+  const pattern = /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\$[^$\n]+?\$|\\\([^)]*?\\\))/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = pattern.exec(text)) !== null) {
+    // Text before the match
+    if (match.index > lastIndex) {
+      nodes.push(<Text key={`t${key++}`}>{text.slice(lastIndex, match.index)}</Text>);
+    }
+
+    let tex = match[0];
+    const isDisplay = tex.startsWith('$$') || tex.startsWith('\\[');
+    // Strip delimiters
+    if (tex.startsWith('$$')) tex = tex.slice(2, -2);
+    else if (tex.startsWith('\\[')) tex = tex.slice(2, -2);
+    else if (tex.startsWith('\\(')) tex = tex.slice(2, -2);
+    else tex = tex.slice(1, -1);
+
+    const rendered = renderLatex(tex);
+    if (isDisplay) {
+      nodes.push(
+        <View key={`math${key}`} style={styles.mathBlock}>
+          <Text style={{ color: accentColor, fontStyle: 'italic', fontSize: 15, textAlign: 'center' }}>
+            {rendered}
+          </Text>
+        </View>
+      );
+    } else {
+      nodes.push(
+        <Text key={`math${key}`} style={{ color: accentColor, fontStyle: 'italic' }}>
+          {rendered}
+        </Text>
+      );
+    }
+    key++;
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Remaining text
+  if (lastIndex < text.length) {
+    nodes.push(<Text key={`t${key++}`}>{text.slice(lastIndex)}</Text>);
+  }
+
+  return nodes.length > 0 ? nodes : [<Text key="empty">{text}</Text>];
+}
+
+/** Lightweight markdown renderer — handles headers, bold, italic, code, lists, links, LaTeX. */
 export default function MarkdownPreview({ content, textColor, accentColor, isDark }: Props) {
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let inCodeBlock = false;
   let codeLines: string[] = [];
+  let codeKey = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -17,8 +143,10 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
     if (line.trimStart().startsWith('```')) {
       if (inCodeBlock) {
         elements.push(
-          <View key={`code-${i}`} style={[styles.codeBlock, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6' }]}>
-            <Text style={{ color: textColor, fontSize: 13, fontFamily: 'monospace' }}>{codeLines.join('\n')}</Text>
+          <View key={`code-${codeKey++}`} style={[styles.codeBlock, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6' }]}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <Text style={{ color: textColor, fontSize: 13, fontFamily: 'monospace' }}>{codeLines.join('\n')}</Text>
+            </ScrollView>
           </View>
         );
         codeLines = [];
@@ -78,12 +206,21 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
       continue;
     }
 
-    // Normal paragraph
-    elements.push(
-      <Text key={`p-${i}`} style={[styles.paragraph, { color: textColor }]}>
-        {renderInline(line, textColor, accentColor)}
-      </Text>
-    );
+    // Normal paragraph — with LaTeX processing
+    const hasLatex = /\$/.test(line) || /\\\( /.test(line) || /\\\[/.test(line);
+    if (hasLatex) {
+      elements.push(
+        <View key={`p-${i}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 }}>
+          {processLatexSegments(line, textColor, accentColor)}
+        </View>
+      );
+    } else {
+      elements.push(
+        <Text key={`p-${i}`} style={[styles.paragraph, { color: textColor }]}>
+          {renderInline(line, textColor, accentColor)}
+        </Text>
+      );
+    }
   }
 
   return <>{elements}</>;
@@ -91,7 +228,6 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
 
 /** Parse inline markdown: **bold**, *italic*, `code`, [link](url) */
 function renderInline(text: string, textColor: string, accentColor: string): React.ReactNode {
-  // Split by inline patterns
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let key = 0;
@@ -100,8 +236,7 @@ function renderInline(text: string, textColor: string, accentColor: string): Rea
     // Inline code
     const codeMatch = remaining.match(/^(.*?)`([^`]+)`(.*)$/);
     if (codeMatch) {
-      if (codeMatch[1]) parts.push(...parseBold(codeMatch[1], textColor, accentColor, key));
-      key += 10;
+      if (codeMatch[1]) parts.push(<Text key={`t${key++}`}>{codeMatch[1]}</Text>);
       parts.push(
         <Text key={`c${key++}`} style={[styles.codeInline, { backgroundColor: '#f3f4f6', color: textColor }]}>
           {codeMatch[2]}
@@ -114,8 +249,7 @@ function renderInline(text: string, textColor: string, accentColor: string): Rea
     // Bold **text**
     const boldMatch = remaining.match(/^(.*?)\*\*([^*]+)\*\*(.*)$/);
     if (boldMatch) {
-      if (boldMatch[1]) parts.push(...parseBold(boldMatch[1], textColor, accentColor, key));
-      key += 10;
+      if (boldMatch[1]) parts.push(<Text key={`t${key++}`}>{boldMatch[1]}</Text>);
       parts.push(<Text key={`b${key++}`} style={{ fontWeight: '700', color: textColor }}>{boldMatch[2]}</Text>);
       remaining = boldMatch[3];
       continue;
@@ -124,8 +258,7 @@ function renderInline(text: string, textColor: string, accentColor: string): Rea
     // Italic *text*
     const italicMatch = remaining.match(/^(.*?)\*([^*]+)\*(.*)$/);
     if (italicMatch) {
-      if (italicMatch[1]) parts.push(...parseBold(italicMatch[1], textColor, accentColor, key));
-      key += 10;
+      if (italicMatch[1]) parts.push(<Text key={`t${key++}`}>{italicMatch[1]}</Text>);
       parts.push(<Text key={`i${key++}`} style={{ fontStyle: 'italic', color: textColor }}>{italicMatch[2]}</Text>);
       remaining = italicMatch[3];
       continue;
@@ -134,14 +267,13 @@ function renderInline(text: string, textColor: string, accentColor: string): Rea
     // Link [text](url)
     const linkMatch = remaining.match(/^(.*?)\[([^\]]+)\]\(([^)]+)\)(.*)$/);
     if (linkMatch) {
-      if (linkMatch[1]) parts.push(...parseBold(linkMatch[1], textColor, accentColor, key));
-      key += 10;
+      if (linkMatch[1]) parts.push(<Text key={`t${key++}`}>{linkMatch[1]}</Text>);
       parts.push(<Text key={`l${key++}`} style={{ color: accentColor, textDecorationLine: 'underline' }}>{linkMatch[2]}</Text>);
       remaining = linkMatch[4];
       continue;
     }
 
-    // Plain text — consume until next special char or end
+    // Plain text
     const nextSpecial = remaining.search(/[*`\[]/);
     if (nextSpecial > 0) {
       parts.push(<Text key={`t${key++}`}>{remaining.slice(0, nextSpecial)}</Text>);
@@ -150,7 +282,6 @@ function renderInline(text: string, textColor: string, accentColor: string): Rea
       parts.push(<Text key={`t${key++}`}>{remaining}</Text>);
       remaining = '';
     } else {
-      // Special char at start but no match — consume one char
       parts.push(<Text key={`t${key++}`}>{remaining[0]}</Text>);
       remaining = remaining.slice(1);
     }
@@ -159,15 +290,11 @@ function renderInline(text: string, textColor: string, accentColor: string): Rea
   return parts.length === 1 ? parts[0] : <>{parts}</>;
 }
 
-function parseBold(text: string, textColor: string, accentColor: string, baseKey: number): React.ReactNode[] {
-  // Simple passthrough — just return styled text
-  return [<Text key={`t${baseKey}`}>{text}</Text>];
-}
-
 const styles = StyleSheet.create({
   heading: { fontWeight: '700', marginTop: 12, marginBottom: 6 },
   paragraph: { fontSize: 16, lineHeight: 24, marginBottom: 4 },
   codeBlock: { padding: 12, borderRadius: 8, marginVertical: 6 },
   codeInline: { paddingHorizontal: 4, borderRadius: 3, fontSize: 14, fontFamily: 'monospace' },
   hr: { height: 1, marginVertical: 8 },
+  mathBlock: { backgroundColor: 'rgba(128,128,128,0.08)', borderRadius: 6, padding: 8, marginVertical: 6 },
 });

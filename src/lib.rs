@@ -5,6 +5,9 @@ pub mod prompting;
 pub mod search_rules;
 pub mod storage;
 
+#[cfg(test)]
+mod regression;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -499,20 +499,18 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#237)
+## 本轮循环状态 (循环#238)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#237
+- 循环编号: 循环#238
 - 本轮时间: 2026-06-20
-- 审查模块: mobile 全量 (~1334行, 10文件), Rust 后端全量 (~17.8K行, 9文件), WinUI (~4.8K行, ~22文件)
-- 竞品调研: Obsidian v1.13.1 (Settings 内置搜索+slider 内联值+鼠标返回按钮+Alt-Arrow 快捷键, Mermaid 即时渲染, Mobile Settings 键盘适配)。Notion Developer Platform v3.5 持续演进 (Workers beta 免费至 8/11, External Agents API Alpha, MCP token 减少 91%, Custom Agent Directory 两月 100 万+ agents, Mobile 新 home tab)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key。
+- 审查模块: 多 provider 功能 (ad72bc2) 全量审查 — Rust models.rs/storage.rs/ai.rs/lib.rs/agent.rs + mobile store.ts/SettingsScreen.tsx + WinUI AppSettings.cs/SettingsDialog
+- 竞品调研: Obsidian v1.13.1 Mobile (Settings 键盘适配 padding, Share Sheet 稳定性, Live Preview 列表 Enter 修复) + Desktop (Settings 内置搜索过滤, slider 内联值, 鼠标返回按钮, Alt-Arrow 重排, Mermaid 即时渲染)。Logseq v0.10.15 (DB graph 模式持续演进, RTC 实时协作, 本地优先+Markdown/Org-mode, Datalog 查询, 闪卡/白板/任务管理)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key + 多 provider 切换。
 - 讨论阶段发现: 2 个新 issue
-  - #1165: BUG — NoteEditorScreen folder input 每次击键调用 moveToFolder，无 debounce，竞态+性能问题
-  - #1166: BUG — parseSSEStreamWithReconnect 死代码，SSE 重连逻辑未接入 chat 流程
-  - Rust 后端: 16 测试全通过, 0 unsafe, 0 生产 unwrap, 0 TODO/FIXME, cargo clippy 0 warnings
-  - C# WinUI: 所有 async void handler 均有 try-catch 保护, 无 .Result/.Wait() 同步阻塞
-  - Mobile: 代码质量优秀, store 持久化正确排除 apiKey, FTS5 查询正确转义, autoSave 机制完整。searchSessions 在 db.ts 定义但未被使用（SessionsScreen 用客户端过滤）。
-- 项目状态: **27 open issue, 2 open PR (#1153 chat rename, #1151 system prompt locale), ~1166 PR 编号, 16 Rust 测试全通过, v0.3.16**
-- 代码审查: 3 路深度审查 mobile (~1334行) + Rust (~17.8K行) + WinUI (~4.8K行) = ~24K行。代码库处于极高质量阶段，主要发现为 folder input debounce 缺失和 SSE 重连死代码。
+  - #1174: SECURITY — mobile store.ts 将所有 provider API key 明文持久化到 AsyncStorage（apiKey 重新加入 persist partialize + providers 数组含明文 key）
+  - #1175: BUG — 多 provider 提交 (ad72bc2) 导致 Rust 测试编译失败（ProviderConfig 缺少 name 字段, AppSettings 缺少 providers/active_provider_index 字段）
+- 代码审查: 多 provider 功能整体设计合理（向后兼容 legacy 单 provider, migrate_providers 自动迁移, effective_provider 统一访问），但存在安全回归和测试遗漏。Rust 后端 encrypt/normalize 对所有 provider 正确处理。normalize_endpoint 新增 /v1 后缀处理正确。WinUI SettingsDialog provider 列表管理逻辑完整。
+- 项目状态: **27 open issue (含 2 个新创建), 1 open PR (#1173 Anthropic /v1 fix), ~1175 PR 编号, cargo test 编译失败, v0.3.22**
+- 代码审查: 多 provider 功能审查 (~615 行新增/修改, 10 文件)。核心发现: AsyncStorage API key 明文存储安全回归 + 测试编译失败。
 
 ## 本轮审核阶段 (审核轮#234)
 - 合并 PR: #1140 (FTS5 双引号转义), #1141 (insertFormat autoSave), #1142 (ErrorBoundary 暗色), #1143 (笔记长按菜单), #1144 (空会话引导), #1145 (滚动位置保持), #1146 (长按复制消息), #1147 (API 重试退避), #1090 (pre-aborted signal + 400 fallback)

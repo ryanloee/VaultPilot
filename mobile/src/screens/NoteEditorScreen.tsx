@@ -9,10 +9,13 @@ import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
-import type { NoteEditorScreenProps } from '../navigation/types';
+import type { NoteEditorScreenProps, RootTabParamList } from '../navigation/types';
+import { useNavigation } from '@react-navigation/native';
+import type { NavigationProp } from '@react-navigation/native';
 
 export default function NoteEditorScreen({ route, navigation }: NoteEditorScreenProps) {
   const { noteId } = route.params;
+  const rootNav = useNavigation<NavigationProp<RootTabParamList>>();
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [title, setTitle] = useState('');
@@ -145,7 +148,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const prefill = `${action.prompt}\n\n${noteText.slice(0, 2000)}`;
     // Navigate to Chat tab with pre-filled text
-    navigation.navigate('Chat', { screen: 'ChatMain', params: { prefillText: prefill } });
+    rootNav.navigate('Chat', { screen: 'ChatMain', params: { prefillText: prefill } });
   };
 
   const showAiActions = () => {

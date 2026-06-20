@@ -29,7 +29,7 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }:
 });
 
 export default function ChatScreen({ navigation }: any) {
-  const { isDark, accentColor, apiBase, apiKey, model } = useAppStore();
+  const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -152,7 +152,7 @@ export default function ChatScreen({ navigation }: any) {
       setStreaming(false);
       abortRef.current = null;
     }
-  }, [input, streaming, sessionId, apiKey, apiBase, model]);
+  }, [input, streaming, sessionId]);
 
   // Create a new conversation
   const newChat = useCallback(async () => {

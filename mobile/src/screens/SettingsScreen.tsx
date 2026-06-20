@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, ApiFormat } from '../store';
 import { checkApi, getSettings, saveSettings } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import appJson from '../../app.json';
 
 // Theme keys — stored separately from API settings (cfg_* keys)
 const THEME_KEY = 'cfg_theme_mode';
@@ -209,7 +210,7 @@ export default function SettingsScreen() {
         ))}
       </View>
 
-      <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v0.1.0</Text>
+      <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
     </ScrollView>
     </SafeAreaView>
   );

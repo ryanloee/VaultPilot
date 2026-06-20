@@ -499,20 +499,20 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#236)
+## 本轮循环状态 (循环#237)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#236
+- 循环编号: 循环#237
 - 本轮时间: 2026-06-20
 - 审查模块: mobile 全量 (~1334行, 10文件), Rust 后端全量 (~17.8K行, 9文件), WinUI (~4.8K行, ~22文件)
-- 竞品调研: Obsidian Desktop v1.13.0-1.13.1 (Settings 新窗口+内置搜索+键盘导航, CLI, Live Preview 图片拖拽调整, Security URI 确认对话框, 暗色主题安全警告)。Notion Developer Platform v3.5 (External Agents API 引入 Claude/Codex/Decagon, Workers 运行时, 数据库同步, Webhook 触发器, CLI, Agent SDK, Custom Agent Directory — 两月内创建 100 万+ agents)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key。Notion Workers 与 VaultPilot #913 (Agent Mode) 方向高度重叠，需关注竞争。
+- 竞品调研: Obsidian v1.13.1 (Settings 内置搜索+slider 内联值+鼠标返回按钮+Alt-Arrow 快捷键, Mermaid 即时渲染, Mobile Settings 键盘适配)。Notion Developer Platform v3.5 持续演进 (Workers beta 免费至 8/11, External Agents API Alpha, MCP token 减少 91%, Custom Agent Directory 两月 100 万+ agents, Mobile 新 home tab)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key。
 - 讨论阶段发现: 2 个新 issue
-  - #1156: BUG — SessionsScreen SwipeableRow 无互斥，多行可同时滑开显示操作按钮
-  - #1157: BUG — fmtTime 硬编码 zh-CN locale，非中文用户看到中文日期格式
+  - #1165: BUG — NoteEditorScreen folder input 每次击键调用 moveToFolder，无 debounce，竞态+性能问题
+  - #1166: BUG — parseSSEStreamWithReconnect 死代码，SSE 重连逻辑未接入 chat 流程
   - Rust 后端: 16 测试全通过, 0 unsafe, 0 生产 unwrap, 0 TODO/FIXME, cargo clippy 0 warnings
   - C# WinUI: 所有 async void handler 均有 try-catch 保护, 无 .Result/.Wait() 同步阻塞
-  - Mobile: 代码质量优秀, store 持久化正确排除 apiKey, FTS5 查询正确转义, autoSave 机制完整, SSE 重连+指数退避+AbortSignal 正确
-- 项目状态: **32 open issue, 2 open PR (#1153 chat rename, #1151 system prompt locale), ~1155 PR 编号, 16 Rust 测试全通过, v0.3.15**
-- 代码审查: 3 路深度审查 mobile (~1334行) + Rust (~17.8K行) + WinUI (~4.8K行) = ~24K行。代码库处于极高质量阶段，剩余发现为 UX 交互细节和 locale 相关问题。
+  - Mobile: 代码质量优秀, store 持久化正确排除 apiKey, FTS5 查询正确转义, autoSave 机制完整。searchSessions 在 db.ts 定义但未被使用（SessionsScreen 用客户端过滤）。
+- 项目状态: **27 open issue, 2 open PR (#1153 chat rename, #1151 system prompt locale), ~1166 PR 编号, 16 Rust 测试全通过, v0.3.16**
+- 代码审查: 3 路深度审查 mobile (~1334行) + Rust (~17.8K行) + WinUI (~4.8K行) = ~24K行。代码库处于极高质量阶段，主要发现为 folder input debounce 缺失和 SSE 重连死代码。
 
 ## 本轮审核阶段 (审核轮#234)
 - 合并 PR: #1140 (FTS5 双引号转义), #1141 (insertFormat autoSave), #1142 (ErrorBoundary 暗色), #1143 (笔记长按菜单), #1144 (空会话引导), #1145 (滚动位置保持), #1146 (长按复制消息), #1147 (API 重试退避), #1090 (pre-aborted signal + 400 fallback)

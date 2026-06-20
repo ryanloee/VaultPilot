@@ -24,7 +24,8 @@
     "plugins": [
       "expo-sqlite",
       "expo-secure-store",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "expo-localization"
     ],
     "extra": {
       "eas": {

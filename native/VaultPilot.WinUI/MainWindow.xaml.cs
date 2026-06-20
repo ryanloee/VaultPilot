@@ -2600,13 +2600,15 @@ public sealed partial class MainWindow : Window
             var history = GetConversationHistory(requestSessionId);
             using var cts = new CancellationTokenSource(
                 TimeSpan.FromMilliseconds((_settings?.Provider.RequestTimeoutMs ?? 60_000) + 30_000));
+            var wakeModelOverride = _settings?.AutoWakeModel?.Trim();
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                 "askWithAi",
                 new
                 {
                     question = wakePrompt,
                     history,
-                    imagePaths = Array.Empty<string>()
+                    imagePaths = Array.Empty<string>(),
+                    modelOverride = string.IsNullOrEmpty(wakeModelOverride) ? null : wakeModelOverride
                 },
                 cts.Token);
 

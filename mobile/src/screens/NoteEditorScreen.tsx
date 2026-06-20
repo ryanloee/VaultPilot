@@ -16,6 +16,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const titleRef = useRef('');
   const contentRef = useRef('');
   const timerRef = useRef<any>(null);
+  const mountedRef = useRef(true);
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
@@ -49,14 +50,15 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   }, [noteId]);
 
   const save = async (t?: string, ct?: string) => {
+    if (!mountedRef.current) return;
     setSaving(true);
     try {
       await updateNote(noteId, t ?? title, ct ?? content);
     } catch (e) {
       console.warn('[NoteEditor] Save failed:', e);
-      Alert.alert('保存失败', String(e));
+      if (mountedRef.current) Alert.alert('保存失败', String(e));
     } finally {
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   };
 
@@ -72,6 +74,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   // Cleanup: flush pending save on unmount
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       clearTimeout(timerRef.current);
       if (pendingRef.current) {
         // Fire-and-forget save on unmount — component state is already gone

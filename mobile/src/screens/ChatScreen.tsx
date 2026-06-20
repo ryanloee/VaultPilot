@@ -136,6 +136,15 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     }
   }, [route.params?.sessionId]);
 
+  // Handle prefillText from NoteEditor AI assistant
+  useEffect(() => {
+    if (route.params?.prefillText) {
+      setInput(route.params.prefillText);
+      // Clear the param so it doesn't re-trigger
+      navigation.setParams({ prefillText: undefined });
+    }
+  }, [route.params?.prefillText]);
+
   // Abort any in-flight stream on unmount
   useEffect(() => {
     return () => {

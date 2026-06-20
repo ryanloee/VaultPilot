@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert,
+  View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator,
 } from 'react-native';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, DbNote } from '../db';
@@ -15,10 +15,17 @@ export default function NotesScreen({ navigation }: any) {
 
   const load = useCallback(async (query: string) => {
     const currentId = ++requestIdRef.current;
-    const data = query ? await searchNotes(query) : await getNotes();
-    if (requestIdRef.current !== currentId) return; // stale, discard
-    setNotes(data);
-    setLoading(false);
+    try {
+      const data = query ? await searchNotes(query) : await getNotes();
+      if (requestIdRef.current !== currentId) return; // stale, discard
+      setNotes(data);
+    } catch (e: any) {
+      if (requestIdRef.current !== currentId) return;
+      console.warn('[Notes] load failed:', e);
+      Alert.alert('加载失败', e.message || '请重试');
+    } finally {
+      if (requestIdRef.current === currentId) setLoading(false);
+    }
   }, []);
 
   // Debounce search: wait 300ms after last keystroke before querying
@@ -69,6 +76,14 @@ export default function NotesScreen({ navigation }: any) {
       </Text>
     </TouchableOpacity>
   );
+
+  if (loading) {
+    return (
+      <View style={[s.container, { backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator color={accentColor} size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={[s.container, { backgroundColor: c.bg }]}>

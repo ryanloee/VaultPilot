@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert,
-  ActivityIndicator, PanResponder, Animated, Dimensions,
+  ActivityIndicator, PanResponder, Animated, Dimensions, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
@@ -79,6 +79,8 @@ export default function SessionsScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<DbSession | null>(null);
+  const [renameText, setRenameText] = useState('');
 
   const load = useCallback(async (query?: string) => {
     try {
@@ -130,8 +132,21 @@ export default function SessionsScreen({ navigation }: any) {
     try { await togglePin(id); await load(); } catch (e: any) { Alert.alert('操作失败', e.message); }
   };
 
+  const handleRename = async () => {
+    if (!renameTarget || !renameText.trim()) return;
+    try {
+      await renameSession(renameTarget.id, renameText.trim());
+      setRenameTarget(null);
+      setRenameText('');
+      await load(search);
+    } catch (e: any) {
+      Alert.alert('重命名失败', e.message);
+    }
+  };
+
   const handleLongPress = (item: DbSession) => {
     Alert.alert(item.title || '对话操作', '', [
+      { text: '重命名', onPress: () => { setRenameTarget(item); setRenameText(item.title); } },
       { text: item.pinned ? '取消置顶' : '置顶', onPress: () => handlePin(item.id) },
       { text: showArchived ? '取消归档' : '归档', onPress: () => handleArchive(item.id) },
       { text: '删除', style: 'destructive', onPress: () => handleDelete(item.id) },
@@ -211,6 +226,31 @@ export default function SessionsScreen({ navigation }: any) {
           </View>
         }
       />
+      {/* Rename Modal */}
+      <Modal visible={!!renameTarget} transparent animationType="fade">
+        <View style={renameStyles.overlay}>
+          <View style={[renameStyles.content, { backgroundColor: c.card }]}>
+            <Text style={[renameStyles.title, { color: c.text }]}>重命名对话</Text>
+            <TextInput
+              style={[renameStyles.input, { color: c.text, borderColor: c.border }]}
+              value={renameText}
+              onChangeText={setRenameText}
+              placeholder="输入新标题"
+              placeholderTextColor={c.textSecondary}
+              autoFocus
+              selectTextOnFocus
+            />
+            <View style={renameStyles.buttons}>
+              <TouchableOpacity onPress={() => { setRenameTarget(null); setRenameText(''); }} style={renameStyles.btn}>
+                <Text style={{ color: c.textSecondary, fontSize: 16 }}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleRename} style={renameStyles.btn}>
+                <Text style={{ color: accentColor, fontSize: 16, fontWeight: '600' }}>确定</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -248,4 +288,13 @@ const s = StyleSheet.create({
   cardTime: { fontSize: 12 },
   empty: { alignItems: 'center', marginTop: 60 },
   emptyText: { fontSize: 15 },
+});
+
+const renameStyles = StyleSheet.create({
+  overlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
+  content: { width: '80%', borderRadius: 16, padding: 20 },
+  title: { fontSize: 18, fontWeight: '700', marginBottom: 16, textAlign: 'center' },
+  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 16, marginBottom: 16 },
+  buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 16 },
+  btn: { paddingVertical: 8, paddingHorizontal: 16 },
 });

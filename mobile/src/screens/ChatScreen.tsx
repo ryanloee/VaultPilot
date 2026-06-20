@@ -9,6 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useAppStore, getColors } from '../store';
 import { chatWithReconnect, ChatMessage } from '../api/client';
+import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
@@ -179,8 +180,12 @@ export default function ChatScreen({ navigation, route }: any) {
     setStreaming(true);
 
     try {
+      // RAG: search notes for relevant context before sending
+      const noteContext = await buildNoteContext(userText);
+      const systemPrompt = buildSystemPrompt(noteContext);
+
       const history: ChatMessage[] = [
-        { role: 'system', content: '你是 VaultPilot AI 助手，知识渊博、乐于助人。用中文回答。' },
+        { role: 'system', content: systemPrompt },
         ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
@@ -195,6 +200,17 @@ export default function ChatScreen({ navigation, route }: any) {
           setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full } : m));
         }
       }, abortRef.current.signal);
+
+      // Execute tool calls (save notes etc.) and clean up markers
+      const { cleaned, actions } = await executeToolCalls(full);
+      const finalContent = actions.length > 0
+        ? cleaned + '\n\n_' + actions.join('；') + '_'
+        : cleaned;
+
+      if (finalContent !== full) {
+        full = finalContent;
+        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full } : m));
+      }
 
       // Persist streamed content — separate try-catch so UI content is preserved on failure
       try {

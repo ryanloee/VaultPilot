@@ -13,6 +13,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const titleRef = useRef('');
+  const contentRef = useRef('');
   const timerRef = useRef<any>(null);
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
@@ -24,6 +26,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         const note = await getNote(noteId);
         if (cancelled) return;
         if (note) {
+          titleRef.current = note.title;
+          contentRef.current = note.content;
           setTitle(note.title);
           setContent(note.content);
         } else {
@@ -102,12 +106,18 @@ export default function NoteEditorScreen({ route, navigation }: any) {
 
   const insertFormat = (syntax: string) => {
     const { start, end } = selectionRef.current;
+    const isPrefix = syntax.endsWith(' ');
     setContent(prev => {
       const before = prev.slice(0, start);
+      const selected = prev.slice(start, end);
       const after = prev.slice(end);
-      const newPos = start + syntax.length;
+      const next = isPrefix
+        ? before + syntax + selected + after
+        : before + syntax + selected + syntax + after;
+      const newPos = isPrefix ? start + syntax.length + selected.length : start + syntax.length + selected.length + syntax.length;
       selectionRef.current = { start: newPos, end: newPos };
-      return before + syntax + after;
+      contentRef.current = next;
+      return next;
     });
   };
 
@@ -138,7 +148,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       <TextInput
         style={[s.titleInput, { color: c.text }]}
         value={title}
-        onChangeText={(t) => { setTitle(t); autoSave(t, content); }}
+        onChangeText={(t) => { titleRef.current = t; setTitle(t); autoSave(t, contentRef.current); }}
         placeholder="笔记标题"
         placeholderTextColor={c.textSecondary}
       />
@@ -147,7 +157,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       <TextInput
         style={[s.contentInput, { color: c.text }]}
         value={content}
-        onChangeText={(t) => { setContent(t); autoSave(title, t); }}
+        onChangeText={(t) => { contentRef.current = t; setContent(t); autoSave(titleRef.current, t); }}
         onSelectionChange={(e) => { selectionRef.current = e.nativeEvent.selection; }}
         placeholder="开始写作..."
         placeholderTextColor={c.textSecondary}

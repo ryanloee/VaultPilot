@@ -9,6 +9,9 @@ import { getMessages, addMessage, updateMessage, createSession } from '../db';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
+/** Max messages sent to API to avoid exceeding model context window */
+const MAX_HISTORY_MESSAGES = 50;
+
 const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }: {
   item: Msg; isDark: boolean; accentColor: string;
 }) {
@@ -55,6 +58,11 @@ export default function ChatScreen({ navigation }: any) {
   // Keep ref in sync with state so send() reads latest messages
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
+  // Abort any in-flight stream on unmount (tab navigation, screen dismissal)
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
+
   const send = useCallback(async () => {
     if (!input.trim() || streaming || !sessionId) return;
     const userText = input.trim();
@@ -70,10 +78,20 @@ export default function ChatScreen({ navigation }: any) {
     }
     setInput('');
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
+    // Snapshot before state update — msgsRef may or may not be flushed by React
+    // before we build the API history, so pin it here.
+    const prevMsgs = [...msgsRef.current];
     setMsgs(prev => [...prev, userMsg]);
 
     // Save AI placeholder to DB upfront — stable id, no key change later
-    const aiId = await addMessage(sessionId, 'assistant', '');
+    let aiId: string;
+    try {
+      aiId = await addMessage(sessionId, 'assistant', '');
+    } catch (e) {
+      console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
+      Alert.alert('发送失败', '无法创建 AI 回复记录');
+      return;
+    }
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
@@ -81,7 +99,7 @@ export default function ChatScreen({ navigation }: any) {
     try {
       const history: ChatMessage[] = [
         { role: 'system', content: '你是 VaultPilot AI 助手，知识渊博、乐于助人。用中文回答。' },
-        ...msgsRef.current.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).map(m => ({ role: m.role as any, content: m.content })),
+        ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
 

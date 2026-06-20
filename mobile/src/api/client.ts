@@ -89,9 +89,13 @@ function sanitizeApiError(status: number, rawBody: string): string {
 }
 
 // ── API Base Normalization ────────────────────────────────
-/** Ensure apiBase ends with /v1 for consistent path construction */
+/** Ensure apiBase ends with /v1 for consistent path construction.
+ *  Preserves existing versioned paths (e.g. /v2) and validates input. */
 function normalizeApiBase(raw: string): string {
-  return raw.replace(/\/+$/, '').replace(/\/v1$/, '') + '/v1';
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  if (!trimmed) return DEFAULTS.apiBase;
+  if (/\/v\d+($|\/)/.test(trimmed)) return trimmed;
+  return trimmed + '/v1';
 }
 
 // ── Chat ──────────────────────────────────────────────────
@@ -112,8 +116,10 @@ export async function chat(
   // Combine user signal with timeout
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-  if (signal) {
-    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  const sig = signal;
+  const onSignalAbort = sig ? () => controller.abort(sig.reason) : undefined;
+  if (sig && onSignalAbort) {
+    sig.addEventListener('abort', onSignalAbort, { once: true });
   }
 
   try {
@@ -149,15 +155,43 @@ export async function chat(
     // If non-streaming fallback, wrap JSON response as a single-chunk SSE stream
     if (!res.headers.get('content-type')?.includes('text/event-stream')) {
       const json = await res.json();
-      const content = json.choices?.[0]?.message?.content ?? '';
-      const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`);
+      const message = json.choices?.[0]?.message ?? {};
+      const delta: Record<string, unknown> = {};
+      if (message.content) delta.content = message.content;
+      if (message.tool_calls) delta.tool_calls = message.tool_calls;
+      if (message.function_call) delta.function_call = message.function_call;
+      const finish_reason = json.choices?.[0]?.finish_reason;
+      const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\ndata: [DONE]\n\n`);
       return new ReadableStream({
         start(controller) { controller.enqueue(encoded); controller.close(); },
       });
     }
 
     if (!res.body) throw new Error('No response body');
-    return res.body;
+    // Wrap body so the timeout still applies during stream reading
+    const body = res.body;
+    const timeoutController = controller;
+    return new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        const reader = body.getReader();
+        const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
+        timeoutController.signal.addEventListener('abort', onTimeout, { once: true });
+        (async () => {
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              ctrl.enqueue(value);
+            }
+            ctrl.close();
+          } catch (e) { ctrl.error(e); }
+          finally {
+            clearTimeout(timeout);
+            timeoutController.signal.removeEventListener('abort', onTimeout);
+          }
+        })();
+      },
+    });
   } catch (e: any) {
     clearTimeout(timeout);
     if (e.name === 'AbortError' && !signal?.aborted) {
@@ -166,6 +200,7 @@ export async function chat(
     throw e;
   } finally {
     clearTimeout(timeout);
+    if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
   }
 }
 

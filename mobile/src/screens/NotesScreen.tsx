@@ -5,23 +5,27 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { useAppStore, getColors } from '../store';
-import { getNotes, createNote, deleteNote, toggleStar, searchNotes, DbNote } from '../db';
+import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
 
 export default function NotesScreen({ navigation }: any) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [notes, setNotes] = useState<DbNote[]>([]);
   const [search, setSearch] = useState('');
+  const [folders, setFolders] = useState<string[]>([]);
+  const [activeFolder, setActiveFolder] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
 
-  const load = useCallback(async (query: string) => {
+  const load = useCallback(async (query: string, folder?: string) => {
     const currentId = ++requestIdRef.current;
     try {
-      const data = query ? await searchNotes(query) : await getNotes();
-      if (requestIdRef.current !== currentId) return; // stale, discard
+      const data = query ? await searchNotes(query) : await getNotes(folder);
+      const folderList = await getFolders();
+      if (requestIdRef.current !== currentId) return;
       setNotes(data);
+      setFolders(folderList);
     } catch (e: any) {
       if (requestIdRef.current !== currentId) return;
       console.warn('[Notes] load failed:', e);
@@ -33,9 +37,9 @@ export default function NotesScreen({ navigation }: any) {
 
   // Debounce search: wait 300ms after last keystroke before querying
   useEffect(() => {
-    const timer = setTimeout(() => load(search), 300);
+    const timer = setTimeout(() => load(search, activeFolder), 300);
     return () => clearTimeout(timer);
-  }, [search, load]);
+  }, [search, activeFolder, load]);
 
   const handleNew = async () => {
     try {
@@ -49,7 +53,7 @@ export default function NotesScreen({ navigation }: any) {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await load(search);
+    await load(search, activeFolder);
     setRefreshing(false);
   };
 
@@ -57,7 +61,7 @@ export default function NotesScreen({ navigation }: any) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert(item.title || '笔记操作', '', [
       { text: item.starred ? '取消收藏' : '收藏', onPress: async () => {
-        try { await toggleStar(item.id); await load(search); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
+        try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
       }},
       { text: '删除', style: 'destructive', onPress: () => handleDelete(item.id) },
       { text: '取消', style: 'cancel' },
@@ -68,7 +72,7 @@ export default function NotesScreen({ navigation }: any) {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteNote(id); await load(search); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
+        try { await deleteNote(id); await load(search, activeFolder); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
       }},
     ]);
   };
@@ -93,7 +97,7 @@ export default function NotesScreen({ navigation }: any) {
         <Text style={[s.cardTime, { color: c.textSecondary }]}>{fmtTime(item.updated_at)}</Text>
       </View>
       <Text style={[s.cardPreview, { color: c.textSecondary }]} numberOfLines={2}>
-        {item.content || '空白笔记'}
+        {item.folder ? `[${item.folder}] ` : ''}{item.content || '空白笔记'}
       </Text>
     </TouchableOpacity>
   );
@@ -119,6 +123,27 @@ export default function NotesScreen({ navigation }: any) {
           onChangeText={setSearch}
         />
       </View>
+
+      {/* Folder chips */}
+      {folders.length > 0 && (
+        <View style={s.chipRow}>
+          <TouchableOpacity
+            style={[s.chip, { backgroundColor: activeFolder === undefined ? accentColor : c.card, borderColor: c.border }]}
+            onPress={() => setActiveFolder(undefined)}
+          >
+            <Text style={[s.chipText, { color: activeFolder === undefined ? '#FFF' : c.text }]}>全部</Text>
+          </TouchableOpacity>
+          {folders.map(f => (
+            <TouchableOpacity
+              key={f}
+              style={[s.chip, { backgroundColor: activeFolder === f ? accentColor : c.card, borderColor: c.border }]}
+              onPress={() => setActiveFolder(activeFolder === f ? undefined : f)}
+            >
+              <Text style={[s.chipText, { color: activeFolder === f ? '#FFF' : c.text }]}>{f}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
       {/* Notes list */}
       <FlatList
@@ -156,6 +181,9 @@ const s = StyleSheet.create({
     borderWidth: 1, borderRadius: 10, height: 40,
   },
   searchInput: { flex: 1, fontSize: 15, padding: 0 },
+  chipRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, gap: 8 },
+  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
+  chipText: { fontSize: 13 },
   card: { borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10 },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   cardTitle: { fontSize: 16, fontWeight: '600', flex: 1 },

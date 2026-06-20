@@ -499,23 +499,22 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#232)
+## 本轮循环状态 (循环#235)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#232
+- 循环编号: 循环#235
 - 本轮时间: 2026-06-20
-- 审查模块: mobile 全量 (~1129行, 8文件), Rust 后端全量 (~17.8K行, 9文件), WinUI (~6.9K行, ~20文件)
-- 竞品调研: Obsidian 1.13.1 (Settings inline slider values, search filtering, back navigation, keyboard shortcuts, mouse back button)。Notion v3.5 Developer Platform (External Agents API Alpha, CLI, Agent SDK, MCP 91% token reduction, webhook triggers)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key。
-- 讨论阶段发现: 零新 issue
-  - Rust 后端: 16 测试全通过, 0 unsafe, 0 生产 unwrap, 0 TODO/FIXME, cargo audit clean(0 漏洞), cargo clippy 0 warnings
+- 审查模块: mobile 全量 (~1483行, 9文件), Rust 后端全量 (~17.8K行, 9文件), WinUI (~6.9K行, ~22文件)
+- 竞品调研: Obsidian 1.13.1 Desktop (Settings revamp: inline slider values, search filtering, back navigation, keyboard shortcuts, mouse back button, Community directory, deprecated Settings Search plugin) + Mobile (Settings padding, Share Sheet crash fix)。Notion v7.21 (tab navigation fix, offline indicator) + Notion Developer Platform (Workers, database sync, External Agents API with Claude/Codex/Decagon, webhook triggers, CLI)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key。Notion 正在推进 agent orchestration 层，与 VaultPilot 的 #913 (Agent Mode) 方向重叠。
+- 讨论阶段发现: 2 个新 issue
+  - #1148: BUG — normalizeApiBase 正则无法匹配 /v1beta 类版本路径，自定义 API 端点被错误追加 /v1
+  - #1149: UX — ChatScreen system prompt 硬编码中文，应检测设备语言或允许用户配置
+  - Rust 后端: 16 测试全通过, 0 unsafe, 0 生产 unwrap, 0 TODO/FIXME, cargo clippy 0 warnings
   - C# WinUI: 所有 22 个 async void handler 均有 try-catch 保护, 无 .Result/.Wait() 同步阻塞
-  - mobile: TypeScript 编译零错误, 已有 issue 覆盖所有已知缺陷
-  - 关闭 5 个过期 PR: #1085(#1083 已由 #1128 修复), #1086(#1080 已关闭+冲突), #1087(#1084 已关闭), #1088(#1082 已关闭+冲突), #1089(#1081 冲突需新 PR)
-- 项目状态: **45 open issue, 1 open PR (#1090, CI 失败需 rebase), ~1130 PR 编号, 16 Rust 测试全通过, cargo audit clean**
-- 代码审查: 3 路深度审查 mobile (~1129行) + Rust (~17.8K行) + WinUI (~6.9K行) = ~25.8K行。三端零新缺陷。
+  - Mobile: 代码质量优秀, store 持久化正确排除 apiKey, FTS5 查询正确转义, autoSave 机制完整
+- 项目状态: **34 open issue, 0 open PR, ~1149 PR 编号, 16 Rust 测试全通过, v0.3.15**
+- 代码审查: 3 路深度审查 mobile (~1483行) + Rust (~17.8K行) + WinUI (~6.9K行) = ~26.2K行。代码库处于极高质量阶段，剩余发现均为边缘场景。
 
-## 本轮审核阶段 (审核轮#233)
-- 合并 PR: #1132 (移除未用权限), #1136 (下拉刷新), #1134 (FlatList 性能优化), #1135 (FTS5 全文搜索), #1133 (SplashScreen + DB 初始化门控)
-- 关闭 PR: #1131 (被 #1133 取代)
-- 待处理: #1090 (已 rebase，等待 CI 重新运行)
-- 发版: v0.3.12 (tag 已推送，CI 自动构建中)
-- 累计: ~1135 PR 编号
+## 本轮审核阶段 (审核轮#234)
+- 合并 PR: #1140 (FTS5 双引号转义), #1141 (insertFormat autoSave), #1142 (ErrorBoundary 暗色), #1143 (笔记长按菜单), #1144 (空会话引导), #1145 (滚动位置保持), #1146 (长按复制消息), #1147 (API 重试退避), #1090 (pre-aborted signal + 400 fallback)
+- 发版: v0.3.15 (tag 已推送)
+- 累计: ~1149 PR 编号

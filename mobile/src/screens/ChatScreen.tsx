@@ -45,6 +45,7 @@ export default function ChatScreen({ navigation }: any) {
   const c = getColors(isDark, accentColor);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
+  const [inputHeight, setInputHeight] = useState(0);
   const [streaming, setStreaming] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +105,7 @@ export default function ChatScreen({ navigation }: any) {
       return;
     }
     setInput('');
+    setInputHeight(0);
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
     // Snapshot before state update — msgsRef may or may not be flushed by React
     // before we build the API history, so pin it here.
@@ -267,9 +269,10 @@ export default function ChatScreen({ navigation }: any) {
       {/* Input bar */}
       <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
         <TextInput
-          style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+          style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
           value={input}
           onChangeText={setInput}
+          onContentSizeChange={e => setInputHeight(e.nativeEvent.contentSize.height)}
           placeholder="输入消息..."
           placeholderTextColor={c.textSecondary}
           multiline
@@ -308,7 +311,7 @@ const s = StyleSheet.create({
   textInput: {
     flex: 1, borderWidth: 1, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 15, maxHeight: 100,
+    fontSize: 15,
   },
   sendBtn: {
     width: 40, height: 40, borderRadius: 20,

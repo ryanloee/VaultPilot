@@ -74,7 +74,6 @@ export default function SettingsScreen() {
   };
 
   const selectProvider = (p: typeof PROVIDERS[0]) => {
-    if (p.name === '自定义') return;
     setApiBase(p.base);
     setApiFormat(p.format);
     if (p.models.length) setModel(p.models[0]);

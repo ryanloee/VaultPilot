@@ -38,7 +38,6 @@ export const ACCENT_COLORS = [
 export const PROVIDERS = [
   { name: 'OpenAI', base: 'https://api.openai.com/v1', format: 'openai' as const, models: ['gpt-4o', 'gpt-4o-mini', 'o1-mini'] },
   { name: 'Anthropic', base: 'https://api.anthropic.com', format: 'anthropic' as const, models: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022'] },
-  { name: '自定义', base: '', format: 'openai' as const, models: [] },
 ];
 
 const LIGHT_COLORS = {

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { StatusBar, useColorScheme, Alert } from 'react-native';
+import { StatusBar, useColorScheme, Alert, Text } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -42,22 +42,22 @@ function MainTabs() {
     >
       <Tab.Screen name="Chat" component={ChatScreen} options={{
         tabBarLabel: '对话',
-        tabBarIcon: ({ color }) => <TabIcon label="💬" />,
+        tabBarIcon: ({ color }) => <TabIcon label="💬" color={color} />,
       }} />
       <Tab.Screen name="Notes" component={NotesStack} options={{
         tabBarLabel: '笔记',
-        tabBarIcon: ({ color }) => <TabIcon label="📝" />,
+        tabBarIcon: ({ color }) => <TabIcon label="📝" color={color} />,
       }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{
         tabBarLabel: '设置',
-        tabBarIcon: ({ color }) => <TabIcon label="⚙️" />,
+        tabBarIcon: ({ color }) => <TabIcon label="⚙️" color={color} />,
       }} />
     </Tab.Navigator>
   );
 }
 
-function TabIcon({ label }: { label: string }) {
-  return <>{label}</>;
+function TabIcon({ label, color }: { label: string; color: string }) {
+  return <Text style={{ fontSize: 20, color }}>{label}</Text>;
 }
 
 export default function App() {

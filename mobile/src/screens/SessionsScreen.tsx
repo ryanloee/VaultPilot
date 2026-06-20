@@ -9,6 +9,8 @@ import { getSessions, deleteSession, toggleArchive, togglePin, renameSession, Db
 
 const SWIPE_THRESHOLD = -80;
 const ACTION_WIDTH = 160;
+// Module-level ref to track the currently open row's close callback (mutex)
+const openRowCloseRef: { current: (() => void) | null } = { current: null };
 
 function SwipeableRow({ children, onDelete, onArchive }: {
   children: React.ReactNode;
@@ -18,9 +20,20 @@ function SwipeableRow({ children, onDelete, onArchive }: {
   const translateX = useRef(new Animated.Value(0)).current;
   const lastOffset = useRef(0);
 
+  const closeRow = () => {
+    Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
+    lastOffset.current = 0;
+  };
+
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy),
+      onPanResponderGrant: () => {
+        // Close any other open row before this one starts moving
+        if (openRowCloseRef.current && openRowCloseRef.current !== closeRow) {
+          openRowCloseRef.current();
+        }
+      },
       onPanResponderMove: (_, g) => {
         const next = Math.min(0, lastOffset.current + g.dx);
         translateX.setValue(next);
@@ -30,9 +43,9 @@ function SwipeableRow({ children, onDelete, onArchive }: {
         if (finalVal < SWIPE_THRESHOLD) {
           Animated.spring(translateX, { toValue: -ACTION_WIDTH, useNativeDriver: true }).start();
           lastOffset.current = -ACTION_WIDTH;
+          openRowCloseRef.current = closeRow;
         } else {
-          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
-          lastOffset.current = 0;
+          closeRow();
         }
       },
     }),
@@ -41,10 +54,10 @@ function SwipeableRow({ children, onDelete, onArchive }: {
   return (
     <View style={swipeStyles.rowContainer}>
       <View style={swipeStyles.actions}>
-        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#F59E0B' }]} onPress={onArchive}>
+        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#F59E0B' }]} onPress={() => { openRowCloseRef.current = null; onArchive(); }}>
           <Text style={swipeStyles.actionText}>归档</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#EF4444' }]} onPress={onDelete}>
+        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#EF4444' }]} onPress={() => { openRowCloseRef.current = null; onDelete(); }}>
           <Text style={swipeStyles.actionText}>删除</Text>
         </TouchableOpacity>
       </View>

@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 import { useAppStore, getColors } from '../store';
 import { chat, parseSSEStream, ChatMessage } from '../api/client';
 import { getMessages, addMessage, updateMessage, createSession, getLatestSession } from '../db';
@@ -21,6 +22,7 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor }:
   const c = getColors(isDark, accentColor);
   const handleLongPress = () => {
     if (!item.content) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert('复制消息', '将消息内容复制到剪贴板？', [
       { text: '取消', style: 'cancel' },
       { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
@@ -93,6 +95,7 @@ export default function ChatScreen({ navigation }: any) {
 
   const send = useCallback(async () => {
     if (!input.trim() || streaming || !sessionId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const userText = input.trim();
 
     // Add user message — only clear input after persistence succeeds
@@ -177,6 +180,7 @@ export default function ChatScreen({ navigation }: any) {
   // Create a new conversation
   const newChat = useCallback(async () => {
     try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       abortRef.current?.abort();
       const id = await createSession('新对话');
       setSessionId(id);
@@ -187,6 +191,7 @@ export default function ChatScreen({ navigation }: any) {
   }, []);
 
   const stop = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     abortRef.current?.abort();
   };
 

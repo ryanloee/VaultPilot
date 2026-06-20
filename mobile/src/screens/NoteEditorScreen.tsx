@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
+import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote } from '../db';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
@@ -15,6 +16,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [previewMode, setPreviewMode] = useState(false);
   const titleRef = useRef('');
   const contentRef = useRef('');
   const timerRef = useRef<any>(null);
@@ -164,22 +166,34 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         placeholderTextColor={c.textSecondary}
       />
 
-      {/* Content */}
-      <TextInput
-        style={[s.contentInput, { color: c.text }]}
-        value={content}
-        onChangeText={(t) => { contentRef.current = t; setContent(t); autoSave(titleRef.current, t); }}
-        onSelectionChange={(e) => { selectionRef.current = e.nativeEvent.selection; }}
-        placeholder="开始写作..."
-        placeholderTextColor={c.textSecondary}
-        multiline
-        textAlignVertical="top"
-      />
+      {/* Content — edit or preview */}
+      {previewMode ? (
+        <ScrollView style={s.previewContainer} contentContainerStyle={{ padding: 16 }}>
+          <MarkdownPreview content={content || '*空白笔记*'} textColor={c.text} accentColor={accentColor} isDark={isDark} />
+        </ScrollView>
+      ) : (
+        <TextInput
+          style={[s.contentInput, { color: c.text }]}
+          value={content}
+          onChangeText={(t) => { contentRef.current = t; setContent(t); autoSave(titleRef.current, t); }}
+          onSelectionChange={(e) => { selectionRef.current = e.nativeEvent.selection; }}
+          placeholder="开始写作..."
+          placeholderTextColor={c.textSecondary}
+          multiline
+          textAlignVertical="top"
+        />
+      )}
 
       {/* Toolbar */}
       <View style={[s.toolbar, { borderTopColor: c.border, backgroundColor: c.bgSecondary }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {TOOLBAR.map((t) => (
+          <TouchableOpacity
+            style={[s.toolBtn, { borderColor: previewMode ? accentColor : c.border, backgroundColor: previewMode ? accentColor + '20' : 'transparent' }]}
+            onPress={() => setPreviewMode(v => !v)}
+          >
+            <Text style={[s.toolLabel, { color: previewMode ? accentColor : c.text }]}>{previewMode ? '✏️' : '👁'}</Text>
+          </TouchableOpacity>
+          {!previewMode && TOOLBAR.map((t) => (
             <TouchableOpacity
               key={t.label}
               style={[s.toolBtn, { borderColor: c.border }]}
@@ -209,6 +223,9 @@ const s = StyleSheet.create({
   },
   contentInput: {
     flex: 1, fontSize: 16, lineHeight: 24, paddingHorizontal: 16, paddingTop: 8,
+  },
+  previewContainer: {
+    flex: 1,
   },
   toolbar: {
     flexDirection: 'row', paddingVertical: 8, paddingHorizontal: 12, borderTopWidth: 1,

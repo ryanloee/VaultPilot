@@ -402,6 +402,24 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         </TouchableOpacity>
       )}
 
+      {/* Shortcut bar */}
+      <View style={[s.shortcutBar, { borderTopColor: c.border, backgroundColor: c.bgSecondary }]}>
+        {[
+          { icon: '📎', label: '附件', alert: '附件功能即将上线' },
+          { icon: '📷', label: '拍照', alert: '拍照功能即将上线' },
+          { icon: '🎤', label: '语音', alert: '语音输入即将上线' },
+        ].map(btn => (
+          <TouchableOpacity
+            key={btn.label}
+            style={[s.shortcutBtn, { borderColor: c.border }]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); Alert.alert(btn.label, btn.alert); }}
+          >
+            <Text style={s.shortcutIcon}>{btn.icon}</Text>
+            <Text style={[s.shortcutLabel, { color: c.textSecondary }]}>{btn.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* Input bar */}
       <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
         <TextInput
@@ -446,6 +464,18 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-end',
     padding: 8, borderTopWidth: 1,
   },
+  shortcutBar: {
+    flexDirection: 'row', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderTopWidth: 1,
+  },
+  shortcutBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 16, borderWidth: 1,
+  },
+  shortcutIcon: { fontSize: 14 },
+  shortcutLabel: { fontSize: 12 },
   textInput: {
     flex: 1, borderWidth: 1, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 10,

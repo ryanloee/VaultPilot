@@ -9,9 +9,10 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import { chatWithReconnect, ChatMessage } from '../api/client';
+import { chatWithReconnect, ChatMessage, ContentPart } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, parseToolCalls, executeSave } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 import type { ChatScreenProps } from '../navigation/types';
@@ -191,9 +192,26 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   }, []);
 
   const send = useCallback(async () => {
-    if (!input.trim() || streaming || !sessionId) return;
+    if ((!input.trim() && attachments.length === 0) || streaming || !sessionId) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const userText = input.trim();
+    const currentAttachments = [...attachments];
+
+    // Read attachments as base64 before clearing
+    const contentParts: ContentPart[] = [];
+    for (const att of currentAttachments) {
+      try {
+        const base64 = await FileSystem.readAsStringAsync(att.uri, { encoding: FileSystem.EncodingType.Base64 });
+        const mime = att.type === 'image' ? 'image/jpeg' : 'application/octet-stream';
+        contentParts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } });
+      } catch (e) {
+        console.warn('[Chat] Failed to read attachment:', att.name, e);
+      }
+    }
+    if (userText) contentParts.unshift({ type: 'text', text: userText });
+    const userContent: string | ContentPart[] = contentParts.length > 0 && contentParts.some(p => p.type !== 'text')
+      ? contentParts
+      : userText;
 
     // Add user message — only clear input after persistence succeeds
     let userId: string;
@@ -249,7 +267,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       const history: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-        { role: 'user', content: userText },
+        { role: 'user', content: userContent },
       ];
 
       abortRef.current = new AbortController();

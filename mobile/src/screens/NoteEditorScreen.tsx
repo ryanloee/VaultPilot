@@ -28,6 +28,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const timerRef = useRef<any>(null);
   const mountedRef = useRef(true);
   const currentFolderRef = useRef('');
+  const originalFolderRef = useRef('');
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
@@ -44,6 +45,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           setContent(note.content);
           setFolder(note.folder || '');
           currentFolderRef.current = note.folder || '';
+          originalFolderRef.current = note.folder || '';
           const noteTags = await getNoteTags(noteId);
           if (!cancelled) setTags(noteTags);
         } else {
@@ -96,8 +98,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         updateNote(noteId, pendingRef.current.title, pendingRef.current.content);
         pendingRef.current = null;
       }
-      // Save folder on unmount if it was changed
-      if (currentFolderRef.current) {
+      // Save folder on unmount only if actually changed
+      if (currentFolderRef.current !== originalFolderRef.current) {
         moveToFolder(noteId, currentFolderRef.current).catch(() => {});
       }
     };
@@ -231,9 +233,13 @@ export default function NoteEditorScreen({ route, navigation }: any) {
               onSubmitEditing={async () => {
                 const tag = newTag.trim();
                 if (tag && !tags.includes(tag)) {
-                  await addTag(noteId, tag);
-                  setTags(prev => [...prev, tag]);
-                  setNewTag('');
+                  try {
+                    await addTag(noteId, tag);
+                    setTags(prev => [...prev, tag]);
+                    setNewTag('');
+                  } catch (e) {
+                    console.warn('[NoteEditor] addTag failed:', e);
+                  }
                 }
               }}
               returnKeyType="done"

@@ -688,3 +688,16 @@
   - 测试: ✅ clippy/test/build 全通过
 - 合并后 cargo fmt ✅, clippy ✅, test ✅, winui-build ✅, linux-cli-build ✅, cargo audit ✅
 - 项目状态: 1 open issue (#913), 0 open PR, v0.3.35
+
+## 讨论阶段 (循环#259)
+- v0.3.35 零缺陷状态，808+ 测试通过，Clippy 干净
+- 2 open issues: #1275 (storage 拆分部分完成), #913 (Agent Mode)
+- 2 open PR: #1278 (clippy 失败), #1279 (CI 修复，全部通过)
+- 创建 3 个新 issue:
+  - #1280: P1 storage/mod.rs → notes.rs 提取笔记 CRUD + 导入导出 + OCR
+  - #1281: P1 storage/mod.rs → search.rs 提取搜索 + 语义搜索
+  - #1282: P2 Agent Mode Phase 1 — AgentProtocol + ToolProxy + vault sandboxing 详细设计
+- PR #1278 clippy 失败根因: field_reassign_with_default (CI Rust 1.96)，需 review 阶段修复
+- 竞品洞察: Obsidian Copilot v3.3.3 移动端成熟、API Key Keychain、Agent Mode 未正式发布
+- 路线图: 下轮 fix = #1280 + #1281 + PR#1278 修复; v0.4.0 = storage 拆分完成 + Agent Mode Phase 1
+- 项目状态: 5 open issues (#913, #1275, #1280, #1281, #1282), 2 open PR (#1278, #1279), v0.3.35

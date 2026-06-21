@@ -4,7 +4,6 @@
   "main": "index.ts",
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.2",
-    "@react-native-voice/voice": "^3.2.4",
     "@react-navigation/bottom-tabs": "^7.18.2",
     "@react-navigation/native": "^7.3.3",
     "@react-navigation/native-stack": "^7.17.5",
@@ -16,6 +15,7 @@
     "expo-image-picker": "~56.0.18",
     "expo-intent-launcher": "~56.0.4",
     "expo-secure-store": "~56.0.4",
+    "expo-speech-recognition": "^56.0.1",
     "expo-splash-screen": "~56.0.10",
     "expo-sqlite": "^56.0.5",
     "expo-status-bar": "~56.0.4",
@@ -35,8 +35,8 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "test": "jest --passWithNoTests"
   },

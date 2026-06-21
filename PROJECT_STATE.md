@@ -499,16 +499,16 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#243)
+## 本轮循环状态 (循环#245)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#243
-- 本轮时间: 2026-06-22
-- 审查模块: 全局扫描 — 2 个 open PR (#1228, #1230), 24 个 open feature issues
-- 竞品调研: Notion AI 2026 (工作流引擎 + 自定义 Agent + MCP Server + 多模型切换 + credit 计费)。思源笔记 v3.6.5 (全平台 + Block-level references + FSRS 间隔重复 + SQL 查询 + 端到端加密同步)。VaultPilot 差异化: 本地优先 + MCP server + 三端原生 + 用户自备 key + 工程笔记场景。
-- 讨论阶段发现: 0 个新 issue（推动已有 24 个 feature issue 实现）
-- 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 TODO/FIXME、clippy 零警告、cargo test 16 passed、mobile jest 137 passed。storage/mod.rs (5357 行，PR #1228 Phase 2 待合并) 和 MainWindow.xaml.cs (PR #1230 Chat extraction 待合并) 是最大技术债。ai.rs 118 个 unwrap 均在测试代码中。
-- 项目状态: **24 open feature issue, 2 open PR (#1228 CI 通过, #1230 CI 未触发), ~1233 PR 编号, v0.3.32**
-- 重点议题: (1) 合并 PR #1228+#1230 → (2) Mobile 设置页 #882 (blocker) → (3) Mobile 编辑器 #883 + 文件夹 #975
+- 循环编号: 循环#245
+- 本轮时间: 2026-06-21
+- 审查模块: 全局扫描 — 6 个 open PR (#1228,#1230,#1235,#1236,#1237,#1238), 15 个 open feature issues
+- 竞品调研: Notion AI 2026 (工作流引擎 + 自定义 Agent + MCP Server)。思源笔记 v3.6.5 (全平台 + FSRS + SQL 查询)。趋势: AI + 插件生态是竞品共同方向，VaultPilot 差异化在本地优先 + 三端原生 + 工程笔记场景。
+- 讨论阶段发现: 1 个新 issue (#1239 统一消息模型 MessageV2)
+- 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 生产 unwrap、cargo test 全通过、mobile jest 160 passed (13 suites)。6 个 PR 积压需 review 合并。
+- 项目状态: **15 open feature issue, 6 open PR, ~1239 PR 编号, v0.3.32**
+- 重点议题: (1) 合并 6 个积压 PR → (2) Mobile 键盘增强 #889 → (3) 统一消息模型 #1239 → (4) 离线模式 #1220
 
 ## 本轮审核阶段 (审核轮#235)
 - 合并 PR: #1204 (flaky validate_base_url test ENV_MUTEX 修复), #1211 (mobile client.ts 单元测试), #1210 (mobile rag.ts RAG 逻辑单元测试)
@@ -548,3 +548,46 @@
 - Closed 10 stale feature issues already implemented: #882(设置页), #879(对话核心), #881(对话管理), #883(笔记编辑器), #884(笔记管理), #975(文件夹分类), #978(置顶/归档), #888(主题系统), #891(EAS Build), #979(duplicate voice input)
 - cargo test 16 passed, mobile jest 160 passed (13 suites)
 - 项目状态: 14 open feature issues, 4 open PR (#1228, #1230, #1235, #1236), ~1236 PR 编号, v0.3.32
+
+## 修复阶段 fix-2 (循环#245)
+- cargo doc warning fix → PR #1237 (unclosed HTML tag in storage/mod.rs rustdoc)
+- renderLatex regex partial-match bugs → PR #1238 (\\cdot matched \\cdots, \\le matched \\leftarrow, extracted to utils/latex.ts, 23 unit tests)
+- cargo test 16 passed, mobile jest 174 passed, clippy clean
+
+## 修复阶段 fix-1 (循环#246)
+- #1239: 统一消息模型 MessageV2 — 三端序列化 schema → 3 个 PR 完成全部 5 步
+  - PR #1243: Rust canonical schema (MessageV2, MessageV2Role, MessageV2Attachment, MessageV2Metadata) + 11 roundtrip tests + shared fixture JSON (Step 1+4+5)
+  - PR #1244: Mobile TypeScript types (messageV2.ts) + createMessageV2() + validateAttachmentUrls() + 7 unit tests (Step 3)
+  - PR #1245: WinUI C# types (MessageV2Role, MessageV2AttachmentType, MessageV2Attachment, MessageV2Metadata, MessageV2 records) + 7 xUnit tests (Step 2)
+- 安全特性: attachment URL local:// scheme 强制 + metadata 64KB 大小限制
+- cargo test 408 passed, mobile jest 158 passed (13 suites), clippy clean
+- 项目状态: 14 open feature issues, 9 open PR (#1228,#1230,#1235,#1236,#1237,#1238,#1243,#1244,#1245), ~1245 PR 编号, v0.3.32
+
+## 修复阶段 fix-3 (循环#247)
+- 测试覆盖率提升 — 3 个 PR，13 个新测试用例
+  - PR #1249: rag.ts executeSave 单元测试 + parseToolCalls 边界用例 (7 新用例, 18→25 tests)
+  - PR #1250: normalizeApiBase 边界用例 via checkApi — 尾部斜杠、/v2 路径、空 base、Anthropic 规范化 (4 新用例, 17→21 tests)
+  - PR #1251: globalSearch 边界用例 — 非空查询合并排序 + FTS LIKE 回退 (2 新用例, 28→30 tests)
+- cargo test 425 passed, mobile jest 151 passed (12 suites), clippy clean
+- 项目状态: 零缺陷, 12 open feature issues, 12 open PR (~#1251), v0.3.32
+
+## PR 审核 review (循环#248)
+- 15 open PR 审核，13 合并，1 关闭（冗余），1 待处理（冲突+无 CI）
+- 已合并 PR:
+  - #1243: MessageV2 统一跨平台 schema (Rust 类型 + 验证 + 14 测试) → 基础 PR
+  - #1244: MessageV2 Mobile TypeScript 类型 + 7 单元测试
+  - #1245: MessageV2 WinUI C# 类型 + 7 xUnit 测试
+  - #1246: LaTeX/inline markdown 提取为可测试 utils，修复 regex 边界 bug + 47 测试
+  - #1247: client.ts API 工具函数提取到 clientUtils.ts + 11 测试
+  - #1249: executeSave + parseToolCalls 边界用例测试
+  - #1250: normalizeApiBase 边界用例测试
+  - #1251: globalSearch 边界用例测试
+  - #1252: mask_secret + ProviderType + masked() 单元测试（替代冲突的 #1248）
+  - #1228: storage/chat.rs 模块提取 Phase 2
+  - #1235: SearchScreen fmtTime 去重使用共享 utils
+  - #1236: updateChecker compareSemver 9 测试用例
+  - #1237: rustdoc HTML 转义修复
+- 关闭: #1238（被 #1246 超集替代）
+- 待处理: #1230（merge conflicts + 无 CI checks）
+- 版本: v0.3.32 → v0.3.33 (git tag v0.3.33)
+- cargo test 425+ passed, clippy clean

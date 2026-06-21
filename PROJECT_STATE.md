@@ -653,3 +653,9 @@
 
 ## 维护维护结果
 - PR #1273 ✅ 已合并: cargo-audit install 重试逻辑 (windows-installers.yml + ci.yml)
+
+## 维护最终结果 (循环#256)
+- PR #1273 ✅: cargo-audit install 重试逻辑 (ci.yml + windows-installers.yml)
+- v0.3.35 ✅ 发布: 补发 Windows/Linux 安装包 (v0.3.34 因 cargo-audit 失败缺少)
+- Release assets: APK + win-x64/x86 Setup.exe + linux deb + nupkg
+- 项目状态: 0 open PR, v0.3.35

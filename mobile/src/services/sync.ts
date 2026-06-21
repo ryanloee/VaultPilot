@@ -112,10 +112,7 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
         await updateNote(meta.id, title, content);
         updated++;
       } else {
-        // createNote returns id; we need to use the server's id
-        // First create with default, then update with real data
-        const newId = await createNote(title);
-        await updateNote(newId, title, content);
+        await createNote(title, content);
         imported++;
       }
     } catch (e) {

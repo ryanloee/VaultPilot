@@ -173,3 +173,115 @@ describe('togglePin / toggleArchive', () => {
     expect(params).toEqual(['sess1']);
   });
 });
+
+describe('getDb singleton', () => {
+  it('retries on failure (resets singleton)', async () => {
+    jest.resetModules();
+    const freshSqlite = require('expo-sqlite');
+    freshSqlite.openDatabaseAsync
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockResolvedValueOnce(mockDb);
+    const db = require('../db');
+
+    await expect(db.getDb()).rejects.toThrow('disk full');
+    await db.getDb();
+    expect(freshSqlite.openDatabaseAsync).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('moveToFolder', () => {
+  it('updates folder column', async () => {
+    const db = await freshDb();
+    await db.moveToFolder('note1', 'projects');
+    const [sql, params] = mockDb.runAsync.mock.calls[0];
+    expect(sql).toContain('UPDATE notes SET folder');
+    expect(params[0]).toBe('projects');
+    expect(params[1]).toBe('note1');
+  });
+});
+
+describe('getMessages', () => {
+  it('returns messages ordered by created_at', async () => {
+    const db = await freshDb();
+    mockDb.getAllAsync.mockResolvedValueOnce([
+      { id: '1', session_id: 's1', role: 'user', content: 'Hi' },
+      { id: '2', session_id: 's1', role: 'assistant', content: 'Hello!' },
+    ]);
+    const msgs = await db.getMessages('s1');
+    expect(msgs).toHaveLength(2);
+    const [sql, params] = mockDb.getAllAsync.mock.calls[0];
+    expect(sql).toContain('ORDER BY created_at');
+    expect(params).toEqual(['s1']);
+  });
+});
+
+describe('updateMessage', () => {
+  it('updates message content', async () => {
+    const db = await freshDb();
+    await db.updateMessage('msg1', 'Updated');
+    const [sql, params] = mockDb.runAsync.mock.calls[0];
+    expect(sql).toContain('UPDATE messages SET content');
+    expect(params).toEqual(['Updated', 'msg1']);
+  });
+});
+
+describe('deleteMessage', () => {
+  it('deletes message by id', async () => {
+    const db = await freshDb();
+    await db.deleteMessage('msg1');
+    const [sql, params] = mockDb.runAsync.mock.calls[0];
+    expect(sql).toContain('DELETE FROM messages');
+    expect(params).toEqual(['msg1']);
+  });
+});
+
+describe('getNote', () => {
+  it('returns note by id', async () => {
+    const db = await freshDb();
+    mockDb.getFirstAsync.mockResolvedValueOnce({
+      id: 'n1', title: 'Test', content: 'Body', starred: 0, folder: '',
+    });
+    const note = await db.getNote('n1');
+    expect(note).toBeTruthy();
+    expect(note!.title).toBe('Test');
+  });
+});
+
+describe('updateNote', () => {
+  it('updates title and content', async () => {
+    const db = await freshDb();
+    await db.updateNote('n1', 'New Title', 'New Body');
+    const [sql, params] = mockDb.runAsync.mock.calls[0];
+    expect(sql).toContain('UPDATE notes SET title');
+    expect(params[0]).toBe('New Title');
+    expect(params[1]).toBe('New Body');
+    expect(params[2]).toBe('n1');
+  });
+});
+
+describe('deleteNote', () => {
+  it('deletes note by id', async () => {
+    const db = await freshDb();
+    await db.deleteNote('n1');
+    const [sql, params] = mockDb.runAsync.mock.calls[0];
+    expect(sql).toContain('DELETE FROM notes');
+    expect(params).toEqual(['n1']);
+  });
+});
+
+describe('getFolders', () => {
+  it('returns non-empty folder names', async () => {
+    const db = await freshDb();
+    mockDb.getAllAsync.mockResolvedValueOnce([{ folder: 'work' }, { folder: 'archive' }]);
+    const folders = await db.getFolders();
+    expect(folders).toEqual(['work', 'archive']);
+  });
+});
+
+describe('globalSearch', () => {
+  it('returns empty for empty query', async () => {
+    const db = await freshDb();
+    const results = await db.globalSearch('');
+    expect(results).toEqual([]);
+  });
+});

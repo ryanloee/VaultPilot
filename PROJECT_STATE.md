@@ -607,3 +607,14 @@
 - Anthropic 图片格式修复 — chatWithReconnect 的 toAnthropicContent 统一转换 → PR #1255 (7 tests)
 - cargo test 16 passed, mobile jest 267 passed (18 suites), clippy clean
 - 项目状态: 14 open feature issues, 3 open PR (#1253,#1254,#1255), ~1255 PR 编号, v0.3.33
+
+## 修复阶段 fix-2 (循环#251)
+- #1206: MainWindow.xaml.cs 重构 — 提取 Chat 和 Utilities partial classes → PR #1256
+  - MainWindow.xaml.cs: 2661 → 1110 行 (-58%)
+  - MainWindow.Chat.cs: 1252 行 (chat session management, message sending, context compression, token estimation, chat UI rendering)
+  - MainWindow.Utilities.cs: 355 行 (theme helpers, version, error/status, logging, model/token detection, localization)
+- #889: 移动端快捷操作工具栏 — 替换单个 📎 按钮（隐藏在 Alert 对话框中）为 3 个可见快捷按钮 → PR #1257
+  - 📷 拍照、🖼 相册、📄 文件 — 每个按钮直接触发对应操作（1 次点击 vs 原来 2 次）
+  - 添加触觉反馈和无障碍标签
+- cargo test 16 passed, mobile jest 260 passed (17 suites), clippy clean
+- 项目状态: 14 open feature issues, 5 open PR (#1253-#1257), ~1257 PR 编号, v0.3.33

@@ -13,6 +13,7 @@
     PrimaryButtonClick="OnPrimaryButtonClick">
 
     <ScrollViewer
+        x:Name="SettingsScroller"
         MaxHeight="520"
         HorizontalScrollBarVisibility="Disabled">
         <StackPanel

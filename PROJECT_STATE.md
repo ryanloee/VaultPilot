@@ -659,3 +659,14 @@
 - v0.3.35 ✅ 发布: 补发 Windows/Linux 安装包 (v0.3.34 因 cargo-audit 失败缺少)
 - Release assets: APK + win-x64/x86 Setup.exe + linux deb + nupkg
 - 项目状态: 0 open PR, v0.3.35
+
+## 讨论阶段 (循环#257)
+- v0.3.35 零缺陷状态，808 测试通过（454 Rust + 354 mobile），Clippy 干净
+- 1 open feature issue: #913 Agent Mode
+- 创建 2 个新 issue:
+  - #1274: P1 移动端 API Key 加密存储 — AsyncStorage → expo-secure-store (security)
+  - #1275: P1 storage/mod.rs 拆分 — notes.rs + search.rs + settings.rs (refactor)
+- 竞品调研: Obsidian Copilot "Agentic Copilot" 已上线（spawn CLI agent 进程），验证 Agent Mode 方向
+- Agent Mode 设计: 4 阶段（进程管理 → 沙箱 → UI → MCP client），安全优先
+- 路线图: v0.4.0 = storage 拆分 + API Key 安全 + Agent Mode Phase 1
+- 项目状态: 3 open issues (#913, #1274, #1275), 0 open PR, v0.3.35

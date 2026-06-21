@@ -591,3 +591,12 @@
 - 待处理: #1230（merge conflicts + 无 CI checks）
 - 版本: v0.3.32 → v0.3.33 (git tag v0.3.33)
 - cargo test 425+ passed, clippy clean
+
+## 讨论阶段 (循环#249)
+- v0.3.33 零缺陷状态，14 open feature issues
+- 关闭 stale PR #1230（merge conflicts + no CI）
+- 重点议题：Mobile 核心体验补齐
+  - P1: #1242 (vault 读取) + #973 (附件渲染)
+  - P2: #1220 (离线模式) + #889 (键盘增强)
+  - P3: 插件/Agent/同步等长期功能
+- 下个 fix 阶段目标：#1242 + #973

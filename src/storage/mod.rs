@@ -921,7 +921,7 @@ pub fn find_related_notes_with_context(
         });
     }
 
-    results.sort_by(|a, b| b.score.cmp(&a.score));
+    results.sort_by_key(|b| std::cmp::Reverse(b.score));
     results.truncate(limit);
     Ok(results)
 }

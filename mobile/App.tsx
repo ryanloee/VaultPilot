@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, LinkingOptions } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
@@ -28,6 +28,21 @@ const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
 const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
 
 SplashScreen.preventAutoHideAsync();
+
+/** Deep link config — enables vaultpilot:// scheme for Quick Settings Tile (#893) */
+const linking: LinkingOptions<RootTabParamList> = {
+  prefixes: ['vaultpilot://'],
+  config: {
+    screens: {
+      Notes: {
+        screens: {
+          NotesList: 'note',
+          NoteEdit: 'note/:noteId',
+        },
+      },
+    },
+  },
+};
 
 function NotesStack() {
   return (
@@ -166,7 +181,7 @@ export default function App() {
         {initState === 'ready' && !onboardingDone ? (
           <OnboardingScreen onComplete={() => setOnboardingDone(true)} />
         ) : (
-          <NavigationContainer>
+          <NavigationContainer linking={linking}>
             <MainTabs />
           </NavigationContainer>
         )}

@@ -5,7 +5,7 @@
  * getDeviceLocale, buildSystemPrompt.
  */
 
-import { buildNoteContext, parseToolCalls, getDeviceLocale, buildSystemPrompt } from '../../services/rag';
+import { buildNoteContext, parseToolCalls, getDeviceLocale, buildSystemPrompt, executeSave } from '../../services/rag';
 import { searchNotes } from '../../db';
 
 // Mock the db module
@@ -16,6 +16,8 @@ jest.mock('../../db', () => ({
 }));
 
 const mockSearchNotes = searchNotes as jest.MockedFunction<typeof searchNotes>;
+const mockCreateNote = require('../../db').createNote as jest.MockedFunction<any>;
+const mockUpdateNote = require('../../db').updateNote as jest.MockedFunction<any>;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -172,5 +174,74 @@ describe('buildSystemPrompt', () => {
   it('includes note-saving instructions', () => {
     const prompt = buildSystemPrompt(null);
     expect(prompt).toContain('SAVE_NOTE');
+  });
+});
+
+// ── executeSave ─────────────────────────────────────────────
+
+describe('executeSave', () => {
+  beforeEach(() => {
+    mockCreateNote.mockReset();
+    mockUpdateNote.mockReset();
+  });
+
+  it('calls createNote with title and updateNote with content', async () => {
+    mockCreateNote.mockResolvedValue('note-123');
+    mockUpdateNote.mockResolvedValue(undefined);
+
+    const result = await executeSave({ title: 'My Note', content: 'Note body here' });
+    expect(mockCreateNote).toHaveBeenCalledWith('My Note');
+    expect(mockUpdateNote).toHaveBeenCalledWith('note-123', 'My Note', 'Note body here');
+    expect(result).toContain('My Note');
+  });
+
+  it('returns Chinese confirmation message', async () => {
+    mockCreateNote.mockResolvedValue('id-1');
+    mockUpdateNote.mockResolvedValue(undefined);
+
+    const result = await executeSave({ title: '测试', content: '内容' });
+    expect(result).toBe('已保存笔记「测试」');
+  });
+});
+
+// ── parseToolCalls — additional edge cases ──────────────────
+
+describe('parseToolCalls — additional edge cases', () => {
+  it('handles content with multiple [ characters after title', () => {
+    const resp = '[SAVE_NOTE: Arrays]Use arr[0] and arr[1] for access';
+    const { cleaned, pendingSaves } = parseToolCalls(resp);
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].content).toBe('Use arr[0] and arr[1] for access');
+    expect(cleaned).toBe('');
+  });
+
+  it('handles marker at very start of response', () => {
+    const resp = '[SAVE_NOTE: First]Content from start';
+    const { cleaned, pendingSaves } = parseToolCalls(resp);
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].title).toBe('First');
+    expect(cleaned).toBe('');
+  });
+
+  it('handles response with no markers at all', () => {
+    const resp = 'Just a normal response without any markers.';
+    const { cleaned, pendingSaves } = parseToolCalls(resp);
+    expect(pendingSaves).toHaveLength(0);
+    expect(cleaned).toBe(resp);
+  });
+
+  it('handles title with special characters', () => {
+    const resp = '[SAVE_NOTE: C++ 与 Rust 对比]内容在这里';
+    const { pendingSaves } = parseToolCalls(resp);
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].title).toBe('C++ 与 Rust 对比');
+  });
+
+  it('handles content spanning multiple lines', () => {
+    const resp = '[SAVE_NOTE: Multi]\nLine 1\nLine 2\nLine 3';
+    const { pendingSaves } = parseToolCalls(resp);
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].content).toContain('Line 1');
+    expect(pendingSaves[0].content).toContain('Line 3');
   });
 });

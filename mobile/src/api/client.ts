@@ -18,9 +18,24 @@ const KEYS = {
 } as const;
 
 // ── Secure helpers ───────────────────────────────────────
+let _migrated = false;
+
 async function getApiKey(): Promise<string> {
   try {
-    return (await SecureStore.getItemAsync(KEYS.apiKey)) || '';
+    const key = await SecureStore.getItemAsync(KEYS.apiKey);
+    if (key) return key;
+
+    // One-time migration: move legacy key from AsyncStorage → SecureStore
+    if (!_migrated) {
+      _migrated = true;
+      const legacy = await AsyncStorage.getItem(KEYS.apiKey);
+      if (legacy) {
+        await SecureStore.setItemAsync(KEYS.apiKey, legacy);
+        await AsyncStorage.removeItem(KEYS.apiKey);
+        return legacy;
+      }
+    }
+    return '';
   } catch (e: unknown) {
     console.warn('[SecureStore] Failed to read API key:', e instanceof Error ? e.message : e);
     return '';

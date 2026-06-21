@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "vaultpilot://message-v2-fixtures",
+  "description": "Shared test fixtures for MessageV2 schema (#1239). All three platforms (Rust, WinUI, Mobile) MUST parse these without error.",
+  "fixtures": [
+    {
+      "name": "minimal_user_text",
+      "json": {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "role": "user",
+        "content": "Hello world"
+      },
+      "assertions": {
+        "role": "user",
+        "contentLength": 11,
+        "attachmentsEmpty": true,
+        "extensionsEmpty": true
+      }
+    },
+    {
+      "name": "assistant_with_image_attachment",
+      "json": {
+        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "role": "assistant",
+        "content": "Here is the chart you requested:",
+        "attachments": [
+          {
+            "type": "image",
+            "url": "local://vault/images/chart.png",
+            "mime": "image/png"
+          }
+        ],
+        "metadata": {
+          "model": "deepseek-v4",
+          "tokens": 42
+        }
+      },
+      "assertions": {
+        "role": "assistant",
+        "attachmentsCount": 1,
+        "firstAttachmentType": "image",
+        "firstAttachmentUrl": "local://vault/images/chart.png",
+        "metadataModel": "deepseek-v4",
+        "metadataTokens": 42
+      }
+    },
+    {
+      "name": "system_prompt",
+      "json": {
+        "id": "sys-001",
+        "role": "system",
+        "content": "You are a helpful embedded engineering assistant."
+      },
+      "assertions": {
+        "role": "system",
+        "attachmentsEmpty": true
+      }
+    },
+    {
+      "name": "user_with_file_attachment",
+      "json": {
+        "id": "file-att-001",
+        "role": "user",
+        "content": "Please analyze this log file.",
+        "attachments": [
+          {
+            "type": "file",
+            "url": "local://vault/logs/boot.log",
+            "mime": "text/plain"
+          }
+        ]
+      },
+      "assertions": {
+        "role": "user",
+        "attachmentsCount": 1,
+        "firstAttachmentType": "file"
+      }
+    },
+    {
+      "name": "with_extensions",
+      "json": {
+        "id": "ext-001",
+        "role": "user",
+        "content": "Run the build.",
+        "extensions": {
+          "agent_mode": {
+            "enabled": true,
+            "timeout_ms": 30000
+          }
+        }
+      },
+      "assertions": {
+        "extensionsContains": "agent_mode"
+      }
+    },
+    {
+      "name": "multiple_attachments",
+      "json": {
+        "id": "multi-att-001",
+        "role": "user",
+        "content": "Compare these two schematics.",
+        "attachments": [
+          {
+            "type": "image",
+            "url": "local://vault/docs/schematic_v1.png",
+            "mime": "image/png"
+          },
+          {
+            "type": "image",
+            "url": "local://vault/docs/schematic_v2.png",
+            "mime": "image/png"
+          }
+        ]
+      },
+      "assertions": {
+        "attachmentsCount": 2
+      }
+    },
+    {
+      "name": "empty_content",
+      "json": {
+        "id": "empty-001",
+        "role": "user",
+        "content": ""
+      },
+      "assertions": {
+        "contentLength": 0
+      }
+    }
+  ]
+}

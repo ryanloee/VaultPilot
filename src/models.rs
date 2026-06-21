@@ -1067,4 +1067,89 @@ mod tests {
         assert!(errors.iter().any(|e| e.contains("base_url")));
         assert!(errors.iter().any(|e| e.contains("request_timeout_ms")));
     }
+
+    // ── mask_secret ──
+
+    #[test]
+    fn mask_secret_empty_returns_empty() {
+        assert_eq!(mask_secret(""), "");
+    }
+
+    #[test]
+    fn mask_secret_short_fully_masked() {
+        // 12 chars or fewer → all asterisks
+        assert_eq!(mask_secret("abc"), "***");
+        assert_eq!(mask_secret("123456789012"), "************");
+    }
+
+    #[test]
+    fn mask_secret_long_shows_prefix_suffix() {
+        // >12 chars → first 4 + … + last 4
+        let key = "sk-abcdefghijklmnopqrst";
+        let masked = mask_secret(key);
+        assert_eq!(masked, "sk-a…qrst");
+        // Middle portion must not appear
+        assert!(!masked.contains("bcdefghijklmnop"));
+    }
+
+    #[test]
+    fn mask_secret_exactly_13_chars() {
+        // 13 chars: first 4 + … + last 4 = "1234…0123"
+        let masked = mask_secret("1234567890123");
+        assert_eq!(masked, "1234…0123");
+    }
+
+    // ── ProviderType::from_base_url ──
+
+    #[test]
+    fn provider_type_detects_anthropic() {
+        assert_eq!(
+            ProviderType::from_base_url("https://api.anthropic.com/v1"),
+            ProviderType::Anthropic
+        );
+        assert_eq!(
+            ProviderType::from_base_url("https://ANTHROPIC.example.com"),
+            ProviderType::Anthropic
+        );
+    }
+
+    #[test]
+    fn provider_type_defaults_to_openai() {
+        assert_eq!(
+            ProviderType::from_base_url("https://api.openai.com/v1"),
+            ProviderType::OpenAi
+        );
+        assert_eq!(
+            ProviderType::from_base_url("https://openrouter.ai/api/v1"),
+            ProviderType::OpenAi
+        );
+        assert_eq!(
+            ProviderType::from_base_url("http://localhost:8080/v1"),
+            ProviderType::OpenAi
+        );
+    }
+
+    // ── masked() ──
+
+    #[test]
+    fn provider_config_masked_hides_api_key() {
+        let provider = ProviderConfig {
+            name: "test".to_string(),
+            api_key: "sk-very-long-secret-key-12345".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o".to_string(),
+            request_timeout_ms: 60_000,
+            context_window_tokens: None,
+            max_output_tokens: None,
+            provider_type: None,
+        };
+        let masked = provider.masked();
+        assert!(!masked.api_key.contains("very-long-secret"));
+        assert!(masked.api_key.contains("sk-v"));
+        assert!(masked.api_key.contains("2345"));
+        // Other fields unchanged
+        assert_eq!(masked.name, "test");
+        assert_eq!(masked.base_url, "https://api.openai.com/v1");
+        assert_eq!(masked.model, "gpt-4o");
+    }
 }

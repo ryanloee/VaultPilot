@@ -614,6 +614,138 @@ pub struct AiWorkflowManual {
     pub skills: Vec<AiSkill>,
 }
 
+// ---------------------------------------------------------------------------
+// MessageV2 — Unified cross-platform message schema (#1239)
+// ---------------------------------------------------------------------------
+
+/// Maximum serialized size of the `metadata` field (64 KB) to prevent
+/// malicious payloads from bloating storage or transit.
+const MESSAGE_V2_METADATA_MAX_BYTES: usize = 64 * 1024;
+
+/// Role of the message author.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageV2Role {
+    #[default]
+    User,
+    Assistant,
+    System,
+}
+
+/// Attachment type discriminator.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageV2AttachmentType {
+    Image,
+    #[default]
+    File,
+}
+
+/// An attachment referenced by a message.
+///
+/// `url` MUST use the `local://` scheme to prevent path-traversal attacks.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageV2Attachment {
+    #[serde(default, rename = "type")]
+    pub kind: MessageV2AttachmentType,
+    /// Resource locator. Must start with `local://`.
+    #[serde(default)]
+    pub url: String,
+    /// MIME type (e.g. "image/png", "application/pdf").
+    #[serde(default)]
+    pub mime: String,
+}
+
+impl MessageV2Attachment {
+    /// Returns `Ok(())` if the URL uses the `local://` scheme.
+    pub fn validate_url(&self) -> Result<(), String> {
+        if !self.url.starts_with("local://") {
+            return Err(format!(
+                "attachment url must use local:// scheme, got: {}",
+                self.url
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Arbitrary key-value metadata attached to a message.
+///
+/// The serialized size is capped at 64 KB (see `MESSAGE_V2_METADATA_MAX_BYTES`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageV2Metadata {
+    /// Model that generated this message (empty for user messages).
+    #[serde(default)]
+    pub model: String,
+    /// Total token count for this message.
+    #[serde(default)]
+    pub tokens: u64,
+    /// Provider-specific extra fields.
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl MessageV2Metadata {
+    /// Validate that the serialized metadata does not exceed the size cap.
+    pub fn validate_size(&self) -> Result<(), String> {
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        if bytes.len() > MESSAGE_V2_METADATA_MAX_BYTES {
+            return Err(format!(
+                "metadata exceeds {} byte limit (got {} bytes)",
+                MESSAGE_V2_METADATA_MAX_BYTES,
+                bytes.len()
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Unified cross-platform message schema.
+///
+/// This is the canonical wire format shared by Rust, WinUI, and Mobile.
+/// See issue #1239 for the full specification.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageV2 {
+    /// Unique message identifier (UUID).
+    #[serde(default)]
+    pub id: String,
+    /// Who produced this message.
+    #[serde(default)]
+    pub role: MessageV2Role,
+    /// Markdown content body.
+    #[serde(default)]
+    pub content: String,
+    /// Attached files / images.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<MessageV2Attachment>,
+    /// Provider and token metadata.
+    #[serde(default)]
+    pub metadata: MessageV2Metadata,
+    /// Reserved extension point for the plugin system.
+    /// Currently unused — always `{}`.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub extensions: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl MessageV2 {
+    /// Full structural validation: checks attachment URLs and metadata size.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for att in &self.attachments {
+            if let Err(e) = att.validate_url() {
+                errors.push(e);
+            }
+        }
+        if let Err(e) = self.metadata.validate_size() {
+            errors.push(e);
+        }
+        errors
+    }
+}
+
 /// Mask a secret string for safe display: show first 4 and last 4 chars.
 fn mask_secret(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
@@ -1066,5 +1198,216 @@ mod tests {
         assert!(errors.iter().any(|e| e.contains("api_key")));
         assert!(errors.iter().any(|e| e.contains("base_url")));
         assert!(errors.iter().any(|e| e.contains("request_timeout_ms")));
+    }
+
+    // ── MessageV2 roundtrip tests (#1239) ────────────────────────────────
+
+    #[test]
+    fn message_v2_roundtrip_user_text_only() {
+        let msg = MessageV2 {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            role: MessageV2Role::User,
+            content: "Hello **world**".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(json.contains("\"id\""));
+        assert!(json.contains("\"role\":\"user\""));
+        assert!(json.contains("\"content\""));
+        // Empty vecs/maps should be skipped
+        assert!(!json.contains("\"attachments\""));
+        assert!(!json.contains("\"extensions\""));
+
+        let parsed: MessageV2 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.id, msg.id);
+        assert_eq!(parsed.role, MessageV2Role::User);
+        assert_eq!(parsed.content, "Hello **world**");
+        assert!(parsed.attachments.is_empty());
+        assert!(parsed.extensions.is_empty());
+    }
+
+    #[test]
+    fn message_v2_roundtrip_assistant_with_attachment() {
+        let msg = MessageV2 {
+            id: "a1".to_string(),
+            role: MessageV2Role::Assistant,
+            content: "Here is the image:".to_string(),
+            attachments: vec![MessageV2Attachment {
+                kind: MessageV2AttachmentType::Image,
+                url: "local://vault/images/chart.png".to_string(),
+                mime: "image/png".to_string(),
+            }],
+            metadata: MessageV2Metadata {
+                model: "deepseek-v4".to_string(),
+                tokens: 42,
+                extra: std::collections::HashMap::new(),
+            },
+            extensions: std::collections::HashMap::new(),
+        };
+        let json = serde_json::to_string_pretty(&msg).expect("serialize");
+        let parsed: MessageV2 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0].kind, MessageV2AttachmentType::Image);
+        assert_eq!(parsed.attachments[0].url, "local://vault/images/chart.png");
+        assert_eq!(parsed.attachments[0].mime, "image/png");
+        assert_eq!(parsed.metadata.model, "deepseek-v4");
+        assert_eq!(parsed.metadata.tokens, 42);
+    }
+
+    #[test]
+    fn message_v2_roundtrip_system_role() {
+        let msg = MessageV2 {
+            role: MessageV2Role::System,
+            content: "You are a helpful assistant.".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(json.contains("\"role\":\"system\""));
+        let parsed: MessageV2 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.role, MessageV2Role::System);
+    }
+
+    #[test]
+    fn message_v2_roundtrip_with_extensions() {
+        let mut ext = std::collections::HashMap::new();
+        ext.insert("plugin_x".to_string(), serde_json::json!({"enabled": true}));
+        let msg = MessageV2 {
+            id: "ext1".to_string(),
+            role: MessageV2Role::User,
+            content: "test".to_string(),
+            extensions: ext,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(json.contains("\"extensions\""));
+        let parsed: MessageV2 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.extensions.len(), 1);
+        assert_eq!(
+            parsed.extensions["plugin_x"],
+            serde_json::json!({"enabled": true})
+        );
+    }
+
+    #[test]
+    fn message_v2_attachment_rejects_non_local_url() {
+        let att = MessageV2Attachment {
+            kind: MessageV2AttachmentType::File,
+            url: "https://evil.com/payload".to_string(),
+            mime: "text/plain".to_string(),
+        };
+        assert!(att.validate_url().is_err());
+
+        let good = MessageV2Attachment {
+            url: "local://vault/doc.pdf".to_string(),
+            ..Default::default()
+        };
+        assert!(good.validate_url().is_ok());
+    }
+
+    #[test]
+    fn message_v2_validate_catches_bad_attachment_urls() {
+        let msg = MessageV2 {
+            attachments: vec![
+                MessageV2Attachment {
+                    url: "local://ok.png".to_string(),
+                    ..Default::default()
+                },
+                MessageV2Attachment {
+                    url: "/etc/passwd".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let errors = msg.validate();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("local://"));
+    }
+
+    #[test]
+    fn message_v2_default_values() {
+        let msg = MessageV2::default();
+        assert!(msg.id.is_empty());
+        assert_eq!(msg.role, MessageV2Role::User);
+        assert!(msg.content.is_empty());
+        assert!(msg.attachments.is_empty());
+        assert!(msg.metadata.model.is_empty());
+        assert_eq!(msg.metadata.tokens, 0);
+        assert!(msg.extensions.is_empty());
+        assert!(msg.validate().is_empty());
+    }
+
+    #[test]
+    fn message_v2_deserializes_minimal_json() {
+        // Minimal JSON with only content — all other fields should default
+        let json = r#"{"content":"hi"}"#;
+        let msg: MessageV2 = serde_json::from_str(json).expect("parse");
+        assert_eq!(msg.content, "hi");
+        assert_eq!(msg.role, MessageV2Role::User);
+        assert!(msg.id.is_empty());
+    }
+
+    #[test]
+    fn message_v2_role_serialization() {
+        assert_eq!(
+            serde_json::to_string(&MessageV2Role::User).unwrap(),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageV2Role::Assistant).unwrap(),
+            "\"assistant\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageV2Role::System).unwrap(),
+            "\"system\""
+        );
+        assert_eq!(
+            "\"user\"",
+            &serde_json::to_string(&MessageV2Role::default()).unwrap()
+        );
+    }
+
+    #[test]
+    fn message_v2_attachment_type_serialization() {
+        assert_eq!(
+            serde_json::to_string(&MessageV2AttachmentType::Image).unwrap(),
+            "\"image\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageV2AttachmentType::File).unwrap(),
+            "\"file\""
+        );
+    }
+
+    #[test]
+    fn message_v2_shared_fixtures_parse() {
+        // Load the shared test fixture file used by all three platforms (#1239).
+        // This ensures the Rust implementation stays in sync with the canonical JSON.
+        let raw = std::fs::read_to_string("tests/fixtures/message_v2_fixtures.json")
+            .expect("fixture file must exist");
+        let root: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+        let fixtures = root["fixtures"].as_array().expect("fixtures array");
+
+        for fixture in fixtures {
+            let name = fixture["name"].as_str().unwrap_or("<unnamed>");
+            let json_val = &fixture["json"];
+            let msg: MessageV2 = serde_json::from_value(json_val.clone())
+                .unwrap_or_else(|e| panic!("fixture '{}': failed to parse MessageV2: {}", name, e));
+            // Every fixture must have an id and content
+            assert!(
+                !msg.id.is_empty() || name == "empty_content",
+                "fixture '{}': id should not be empty",
+                name
+            );
+            // Validate roundtrip
+            let serialized = serde_json::to_string(&msg).expect("serialize");
+            let reparsed: MessageV2 = serde_json::from_str(&serialized).expect("roundtrip");
+            assert_eq!(reparsed.role, msg.role, "fixture '{}': role mismatch", name);
+            assert_eq!(
+                reparsed.content, msg.content,
+                "fixture '{}': content mismatch",
+                name
+            );
+        }
     }
 }

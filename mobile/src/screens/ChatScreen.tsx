@@ -12,16 +12,15 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import { chatWithReconnect, ChatMessage, ContentPart } from '../api/client';
+import { chatWithReconnect } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, parseToolCalls, executeSave } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 import type { ChatScreenProps } from '../navigation/types';
+import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview, MAX_HISTORY_MESSAGES } from '../utils/chatHelpers';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
 
-/** Max messages sent to API to avoid exceeding model context window */
-const MAX_HISTORY_MESSAGES = 50;
 
 const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, onDelete, onResend }: {
   item: Msg; isDark: boolean; accentColor: string;
@@ -198,20 +197,17 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     const currentAttachments = [...attachments];
 
     // Read attachments as base64 before clearing
-    const contentParts: ContentPart[] = [];
+    const attData: { base64: string; mime: string }[] = [];
     for (const att of currentAttachments) {
       try {
         const base64 = await FileSystem.readAsStringAsync(att.uri, { encoding: FileSystem.EncodingType.Base64 });
         const mime = att.type === 'image' ? 'image/jpeg' : 'application/octet-stream';
-        contentParts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } });
+        attData.push({ base64, mime });
       } catch (e) {
         console.warn('[Chat] Failed to read attachment:', att.name, e);
       }
     }
-    if (userText) contentParts.unshift({ type: 'text', text: userText });
-    const userContent: string | ContentPart[] = contentParts.length > 0 && contentParts.some(p => p.type !== 'text')
-      ? contentParts
-      : userText;
+    const userContent = buildUserContent(userText, attData);
 
     // Add user message — only clear input after persistence succeeds
     let userId: string;
@@ -264,11 +260,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       const noteContext = await buildNoteContext(userText);
       const systemPrompt = buildSystemPrompt(noteContext);
 
-      const history: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-        { role: 'user', content: userContent },
-      ];
+      const history = buildHistory(prevMsgs, systemPrompt, userContent);
 
       abortRef.current = new AbortController();
       let full = '';
@@ -290,7 +282,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         const confirmed = await new Promise<boolean>((resolve) => {
           Alert.alert(
             '保存笔记？',
-            `AI 想要保存笔记「${save.title}」\n\n${save.content.slice(0, 200)}${save.content.length > 200 ? '...' : ''}`,
+            `AI 想要保存笔记「${save.title}」\n\n${buildSavePreview(save.content)}`,
             [
               { text: '拒绝', style: 'cancel', onPress: () => resolve(false) },
               { text: '保存', onPress: () => resolve(true) },
@@ -307,9 +299,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         }
       }
 
-      const finalContent = actions.length > 0
-        ? cleaned + '\n\n_' + actions.join('；') + '_'
-        : cleaned;
+      const finalContent = formatToolCallResult(cleaned, actions);
 
       if (finalContent !== full) {
         full = finalContent;

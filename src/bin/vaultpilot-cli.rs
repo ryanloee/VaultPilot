@@ -176,6 +176,9 @@ enum Commands {
 
     /// Start an MCP stdio server for VaultPilot's built-in model chat interface
     Mcp,
+
+    /// List registered plugins
+    Plugins,
 }
 
 #[derive(Subcommand)]
@@ -635,6 +638,21 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             "message": "The MCP server is started by running `vaultpilot-cli mcp` directly."
         })),
         Commands::Vault { action } => handle_vault(context, action),
+        Commands::Plugins => {
+            let mgr = vaultpilot_lib::plugin::PluginManager::new();
+            let plugins: Vec<_> = mgr
+                .list()
+                .into_iter()
+                .map(|info| {
+                    serde_json::json!({
+                        "name": info.name,
+                        "version": info.version,
+                        "description": info.description,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({ "plugins": plugins, "count": plugins.len() }))
+        }
     }
 }
 

@@ -10,6 +10,7 @@ import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, 
 import type { NotesScreenProps } from '../navigation/types';
 import { fmtTime } from '../utils/timeFormat';
 import { useNetworkState } from '../utils/networkState';
+import { usePendingSync } from '../utils/offlineSync';
 
 export default function NotesScreen({ navigation }: NotesScreenProps) {
   const { isDark, accentColor } = useAppStore();
@@ -22,6 +23,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
   const { isOnline } = useNetworkState();
+  const { pendingCount } = usePendingSync();
 
   const load = useCallback(async (query: string, folder?: string) => {
     const currentId = ++requestIdRef.current;
@@ -117,6 +119,14 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
 
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
+      {!isOnline && (
+        <View style={{ backgroundColor: '#F59E0B20', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ color: '#F59E0B', fontSize: 13 }}>📴 离线模式</Text>
+          {pendingCount > 0 && (
+            <Text style={{ color: '#F59E0B', fontSize: 12 }}>{pendingCount} 条待同步</Text>
+          )}
+        </View>
+      )}
       {/* Search bar */}
       <View style={[s.searchBar, { borderColor: c.border }]}>
         <Text style={{ color: c.textSecondary, fontSize: 16 }}>🔍 </Text>

@@ -10,6 +10,8 @@ import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
 import { extractAutoTags } from '../utils/autoTag';
+import { queuePendingSync } from '../db';
+import { useNetworkState } from '../utils/networkState';
 import type { NoteEditorScreenProps, RootTabParamList } from '../navigation/types';
 import { useNavigation } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
@@ -18,6 +20,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
   const { noteId } = route.params;
   const rootNav = useNavigation<NavigationProp<RootTabParamList>>();
   const { isDark, accentColor } = useAppStore();
+  const { isOnline } = useNetworkState();
   const c = getColors(isDark, accentColor);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -88,6 +91,10 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
           const freshTags = await getNoteTags(noteId);
           if (mountedRef.current) setTags(freshTags);
         }
+      }
+      // Queue for backend sync if offline
+      if (!isOnline) {
+        queuePendingSync(noteId).catch(() => {});
       }
     } catch (e) {
       console.warn('[NoteEditor] Save failed:', e);

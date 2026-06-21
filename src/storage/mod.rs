@@ -260,7 +260,6 @@ pub fn initialize_storage_with_context(context: &StorageContext) -> Result<AppSe
     Ok(settings)
 }
 
-
 pub fn list_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>> {
     let result = search_notes_with_context(
         context,
@@ -827,7 +826,6 @@ pub(crate) fn build_related_query(doc: &NoteDocument) -> String {
         .collect();
     unique.join(" ")
 }
-
 
 /// Get a database connection from the connection pool.
 /// Returns a `PooledConnection` that is automatically returned to the pool on drop.
@@ -3321,8 +3319,8 @@ pub async fn load_recent_notes_for_overview_async(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::settings::normalize_settings;
+    use super::*;
     use crate::models::{ChatSession, ProviderConfig};
 
     fn setup_temp_context() -> (PathBuf, StorageContext) {

@@ -284,4 +284,33 @@ describe('globalSearch', () => {
     const results = await db.globalSearch('');
     expect(results).toEqual([]);
   });
+
+  it('returns note and session results for non-empty query', async () => {
+    const db = await freshDb();
+    // First call: FTS note search (returns results)
+    mockDb.getAllAsync
+      .mockResolvedValueOnce([{ type: 'note', id: 'n1', title: 'Test Note', snippet: 'content...', updated_at: 2000 }])
+      // Second call: FTS session message search
+      .mockResolvedValueOnce([{ type: 'session', id: 'm1', title: 'Chat', snippet: 'message...', updated_at: 1000, sessionId: 's1' }]);
+
+    const results = await db.globalSearch('test');
+    expect(results).toHaveLength(2);
+    expect(results[0].type).toBe('note');
+    expect(results[1].type).toBe('session');
+  });
+
+  it('falls back to LIKE when FTS note search returns empty', async () => {
+    const db = await freshDb();
+    // FTS note search returns empty
+    mockDb.getAllAsync
+      .mockResolvedValueOnce([])
+      // LIKE fallback for notes
+      .mockResolvedValueOnce([{ type: 'note', id: 'n2', title: 'CJK Note', snippet: 'content', updated_at: 500 }])
+      // FTS session search
+      .mockResolvedValueOnce([]);
+
+    const results = await db.globalSearch('CJK');
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe('n2');
+  });
 });

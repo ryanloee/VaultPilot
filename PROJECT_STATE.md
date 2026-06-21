@@ -537,6 +537,7 @@
 - PR #1229: refactor(mobile): extract shared fmtTime utility — ✅ 已合并
 - PR #1227: ci: auto-merge main into PR branches before CI checks — ✅ 已合并
 - PR #1226: feat(mobile): APK 自动更新检测 — ✅ 已合并
+- PR #1261: feat(mobile): 启动时自动检查更新 + 自动下载安装 APK — ✅ 已合并 (reviewer fixes: remove @react-native-voice/voice, restore autoSyncOnStartup, fix sync test)
 - PR #1225: feat(mobile): 首次使用引导页面 OnboardingScreen — ✅ 已合并
 - PR #1230: refactor(WinUI): extract Chat partial class — ❌ winui-build 失败 (CS0103: _isShuttingDown, LogStartup)
 - PR #1228: refactor(storage): extract chat session module — ❌ cargo fmt 失败

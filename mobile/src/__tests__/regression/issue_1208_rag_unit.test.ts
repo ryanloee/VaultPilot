@@ -210,19 +210,17 @@ describe('executeSave', () => {
     mockUpdateNote.mockReset();
   });
 
-  it('calls createNote with title and updateNote with content', async () => {
+  it('calls createNote with title and content (single operation)', async () => {
     mockCreateNote.mockResolvedValue('note-123');
-    mockUpdateNote.mockResolvedValue(undefined);
 
     const result = await executeSave({ title: 'My Note', content: 'Note body here' });
-    expect(mockCreateNote).toHaveBeenCalledWith('My Note');
-    expect(mockUpdateNote).toHaveBeenCalledWith('note-123', 'My Note', 'Note body here');
+    expect(mockCreateNote).toHaveBeenCalledWith('My Note', 'Note body here');
+    expect(mockUpdateNote).not.toHaveBeenCalled();
     expect(result).toContain('My Note');
   });
 
   it('returns Chinese confirmation message', async () => {
     mockCreateNote.mockResolvedValue('id-1');
-    mockUpdateNote.mockResolvedValue(undefined);
 
     const result = await executeSave({ title: '测试', content: '内容' });
     expect(result).toBe('已保存笔记「测试」');

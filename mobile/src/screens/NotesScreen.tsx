@@ -9,6 +9,7 @@ import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
 import type { NotesScreenProps } from '../navigation/types';
 import { fmtTime } from '../utils/timeFormat';
+import { useNetworkState } from '../utils/networkState';
 
 export default function NotesScreen({ navigation }: NotesScreenProps) {
   const { isDark, accentColor } = useAppStore();
@@ -20,6 +21,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
+  const { isOnline } = useNetworkState();
 
   const load = useCallback(async (query: string, folder?: string) => {
     const currentId = ++requestIdRef.current;
@@ -127,6 +129,13 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
           accessibilityLabel="搜索笔记"
         />
       </View>
+
+      {/* Offline banner */}
+      {!isOnline && (
+        <View style={{ backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}>📡 离线模式 — 本地笔记可查看编辑</Text>
+        </View>
+      )}
 
       {/* Folder chips */}
       {folders.length > 0 && (

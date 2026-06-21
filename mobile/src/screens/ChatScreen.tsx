@@ -18,6 +18,7 @@ import { getMessages, addMessage, updateMessage, deleteMessage, createSession, g
 import type { ChatScreenProps } from '../navigation/types';
 import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview, MAX_HISTORY_MESSAGES } from '../utils/chatHelpers';
 import { useVoiceInput } from '../utils/useVoiceInput';
+import { useNetworkState } from '../utils/networkState';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; attachments?: { name: string; type: 'image' | 'file' }[]; }
 interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
@@ -104,6 +105,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const listRef = useRef<FlatList>(null);
   const msgsRef = useRef<Msg[]>([]);
   const voice = useVoiceInput();
+  const { isOnline } = useNetworkState();
 
   // Append voice transcript to input when recognition completes
   useEffect(() => {
@@ -458,6 +460,13 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           <Text style={{ color: accentColor, fontSize: 14 }}>＋</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Offline banner */}
+      {!isOnline && (
+        <View style={{ backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}>📡 离线模式 — 笔记可查看编辑，聊天需联网</Text>
+        </View>
+      )}
 
       {/* Message list */}
       <FlatList

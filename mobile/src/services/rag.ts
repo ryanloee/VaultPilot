@@ -3,7 +3,7 @@
  * Searches local notes before chat and injects relevant context into prompts.
  * Also handles LLM-initiated note operations (save/search).
  */
-import { searchNotes, createNote, updateNote, DbNote } from '../db';
+import { searchNotes, createNote, DbNote } from '../db';
 
 /** Max notes to inject into context */
 const MAX_CONTEXT_NOTES = 5;
@@ -91,11 +91,7 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       ? recentMessages.join(' ') + ' ' + userMessage
       : userMessage;
     const keywords = extractKeywords(allText);
-    console.log('[RAG] Keywords extracted:', keywords);
-    if (keywords.length === 0) {
-      console.log('[RAG] No keywords extracted from message, skipping note search');
-      return null;
-    }
+    if (keywords.length === 0) return null;
 
     const seen = new Set<string>();
     const results: DbNote[] = [];
@@ -114,7 +110,6 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       if (results.length >= MAX_CONTEXT_NOTES) break;
     }
 
-    console.log('[RAG] Found', results.length, 'relevant notes');
     if (results.length === 0) return null;
 
     const blocks = results.map(n => {
@@ -198,8 +193,7 @@ export function parseToolCalls(response: string): {
  * Execute a single pending save after user confirmation.
  */
 export async function executeSave(save: PendingSave): Promise<string> {
-  const noteId = await createNote(save.title);
-  await updateNote(noteId, save.title, save.content);
+  await createNote(save.title, save.content);
   return `已保存笔记「${save.title}」`;
 }
 

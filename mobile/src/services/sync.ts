@@ -112,10 +112,7 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
         await updateNote(meta.id, title, content);
         updated++;
       } else {
-        // createNote returns id; we need to use the server's id
-        // First create with default, then update with real data
-        const newId = await createNote(title);
-        await updateNote(newId, title, content);
+        await createNote(title, content);
         imported++;
       }
     } catch (e) {
@@ -130,4 +127,27 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
 
 export async function getLastSyncTime(): Promise<string | null> {
   return AsyncStorage.getItem(LAST_SYNC_KEY);
+}
+
+/**
+ * Auto-sync on startup: if backend is configured and reachable, sync notes.
+ * Returns the sync result if sync was attempted, null if skipped.
+ * Non-blocking — errors are caught and logged, never thrown.
+ */
+export async function autoSyncOnStartup(): Promise<SyncResult | null> {
+  try {
+    const { url } = await getServerConfig();
+    if (!url) return null;
+
+    const reachable = await pingBackend();
+    if (!reachable) return null;
+
+    console.log('[Sync] Backend reachable, starting auto-sync...');
+    const result = await syncNotesFromServer();
+    console.log('[Sync] Auto-sync complete:', result);
+    return result;
+  } catch (e) {
+    console.warn('[Sync] Auto-sync failed:', e);
+    return null;
+  }
 }

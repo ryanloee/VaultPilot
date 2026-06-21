@@ -8,5 +8,8 @@ module.exports = {
     '^@react-native-async-storage/async-storage$': '<rootDir>/src/__mocks__/async-storage.ts',
     '^expo-secure-store$': '<rootDir>/src/__mocks__/expo-secure-store.ts',
     '^expo-speech-recognition$': '<rootDir>/src/__mocks__/expo-speech-recognition.ts',
+    '^expo-file-system$': '<rootDir>/src/__mocks__/expo-file-system.ts',
+    '^expo-intent-launcher$': '<rootDir>/src/__mocks__/expo-intent-launcher.ts',
+    '^react-native$': '<rootDir>/src/__mocks__/react-native.ts',
   },
 };

@@ -369,6 +369,7 @@ public sealed partial class SettingsDialog : ContentDialog
             {
                 ErrorInfoBar.Message = string.Join("\n", validationErrors);
                 ErrorInfoBar.IsOpen = true;
+                SettingsScroller.ChangeView(null, 0, null, true);
                 args.Cancel = true;
                 return;
             }
@@ -402,6 +403,7 @@ public sealed partial class SettingsDialog : ContentDialog
         {
             // Show error and keep the dialog open so the user can retry or cancel.
             ErrorInfoBar.Message = $"保存设置失败：{error.Message}";
+            SettingsScroller.ChangeView(null, 0, null, true);
             ErrorInfoBar.IsOpen = true;
             args.Cancel = true;
         }

@@ -137,4 +137,36 @@ describe('checkApi', () => {
     const calledUrl = mockFetch.mock.calls[0][0];
     expect(calledUrl).not.toMatch(/\/v1\/v1/);
   });
+
+  it('appends /v1 to apiBase with trailing slashes', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    await checkApi({ apiBase: 'https://api.openai.com///', apiKey: 'sk-test', apiFormat: 'openai' });
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/v1/models');
+    expect(calledUrl).not.toMatch(/\/\/\/v1/); // no triple slashes before /v1
+  });
+
+  it('preserves /v2 versioned path without appending /v1', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    await checkApi({ apiBase: 'https://api.openai.com/v2', apiKey: 'sk-test', apiFormat: 'openai' });
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/v2/models');
+    expect(calledUrl).not.toMatch(/\/v1\/models/);
+  });
+
+  it('falls back to default apiBase when empty string provided', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    await checkApi({ apiBase: '', apiKey: 'sk-test', apiFormat: 'openai' });
+    const calledUrl = mockFetch.mock.calls[0][0];
+    // Should use default: https://opencode.ai/zen/v1
+    expect(calledUrl).toContain('opencode.ai');
+  });
+
+  it('strips trailing slashes from Anthropic base before appending /v1/messages', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 400, text: jest.fn().mockResolvedValue('') });
+    await checkApi({ apiBase: 'https://api.anthropic.com/', apiKey: 'sk-ant-test', apiFormat: 'anthropic' });
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/v1/messages');
+    expect(calledUrl).not.toMatch(/\/\/v1/); // no double slash before v1
+  });
 });

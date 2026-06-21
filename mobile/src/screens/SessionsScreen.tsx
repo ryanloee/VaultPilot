@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { getSessions, deleteSession, toggleArchive, togglePin, renameSession, searchSessions, DbSession } from '../db';
 import type { SessionsScreenProps } from '../navigation/types';
+import { fmtTime } from '../utils/timeFormat';
 
 const SWIPE_THRESHOLD = -80;
 const ACTION_WIDTH = 160;
@@ -155,13 +156,6 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
       { text: '删除', style: 'destructive', onPress: () => handleDelete(item.id) },
       { text: '取消', style: 'cancel' },
     ]);
-  };
-
-  const fmtTime = (ts: number) => {
-    const d = new Date(ts * 1000);
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
   };
 
   if (loading) {

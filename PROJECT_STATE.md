@@ -522,3 +522,9 @@
 - #1212: storage.rs Phase 1 backup 模块提取 → PR #1216（4 个回归测试 ✅）
 - #1214: ChatScreen 纯逻辑提取 + 19 个单元测试 → PR #1217（refactor + test ✅）
 - cargo build/test/clippy ✅, mobile jest 116 tests ✅
+
+## 本轮审核阶段 (审核轮#236)
+- 合并 PR: #1215 (store.ts 全局状态管理单元测试), #1216 (storage backup 模块提取), #1217 (ChatScreen 纯逻辑提取+19单元测试)
+- 发版: v0.3.31 (tag 已推送)
+- 累计: ~1217 PR 编号
+- 项目状态: 0 open issue, 0 open PR, cargo test 全通过, v0.3.31

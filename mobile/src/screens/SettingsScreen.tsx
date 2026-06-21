@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, ApiFormat, ProviderConfig } from '../store';
@@ -8,9 +8,11 @@ import { checkApi, getSettings, saveSettings } from '../api/client';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
+import { checkForUpdate, type UpdateInfo } from '../utils/updateChecker';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
+const SKIP_UPDATE_KEY = 'cfg_skip_update_version';
 
 export default function SettingsScreen() {
   const store = useAppStore();
@@ -20,6 +22,9 @@ export default function SettingsScreen() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
 
   // Active provider values for editing
   const activeIdx = store.providers.length > 0
@@ -91,7 +96,36 @@ export default function SettingsScreen() {
         console.warn('[Settings] Failed to load:', e);
       }
     })();
+
+    // Auto-check for updates (once per mount)
+    (async () => {
+      try {
+        const skipVersion = await AsyncStorage.getItem(SKIP_UPDATE_KEY);
+        const info = await checkForUpdate(appJson.expo.version);
+        if (info && info.latestVersion !== skipVersion) {
+          setUpdateInfo(info);
+          setShowUpdateModal(true);
+        }
+      } catch {}
+    })();
   }, []);
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    try {
+      const info = await checkForUpdate(appJson.expo.version);
+      if (info) {
+        setUpdateInfo(info);
+        setShowUpdateModal(true);
+      } else {
+        Alert.alert('已是最新', `当前版本 v${appJson.expo.version} 已是最新`);
+      }
+    } catch {
+      Alert.alert('检查失败', '无法连接到更新服务器');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   const saveActiveProvider = async () => {
     if (activeIdx < 0) return;
@@ -331,8 +365,65 @@ export default function SettingsScreen() {
         ))}
       </View>
 
-      <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
+      <View style={s.versionRow}>
+        <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
+        <TouchableOpacity onPress={handleCheckUpdate} disabled={checkingUpdate}>
+          <Text style={{ color: store.accentColor, fontSize: 12 }}>
+            {checkingUpdate ? '检查中...' : '检查更新'}
+          </Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
+
+    {/* ── Update Modal ── */}
+    {updateInfo && (
+      <Modal visible={showUpdateModal} transparent animationType="slide">
+        <View style={s.modalOverlay}>
+          <View style={[s.modalContent, { backgroundColor: c.card }]}>
+            <Text style={[s.sectionTitle, { color: c.text }]}>🎉 发现新版本</Text>
+            <Text style={{ color: c.text, fontSize: 16, marginTop: 8 }}>
+              v{updateInfo.currentVersion} → v{updateInfo.latestVersion}
+            </Text>
+            {updateInfo.body ? (
+              <ScrollView style={{ maxHeight: 200, marginTop: 12 }}>
+                <Text style={{ color: c.textSecondary, fontSize: 14, lineHeight: 20 }}>
+                  {updateInfo.body.slice(0, 1000)}
+                </Text>
+              </ScrollView>
+            ) : null}
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+              <TouchableOpacity
+                style={[s.modalClose, { borderColor: c.border, flex: 1 }]}
+                onPress={async () => {
+                  await AsyncStorage.setItem(SKIP_UPDATE_KEY, updateInfo.latestVersion);
+                  setShowUpdateModal(false);
+                }}
+              >
+                <Text style={{ color: c.textSecondary }}>跳过此版本</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.modalClose, { borderColor: store.accentColor, backgroundColor: store.accentColor + '15', flex: 1 }]}
+                onPress={() => {
+                  const url = updateInfo.apkUrl ?? updateInfo.releaseUrl;
+                  Linking.openURL(url);
+                  setShowUpdateModal(false);
+                }}
+              >
+                <Text style={{ color: store.accentColor, fontWeight: '600' }}>
+                  {updateInfo.apkUrl ? '下载 APK' : '查看发布页'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={{ paddingVertical: 10, alignItems: 'center' }}
+              onPress={() => setShowUpdateModal(false)}
+            >
+              <Text style={{ color: c.textSecondary, fontSize: 13 }}>稍后提醒</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    )}
 
     {/* ── Add Provider Modal ── */}
     <Modal visible={showAddModal} transparent animationType="slide">
@@ -408,7 +499,8 @@ const s = StyleSheet.create({
   themeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   colorRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
-  version: { textAlign: 'center', fontSize: 12, marginTop: 20, marginBottom: 40 },
+  version: { textAlign: 'center', fontSize: 12, marginBottom: 0 },
+  versionRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 20, marginBottom: 40 },
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '70%' },
   modalItem: { borderBottomWidth: 1, paddingVertical: 14 },

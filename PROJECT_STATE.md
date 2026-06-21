@@ -618,3 +618,9 @@
   - 添加触觉反馈和无障碍标签
 - cargo test 16 passed, mobile jest 260 passed (17 suites), clippy clean
 - 项目状态: 14 open feature issues, 5 open PR (#1253-#1257), ~1257 PR 编号, v0.3.33
+
+## PR 审核 review (循环#252)
+- #887: voice input hook + mic button → PR #1258 ✅ squash 合并
+- #892: Android home screen widget → PR #1260 ✅ squash 合并
+- #1261: 启动时自动检查更新 → ❌ 请求修改（分支严重过期，混合不相关改动，已评论要求 rebase）
+- 项目状态: 1 open PR (#1261 需 rebase), ~1261 PR 编号, v0.3.33

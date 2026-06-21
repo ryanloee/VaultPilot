@@ -74,35 +74,10 @@ jobs:
       - name: Expo prebuild (generate native project)
         run: npx expo prebuild --platform android --no-install
 
-      - name: Patch deprecated RN native modules for Gradle 9
-        run: |
-          VOICE_GRADLE="node_modules/@react-native-voice/voice/android/build.gradle"
-          if [ -f "$VOICE_GRADLE" ]; then
-            # Replace jcenter() → mavenCentral()
-            sed -i 's/jcenter()/mavenCentral()/g' "$VOICE_GRADLE"
-            # Replace compileSdkVersion with hardcoded value (AGP 9 requires compileSdk)
-            sed -i 's/compileSdkVersion .*/compileSdk 35/' "$VOICE_GRADLE"
-            sed -i 's/targetSdkVersion .*/targetSdk 35/' "$VOICE_GRADLE"
-            sed -i 's/minSdkVersion .*/minSdk 24/' "$VOICE_GRADLE"
-            echo "Patched $VOICE_GRADLE"
-          fi
-          # Enable Jetifier for old Support Library deps (voice lib uses appcompat-v7)
-          if [ -f android/gradle.properties ]; then
-            if ! grep -q "enableJetifier" android/gradle.properties; then
-              echo "android.enableJetifier=true" >> android/gradle.properties
-              echo "Added enableJetifier"
-            fi
-          fi
-
       - name: Build APK
         run: |
           cd android
-          ./gradlew assembleRelease --stacktrace 2>&1 | tee /tmp/build.log; EXIT_CODE=$?
-          echo "--- BUILD LOG TAIL ---"
-          tail -100 /tmp/build.log
-          echo "--- NODE ERRORS ---"
-          grep -B5 -A5 "node.*error\|non-zero exit\|What went wrong" /tmp/build.log || true
-          exit $EXIT_CODE
+          ./gradlew assembleRelease
 
       - name: Validate APK
         run: |

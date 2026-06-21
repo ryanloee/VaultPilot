@@ -47,7 +47,14 @@ jobs:
 
       - name: Install cargo-audit
         shell: powershell
-        run: cargo install cargo-audit --locked
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            cargo install cargo-audit --locked
+            if ($LASTEXITCODE -eq 0) { break }
+            Write-Host "Attempt $i failed, retrying in 10s..."
+            Start-Sleep -Seconds 10
+          }
+          if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-audit failed after 3 attempts" }
 
       - name: Run cargo audit
         shell: powershell

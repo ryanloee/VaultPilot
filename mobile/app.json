@@ -25,7 +25,8 @@
       "expo-sqlite",
       "expo-secure-store",
       "expo-splash-screen",
-      "./plugins/withQuickSettingsTile.js"
+      "./plugins/withQuickSettingsTile.js",
+      "./plugins/withDesktopWidget.js"
     ],
     "extra": {
       "eas": {

@@ -105,6 +105,18 @@ export async function chat(
 }
 
 // ── Anthropic Messages API ────────────────────────────────
+
+/** Convert OpenAI-style content parts to Anthropic format (shared by chat + chatWithReconnect). */
+export function toAnthropicContent(content: string | ContentPart[]): string | Record<string, unknown>[] {
+  if (typeof content === 'string') return content;
+  return content.map(p => {
+    if (p.type === 'text') return p;
+    const match = p.image_url.url.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (match) return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
+    return { type: 'text', text: '[image unavailable]' };
+  });
+}
+
 async function chatAnthropic(
   apiBase: string, apiKey: string, model: string,
   messages: ChatMessage[], signal?: AbortSignal
@@ -123,16 +135,6 @@ async function chatAnthropic(
 
   // Strip /v1 suffix to avoid double /v1 path when appending /v1/messages
   const base = normalizeApiBase(apiBase).replace(/\/v\d+.*$/, '');
-  // Convert OpenAI-style content parts to Anthropic format
-  const toAnthropicContent = (content: string | ContentPart[]) => {
-    if (typeof content === 'string') return content;
-    return content.map(p => {
-      if (p.type === 'text') return p;
-      const match = p.image_url.url.match(/^data:(image\/\w+);base64,(.+)$/);
-      if (match) return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
-      return { type: 'text', text: '[image unavailable]' };
-    });
-  };
   const body: Record<string, unknown> = {
     model,
     max_tokens: 4096,
@@ -414,7 +416,7 @@ export async function chatWithReconnect(
     const body: Record<string, unknown> = {
       model,
       max_tokens: 4096,
-      messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
+      messages: nonSystem.map(m => ({ role: m.role, content: toAnthropicContent(m.content) })),
       stream: true,
     };
     if (systemText) body.system = systemText;

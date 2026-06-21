@@ -650,3 +650,6 @@
 - 测试健康: 454 tests (426 lib + 12 agent + 16 cli) 全部通过, clippy 干净
 - Mobile 依赖: 3 个 minor 更新可用 (async-storage 2→3 major 跳过, react-native 0.85→0.86 minor 跳过, safe-area-context 5.7→5.8 minor 跳过)
 - 项目状态: 1 open PR (#1273), v0.3.34
+
+## 维护维护结果
+- PR #1273 ✅ 已合并: cargo-audit install 重试逻辑 (windows-installers.yml + ci.yml)

@@ -1811,6 +1811,7 @@ async fn handle_mcp_request(
                 "notes.create" => mcp_call_notes_create(context, arguments),
                 "notes.delete" => mcp_call_notes_delete(context, arguments),
                 "notes.search" => mcp_call_notes_search(context, arguments),
+                "notes.related" => mcp_call_notes_related(context, arguments),
                 "notes.import" => mcp_call_notes_import(context, arguments),
                 "index.rebuild" => mcp_call_index_rebuild(context),
                 "ask" => mcp_call_ask(context, arguments).await,
@@ -2477,6 +2478,27 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
+            "name": "notes.related",
+            "title": "Related Notes",
+            "description": "Find notes related to a given note. Returns ranked results with relevance scores.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "string", "description": "Note ID to find related notes for." },
+                    "limit": { "type": "integer", "default": 5, "description": "Maximum results to return." }
+                },
+                "required": ["note_id"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Related Notes",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
             "name": "notes.import",
             "title": "Import Notes",
             "description": "Import Markdown files from local paths into the vault.",
@@ -2805,6 +2827,28 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
             mcp_tool_success(
                 format!("Found {count} note(s)."),
                 serde_json::to_value(&result).unwrap_or_default(),
+            )
+        }
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+    }
+}
+
+fn mcp_call_notes_related(context: &StorageContext, arguments: Value) -> Value {
+    let note_id = match arguments.get("note_id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => return mcp_tool_error("notes.related requires 'note_id' parameter".to_string()),
+    };
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(5)
+        .min(20) as usize;
+    match find_related_notes_with_context(context, &note_id, limit) {
+        Ok(results) => {
+            let count = results.len();
+            mcp_tool_success(
+                format!("Found {count} related note(s)."),
+                serde_json::to_value(&results).unwrap_or_default(),
             )
         }
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),

@@ -1136,7 +1136,10 @@ async fn http_search_notes(
     require_bridge_token(&state, &headers)?;
     let query_text = params.get("q").cloned().unwrap_or_default();
     if query_text.is_empty() {
-        return Err(openai_error(StatusCode::BAD_REQUEST, "Missing 'q' parameter"));
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "Missing 'q' parameter",
+        ));
     }
     let limit: usize = params
         .get("limit")

@@ -30,8 +30,7 @@
       "expo-splash-screen",
       "./plugins/withQuickSettingsTile.js",
       "./plugins/withDesktopWidget.js",
-      "expo-speech-recognition",
-      "./plugins/withVoiceLibFix.js"
+      "expo-speech-recognition"
     ],
     "extra": {
       "eas": {

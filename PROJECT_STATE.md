@@ -541,3 +541,10 @@
 - PR #1230: refactor(WinUI): extract Chat partial class — ❌ winui-build 失败 (CS0103: _isShuttingDown, LogStartup)
 - PR #1228: refactor(storage): extract chat session module — ❌ cargo fmt 失败
 - 发版: v0.3.32 (5 PR 合并)
+
+## 修复阶段 fix-1 (循环#244)
+- SearchScreen fmtTime duplication → PR #1235 (use shared utility from utils/timeFormat.ts)
+- updateChecker compareSemver unit tests → PR #1236 (9 test cases)
+- Closed 10 stale feature issues already implemented: #882(设置页), #879(对话核心), #881(对话管理), #883(笔记编辑器), #884(笔记管理), #975(文件夹分类), #978(置顶/归档), #888(主题系统), #891(EAS Build), #979(duplicate voice input)
+- cargo test 16 passed, mobile jest 160 passed (13 suites)
+- 项目状态: 14 open feature issues, 4 open PR (#1228, #1230, #1235, #1236), ~1236 PR 编号, v0.3.32

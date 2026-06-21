@@ -643,3 +643,10 @@
 - Clippy 修复: sort_by → sort_by_key, empty_line_after_doc_comments
 - 发版: v0.3.33 → v0.3.34 (6 PR 合并)
 - 项目状态: 0 open PR, v0.3.34
+
+## 维护 maintenance (循环#256)
+- CI 修复: cargo-audit install 添加重试逻辑 (PR #1273) — 修复 Windows Installers v0.3.34 发布失败
+- 依赖检查: cargo outdated 无过时依赖, cargo audit 无安全漏洞
+- 测试健康: 454 tests (426 lib + 12 agent + 16 cli) 全部通过, clippy 干净
+- Mobile 依赖: 3 个 minor 更新可用 (async-storage 2→3 major 跳过, react-native 0.85→0.86 minor 跳过, safe-area-context 5.7→5.8 minor 跳过)
+- 项目状态: 1 open PR (#1273), v0.3.34

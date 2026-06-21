@@ -283,8 +283,9 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     setStreaming(true);
 
     try {
-      // RAG: search notes for relevant context before sending
-      const noteContext = await buildNoteContext(userText);
+      // RAG: search notes for relevant context, considering recent conversation
+      const recentTexts = prevMsgs.slice(-6).map(m => m.content).filter(Boolean);
+      const noteContext = await buildNoteContext(userText, recentTexts);
       const systemPrompt = buildSystemPrompt(noteContext);
 
       const history = buildHistory(prevMsgs, systemPrompt, userContent);

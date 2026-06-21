@@ -9,6 +9,8 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../utils/updateChecker';
+import { exportSettings, importSettings } from '../utils/settingsSync';
+import * as Clipboard from 'expo-clipboard';
 import { getServerConfig, setServerConfig, syncNotesFromServer, getLastSyncTime } from '../services/sync';
 
 const THEME_KEY = 'cfg_theme_mode';
@@ -436,6 +438,40 @@ export default function SettingsScreen() {
           上次同步: {new Date(lastSync).toLocaleString()}
         </Text>
       )}
+
+      {/* ── Settings Export/Import (#1222) ── */}
+      <View style={{ marginTop: 20, gap: 8 }}>
+        <Text style={[s.sectionTitle, { color: c.text, marginBottom: 8 }]}>设置同步</Text>
+        <TouchableOpacity
+          style={[s.btn, { backgroundColor: store.accentColor + '15', borderColor: store.accentColor }]}
+          onPress={async () => {
+            try {
+              const json = await exportSettings(false);
+              await Clipboard.setStringAsync(json);
+              Alert.alert('已复制', '设置已复制到剪贴板（不含 API Key）\n在其他设备粘贴导入即可');
+            } catch (e) {
+              Alert.alert('导出失败', String(e));
+            }
+          }}
+        >
+          <Text style={[s.btnText, { color: store.accentColor }]}>📤 导出设置</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.btn, { borderColor: c.border }]}
+          onPress={async () => {
+            try {
+              const json = await Clipboard.getStringAsync();
+              if (!json.trim()) { Alert.alert('剪贴板为空'); return; }
+              const result = await importSettings(json);
+              Alert.alert('导入成功', `已导入 ${result.providersImported} 个 Provider 配置\n请重启应用生效`);
+            } catch (e) {
+              Alert.alert('导入失败', '剪贴板内容不是有效的设置 JSON');
+            }
+          }}
+        >
+          <Text style={[s.btnText, { color: c.text }]}>📥 从剪贴板导入</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={s.versionRow}>
         <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>

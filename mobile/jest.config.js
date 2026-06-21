@@ -11,6 +11,5 @@ module.exports = {
     '^expo-file-system$': '<rootDir>/src/__mocks__/expo-file-system.ts',
     '^expo-intent-launcher$': '<rootDir>/src/__mocks__/expo-intent-launcher.ts',
     '^react-native$': '<rootDir>/src/__mocks__/react-native.ts',
-    '^@react-native-voice/voice$': '<rootDir>/src/__mocks__/@react-native-voice/voice.ts',
   },
 };

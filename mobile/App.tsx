@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
+import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet, Linking } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer, LinkingOptions } from '@react-navigation/native';
@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
 import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import { autoSyncOnStartup } from './src/services/sync';
 import appJson from './app.json';
 import { checkForUpdate, downloadAndInstall, type UpdateInfo } from './src/utils/updateChecker';
 
@@ -124,6 +125,8 @@ export default function App() {
     (async () => {
       try {
         await getDb(); // Initialize database
+        // Auto-sync with backend if configured (non-blocking)
+        autoSyncOnStartup();
       } catch (e) {
         console.error('[App] DB init failed:', e);
         setErrorMsg(String(e));
@@ -183,7 +186,6 @@ export default function App() {
   const handleUpdate = async () => {
     if (!updateInfo?.apkUrl) {
       if (updateInfo?.releaseUrl) {
-        const { Linking } = require('react-native');
         Linking.openURL(updateInfo.releaseUrl);
       }
       return;

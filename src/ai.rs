@@ -2386,10 +2386,18 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
         let rt = tokio::runtime::Runtime::new().unwrap();
-        assert!(rt.block_on(validate_base_url("http://192.168.1.1/api")).is_err());
-        assert!(rt.block_on(validate_base_url("http://10.0.0.1/api")).is_err());
-        assert!(rt.block_on(validate_base_url("http://172.16.0.1/api")).is_err());
-        assert!(rt.block_on(validate_base_url("http://127.0.0.1/api")).is_err());
+        assert!(rt
+            .block_on(validate_base_url("http://192.168.1.1/api"))
+            .is_err());
+        assert!(rt
+            .block_on(validate_base_url("http://10.0.0.1/api"))
+            .is_err());
+        assert!(rt
+            .block_on(validate_base_url("http://172.16.0.1/api"))
+            .is_err());
+        assert!(rt
+            .block_on(validate_base_url("http://127.0.0.1/api"))
+            .is_err());
     }
 
     // ── is_private_ip ──────────────────────────────────────────────────

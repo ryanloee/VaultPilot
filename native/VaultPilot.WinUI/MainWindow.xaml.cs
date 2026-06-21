@@ -2,6 +2,7 @@
 using VaultPilot.WinUI.Controls;
 using VaultPilot.WinUI.Models;
 using VaultPilot.WinUI.Views;
+using Microsoft.UI;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;

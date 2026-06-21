@@ -11,6 +11,7 @@ using System.Linq;
 using System.Threading;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
+using Windows.System;
 
 namespace VaultPilot.WinUI;
 

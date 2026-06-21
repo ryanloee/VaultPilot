@@ -632,3 +632,14 @@
 - #1222: 设置导出/导入 → PR #1269 ✅ (settingsSync.ts + SettingsScreen 剪贴板导出/导入)
 - 测试: 27 新增回归测试, 全套 337 tests / 26 suites 通过
 - 项目状态: 3 open PR (#1267-#1269), 3 open feature issues (#1223,#914,#913), v0.3.33
+
+## PR 审核 review (循环#255)
+- #914: 主动知识推送 find_related_notes → PR #1270 ✅ (storage + CLI, clippy 修复后合并)
+- #1223: 插件系统 VaultPlugin trait → PR #1271 ✅ (PluginManager + 5 tests)
+- #914: MCP notes.related + HTTP endpoint → PR #1272 ✅ (MCP tool + REST API, 依赖 #1270 rebase 后合并)
+- #1222: 设置导出/导入 → PR #1269 ✅ (settingsSync.ts + 剪贴板)
+- #1221: 自动标签 → PR #1268 ✅ (autoTag.ts TF 关键词)
+- #1220: 离线编辑队列 → PR #1267 ✅ (offlineSync.ts + banner, 解决合并冲突后合并)
+- Clippy 修复: sort_by → sort_by_key, empty_line_after_doc_comments
+- 发版: v0.3.33 → v0.3.34 (6 PR 合并)
+- 项目状态: 0 open PR, v0.3.34

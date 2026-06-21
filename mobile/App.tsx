@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
 import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import { autoSyncOnStartup } from './src/services/sync';
 
 import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
@@ -119,6 +120,8 @@ export default function App() {
     (async () => {
       try {
         await getDb(); // Initialize database
+        // Auto-sync with backend if configured (non-blocking)
+        autoSyncOnStartup();
       } catch (e) {
         console.error('[App] DB init failed:', e);
         setErrorMsg(String(e));

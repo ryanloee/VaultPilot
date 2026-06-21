@@ -154,7 +154,12 @@ jobs:
           git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: |
+          for i in 1 2 3; do
+            cargo install cargo-audit --locked && break
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Run cargo audit
         run: cargo audit

@@ -74,6 +74,17 @@ jobs:
       - name: Expo prebuild (generate native project)
         run: npx expo prebuild --platform android --no-install
 
+      - name: Patch deprecated RN native modules for Gradle 9
+        run: |
+          VOICE_GRADLE="node_modules/@react-native-voice/voice/android/build.gradle"
+          if [ -f "$VOICE_GRADLE" ]; then
+            sed -i 's/jcenter()/mavenCentral()/g' "$VOICE_GRADLE"
+            sed -i 's/compileSdkVersion /compileSdk /g' "$VOICE_GRADLE"
+            sed -i 's/targetSdkVersion /targetSdk /g' "$VOICE_GRADLE"
+            sed -i 's/minSdkVersion /minSdk /g' "$VOICE_GRADLE"
+            echo "Patched $VOICE_GRADLE"
+          fi
+
       - name: Build APK
         run: |
           cd android

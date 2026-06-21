@@ -513,20 +513,29 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
 
       {/* Input bar */}
       <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
-        <TouchableOpacity
-          style={[s.attachBtn, { borderColor: c.border }]}
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            Alert.alert('添加附件', '', [
-              { text: '📷 拍照', onPress: takePhoto },
-              { text: '🖼 相册', onPress: pickImage },
-              { text: '📄 文件', onPress: pickDocument },
-              { text: '取消', style: 'cancel' },
-            ]);
-          }}
-        >
-          <Text style={{ color: c.textSecondary, fontSize: 18 }}>📎</Text>
-        </TouchableOpacity>
+        <View style={s.quickActions}>
+          <TouchableOpacity
+            style={[s.quickBtn, { borderColor: c.border }]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); takePhoto(); }}
+            accessibilityRole="button" accessibilityLabel="拍照"
+          >
+            <Text style={{ fontSize: 16 }}>📷</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[s.quickBtn, { borderColor: c.border }]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); pickImage(); }}
+            accessibilityRole="button" accessibilityLabel="从相册选择"
+          >
+            <Text style={{ fontSize: 16 }}>🖼</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[s.quickBtn, { borderColor: c.border }]}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); pickDocument(); }}
+            accessibilityRole="button" accessibilityLabel="选择文件"
+          >
+            <Text style={{ fontSize: 16 }}>📄</Text>
+          </TouchableOpacity>
+        </View>
         <TextInput
           style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
           value={input}
@@ -571,6 +580,14 @@ const s = StyleSheet.create({
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',
     padding: 8, borderTopWidth: 1,
+  },
+  quickActions: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: 6,
+  },
+  quickBtn: {
+    width: 34, height: 34, borderRadius: 17,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1,
   },
   attachBtn: {
     width: 40, height: 40, borderRadius: 20,

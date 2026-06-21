@@ -1180,6 +1180,62 @@ public sealed partial class MainWindow : Window
         ComposerProgressRing.Visibility = Visibility.Collapsed;
     }
 
+    private volatile bool _isShuttingDown;
+
+    private static string StartupLogPath()
+    {
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "com.local.vaultpilot");
+        Directory.CreateDirectory(root);
+        return Path.Combine(root, "startup.log");
+    }
+
+    private static async Task LogStartup(string message)
+    {
+        try
+        {
+            var line = $"{DateTimeOffset.Now:O} {message}";
+            await File.AppendAllTextAsync(StartupLogPath(), line + Environment.NewLine, System.Text.Encoding.UTF8);
+        }
+        catch
+        {
+            // Ignore logging failures.
+        }
+    }
+
+    private async Task UpdateStartupStepAsync(string step)
+    {
+        try
+        {
+            _startupStep = step;
+            UpdateStatusBar("info", "正在启动", $"{step}...");
+            await LogStartup($"Step: {step}");
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine($"[UpdateStartupStepAsync] Error: {error}");
+        }
+    }
+
+    private async Task ShowStartupFailureAsync(Exception error, string stderrTail)
+    {
+        var detail = LocalizeError(error.Message);
+        if (!string.IsNullOrWhiteSpace(stderrTail))
+        {
+            detail = $"{detail}\n\n后端日志:\n{stderrTail}";
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = RootGrid.XamlRoot,
+            Title = "启动失败",
+            Content = $"无法连接本地后端：{detail}",
+            CloseButtonText = "关闭"
+        };
+        await dialog.ShowAsync();
+    }
+
     private void ShowError(string title, Exception error, bool addMessage = true)
     {
         UpdateStatusBar("error", title, LocalizeError(error.Message));

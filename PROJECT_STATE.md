@@ -517,3 +517,8 @@
 - 合并 PR: #1204 (flaky validate_base_url test ENV_MUTEX 修复), #1211 (mobile client.ts 单元测试), #1210 (mobile rag.ts RAG 逻辑单元测试)
 - 发版: v0.3.30 (tag 已推送)
 - 累计: ~1211 PR 编号
+
+## 修复阶段 fix-2 (循环#240)
+- #1212: storage.rs Phase 1 backup 模块提取 → PR #1216（4 个回归测试 ✅）
+- #1214: ChatScreen 纯逻辑提取 + 19 个单元测试 → PR #1217（refactor + test ✅）
+- cargo build/test/clippy ✅, mobile jest 116 tests ✅

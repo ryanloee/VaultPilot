@@ -30,10 +30,11 @@ function isChinese(): boolean {
  */
 function extractKeywords(text: string): string[] {
   const stopWords = new Set([
-    '的', '了', '是', '在', '我', '有', '和', '就', '不', '人', '都', '一', '一个',
-    '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好',
-    '自己', '这', '他', '她', '它', '们', '那', '些', '什么', '怎么', '如何', '请',
-    '帮', '我', '记录', '一下', '告诉', '知道', '可以', '能', '吗', '呢', '啊',
+    // Only filter grammatical particles and pronouns, keep meaningful CJK words
+    '的', '了', '是', '在', '我', '和', '就', '不', '都', '也', '到', '着',
+    '这', '他', '她', '它', '们', '那', '些', '吗', '呢', '啊', '吧',
+    '把', '被', '从', '而', '或', '及', '其', '且', '因', '但', '如', '所',
+    '之', '乎', '矣', '哉',
     'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
     'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'shall',
     'should', 'may', 'might', 'can', 'could', 'i', 'you', 'he', 'she',
@@ -61,7 +62,21 @@ function extractKeywords(text: string): string[] {
       return isCJK ? t.length >= 1 : t.length >= 2;
     });
 
-  return [...new Set(tokens)].slice(0, 10);
+  const result = [...new Set(tokens)].slice(0, 10);
+  // If no keywords extracted, try with relaxed filtering (keep all CJK chars >= 1)
+  if (result.length === 0) {
+    const relaxed = text
+      .split(/[\s,\u3002\uff0e.!\uff01?\uff1f;\uff1b:\uff1a\u3001\n\r]+/)
+      .flatMap(t => t.split(/(?<=[一-鿿])(?=[^一-鿿])|(?<=[^一-鿿])(?=[一-鿿])/))
+      .map(t => t.trim().toLowerCase())
+      .filter(t => {
+        if (!t) return false;
+        const isCJK = /[\u4e00-\u9fff]/.test(t);
+        return isCJK ? t.length >= 2 : t.length >= 3;
+      });
+    return [...new Set(relaxed)].slice(0, 10);
+  }
+  return result;
 }
 
 /**
@@ -71,7 +86,11 @@ function extractKeywords(text: string): string[] {
 export async function buildNoteContext(userMessage: string): Promise<string | null> {
   try {
     const keywords = extractKeywords(userMessage);
-    if (keywords.length === 0) return null;
+    console.log('[RAG] Keywords extracted:', keywords);
+    if (keywords.length === 0) {
+      console.log('[RAG] No keywords extracted from message, skipping note search');
+      return null;
+    }
 
     const seen = new Set<string>();
     const results: DbNote[] = [];
@@ -90,6 +109,7 @@ export async function buildNoteContext(userMessage: string): Promise<string | nu
       if (results.length >= MAX_CONTEXT_NOTES) break;
     }
 
+    console.log('[RAG] Found', results.length, 'relevant notes');
     if (results.length === 0) return null;
 
     const blocks = results.map(n => {

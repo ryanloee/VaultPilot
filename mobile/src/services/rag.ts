@@ -81,11 +81,16 @@ function extractKeywords(text: string): string[] {
 
 /**
  * Search notes relevant to the user's message and build context string.
+ * Optionally considers recent conversation history for better keyword extraction.
  * Returns null if no relevant notes found.
  */
-export async function buildNoteContext(userMessage: string): Promise<string | null> {
+export async function buildNoteContext(userMessage: string, recentMessages?: string[]): Promise<string | null> {
   try {
-    const keywords = extractKeywords(userMessage);
+    // Extract keywords from current message + recent conversation history
+    const allText = recentMessages && recentMessages.length > 0
+      ? recentMessages.join(' ') + ' ' + userMessage
+      : userMessage;
+    const keywords = extractKeywords(allText);
     console.log('[RAG] Keywords extracted:', keywords);
     if (keywords.length === 0) {
       console.log('[RAG] No keywords extracted from message, skipping note search');

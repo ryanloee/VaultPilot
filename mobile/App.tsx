@@ -194,4 +194,4 @@ export default function App() {
       </ErrorBoundary>
     </SafeAreaProvider>
   );
-
+}

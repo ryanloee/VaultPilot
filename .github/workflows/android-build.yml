@@ -86,6 +86,13 @@ jobs:
             sed -i 's/minSdkVersion .*/minSdk 24/' "$VOICE_GRADLE"
             echo "Patched $VOICE_GRADLE"
           fi
+          # Enable Jetifier for old Support Library deps (voice lib uses appcompat-v7)
+          if [ -f android/gradle.properties ]; then
+            if ! grep -q "enableJetifier" android/gradle.properties; then
+              echo "android.enableJetifier=true" >> android/gradle.properties
+              echo "Added enableJetifier"
+            fi
+          fi
 
       - name: Build APK
         run: |

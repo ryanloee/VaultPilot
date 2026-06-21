@@ -8,7 +8,7 @@ import { checkApi, getSettings, saveSettings } from '../api/client';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
-import { checkForUpdate, type UpdateInfo } from '../utils/updateChecker';
+import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../utils/updateChecker';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
@@ -95,18 +95,6 @@ export default function SettingsScreen() {
       } catch (e) {
         console.warn('[Settings] Failed to load:', e);
       }
-    })();
-
-    // Auto-check for updates (once per mount)
-    (async () => {
-      try {
-        const skipVersion = await AsyncStorage.getItem(SKIP_UPDATE_KEY);
-        const info = await checkForUpdate(appJson.expo.version);
-        if (info && info.latestVersion !== skipVersion) {
-          setUpdateInfo(info);
-          setShowUpdateModal(true);
-        }
-      } catch {}
     })();
   }, []);
 
@@ -403,10 +391,13 @@ export default function SettingsScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.modalClose, { borderColor: store.accentColor, backgroundColor: store.accentColor + '15', flex: 1 }]}
-                onPress={() => {
-                  const url = updateInfo.apkUrl ?? updateInfo.releaseUrl;
-                  Linking.openURL(url);
+                onPress={async () => {
                   setShowUpdateModal(false);
+                  if (updateInfo.apkUrl) {
+                    await downloadAndInstall(updateInfo.apkUrl, updateInfo.latestVersion);
+                  } else {
+                    Linking.openURL(updateInfo.releaseUrl);
+                  }
                 }}
               >
                 <Text style={{ color: store.accentColor, fontWeight: '600' }}>

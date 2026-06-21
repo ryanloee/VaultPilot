@@ -1,15 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
+import { StatusBar, useColorScheme, Text, View, TouchableOpacity, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
+import { useAppStore, isValidThemeMode } from './src/store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
 import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import appJson from './app.json';
+import { checkForUpdate, downloadAndInstall, type UpdateInfo } from './src/utils/updateChecker';
 
 import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
@@ -26,6 +28,26 @@ const ONBOARDING_KEY = 'cfg_onboarding_done';
 const Tab = createBottomTabNavigator<RootTabParamList>();
 const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
 const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
+
+const linking: LinkingOptions<RootTabParamList> = {
+  prefixes: ['vaultpilot://'],
+  config: {
+    screens: {
+      Chat: {
+        screens: {
+          ChatMain: 'chat',
+          Sessions: 'chat/sessions',
+        },
+      },
+      Notes: {
+        screens: {
+          NotesList: 'note',
+          NoteEdit: 'note/:noteId',
+        },
+      },
+    },
+  },
+};
 
 SplashScreen.preventAutoHideAsync();
 
@@ -86,18 +108,20 @@ function TabIcon({ label, color }: { label: string; color: string }) {
 }
 
 export default function App() {
-  const { isDark, setIsDark, themeMode, accentColor } = useAppStore();
+  const { isDark, setIsDark, themeMode } = useAppStore();
   const systemScheme = useColorScheme();
   const [initState, setInitState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
-  const [onboardingDone, setOnboardingDone] = useState(true); // default true until checked
+  const [onboardingDone, setOnboardingDone] = useState(true);
   const loadedRef = useRef(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [downloadPct, setDownloadPct] = useState<number | null>(null);
+  const [dismissed, setDismissed] = useState(false);
 
-  // Load saved settings on startup
   useEffect(() => {
     (async () => {
       try {
-        await getDb(); // Initialize database
+        await getDb();
       } catch (e) {
         console.error('[App] DB init failed:', e);
         setErrorMsg(String(e));
@@ -106,11 +130,9 @@ export default function App() {
         return;
       }
       try {
-        // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
         const apiSettings = await getSettings();
         useAppStore.getState().setApiSettings(apiSettings);
 
-        // Load theme settings from cfg_* keys
         const [savedTheme, savedColor] = await Promise.all([
           AsyncStorage.getItem('cfg_theme_mode'),
           AsyncStorage.getItem('cfg_accent_color'),
@@ -125,7 +147,6 @@ export default function App() {
         }
         if (savedColor) useAppStore.getState().setAccentColor(savedColor);
 
-        // Check onboarding status
         const onboardingStatus = await AsyncStorage.getItem(ONBOARDING_KEY);
         setOnboardingDone(onboardingStatus === 'true');
       } catch (e) {
@@ -134,15 +155,44 @@ export default function App() {
       loadedRef.current = true;
       setInitState('ready');
       await SplashScreen.hideAsync();
+
+      // Auto-check for update after app ready (non-blocking)
+      try {
+        const currentVer = appJson.expo.version;
+        const skipVer = await AsyncStorage.getItem('cfg_skip_update');
+        const info = await checkForUpdate(currentVer);
+        if (info && info.latestVersion !== skipVer) {
+          setUpdateInfo(info);
+        }
+      } catch {}
     })();
   }, []);
 
-  // Follow system theme — only after initial load to avoid overriding saved preference
   useEffect(() => {
     if (loadedRef.current && themeMode === 'system') {
       setIsDark(systemScheme === 'dark');
     }
   }, [systemScheme, themeMode]);
+
+  const handleUpdate = async () => {
+    if (!updateInfo?.apkUrl) {
+      if (updateInfo?.releaseUrl) {
+        const { Linking } = require('react-native');
+        Linking.openURL(updateInfo.releaseUrl);
+      }
+      return;
+    }
+    setDownloadPct(0);
+    const ok = await downloadAndInstall(updateInfo.apkUrl, updateInfo.latestVersion, setDownloadPct);
+    if (!ok) setDownloadPct(null);
+  };
+
+  const handleSkipUpdate = async () => {
+    if (updateInfo) {
+      await AsyncStorage.setItem('cfg_skip_update', updateInfo.latestVersion);
+    }
+    setDismissed(true);
+  };
 
   if (initState === 'error') {
     return (
@@ -166,7 +216,28 @@ export default function App() {
         {initState === 'ready' && !onboardingDone ? (
           <OnboardingScreen onComplete={() => setOnboardingDone(true)} />
         ) : (
-          <NavigationContainer>
+          <NavigationContainer linking={linking}>
+            {updateInfo && !dismissed && (
+              <View style={[styles.updateBanner, { backgroundColor: isDark ? '#1E3A5F' : '#EFF6FF' }]}>
+                <Text style={[styles.updateText, { color: isDark ? '#93C5FD' : '#1D4ED8' }]}>
+                  📦 v{updateInfo.latestVersion} 可用
+                </Text>
+                {downloadPct !== null ? (
+                  <Text style={[styles.updateText, { color: isDark ? '#86EFAC' : '#15803D' }]}>
+                    下载中 {downloadPct}%
+                  </Text>
+                ) : (
+                  <View style={styles.updateButtons}>
+                    <TouchableOpacity onPress={handleUpdate} style={styles.updateBtn}>
+                      <Text style={styles.updateBtnText}>更新</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={handleSkipUpdate} style={[styles.updateBtn, { backgroundColor: 'transparent' }]}>
+                      <Text style={[styles.updateBtnText, { color: isDark ? '#9CA3AF' : '#6B7280' }]}>跳过</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+            )}
             <MainTabs />
           </NavigationContainer>
         )}
@@ -174,3 +245,36 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  updateBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginHorizontal: 8,
+    marginTop: 4,
+    borderRadius: 8,
+  },
+  updateText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  updateButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  updateBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    backgroundColor: '#3B82F6',
+    borderRadius: 6,
+  },
+  updateBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+});

@@ -24,7 +24,8 @@
     "plugins": [
       "expo-sqlite",
       "expo-secure-store",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "./plugins/withVoiceLibFix.js"
     ],
     "extra": {
       "eas": {

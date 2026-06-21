@@ -17,8 +17,11 @@ import NotesScreen from './src/screens/NotesScreen';
 import NoteEditorScreen from './src/screens/NoteEditorScreen';
 import SearchScreen from './src/screens/SearchScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
 
 import type { ChatStackParamList, NotesStackParamList, RootTabParamList } from './src/navigation/types';
+
+const ONBOARDING_KEY = 'cfg_onboarding_done';
 
 const Tab = createBottomTabNavigator<RootTabParamList>();
 const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
@@ -87,6 +90,7 @@ export default function App() {
   const systemScheme = useColorScheme();
   const [initState, setInitState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
+  const [onboardingDone, setOnboardingDone] = useState(true); // default true until checked
   const loadedRef = useRef(false);
 
   // Load saved settings on startup
@@ -120,6 +124,10 @@ export default function App() {
           }
         }
         if (savedColor) useAppStore.getState().setAccentColor(savedColor);
+
+        // Check onboarding status
+        const onboardingStatus = await AsyncStorage.getItem(ONBOARDING_KEY);
+        setOnboardingDone(onboardingStatus === 'true');
       } catch (e) {
         console.warn('[App] Failed to load settings:', e);
       }
@@ -155,9 +163,13 @@ export default function App() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <NavigationContainer>
-          <MainTabs />
-        </NavigationContainer>
+        {initState === 'ready' && !onboardingDone ? (
+          <OnboardingScreen onComplete={() => setOnboardingDone(true)} />
+        ) : (
+          <NavigationContainer>
+            <MainTabs />
+          </NavigationContainer>
+        )}
       </ErrorBoundary>
     </SafeAreaProvider>
   );

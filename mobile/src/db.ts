@@ -82,6 +82,12 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
           PRIMARY KEY (note_id, tag),
           FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS pending_syncs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          note_id TEXT NOT NULL,
+          action TEXT NOT NULL DEFAULT 'update',
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
       // FTS5 virtual tables — gracefully degrade if device SQLite lacks FTS5
@@ -426,4 +432,43 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
   return [...noteResults, ...sessionResults]
     .sort((a, b) => b.updated_at - a.updated_at)
     .slice(0, limit);
+}
+
+// ── Offline Sync Queue (#1220) ──────────────────────────────
+
+/** Queue a note for sync when back online. */
+export async function queuePendingSync(noteId: string, action = 'update'): Promise<void> {
+  const db = await getDb();
+  // Deduplicate: only one pending entry per note
+  await db.runAsync(
+    'INSERT OR REPLACE INTO pending_syncs (note_id, action) VALUES (?, ?)',
+    [noteId, action]
+  );
+}
+
+/** Count of notes waiting to sync. */
+export async function getPendingSyncCount(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM pending_syncs');
+  return row?.c ?? 0;
+}
+
+/** Get all pending sync entries. */
+export async function getPendingSyncs(): Promise<Array<{ id: number; note_id: string; action: string }>> {
+  const db = await getDb();
+  return db.getAllAsync<{ id: number; note_id: string; action: string }>(
+    'SELECT * FROM pending_syncs ORDER BY created_at ASC'
+  );
+}
+
+/** Remove a pending sync entry after successful sync. */
+export async function clearPendingSync(noteId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM pending_syncs WHERE note_id = ?', [noteId]);
+}
+
+/** Remove all pending sync entries (e.g. after full sync). */
+export async function clearAllPendingSyncs(): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('DELETE FROM pending_syncs');
 }

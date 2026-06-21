@@ -335,13 +335,22 @@ export async function searchNotes(query: string): Promise<DbNote[]> {
   }
   const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
   if (!ftsQuery) return [];
-  return db.getAllAsync<DbNote>(
+  const ftsResults = await db.getAllAsync<DbNote>(
     `SELECT n.* FROM notes n
      INNER JOIN notes_fts fts ON n.rowid = fts.rowid
      WHERE notes_fts MATCH ?
      ORDER BY n.updated_at DESC LIMIT 50`,
     [ftsQuery]
   );
+  // Fallback to LIKE search if FTS returns no results (common with CJK text)
+  if (ftsResults.length === 0) {
+    const escaped = escapeLikePattern(query);
+    return db.getAllAsync<DbNote>(
+      `SELECT * FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\' ORDER BY updated_at DESC LIMIT 50`,
+      [`%${escaped}%`, `%${escaped}%`]
+    );
+  }
+  return ftsResults;
 }
 
 export interface GlobalSearchResult {

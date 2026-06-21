@@ -600,3 +600,10 @@
   - P2: #1220 (离线模式) + #889 (键盘增强)
   - P3: 插件/Agent/同步等长期功能
 - 下个 fix 阶段目标：#1242 + #973
+
+## 修复阶段 fix-1 (循环#250)
+- #973: 附件渲染 — message bubbles 显示附件指示器 + attachments 列迁移 + MIME 类型推断 → PR #1253 (15 tests)
+- RAG 上下文改进 — buildNoteContext 支持最近对话历史关键词提取 → PR #1254 (2 tests)
+- Anthropic 图片格式修复 — chatWithReconnect 的 toAnthropicContent 统一转换 → PR #1255 (7 tests)
+- cargo test 16 passed, mobile jest 267 passed (18 suites), clippy clean
+- 项目状态: 14 open feature issues, 3 open PR (#1253,#1254,#1255), ~1255 PR 编号, v0.3.33

@@ -248,7 +248,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           const newId = await createSession('新对话');
           setSessionId(newId);
           activeSessionId = newId;
-          userId = await addMessage(newId, 'user', userText);
+          userId = await addMessage(newId, 'user', userText, attMeta);
         } catch (e2) {
           console.warn('[Chat] addMessage retry failed:', e2);
           Alert.alert('发送失败', '无法创建对话，请重试');

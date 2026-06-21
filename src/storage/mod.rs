@@ -3270,7 +3270,7 @@ fn make_fts_query(text: &str) -> String {
 /// plus all chat sessions (as a single chat-sessions.json).
 ///
 /// The resulting zip has the structure:
-///   notes/<title>.md  (one file per note)
+///   notes/`<title>`.md  (one file per note)
 ///   chat-sessions.json  (all sessions in one JSON file)
 pub fn vault_export_with_context(
     context: &StorageContext,

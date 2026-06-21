@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
@@ -26,6 +26,27 @@ const ONBOARDING_KEY = 'cfg_onboarding_done';
 const Tab = createBottomTabNavigator<RootTabParamList>();
 const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
 const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
+
+/** Deep link config for Quick Settings Tile (#893) and Desktop Widget (#892) */
+const linking: LinkingOptions<RootTabParamList> = {
+  prefixes: ['vaultpilot://'],
+  config: {
+    screens: {
+      Chat: {
+        screens: {
+          ChatMain: 'chat',
+          Sessions: 'chat/sessions',
+        },
+      },
+      Notes: {
+        screens: {
+          NotesList: 'note',
+          NoteEdit: 'note/:noteId',
+        },
+      },
+    },
+  },
+};
 
 SplashScreen.preventAutoHideAsync();
 
@@ -166,11 +187,11 @@ export default function App() {
         {initState === 'ready' && !onboardingDone ? (
           <OnboardingScreen onComplete={() => setOnboardingDone(true)} />
         ) : (
-          <NavigationContainer>
+          <NavigationContainer linking={linking}>
             <MainTabs />
           </NavigationContainer>
         )}
       </ErrorBoundary>
     </SafeAreaProvider>
   );
-}
+

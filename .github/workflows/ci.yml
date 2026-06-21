@@ -23,6 +23,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Auto-merge main (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -49,6 +60,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Auto-merge main (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -75,6 +97,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Auto-merge main (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -108,6 +141,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Auto-merge main (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -120,6 +164,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Auto-merge main (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -140,6 +196,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Auto-merge main (PR only)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5

@@ -17,6 +17,7 @@ import { buildNoteContext, buildSystemPrompt, parseToolCalls, executeSave } from
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 import type { ChatScreenProps } from '../navigation/types';
 import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview, MAX_HISTORY_MESSAGES } from '../utils/chatHelpers';
+import { useVoiceInput } from '../utils/useVoiceInput';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
@@ -78,6 +79,15 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const abortRef = useRef<AbortController | null>(null);
   const listRef = useRef<FlatList>(null);
   const msgsRef = useRef<Msg[]>([]);
+  const voice = useVoiceInput();
+
+  // Append voice transcript to input when recognition completes
+  useEffect(() => {
+    if (voice.transcript && !voice.isListening) {
+      setInput(prev => prev ? `${prev} ${voice.transcript}` : voice.transcript);
+      voice.setTranscript('');
+    }
+  }, [voice.transcript, voice.isListening]);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -513,6 +523,20 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           onSubmitEditing={send}
           accessibilityLabel="消息输入框"
         />
+        {/* Voice input button */}
+        {voice.isAvailable && !streaming && (
+          <TouchableOpacity
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              voice.isListening ? voice.stopListening() : voice.startListening();
+            }}
+            style={[s.sendBtn, { backgroundColor: voice.isListening ? '#EF4444' : c.border }]}
+            accessibilityRole="button"
+            accessibilityLabel={voice.isListening ? '停止录音' : '语音输入'}
+          >
+            <Text style={s.sendText}>{voice.isListening ? '⏹' : '🎤'}</Text>
+          </TouchableOpacity>
+        )}
         {streaming ? (
           <TouchableOpacity onPress={stop} style={[s.sendBtn, { backgroundColor: '#EF4444' }]}
             accessibilityRole="button" accessibilityLabel="停止生成">

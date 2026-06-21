@@ -499,18 +499,19 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#238)
+## 本轮循环状态 (循环#239)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#238
-- 本轮时间: 2026-06-20
-- 审查模块: 多 provider 功能 (ad72bc2) 全量审查 — Rust models.rs/storage.rs/ai.rs/lib.rs/agent.rs + mobile store.ts/SettingsScreen.tsx + WinUI AppSettings.cs/SettingsDialog
-- 竞品调研: Obsidian v1.13.1 Mobile (Settings 键盘适配 padding, Share Sheet 稳定性, Live Preview 列表 Enter 修复) + Desktop (Settings 内置搜索过滤, slider 内联值, 鼠标返回按钮, Alt-Arrow 重排, Mermaid 即时渲染)。Logseq v0.10.15 (DB graph 模式持续演进, RTC 实时协作, 本地优先+Markdown/Org-mode, Datalog 查询, 闪卡/白板/任务管理)。VaultPilot 差异化: MCP server + 三端原生 + 本地优先 + 用户自备 key + 多 provider 切换。
-- 讨论阶段发现: 2 个新 issue
-  - #1174: SECURITY — mobile store.ts 将所有 provider API key 明文持久化到 AsyncStorage（apiKey 重新加入 persist partialize + providers 数组含明文 key）
-  - #1175: BUG — 多 provider 提交 (ad72bc2) 导致 Rust 测试编译失败（ProviderConfig 缺少 name 字段, AppSettings 缺少 providers/active_provider_index 字段）
-- 代码审查: 多 provider 功能整体设计合理（向后兼容 legacy 单 provider, migrate_providers 自动迁移, effective_provider 统一访问），但存在安全回归和测试遗漏。Rust 后端 encrypt/normalize 对所有 provider 正确处理。normalize_endpoint 新增 /v1 后缀处理正确。WinUI SettingsDialog provider 列表管理逻辑完整。
-- 项目状态: **27 open issue (含 2 个新创建), 1 open PR (#1173 Anthropic /v1 fix), ~1175 PR 编号, cargo test 编译失败, v0.3.22**
-- 代码审查: 多 provider 功能审查 (~615 行新增/修改, 10 文件)。核心发现: AsyncStorage API key 明文存储安全回归 + 测试编译失败。
+- 循环编号: 循环#239
+- 本轮时间: 2026-06-21
+- 审查模块: 全局扫描 — Rust (12 文件 18099 行) + C# WinUI (14 文件 7087 行) + Mobile (12 文件 5421 行)
+- 竞品调研: Perplexity AI (Spaces/Collections 知识组织, Deep Research mode, Focus mode 学术/视频过滤)。Microsoft Copilot Studio (RAG 管线: query rewriting → retrieval → summarization → safety, Dataverse 500 文件上限, SharePoint 集成)。VaultPilot 差异化: 本地优先 + MCP server + 三端原生 + 用户自备 key。
+- 讨论阶段发现: 3 个新 issue
+  - #1212: REFACTOR — storage.rs 渐进式拆分 Phase 1: backup.rs (~200 行)，5 Phase 方案（backup→sessions→search→notes→mod.rs）
+  - #1213: TEST — store.ts 全局状态管理单元测试（0 测试 → 12+ 测试用例）
+  - #1214: TEST — ChatScreen 核心逻辑单元测试（0 测试 → 10+ 测试用例）
+- 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 生产 unwrap、0 TODO/FIXME、clippy 零警告、cargo test 全通过、97 mobile 测试通过。storage.rs (5445 行) 和 MainWindow.xaml.cs (2661 行+附件 700+433) 仍是最大技术债。MainWindow 已完成 Markdown/Attachments/Updates 三阶段提取。
+- 项目状态: **25 open issue (含 3 个新创建), 0 open PR, ~1214 PR 编号, cargo test 全通过, v0.3.30**
+- 重点议题: storage.rs 渐进式拆分 → Mobile 测试覆盖 → MainWindow Chat 提取 → Mobile 功能增强
 
 ## 本轮审核阶段 (审核轮#235)
 - 合并 PR: #1204 (flaky validate_base_url test ENV_MUTEX 修复), #1211 (mobile client.ts 单元测试), #1210 (mobile rag.ts RAG 逻辑单元测试)

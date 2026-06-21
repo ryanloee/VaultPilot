@@ -510,7 +510,7 @@
   - #1213: TEST — store.ts 全局状态管理单元测试（0 测试 → 12+ 测试用例）
   - #1214: TEST — ChatScreen 核心逻辑单元测试（0 测试 → 10+ 测试用例）
 - 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 生产 unwrap、0 TODO/FIXME、clippy 零警告、cargo test 全通过、97 mobile 测试通过。storage.rs (5445 行) 和 MainWindow.xaml.cs (2661 行+附件 700+433) 仍是最大技术债。MainWindow 已完成 Markdown/Attachments/Updates 三阶段提取。
-- 项目状态: **25 open issue (含 3 个新创建), 0 open PR, ~1214 PR 编号, cargo test 全通过, v0.3.30**
+- 项目状态: **24 open issue (含 2 个新创建), 1 open PR (#1215), ~1215 PR 编号, cargo test 全通过, v0.3.30**
 - 重点议题: storage.rs 渐进式拆分 → Mobile 测试覆盖 → MainWindow Chat 提取 → Mobile 功能增强
 
 ## 本轮审核阶段 (审核轮#235)

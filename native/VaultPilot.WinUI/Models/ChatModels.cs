@@ -144,3 +144,99 @@ public sealed record ChatState
         this.Sessions = Sessions ?? Array.Empty<ChatSession>();
     }
 }
+
+// ── MessageV2 — Unified cross-platform schema (#1239) ─────────────────
+
+/// <summary>
+/// Role of the message author.  Matches the Rust <c>MessageV2Role</c> enum.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum MessageV2Role
+{
+    User,
+    Assistant,
+    System,
+}
+
+/// <summary>
+/// Attachment type discriminator.  Matches the Rust <c>MessageV2AttachmentType</c> enum.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum MessageV2AttachmentType
+{
+    Image,
+    File,
+}
+
+/// <summary>
+/// An attachment referenced by a MessageV2 message.
+/// <c>Url</c> must use the <c>local://</c> scheme to prevent path-traversal attacks.
+/// </summary>
+public sealed record MessageV2Attachment
+{
+    [JsonPropertyName("type")]
+    public MessageV2AttachmentType Type { get; init; } = MessageV2AttachmentType.File;
+
+    public string Url { get; init; } = string.Empty;
+    public string Mime { get; init; } = string.Empty;
+
+    [JsonConstructor]
+    public MessageV2Attachment() { }
+
+    /// <summary>
+    /// Returns <c>null</c> if the URL uses the <c>local://</c> scheme; otherwise an error message.
+    /// </summary>
+    public string? ValidateUrl()
+    {
+        if (!Url.StartsWith("local://", StringComparison.Ordinal))
+            return $"attachment url must use local:// scheme, got: {Url}";
+        return null;
+    }
+}
+
+/// <summary>
+/// Provider and token metadata attached to a MessageV2 message.
+/// </summary>
+public sealed record MessageV2Metadata
+{
+    public string Model { get; init; } = string.Empty;
+    public ulong Tokens { get; init; }
+
+    [JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? Extra { get; init; }
+
+    [JsonConstructor]
+    public MessageV2Metadata() { }
+}
+
+/// <summary>
+/// Unified cross-platform message schema.
+/// This is the canonical wire format shared by Rust, WinUI, and Mobile.
+/// See issue #1239 for the full specification.
+/// </summary>
+public sealed record MessageV2
+{
+    public string Id { get; init; } = string.Empty;
+    public MessageV2Role Role { get; init; } = MessageV2Role.User;
+    public string Content { get; init; } = string.Empty;
+    public IReadOnlyList<MessageV2Attachment> Attachments { get; init; } = Array.Empty<MessageV2Attachment>();
+    public MessageV2Metadata Metadata { get; init; } = new();
+    public Dictionary<string, System.Text.Json.JsonElement> Extensions { get; init; } = new();
+
+    [JsonConstructor]
+    public MessageV2() { }
+
+    /// <summary>
+    /// Full structural validation: checks attachment URLs.
+    /// </summary>
+    public IReadOnlyList<string> Validate()
+    {
+        var errors = new List<string>();
+        foreach (var att in Attachments)
+        {
+            var err = att.ValidateUrl();
+            if (err != null) errors.Add(err);
+        }
+        return errors;
+    }
+}

@@ -28,7 +28,6 @@
       "expo-sqlite",
       "expo-secure-store",
       "expo-splash-screen",
-      "expo-intent-launcher",
       "./plugins/withQuickSettingsTile.js",
       "./plugins/withDesktopWidget.js",
       "expo-speech-recognition"

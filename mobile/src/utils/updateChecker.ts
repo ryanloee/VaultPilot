@@ -62,9 +62,6 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
   }
 }
 
-/**
- * Download APK and trigger install via system package installer.
- */
 export async function downloadAndInstall(
   apkUrl: string,
   version: string,
@@ -75,7 +72,7 @@ export async function downloadAndInstall(
   try {
     const dest = new File(Paths.cache, `VaultPilot-v${version}.apk`);
     const task = File.createDownloadTask(apkUrl, dest, {
-      onProgress: ({ bytesWritten, totalBytes }) => {
+      onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
         if (onProgress && totalBytes > 0) {
           onProgress(Math.round((bytesWritten / totalBytes) * 100));
         }
@@ -85,17 +82,14 @@ export async function downloadAndInstall(
     const result = await task.downloadAsync();
     if (!result?.uri) return false;
 
-    // Open system package installer
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
       data: result.uri,
-      flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      flags: 1,
       type: 'application/vnd.android.package-archive',
     });
-
     return true;
   } catch (e) {
     console.warn('[UpdateChecker] Download/install failed:', e);
-    // Fallback: open release page in browser
     try {
       const releaseUrl = `https://github.com/ryanloee/VaultPilot/releases/tag/v${version}`;
       await Linking.openURL(releaseUrl);

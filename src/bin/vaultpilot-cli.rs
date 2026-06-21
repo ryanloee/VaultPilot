@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -30,6 +30,7 @@ use vaultpilot_lib::storage::{
     import_markdown_with_context,
     // Sync originals (for use in sync helper functions)
     initialize_storage_with_context,
+    list_notes_async,
     load_chat_state_async,
     load_chat_state_with_context,
     load_note_async,
@@ -1009,6 +1010,9 @@ async fn run_http_bridge(
         .route("/health", get(http_health))
         .route("/v1/models", get(http_models))
         .route("/v1/chat/completions", post(http_chat_completions))
+        .route("/api/notes", get(http_list_notes))
+        .route("/api/notes/search", get(http_search_notes))
+        .route("/api/notes/{note_id}", get(http_get_note))
         // #790: Rate limiter placed before body limit and timeout so
         // rate-limited requests are rejected immediately without reading
         // the body or consuming timeout budget. In Axum .layer() ordering,
@@ -1044,6 +1048,7 @@ async fn run_http_bridge(
             "baseUrl": format!("http://{}:{}", ip, port),
             "chatCompletions": format!("http://{}:{}/v1/chat/completions", ip, port),
             "models": format!("http://{}:{}/v1/models", ip, port),
+            "notes": format!("http://{}:{}/api/notes", ip, port),
             "requiresToken": requires_token
         })
     );
@@ -1088,6 +1093,71 @@ async fn rate_limit_middleware(
     }
 
     next.run(request).await
+}
+
+async fn http_list_notes(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let limit: usize = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50)
+        .min(200);
+    let notes = list_notes_async(&state.context)
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let notes: Vec<_> = notes.into_iter().take(limit).collect();
+    Ok(Json(serde_json::json!({
+        "notes": notes,
+        "total": notes.len()
+    })))
+}
+
+async fn http_get_note(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(note_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let note = load_note_async(&state.context, &note_id)
+        .await
+        .map_err(|e| openai_error(StatusCode::NOT_FOUND, &format!("Note not found: {e}")))?;
+    Ok(Json(serde_json::to_value(note).unwrap_or_default()))
+}
+
+async fn http_search_notes(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let query_text = params.get("q").cloned().unwrap_or_default();
+    if query_text.is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "Missing 'q' parameter",
+        ));
+    }
+    let limit: usize = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20)
+        .min(100);
+    let query = SearchQuery {
+        text: query_text,
+        limit: Some(limit),
+        ..Default::default()
+    };
+    let result = search_notes_async(&state.context, query)
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "notes": result.notes,
+        "total": result.total
+    })))
 }
 
 async fn http_health() -> Json<Value> {

@@ -51,6 +51,27 @@ const linking: LinkingOptions<RootTabParamList> = {
 
 SplashScreen.preventAutoHideAsync();
 
+/** Deep link config for Quick Settings Tile (#893) and Desktop Widget (#892) */
+const linking: LinkingOptions<RootTabParamList> = {
+  prefixes: ['vaultpilot://'],
+  config: {
+    screens: {
+      Chat: {
+        screens: {
+          ChatMain: 'chat',
+          Sessions: 'chat/sessions',
+        },
+      },
+      Notes: {
+        screens: {
+          NotesList: 'note',
+          NoteEdit: 'note/:noteId',
+        },
+      },
+    },
+  },
+};
+
 function NotesStack() {
   return (
     <NotesNativeStack.Navigator screenOptions={{ headerShown: false }}>

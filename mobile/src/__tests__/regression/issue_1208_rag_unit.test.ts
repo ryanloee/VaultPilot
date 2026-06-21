@@ -108,6 +108,31 @@ describe('buildNoteContext — keyword extraction', () => {
     await buildNoteContext('test "quoted" keyword');
     expect(mockSearchNotes).toHaveBeenCalled();
   });
+
+  it('uses recent conversation history for keyword extraction', async () => {
+    mockSearchNotes.mockResolvedValue([
+      { id: '1', title: 'Rust Lifetimes', content: 'Lifetimes in Rust...', starred: 0, folder: '', created_at: 0, updated_at: 0 },
+    ]);
+    // "explain more" alone would yield no useful keywords,
+    // but history contains "Rust lifetimes" which should be extracted
+    const result = await buildNoteContext('explain more', [
+      'I was reading about Rust lifetimes',
+      'The borrow checker is confusing',
+    ]);
+    expect(result).not.toBeNull();
+    expect(result).toContain('Rust Lifetimes');
+    // Should have searched with keywords from history
+    expect(mockSearchNotes).toHaveBeenCalled();
+    const searchedKeywords = mockSearchNotes.mock.calls.map((c: any) => c[0]);
+    const hasRust = searchedKeywords.some((k: string) => k.includes('rust'));
+    expect(hasRust).toBe(true);
+  });
+
+  it('without recentMessages still works (backward compatible)', async () => {
+    mockSearchNotes.mockResolvedValue([]);
+    const result = await buildNoteContext('TypeScript generics');
+    expect(result).toBeNull();
+  });
 });
 
 // ── parseToolCalls edge cases ───────────────────────────────

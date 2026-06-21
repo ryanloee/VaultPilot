@@ -14,6 +14,9 @@
     "android": {
       "package": "com.vaultpilot.mobile",
       "versionCode": 1,
+      "permissions": [
+        "android.permission.REQUEST_INSTALL_PACKAGES"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#1E3A5F",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -25,6 +28,10 @@
       "expo-sqlite",
       "expo-secure-store",
       "expo-splash-screen",
+"expo-intent-launcher",
+      "./plugins/withQuickSettingsTile.js",
+      "./plugins/withDesktopWidget.js",
+      "expo-speech-recognition",
       "./plugins/withVoiceLibFix.js"
     ],
     "extra": {

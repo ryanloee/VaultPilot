@@ -155,7 +155,7 @@ describe('syncNotesFromServer', () => {
     expect(result.skipped).toBe(0);
     expect(result.errors).toBe(0);
     expect(mockCreateNote).toHaveBeenCalledWith('Test Note', 'Note content here');
-    expect(mockUpdateNote).toHaveBeenCalledWith('new-local-id', 'Test Note', 'Note content here');
+    expect(mockUpdateNote).not.toHaveBeenCalled();
   });
 
   it('skips notes where local is newer', async () => {

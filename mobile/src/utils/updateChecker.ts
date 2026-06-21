@@ -1,12 +1,10 @@
 /**
- * APK auto-update checker — compares local app version against GitHub Releases.
- *
- * Design:
- * - Fetches latest release from GitHub API
- * - Compares semver (major.minor.patch) with current app.json version
- * - Returns release info so UI can show update prompt
- * - Download via browser (Linking.openURL) — no expo-intent-launcher dependency
+ * APK auto-update — check, download, and install.
  */
+
+import { File, Paths } from 'expo-file-system';
+import * as IntentLauncher from 'expo-intent-launcher';
+import { Platform, Linking } from 'react-native';
 
 const GITHUB_API = 'https://api.github.com/repos/ryanloee/VaultPilot/releases/latest';
 
@@ -14,12 +12,11 @@ export interface UpdateInfo {
   latestVersion: string;
   currentVersion: string;
   releaseUrl: string;
-  body: string; // release notes
+  body: string;
   apkUrl: string | null;
   publishedAt: string;
 }
 
-/** Compare two semver strings. Returns 1 if a > b, -1 if a < b, 0 if equal. */
 export function compareSemver(a: string, b: string): number {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
@@ -32,7 +29,6 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-/** Check GitHub Releases for a newer version. Returns null if up-to-date. */
 export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo | null> {
   try {
     const res = await fetch(GITHUB_API, {
@@ -46,7 +42,7 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
     const latestVersion = tag.replace(/^v/, '');
 
     if (!latestVersion || compareSemver(latestVersion, currentVersion) <= 0) {
-      return null; // up-to-date
+      return null;
     }
 
     const apkAsset = (release.assets ?? []).find(
@@ -62,7 +58,42 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
       publishedAt: release.published_at ?? '',
     };
   } catch {
-    // Network error or timeout — silently skip
     return null;
+  }
+}
+
+export async function downloadAndInstall(
+  apkUrl: string,
+  version: string,
+  onProgress?: (percent: number) => void,
+): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+
+  try {
+    const dest = new File(Paths.cache, `VaultPilot-v${version}.apk`);
+    const task = File.createDownloadTask(apkUrl, dest, {
+      onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
+        if (onProgress && totalBytes > 0) {
+          onProgress(Math.round((bytesWritten / totalBytes) * 100));
+        }
+      },
+    });
+
+    const result = await task.downloadAsync();
+    if (!result?.uri) return false;
+
+    await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+      data: result.uri,
+      flags: 1,
+      type: 'application/vnd.android.package-archive',
+    });
+    return true;
+  } catch (e) {
+    console.warn('[UpdateChecker] Download/install failed:', e);
+    try {
+      const releaseUrl = `https://github.com/ryanloee/VaultPilot/releases/tag/v${version}`;
+      await Linking.openURL(releaseUrl);
+    } catch {}
+    return false;
   }
 }

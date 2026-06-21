@@ -8,7 +8,8 @@ import { checkApi, getSettings, saveSettings } from '../api/client';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
-import { checkForUpdate, type UpdateInfo } from '../utils/updateChecker';
+import { checkForUpdate, downloadAndInstall, type UpdateInfo } from '../utils/updateChecker';
+import { getServerConfig, setServerConfig, syncNotesFromServer, getLastSyncTime } from '../services/sync';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
@@ -25,6 +26,10 @@ export default function SettingsScreen() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [serverUrl, setServerUrl] = useState('');
+  const [serverToken, setServerToken] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(null);
 
   // Active provider values for editing
   const activeIdx = store.providers.length > 0
@@ -95,6 +100,14 @@ export default function SettingsScreen() {
       } catch (e) {
         console.warn('[Settings] Failed to load:', e);
       }
+      // Load server config
+      try {
+        const cfg = await getServerConfig();
+        setServerUrl(cfg.url);
+        setServerToken(cfg.token);
+        const ls = await getLastSyncTime();
+        setLastSync(ls);
+      } catch {}
     })();
 
     // Auto-check for updates (once per mount)
@@ -365,6 +378,65 @@ export default function SettingsScreen() {
         ))}
       </View>
 
+      {/* ── Backend Server Section ── */}
+      <Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>后端服务器</Text>
+      <Text style={[s.label, { color: c.textSecondary }]}>连接电脑端同步知识库笔记</Text>
+      <TextInput
+        style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+        value={serverUrl}
+        onChangeText={setServerUrl}
+        placeholder="http://192.168.1.100:3000"
+        placeholderTextColor={c.textSecondary}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+      />
+      <TextInput
+        style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+        value={serverToken}
+        onChangeText={setServerToken}
+        placeholder="Token（可选）"
+        placeholderTextColor={c.textSecondary}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+      <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+        <TouchableOpacity
+          style={[s.saveBtn, { backgroundColor: store.accentColor, flex: 1 }]}
+          onPress={async () => {
+            await setServerConfig(serverUrl, serverToken);
+            Alert.alert('已保存', '后端服务器配置已保存');
+          }}
+        >
+          <Text style={s.saveBtnText}>保存</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.saveBtn, { backgroundColor: '#10B981', flex: 1 }]}
+          onPress={async () => {
+            setSyncing(true);
+            try {
+              await setServerConfig(serverUrl, serverToken);
+              const result = await syncNotesFromServer();
+              const last = await getLastSyncTime();
+              setLastSync(last);
+              Alert.alert('同步完成', `新增 ${result.imported} 更新 ${result.updated} 跳过 ${result.skipped} 耗时 ${(result.duration_ms/1000).toFixed(1)}s`);
+            } catch (e) {
+              Alert.alert('同步失败', e instanceof Error ? e.message : String(e));
+            } finally {
+              setSyncing(false);
+            }
+          }}
+          disabled={syncing}
+        >
+          <Text style={s.saveBtnText}>{syncing ? '同步中...' : '立即同步'}</Text>
+        </TouchableOpacity>
+      </View>
+      {lastSync && (
+        <Text style={[s.label, { color: c.textSecondary, marginTop: 4 }]}>
+          上次同步: {new Date(lastSync).toLocaleString()}
+        </Text>
+      )}
+
       <View style={s.versionRow}>
         <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
         <TouchableOpacity onPress={handleCheckUpdate} disabled={checkingUpdate}>
@@ -507,4 +579,6 @@ const s = StyleSheet.create({
   modalItemName: { fontSize: 16, fontWeight: '600' },
   modalItemDetail: { fontSize: 13, marginTop: 2 },
   modalClose: { paddingVertical: 14, alignItems: 'center', marginTop: 8, borderTopWidth: 1 },
+  saveBtn: { paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  saveBtnText: { color: '#FFF', fontWeight: '600', fontSize: 14 },
 });

@@ -252,10 +252,10 @@ export interface DbNote {
   starred: number; folder: string; created_at: number; updated_at: number;
 }
 
-export async function createNote(title = '无标题'): Promise<string> {
+export async function createNote(title = '无标题', content = ''): Promise<string> {
   const db = await getDb();
   const id = uuid();
-  await db.runAsync('INSERT INTO notes (id, title) VALUES (?, ?)', [id, title]);
+  await db.runAsync('INSERT INTO notes (id, title, content) VALUES (?, ?, ?)', [id, title, content]);
   return id;
 }
 

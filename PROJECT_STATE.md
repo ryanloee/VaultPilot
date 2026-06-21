@@ -499,19 +499,16 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#239)
+## 本轮循环状态 (循环#241)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#239
+- 循环编号: 循环#241
 - 本轮时间: 2026-06-21
-- 审查模块: 全局扫描 — Rust (12 文件 18099 行) + C# WinUI (14 文件 7087 行) + Mobile (12 文件 5421 行)
-- 竞品调研: Perplexity AI (Spaces/Collections 知识组织, Deep Research mode, Focus mode 学术/视频过滤)。Microsoft Copilot Studio (RAG 管线: query rewriting → retrieval → summarization → safety, Dataverse 500 文件上限, SharePoint 集成)。VaultPilot 差异化: 本地优先 + MCP server + 三端原生 + 用户自备 key。
-- 讨论阶段发现: 3 个新 issue
-  - #1212: REFACTOR — storage.rs 渐进式拆分 Phase 1: backup.rs (~200 行)，5 Phase 方案（backup→sessions→search→notes→mod.rs）
-  - #1213: TEST — store.ts 全局状态管理单元测试（0 测试 → 12+ 测试用例）
-  - #1214: TEST — ChatScreen 核心逻辑单元测试（0 测试 → 10+ 测试用例）
-- 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 生产 unwrap、0 TODO/FIXME、clippy 零警告、cargo test 全通过、97 mobile 测试通过。storage.rs (5445 行) 和 MainWindow.xaml.cs (2661 行+附件 700+433) 仍是最大技术债。MainWindow 已完成 Markdown/Attachments/Updates 三阶段提取。
-- 项目状态: **24 open issue (含 2 个新创建), 1 open PR (#1215), ~1215 PR 编号, cargo test 全通过, v0.3.30**
-- 重点议题: storage.rs 渐进式拆分 → Mobile 测试覆盖 → MainWindow Chat 提取 → Mobile 功能增强
+- 审查模块: 全局扫描 — Rust (12 文件 18207 行) + C# WinUI (14 文件 7087 行) + Mobile (12 文件 5886 行)
+- 竞品调研: Mem.ai (NLP 自动组织、Voice Mode、Heads Up 相关笔记推荐、$12/月)。Obsidian Copilot (10 万+ 用户、语义索引、inline AI 命令、model agnostic)。Notion AI (从写作助手进化为工作流引擎、AI Agents、数据库分析)。VaultPilot 差异化: 本地优先 + MCP server + 三端原生 + 用户自备 key + 工程笔记场景。
+- 讨论阶段发现: 0 个新 issue（推动已有 28 个 feature issue 实现）
+- 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 生产 unwrap、0 TODO/FIXME、clippy 零警告、cargo test 397 全通过。storage/mod.rs (5357 行，Phase 1 backup.rs 已提取) 和 MainWindow.xaml.cs (2661 行) 仍是最大技术债。
+- 项目状态: **28 open feature issue, 0 open PR, ~1217 PR 编号, cargo test 全通过, v0.3.31**
+- 重点议题: Mobile 核心功能(#882设置页+#1219 onboarding 最高优先) → 知识管理增强(#1221智能标签) → storage.rs Phase 2(sessions模块) → MainWindow Chat 提取
 
 ## 本轮审核阶段 (审核轮#235)
 - 合并 PR: #1204 (flaky validate_base_url test ENV_MUTEX 修复), #1211 (mobile client.ts 单元测试), #1210 (mobile rag.ts RAG 逻辑单元测试)

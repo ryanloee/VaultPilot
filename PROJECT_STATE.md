@@ -670,3 +670,21 @@
 - Agent Mode 设计: 4 阶段（进程管理 → 沙箱 → UI → MCP client），安全优先
 - 路线图: v0.4.0 = storage 拆分 + API Key 安全 + Agent Mode Phase 1
 - 项目状态: 3 open issues (#913, #1274, #1275), 0 open PR, v0.3.35
+
+## 修复阶段 fix-1 (循环#258)
+- #1274: API Key 迁移 AsyncStorage → SecureStore → PR #1276 (4 回归测试)
+- #1275: storage/settings.rs 模块提取 → PR #1277 (mod.rs -140 行, cargo fmt 修复)
+- cargo test 通过, clippy 干净
+- 项目状态: 1 open issue (#913), 0 open PR, v0.3.35
+
+## PR 审核 review (循环#258)
+- PR #1276: fix: migrate legacy API key from AsyncStorage to SecureStore (#1274) → ✅ squash 合并
+  - 逻辑: ✅ 一次性迁移 + _migrated flag 防重复检查
+  - 测试: ✅ 4 个回归测试（迁移、跳过、空 key、session 内幂等）
+  - 安全: ✅ SecureStore 加密存储，AsyncStorage 旧值清除
+- PR #1277: refactor: extract settings module from storage/mod.rs (#1275) → ✅ squash 合并
+  - 逻辑: ✅ 纯模块提取，代码 1:1 搬迁 + re-export
+  - 格式: ⚠️ cargo fmt 失败（多余空行 + import 顺序），已修复推送
+  - 测试: ✅ clippy/test/build 全通过
+- 合并后 cargo fmt ✅, clippy ✅, test ✅, winui-build ✅, linux-cli-build ✅, cargo audit ✅
+- 项目状态: 1 open issue (#913), 0 open PR, v0.3.35

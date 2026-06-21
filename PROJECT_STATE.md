@@ -625,3 +625,10 @@
 - #892: Android home screen widget → PR #1260 ✅ squash 合并
 - #1261: 启动时自动检查更新 → ❌ 请求修改（分支严重过期，混合不相关改动，已评论要求 rebase）
 - 项目状态: 1 open PR (#1261 需 rebase), ~1261 PR 编号, v0.3.33
+
+## 修复 fix-1 (循环#254)
+- #1220: 离线编辑队列 + 同步指示器 → PR #1267 ✅ (pending_syncs 表 + offlineSync.ts + offline banner)
+- #1221: 笔记自动标签 → PR #1268 ✅ (autoTag.ts TF 关键词提取 + CJK bigram)
+- #1222: 设置导出/导入 → PR #1269 ✅ (settingsSync.ts + SettingsScreen 剪贴板导出/导入)
+- 测试: 27 新增回归测试, 全套 337 tests / 26 suites 通过
+- 项目状态: 3 open PR (#1267-#1269), 3 open feature issues (#1223,#914,#913), v0.3.33

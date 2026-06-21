@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
+import { NavigationContainer, LinkingOptions } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
@@ -27,6 +27,8 @@ const Tab = createBottomTabNavigator<RootTabParamList>();
 const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
 const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
 
+SplashScreen.preventAutoHideAsync();
+
 /** Deep link config for Quick Settings Tile (#893) and Desktop Widget (#892) */
 const linking: LinkingOptions<RootTabParamList> = {
   prefixes: ['vaultpilot://'],
@@ -47,8 +49,6 @@ const linking: LinkingOptions<RootTabParamList> = {
     },
   },
 };
-
-SplashScreen.preventAutoHideAsync();
 
 function NotesStack() {
   return (

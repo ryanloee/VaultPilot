@@ -512,7 +512,7 @@
 - 项目状态: **27 open issue (含 2 个新创建), 1 open PR (#1173 Anthropic /v1 fix), ~1175 PR 编号, cargo test 编译失败, v0.3.22**
 - 代码审查: 多 provider 功能审查 (~615 行新增/修改, 10 文件)。核心发现: AsyncStorage API key 明文存储安全回归 + 测试编译失败。
 
-## 本轮审核阶段 (审核轮#234)
-- 合并 PR: #1140 (FTS5 双引号转义), #1141 (insertFormat autoSave), #1142 (ErrorBoundary 暗色), #1143 (笔记长按菜单), #1144 (空会话引导), #1145 (滚动位置保持), #1146 (长按复制消息), #1147 (API 重试退避), #1090 (pre-aborted signal + 400 fallback)
-- 发版: v0.3.15 (tag 已推送)
-- 累计: ~1149 PR 编号
+## 本轮审核阶段 (审核轮#235)
+- 合并 PR: #1204 (flaky validate_base_url test ENV_MUTEX 修复), #1211 (mobile client.ts 单元测试), #1210 (mobile rag.ts RAG 逻辑单元测试)
+- 发版: v0.3.30 (tag 已推送)
+- 累计: ~1211 PR 编号

@@ -19,6 +19,7 @@
 // mod issue_042_empty_vault;
 // mod issue_099_search_crash;
 mod issue_1175_missing_test_fields;
+mod issue_914_related_notes;
 
 // Example — reference only, delete once you have real regression tests
 mod _example_042;

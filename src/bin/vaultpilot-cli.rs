@@ -27,8 +27,8 @@ use vaultpilot_lib::storage::{
     delete_note_with_context,
     export_all_notes_with_context,
     export_note_markdown_with_context,
+    find_related_notes_with_context,
     import_markdown_with_context,
-    // Sync originals (for use in sync helper functions)
     initialize_storage_with_context,
     list_notes_async,
     load_chat_state_async,
@@ -292,6 +292,16 @@ enum NotesActions {
         /// Output directory path
         #[arg(long)]
         output: PathBuf,
+    },
+
+    /// Find notes related to a given note (proactive knowledge push)
+    Related {
+        /// Note ID to find related notes for
+        id: String,
+
+        /// Maximum results
+        #[arg(long, default_value = "5")]
+        limit: usize,
     },
 }
 
@@ -968,6 +978,10 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
         NotesActions::ExportAll { output } => {
             let result = export_all_notes_with_context(context, output)?;
             to_json(&result)
+        }
+        NotesActions::Related { id, limit } => {
+            let results = find_related_notes_with_context(context, id, *limit)?;
+            to_json(&results)
         }
     }
 }

@@ -293,6 +293,18 @@ pub struct NoteDocument {
     pub search_snippet: Option<String>,
 }
 
+/// A note recommended as related to the current note, with a relevance score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedNote {
+    pub meta: NoteMeta,
+    /// Relevance score — higher means more related.
+    pub score: i64,
+    /// Optional snippet showing why this note is related.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationTurn {

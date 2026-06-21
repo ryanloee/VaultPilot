@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
 import { ApiFormat } from '../store';
+import { isRetryable, sanitizeApiError, normalizeApiBase, DEFAULTS } from './clientUtils';
 
 // Re-export unified SSE types from sse.ts (single implementation)
 export type { StreamChunk } from './sse';
@@ -15,12 +16,6 @@ const KEYS = {
   model: 'cfg_model',
   apiFormat: 'cfg_api_format',
 } as const;
-
-// Defaults
-const DEFAULTS = {
-  apiBase: 'https://opencode.ai/zen/v1',
-  model: 'deepseek-v4-flash-free',
-};
 
 // ── Secure helpers ───────────────────────────────────────
 async function getApiKey(): Promise<string> {
@@ -47,10 +42,6 @@ const CHAT_TIMEOUT_MS = 120_000;
 /** Max retries for transient network/server errors */
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 1000;
-
-function isRetryable(status: number): boolean {
-  return status === 429 || status === 502 || status === 503 || status === 504;
-}
 
 // ── Settings ──────────────────────────────────────────────
 let _settingsCache: { apiBase: string; apiKey: string; model: string; apiFormat: ApiFormat } | null = null;
@@ -84,42 +75,6 @@ export async function saveSettings(s: { apiBase?: string; apiKey?: string; model
   if (s.apiFormat !== undefined) ops.push(AsyncStorage.setItem(KEYS.apiFormat, s.apiFormat));
   await Promise.all(ops);
   invalidateSettingsCache();
-}
-
-// ── Error Sanitization ───────────────────────────────────
-const STATUS_MESSAGES: Record<number, string> = {
-  400: '请求格式错误',
-  401: 'API Key 无效或已过期',
-  403: '访问被拒绝，请检查权限',
-  404: '请求的资源不存在',
-  408: '请求超时，请稍后重试',
-  429: '请求过于频繁，请稍后重试',
-  500: '服务器内部错误',
-  502: '服务暂时不可用',
-  503: '服务暂时不可用，请稍后重试',
-  504: '服务响应超时，请稍后重试',
-};
-
-function sanitizeApiError(status: number, rawBody: string): string {
-  // Log full error in development for debugging
-  if (__DEV__) {
-    console.warn(`[API Error ${status}]`, rawBody);
-  }
-  const friendly = STATUS_MESSAGES[status];
-  if (friendly) return `API 错误 (${status}): ${friendly}`;
-  if (status >= 500) return `API 错误 (${status}): 服务端异常，请稍后重试`;
-  if (status >= 400) return `API 错误 (${status}): 请求有误，请检查参数`;
-  return `API 错误 (${status})`;
-}
-
-// ── API Base Normalization ────────────────────────────────
-/** Ensure apiBase ends with /v1 for consistent path construction.
- *  Preserves existing versioned paths (e.g. /v2) and validates input. */
-function normalizeApiBase(raw: string): string {
-  const trimmed = raw.trim().replace(/\/+$/, '');
-  if (!trimmed) return DEFAULTS.apiBase;
-  if (/\/v\d+[\w-]*($|\/)/.test(trimmed)) return trimmed;
-  return trimmed + '/v1';
 }
 
 // ── Chat ──────────────────────────────────────────────────

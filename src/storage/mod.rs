@@ -25,7 +25,7 @@ use walkdir::WalkDir;
 
 use crate::models::{
     AppSettings, ChatState, ExportResult, ImportResult, IndexStats, NoteDocument, NoteMeta,
-    SearchQuery, SearchResult, VaultExportResult,
+    RelatedNote, SearchQuery, SearchResult, VaultExportResult,
 };
 
 mod backup;
@@ -872,6 +872,92 @@ pub fn search_candidate_notes_with_context(
 ) -> Result<Vec<NoteMeta>> {
     let (connection, _) = open_connection(context)?;
     rank_note_metas(context, &connection, question, image_paths, limit)
+}
+
+/// Find notes related to the given note by extracting key terms and running FTS5 search.
+/// Returns up to `limit` related notes with relevance scores, excluding the source note.
+pub fn find_related_notes_with_context(
+    context: &StorageContext,
+    note_id: &str,
+    limit: usize,
+) -> Result<Vec<RelatedNote>> {
+    let (connection, _) = open_connection(context)?;
+    let source_meta = load_note_meta_by_id(&connection, note_id)?
+        .ok_or_else(|| anyhow!("note not found: {note_id}"))?;
+    let source_doc = load_note_body_from_meta(&source_meta)?;
+
+    // Build a focused query from title + tags (most distinctive terms).
+    let query = build_related_query(&source_doc);
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Use existing rank infrastructure which has FTS5 + LIKE fallback.
+    let search_limit = limit.saturating_mul(3).max(15);
+    let candidates = rank_documents(context, &connection, &query, &[], search_limit)?;
+
+    let mut results: Vec<RelatedNote> = Vec::new();
+    for doc in candidates {
+        if doc.meta.id == note_id {
+            continue;
+        }
+        let mut score = 0i64;
+        // Title word overlap bonus
+        let source_words: HashSet<&str> = source_meta.title.split_whitespace().collect();
+        let target_words: HashSet<&str> = doc.meta.title.split_whitespace().collect();
+        let overlap = source_words.intersection(&target_words).count();
+        score += (overlap as i64) * 30;
+        // Tag overlap bonus
+        let source_tags: HashSet<&str> = source_meta.tags.iter().map(String::as_str).collect();
+        let target_tags: HashSet<&str> = doc.meta.tags.iter().map(String::as_str).collect();
+        let tag_overlap = source_tags.intersection(&target_tags).count();
+        score += (tag_overlap as i64) * 50;
+        // Base relevance from FTS/LIKE ranking
+        score += 10;
+        results.push(RelatedNote {
+            meta: doc.meta,
+            score,
+            snippet: doc.search_snippet,
+        });
+    }
+
+    results.sort_by_key(|b| std::cmp::Reverse(b.score));
+    results.truncate(limit);
+    Ok(results)
+}
+
+/// Extract key terms from a note to build a search query for related notes.
+/// Uses only title + tags for focused matching (avoids FTS5 AND-query bloat).
+pub(crate) fn build_related_query(doc: &NoteDocument) -> String {
+    let mut terms: Vec<String> = Vec::new();
+    // Title words (most important signal)
+    for word in doc.meta.title.split_whitespace() {
+        let w = word.trim();
+        if w.len() >= 2 {
+            terms.push(w.to_string());
+        }
+    }
+    // Tags
+    for tag in &doc.meta.tags {
+        let t = tag.trim();
+        if !t.is_empty() {
+            terms.push(t.to_string());
+        }
+    }
+    // Keywords
+    for kw in &doc.meta.keywords {
+        let k = kw.trim();
+        if !k.is_empty() {
+            terms.push(k.to_string());
+        }
+    }
+    // Deduplicate while preserving order
+    let mut seen = HashSet::new();
+    let unique: Vec<String> = terms
+        .into_iter()
+        .filter(|t| seen.insert(t.to_lowercase()))
+        .collect();
+    unique.join(" ")
 }
 
 fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
@@ -3307,6 +3393,19 @@ pub async fn export_all_notes_async(
 pub async fn rebuild_index_async(ctx: &StorageContext) -> Result<IndexStats> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || rebuild_index_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`find_related_notes_with_context`].
+pub async fn find_related_notes_async(
+    ctx: &StorageContext,
+    note_id: &str,
+    limit: usize,
+) -> Result<Vec<RelatedNote>> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    tokio::task::spawn_blocking(move || find_related_notes_with_context(&ctx, &note_id, limit))
         .await
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }

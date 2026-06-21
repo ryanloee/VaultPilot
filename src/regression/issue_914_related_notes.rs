@@ -3,7 +3,6 @@
 ///
 /// Feature: Proactive knowledge push — AI recommends related notes while editing.
 /// Implementation: PR for issue #914
-
 #[cfg(test)]
 mod tests {
     use std::fs;

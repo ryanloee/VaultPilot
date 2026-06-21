@@ -9,6 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
+import { extractAutoTags } from '../utils/autoTag';
 import type { NoteEditorScreenProps, RootTabParamList } from '../navigation/types';
 import { useNavigation } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
@@ -75,6 +76,19 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     setSaving(true);
     try {
       await updateNote(noteId, t ?? title, ct ?? content);
+      // Auto-tag if note has no tags yet
+      if (tags.length === 0 && (t ?? title).trim()) {
+        const suggestions = extractAutoTags(t ?? title, ct ?? content);
+        for (const tag of suggestions) {
+          if (!tags.includes(tag)) {
+            await addTag(noteId, tag);
+          }
+        }
+        if (suggestions.length > 0 && mountedRef.current) {
+          const freshTags = await getNoteTags(noteId);
+          if (mountedRef.current) setTags(freshTags);
+        }
+      }
     } catch (e) {
       console.warn('[NoteEditor] Save failed:', e);
       if (mountedRef.current) Alert.alert('保存失败', String(e));

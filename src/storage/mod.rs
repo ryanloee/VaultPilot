@@ -24,8 +24,8 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::models::{
-    AppSettings, ChatState, ExportResult, ImportResult, IndexStats, NoteDocument,
-    NoteMeta, SearchQuery, SearchResult, VaultExportResult,
+    AppSettings, ChatState, ExportResult, ImportResult, IndexStats, NoteDocument, NoteMeta,
+    SearchQuery, SearchResult, VaultExportResult,
 };
 
 mod backup;
@@ -392,7 +392,6 @@ pub fn save_settings_with_context(
     }
     Ok(settings)
 }
-
 
 pub fn list_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>> {
     let result = search_notes_with_context(

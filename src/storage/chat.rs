@@ -27,9 +27,7 @@ pub(super) struct LegacyChatState {
     summary: Option<crate::models::ConversationSummary>,
 }
 
-pub fn load_chat_state_with_context(
-    context: &super::StorageContext,
-) -> Result<ChatState> {
+pub fn load_chat_state_with_context(context: &super::StorageContext) -> Result<ChatState> {
     let paths = &context.paths;
     if let Some(parent) = paths.chat_state_path.parent() {
         std::fs::create_dir_all(parent)?;

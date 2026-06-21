@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StatusBar, useColorScheme, Text, View, TouchableOpacity, StyleSheet } from 'react-native';
+import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
+import { NavigationContainer, LinkingOptions } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useAppStore, isValidThemeMode } from './src/store';
+import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
 import { getSettings } from './src/api/client';
@@ -28,26 +28,6 @@ const ONBOARDING_KEY = 'cfg_onboarding_done';
 const Tab = createBottomTabNavigator<RootTabParamList>();
 const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
 const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
-
-const linking: LinkingOptions<RootTabParamList> = {
-  prefixes: ['vaultpilot://'],
-  config: {
-    screens: {
-      Chat: {
-        screens: {
-          ChatMain: 'chat',
-          Sessions: 'chat/sessions',
-        },
-      },
-      Notes: {
-        screens: {
-          NotesList: 'note',
-          NoteEdit: 'note/:noteId',
-        },
-      },
-    },
-  },
-};
 
 SplashScreen.preventAutoHideAsync();
 
@@ -129,7 +109,7 @@ function TabIcon({ label, color }: { label: string; color: string }) {
 }
 
 export default function App() {
-  const { isDark, setIsDark, themeMode } = useAppStore();
+  const { isDark, setIsDark, themeMode, accentColor } = useAppStore();
   const systemScheme = useColorScheme();
   const [initState, setInitState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
@@ -139,10 +119,11 @@ export default function App() {
   const [downloadPct, setDownloadPct] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
+  // Load saved settings on startup
   useEffect(() => {
     (async () => {
       try {
-        await getDb();
+        await getDb(); // Initialize database
       } catch (e) {
         console.error('[App] DB init failed:', e);
         setErrorMsg(String(e));
@@ -151,9 +132,11 @@ export default function App() {
         return;
       }
       try {
+        // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
         const apiSettings = await getSettings();
         useAppStore.getState().setApiSettings(apiSettings);
 
+        // Load theme settings from cfg_* keys
         const [savedTheme, savedColor] = await Promise.all([
           AsyncStorage.getItem('cfg_theme_mode'),
           AsyncStorage.getItem('cfg_accent_color'),
@@ -168,6 +151,7 @@ export default function App() {
         }
         if (savedColor) useAppStore.getState().setAccentColor(savedColor);
 
+        // Check onboarding status
         const onboardingStatus = await AsyncStorage.getItem(ONBOARDING_KEY);
         setOnboardingDone(onboardingStatus === 'true');
       } catch (e) {
@@ -189,6 +173,7 @@ export default function App() {
     })();
   }, []);
 
+  // Follow system theme — only after initial load to avoid overriding saved preference
   useEffect(() => {
     if (loadedRef.current && themeMode === 'system') {
       setIsDark(systemScheme === 'dark');

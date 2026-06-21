@@ -1,7 +1,7 @@
 /**
  * Expo config plugin to fix @react-native-voice/voice build.gradle
  * - Replace deprecated jcenter() with mavenCentral()
- * - Ensure compileSdkVersion is set from rootProject
+ * - Replace deprecated compileSdkVersion/targetSdkVersion/minSdkVersion with modern equivalents
  */
 const { withDangerousMod } = require('@expo/config-plugins');
 const fs = require('fs');
@@ -20,6 +20,19 @@ function withVoiceLibFix(config) {
         let content = fs.readFileSync(buildGradle, 'utf8');
         // Replace jcenter() with mavenCentral()
         content = content.replace(/jcenter\(\)/g, 'mavenCentral()');
+        // Replace deprecated method-style SDK version setters with property-style
+        content = content.replace(
+          /compileSdkVersion\s+(.+)/g,
+          'compileSdk $1'
+        );
+        content = content.replace(
+          /targetSdkVersion\s+(.+)/g,
+          'targetSdk $1'
+        );
+        content = content.replace(
+          /minSdkVersion\s+(\d+)/g,
+          'minSdk $1'
+        );
         fs.writeFileSync(buildGradle, content);
       }
 

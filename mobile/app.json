@@ -26,7 +26,8 @@
       "expo-secure-store",
       "expo-splash-screen",
       "./plugins/withQuickSettingsTile.js",
-      "./plugins/withDesktopWidget.js"
+      "./plugins/withDesktopWidget.js",
+      "./plugins/withVoiceLibFix.js"
     ],
     "extra": {
       "eas": {

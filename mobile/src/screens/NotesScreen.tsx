@@ -8,6 +8,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
 import type { NotesScreenProps } from '../navigation/types';
+import { fmtTime } from '../utils/timeFormat';
 
 export default function NotesScreen({ navigation }: NotesScreenProps) {
   const { isDark, accentColor } = useAppStore();
@@ -81,13 +82,6 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
         try { await deleteNote(id); await load(search, activeFolder); } catch (e: unknown) { Alert.alert('删除失败', e instanceof Error ? e.message : '请重试'); }
       }},
     ]);
-  };
-
-  const fmtTime = (ts: number) => {
-    const d = new Date(ts * 1000);
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
   };
 
   const renderItem = ({ item }: { item: DbNote }) => (

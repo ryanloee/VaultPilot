@@ -21,6 +21,7 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureColumn('sessions', 'archived', 'INTEGER DEFAULT 0');
   await ensureColumn('notes', 'starred', 'INTEGER DEFAULT 0');
   await ensureColumn('notes', 'folder', 'TEXT NOT NULL DEFAULT \'\'');
+  await ensureColumn('messages', 'attachments', 'TEXT');
 }
 
 /** Populate FTS tables from existing data (runs once, idempotent via content= sync). */
@@ -212,6 +213,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
 
 export interface DbMessage {
   id: string; session_id: string; role: string; content: string; created_at: number;
+  attachments?: string; // JSON array of {name: string, type: 'image'|'file'}
 }
 
 export async function getMessages(sessionId: string): Promise<DbMessage[]> {
@@ -221,13 +223,14 @@ export async function getMessages(sessionId: string): Promise<DbMessage[]> {
   );
 }
 
-export async function addMessage(sessionId: string, role: string, content: string): Promise<string> {
+export async function addMessage(sessionId: string, role: string, content: string, attachments?: { name: string; type: 'image' | 'file' }[]): Promise<string> {
   const db = await getDb();
   const id = uuid();
+  const attJson = attachments && attachments.length > 0 ? JSON.stringify(attachments) : null;
   await db.withTransactionAsync(async () => {
     await db.runAsync(
-      'INSERT INTO messages (id, session_id, role, content) VALUES (?, ?, ?, ?)',
-      [id, sessionId, role, content]
+      'INSERT INTO messages (id, session_id, role, content, attachments) VALUES (?, ?, ?, ?, ?)',
+      [id, sessionId, role, content, attJson]
     );
     await db.runAsync('UPDATE sessions SET updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [sessionId]);
   });

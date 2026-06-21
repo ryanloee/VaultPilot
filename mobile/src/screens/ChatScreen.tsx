@@ -18,8 +18,20 @@ import { getMessages, addMessage, updateMessage, deleteMessage, createSession, g
 import type { ChatScreenProps } from '../navigation/types';
 import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview, MAX_HISTORY_MESSAGES } from '../utils/chatHelpers';
 
-interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
+interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; attachments?: { name: string; type: 'image' | 'file' }[]; }
 interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
+
+/** Infer MIME type from file name/extension. */
+function inferMime(name: string, fallback: string): string {
+  const ext = name.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+    jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    pdf: 'application/pdf', doc: 'application/msword',
+    txt: 'text/plain', md: 'text/markdown',
+  };
+  return ext && map[ext] ? map[ext] : fallback;
+}
 
 
 const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, onDelete, onResend }: {
@@ -49,6 +61,18 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
       <View style={[s.bubble, item.role === 'user'
         ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
         : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
+        {/* Attachment indicators for user messages */}
+        {item.attachments && item.attachments.length > 0 && (
+          <View style={s.msgAttachRow}>
+            {item.attachments.map((att, i) => (
+              <View key={i} style={[s.msgAttachChip, { borderColor: c.border }]}>
+                <Text style={{ fontSize: 12, color: c.textSecondary }}>
+                  {att.type === 'image' ? '🖼' : '📄'} {att.name}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
         {isAssistant && item.content ? (
           <>
             <MarkdownPreview content={item.content} textColor={c.aiText} accentColor={accentColor} isDark={isDark} />
@@ -127,6 +151,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       const history = await getMessages(sid);
       setMsgs(history.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+        attachments: m.attachments ? JSON.parse(m.attachments) : undefined,
       })));
     } catch (e) {
       console.warn('[Chat] loadSession failed:', e);
@@ -149,6 +174,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           const history = await getMessages(existing.id);
           setMsgs(history.map(m => ({
             id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+            attachments: m.attachments ? JSON.parse(m.attachments) : undefined,
           })));
         } else {
           const id = await createSession('新对话');
@@ -201,7 +227,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     for (const att of currentAttachments) {
       try {
         const base64 = await FileSystem.readAsStringAsync(att.uri, { encoding: FileSystem.EncodingType.Base64 });
-        const mime = att.type === 'image' ? 'image/jpeg' : 'application/octet-stream';
+        const mime = inferMime(att.name, att.type === 'image' ? 'image/jpeg' : 'application/octet-stream');
         attData.push({ base64, mime });
       } catch (e) {
         console.warn('[Chat] Failed to read attachment:', att.name, e);
@@ -212,8 +238,9 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     // Add user message — only clear input after persistence succeeds
     let userId: string;
     let activeSessionId = sessionId;
+    const attMeta = currentAttachments.map(a => ({ name: a.name, type: a.type }));
     try {
-      userId = await addMessage(activeSessionId, 'user', userText);
+      userId = await addMessage(activeSessionId, 'user', userText, attMeta);
     } catch (e: unknown) {
       // FOREIGN KEY = session was deleted/reset; recreate and retry
       if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
@@ -236,7 +263,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     setInput('');
     setInputHeight(0);
     setAttachments([]);
-    const userMsg: Msg = { id: userId, role: 'user', content: userText };
+    const userMsg: Msg = { id: userId, role: 'user', content: userText, attachments: attMeta.length > 0 ? attMeta : undefined };
     // Snapshot before state update — msgsRef may or may not be flushed by React
     // before we build the API history, so pin it here.
     const prevMsgs = [...msgsRef.current];
@@ -559,6 +586,15 @@ const s = StyleSheet.create({
     borderRadius: 12, borderWidth: 1,
   },
   attachName: { fontSize: 12, maxWidth: 150 },
+  msgAttachRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 4,
+    marginBottom: 6,
+  },
+  msgAttachChip: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: 8, borderWidth: 1, backgroundColor: 'rgba(128,128,128,0.08)',
+  },
   textInput: {
     flex: 1, borderWidth: 1, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 10,

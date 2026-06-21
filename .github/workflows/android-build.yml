@@ -78,10 +78,12 @@ jobs:
         run: |
           VOICE_GRADLE="node_modules/@react-native-voice/voice/android/build.gradle"
           if [ -f "$VOICE_GRADLE" ]; then
+            # Replace jcenter() → mavenCentral()
             sed -i 's/jcenter()/mavenCentral()/g' "$VOICE_GRADLE"
-            sed -i 's/compileSdkVersion /compileSdk /g' "$VOICE_GRADLE"
-            sed -i 's/targetSdkVersion /targetSdk /g' "$VOICE_GRADLE"
-            sed -i 's/minSdkVersion /minSdk /g' "$VOICE_GRADLE"
+            # Replace compileSdkVersion with hardcoded value (AGP 9 requires compileSdk)
+            sed -i 's/compileSdkVersion .*/compileSdk 35/' "$VOICE_GRADLE"
+            sed -i 's/targetSdkVersion .*/targetSdk 35/' "$VOICE_GRADLE"
+            sed -i 's/minSdkVersion .*/minSdk 24/' "$VOICE_GRADLE"
             echo "Patched $VOICE_GRADLE"
           fi
 

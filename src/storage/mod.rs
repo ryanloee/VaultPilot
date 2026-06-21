@@ -28,6 +28,8 @@ use crate::models::{
     NoteMeta, SearchQuery, SearchResult, VaultExportResult,
 };
 
+mod backup;
+
 /// Type alias for a pooled SQLite connection.
 type PooledConnection = r2d2::PooledConnection<SqliteConnectionManager>;
 
@@ -104,7 +106,7 @@ impl StorageContext {
         }
 
         // Auto-backup SQLite database before opening (keep last 3 backups)
-        auto_backup_database(&db_path).unwrap_or_else(|e| {
+        backup::auto_backup_database(&db_path).unwrap_or_else(|e| {
             tracing::warn!("SQLite auto-backup failed: {e}");
         });
 
@@ -3262,96 +3264,6 @@ fn make_fts_query(text: &str) -> String {
         .take(8)
         .collect();
     terms.join(" ")
-}
-
-/// Auto-backup the SQLite database, keeping the last 3 backups.
-/// Creates rotating backups: db.bak, db.bak.1, db.bak.2
-/// On Windows, `fs::rename` fails if the destination file already exists.
-/// This helper removes the file first on Windows; on Unix it is a no-op
-/// because `rename` atomically replaces the destination (#829).
-fn windows_remove_if_exists(path: &std::path::Path) {
-    #[cfg(windows)]
-    {
-        let _ = std::fs::remove_file(path);
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = path; // suppress unused variable warning
-    }
-}
-
-fn auto_backup_database(db_path: &Path) -> Result<()> {
-    if !db_path.exists() {
-        debug!("no existing database to backup");
-        return Ok(());
-    }
-
-    let backup_dir = db_path.parent().unwrap_or(Path::new("."));
-    let file_name = db_path
-        .file_name()
-        .ok_or_else(|| anyhow!("db_path has no file name: {}", db_path.display()))?;
-    let file_name_str = file_name.to_string_lossy();
-    let max_backups = 3;
-
-    // Rotate existing backups: .bak.2 -> delete, .bak.1 -> .bak.2, .bak -> .bak.1
-    for i in (1..max_backups).rev() {
-        let older = backup_dir.join(format!("{file_name_str}.bak.{i}"));
-        let newer = backup_dir.join(format!("{file_name_str}.bak.{}", i + 1));
-        if older.exists() {
-            if i + 1 >= max_backups {
-                // Delete the oldest backup
-                if let Err(e) = fs::remove_file(&older) {
-                    tracing::warn!(path = %older.display(), error = %e, "Failed to remove old backup");
-                }
-            } else {
-                // On Windows, rename fails if the destination already exists.
-                // Remove the destination first to ensure the rename succeeds.
-                windows_remove_if_exists(&newer);
-                if let Err(e) = fs::rename(&older, &newer) {
-                    tracing::warn!(from = %older.display(), to = %newer.display(), error = %e, "Failed to rotate backup");
-                }
-            }
-        }
-    }
-
-    // Move current .bak to .bak.1
-    let current_bak = backup_dir.join(format!("{file_name_str}.bak"));
-    if current_bak.exists() {
-        let bak1 = backup_dir.join(format!("{file_name_str}.bak.1"));
-        // On Windows, rename fails if the destination already exists.
-        windows_remove_if_exists(&bak1);
-        if let Err(e) = fs::rename(&current_bak, &bak1) {
-            tracing::warn!(from = %current_bak.display(), to = %bak1.display(), error = %e, "Failed to rotate current backup");
-        }
-    }
-
-    // Checkpoint WAL before copying to ensure backup is consistent.
-    // In WAL mode, committed transactions may reside in the -wal file
-    // and won't be included in a plain file copy.
-    // Hold the checkpoint connection alive through fs::copy to prevent
-    // new WAL transactions from starting between checkpoint and copy.
-    let _checkpoint_guard = Connection::open(db_path).ok();
-    if let Some(ref conn) = _checkpoint_guard {
-        // Set busy_timeout so the checkpoint retries on SQLITE_BUSY instead of
-        // failing immediately when another connection has an active transaction.
-        let _ = conn.execute_batch("PRAGMA busy_timeout = 5000;");
-        // TRUNCATE mode: flush WAL into main DB and truncate WAL file
-        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
-            tracing::warn!(error = %e, "WAL checkpoint before backup failed, proceeding with copy");
-        }
-    }
-
-    // Copy current database to .bak
-    fs::copy(db_path, &current_bak).with_context(|| {
-        format!(
-            "failed to backup database from {} to {}",
-            db_path.display(),
-            current_bak.display()
-        )
-    })?;
-
-    debug!(source = %db_path.display(), backup = %current_bak.display(), "database backed up");
-    Ok(())
 }
 
 /// Export the entire vault as a zip file: all notes (as .md with frontmatter)

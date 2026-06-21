@@ -525,3 +525,9 @@
 - 发版: v0.3.31 (tag 已推送)
 - 累计: ~1217 PR 编号
 - 项目状态: 0 open issue, 0 open PR, cargo test 全通过, v0.3.31
+
+## 修复阶段 fix-3 (循环#242)
+- #1206: MainWindow.xaml.cs Chat partial class extraction → PR #1230 (2661→1317 lines, -1344)
+- #1231: db.ts unit tests extended → PR #1233 (18→28 test cases, +10 new)
+- Closed: #1232 (SSE tests already exist in sse.test.ts), #1205 (duplicate of #1219), #1234 (not feasible in node test env)
+- cargo test 16 passed, mobile jest 137 passed (11 suites)

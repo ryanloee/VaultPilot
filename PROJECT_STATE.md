@@ -499,16 +499,16 @@
 499|- 2026-06-14 [修复轮#109]: render_history XML 转义、load_recent_notes_for_overview spawn_blocking、cached_settings mutex 中毒恢复
 500|- 2026-06-14 [PR审核轮#110]: 审核并合并 PR #494 (#491+#492+#493)，CI 5/6 通过（cargo audit 预存在 CVE），累计 200 已合并 PR
 501|
-## 本轮循环状态 (循环#241)
+## 本轮循环状态 (循环#243)
 <!-- 讨论团队在每轮开始时写入 -->
-- 循环编号: 循环#241
-- 本轮时间: 2026-06-21
-- 审查模块: 全局扫描 — Rust (12 文件 18207 行) + C# WinUI (14 文件 7087 行) + Mobile (12 文件 5886 行)
-- 竞品调研: Mem.ai (NLP 自动组织、Voice Mode、Heads Up 相关笔记推荐、$12/月)。Obsidian Copilot (10 万+ 用户、语义索引、inline AI 命令、model agnostic)。Notion AI (从写作助手进化为工作流引擎、AI Agents、数据库分析)。VaultPilot 差异化: 本地优先 + MCP server + 三端原生 + 用户自备 key + 工程笔记场景。
-- 讨论阶段发现: 0 个新 issue（推动已有 28 个 feature issue 实现）
-- 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 生产 unwrap、0 TODO/FIXME、clippy 零警告、cargo test 397 全通过。storage/mod.rs (5357 行，Phase 1 backup.rs 已提取) 和 MainWindow.xaml.cs (2661 行) 仍是最大技术债。
-- 项目状态: **28 open feature issue, 0 open PR, ~1217 PR 编号, cargo test 全通过, v0.3.31**
-- 重点议题: Mobile 核心功能(#882设置页+#1219 onboarding 最高优先) → 知识管理增强(#1221智能标签) → storage.rs Phase 2(sessions模块) → MainWindow Chat 提取
+- 循环编号: 循环#243
+- 本轮时间: 2026-06-22
+- 审查模块: 全局扫描 — 2 个 open PR (#1228, #1230), 24 个 open feature issues
+- 竞品调研: Notion AI 2026 (工作流引擎 + 自定义 Agent + MCP Server + 多模型切换 + credit 计费)。思源笔记 v3.6.5 (全平台 + Block-level references + FSRS 间隔重复 + SQL 查询 + 端到端加密同步)。VaultPilot 差异化: 本地优先 + MCP server + 三端原生 + 用户自备 key + 工程笔记场景。
+- 讨论阶段发现: 0 个新 issue（推动已有 24 个 feature issue 实现）
+- 代码审查: 项目处于「零缺陷」状态 — 0 unsafe、0 TODO/FIXME、clippy 零警告、cargo test 16 passed、mobile jest 137 passed。storage/mod.rs (5357 行，PR #1228 Phase 2 待合并) 和 MainWindow.xaml.cs (PR #1230 Chat extraction 待合并) 是最大技术债。ai.rs 118 个 unwrap 均在测试代码中。
+- 项目状态: **24 open feature issue, 2 open PR (#1228 CI 通过, #1230 CI 未触发), ~1233 PR 编号, v0.3.32**
+- 重点议题: (1) 合并 PR #1228+#1230 → (2) Mobile 设置页 #882 (blocker) → (3) Mobile 编辑器 #883 + 文件夹 #975
 
 ## 本轮审核阶段 (审核轮#235)
 - 合并 PR: #1204 (flaky validate_base_url test ENV_MUTEX 修复), #1211 (mobile client.ts 单元测试), #1210 (mobile rag.ts RAG 逻辑单元测试)
@@ -531,3 +531,13 @@
 - #1231: db.ts unit tests extended → PR #1233 (18→28 test cases, +10 new)
 - Closed: #1232 (SSE tests already exist in sse.test.ts), #1205 (duplicate of #1219), #1234 (not feasible in node test env)
 - cargo test 16 passed, mobile jest 137 passed (11 suites)
+
+## 审核阶段 review (循环#242)
+- PR #1233: test(mobile): extend db.ts unit tests — ✅ 已合并
+- PR #1229: refactor(mobile): extract shared fmtTime utility — ✅ 已合并
+- PR #1227: ci: auto-merge main into PR branches before CI checks — ✅ 已合并
+- PR #1226: feat(mobile): APK 自动更新检测 — ✅ 已合并
+- PR #1225: feat(mobile): 首次使用引导页面 OnboardingScreen — ✅ 已合并
+- PR #1230: refactor(WinUI): extract Chat partial class — ❌ winui-build 失败 (CS0103: _isShuttingDown, LogStartup)
+- PR #1228: refactor(storage): extract chat session module — ❌ cargo fmt 失败
+- 发版: v0.3.32 (5 PR 合并)

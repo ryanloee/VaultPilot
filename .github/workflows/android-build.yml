@@ -97,7 +97,7 @@ jobs:
       - name: Build APK
         run: |
           cd android
-          ./gradlew assembleRelease --stacktrace --info 2>&1 | tail -80
+          ./gradlew assembleRelease --stacktrace 2>&1 | grep -A10 "FAILED\|Exception\|Error\|non-zero" | head -40
 
       - name: Validate APK
         run: |

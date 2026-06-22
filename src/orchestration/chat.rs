@@ -537,8 +537,14 @@ mod tests {
     #[test]
     fn estimate_turn_tokens_with_attachments() {
         let attachments = vec![
-            ChatAttachment { path: "a.png".into(), name: "a.png".into() },
-            ChatAttachment { path: "b.png".into(), name: "b.png".into() },
+            ChatAttachment {
+                path: "a.png".into(),
+                name: "a.png".into(),
+            },
+            ChatAttachment {
+                path: "b.png".into(),
+                name: "b.png".into(),
+            },
         ];
         let text_tokens = estimate_tokens_for_text(Some("hello"));
         let expected = text_tokens + 2 * IMAGE_ATTACHMENT_TOKEN_ESTIMATE;
@@ -587,9 +593,10 @@ mod tests {
     fn enrich_appends_attachment_names() {
         let turn = ChatTurn {
             text: "see this".into(),
-            attachments: vec![
-                ChatAttachment { path: "a.png".into(), name: "photo.png".into() },
-            ],
+            attachments: vec![ChatAttachment {
+                path: "a.png".into(),
+                name: "photo.png".into(),
+            }],
             ..Default::default()
         };
         let result = enrich_turn_for_compression(&turn);

@@ -47,14 +47,16 @@ jobs:
 
       - name: Install cargo-audit
         shell: powershell
+        env:
+          CARGO_HTTP_HTTP2: "0"
         run: |
-          for ($i = 1; $i -le 3; $i++) {
-            cargo install cargo-audit --locked
+          for ($i = 1; $i -le 5; $i++) {
+            cargo install cargo-audit --locked --force
             if ($LASTEXITCODE -eq 0) { break }
-            Write-Host "Attempt $i failed, retrying in 10s..."
-            Start-Sleep -Seconds 10
+            Write-Host "Attempt $i failed, retrying in 30s..."
+            Start-Sleep -Seconds 30
           }
-          if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-audit failed after 3 attempts" }
+          if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-audit failed after 5 attempts" }
 
       - name: Run cargo audit
         shell: powershell

@@ -155,10 +155,10 @@ jobs:
 
       - name: Install cargo-audit
         run: |
-          for i in 1 2 3; do
-            cargo install cargo-audit --locked && break
-            echo "Attempt $i failed, retrying in 10s..."
-            sleep 10
+          for i in 1 2 3 4 5; do
+            cargo install cargo-audit --locked --force && break
+            echo "Attempt $i failed, retrying in 30s..."
+            sleep 30
           done
 
       - name: Run cargo audit

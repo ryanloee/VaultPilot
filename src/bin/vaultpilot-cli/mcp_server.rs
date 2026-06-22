@@ -331,6 +331,10 @@ pub(super) async fn run_mcp_http_server(
     let ip: IpAddr = host
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid host '{}': {}", host, e))?;
+
+    // Non-loopback binding requires token auth (same policy as HTTP bridge)
+    crate::http_bridge::validate_http_bridge_binding(ip, token.as_deref())?;
+
     let address = SocketAddr::new(ip, port);
     let state = Arc::new(McpHttpState {
         context,
@@ -1795,5 +1799,32 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.is_some());
         assert_eq!(resp.error.as_ref().unwrap().code, -32600);
+    }
+
+    // ── MCP HTTP server binding validation (regression for #1306) ──
+
+    #[test]
+    fn mcp_http_rejects_non_loopback_without_token() {
+        // Non-loopback binding without token must fail (same as HTTP bridge)
+        let result =
+            crate::http_bridge::validate_http_bridge_binding("192.168.1.1".parse().unwrap(), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("--token"));
+    }
+
+    #[test]
+    fn mcp_http_allows_loopback_without_token() {
+        let result =
+            crate::http_bridge::validate_http_bridge_binding("127.0.0.1".parse().unwrap(), None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn mcp_http_allows_non_loopback_with_token() {
+        let result = crate::http_bridge::validate_http_bridge_binding(
+            "192.168.1.1".parse().unwrap(),
+            Some("secret"),
+        );
+        assert!(result.is_ok());
     }
 }

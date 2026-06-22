@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
 use deunicode::deunicode;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::{debug, instrument, warn};
 
 use crate::models::{NoteDocument, NoteMeta, SearchQuery, SearchResult};
@@ -142,7 +142,11 @@ pub fn search_notes_with_context(
     Ok(SearchResult { notes, total })
 }
 
-pub(super) fn build_attachment_semantic_text(file_name: &str, stem: &str, ocr_text: &str) -> String {
+pub(super) fn build_attachment_semantic_text(
+    file_name: &str,
+    stem: &str,
+    ocr_text: &str,
+) -> String {
     [file_name.trim(), stem.trim(), ocr_text.trim()]
         .into_iter()
         .filter(|part| !part.is_empty())
@@ -615,7 +619,10 @@ fn query_attachment_fts_note_ids(
     Ok(note_ids)
 }
 
-pub(super) fn load_note_meta_by_id(connection: &Connection, note_id: &str) -> Result<Option<NoteMeta>> {
+pub(super) fn load_note_meta_by_id(
+    connection: &Connection,
+    note_id: &str,
+) -> Result<Option<NoteMeta>> {
     connection
         .query_row(
             "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
@@ -1455,9 +1462,7 @@ fn make_fts_query(text: &str) -> String {
 mod tests {
     use super::*;
     // AttachmentEntry is defined in this module
-    use crate::storage::{
-        initialize_storage_with_context, save_note_with_context,
-    };
+    use crate::storage::{initialize_storage_with_context, save_note_with_context};
 
     fn setup_temp_context() -> (std::path::PathBuf, crate::storage::StorageContext) {
         let temp = std::env::temp_dir().join(format!(
@@ -1469,701 +1474,701 @@ mod tests {
         (temp, ctx)
     }
 
-        #[test]
-        fn escape_like_pattern_escapes_wildcards() {
-            // Percent sign
-            assert_eq!(escape_like_pattern("100%"), "100\\%");
-            // Underscore
-            assert_eq!(escape_like_pattern("a_b"), "a\\_b");
-            // Backslash
-            assert_eq!(escape_like_pattern("a\\b"), "a\\\\b");
-            // Combined
-            assert_eq!(escape_like_pattern("%_\\test"), "\\%\\_\\\\test");
-            // No wildcards
-            assert_eq!(escape_like_pattern("hello"), "hello");
-            // Empty string
-            assert_eq!(escape_like_pattern(""), "");
-        }
-        #[test]
-        fn extract_search_terms_understands_mixed_cn_and_domain_terms() {
-            let terms = extract_search_terms("告诉我 sd卡的引脚复用怎么做的");
-            assert!(terms.iter().any(|term| term == "sd"));
-            assert!(terms.iter().any(|term| term == "sd卡"));
-            assert!(terms.iter().any(|term| term == "引脚"));
-            assert!(terms.iter().any(|term| term == "复用"));
-            assert!(terms.iter().any(|term| term == "引脚复用"));
-            assert!(terms.iter().any(|term| term == "mmc"));
-        }
-        #[test]
-        fn fts_query_preserves_pure_cjk_text() {
-            let query = make_fts_query("你好");
+    #[test]
+    fn escape_like_pattern_escapes_wildcards() {
+        // Percent sign
+        assert_eq!(escape_like_pattern("100%"), "100\\%");
+        // Underscore
+        assert_eq!(escape_like_pattern("a_b"), "a\\_b");
+        // Backslash
+        assert_eq!(escape_like_pattern("a\\b"), "a\\\\b");
+        // Combined
+        assert_eq!(escape_like_pattern("%_\\test"), "\\%\\_\\\\test");
+        // No wildcards
+        assert_eq!(escape_like_pattern("hello"), "hello");
+        // Empty string
+        assert_eq!(escape_like_pattern(""), "");
+    }
+    #[test]
+    fn extract_search_terms_understands_mixed_cn_and_domain_terms() {
+        let terms = extract_search_terms("告诉我 sd卡的引脚复用怎么做的");
+        assert!(terms.iter().any(|term| term == "sd"));
+        assert!(terms.iter().any(|term| term == "sd卡"));
+        assert!(terms.iter().any(|term| term == "引脚"));
+        assert!(terms.iter().any(|term| term == "复用"));
+        assert!(terms.iter().any(|term| term == "引脚复用"));
+        assert!(terms.iter().any(|term| term == "mmc"));
+    }
+    #[test]
+    fn fts_query_preserves_pure_cjk_text() {
+        let query = make_fts_query("你好");
+        assert!(
+            !query.is_empty(),
+            "CJK text should not be stripped from FTS query"
+        );
+        // Terms are now wrapped in double quotes for FTS5 safety
+        assert!(query.contains("\"你好\""));
+    }
+
+    #[test]
+    fn fts_query_handles_cjk_search_terms() {
+        let query = make_fts_query("引脚配置");
+        assert!(
+            !query.is_empty(),
+            "CJK search terms should produce non-empty FTS query"
+        );
+        // extract_search_terms generates bigrams like "引脚" and "配置"
+        // Terms are now wrapped in double quotes for FTS5 safety
+        assert!(query.contains("\"引脚\""));
+        assert!(query.contains("\"配置\""));
+    }
+
+    #[test]
+    fn escape_fts5_term_wraps_in_quotes() {
+        assert_eq!(escape_fts5_term("hello"), "\"hello\"");
+        assert_eq!(escape_fts5_term("test_123"), "\"test_123\"");
+        assert_eq!(escape_fts5_term("non-volatile"), "\"non-volatile\"");
+    }
+
+    #[test]
+    fn escape_fts5_term_strips_special_chars() {
+        // FTS5 operators like *, +, :, ^, (, ) are stripped by the filter
+        assert_eq!(escape_fts5_term("hello*world"), "\"helloworld\"");
+        assert_eq!(escape_fts5_term("foo+bar"), "\"foobar\"");
+        assert_eq!(escape_fts5_term("a:b"), "\"ab\"");
+        assert_eq!(escape_fts5_term("test^case"), "\"testcase\"");
+        assert_eq!(escape_fts5_term("(parens)"), "\"parens\"");
+    }
+
+    #[test]
+    fn escape_fts5_term_empty_after_filtering() {
+        assert_eq!(escape_fts5_term(""), String::new());
+        assert_eq!(escape_fts5_term("***"), String::new());
+        // Only chars that are NOT alphanumeric, CJK, '_', or '-' produce empty
+        assert_eq!(escape_fts5_term("+^:"), String::new());
+    }
+
+    #[test]
+    fn escape_fts5_term_preserves_unicode_letters() {
+        // French accented characters
+        assert_eq!(escape_fts5_term("café"), "\"café\"");
+        // German umlauts
+        assert_eq!(escape_fts5_term("über"), "\"über\"");
+        assert_eq!(escape_fts5_term("schön"), "\"schön\"");
+        // Russian Cyrillic
+        assert_eq!(escape_fts5_term("Москва"), "\"Москва\"");
+        // Mixed ASCII + Unicode
+        assert_eq!(escape_fts5_term("résumé"), "\"résumé\"");
+    }
+
+    #[test]
+    fn make_fts_query_escapes_special_characters() {
+        // extract_search_terms splits "hello*world" into "hello" and "world"
+        let query = make_fts_query("hello*world");
+        assert!(query.contains("\"hello\""));
+        assert!(query.contains("\"world\""));
+    }
+
+    #[test]
+    fn make_fts_query_does_not_produce_fts5_operators() {
+        // A query like "test -not" should not produce a bare minus sign
+        let query = make_fts_query("test -not");
+        // All terms should be quoted, no bare operators
+        for part in query.split_whitespace() {
             assert!(
-                !query.is_empty(),
-                "CJK text should not be stripped from FTS query"
+                part.starts_with('"') && part.ends_with('"'),
+                "each term should be quoted: {part}"
             );
-            // Terms are now wrapped in double quotes for FTS5 safety
-            assert!(query.contains("\"你好\""));
         }
+    }
+    #[test]
+    fn semantic_vectors_rank_related_text_higher() {
+        let query = build_text_semantic_vector("github release workflow tag publish")
+            .expect("query vector");
+        let related =
+            build_text_semantic_vector("release tag publish github").expect("related vector");
+        let unrelated =
+            build_text_semantic_vector("pinmux mmc gpio kernel").expect("unrelated vector");
 
-        #[test]
-        fn fts_query_handles_cjk_search_terms() {
-            let query = make_fts_query("引脚配置");
-            assert!(
-                !query.is_empty(),
-                "CJK search terms should produce non-empty FTS query"
-            );
-            // extract_search_terms generates bigrams like "引脚" and "配置"
-            // Terms are now wrapped in double quotes for FTS5 safety
-            assert!(query.contains("\"引脚\""));
-            assert!(query.contains("\"配置\""));
-        }
+        assert!(cosine_similarity(&query, &related) > cosine_similarity(&query, &unrelated));
+        assert!(similarity_to_rank_score(cosine_similarity(&query, &related)) > 0);
+    }
 
-        #[test]
-        fn escape_fts5_term_wraps_in_quotes() {
-            assert_eq!(escape_fts5_term("hello"), "\"hello\"");
-            assert_eq!(escape_fts5_term("test_123"), "\"test_123\"");
-            assert_eq!(escape_fts5_term("non-volatile"), "\"non-volatile\"");
-        }
+    #[test]
+    fn attachment_text_score_uses_ocr_text() {
+        let attachments = vec![AttachmentEntry {
+            note_id: "n1".to_string(),
+            path: "D:/vault/2026/04/release.md".to_string(),
+            file_name: "screenshot.png".to_string(),
+            stem: "screenshot".to_string(),
+            ocr_text: "GitHub Release v0.1.1 publish workflow".to_string(),
+            semantic_vector: None,
+            perceptual_hash: None,
+        }];
 
-        #[test]
-        fn escape_fts5_term_strips_special_chars() {
-            // FTS5 operators like *, +, :, ^, (, ) are stripped by the filter
-            assert_eq!(escape_fts5_term("hello*world"), "\"helloworld\"");
-            assert_eq!(escape_fts5_term("foo+bar"), "\"foobar\"");
-            assert_eq!(escape_fts5_term("a:b"), "\"ab\"");
-            assert_eq!(escape_fts5_term("test^case"), "\"testcase\"");
-            assert_eq!(escape_fts5_term("(parens)"), "\"parens\"");
-        }
+        assert!(attachment_text_relevance_score("release workflow", &attachments) > 0);
+    }
 
-        #[test]
-        fn escape_fts5_term_empty_after_filtering() {
-            assert_eq!(escape_fts5_term(""), String::new());
-            assert_eq!(escape_fts5_term("***"), String::new());
-            // Only chars that are NOT alphanumeric, CJK, '_', or '-' produce empty
-            assert_eq!(escape_fts5_term("+^:"), String::new());
-        }
+    #[test]
+    fn relevance_score_hits_sd_pinmux_note_from_natural_query() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                id: "1".to_string(),
+                title: "RK3566 SD卡复用引脚电路示意图".to_string(),
+                tags: vec![
+                    "RK3566".to_string(),
+                    "SD卡".to_string(),
+                    "引脚复用".to_string(),
+                ],
+                keywords: vec![
+                    "sd card".to_string(),
+                    "pin multiplexing".to_string(),
+                    "mmc".to_string(),
+                ],
+                platform: "RK3566".to_string(),
+                board: String::new(),
+                kernel: String::new(),
+                status: "待确认".to_string(),
+                created_at: String::new(),
+                updated_at: "2026-04-10T00:00:00Z".to_string(),
+                source: "manual".to_string(),
+                path: "vault/2026/04/rk3566-sd.md".to_string(),
+                summary: "记录 RK3566 平台下 SD 卡引脚复用的电路与对照信息".to_string(),
+            },
+            body:
+                "## 概述\nSD 卡接口引脚连接定义。\n## 备注\n软件层可参考 Device Tree pinctrl 配置。"
+                    .to_string(),
+            search_snippet: None,
+        };
 
-        #[test]
-        fn escape_fts5_term_preserves_unicode_letters() {
-            // French accented characters
-            assert_eq!(escape_fts5_term("café"), "\"café\"");
-            // German umlauts
-            assert_eq!(escape_fts5_term("über"), "\"über\"");
-            assert_eq!(escape_fts5_term("schön"), "\"schön\"");
-            // Russian Cyrillic
-            assert_eq!(escape_fts5_term("Москва"), "\"Москва\"");
-            // Mixed ASCII + Unicode
-            assert_eq!(escape_fts5_term("résumé"), "\"résumé\"");
-        }
+        assert!(document_relevance_score("sd卡的引脚复用怎么做的", &doc) > 200);
+    }
+    #[test]
+    fn relevance_score_hits_flash_command_note_from_broad_query() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                id: "2".to_string(),
+                title: "刷机命令记录".to_string(),
+                tags: vec!["刷机".to_string()],
+                keywords: vec![
+                    "wboot".to_string(),
+                    "update".to_string(),
+                    "zboot".to_string(),
+                ],
+                platform: String::new(),
+                board: String::new(),
+                kernel: String::new(),
+                status: "已解决".to_string(),
+                created_at: String::new(),
+                updated_at: "2026-04-10T00:00:00Z".to_string(),
+                source: "manual".to_string(),
+                path: "vault/2026/04/flash.md".to_string(),
+                summary: "之前刷机时使用过的命令记录".to_string(),
+            },
+            body: "相关命令: wboot -w update zboot.img".to_string(),
+            search_snippet: None,
+        };
 
-        #[test]
-        fn make_fts_query_escapes_special_characters() {
-            // extract_search_terms splits "hello*world" into "hello" and "world"
-            let query = make_fts_query("hello*world");
-            assert!(query.contains("\"hello\""));
-            assert!(query.contains("\"world\""));
-        }
+        assert!(document_relevance_score("刷机怎么刷啊", &doc) > 180);
+    }
+    // ── 1.12 normalize_search_text / normalize_query_for_search ──
 
-        #[test]
-        fn make_fts_query_does_not_produce_fts5_operators() {
-            // A query like "test -not" should not produce a bare minus sign
-            let query = make_fts_query("test -not");
-            // All terms should be quoted, no bare operators
-            for part in query.split_whitespace() {
-                assert!(
-                    part.starts_with('"') && part.ends_with('"'),
-                    "each term should be quoted: {part}"
-                );
-            }
-        }
-        #[test]
-        fn semantic_vectors_rank_related_text_higher() {
-            let query = build_text_semantic_vector("github release workflow tag publish")
-                .expect("query vector");
-            let related =
-                build_text_semantic_vector("release tag publish github").expect("related vector");
-            let unrelated =
-                build_text_semantic_vector("pinmux mmc gpio kernel").expect("unrelated vector");
+    #[test]
+    fn normalize_search_text_lowercases() {
+        assert!(normalize_search_text("Hello WORLD").contains("hello world"));
+    }
 
-            assert!(cosine_similarity(&query, &related) > cosine_similarity(&query, &unrelated));
-            assert!(similarity_to_rank_score(cosine_similarity(&query, &related)) > 0);
-        }
+    #[test]
+    fn normalize_search_text_preserves_cjk() {
+        let result = normalize_search_text("测试MMC模块");
+        assert!(result.contains("测试"));
+        assert!(result.contains("mmc"));
+    }
 
-        #[test]
-        fn attachment_text_score_uses_ocr_text() {
-            let attachments = vec![AttachmentEntry {
-                note_id: "n1".to_string(),
-                path: "D:/vault/2026/04/release.md".to_string(),
-                file_name: "screenshot.png".to_string(),
-                stem: "screenshot".to_string(),
-                ocr_text: "GitHub Release v0.1.1 publish workflow".to_string(),
-                semantic_vector: None,
-                perceptual_hash: None,
-            }];
+    #[test]
+    fn normalize_query_removes_noise_phrases() {
+        let result = normalize_query_for_search("告诉我sd卡怎么做");
+        assert!(!result.contains("告诉我"));
+        assert!(result.contains("sd"));
+    }
+    // ── 1.13 is_noise_term ──
 
-            assert!(attachment_text_relevance_score("release workflow", &attachments) > 0);
-        }
+    #[test]
+    fn noise_terms_detected() {
+        assert!(is_noise_term("什么"));
+        assert!(is_noise_term("怎么"));
+        assert!(is_noise_term("如何"));
+        assert!(is_noise_term("这个"));
+        assert!(is_noise_term("那个"));
+    }
 
-        #[test]
-        fn relevance_score_hits_sd_pinmux_note_from_natural_query() {
-            let doc = NoteDocument {
-                meta: NoteMeta {
-                    id: "1".to_string(),
-                    title: "RK3566 SD卡复用引脚电路示意图".to_string(),
-                    tags: vec![
-                        "RK3566".to_string(),
-                        "SD卡".to_string(),
-                        "引脚复用".to_string(),
-                    ],
-                    keywords: vec![
-                        "sd card".to_string(),
-                        "pin multiplexing".to_string(),
-                        "mmc".to_string(),
-                    ],
-                    platform: "RK3566".to_string(),
-                    board: String::new(),
-                    kernel: String::new(),
-                    status: "待确认".to_string(),
-                    created_at: String::new(),
-                    updated_at: "2026-04-10T00:00:00Z".to_string(),
-                    source: "manual".to_string(),
-                    path: "vault/2026/04/rk3566-sd.md".to_string(),
-                    summary: "记录 RK3566 平台下 SD 卡引脚复用的电路与对照信息".to_string(),
-                },
-                body:
-                    "## 概述\nSD 卡接口引脚连接定义。\n## 备注\n软件层可参考 Device Tree pinctrl 配置。"
-                        .to_string(),
-                search_snippet: None,
-            };
+    #[test]
+    fn real_terms_not_noise() {
+        assert!(!is_noise_term("sd卡"));
+        assert!(!is_noise_term("mmc"));
+        assert!(!is_noise_term("flash"));
+        assert!(!is_noise_term("刷机"));
+    }
+    // ── 1.14 expand_term_aliases ──
 
-            assert!(document_relevance_score("sd卡的引脚复用怎么做的", &doc) > 200);
-        }
-        #[test]
-        fn relevance_score_hits_flash_command_note_from_broad_query() {
-            let doc = NoteDocument {
-                meta: NoteMeta {
-                    id: "2".to_string(),
-                    title: "刷机命令记录".to_string(),
-                    tags: vec!["刷机".to_string()],
-                    keywords: vec![
-                        "wboot".to_string(),
-                        "update".to_string(),
-                        "zboot".to_string(),
-                    ],
-                    platform: String::new(),
-                    board: String::new(),
-                    kernel: String::new(),
-                    status: "已解决".to_string(),
-                    created_at: String::new(),
-                    updated_at: "2026-04-10T00:00:00Z".to_string(),
-                    source: "manual".to_string(),
-                    path: "vault/2026/04/flash.md".to_string(),
-                    summary: "之前刷机时使用过的命令记录".to_string(),
-                },
-                body: "相关命令: wboot -w update zboot.img".to_string(),
-                search_snippet: None,
-            };
+    #[test]
+    fn expand_sd_aliases() {
+        let aliases = expand_term_aliases("sd");
+        assert!(aliases.contains(&"sd卡".to_string()));
+        assert!(aliases.contains(&"sdio".to_string()));
+        assert!(aliases.contains(&"mmc".to_string()));
+        assert!(aliases.contains(&"tf".to_string()));
+    }
 
-            assert!(document_relevance_score("刷机怎么刷啊", &doc) > 180);
-        }
-        // ── 1.12 normalize_search_text / normalize_query_for_search ──
+    #[test]
+    fn expand_flash_aliases() {
+        let aliases = expand_term_aliases("刷机");
+        assert!(aliases.contains(&"烧录".to_string()));
+        assert!(aliases.contains(&"flash".to_string()));
+        assert!(aliases.contains(&"wboot".to_string()));
+    }
 
-        #[test]
-        fn normalize_search_text_lowercases() {
-            assert!(normalize_search_text("Hello WORLD").contains("hello world"));
-        }
+    #[test]
+    fn expand_gpio_aliases() {
+        let aliases = expand_term_aliases("gpio");
+        assert!(aliases.contains(&"管脚".to_string()));
+        assert!(aliases.contains(&"引脚".to_string()));
+    }
 
-        #[test]
-        fn normalize_search_text_preserves_cjk() {
-            let result = normalize_search_text("测试MMC模块");
-            assert!(result.contains("测试"));
-            assert!(result.contains("mmc"));
-        }
+    #[test]
+    fn expand_pinmux_aliases() {
+        let aliases = expand_term_aliases("pinmux");
+        assert!(aliases.contains(&"引脚复用".to_string()));
+        assert!(aliases.contains(&"iomux".to_string()));
+    }
 
-        #[test]
-        fn normalize_query_removes_noise_phrases() {
-            let result = normalize_query_for_search("告诉我sd卡怎么做");
-            assert!(!result.contains("告诉我"));
-            assert!(result.contains("sd"));
-        }
-        // ── 1.13 is_noise_term ──
+    #[test]
+    fn expand_random_term_returns_empty() {
+        assert!(expand_term_aliases("something_unrelated_xyz").is_empty());
+    }
+    // ── 1.15 is_cjk / is_cjk_stop_char ──
 
-        #[test]
-        fn noise_terms_detected() {
-            assert!(is_noise_term("什么"));
-            assert!(is_noise_term("怎么"));
-            assert!(is_noise_term("如何"));
-            assert!(is_noise_term("这个"));
-            assert!(is_noise_term("那个"));
-        }
+    #[test]
+    fn cjk_chars_identified() {
+        assert!(is_cjk('电'));
+        assert!(is_cjk('的'));
+        assert!(!is_cjk('A'));
+        assert!(!is_cjk('1'));
+        // CJK Extension A (U+3400–U+4DBF)
+        assert!(is_cjk('\u{3400}'));
+        // CJK Compatibility Ideographs (U+F900–U+FAFF)
+        assert!(is_cjk('\u{F900}'));
+    }
 
-        #[test]
-        fn real_terms_not_noise() {
-            assert!(!is_noise_term("sd卡"));
-            assert!(!is_noise_term("mmc"));
-            assert!(!is_noise_term("flash"));
-            assert!(!is_noise_term("刷机"));
-        }
-        // ── 1.14 expand_term_aliases ──
+    #[test]
+    fn cjk_stop_chars_detected() {
+        assert!(is_cjk_stop_char('的'));
+        assert!(is_cjk_stop_char('了'));
+        assert!(!is_cjk_stop_char('电'));
+    }
+    // ── 1.16 sliding_char_grams ──
 
-        #[test]
-        fn expand_sd_aliases() {
-            let aliases = expand_term_aliases("sd");
-            assert!(aliases.contains(&"sd卡".to_string()));
-            assert!(aliases.contains(&"sdio".to_string()));
-            assert!(aliases.contains(&"mmc".to_string()));
-            assert!(aliases.contains(&"tf".to_string()));
-        }
+    #[test]
+    fn sliding_grams_normal() {
+        let result = sliding_char_grams("abcd", 3);
+        assert_eq!(result, vec!["abc", "bcd"]);
+    }
 
-        #[test]
-        fn expand_flash_aliases() {
-            let aliases = expand_term_aliases("刷机");
-            assert!(aliases.contains(&"烧录".to_string()));
-            assert!(aliases.contains(&"flash".to_string()));
-            assert!(aliases.contains(&"wboot".to_string()));
-        }
+    #[test]
+    fn sliding_grams_too_short() {
+        assert!(sliding_char_grams("ab", 3).is_empty());
+    }
 
-        #[test]
-        fn expand_gpio_aliases() {
-            let aliases = expand_term_aliases("gpio");
-            assert!(aliases.contains(&"管脚".to_string()));
-            assert!(aliases.contains(&"引脚".to_string()));
-        }
+    #[test]
+    fn sliding_grams_exact_length() {
+        assert_eq!(sliding_char_grams("abc", 3), vec!["abc"]);
+    }
+    // ── 1.17 document_relevance_score edge cases ──
 
-        #[test]
-        fn expand_pinmux_aliases() {
-            let aliases = expand_term_aliases("pinmux");
-            assert!(aliases.contains(&"引脚复用".to_string()));
-            assert!(aliases.contains(&"iomux".to_string()));
-        }
+    #[test]
+    fn relevance_empty_query_returns_zero() {
+        let doc = NoteDocument::default();
+        assert_eq!(document_relevance_score("", &doc), 0);
+    }
 
-        #[test]
-        fn expand_random_term_returns_empty() {
-            assert!(expand_term_aliases("something_unrelated_xyz").is_empty());
-        }
-        // ── 1.15 is_cjk / is_cjk_stop_char ──
-
-        #[test]
-        fn cjk_chars_identified() {
-            assert!(is_cjk('电'));
-            assert!(is_cjk('的'));
-            assert!(!is_cjk('A'));
-            assert!(!is_cjk('1'));
-            // CJK Extension A (U+3400–U+4DBF)
-            assert!(is_cjk('\u{3400}'));
-            // CJK Compatibility Ideographs (U+F900–U+FAFF)
-            assert!(is_cjk('\u{F900}'));
-        }
-
-        #[test]
-        fn cjk_stop_chars_detected() {
-            assert!(is_cjk_stop_char('的'));
-            assert!(is_cjk_stop_char('了'));
-            assert!(!is_cjk_stop_char('电'));
-        }
-        // ── 1.16 sliding_char_grams ──
-
-        #[test]
-        fn sliding_grams_normal() {
-            let result = sliding_char_grams("abcd", 3);
-            assert_eq!(result, vec!["abc", "bcd"]);
-        }
-
-        #[test]
-        fn sliding_grams_too_short() {
-            assert!(sliding_char_grams("ab", 3).is_empty());
-        }
-
-        #[test]
-        fn sliding_grams_exact_length() {
-            assert_eq!(sliding_char_grams("abc", 3), vec!["abc"]);
-        }
-        // ── 1.17 document_relevance_score edge cases ──
-
-        #[test]
-        fn relevance_empty_query_returns_zero() {
-            let doc = NoteDocument::default();
-            assert_eq!(document_relevance_score("", &doc), 0);
-        }
-
-        #[test]
-        fn relevance_no_match_returns_zero() {
-            let doc = NoteDocument {
-                meta: NoteMeta {
-                    title: "Completely Unrelated".to_string(),
-                    ..Default::default()
-                },
-                body: "Nothing relevant here".to_string(),
-                search_snippet: None,
-            };
-            assert_eq!(document_relevance_score("mmc sd卡 pinmux", &doc), 0);
-        }
-
-        #[test]
-        fn relevance_body_only_match() {
-            let doc = NoteDocument {
-                body: "mmc timeout after 30 seconds".to_string(),
+    #[test]
+    fn relevance_no_match_returns_zero() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                title: "Completely Unrelated".to_string(),
                 ..Default::default()
-            };
-            assert!(document_relevance_score("mmc timeout", &doc) > 0);
+            },
+            body: "Nothing relevant here".to_string(),
+            search_snippet: None,
+        };
+        assert_eq!(document_relevance_score("mmc sd卡 pinmux", &doc), 0);
+    }
+
+    #[test]
+    fn relevance_body_only_match() {
+        let doc = NoteDocument {
+            body: "mmc timeout after 30 seconds".to_string(),
+            ..Default::default()
+        };
+        assert!(document_relevance_score("mmc timeout", &doc) > 0);
+    }
+    // ── 1.18 attachment_text_relevance_score edge cases ──
+
+    #[test]
+    fn attachment_score_empty_attachments_zero() {
+        assert_eq!(attachment_text_relevance_score("mmc", &[]), 0);
+    }
+
+    #[test]
+    fn attachment_score_empty_query_zero() {
+        let attachments = vec![AttachmentEntry {
+            note_id: "n".to_string(),
+            path: "p".to_string(),
+            file_name: "f.png".to_string(),
+            stem: "f".to_string(),
+            ocr_text: "text".to_string(),
+            semantic_vector: None,
+            perceptual_hash: None,
+        }];
+        assert_eq!(attachment_text_relevance_score("", &attachments), 0);
+    }
+
+    #[test]
+    fn attachment_score_ocr_match_higher_than_filename() {
+        let attachments = vec![AttachmentEntry {
+            note_id: "n".to_string(),
+            path: "p".to_string(),
+            file_name: "img.png".to_string(),
+            stem: "img".to_string(),
+            ocr_text: "mmc timeout register dump".to_string(),
+            semantic_vector: None,
+            perceptual_hash: None,
+        }];
+        let score_ocr = attachment_text_relevance_score("mmc timeout register", &attachments);
+        let score_fname = attachment_text_relevance_score("img", &attachments);
+        assert!(score_ocr > score_fname);
+    }
+    // ── 1.19 build_candidate_note_ids ──
+
+    #[test]
+    fn build_candidates_deduplicates() {
+        let ids = build_candidate_note_ids(
+            &["a".to_string(), "b".to_string()],
+            &["b".to_string(), "c".to_string()],
+            &HashMap::new(),
+            &HashMap::new(),
+            &["c".to_string(), "d".to_string()],
+            10,
+        );
+        let unique: HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len());
+        assert!(ids.contains(&"a".to_string()));
+        assert!(ids.contains(&"b".to_string()));
+        assert!(ids.contains(&"c".to_string()));
+        assert!(ids.contains(&"d".to_string()));
+    }
+
+    #[test]
+    fn build_candidates_truncates_to_limit() {
+        let many: Vec<String> = (0..100).map(|i| format!("id{i}")).collect();
+        let result = build_candidate_note_ids(&many, &[], &HashMap::new(), &HashMap::new(), &[], 2);
+        assert!(result.len() <= 24); // limit*8.max(24) with limit=2 → 24
+    }
+    // ── 1.20 cosine_similarity / normalize_vector ──
+
+    #[test]
+    fn cosine_similarity_identical_vectors() {
+        let v = vec![1.0_f32, 0.0, 0.0];
+        let sim = cosine_similarity(&v, &v);
+        assert!((sim - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal() {
+        let a = vec![1.0_f32, 0.0];
+        let b = vec![0.0_f32, 1.0];
+        let sim = cosine_similarity(&a, &b);
+        assert!(sim.abs() < 0.001);
+    }
+
+    #[test]
+    fn normalize_vector_zero_no_panic() {
+        let mut v = vec![0.0_f32; 3];
+        normalize_vector(&mut v); // should not divide by zero
+        assert_eq!(v, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn normalize_vector_produces_unit() {
+        let mut v = vec![3.0_f32, 4.0];
+        normalize_vector(&mut v);
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.001);
+    }
+    // ── 1.21 similarity_to_rank_score ──
+
+    #[test]
+    fn similarity_to_rank_boundary_values() {
+        assert_eq!(similarity_to_rank_score(0.85), 220);
+        assert_eq!(similarity_to_rank_score(0.70), 170);
+        assert_eq!(similarity_to_rank_score(0.55), 120);
+        assert_eq!(similarity_to_rank_score(0.40), 80);
+        assert_eq!(similarity_to_rank_score(0.25), 40);
+        assert_eq!(similarity_to_rank_score(0.10), 0);
+        assert_eq!(similarity_to_rank_score(1.0), 220); // top bucket
+    }
+    // ── 1.22 image_similarity_score ──
+
+    #[test]
+    fn image_similarity_identical() {
+        assert_eq!(image_similarity_score(0xABCD, 0xABCD), 240);
+    }
+
+    #[test]
+    fn image_similarity_boundary_distances() {
+        let base: u64 = 0;
+        let d2: u64 = (1u64 << 2) - 1; // 2 bits differ
+        assert_eq!(image_similarity_score(base, d2), 240);
+    }
+
+    #[test]
+    fn image_similarity_max_distance() {
+        assert_eq!(image_similarity_score(0, u64::MAX), 0);
+    }
+    // ── 1.23 serialize/deserialize semantic vector ──
+
+    #[test]
+    fn semantic_vector_round_trip() {
+        let v: Vec<f32> = (0..ATTACHMENT_VECTOR_DIM)
+            .map(|i| i as f32 * 0.01)
+            .collect();
+        let serialized = serialize_semantic_vector(&v);
+        let deserialized = deserialize_semantic_vector(&serialized).expect("deserialize");
+        assert_eq!(deserialized.len(), ATTACHMENT_VECTOR_DIM);
+        for (a, b) in v.iter().zip(deserialized.iter()) {
+            assert!((a - b).abs() < f32::EPSILON);
         }
-        // ── 1.18 attachment_text_relevance_score edge cases ──
+    }
 
-        #[test]
-        fn attachment_score_empty_attachments_zero() {
-            assert_eq!(attachment_text_relevance_score("mmc", &[]), 0);
-        }
+    #[test]
+    fn deserialize_wrong_dimension_returns_none() {
+        let v = vec![1.0_f32; 10];
+        let serialized = serde_json::to_string(&v).unwrap();
+        assert!(deserialize_semantic_vector(&serialized).is_none());
+    }
 
-        #[test]
-        fn attachment_score_empty_query_zero() {
-            let attachments = vec![AttachmentEntry {
-                note_id: "n".to_string(),
-                path: "p".to_string(),
-                file_name: "f.png".to_string(),
-                stem: "f".to_string(),
-                ocr_text: "text".to_string(),
-                semantic_vector: None,
-                perceptual_hash: None,
-            }];
-            assert_eq!(attachment_text_relevance_score("", &attachments), 0);
-        }
+    #[test]
+    fn deserialize_garbage_returns_none() {
+        assert!(deserialize_semantic_vector("not json").is_none());
+    }
 
-        #[test]
-        fn attachment_score_ocr_match_higher_than_filename() {
-            let attachments = vec![AttachmentEntry {
-                note_id: "n".to_string(),
-                path: "p".to_string(),
-                file_name: "img.png".to_string(),
-                stem: "img".to_string(),
-                ocr_text: "mmc timeout register dump".to_string(),
-                semantic_vector: None,
-                perceptual_hash: None,
-            }];
-            let score_ocr = attachment_text_relevance_score("mmc timeout register", &attachments);
-            let score_fname = attachment_text_relevance_score("img", &attachments);
-            assert!(score_ocr > score_fname);
-        }
-        // ── 1.19 build_candidate_note_ids ──
+    // ── 1.24 build_text_semantic_vector ──
 
-        #[test]
-        fn build_candidates_deduplicates() {
-            let ids = build_candidate_note_ids(
-                &["a".to_string(), "b".to_string()],
-                &["b".to_string(), "c".to_string()],
-                &HashMap::new(),
-                &HashMap::new(),
-                &["c".to_string(), "d".to_string()],
-                10,
-            );
-            let unique: HashSet<&String> = ids.iter().collect();
-            assert_eq!(unique.len(), ids.len());
-            assert!(ids.contains(&"a".to_string()));
-            assert!(ids.contains(&"b".to_string()));
-            assert!(ids.contains(&"c".to_string()));
-            assert!(ids.contains(&"d".to_string()));
-        }
+    #[test]
+    fn semantic_vector_empty_text_returns_none() {
+        assert!(build_text_semantic_vector("").is_none());
+    }
 
-        #[test]
-        fn build_candidates_truncates_to_limit() {
-            let many: Vec<String> = (0..100).map(|i| format!("id{i}")).collect();
-            let result = build_candidate_note_ids(&many, &[], &HashMap::new(), &HashMap::new(), &[], 2);
-            assert!(result.len() <= 24); // limit*8.max(24) with limit=2 → 24
-        }
-        // ── 1.20 cosine_similarity / normalize_vector ──
+    #[test]
+    fn semantic_vector_produces_normalized() {
+        let v = build_text_semantic_vector("github release workflow").expect("vector");
+        assert_eq!(v.len(), ATTACHMENT_VECTOR_DIM);
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.01);
+    }
 
-        #[test]
-        fn cosine_similarity_identical_vectors() {
-            let v = vec![1.0_f32, 0.0, 0.0];
-            let sim = cosine_similarity(&v, &v);
-            assert!((sim - 1.0).abs() < 0.001);
-        }
+    // ── 1.25 stable_term_hash ──
 
-        #[test]
-        fn cosine_similarity_orthogonal() {
-            let a = vec![1.0_f32, 0.0];
-            let b = vec![0.0_f32, 1.0];
-            let sim = cosine_similarity(&a, &b);
-            assert!(sim.abs() < 0.001);
-        }
+    #[test]
+    fn stable_term_hash_consistent() {
+        assert_eq!(stable_term_hash("mmc"), stable_term_hash("mmc"));
+    }
 
-        #[test]
-        fn normalize_vector_zero_no_panic() {
-            let mut v = vec![0.0_f32; 3];
-            normalize_vector(&mut v); // should not divide by zero
-            assert_eq!(v, vec![0.0, 0.0, 0.0]);
-        }
+    #[test]
+    fn stable_term_hash_different_inputs() {
+        assert_ne!(stable_term_hash("mmc"), stable_term_hash("sdio"));
+    }
+    #[test]
+    fn search_notes_filters_by_text() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
 
-        #[test]
-        fn normalize_vector_produces_unit() {
-            let mut v = vec![3.0_f32, 4.0];
-            normalize_vector(&mut v);
-            let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-            assert!((norm - 1.0).abs() < 0.001);
-        }
-        // ── 1.21 similarity_to_rank_score ──
-
-        #[test]
-        fn similarity_to_rank_boundary_values() {
-            assert_eq!(similarity_to_rank_score(0.85), 220);
-            assert_eq!(similarity_to_rank_score(0.70), 170);
-            assert_eq!(similarity_to_rank_score(0.55), 120);
-            assert_eq!(similarity_to_rank_score(0.40), 80);
-            assert_eq!(similarity_to_rank_score(0.25), 40);
-            assert_eq!(similarity_to_rank_score(0.10), 0);
-            assert_eq!(similarity_to_rank_score(1.0), 220); // top bucket
-        }
-        // ── 1.22 image_similarity_score ──
-
-        #[test]
-        fn image_similarity_identical() {
-            assert_eq!(image_similarity_score(0xABCD, 0xABCD), 240);
-        }
-
-        #[test]
-        fn image_similarity_boundary_distances() {
-            let base: u64 = 0;
-            let d2: u64 = (1u64 << 2) - 1; // 2 bits differ
-            assert_eq!(image_similarity_score(base, d2), 240);
-        }
-
-        #[test]
-        fn image_similarity_max_distance() {
-            assert_eq!(image_similarity_score(0, u64::MAX), 0);
-        }
-        // ── 1.23 serialize/deserialize semantic vector ──
-
-        #[test]
-        fn semantic_vector_round_trip() {
-            let v: Vec<f32> = (0..ATTACHMENT_VECTOR_DIM)
-                .map(|i| i as f32 * 0.01)
-                .collect();
-            let serialized = serialize_semantic_vector(&v);
-            let deserialized = deserialize_semantic_vector(&serialized).expect("deserialize");
-            assert_eq!(deserialized.len(), ATTACHMENT_VECTOR_DIM);
-            for (a, b) in v.iter().zip(deserialized.iter()) {
-                assert!((a - b).abs() < f32::EPSILON);
-            }
-        }
-
-        #[test]
-        fn deserialize_wrong_dimension_returns_none() {
-            let v = vec![1.0_f32; 10];
-            let serialized = serde_json::to_string(&v).unwrap();
-            assert!(deserialize_semantic_vector(&serialized).is_none());
-        }
-
-        #[test]
-        fn deserialize_garbage_returns_none() {
-            assert!(deserialize_semantic_vector("not json").is_none());
-        }
-
-        // ── 1.24 build_text_semantic_vector ──
-
-        #[test]
-        fn semantic_vector_empty_text_returns_none() {
-            assert!(build_text_semantic_vector("").is_none());
-        }
-
-        #[test]
-        fn semantic_vector_produces_normalized() {
-            let v = build_text_semantic_vector("github release workflow").expect("vector");
-            assert_eq!(v.len(), ATTACHMENT_VECTOR_DIM);
-            let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-            assert!((norm - 1.0).abs() < 0.01);
-        }
-
-        // ── 1.25 stable_term_hash ──
-
-        #[test]
-        fn stable_term_hash_consistent() {
-            assert_eq!(stable_term_hash("mmc"), stable_term_hash("mmc"));
-        }
-
-        #[test]
-        fn stable_term_hash_different_inputs() {
-            assert_ne!(stable_term_hash("mmc"), stable_term_hash("sdio"));
-        }
-        #[test]
-        fn search_notes_filters_by_text() {
-            let (_temp, ctx) = setup_temp_context();
-            initialize_storage_with_context(&ctx).expect("init");
-
-            for (i, (title, tags)) in [
-                ("MMC timeout fix", vec!["kernel".to_string()]),
-                ("SD卡引脚配置", vec!["hardware".to_string()]),
-                ("刷机命令记录", vec!["tool".to_string()]),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                save_note_with_context(
-                    &ctx,
-                    NoteDocument {
-                        meta: NoteMeta {
-                            title: title.to_string(),
-                            tags,
-                            ..Default::default()
-                        },
-                        body: format!("Content for note {}", i),
-                        search_snippet: None,
-                    },
-                )
-                .expect("save");
-            }
-
-            let results = search_notes_with_context(
-                &ctx,
-                SearchQuery {
-                    text: "MMC".to_string(),
-                    tags: vec![],
-                    keywords: vec![],
-                    limit: Some(10),
-                    ..Default::default()
-                },
-            )
-            .expect("search");
-            assert!(results.notes.iter().any(|n| n.title.contains("MMC")));
-        }
-
-        #[test]
-        fn search_notes_filters_by_tags() {
-            let (_temp, ctx) = setup_temp_context();
-            initialize_storage_with_context(&ctx).expect("init");
-
+        for (i, (title, tags)) in [
+            ("MMC timeout fix", vec!["kernel".to_string()]),
+            ("SD卡引脚配置", vec!["hardware".to_string()]),
+            ("刷机命令记录", vec!["tool".to_string()]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             save_note_with_context(
                 &ctx,
                 NoteDocument {
                     meta: NoteMeta {
-                        title: "Tagged Note".to_string(),
-                        tags: vec!["kernel".to_string()],
+                        title: title.to_string(),
+                        tags,
                         ..Default::default()
                     },
-                    body: "Tagged content".to_string(),
+                    body: format!("Content for note {}", i),
                     search_snippet: None,
                 },
             )
             .expect("save");
+        }
 
-            let results = search_notes_with_context(
-                &ctx,
-                SearchQuery {
-                    text: String::new(),
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: "MMC".to_string(),
+                tags: vec![],
+                keywords: vec![],
+                limit: Some(10),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        assert!(results.notes.iter().any(|n| n.title.contains("MMC")));
+    }
+
+    #[test]
+    fn search_notes_filters_by_tags() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "Tagged Note".to_string(),
                     tags: vec!["kernel".to_string()],
-                    keywords: vec![],
-                    limit: Some(10),
                     ..Default::default()
                 },
-            )
-            .expect("search by tag");
-            assert!(results
-                .notes
-                .iter()
-                .any(|n| n.tags.contains(&"kernel".to_string())));
-        }
+                body: "Tagged content".to_string(),
+                search_snippet: None,
+            },
+        )
+        .expect("save");
 
-        #[test]
-        fn search_notes_tag_filter_exact_match() {
-            // Regression: tag filter must use exact match, not substring.
-            // Searching for tag "sd" must NOT match a note tagged "sdcard".
-            let (_temp, ctx) = setup_temp_context();
-            initialize_storage_with_context(&ctx).expect("init");
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["kernel".to_string()],
+                keywords: vec![],
+                limit: Some(10),
+                ..Default::default()
+            },
+        )
+        .expect("search by tag");
+        assert!(results
+            .notes
+            .iter()
+            .any(|n| n.tags.contains(&"kernel".to_string())));
+    }
 
+    #[test]
+    fn search_notes_tag_filter_exact_match() {
+        // Regression: tag filter must use exact match, not substring.
+        // Searching for tag "sd" must NOT match a note tagged "sdcard".
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "SDCard Note".to_string(),
+                    tags: vec!["sdcard".to_string()],
+                    ..Default::default()
+                },
+                body: "content".to_string(),
+                search_snippet: None,
+            },
+        )
+        .expect("save");
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["sd".to_string()],
+                keywords: vec![],
+                limit: Some(10),
+                ..Default::default()
+            },
+        )
+        .expect("search by tag");
+        assert!(
+            results.notes.is_empty(),
+            "tag 'sd' should not match tag 'sdcard', got {} results",
+            results.notes.len()
+        );
+    }
+
+    #[test]
+    fn search_total_count_not_capped_by_limit() {
+        // Regression: total must reflect the full matching set, not just
+        // the LIMIT-clamped page.  See issue #769.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        for i in 0..5 {
             save_note_with_context(
                 &ctx,
                 NoteDocument {
                     meta: NoteMeta {
-                        title: "SDCard Note".to_string(),
-                        tags: vec!["sdcard".to_string()],
+                        title: format!("Note {i}"),
                         ..Default::default()
                     },
-                    body: "content".to_string(),
+                    body: format!("Body {i}"),
                     search_snippet: None,
                 },
             )
             .expect("save");
-
-            let results = search_notes_with_context(
-                &ctx,
-                SearchQuery {
-                    text: String::new(),
-                    tags: vec!["sd".to_string()],
-                    keywords: vec![],
-                    limit: Some(10),
-                    ..Default::default()
-                },
-            )
-            .expect("search by tag");
-            assert!(
-                results.notes.is_empty(),
-                "tag 'sd' should not match tag 'sdcard', got {} results",
-                results.notes.len()
-            );
         }
 
-        #[test]
-        fn search_total_count_not_capped_by_limit() {
-            // Regression: total must reflect the full matching set, not just
-            // the LIMIT-clamped page.  See issue #769.
-            let (_temp, ctx) = setup_temp_context();
-            initialize_storage_with_context(&ctx).expect("init");
+        // No text, no filters → query_recent_note_metas path.
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        assert_eq!(results.notes.len(), 2, "page should contain 2 notes");
+        assert_eq!(
+            results.total, 5,
+            "total should reflect all 5 notes, not the LIMIT"
+        );
 
-            for i in 0..5 {
-                save_note_with_context(
-                    &ctx,
-                    NoteDocument {
-                        meta: NoteMeta {
-                            title: format!("Note {i}"),
-                            ..Default::default()
-                        },
-                        body: format!("Body {i}"),
-                        search_snippet: None,
-                    },
-                )
-                .expect("save");
-            }
-
-            // No text, no filters → query_recent_note_metas path.
-            let results = search_notes_with_context(
-                &ctx,
-                SearchQuery {
-                    text: String::new(),
-                    limit: Some(2),
-                    ..Default::default()
-                },
-            )
-            .expect("search");
-            assert_eq!(results.notes.len(), 2, "page should contain 2 notes");
-            assert_eq!(
-                results.total, 5,
-                "total should reflect all 5 notes, not the LIMIT"
-            );
-
-            // With tag filter → query_filtered_note_metas path.
-            save_note_with_context(
-                &ctx,
-                NoteDocument {
-                    meta: NoteMeta {
-                        title: "Tagged".to_string(),
-                        tags: vec!["important".to_string()],
-                        ..Default::default()
-                    },
-                    body: "tagged body".to_string(),
-                    search_snippet: None,
-                },
-            )
-            .expect("save tagged");
-
-            let results = search_notes_with_context(
-                &ctx,
-                SearchQuery {
-                    text: String::new(),
+        // With tag filter → query_filtered_note_metas path.
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "Tagged".to_string(),
                     tags: vec!["important".to_string()],
-                    limit: Some(1),
                     ..Default::default()
                 },
-            )
-            .expect("search filtered");
-            assert_eq!(results.notes.len(), 1, "page should contain 1 note");
-            assert_eq!(results.total, 1, "total should reflect the 1 matching note");
-        }
+                body: "tagged body".to_string(),
+                search_snippet: None,
+            },
+        )
+        .expect("save tagged");
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["important".to_string()],
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .expect("search filtered");
+        assert_eq!(results.notes.len(), 1, "page should contain 1 note");
+        assert_eq!(results.total, 1, "total should reflect the 1 matching note");
+    }
 }

@@ -40,12 +40,10 @@ pub use search::search_notes_with_context;
 
 // Internal imports from search module (used by notes functions in this file)
 use search::{
-    build_attachment_semantic_text, build_text_semantic_vector, derived_note_id,
-    fallback_source, fallback_title, hash_content, is_markdown_file, list_all_note_metas,
-    load_note_meta_by_id, rank_documents, rank_note_metas, sanitize_terms,
-    serialize_semantic_vector, slugify,
+    build_attachment_semantic_text, build_text_semantic_vector, derived_note_id, fallback_source,
+    fallback_title, hash_content, is_markdown_file, list_all_note_metas, load_note_meta_by_id,
+    rank_documents, rank_note_metas, sanitize_terms, serialize_semantic_vector, slugify,
 };
-// Re-export search public API so callers see no difference.
 
 /// Type alias for a pooled SQLite connection.
 type PooledConnection = r2d2::PooledConnection<SqliteConnectionManager>;
@@ -143,7 +141,6 @@ impl StorageContext {
         })
     }
 }
-
 
 /// Maximum note file size (10 MiB) — prevents OOM from oversized markdown files
 /// during import or vault rebuild (#827).
@@ -1470,7 +1467,6 @@ if ($null -ne $result -and $null -ne $result.Text) {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-
 fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     // #847: Strip UTF-8 BOM that Windows editors (e.g. Notepad) may prepend.
     // Without this, files with BOM have their frontmatter silently ignored.
@@ -1578,7 +1574,6 @@ fn extract_summary(body: &str) -> String {
         .join(" ");
     compact.chars().take(180).collect()
 }
-
 
 /// Export the entire vault as a zip file: all notes (as .md with frontmatter)
 /// plus all chat sessions (as a single chat-sessions.json).
@@ -1892,12 +1887,10 @@ pub async fn load_recent_notes_for_overview_async(
 }
 
 #[cfg(test)]
-
-#[cfg(test)]
 mod tests {
+    use super::search::image_similarity_score;
     use super::settings::normalize_settings;
     use super::*;
-    use super::search::image_similarity_score;
     use crate::models::{ChatSession, ProviderConfig};
 
     fn setup_temp_context() -> (PathBuf, StorageContext) {
@@ -1909,7 +1902,6 @@ mod tests {
         let ctx = StorageContext::for_test(&temp);
         (temp, ctx)
     }
-
 
     // ══════════════════════════════════════
     // Phase 1: Pure Logic Tests

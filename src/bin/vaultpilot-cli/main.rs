@@ -111,6 +111,20 @@ enum Commands {
         history: Option<String>,
     },
 
+    /// Run an autonomous AI agent loop (prompt → tool calls → answer)
+    Agent {
+        /// The prompt / task for the agent
+        prompt: String,
+
+        /// Maximum tool-calling steps (default: 20)
+        #[arg(long, default_value_t = 20)]
+        max_steps: usize,
+
+        /// Auto-approve write operations without confirmation
+        #[arg(long)]
+        auto_approve: bool,
+    },
+
     /// Compress chat history into a summary
     Compress {
         /// JSON array of conversation turns
@@ -458,6 +472,11 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 .collect();
             Ok(serde_json::json!({ "plugins": plugins, "count": plugins.len() }))
         }
+        Commands::Agent {
+            prompt,
+            max_steps,
+            auto_approve,
+        } => handle_agent(context, prompt, *max_steps, *auto_approve).await,
     }
 }
 
@@ -693,6 +712,92 @@ fn chat_session_overview(session: &ChatSession) -> ChatSessionOverview {
         created_at: session.created_at.clone(),
         updated_at: session.updated_at.clone(),
     }
+}
+
+async fn handle_agent(
+    context: &StorageContext,
+    prompt: &str,
+    max_steps: usize,
+    auto_approve: bool,
+) -> Result<Value> {
+    let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+    settings.provider = settings.effective_provider().clone();
+
+    let config = vaultpilot_lib::agent::AgentConfig {
+        name: "vaultpilot-cli-agent".into(),
+        permission: if auto_approve {
+            vaultpilot_lib::agent::AgentPermission::ReadWrite
+        } else {
+            vaultpilot_lib::agent::AgentPermission::ReadOnly
+        },
+        limits: vaultpilot_lib::agent::AgentResourceLimits {
+            max_tool_calls: max_steps as u64,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    eprintln!("🤖 Agent starting — max {} steps, {} write mode",
+        max_steps,
+        if auto_approve { "auto-approve" } else { "read-only" }
+    );
+
+    let result = vaultpilot_lib::agent::run_agent(
+        &settings,
+        context,
+        prompt,
+        config,
+        |event| {
+            match event {
+                vaultpilot_lib::agent::AgentEvent::Thinking { step } => {
+                    eprintln!("\n🧠 Step {step}: thinking...");
+                }
+                vaultpilot_lib::agent::AgentEvent::ToolCall { step, tool, args } => {
+                    eprintln!("🔧 Step {step}: calling {tool}({args})");
+                }
+                vaultpilot_lib::agent::AgentEvent::ToolResult { step: _, tool, result_preview, is_error } => {
+                    let status = if *is_error { "❌" } else { "✅" };
+                    eprintln!("   {status} {tool} → {result_preview}");
+                }
+                vaultpilot_lib::agent::AgentEvent::FinalAnswer { text: _ } => {
+                    eprintln!("\n🤖 Agent completed!");
+                }
+                vaultpilot_lib::agent::AgentEvent::WriteApprovalNeeded { tool, args } => {
+                    eprintln!("⚠️  Write operation: {tool}({args})");
+                    if auto_approve {
+                        eprintln!("   Auto-approved");
+                        return true;
+                    }
+                    eprint!("   Approve? [y/N]: ");
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input).unwrap_or_default();
+                    let approved = input.trim().eq_ignore_ascii_case("y");
+                    if !approved {
+                        eprintln!("   Denied by user");
+                    }
+                    return approved;
+                }
+                vaultpilot_lib::agent::AgentEvent::StepLimitReached { steps } => {
+                    eprintln!("⚠️  Step limit reached ({steps} steps)");
+                }
+                vaultpilot_lib::agent::AgentEvent::TokenBudgetExceeded { tokens_used, budget } => {
+                    eprintln!("⚠️  Token budget exceeded ({tokens_used}/{budget})");
+                }
+                vaultpilot_lib::agent::AgentEvent::Timeout => {
+                    eprintln!("⏰ Session timed out");
+                }
+                vaultpilot_lib::agent::AgentEvent::Error { message } => {
+                    eprintln!("❌ Error: {message}");
+                }
+            }
+            true // default: continue
+        },
+    )
+    .await?;
+
+    eprintln!("\n📊 Stats: {} steps, {} tokens used", result.steps_used, result.tokens_used);
+    serde_json::to_value(&result)
+        .map_err(|e| anyhow::anyhow!("serialization failed: {}", e))
 }
 
 fn exit_ok(pretty: &bool, value: Value) -> ! {

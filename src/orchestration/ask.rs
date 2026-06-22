@@ -1171,7 +1171,9 @@ mod tests {
     #[test]
     fn session_memory_detects_english() {
         assert!(looks_like_session_memory_question("what is my name"));
-        assert!(looks_like_session_memory_question("do you remember my name"));
+        assert!(looks_like_session_memory_question(
+            "do you remember my name"
+        ));
         assert!(looks_like_session_memory_question("what did i just say"));
     }
 
@@ -1184,8 +1186,14 @@ mod tests {
 
     #[test]
     fn merge_usage_both_none() {
-        let a = RequestUsage { input_tokens: None, output_tokens: None };
-        let b = RequestUsage { input_tokens: None, output_tokens: None };
+        let a = RequestUsage {
+            input_tokens: None,
+            output_tokens: None,
+        };
+        let b = RequestUsage {
+            input_tokens: None,
+            output_tokens: None,
+        };
         let merged = merge_usage(a, b);
         assert_eq!(merged.input_tokens, None);
         assert_eq!(merged.output_tokens, None);
@@ -1193,8 +1201,14 @@ mod tests {
 
     #[test]
     fn merge_usage_sums_values() {
-        let a = RequestUsage { input_tokens: Some(100), output_tokens: Some(50) };
-        let b = RequestUsage { input_tokens: Some(200), output_tokens: Some(80) };
+        let a = RequestUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+        };
+        let b = RequestUsage {
+            input_tokens: Some(200),
+            output_tokens: Some(80),
+        };
         let merged = merge_usage(a, b);
         assert_eq!(merged.input_tokens, Some(300));
         assert_eq!(merged.output_tokens, Some(130));
@@ -1202,8 +1216,14 @@ mod tests {
 
     #[test]
     fn merge_usage_one_none_one_some() {
-        let a = RequestUsage { input_tokens: None, output_tokens: Some(50) };
-        let b = RequestUsage { input_tokens: Some(200), output_tokens: None };
+        let a = RequestUsage {
+            input_tokens: None,
+            output_tokens: Some(50),
+        };
+        let b = RequestUsage {
+            input_tokens: Some(200),
+            output_tokens: None,
+        };
         let merged = merge_usage(a, b);
         assert_eq!(merged.input_tokens, Some(200));
         assert_eq!(merged.output_tokens, Some(50));
@@ -1297,7 +1317,10 @@ mod tests {
 
     #[test]
     fn planned_identity_search() {
-        let call = AssistantToolCall::SearchNotes { query: "test".into(), limit: 5 };
+        let call = AssistantToolCall::SearchNotes {
+            query: "test".into(),
+            limit: 5,
+        };
         let (name, detail) = planned_tool_identity(&call).unwrap();
         assert_eq!(name, "search_notes");
         assert!(detail.contains("test"));
@@ -1314,7 +1337,9 @@ mod tests {
 
     #[test]
     fn planned_identity_read_file() {
-        let call = AssistantToolCall::ReadFile { path: "/notes/test.md".into() };
+        let call = AssistantToolCall::ReadFile {
+            path: "/notes/test.md".into(),
+        };
         let (name, detail) = planned_tool_identity(&call).unwrap();
         assert_eq!(name, "read_file");
         assert!(detail.contains("/notes/test.md"));

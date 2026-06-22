@@ -768,3 +768,36 @@
 - clippy: 零警告
 - CI: main 全绿
 - 剩余缺口: ai/client.rs (961行), orchestration/chat.rs 已有测试, ai/parsing.rs 已通过 ai/mod.rs 覆盖
+
+## 讨论阶段 (循环#264)
+- v0.3.38 零缺陷状态，426 测试通过，Clippy 干净
+- 1 open issue (#913 Agent Mode)，0 open PR
+- 项目进入"后重构时代"——大文件拆分全部完成，模块化架构健康
+- 创建 3 个新 issue:
+  - #1305: P1 ai/client.rs 纯函数提取 + 单元测试 (961 行零测试盲区)
+  - #1306: P1 Agent Mode Phase 3.1 — CLI HTTP MCP server with token auth
+  - #1307: P2 Mobile 流式响应审计 — 检查 SSE 支持
+- 三回合讨论核心结论:
+  1. ai/client.rs 测试盲区是最大质量风险 → P1 下个 fix 周期
+  2. Agent Mode Phase 3 CLI 优先 → 差异化竞争力
+  3. Mobile 流式审计 → 用户体验提升
+- 竞品洞察: 沿用上轮 Obsidian Copilot Agent Mode 洞察 (时间窗口 2-3 个月)
+- 路线图: v0.4.0 = ai/client.rs 测试 + Phase 3.1; v0.5.0 = Mobile 流式 + Phase 3.2
+- 项目状态: 4 open issues (#913, #1305, #1306, #1307), 0 open PR, v0.3.38
+
+## 修复阶段 fix-1 (循环#265)
+- #1305 → PR #1308: ai/client.rs 54 个纯函数单元测试 (消除 961 行零测试盲区)
+  - detect_image_media_type: 9 tests (png/jpg/jpeg/webp/gif/大写/路径/不支持/无扩展名)
+  - is_private_ip: 18 tests (RFC1918/loopback/link-local/CGNAT/benchmarking + IPv6 全覆盖)
+  - normalize_endpoint: 8 tests (Anthropic/OpenAI 完整路径/v1/裸URL/尾部斜杠/空白)
+  - is_retryable_provider_error: 13 tests (429/500-504/中文限流 + 不可重试)
+  - format_transport_error: 3 tests (超时/连接/脱敏 userinfo)
+  - should_retry_transport_error: 1 test
+- #1307 → 已关闭: Mobile SSE 流式审计确认全部功能已实现 (sse.ts + parseSSEStreamWithReconnect)
+- #1306 → PR #1309: MCP HTTP server with token auth (vaultpilot-cli mcp-http)
+  - POST /mcp JSON-RPC 端点
+  - Bearer token 认证
+  - tokio::sync::Mutex async 安全状态管理
+  - 默认端口 8766
+- 测试: cargo test 全通过, clippy 零警告, cargo fmt 干净
+- 项目状态: 1 open issue (#913 Agent Mode), 2 open PR (#1308, #1309), v0.3.38

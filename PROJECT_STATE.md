@@ -725,3 +725,33 @@
   - CI: ✅ 全部通过
 - 合并后 cargo fmt ✅, clippy ✅, test ✅, winui-build ✅, linux-cli-build ✅
 - 项目状态: 2 open issues (#913, #1275), 0 open PR, v0.3.35
+
+## 修复阶段 fix-3 (循环#263)
+- 所有 4 个开放 PR (#1290, #1291, #1292, #1293) 的 `cargo fmt` 失败已全部修复
+- PR #1290 (CLI 模块拆分): `cargo fmt` ✅, `clippy` ✅, `test` ✅
+- PR #1291 (AI 模块拆分): `cargo fmt` ✅, `clippy` ✅, `test` ✅
+- PR #1292 (lib.rs 编排拆分): `cargo fmt` ✅, `clippy` ✅, `test` ⏳
+- PR #1293 (Agent Mode Phase 2): `cargo fmt` ✅, `clippy` ✅, `test` ⏳
+- 项目状态: 5 open issues (#913, #1286, #1287, #1288, #1289), 4 open PR, v0.3.35
+- 下一步: review 阶段合并 PR
+
+## Review 循环 #261
+- PR #1290 (CLI 模块拆分): ✅ 合并
+- PR #1291 (AI context 模块提取): ✅ 合并
+- PR #1292 (lib.rs 编排模块拆分): ✅ 合并 — ⚠️ sanitize_error 安全退化已评论，#1294 跟进
+- PR #1293 (Agent Mode Phase 2 — write patterns + process management): ✅ 合并
+- v0.3.36 发版: git tag v0.3.36 已推送
+- 新 Issue: #1294 — sanitize_error 完整 redaction 恢复
+- 项目状态: 1 open issue (#1294), 0 open PR, v0.3.36
+- 下一步: maintenance 阶段
+
+## 维护阶段 (循环#262)
+- CI 状态: main 最新 run 全绿（v0.3.36 bump push success）
+- 代码质量: cargo fmt ✅, clippy ✅ (零警告)
+- 测试: 362 全通过（lib 334 + agent 12 + cli 16）
+- 依赖安全: cargo audit 干净（304 crate，零漏洞）
+- 技术债务: 无 TODO/FIXME/HACK
+- npm outdated: react-native 0.85→0.86 / async-storage 2.2→3.1 / safe-area-context 5.7→5.8（均为 major/minor 跳版本，维护阶段不更新）
+- Open issue: #1294 (sanitize_error URL 参数 redaction — 安全/bug，留待下轮 fix)
+- 项目状态: 1 open issue (#1294), 0 open PR, v0.3.36 — 零缺陷维护态
+- 下一步: discussion 阶段

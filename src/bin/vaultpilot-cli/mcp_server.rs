@@ -7,7 +7,8 @@ use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     delete_note_with_context, find_related_notes_with_context, import_markdown_with_context,
     load_chat_state_with_context, load_note_async, load_note_with_context,
-    rebuild_index_with_context, save_chat_state_with_context, save_note_with_context, search_notes_async, search_notes_with_context, StorageContext,
+    rebuild_index_with_context, save_chat_state_with_context, save_note_with_context,
+    search_notes_async, search_notes_with_context, StorageContext,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, chat_with_ai_with_context, sanitize_error};
 

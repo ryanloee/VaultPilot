@@ -1,6 +1,6 @@
 mod http_bridge;
-mod mcp_server;
 mod markdown_utils;
+mod mcp_server;
 
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -16,11 +16,11 @@ use uuid::Uuid;
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     delete_note_with_context, export_all_notes_with_context, export_note_markdown_with_context,
-    find_related_notes_with_context, import_markdown_with_context,
-    initialize_storage_with_context, load_chat_state_async, load_note_with_context,
-    load_settings_with_context, rebuild_index_with_context, save_chat_state_async,
-    save_note_with_context, save_settings_with_context, search_notes_with_context,
-    vault_export_with_context, StorageContext,
+    find_related_notes_with_context, import_markdown_with_context, initialize_storage_with_context,
+    load_chat_state_async, load_note_with_context, load_settings_with_context,
+    rebuild_index_with_context, save_chat_state_async, save_note_with_context,
+    save_settings_with_context, search_notes_with_context, vault_export_with_context,
+    StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,

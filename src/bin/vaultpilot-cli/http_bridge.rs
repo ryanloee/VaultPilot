@@ -23,7 +23,6 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path};
 
-
 // ─── Public entry point ────────────────────────────────────────────
 
 pub(super) async fn run_http_bridge(

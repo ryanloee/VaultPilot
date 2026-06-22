@@ -113,6 +113,63 @@ pub fn sanitize_error(message: &str) -> String {
             }
         }
 
+        // 2f. Redact api-key query parameter: "api-key=" (hyphenated variant,
+        //     used by Cloudflare and other services).
+        if i + 8 <= len
+            && bytes[i..i + 8].eq_ignore_ascii_case(b"api-key=")
+            && (i == 0 || bytes[i - 1] == b'?' || bytes[i - 1] == b'&' || bytes[i - 1] == b' ')
+        {
+            let val_start = i + 8;
+            let val_end = scan_until_ampersand_or_end(bytes, val_start);
+            if val_end - val_start >= 8 {
+                out.push_str("api-key=[REDACTED]");
+                i = val_end;
+                continue;
+            }
+        }
+
+        // 2g. Redact access_token query parameter: "access_token=" (OAuth).
+        if i + 13 <= len
+            && bytes[i..i + 13].eq_ignore_ascii_case(b"access_token=")
+            && (i == 0 || bytes[i - 1] == b'?' || bytes[i - 1] == b'&' || bytes[i - 1] == b' ')
+        {
+            let val_start = i + 13;
+            let val_end = scan_until_ampersand_or_end(bytes, val_start);
+            if val_end - val_start >= 8 {
+                out.push_str("access_token=[REDACTED]");
+                i = val_end;
+                continue;
+            }
+        }
+
+        // 2h. Redact secret query parameter: "secret=" (generic).
+        if i + 7 <= len
+            && bytes[i..i + 7].eq_ignore_ascii_case(b"secret=")
+            && (i == 0 || bytes[i - 1] == b'?' || bytes[i - 1] == b'&' || bytes[i - 1] == b' ')
+        {
+            let val_start = i + 7;
+            let val_end = scan_until_ampersand_or_end(bytes, val_start);
+            if val_end - val_start >= 8 {
+                out.push_str("secret=[REDACTED]");
+                i = val_end;
+                continue;
+            }
+        }
+
+        // 2i. Redact token query parameter: "token=" (generic).
+        if i + 6 <= len
+            && bytes[i..i + 6].eq_ignore_ascii_case(b"token=")
+            && (i == 0 || bytes[i - 1] == b'?' || bytes[i - 1] == b'&' || bytes[i - 1] == b' ')
+        {
+            let val_start = i + 6;
+            let val_end = scan_until_ampersand_or_end(bytes, val_start);
+            if val_end - val_start >= 8 {
+                out.push_str("token=[REDACTED]");
+                i = val_end;
+                continue;
+            }
+        }
+
         out.push(bytes[i] as char);
         i += 1;
     }
@@ -196,6 +253,47 @@ mod tests {
         let input = "error: https://api.example.com?api_key=abcdefghijklmnop";
         let result = sanitize_error(input);
         assert!(result.contains("api_key=[REDACTED]"));
+    }
+
+    #[test]
+    fn sanitize_error_redacts_api_key_hyphenated() {
+        let input = "error: https://api.cloudflare.com?api-key=abcdefghijklmnop";
+        let result = sanitize_error(input);
+        assert!(result.contains("api-key=[REDACTED]"));
+        assert!(!result.contains("abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn sanitize_error_redacts_access_token() {
+        let input = "error: https://oauth.example.com?access_token=abcdefghijklmnop";
+        let result = sanitize_error(input);
+        assert!(result.contains("access_token=[REDACTED]"));
+        assert!(!result.contains("abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn sanitize_error_redacts_secret_param() {
+        let input = "error: https://api.example.com?secret=abcdefghijklmnop";
+        let result = sanitize_error(input);
+        assert!(result.contains("secret=[REDACTED]"));
+        assert!(!result.contains("abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn sanitize_error_redacts_token_param() {
+        let input = "error: https://api.example.com?token=abcdefghijklmnop";
+        let result = sanitize_error(input);
+        assert!(result.contains("token=[REDACTED]"));
+        assert!(!result.contains("abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn sanitize_error_redacts_multiple_params() {
+        let input = "https://api.example.com?api_key=12345678&secret=abcdefgh&token=ijklmnop";
+        let result = sanitize_error(input);
+        assert!(result.contains("api_key=[REDACTED]"));
+        assert!(result.contains("secret=[REDACTED]"));
+        assert!(result.contains("token=[REDACTED]"));
     }
 
     #[test]

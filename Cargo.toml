@@ -44,4 +44,4 @@ zip = "8.6.0"
 
 [[bin]]
 name = "vaultpilot-cli"
-path = "src/bin/vaultpilot-cli.rs"
+path = "src/bin/vaultpilot-cli/main.rs"

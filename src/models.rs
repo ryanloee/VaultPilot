@@ -1666,4 +1666,87 @@ mod tests {
             ProviderType::OpenAi
         );
     }
+
+    // ── Edge case tests (#1323) ──
+
+    #[test]
+    fn provider_type_from_empty_url_defaults_to_openai() {
+        assert_eq!(ProviderType::from_base_url(""), ProviderType::OpenAi);
+    }
+
+    #[test]
+    fn provider_type_from_proxy_url_with_anthropic_in_path() {
+        // Proxy URLs with "anthropic" anywhere should be detected
+        assert_eq!(
+            ProviderType::from_base_url("https://proxy.example.com/anthropic/v1"),
+            ProviderType::Anthropic
+        );
+    }
+
+    #[test]
+    fn provider_type_case_insensitive() {
+        assert_eq!(
+            ProviderType::from_base_url("https://API.Anthropic.Com/v1"),
+            ProviderType::Anthropic
+        );
+        assert_eq!(
+            ProviderType::from_base_url("https://ANTHROPIC"),
+            ProviderType::Anthropic
+        );
+    }
+
+    #[test]
+    fn provider_config_masked_with_empty_key() {
+        let provider = ProviderConfig {
+            api_key: String::new(),
+            ..ProviderConfig::default()
+        };
+        let masked = provider.masked();
+        assert!(masked.api_key.is_empty());
+    }
+
+    #[test]
+    fn provider_config_masked_preserves_all_fields() {
+        let provider = ProviderConfig {
+            name: "my-provider".to_string(),
+            api_key: "short".to_string(),
+            base_url: "https://custom.api.com/v1".to_string(),
+            model: "claude-3".to_string(),
+            request_timeout_ms: 45_000,
+            context_window_tokens: Some(200_000),
+            max_output_tokens: Some(8192),
+            provider_type: Some(ProviderType::Anthropic),
+        };
+        let masked = provider.masked();
+        assert_eq!(masked.name, "my-provider");
+        assert_eq!(masked.base_url, "https://custom.api.com/v1");
+        assert_eq!(masked.model, "claude-3");
+        assert_eq!(masked.request_timeout_ms, 45_000);
+        assert_eq!(masked.context_window_tokens, Some(200_000));
+        assert_eq!(masked.max_output_tokens, Some(8192));
+        assert_eq!(masked.provider_type, Some(ProviderType::Anthropic));
+        // Key should be masked (short key = all stars)
+        assert_eq!(masked.api_key, "*****");
+    }
+
+    #[test]
+    fn effective_provider_type_explicit_override() {
+        let provider = ProviderConfig {
+            base_url: "https://api.openai.com/v1".to_string(),
+            provider_type: Some(ProviderType::Anthropic),
+            ..ProviderConfig::default()
+        };
+        // Explicit override takes precedence over URL detection
+        assert_eq!(provider.effective_provider_type(), ProviderType::Anthropic);
+    }
+
+    #[test]
+    fn effective_provider_type_auto_from_url() {
+        let provider = ProviderConfig {
+            base_url: "https://api.anthropic.com/v1".to_string(),
+            provider_type: None,
+            ..ProviderConfig::default()
+        };
+        assert_eq!(provider.effective_provider_type(), ProviderType::Anthropic);
+    }
 }

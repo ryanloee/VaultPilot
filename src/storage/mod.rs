@@ -4387,8 +4387,10 @@ mod tests {
             default_vault_dir: temp.join("default-vault"),
             vault_dir_override: Some(override_dir.clone()),
         };
-        let mut settings = AppSettings::default();
-        settings.vault_dir = "/old/path".into();
+        let mut settings = AppSettings {
+            vault_dir: "/old/path".into(),
+            ..Default::default()
+        };
         normalize_settings(&mut settings, &paths);
         assert_eq!(settings.vault_dir, override_dir.to_string_lossy());
     }
@@ -4407,9 +4409,11 @@ mod tests {
             default_vault_dir: temp.join("default-vault"),
             vault_dir_override: None,
         };
-        let mut settings = AppSettings::default();
-        settings.providers = vec![ProviderConfig::default()];
-        settings.active_provider_index = 5;
+        let mut settings = AppSettings {
+            providers: vec![ProviderConfig::default()],
+            active_provider_index: 5,
+            ..Default::default()
+        };
         normalize_settings(&mut settings, &paths);
         assert_eq!(settings.active_provider_index, 0);
     }
@@ -4428,23 +4432,25 @@ mod tests {
             default_vault_dir: temp.join("default-vault"),
             vault_dir_override: None,
         };
-        let mut settings = AppSettings::default();
-        settings.providers = vec![
-            ProviderConfig {
-                base_url: "".into(),
-                model: "".into(),
-                request_timeout_ms: 0,
-                context_window_tokens: Some(0),
-                ..Default::default()
-            },
-            ProviderConfig {
-                base_url: "https://custom.api".into(),
-                model: "custom-model".into(),
-                request_timeout_ms: 30_000,
-                context_window_tokens: Some(4096),
-                ..Default::default()
-            },
-        ];
+        let mut settings = AppSettings {
+            providers: vec![
+                ProviderConfig {
+                    base_url: "".into(),
+                    model: "".into(),
+                    request_timeout_ms: 0,
+                    context_window_tokens: Some(0),
+                    ..Default::default()
+                },
+                ProviderConfig {
+                    base_url: "https://custom.api".into(),
+                    model: "custom-model".into(),
+                    request_timeout_ms: 30_000,
+                    context_window_tokens: Some(4096),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
         normalize_settings(&mut settings, &paths);
         // First provider: empty fields get defaults
         assert_eq!(

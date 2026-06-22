@@ -1,368 +1,28 @@
+pub mod client;
 pub mod context;
+pub mod parsing;
 
-use context::is_openai_reasoning_model;
 pub use context::{resolve_context_window, resolve_max_output_tokens};
 
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Mutex;
-use std::{
-    collections::HashSet,
-    path::Path,
-    time::{Duration, SystemTime},
+// Re-export public types so callers can use `ai::ChatAnswerResult` etc.
+pub use client::RequestUsage;
+pub use parsing::{
+    AssistantToolCall, ChatAnswerResult, RecordInteractionResult, ToolSelectionResult,
 };
+
+use std::collections::HashSet;
 
 use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use bytes::{Bytes, BytesMut};
-use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use serde::{Deserialize, Serialize};
-use tokio::time::{sleep, timeout};
-use url::Url;
+use tracing::instrument;
 
-use crate::models::{
-    AnswerCitation, AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft,
-};
+use crate::models::{AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft};
 use crate::prompting;
-use tracing::{info, instrument, warn};
 
-const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024; // 50MB
-
-/// Cached HTTP client, rebuilt only when provider config or base_url changes.
-struct CachedClient {
-    client: reqwest::Client,
-    // Fingerprint of the config used to build this client.
-    api_key: String,
-    timeout_ms: u64,
-    provider_type: crate::models::ProviderType,
-    base_url: String,
-}
-
-static CACHED_CLIENT: Mutex<Option<CachedClient>> = Mutex::new(None);
-
-fn get_or_build_client(
-    api_key: &str,
-    timeout_ms: u64,
-    provider_type: crate::models::ProviderType,
-    base_url: &str,
-    resolved_addrs: &[(String, SocketAddr)],
-) -> Result<reqwest::Client> {
-    let mut cache = CACHED_CLIENT.lock().unwrap_or_else(|e| {
-        tracing::warn!("CACHED_CLIENT lock poisoned, recovering inner value");
-        e.into_inner()
-    });
-    if let Some(ref cached) = *cache {
-        if cached.api_key == api_key
-            && cached.timeout_ms == timeout_ms
-            && cached.provider_type == provider_type
-            && cached.base_url == base_url
-        {
-            return Ok(cached.client.clone());
-        }
-    }
-
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-    use crate::models::ProviderType;
-    match provider_type {
-        ProviderType::Anthropic => {
-            headers.insert(
-                "x-api-key",
-                HeaderValue::from_str(api_key).context("invalid API key")?,
-            );
-            headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
-        }
-        ProviderType::OpenAi => {
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {api_key}"))
-                    .context("invalid API key for Bearer auth")?,
-            );
-        }
-    }
-
-    let mut builder = reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .default_headers(headers);
-
-    // Pin DNS to the addresses verified by validate_base_url to prevent
-    // DNS rebinding TOCTOU attacks (issue #503).
-    for (host, addr) in resolved_addrs {
-        builder = builder.resolve(host, *addr);
-    }
-
-    let client = builder.build()?;
-
-    *cache = Some(CachedClient {
-        client: client.clone(),
-        api_key: api_key.to_string(),
-        timeout_ms,
-        provider_type,
-        base_url: base_url.to_string(),
-    });
-    Ok(client)
-}
-
-pub struct ChatAnswerResult {
-    pub answer: String,
-    pub citations: Vec<AnswerCitation>,
-    pub usage: RequestUsage,
-}
-
-pub struct RecordInteractionResult {
-    pub reply: String,
-    pub note_draft: StructuredNoteDraft,
-    pub usage: RequestUsage,
-}
-
-pub struct ToolSelectionResult {
-    pub tool_call: AssistantToolCall,
-    pub usage: RequestUsage,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RequestUsage {
-    pub input_tokens: Option<usize>,
-    pub output_tokens: Option<usize>,
-}
-
-struct ModelResponse {
-    text: String,
-    usage: RequestUsage,
-}
-
-#[derive(Debug, Clone)]
-pub enum AssistantToolCall {
-    None,
-    SearchNotes { query: String, limit: usize },
-    ListNotes { limit: usize },
-    ListDirectory { path: String },
-    ReadFile { path: String },
-    SaveNote { draft: Box<StructuredNoteDraft> },
-}
-
-#[derive(Debug, Serialize)]
-struct AnthropicRequest<'a> {
-    model: &'a str,
-    max_tokens: u32,
-    temperature: f32,
-    system: &'a str,
-    messages: Vec<AnthropicMessage>,
-}
-
-#[derive(Debug, Serialize)]
-struct AnthropicMessage {
-    role: String,
-    content: Vec<AnthropicInputBlock>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum AnthropicInputBlock {
-    Text { text: String },
-    Image { source: AnthropicImageSource },
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct AnthropicImageSource {
-    #[serde(rename = "type")]
-    kind: String,
-    media_type: String,
-    data: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AnthropicResponse {
-    #[serde(default)]
-    content: Vec<AnthropicContentBlock>,
-    #[serde(default)]
-    usage: AnthropicUsage,
-    error: Option<AnthropicApiError>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AnthropicContentBlock {
-    #[serde(default, rename = "type")]
-    kind: String,
-    text: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AnthropicApiError {
-    #[serde(default)]
-    message: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AnthropicUsage {
-    #[serde(default)]
-    input_tokens: usize,
-    #[serde(default)]
-    output_tokens: usize,
-}
-
-// ---------------------------------------------------------------------------
-// OpenAI-compatible request / response structs
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-struct OpenAiRequest<'a> {
-    model: &'a str,
-    max_tokens: u32,
-    temperature: f32,
-    messages: Vec<OpenAiMessage>,
-}
-
-/// Request struct for OpenAI reasoning models (o1/o3/o4) which require
-/// `max_completion_tokens` instead of `max_tokens` and do not support `temperature`.
-#[derive(Debug, Serialize)]
-struct OpenAiReasoningRequest<'a> {
-    model: &'a str,
-    max_completion_tokens: u32,
-    messages: Vec<OpenAiMessage>,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenAiMessage {
-    role: String,
-    content: OpenAiContent,
-}
-
-/// OpenAI content can be a plain string (text-only) or an array of parts
-/// (when images are present).
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum OpenAiContent {
-    Text(String),
-    Parts(Vec<OpenAiContentPart>),
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum OpenAiContentPart {
-    Text {
-        text: String,
-    },
-    #[serde(rename = "image_url")]
-    ImageUrl {
-        image_url: OpenAiImageUrl,
-    },
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct OpenAiImageUrl {
-    url: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OpenAiResponse {
-    #[serde(default)]
-    choices: Vec<OpenAiChoice>,
-    #[serde(default)]
-    usage: OpenAiUsage,
-    error: Option<OpenAiApiError>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OpenAiChoice {
-    #[serde(default)]
-    message: OpenAiChoiceMessage,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OpenAiChoiceMessage {
-    #[serde(default)]
-    content: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OpenAiApiError {
-    #[serde(default)]
-    message: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct OpenAiUsage {
-    #[serde(default)]
-    prompt_tokens: usize,
-    #[serde(default)]
-    completion_tokens: usize,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct IngestResponse {
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    keywords: Vec<String>,
-    #[serde(default)]
-    platform: String,
-    #[serde(default)]
-    board: String,
-    #[serde(default)]
-    kernel: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    body: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct AskResponse {
-    #[serde(default)]
-    answer: String,
-    #[serde(default)]
-    citations: Vec<AnswerCitation>,
-    #[serde(default)]
-    note_draft: Option<StructuredNoteDraft>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct RecordResponse {
-    #[serde(default)]
-    reply: String,
-    #[serde(default)]
-    note_draft: Option<StructuredNoteDraft>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct ToolCallResponse {
-    #[serde(default)]
-    tool: String,
-    #[serde(default)]
-    query: String,
-    #[serde(default)]
-    path: String,
-    #[serde(default = "default_limit")]
-    limit: usize,
-    #[serde(default)]
-    note_draft: Option<StructuredNoteDraft>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct CompressionResponse {
-    #[serde(default)]
-    summary: String,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct NoteSelectionResponse {
-    #[serde(default)]
-    note_ids: Vec<String>,
-}
-
-fn default_limit() -> usize {
-    6
-}
+use client::{send_request, send_request_with_temperature};
+use parsing::{
+    enrich_citations, extract_json, parse_or_fallback_answer, parse_or_fallback_note,
+    parse_record_response, parse_tool_call, CompressionResponse, NoteSelectionResponse,
+};
 
 #[instrument(skip(settings, raw_input, image_paths), fields(input_len = raw_input.len()))]
 pub async fn organize_note(
@@ -583,1164 +243,20 @@ pub async fn select_relevant_note_ids(
         .collect())
 }
 
-fn parse_or_fallback_note(text: &str, raw_input: &str) -> StructuredNoteDraft {
-    let parsed = extract_json(text)
-        .ok()
-        .and_then(|json| serde_json::from_str::<IngestResponse>(&json).ok());
-
-    if let Some(parsed) = parsed {
-        return StructuredNoteDraft {
-            title: fallback_title(&parsed.title, raw_input),
-            summary: fallback_summary(&parsed.summary, raw_input),
-            tags: dedupe_terms(parsed.tags),
-            keywords: dedupe_terms(parsed.keywords),
-            platform: parsed.platform.trim().to_string(),
-            board: parsed.board.trim().to_string(),
-            kernel: parsed.kernel.trim().to_string(),
-            status: if parsed.status.trim().is_empty() {
-                "已记录".to_string()
-            } else {
-                parsed.status.trim().to_string()
-            },
-            source: "captured".to_string(),
-            body: fallback_body(&parsed.body, raw_input),
-        };
-    }
-
-    heuristic_note_from_input(raw_input)
-}
-
-fn parse_or_fallback_answer(text: &str, question: &str, no_context: bool) -> AskResponse {
-    if let Ok(json) = extract_json(text) {
-        if let Ok(parsed) = serde_json::from_str::<AskResponse>(&json) {
-            let answer = parsed.answer.trim().to_string();
-            return AskResponse {
-                answer: if answer.is_empty() {
-                    fallback_answer(question, no_context)
-                } else {
-                    answer
-                },
-                citations: parsed.citations,
-                note_draft: parsed.note_draft,
-            };
-        }
-    }
-
-    AskResponse {
-        answer: if text.trim().is_empty() {
-            fallback_answer(question, no_context)
-        } else {
-            text.trim().to_string()
-        },
-        citations: Vec::new(),
-        note_draft: None,
-    }
-}
-
-/// Extract a programmatic snippet from `body` that contains the best matching
-/// paragraph for the given `query`.  Returns the first paragraph that contains
-/// at least one query term, with `==highlight==` markers around each match.
-/// Falls back to the first 280 characters if no paragraph matches.
-fn generate_programmatic_snippet(body: &str, query: &str) -> String {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(|t| t.to_lowercase())
-        .filter(|t| !t.is_empty())
-        .collect();
-
-    if terms.is_empty() {
-        return truncate(body, 280).to_string();
-    }
-
-    // Split body into paragraphs (separated by blank lines).
-    let paragraphs: Vec<&str> = body
-        .split("\n\n")
-        .map(|p| p.trim())
-        .filter(|p| !p.is_empty())
-        .collect();
-
-    // Find the first paragraph containing at least one query term.
-    let best = paragraphs
-        .iter()
-        .find(|p| {
-            let lower = p.to_lowercase();
-            terms.iter().any(|t| lower.contains(t.as_str()))
-        })
-        .copied()
-        .unwrap_or_else(|| {
-            // No paragraph matched; fall back to the first non-heading paragraph
-            // or the first paragraph overall.
-            paragraphs
-                .iter()
-                .find(|p| !p.starts_with('#'))
-                .copied()
-                .or_else(|| paragraphs.first().copied())
-                .unwrap_or(body)
-        });
-
-    // Highlight each term in the chosen paragraph (case-insensitive).
-    // We collect all highlight ranges first, merge overlapping ones,
-    // then apply markers once to avoid corruption from sequential passes.
-    let snippet_chars: Vec<char> = best.chars().collect();
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    for term in &terms {
-        let term_len = term.chars().count();
-        if term_len == 0 {
-            continue;
-        }
-        let mut i = 0;
-        while i <= snippet_chars.len().saturating_sub(term_len) {
-            let candidate_lower: String = snippet_chars[i..i + term_len]
-                .iter()
-                .collect::<String>()
-                .to_lowercase();
-            if candidate_lower.as_str() == term.as_str() {
-                ranges.push((i, i + term_len));
-                i += term_len; // skip past this match to avoid overlapping highlights
-            } else {
-                i += 1;
-            }
-        }
-    }
-    // Merge overlapping ranges
-    ranges.sort_unstable();
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for (start, end) in ranges {
-        if let Some(last) = merged.last_mut() {
-            if start <= last.1 {
-                last.1 = last.1.max(end);
-                continue;
-            }
-        }
-        merged.push((start, end));
-    }
-    // Apply highlight markers once
-    let mut snippet = String::with_capacity(best.len() + merged.len() * 4);
-    let mut prev_end = 0;
-    for (start, end) in &merged {
-        // Append text before this highlight
-        for c in &snippet_chars[prev_end..*start] {
-            snippet.push(*c);
-        }
-        // Append highlighted text
-        snippet.push_str("==");
-        for c in &snippet_chars[*start..*end] {
-            snippet.push(*c);
-        }
-        snippet.push_str("==");
-        prev_end = *end;
-    }
-    // Append remaining characters after last highlight
-    for c in &snippet_chars[prev_end..] {
-        snippet.push(*c);
-    }
-
-    // Truncate if too long.
-    if snippet.len() > 500 {
-        format!(
-            "{}…",
-            &snippet[..snippet
-                .char_indices()
-                .take_while(|(i, _)| *i < 498)
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(498)]
-        )
-    } else {
-        snippet
-    }
-}
-
-/// Enrich AI-generated citations with programmatic snippets from FTS5 data.
-/// For each citation, if a matching note document has an FTS5 search_snippet,
-/// use that; otherwise generate a programmatic snippet from the body.
-fn enrich_citations(citations: Vec<AnswerCitation>, docs: &[NoteDocument]) -> Vec<AnswerCitation> {
-    if citations.is_empty() || docs.is_empty() {
-        return citations;
-    }
-
-    let doc_map: std::collections::HashMap<&str, &NoteDocument> =
-        docs.iter().map(|d| (d.meta.id.as_str(), d)).collect();
-
-    citations
-        .into_iter()
-        .map(|mut citation| {
-            if let Some(doc) = doc_map.get(citation.note_id.as_str()) {
-                if let Some(ref fts_snippet) = doc.search_snippet {
-                    if !fts_snippet.trim().is_empty() && fts_snippet.contains("==") {
-                        citation.snippet = fts_snippet.clone();
-                        return citation;
-                    }
-                }
-                // No FTS5 snippet; generate one programmatically if the
-                // AI-generated snippet is empty or very short.
-                if citation.snippet.trim().len() < 20 {
-                    citation.snippet = generate_programmatic_snippet(&doc.body, &citation.title);
-                }
-            }
-            citation
-        })
-        .collect()
-}
-
-fn parse_record_response(
-    text: &str,
-    raw_input: &str,
-    usage: RequestUsage,
-) -> Result<RecordInteractionResult> {
-    if let Ok(json) = extract_json(text) {
-        if let Ok(parsed) = serde_json::from_str::<RecordResponse>(&json) {
-            if let Some(note_draft) = parsed.note_draft {
-                let draft = normalize_draft(note_draft);
-                let reply = if parsed.reply.trim().is_empty() {
-                    fallback_record_reply(&draft.title)
-                } else {
-                    parsed.reply.trim().to_string()
-                };
-                return Ok(RecordInteractionResult {
-                    reply,
-                    note_draft: draft,
-                    usage,
-                });
-            }
-        }
-    }
-
-    Err(anyhow!(
-        "model did not return a valid note draft for record request: {}",
-        crate::sanitize_error(&truncate(raw_input, 80))
-    ))
-}
-
-fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToolCall> {
-    let parsed = extract_json(text)
-        .ok()
-        .and_then(|json| parse_tool_call_response(&json))
-        .ok_or_else(|| anyhow!("model did not return a valid tool call"))?;
-
-    let limit = parsed.limit.clamp(3, 8);
-
-    match parsed.tool.trim().to_ascii_lowercase().as_str() {
-        "none" => Ok(AssistantToolCall::None),
-        "search_notes" => Ok(AssistantToolCall::SearchNotes {
-            query: if parsed.query.trim().is_empty() {
-                question.trim().to_string()
-            } else {
-                parsed.query.trim().to_string()
-            },
-            limit,
-        }),
-        "list_notes" => Ok(AssistantToolCall::ListNotes { limit }),
-        "list_directory" => Ok(AssistantToolCall::ListDirectory {
-            path: parsed.path.trim().to_string(),
-        }),
-        "read_file" => Ok(AssistantToolCall::ReadFile {
-            path: parsed.path.trim().to_string(),
-        }),
-        "save_note" => {
-            let draft = parsed
-                .note_draft
-                .map(normalize_draft)
-                .ok_or_else(|| anyhow!("save_note was selected but noteDraft is missing"))?;
-            Ok(AssistantToolCall::SaveNote {
-                draft: Box::new(draft),
-            })
-        }
-        other => Err(anyhow!(
-            "unknown tool selected by model: {}",
-            crate::sanitize_error(other)
-        )),
-    }
-}
-
-fn parse_tool_call_response(json: &str) -> Option<ToolCallResponse> {
-    serde_json::from_str::<ToolCallResponse>(json)
-        .ok()
-        .or_else(|| {
-            let repaired = repair_json_string_escapes(json)?;
-            serde_json::from_str::<ToolCallResponse>(&repaired).ok()
-        })
-}
-
-#[allow(clippy::while_let_on_iterator)]
-fn repair_json_string_escapes(input: &str) -> Option<String> {
-    let mut repaired = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    let mut in_string = false;
-    let mut escaping = false;
-
-    while let Some(ch) = chars.next() {
-        if in_string {
-            if escaping {
-                if matches!(ch, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') {
-                    repaired.push(ch);
-                } else {
-                    repaired.push('\\');
-                    repaired.push(ch);
-                }
-                escaping = false;
-                continue;
-            }
-
-            match ch {
-                '\\' => {
-                    repaired.push('\\');
-                    escaping = true;
-                }
-                '"' => {
-                    repaired.push('"');
-                    in_string = false;
-                }
-                '\n' => repaired.push_str("\\n"),
-                '\r' => repaired.push_str("\\r"),
-                '\t' => repaired.push_str("\\t"),
-                _ => repaired.push(ch),
-            }
-        } else {
-            repaired.push(ch);
-            if ch == '"' {
-                in_string = true;
-            }
-        }
-    }
-
-    if escaping {
-        repaired.push('\\');
-    }
-
-    Some(repaired)
-}
-
-fn normalize_draft(draft: StructuredNoteDraft) -> StructuredNoteDraft {
-    let fallback = heuristic_note_from_input(&draft.body);
-    StructuredNoteDraft {
-        title: if draft.title.trim().is_empty() {
-            fallback.title
-        } else {
-            draft.title.trim().to_string()
-        },
-        summary: if draft.summary.trim().is_empty() {
-            fallback.summary
-        } else {
-            draft.summary.trim().to_string()
-        },
-        tags: dedupe_terms(draft.tags),
-        keywords: dedupe_terms(draft.keywords),
-        platform: draft.platform.trim().to_string(),
-        board: draft.board.trim().to_string(),
-        kernel: draft.kernel.trim().to_string(),
-        status: if draft.status.trim().is_empty() {
-            "已记录".to_string()
-        } else {
-            draft.status.trim().to_string()
-        },
-        source: if draft.source.trim().is_empty() {
-            "captured".to_string()
-        } else {
-            draft.source.trim().to_string()
-        },
-        body: if draft.body.trim().is_empty() {
-            fallback.body
-        } else {
-            draft.body.trim().to_string()
-        },
-    }
-}
-
-fn heuristic_note_from_input(raw_input: &str) -> StructuredNoteDraft {
-    let compact = raw_input.trim();
-    let (heuristic_title, heuristic_tags) =
-        crate::search_rules::SearchRules::global().evaluate_heuristic(compact);
-
-    let title = if let Some(t) = heuristic_title {
-        t
-    } else if let Some(first_line) = compact.lines().find(|line| !line.trim().is_empty()) {
-        truncate(first_line.trim(), 40)
-    } else {
-        "临时记录".to_string()
-    };
-
-    let keywords = extract_command_keywords(compact);
-    let mut tags = vec!["record".to_string()];
-    tags.extend(heuristic_tags);
-
-    StructuredNoteDraft {
-        title,
-        summary: truncate(compact, 120),
-        tags: dedupe_terms(tags),
-        keywords,
-        platform: String::new(),
-        board: String::new(),
-        kernel: String::new(),
-        status: "已记录".to_string(),
-        source: "captured".to_string(),
-        body: format!(
-            "## 摘要\n\n{}\n\n## 背景/上下文\n\n待确认\n\n## 关键信息\n\n{}\n\n## 操作步骤/命令\n\n```\n{}\n```\n\n## 结果/结论\n\n待确认\n\n## 待确认事项\n\n待确认\n\n## 关键词\n\n{}",
-            compact,
-            compact,
-            compact,
-            extract_command_keywords(compact).join(", ")
-        ),
-    }
-}
-
-fn extract_command_keywords(raw_input: &str) -> Vec<String> {
-    dedupe_terms(
-        raw_input
-            .split_whitespace()
-            .map(|part| {
-                part.trim_matches(|ch: char| ",.;:()[]{}'\"".contains(ch))
-                    .to_string()
-            })
-            .filter(|part| !part.is_empty())
-            .filter(|part| part.len() > 1)
-            .collect(),
-    )
-}
-
-fn fallback_title(title: &str, raw_input: &str) -> String {
-    if title.trim().is_empty() {
-        heuristic_note_from_input(raw_input).title
-    } else {
-        title.trim().to_string()
-    }
-}
-
-fn fallback_summary(summary: &str, raw_input: &str) -> String {
-    if summary.trim().is_empty() {
-        truncate(raw_input.trim(), 120)
-    } else {
-        summary.trim().to_string()
-    }
-}
-
-fn fallback_body(body: &str, raw_input: &str) -> String {
-    if body.trim().is_empty() {
-        heuristic_note_from_input(raw_input).body
-    } else {
-        body.trim().to_string()
-    }
-}
-
-fn fallback_answer(question: &str, no_context: bool) -> String {
-    if no_context {
-        format!(
-            "我先直接回答这个问题：{}。这次没有检索到可用的本地笔记，所以这是基于通用模型理解给出的回答。",
-            question
-        )
-    } else {
-        "我已经拿到了知识库结果，但这次模型没有按 JSON 返回，所以我先把可读文本直接展示给你。"
-            .to_string()
-    }
-}
-
-fn fallback_record_reply(title: &str) -> String {
-    format!(
-        "我已经理解这条内容，并按“{}”这个主题准备写入知识库。",
-        title
-    )
-}
-
-fn dedupe_terms(values: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .filter(|value| seen.insert(value.to_lowercase()))
-        .collect()
-}
-
-fn truncate(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
-}
-
-async fn send_request(
-    settings: &AppSettings,
-    system: &str,
-    prompt: &str,
-    image_paths: &[String],
-) -> Result<ModelResponse> {
-    send_request_with_temperature(settings, system, prompt, image_paths, 0.2).await
-}
-
-#[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.effective_provider().model, temperature))]
-async fn send_request_with_temperature(
-    settings: &AppSettings,
-    system: &str,
-    prompt: &str,
-    image_paths: &[String],
-    temperature: f32,
-) -> Result<ModelResponse> {
-    let provider = settings.effective_provider();
-    if provider.api_key.trim().is_empty() {
-        return Err(anyhow!("API key is empty"));
-    }
-
-    let provider_type = provider.effective_provider_type();
-    let resolved_addrs = validate_base_url(&provider.base_url).await?;
-    let client = get_or_build_client(
-        &provider.api_key,
-        provider.request_timeout_ms,
-        provider_type,
-        &provider.base_url,
-        &resolved_addrs,
-    )?;
-
-    let endpoint = normalize_endpoint(&provider.base_url, provider_type);
-
-    let body: Bytes = match provider_type {
-        crate::models::ProviderType::Anthropic => {
-            let content_blocks = build_input_blocks(prompt, image_paths).await?;
-            let payload = AnthropicRequest {
-                model: &provider.model,
-                max_tokens: resolve_max_output_tokens(&provider.model, provider.max_output_tokens),
-                temperature,
-                system,
-                messages: vec![AnthropicMessage {
-                    role: "user".to_string(),
-                    content: content_blocks,
-                }],
-            };
-            serde_json::to_vec(&payload)?.into()
-        }
-        crate::models::ProviderType::OpenAi => {
-            let messages =
-                build_openai_messages(&provider.model, system, prompt, image_paths).await?;
-            let max_output = resolve_max_output_tokens(&provider.model, provider.max_output_tokens);
-            let body_bytes = if is_openai_reasoning_model(&provider.model) {
-                // Reasoning models (o1/o3/o4) require max_completion_tokens
-                // and do not support temperature.
-                let payload = OpenAiReasoningRequest {
-                    model: &provider.model,
-                    max_completion_tokens: max_output,
-                    messages,
-                };
-                serde_json::to_vec(&payload)?
-            } else {
-                let payload = OpenAiRequest {
-                    model: &provider.model,
-                    max_tokens: max_output,
-                    temperature,
-                    messages,
-                };
-                serde_json::to_vec(&payload)?
-            };
-            body_bytes.into()
-        }
-    };
-
-    for attempt in 0..3 {
-        let response = match client
-            .post(&endpoint)
-            .header("content-type", "application/json")
-            .body(body.clone())
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                if should_retry_transport_error(&error) && attempt < 2 {
-                    warn!(attempt = attempt + 1, error = %crate::sanitize_error(&error.to_string()), "transport error, retrying");
-                    // Issue #749: add jitter to prevent thundering herd
-                    let base = 2u64.pow(attempt as u32 + 1);
-                    let jitter = SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .subsec_nanos() as u64
-                        % base;
-                    sleep(Duration::from_secs(base + jitter)).await;
-                    continue;
-                }
-                return Err(anyhow!(format_transport_error(&error, &endpoint)));
-            }
-        };
-        let status = response.status();
-        let mut buf = BytesMut::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|error| anyhow!(format_transport_error(&error, &endpoint)))?;
-            if buf.len() + chunk.len() > MAX_RESPONSE_SIZE {
-                return Err(anyhow!(
-                    "API response body exceeds {}MB size limit, possible misconfigured endpoint",
-                    MAX_RESPONSE_SIZE / (1024 * 1024)
-                ));
-            }
-            buf.extend_from_slice(&chunk);
-        }
-        let text = String::from_utf8(buf.to_vec()).map_err(|e| {
-            anyhow!(
-                "API response is not valid UTF-8 (invalid byte at position {})",
-                e.utf8_error().valid_up_to()
-            )
-        })?;
-
-        if !status.is_success() {
-            // Try to extract a human-readable error message from the response,
-            // using the format appropriate for the provider.
-            let detail = match provider_type {
-                crate::models::ProviderType::Anthropic => {
-                    serde_json::from_str::<AnthropicResponse>(&text)
-                        .ok()
-                        .and_then(|value| value.error.map(|error| error.message))
-                        .filter(|message| !message.trim().is_empty())
-                        .unwrap_or(text.clone())
-                }
-                crate::models::ProviderType::OpenAi => {
-                    serde_json::from_str::<OpenAiResponse>(&text)
-                        .ok()
-                        .and_then(|value| value.error.map(|error| error.message))
-                        .filter(|message| !message.trim().is_empty())
-                        .unwrap_or(text.clone())
-                }
-            };
-
-            if is_retryable_provider_error(status.as_u16(), &detail) && attempt < 2 {
-                warn!(
-                    attempt = attempt + 1,
-                    status = status.as_u16(),
-                    "retryable API error, retrying"
-                );
-                // Issue #749: add jitter to prevent thundering herd
-                let base = 2u64.pow(attempt as u32 + 1);
-                let jitter = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as u64
-                    % base;
-                sleep(Duration::from_secs(base + jitter)).await;
-                continue;
-            }
-
-            return Err(anyhow!(
-                "API request failed ({}): {}",
-                status.as_u16(),
-                crate::sanitize_error(&detail)
-            ));
-        }
-
-        // Parse the response using the format appropriate for the provider.
-        let (joined, usage) = match provider_type {
-            crate::models::ProviderType::Anthropic => {
-                let parsed: AnthropicResponse =
-                    serde_json::from_str(&text).context("failed to parse API response")?;
-                let joined = parsed
-                    .content
-                    .into_iter()
-                    .filter(|block| block.kind == "text")
-                    .filter_map(|block| block.text)
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let usage = RequestUsage {
-                    input_tokens: Some(parsed.usage.input_tokens),
-                    output_tokens: Some(parsed.usage.output_tokens),
-                };
-                info!(
-                    input_tokens = parsed.usage.input_tokens,
-                    output_tokens = parsed.usage.output_tokens,
-                    "API request completed"
-                );
-                (joined, usage)
-            }
-            crate::models::ProviderType::OpenAi => {
-                let parsed: OpenAiResponse =
-                    serde_json::from_str(&text).context("failed to parse API response")?;
-                let joined = parsed
-                    .choices
-                    .first()
-                    .and_then(|choice| choice.message.content.clone())
-                    .unwrap_or_default();
-                let usage = RequestUsage {
-                    input_tokens: Some(parsed.usage.prompt_tokens),
-                    output_tokens: Some(parsed.usage.completion_tokens),
-                };
-                info!(
-                    input_tokens = parsed.usage.prompt_tokens,
-                    output_tokens = parsed.usage.completion_tokens,
-                    "API request completed"
-                );
-                (joined, usage)
-            }
-        };
-
-        if joined.trim().is_empty() {
-            return Err(anyhow!("API returned an empty response"));
-        }
-
-        return Ok(ModelResponse {
-            text: joined,
-            usage,
-        });
-    }
-
-    Err(anyhow!("API request failed after retries"))
-}
-
-fn should_retry_transport_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect() || error.is_request()
-}
-
-fn format_transport_error(error: &reqwest::Error, endpoint: &str) -> String {
-    // Extract just the host from the endpoint URL to avoid leaking API paths
-    let host = endpoint
-        .split("://")
-        .nth(1)
-        .and_then(|s| s.split('/').next())
-        // Strip userinfo (user:pass@host) to avoid leaking credentials in error messages
-        .and_then(|s| s.split('@').next_back())
-        .unwrap_or("(unknown)");
-    if error.is_timeout() {
-        return format!("请求超时。模型服务长时间没有响应：{}", host);
-    }
-    if error.is_connect() {
-        return format!("网络连接失败，无法连接到模型服务：{}", host);
-    }
-    if error.is_request() {
-        return format!("请求发送失败，请检查 Base URL、网络或代理配置：{}", host);
-    }
-    if error.is_decode() {
-        return "模型服务返回的数据格式无法解析。".to_string();
-    }
-    format!(
-        "调用模型服务失败：{}",
-        crate::sanitize_error(&error.to_string())
-    )
-}
-
-async fn build_input_blocks(
-    prompt: &str,
-    image_paths: &[String],
-) -> Result<Vec<AnthropicInputBlock>> {
-    let mut blocks = vec![AnthropicInputBlock::Text {
-        text: prompt.to_string(),
-    }];
-
-    for path in image_paths {
-        let media_type = detect_image_media_type(path)?;
-        // Guard against OOM from excessively large image files (issue #141)
-        const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
-        let metadata = tokio::fs::metadata(path).await.with_context(|| {
-            format!(
-                "failed to stat image: {}",
-                std::path::Path::new(path)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-            )
-        })?;
-        if metadata.len() > MAX_IMAGE_SIZE {
-            return Err(anyhow!(
-                "image file too large: {} ({} MB > 20 MB limit)",
-                std::path::Path::new(path)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy(),
-                metadata.len() / (1024 * 1024)
-            ));
-        }
-        let data = tokio::fs::read(path).await.with_context(|| {
-            format!(
-                "failed to read image: {}",
-                std::path::Path::new(path)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-            )
-        })?;
-        blocks.push(AnthropicInputBlock::Image {
-            source: AnthropicImageSource {
-                kind: "base64".to_string(),
-                media_type: media_type.to_string(),
-                data: STANDARD.encode(data),
-            },
-        });
-    }
-
-    Ok(blocks)
-}
-
-/// Build the messages array for an OpenAI-compatible request.
-///
-/// The system prompt is emitted as a `system` role message (or `developer` for
-/// OpenAI reasoning models o1/o3/o4 per #742). User content is a plain string
-/// when no images are attached, or an array of content parts when images are
-/// present.
-async fn build_openai_messages(
-    model: &str,
-    system: &str,
-    prompt: &str,
-    image_paths: &[String],
-) -> Result<Vec<OpenAiMessage>> {
-    let mut messages = Vec::new();
-
-    if !system.is_empty() {
-        // #742: Reasoning models (o1/o3/o4) require "developer" role instead of "system"
-        let system_role = if is_openai_reasoning_model(model) {
-            "developer"
-        } else {
-            "system"
-        };
-        messages.push(OpenAiMessage {
-            role: system_role.to_string(),
-            content: OpenAiContent::Text(system.to_string()),
-        });
-    }
-
-    if image_paths.is_empty() {
-        messages.push(OpenAiMessage {
-            role: "user".to_string(),
-            content: OpenAiContent::Text(prompt.to_string()),
-        });
-    } else {
-        let mut parts: Vec<OpenAiContentPart> = vec![OpenAiContentPart::Text {
-            text: prompt.to_string(),
-        }];
-
-        for path in image_paths {
-            let media_type = detect_image_media_type(path)?;
-            const MAX_IMAGE_SIZE: u64 = 20 * 1024 * 1024;
-            let metadata = tokio::fs::metadata(path).await.with_context(|| {
-                format!(
-                    "failed to stat image: {}",
-                    std::path::Path::new(path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                )
-            })?;
-            if metadata.len() > MAX_IMAGE_SIZE {
-                return Err(anyhow!(
-                    "image file too large: {} ({} MB > 20 MB limit)",
-                    std::path::Path::new(path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy(),
-                    metadata.len() / (1024 * 1024)
-                ));
-            }
-            let data = tokio::fs::read(path).await.with_context(|| {
-                format!(
-                    "failed to read image: {}",
-                    std::path::Path::new(path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                )
-            })?;
-            parts.push(OpenAiContentPart::ImageUrl {
-                image_url: OpenAiImageUrl {
-                    url: format!("data:{};base64,{}", media_type, STANDARD.encode(data)),
-                },
-            });
-        }
-
-        messages.push(OpenAiMessage {
-            role: "user".to_string(),
-            content: OpenAiContent::Parts(parts),
-        });
-    }
-
-    Ok(messages)
-}
-
-fn detect_image_media_type(path: &str) -> Result<&'static str> {
-    let fname = Path::new(path)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("unknown");
-    let extension = Path::new(path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
-        .ok_or_else(|| anyhow!("unsupported image format: {fname}"))?;
-
-    match extension.as_str() {
-        "png" => Ok("image/png"),
-        "jpg" | "jpeg" => Ok("image/jpeg"),
-        "webp" => Ok("image/webp"),
-        "gif" => Ok("image/gif"),
-        _ => Err(anyhow!("unsupported image format: {fname}")),
-    }
-}
-
-fn extract_json(text: &str) -> Result<String> {
-    let trimmed = text.trim();
-    // Try extracting a well-delimited, validated JSON block first.
-    // This prevents returning strings like `{"a":1} prose {"b":2}` that
-    // bracket-match but fail serde_json (issue #601).
-    if let Some(result) = extract_json_block(trimmed, '{', '}') {
-        return Ok(result);
-    }
-    if let Some(result) = extract_json_block(trimmed, '[', ']') {
-        return Ok(result);
-    }
-    // Fallback: if the whole string bracket-matches, return it directly.
-    // This handles inputs that are valid JSON but have unusual structure
-    // that extract_json_block's depth-tracking doesn't capture.
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        return Ok(trimmed.to_string());
-    }
-    if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        return Ok(trimmed.to_string());
-    }
-    Err(anyhow!("AI response does not contain JSON"))
-}
-
-fn extract_json_block(text: &str, open: char, close: char) -> Option<String> {
-    // Try every occurrence of the opening character, not just the first.
-    // Prose before the real JSON may contain braces/brackets that cause
-    // a false match when we only look at the first occurrence (issue #434).
-    for (start, _) in text.match_indices(open) {
-        let mut depth = 0;
-        let mut in_string = false;
-        let mut backslash_count = 0usize;
-        for (i, c) in text[start..].char_indices() {
-            if in_string {
-                if c == '\\' {
-                    backslash_count += 1;
-                } else {
-                    if c == '"' && backslash_count.is_multiple_of(2) {
-                        in_string = false;
-                    }
-                    backslash_count = 0;
-                }
-                continue;
-            }
-            match c {
-                '"' => in_string = true,
-                c if c == open => depth += 1,
-                c if c == close => {
-                    depth -= 1;
-                    if depth == 0 {
-                        // Validate that this substring is parseable JSON
-                        let candidate = &text[start..=start + i];
-                        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
-                            return Some(candidate.to_string());
-                        }
-                        // Not valid JSON — continue searching from next open char
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
-/// Validate that a base_url is safe to use as a request endpoint, and
-/// resolve DNS to pin the verified addresses.
-///
-/// Checks:
-/// 1. URL must parse as valid HTTP or HTTPS.
-/// 2. Host must be present.
-/// 3. Rejects RFC 1918 / loopback / link-local addresses (SSRF protection)
-///    unless `VAULTPILOT_ALLOW_LOCAL_ENDPOINT` env var is set.
-///
-/// Returns a list of `(hostname, SocketAddr)` pairs that were verified to be
-/// non-private. These can be passed to `reqwest::ClientBuilder::resolve()` to
-/// pin DNS and prevent rebinding attacks (TOCTOU fix, #503).
-async fn validate_base_url(base_url: &str) -> Result<Vec<(String, SocketAddr)>> {
-    let trimmed = base_url.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow!("base_url is empty"));
-    }
-
-    let parsed = Url::parse(trimmed).context("base_url is not a valid URL")?;
-
-    match parsed.scheme() {
-        "https" => {}
-        "http" => {
-            warn!(
-                "base_url uses HTTP (not HTTPS); \
-                 consider using HTTPS for production endpoints"
-            );
-        }
-        other => {
-            return Err(anyhow!(
-                "base_url scheme '{}' is not supported; use http or https",
-                other
-            ));
-        }
-    }
-
-    let host_str = parsed
-        .host_str()
-        .ok_or_else(|| anyhow!("base_url has no host component"))?;
-
-    // Allow explicit opt-in to local/private endpoints via env var.
-    // Still resolve DNS for pinning even when local endpoints are allowed.
-    let allow_local = std::env::var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT").is_ok();
-    if allow_local && (host_str == "localhost" || host_str.parse::<IpAddr>().is_ok()) {
-        return Ok(Vec::new());
-    }
-    if allow_local {
-        // Resolve DNS and return addresses (skip private IP check) to enable DNS pinning.
-        let port = parsed
-            .port_or_known_default()
-            .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-        // 10s DNS timeout to avoid consuming the full request budget (issue #603).
-        return match timeout(
-            Duration::from_secs(10),
-            tokio::net::lookup_host(format!("{}:{}", host_str, port)),
-        )
-        .await
-        {
-            Ok(Ok(addrs)) => Ok(addrs.map(|a| (host_str.to_string(), a)).collect()),
-            Ok(Err(e)) => Err(anyhow!(
-                "failed to resolve base_url host '{}': {}",
-                host_str,
-                e
-            )),
-            Err(_) => Err(anyhow!(
-                "DNS resolution timed out (10s) for base_url host '{}'",
-                host_str
-            )),
-        };
-    }
-
-    if host_str == "localhost" {
-        return Err(anyhow!(
-            "base_url points to 'localhost'; set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 \
-             to allow local endpoints"
-        ));
-    }
-
-    if let Ok(ip) = host_str.parse::<IpAddr>() {
-        if is_private_ip(ip) {
-            return Err(anyhow!(
-                "base_url resolves to a private/reserved IP ({}); \
-                 set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
-                ip
-            ));
-        }
-        Ok(Vec::new())
-    } else {
-        // For hostnames that aren't literal IPs, resolve DNS and check each address.
-        let port = parsed
-            .port_or_known_default()
-            .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-        // 10s DNS timeout to avoid consuming the full request budget (issue #603).
-        match timeout(
-            Duration::from_secs(10),
-            tokio::net::lookup_host(format!("{}:{}", host_str, port)),
-        )
-        .await
-        {
-            Ok(Ok(addrs)) => {
-                let mut resolved = Vec::new();
-                for addr in addrs {
-                    if is_private_ip(addr.ip()) {
-                        return Err(anyhow!(
-                            "base_url host '{}' resolves to a private/reserved IP ({}); \\
-                             set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
-                            host_str,
-                            addr.ip()
-                        ));
-                    }
-                    resolved.push((host_str.to_string(), addr));
-                }
-                Ok(resolved)
-            }
-            Ok(Err(e)) => Err(anyhow!(
-                "failed to resolve base_url host '{}': {}",
-                host_str,
-                e
-            )),
-            Err(_) => Err(anyhow!(
-                "DNS resolution timed out (10s) for base_url host '{}'",
-                host_str
-            )),
-        }
-    }
-}
-
-/// Returns `true` for RFC 1918, loopback, link-local, and other reserved IPs.
-fn is_private_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_unspecified()
-                || matches!(v4.octets(), [100, 64..=127, _, _]) // CGNAT 100.64.0.0/10
-                || matches!(v4.octets(), [198, 18..=19, _, _]) // Benchmarking 198.18.0.0/15
-                || matches!(v4.octets()[0], 240..=255)
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || (v6.segments()[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
-                || v6
-                    .to_ipv4_mapped()
-                    .is_some_and(|v4| is_private_ip(IpAddr::V4(v4))) // IPv4-mapped
-        }
-    }
-}
-
-/// Route to the correct API endpoint based on provider type.
-fn normalize_endpoint(base_url: &str, provider_type: crate::models::ProviderType) -> String {
-    use crate::models::ProviderType;
-    let trimmed = base_url.trim().trim_end_matches('/');
-    match provider_type {
-        ProviderType::Anthropic => {
-            // Only recognize the full canonical path, not arbitrary suffixes
-            // like /custom/messages (issue #602).
-            if trimmed.ends_with("/v1/messages") {
-                trimmed.to_string()
-            } else if trimmed.ends_with("/v1") {
-                format!("{trimmed}/messages")
-            } else {
-                format!("{trimmed}/v1/messages")
-            }
-        }
-        ProviderType::OpenAi => {
-            if trimmed.ends_with("/v1/chat/completions") {
-                trimmed.to_string()
-            } else if trimmed.ends_with("/v1") {
-                format!("{trimmed}/chat/completions")
-            } else {
-                format!("{trimmed}/v1/chat/completions")
-            }
-        }
-    }
-}
-
-/// Legacy wrapper for backward compatibility (Anthropic-only).
-#[allow(dead_code)]
-fn normalize_messages_endpoint(base_url: &str) -> String {
-    normalize_endpoint(base_url, crate::models::ProviderType::Anthropic)
-}
-
-fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
-    // #792: Only retry specific 5xx codes that indicate transient failures.
-    // 501 (Not Implemented), 505 (HTTP Version Not Supported), etc. are
-    // permanent failures that waste retry attempts with exponential backoff.
-    status == 429
-        || status == 500  // Internal Server Error — transient backend failure
-        || status == 502  // Bad Gateway
-        || status == 503  // Service Unavailable
-        || status == 504  // Gateway Timeout
-        || detail.contains("访问量过大")
-        || detail.to_ascii_lowercase().contains("too many requests")
-        || detail.to_ascii_lowercase().contains("rate limit")
-}
-
 #[cfg(test)]
 mod tests {
+    use super::client::{
+        is_private_ip, is_retryable_provider_error, normalize_messages_endpoint, OpenAiContent,
+        OpenAiMessage, OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
+    };
     use super::context::{
         is_openai_reasoning_model, resolve_context_window, resolve_max_output_tokens,
     };
-    use super::{
-        dedupe_terms, detect_image_media_type, extract_json, extract_json_block, fallback_answer,
-        generate_programmatic_snippet, heuristic_note_from_input, is_private_ip,
-        is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
+    use super::parsing::{
+        dedupe_terms, extract_json, extract_json_block, fallback_answer,
+        generate_programmatic_snippet, heuristic_note_from_input, normalize_draft,
         parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
-        validate_base_url, AssistantToolCall, OpenAiContent, OpenAiMessage, OpenAiReasoningRequest,
-        OpenAiRequest, RequestUsage,
+        AssistantToolCall,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -1791,9 +307,7 @@ mod tests {
 
     #[test]
     fn extract_json_block_double_escaped_backslash() {
-        // \\" is an escaped backslash followed by a real closing quote
-        let text = r#"{"key": "value\\\\"}more"#;
-        // This should find the JSON object correctly
+        let text = r#"{"key": "value\\"}more"#;
         let result = extract_json_block(text, '{', '}');
         assert!(result.is_some(), "Should handle double-escaped backslash");
         let json = result.unwrap();
@@ -1840,32 +354,6 @@ mod tests {
     }
 
     #[test]
-    fn detects_supported_image_types() {
-        assert_eq!(detect_image_media_type("a.png").expect("png"), "image/png");
-        assert!(detect_image_media_type("a.bmp").is_err());
-    }
-
-    #[test]
-    fn detects_jpeg_and_webp_and_gif() {
-        assert_eq!(
-            detect_image_media_type("photo.jpg").expect("jpg"),
-            "image/jpeg"
-        );
-        assert_eq!(
-            detect_image_media_type("img.jpeg").expect("jpeg"),
-            "image/jpeg"
-        );
-        assert_eq!(
-            detect_image_media_type("pic.webp").expect("webp"),
-            "image/webp"
-        );
-        assert_eq!(
-            detect_image_media_type("anim.gif").expect("gif"),
-            "image/gif"
-        );
-    }
-
-    #[test]
     fn heuristically_builds_note_for_command_records() {
         let draft =
             heuristic_note_from_input("我发送刷机命令你记录一下，wboot -w update zboot.img");
@@ -1891,7 +379,6 @@ mod tests {
 
     #[test]
     fn parses_list_notes_tool_call() {
-        // English input
         let tool = parse_tool_call(
             "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
             "list notes",
@@ -1925,7 +412,7 @@ mod tests {
     #[test]
     fn parses_read_file_tool_call() {
         let tool = parse_tool_call(
-            "{\"tool\":\"read_file\",\"path\":\"C:\\\\Users\\\\test\\\\log.txt\",\"noteDraft\":null}",
+            "{\"tool\":\"read_file\",\"path\":\"C:\\\\\\\\Users\\\\\\\\test\\\\\\\\log.txt\",\"noteDraft\":null}",
             "看下日志",
         )
         .expect("tool");
@@ -2056,21 +543,19 @@ mod tests {
     #[test]
     fn is_retryable_detects_429_and_specific_5xx() {
         assert!(is_retryable_provider_error(429, ""));
-        assert!(is_retryable_provider_error(500, "")); // Internal Server Error — transient
-        assert!(is_retryable_provider_error(502, "")); // Bad Gateway — transient
-        assert!(is_retryable_provider_error(503, "")); // Service Unavailable — transient
-        assert!(is_retryable_provider_error(504, "")); // Gateway Timeout — transient
-        assert!(!is_retryable_provider_error(501, "")); // Not Implemented — permanent
+        assert!(is_retryable_provider_error(500, ""));
+        assert!(is_retryable_provider_error(502, ""));
+        assert!(is_retryable_provider_error(503, ""));
+        assert!(is_retryable_provider_error(504, ""));
+        assert!(!is_retryable_provider_error(501, ""));
         assert!(!is_retryable_provider_error(400, ""));
         assert!(!is_retryable_provider_error(401, ""));
     }
 
     #[test]
     fn is_retryable_detects_500_as_transient() {
-        // 500 Internal Server Error is transient for LLM providers
         assert!(is_retryable_provider_error(500, ""));
         assert!(is_retryable_provider_error(500, "Internal Server Error"));
-        // 501 should still NOT be retried
         assert!(!is_retryable_provider_error(501, ""));
     }
 
@@ -2099,7 +584,6 @@ mod tests {
 
     #[test]
     fn is_openai_reasoning_model_rejects_false_positives() {
-        // These should NOT match — "o1"/"o3"/"o4" appear as substrings of longer tokens
         assert!(!is_openai_reasoning_model("phi-1"));
         assert!(!is_openai_reasoning_model("co1der"));
         assert!(!is_openai_reasoning_model("pro1"));
@@ -2109,13 +593,11 @@ mod tests {
 
     #[test]
     fn is_openai_reasoning_model_handles_namespaced_names() {
-        // #741: Proxy services use namespaced model names
         assert!(is_openai_reasoning_model("openai/o1-mini"));
         assert!(is_openai_reasoning_model("openai/o1-preview"));
         assert!(is_openai_reasoning_model("together/o3-mini"));
         assert!(is_openai_reasoning_model("custom-provider/o4-mini"));
         assert!(is_openai_reasoning_model("org/o1"));
-        // Namespaced non-reasoning models should NOT match
         assert!(!is_openai_reasoning_model("openai/gpt-4o"));
         assert!(!is_openai_reasoning_model("together/phi-1"));
         assert!(!is_openai_reasoning_model("provider/pro1"));
@@ -2123,14 +605,11 @@ mod tests {
 
     #[test]
     fn resolve_max_output_tokens_reasoning_models() {
-        // #742: Reasoning models should get 32768 default
         assert_eq!(resolve_max_output_tokens("o1-mini", None), 32768);
         assert_eq!(resolve_max_output_tokens("o3-mini", None), 32768);
         assert_eq!(resolve_max_output_tokens("o4-mini", None), 32768);
         assert_eq!(resolve_max_output_tokens("openai/o1-mini", None), 32768);
-        // Explicit config overrides
         assert_eq!(resolve_max_output_tokens("o1-mini", Some(16384)), 16384);
-        // Non-reasoning models still get default
         assert_eq!(resolve_max_output_tokens("gpt-4o", None), 16384);
         assert_eq!(resolve_max_output_tokens("unknown-model", None), 8192);
     }
@@ -2148,14 +627,8 @@ mod tests {
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["model"], "o3-mini");
         assert_eq!(json["max_completion_tokens"], 16384);
-        assert!(
-            json.get("max_tokens").is_none(),
-            "reasoning models must not include max_tokens"
-        );
-        assert!(
-            json.get("temperature").is_none(),
-            "reasoning models must not include temperature"
-        );
+        assert!(json.get("max_tokens").is_none());
+        assert!(json.get("temperature").is_none());
     }
 
     #[test]
@@ -2180,36 +653,37 @@ mod tests {
 
     #[tokio::test]
     async fn validate_base_url_accepts_https() {
-        assert!(validate_base_url("https://api.anthropic.com/v1")
-            .await
-            .is_ok());
+        assert!(
+            super::client::validate_base_url("https://api.anthropic.com/v1")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
     async fn validate_base_url_rejects_empty() {
-        assert!(validate_base_url("").await.is_err());
-        assert!(validate_base_url("   ").await.is_err());
+        assert!(super::client::validate_base_url("").await.is_err());
+        assert!(super::client::validate_base_url("   ").await.is_err());
     }
 
     #[tokio::test]
     async fn validate_base_url_rejects_invalid_url() {
-        assert!(validate_base_url("not a url").await.is_err());
+        assert!(super::client::validate_base_url("not a url").await.is_err());
     }
 
     #[tokio::test]
     async fn validate_base_url_rejects_non_http_scheme() {
-        assert!(validate_base_url("ftp://example.com").await.is_err());
-        assert!(validate_base_url("file:///etc/passwd").await.is_err());
+        assert!(super::client::validate_base_url("ftp://example.com")
+            .await
+            .is_err());
+        assert!(super::client::validate_base_url("file:///etc/passwd")
+            .await
+            .is_err());
     }
 
     #[test]
     fn validate_base_url_localhost_env_guard() {
-        // Combines "rejects localhost without env" and "allows with env" into one
-        // test to avoid parallel env-var race conditions (flaky in CI).
-        // Uses a dedicated runtime inside each guard scope so the Mutex guard
-        // is held across the async call, preventing parallel tests from
-        // mutating the env var between set/remove and the read inside
-        // validate_base_url.
+        use super::client::validate_base_url;
 
         // Without env var → reject localhost
         {
@@ -2240,6 +714,8 @@ mod tests {
 
     #[test]
     fn validate_base_url_rejects_private_ip() {
+        use super::client::validate_base_url;
+
         let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2287,7 +763,6 @@ mod tests {
 
     #[test]
     fn is_private_ip_detects_ipv4_mapped_private() {
-        // IPv4-mapped IPv6 addresses that resolve to private IPv4
         assert!(is_private_ip("::ffff:10.0.0.1".parse().unwrap()));
         assert!(is_private_ip("::ffff:192.168.1.1".parse().unwrap()));
         assert!(is_private_ip("::ffff:172.16.0.1".parse().unwrap()));
@@ -2296,14 +771,12 @@ mod tests {
 
     #[test]
     fn is_private_ip_allows_ipv4_mapped_public() {
-        // IPv4-mapped IPv6 addresses that resolve to public IPv4
         assert!(!is_private_ip("::ffff:8.8.8.8".parse().unwrap()));
         assert!(!is_private_ip("::ffff:1.1.1.1".parse().unwrap()));
     }
 
     #[test]
     fn is_private_ip_allows_global_ipv6() {
-        // Global unicast IPv6 addresses should be allowed
         assert!(!is_private_ip("2001:db8::1".parse().unwrap()));
         assert!(!is_private_ip("2606:4700:4700::1111".parse().unwrap()));
     }
@@ -2312,7 +785,6 @@ mod tests {
     fn generate_programmatic_snippet_handles_cjk() {
         let body = "这是一个测试文档，包含中文字符和English混合内容。\n\n第二段包含更多中文。";
         let snippet = generate_programmatic_snippet(body, "测试");
-        // Should not panic and should contain highlight markers
         assert!(snippet.contains("=="));
         assert!(snippet.contains("测试"));
     }
@@ -2321,7 +793,6 @@ mod tests {
     fn generate_programmatic_snippet_handles_multibyte_unicode() {
         let body = "Straße und Überprüfung sind wichtig.";
         let snippet = generate_programmatic_snippet(body, "Straße");
-        // Should not panic even with ß which lowercases to "ss"
         assert!(!snippet.is_empty());
     }
 }

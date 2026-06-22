@@ -711,3 +711,17 @@
 - 依赖安全: cargo audit 无法运行（GitHub 网络问题），npm audit 30 moderate（全部 jest/expo 测试依赖，非生产风险）
 - Windows Installer: v0.3.34 失败（HTTP2 瞬时问题）已由 v0.3.35 + CI retry resilience PR 修复
 - 项目状态: 4 open issues (#913, #1275, #1280, #1282), 0 open PR, v0.3.35 — 零缺陷维护态
+
+## PR 审核 review (循环#261)
+- PR #1284: refactor: extract notes module from storage/mod.rs (#1280) → ✅ squash 合并
+  - 逻辑: ✅ 纯模块提取，mod.rs 2834→1207 行 (-57%)，notes.rs 1713 行
+  - 格式: ⚠️ cargo fmt 失败（import 排序），已修复推送
+  - 测试: ✅ cargo test/clippy/build 全通过
+  - 公共 API: ✅ re-export 无破坏性变更
+- PR #1285: feat: Agent Mode Phase 1 — AgentProtocol + ToolProxy + vault sandboxing (#1282) → ✅ squash 合并
+  - 逻辑: ✅ 5 层安全检查（资源限制/白名单/写权限/路径沙箱/审计日志）
+  - 测试: ✅ 9 个回归测试覆盖所有安全边界
+  - 安全: ✅ fail-closed、symlink 防逃逸、路径穿越阻断
+  - CI: ✅ 全部通过
+- 合并后 cargo fmt ✅, clippy ✅, test ✅, winui-build ✅, linux-cli-build ✅
+- 项目状态: 2 open issues (#913, #1275), 0 open PR, v0.3.35

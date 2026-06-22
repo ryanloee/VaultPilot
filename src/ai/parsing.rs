@@ -733,3 +733,622 @@ pub(super) fn extract_json_block(text: &str, open: char, close: char) -> Option<
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::client::RequestUsage;
+    use crate::models::{AnswerCitation, NoteDocument, NoteMeta, StructuredNoteDraft};
+
+    fn sample_usage() -> RequestUsage {
+        RequestUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+        }
+    }
+
+    // --- default_limit ---
+    #[test]
+    fn default_limit_returns_6() {
+        assert_eq!(default_limit(), 6);
+    }
+
+    // --- truncate ---
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_cut() {
+        assert_eq!(truncate("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate("", 10), "");
+    }
+
+    #[test]
+    fn truncate_exact_length() {
+        assert_eq!(truncate("abc", 3), "abc");
+    }
+
+    #[test]
+    fn truncate_cjk_characters() {
+        assert_eq!(truncate("你好世界测试", 3), "你好世");
+    }
+
+    // --- dedupe_terms ---
+    #[test]
+    fn dedupe_terms_removes_duplicates() {
+        let result = dedupe_terms(vec!["a".into(), "A".into(), "b".into()]);
+        assert_eq!(result, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn dedupe_terms_trims_whitespace() {
+        let result = dedupe_terms(vec![" a ".into(), "a".into()]);
+        assert_eq!(result, vec!["a"]);
+    }
+
+    #[test]
+    fn dedupe_terms_filters_empty() {
+        let result = dedupe_terms(vec!["".into(), "  ".into(), "a".into()]);
+        assert_eq!(result, vec!["a"]);
+    }
+
+    #[test]
+    fn dedupe_terms_empty_input() {
+        let result = dedupe_terms(vec![]);
+        assert!(result.is_empty());
+    }
+
+    // --- extract_json ---
+    #[test]
+    fn extract_json_from_pure_json_object() {
+        let result = extract_json(r#"{"key": "value"}"#).unwrap();
+        assert_eq!(result, r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn extract_json_from_json_array() {
+        let result = extract_json(r#"[1, 2, 3]"#).unwrap();
+        assert_eq!(result, r#"[1, 2, 3]"#);
+    }
+
+    #[test]
+    fn extract_json_from_surrounding_prose() {
+        let text = r#"Here is the result: {"answer": "42"} and that's it."#;
+        let result = extract_json(text).unwrap();
+        assert_eq!(result, r#"{"answer": "42"}"#);
+    }
+
+    #[test]
+    fn extract_json_no_json_returns_err() {
+        assert!(extract_json("no json here").is_err());
+    }
+
+    #[test]
+    fn extract_json_empty_string_returns_err() {
+        assert!(extract_json("").is_err());
+    }
+
+    // --- extract_json_block ---
+    #[test]
+    fn extract_json_block_simple_object() {
+        let result = extract_json_block(r#"{"a":1}"#, '{', '}').unwrap();
+        assert_eq!(result, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn extract_json_block_nested_object() {
+        let text = r#"{"a": {"b": 2}}"#;
+        let result = extract_json_block(text, '{', '}').unwrap();
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn extract_json_block_skips_prose_before() {
+        let text = r#"Some text {"a":1} more"#;
+        let result = extract_json_block(text, '{', '}').unwrap();
+        assert_eq!(result, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn extract_json_block_no_match() {
+        assert!(extract_json_block("no braces here", '{', '}').is_none());
+    }
+
+    #[test]
+    fn extract_json_block_array() {
+        let result = extract_json_block(r#"text [1,2,3] more"#, '[', ']').unwrap();
+        assert_eq!(result, "[1,2,3]");
+    }
+
+    #[test]
+    fn extract_json_block_invalid_json_braces_skipped() {
+        // A brace that doesn't form valid JSON is skipped
+        assert!(extract_json_block("{not json}", '{', '}').is_none());
+    }
+
+    // --- repair_json_string_escapes ---
+    #[test]
+    fn repair_json_string_escapes_valid_json() {
+        let input = r#"{"tool":"search_notes"}"#;
+        let result = repair_json_string_escapes(input).unwrap();
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn repair_json_string_escapes_with_newlines() {
+        let input = r#"{"text":"line1\nline2"}"#;
+        let result = repair_json_string_escapes(input).unwrap();
+        assert_eq!(result, input);
+    }
+
+    // --- parse_tool_call_response ---
+    #[test]
+    fn parse_tool_call_response_valid() {
+        let json = r#"{"tool":"search_notes","query":"test","limit":5}"#;
+        let result = parse_tool_call_response(json).unwrap();
+        assert_eq!(result.tool, "search_notes");
+        assert_eq!(result.query, "test");
+        assert_eq!(result.limit, 5);
+    }
+
+    #[test]
+    fn parse_tool_call_response_invalid() {
+        assert!(parse_tool_call_response("not json").is_none());
+    }
+
+    #[test]
+    fn parse_tool_call_response_uses_default_limit() {
+        let json = r#"{"tool":"none"}"#;
+        let result = parse_tool_call_response(json).unwrap();
+        assert_eq!(result.limit, 6); // default_limit()
+    }
+
+    // --- parse_tool_call ---
+    #[test]
+    fn parse_tool_call_none() {
+        let text = r#"{"tool":"none","query":"","limit":5}"#;
+        let result = parse_tool_call(text, "some question").unwrap();
+        assert!(matches!(result, AssistantToolCall::None));
+    }
+
+    #[test]
+    fn parse_tool_call_search_notes() {
+        let text = r#"{"tool":"search_notes","query":"rust tips","limit":5}"#;
+        let result = parse_tool_call(text, "fallback").unwrap();
+        match result {
+            AssistantToolCall::SearchNotes { query, limit } => {
+                assert_eq!(query, "rust tips");
+                assert_eq!(limit, 5);
+            }
+            _ => panic!("Expected SearchNotes"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_search_notes_empty_query_uses_question() {
+        let text = r#"{"tool":"search_notes","query":"","limit":5}"#;
+        let result = parse_tool_call(text, "my question").unwrap();
+        match result {
+            AssistantToolCall::SearchNotes { query, .. } => {
+                assert_eq!(query, "my question");
+            }
+            _ => panic!("Expected SearchNotes"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_list_notes() {
+        let text = r#"{"tool":"list_notes","limit":4}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        assert!(matches!(result, AssistantToolCall::ListNotes { limit: 4 }));
+    }
+
+    #[test]
+    fn parse_tool_call_list_directory() {
+        let text = r#"{"tool":"list_directory","path":"/tmp","limit":5}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::ListDirectory { path } => assert_eq!(path, "/tmp"),
+            _ => panic!("Expected ListDirectory"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_read_file() {
+        let text = r#"{"tool":"read_file","path":"/tmp/f.txt","limit":5}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::ReadFile { path } => assert_eq!(path, "/tmp/f.txt"),
+            _ => panic!("Expected ReadFile"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_save_note() {
+        let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"B"}}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::SaveNote { draft } => {
+                assert_eq!(draft.title, "T");
+            }
+            _ => panic!("Expected SaveNote"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_save_note_missing_draft_returns_err() {
+        let text = r#"{"tool":"save_note","limit":5}"#;
+        assert!(parse_tool_call(text, "q").is_err());
+    }
+
+    #[test]
+    fn parse_tool_call_unknown_tool_returns_err() {
+        let text = r#"{"tool":"unknown_tool","limit":5}"#;
+        assert!(parse_tool_call(text, "q").is_err());
+    }
+
+    #[test]
+    fn parse_tool_call_limit_clamped() {
+        let text = r#"{"tool":"list_notes","limit":100}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::ListNotes { limit } => assert_eq!(limit, 8), // clamped to max 8
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_limit_clamped_min() {
+        let text = r#"{"tool":"list_notes","limit":0}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::ListNotes { limit } => assert_eq!(limit, 3), // clamped to min 3
+            _ => panic!(),
+        }
+    }
+
+    // --- parse_or_fallback_note ---
+    #[test]
+    fn parse_or_fallback_note_valid_json() {
+        let text = r#"{"title":"My Note","summary":"A summary","tags":["rust"],"keywords":["code"],"platform":"Linux","board":"x86","kernel":"6.1","status":"done","body":"content here"}"#;
+        let result = parse_or_fallback_note(text, "raw input");
+        assert_eq!(result.title, "My Note");
+        assert_eq!(result.summary, "A summary");
+        assert_eq!(result.tags, vec!["rust"]);
+        assert_eq!(result.source, "captured");
+    }
+
+    #[test]
+    fn parse_or_fallback_note_empty_title_uses_fallback() {
+        let text = r#"{"title":"","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","body":"B"}"#;
+        let result = parse_or_fallback_note(text, "raw input for title");
+        assert!(!result.title.is_empty());
+    }
+
+    #[test]
+    fn parse_or_fallback_note_invalid_json_uses_heuristic() {
+        let result = parse_or_fallback_note("not json at all", "some raw input");
+        assert!(!result.title.is_empty());
+        assert_eq!(result.source, "captured");
+    }
+
+    #[test]
+    fn parse_or_fallback_note_default_status() {
+        let text = r#"{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","body":"B"}"#;
+        let result = parse_or_fallback_note(text, "raw");
+        assert_eq!(result.status, "已记录");
+    }
+
+    // --- parse_or_fallback_answer ---
+    #[test]
+    fn parse_or_fallback_answer_valid_json() {
+        let text = r#"{"answer":"The answer is 42","citations":[]}"#;
+        let result = parse_or_fallback_answer(text, "what?", false);
+        assert_eq!(result.answer, "The answer is 42");
+    }
+
+    #[test]
+    fn parse_or_fallback_answer_empty_answer_uses_fallback() {
+        let text = r#"{"answer":"  ","citations":[]}"#;
+        let result = parse_or_fallback_answer(text, "what?", false);
+        assert!(!result.answer.is_empty());
+    }
+
+    #[test]
+    fn parse_or_fallback_answer_no_json_uses_text() {
+        let result = parse_or_fallback_answer("plain text answer", "q", false);
+        assert_eq!(result.answer, "plain text answer");
+    }
+
+    #[test]
+    fn parse_or_fallback_answer_empty_text_no_context() {
+        let result = parse_or_fallback_answer("", "what is X?", true);
+        assert!(result.answer.contains("what is X?"));
+    }
+
+    #[test]
+    fn parse_or_fallback_answer_empty_text_with_context() {
+        let result = parse_or_fallback_answer("", "q", false);
+        assert!(result.answer.contains("知识库"));
+    }
+
+    // --- fallback_title ---
+    #[test]
+    fn fallback_title_non_empty() {
+        assert_eq!(fallback_title("My Title", "raw"), "My Title");
+    }
+
+    #[test]
+    fn fallback_title_empty_uses_heuristic() {
+        let result = fallback_title("", "some raw input");
+        assert!(!result.is_empty());
+    }
+
+    // --- fallback_summary ---
+    #[test]
+    fn fallback_summary_non_empty() {
+        assert_eq!(fallback_summary("My Summary", "raw"), "My Summary");
+    }
+
+    #[test]
+    fn fallback_summary_empty_uses_truncated_input() {
+        let long_input = "a".repeat(200);
+        let result = fallback_summary("", &long_input);
+        assert!(result.len() <= 120);
+    }
+
+    // --- fallback_body ---
+    #[test]
+    fn fallback_body_non_empty() {
+        assert_eq!(fallback_body("content", "raw"), "content");
+    }
+
+    #[test]
+    fn fallback_body_empty_uses_heuristic() {
+        let result = fallback_body("", "some input");
+        assert!(!result.is_empty());
+    }
+
+    // --- fallback_answer ---
+    #[test]
+    fn fallback_answer_no_context() {
+        let result = fallback_answer("what?", true);
+        assert!(result.contains("what?"));
+        assert!(result.contains("通用模型"));
+    }
+
+    #[test]
+    fn fallback_answer_with_context() {
+        let result = fallback_answer("q", false);
+        assert!(result.contains("知识库"));
+    }
+
+    // --- fallback_record_reply ---
+    #[test]
+    fn fallback_record_reply_contains_title() {
+        let result = fallback_record_reply("My Title");
+        assert!(result.contains("My Title"));
+    }
+
+    // --- extract_command_keywords ---
+    #[test]
+    fn extract_command_keywords_basic() {
+        let result = extract_command_keywords("hello world test");
+        assert_eq!(result, vec!["hello", "world", "test"]);
+    }
+
+    #[test]
+    fn extract_command_keywords_filters_single_char() {
+        let result = extract_command_keywords("a b cd");
+        assert_eq!(result, vec!["cd"]);
+    }
+
+    #[test]
+    fn extract_command_keywords_strips_punctuation() {
+        let result = extract_command_keywords("hello, world!");
+        assert_eq!(result, vec!["hello", "world!"]); // "!" not in strip set
+    }
+
+    #[test]
+    fn extract_command_keywords_empty() {
+        let result = extract_command_keywords("");
+        assert!(result.is_empty());
+    }
+
+    // --- normalize_draft ---
+    #[test]
+    fn normalize_draft_trims_fields() {
+        let draft = StructuredNoteDraft {
+            title: "  Title  ".into(),
+            summary: "  Summary  ".into(),
+            tags: vec![" tag1 ".into(), "tag1".into()],
+            keywords: vec![],
+            platform: " p ".into(),
+            board: " b ".into(),
+            kernel: " k ".into(),
+            status: " s ".into(),
+            source: " captured ".into(),
+            body: " body ".into(),
+        };
+        let result = normalize_draft(draft);
+        assert_eq!(result.title, "Title");
+        assert_eq!(result.summary, "Summary");
+        assert_eq!(result.tags, vec!["tag1"]); // deduped
+        assert_eq!(result.status, "s"); // trimmed by normalize_draft
+    }
+
+    #[test]
+    fn normalize_draft_empty_fields_use_fallback() {
+        let draft = StructuredNoteDraft {
+            title: "".into(),
+            summary: "".into(),
+            tags: vec![],
+            keywords: vec![],
+            platform: "".into(),
+            board: "".into(),
+            kernel: "".into(),
+            status: "".into(),
+            source: "".into(),
+            body: "".into(),
+        };
+        let result = normalize_draft(draft);
+        assert!(!result.title.is_empty());
+        assert_eq!(result.status, "已记录");
+        assert_eq!(result.source, "captured");
+    }
+
+    // --- generate_programmatic_snippet ---
+    #[test]
+    fn generate_programmatic_snippet_highlight_match() {
+        let body = "First paragraph.\n\nThis paragraph has rust in it.\n\nThird.";
+        let result = generate_programmatic_snippet(body, "rust");
+        assert!(result.contains("==rust=="));
+    }
+
+    #[test]
+    fn generate_programmatic_snippet_no_match_fallback() {
+        let body = "First paragraph.\n\nSecond paragraph.";
+        let result = generate_programmatic_snippet(body, "xyz");
+        assert!(!result.contains("=="));
+    }
+
+    #[test]
+    fn generate_programmatic_snippet_empty_query() {
+        let body = "Some body text here.";
+        let result = generate_programmatic_snippet(body, "");
+        assert_eq!(result, "Some body text here.");
+    }
+
+    #[test]
+    fn generate_programmatic_snippet_case_insensitive() {
+        let body = "This has RUST in it.";
+        let result = generate_programmatic_snippet(body, "rust");
+        assert!(result.contains("==RUST=="));
+    }
+
+    // --- enrich_citations ---
+    #[test]
+    fn enrich_citations_empty_citations() {
+        let result = enrich_citations(vec![], &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn enrich_citations_uses_fts5_snippet() {
+        let citation = AnswerCitation {
+            note_id: "n1".into(),
+            title: "T".into(),
+            path: "p".into(),
+            snippet: "old".into(),
+        };
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                id: "n1".into(),
+                ..Default::default()
+            },
+            body: "body text".into(),
+            search_snippet: Some("FTS5 ==match== here".into()),
+        };
+        let result = enrich_citations(vec![citation], &[doc]);
+        assert_eq!(result[0].snippet, "FTS5 ==match== here");
+    }
+
+    #[test]
+    fn enrich_citations_generates_snippet_when_short() {
+        let citation = AnswerCitation {
+            note_id: "n1".into(),
+            title: "rust tips".into(),
+            path: "p".into(),
+            snippet: "short".into(),
+        };
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                id: "n1".into(),
+                ..Default::default()
+            },
+            body: "This body contains rust tips for beginners.".into(),
+            search_snippet: None,
+        };
+        let result = enrich_citations(vec![citation], &[doc]);
+        // Should generate a programmatic snippet since original is < 20 chars
+        assert!(result[0].snippet.len() > 5);
+    }
+
+    #[test]
+    fn enrich_citations_no_matching_doc() {
+        let citation = AnswerCitation {
+            note_id: "n999".into(),
+            title: "T".into(),
+            path: "p".into(),
+            snippet: "original".into(),
+        };
+        let result = enrich_citations(vec![citation], &[]);
+        assert_eq!(result[0].snippet, "original");
+    }
+
+    // --- parse_record_response ---
+    #[test]
+    fn parse_record_response_valid() {
+        let text = r#"{"reply":"Done","noteDraft":{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"recorded","source":"captured","body":"B"}}"#;
+        let result = parse_record_response(text, "raw", sample_usage()).unwrap();
+        assert_eq!(result.reply, "Done");
+        assert_eq!(result.note_draft.title, "T");
+    }
+
+    #[test]
+    fn parse_record_response_empty_reply_uses_fallback() {
+        let text = r#"{"reply":"  ","noteDraft":{"title":"MyTitle","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"recorded","source":"captured","body":"B"}}"#;
+        let result = parse_record_response(text, "raw", sample_usage()).unwrap();
+        assert!(result.reply.contains("MyTitle"));
+    }
+
+    #[test]
+    fn parse_record_response_no_draft_returns_err() {
+        let text = r#"{"reply":"Done"}"#;
+        assert!(parse_record_response(text, "raw input", sample_usage()).is_err());
+    }
+
+    #[test]
+    fn parse_record_response_invalid_json_returns_err() {
+        assert!(parse_record_response("not json", "raw", sample_usage()).is_err());
+    }
+
+    // --- Anthropic response parsing ---
+    #[test]
+    fn anthropic_response_deserialize() {
+        let json = r#"{"content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let resp: AnthropicResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.content[0].text.as_deref(), Some("hello"));
+        assert_eq!(resp.usage.input_tokens, 10);
+    }
+
+    #[test]
+    fn anthropic_response_with_error() {
+        let json = r#"{"error":{"message":"rate limited"}}"#;
+        let resp: AnthropicResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().message, "rate limited");
+    }
+
+    // --- OpenAI response parsing ---
+    #[test]
+    fn openai_response_deserialize() {
+        let json = r#"{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":20,"completion_tokens":10}}"#;
+        let resp: OpenAiResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("hi"));
+        assert_eq!(resp.usage.prompt_tokens, 20);
+    }
+
+    #[test]
+    fn openai_response_with_error() {
+        let json = r#"{"error":{"message":"invalid key"}}"#;
+        let resp: OpenAiResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.error.is_some());
+    }
+}

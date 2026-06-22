@@ -1,7 +1,7 @@
 pub mod context;
 
-pub use context::{resolve_context_window, resolve_max_output_tokens};
 use context::is_openai_reasoning_model;
+pub use context::{resolve_context_window, resolve_max_output_tokens};
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
@@ -1731,14 +1731,16 @@ fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::context::{is_openai_reasoning_model, resolve_context_window, resolve_max_output_tokens};
+    use super::context::{
+        is_openai_reasoning_model, resolve_context_window, resolve_max_output_tokens,
+    };
     use super::{
         dedupe_terms, detect_image_media_type, extract_json, extract_json_block, fallback_answer,
-        generate_programmatic_snippet, heuristic_note_from_input,
-        is_private_ip, is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
+        generate_programmatic_snippet, heuristic_note_from_input, is_private_ip,
+        is_retryable_provider_error, normalize_draft, normalize_messages_endpoint,
         parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
-        validate_base_url, AssistantToolCall,
-        OpenAiContent, OpenAiMessage, OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
+        validate_base_url, AssistantToolCall, OpenAiContent, OpenAiMessage, OpenAiReasoningRequest,
+        OpenAiRequest, RequestUsage,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 

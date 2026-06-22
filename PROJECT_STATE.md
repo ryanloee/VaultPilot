@@ -341,9 +341,14 @@
 336|- #810: Zig 二进制下载缺少 SHA256 校验 — CI 供应链加固 (PR #813 已合并)
 337|- #811: XAML 硬编码 Opacity 值在高对比度模式下不可见 → SecondaryTextBrush 主题资源 (PR #814 已合并)
 338|- #823: trigger_matches 空字符串 panic — 添加空 guard + 测试 (PR #825 已合并)
-339|- #824: detect_image_media_type 错误消息泄露完整文件路径 — 使用 file_name() (PR #826 已合并)
-340|
-341|## 当前进行中
+- #824: detect_image_media_type 错误消息泄露完整文件路径 — 使用 file_name() (PR #826 已合并)
+- #1305: ai/client.rs 961 行零测试盲区 — 添加 54 个单元测试 (PR #1308 已合并)
+- #1310: http_bridge.rs 纯函数零测试 — 添加 34 个单元测试 (PR #1312 已合并)
+- #1311: mcp_server.rs 纯函数零测试 — 添加 20 个单元测试 (PR #1313 已合并)
+- #1314: markdown_utils.rs 纯函数零测试 — 添加 24 个单元测试 (PR #1315 已合并)
+- #1306: MCP HTTP server 外部 AI agent 连接 + 非回环绑定安全验证 (PR #1309 已合并)
+
+## 当前进行中
 342|<!-- 由 issue-monitor 任务在创建 PR 后更新 -->
 343|
 344|- #597: CI WinUI 测试 — PR #646 和 PR #804 已关闭 (WinUI 构建 6h 超时)，需进一步调查

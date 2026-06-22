@@ -748,3 +748,336 @@ fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiEr
         }),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── constant_time_eq ──────────────────────────────────────────
+
+    #[test]
+    fn constant_time_eq_identical() {
+        assert!(constant_time_eq(b"secret-token", b"secret-token"));
+    }
+
+    #[test]
+    fn constant_time_eq_different() {
+        assert!(!constant_time_eq(b"secret-token", b"secret-tokez"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_length() {
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+    }
+
+    #[test]
+    fn constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn constant_time_eq_long_identical() {
+        let a = vec![0xABu8; 256];
+        assert!(constant_time_eq(&a, &a));
+    }
+
+    // ── validate_http_bridge_binding ──────────────────────────────
+
+    #[test]
+    fn binding_loopback_without_token_ok() {
+        assert!(validate_http_bridge_binding("127.0.0.1".parse().unwrap(), None).is_ok());
+    }
+
+    #[test]
+    fn binding_loopback_with_token_ok() {
+        assert!(validate_http_bridge_binding("127.0.0.1".parse().unwrap(), Some("t")).is_ok());
+    }
+
+    #[test]
+    fn binding_non_loopback_without_token_fails() {
+        let err = validate_http_bridge_binding("192.168.1.1".parse().unwrap(), None);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("--token"));
+    }
+
+    #[test]
+    fn binding_non_loopback_with_token_ok() {
+        assert!(
+            validate_http_bridge_binding("192.168.1.1".parse().unwrap(), Some("mytoken")).is_ok()
+        );
+    }
+
+    // ── normalize_bridge_token ────────────────────────────────────
+
+    #[test]
+    fn normalize_token_trims() {
+        assert_eq!(
+            normalize_bridge_token(Some("  tok  ".into())),
+            Some("tok".into())
+        );
+    }
+
+    #[test]
+    fn normalize_token_none_is_none() {
+        assert_eq!(normalize_bridge_token(None), None);
+    }
+
+    #[test]
+    fn normalize_token_empty_is_none() {
+        assert_eq!(normalize_bridge_token(Some("".into())), None);
+    }
+
+    #[test]
+    fn normalize_token_whitespace_only_is_none() {
+        assert_eq!(normalize_bridge_token(Some("   ".into())), None);
+    }
+
+    // ── bridge_token_from_headers ─────────────────────────────────
+
+    #[test]
+    fn token_from_bearer_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer my-token".parse().unwrap());
+        assert_eq!(bridge_token_from_headers(&headers), Some("my-token"));
+    }
+
+    #[test]
+    fn token_from_custom_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-vaultpilot-token", "custom-tok".parse().unwrap());
+        assert_eq!(bridge_token_from_headers(&headers), Some("custom-tok"));
+    }
+
+    #[test]
+    fn token_missing_returns_none() {
+        let headers = HeaderMap::new();
+        assert_eq!(bridge_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn token_bearer_empty_returns_none() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer  ".parse().unwrap());
+        assert_eq!(bridge_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn token_non_bearer_scheme_returns_none() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Basic abc".parse().unwrap());
+        assert_eq!(bridge_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn token_bearer_case_insensitive() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "bearer my-token".parse().unwrap());
+        assert_eq!(bridge_token_from_headers(&headers), Some("my-token"));
+    }
+
+    // ── bridge_model_id ───────────────────────────────────────────
+
+    #[test]
+    fn model_id_with_model() {
+        let mut settings = AppSettings::default();
+        settings.provider.model = "deepseek-v3".into();
+        assert_eq!(bridge_model_id(&settings), "vaultpilot-chat:deepseek-v3");
+    }
+
+    #[test]
+    fn model_id_empty_model() {
+        let mut settings = AppSettings::default();
+        settings.provider.model = "".into();
+        assert_eq!(bridge_model_id(&settings), "vaultpilot-chat");
+    }
+
+    #[test]
+    fn model_id_whitespace_model() {
+        let mut settings = AppSettings::default();
+        settings.provider.model = "  ".into();
+        assert_eq!(bridge_model_id(&settings), "vaultpilot-chat");
+    }
+
+    // ── openai_request_to_dialog ──────────────────────────────────
+
+    #[test]
+    fn dialog_empty_messages_errors() {
+        let req = OpenAiChatCompletionsRequest {
+            model: "test".into(),
+            messages: vec![],
+            stream: false,
+        };
+        assert!(openai_request_to_dialog(req, Path::new("/vault")).is_err());
+    }
+
+    #[test]
+    fn dialog_last_not_user_errors() {
+        let req = OpenAiChatCompletionsRequest {
+            model: "test".into(),
+            messages: vec![OpenAiChatMessage {
+                role: "assistant".into(),
+                content: OpenAiMessageContent::Text("hi".into()),
+            }],
+            stream: false,
+        };
+        assert!(openai_request_to_dialog(req, Path::new("/vault")).is_err());
+    }
+
+    #[test]
+    fn dialog_single_user_message() {
+        let req = OpenAiChatCompletionsRequest {
+            model: "test".into(),
+            messages: vec![OpenAiChatMessage {
+                role: "user".into(),
+                content: OpenAiMessageContent::Text("hello".into()),
+            }],
+            stream: false,
+        };
+        let (question, history, images) =
+            openai_request_to_dialog(req, Path::new("/vault")).unwrap();
+        assert_eq!(question, "hello");
+        assert!(history.is_empty());
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn dialog_multi_turn_preserves_history() {
+        let req = OpenAiChatCompletionsRequest {
+            model: "test".into(),
+            messages: vec![
+                OpenAiChatMessage {
+                    role: "user".into(),
+                    content: OpenAiMessageContent::Text("first".into()),
+                },
+                OpenAiChatMessage {
+                    role: "assistant".into(),
+                    content: OpenAiMessageContent::Text("reply".into()),
+                },
+                OpenAiChatMessage {
+                    role: "user".into(),
+                    content: OpenAiMessageContent::Text("second".into()),
+                },
+            ],
+            stream: false,
+        };
+        let (question, history, _) = openai_request_to_dialog(req, Path::new("/vault")).unwrap();
+        assert_eq!(question, "second");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[0].text, "first");
+        assert_eq!(history[1].role, "assistant");
+        assert_eq!(history[1].text, "reply");
+    }
+
+    #[test]
+    fn dialog_empty_last_user_with_images_ok() {
+        let req = OpenAiChatCompletionsRequest {
+            model: "test".into(),
+            messages: vec![OpenAiChatMessage {
+                role: "user".into(),
+                content: OpenAiMessageContent::Text("".into()),
+            }],
+            stream: false,
+        };
+        // Empty text with no images should fail
+        assert!(openai_request_to_dialog(req, Path::new("/vault")).is_err());
+    }
+
+    // ── render_openai_message_content ─────────────────────────────
+
+    #[test]
+    fn render_text_content() {
+        let (text, images) = render_openai_message_content(
+            OpenAiMessageContent::Text("hello".into()),
+            Path::new("/vault"),
+        )
+        .unwrap();
+        assert_eq!(text, "hello");
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn render_parts_text_only() {
+        let (text, images) = render_openai_message_content(
+            OpenAiMessageContent::Parts(vec![OpenAiContentPart {
+                kind: "text".into(),
+                text: Some("hi".into()),
+                image_url: None,
+            }]),
+            Path::new("/vault"),
+        )
+        .unwrap();
+        assert_eq!(text, "hi");
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn render_parts_multiple_text_joined() {
+        let (text, _) = render_openai_message_content(
+            OpenAiMessageContent::Parts(vec![
+                OpenAiContentPart {
+                    kind: "text".into(),
+                    text: Some("a".into()),
+                    image_url: None,
+                },
+                OpenAiContentPart {
+                    kind: "text".into(),
+                    text: Some("b".into()),
+                    image_url: None,
+                },
+            ]),
+            Path::new("/vault"),
+        )
+        .unwrap();
+        assert_eq!(text, "a\nb");
+    }
+
+    #[test]
+    fn render_parts_unknown_kind_ignored() {
+        let (text, images) = render_openai_message_content(
+            OpenAiMessageContent::Parts(vec![
+                OpenAiContentPart {
+                    kind: "text".into(),
+                    text: Some("hi".into()),
+                    image_url: None,
+                },
+                OpenAiContentPart {
+                    kind: "unknown_type".into(),
+                    text: None,
+                    image_url: None,
+                },
+            ]),
+            Path::new("/vault"),
+        )
+        .unwrap();
+        assert_eq!(text, "hi");
+        assert!(images.is_empty());
+    }
+
+    // ── RateLimiter ───────────────────────────────────────────────
+
+    #[test]
+    fn rate_limiter_allows_within_limit() {
+        let rl = RateLimiter::new(3, std::time::Duration::from_secs(1));
+        assert!(rl.check("key1"));
+        assert!(rl.check("key1"));
+        assert!(rl.check("key1"));
+    }
+
+    #[test]
+    fn rate_limiter_blocks_over_limit() {
+        let rl = RateLimiter::new(2, std::time::Duration::from_secs(60));
+        assert!(rl.check("key1"));
+        assert!(rl.check("key1"));
+        assert!(!rl.check("key1"));
+    }
+
+    #[test]
+    fn rate_limiter_independent_keys() {
+        let rl = RateLimiter::new(1, std::time::Duration::from_secs(60));
+        assert!(rl.check("a"));
+        assert!(!rl.check("a"));
+        assert!(rl.check("b"));
+        assert!(!rl.check("b"));
+    }
+}

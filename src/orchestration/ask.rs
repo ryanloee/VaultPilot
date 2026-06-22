@@ -1,15 +1,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ai::AssistantToolCall;
 use crate::models::{
-    AppSettings, ConversationTurn, ContextStatus, GroundedAnswer, NoteDocument,
-    NoteMeta, StructuredNoteDraft, ThinkingTrace, ThinkingTraceStep,
+    AppSettings, ContextStatus, ConversationTurn, GroundedAnswer, NoteDocument, NoteMeta,
+    StructuredNoteDraft, ThinkingTrace, ThinkingTraceStep,
 };
 use crate::storage::{
     has_notes_async, initialize_storage_async, load_context_notes_async,
     load_recent_notes_for_overview_async, save_note_with_images_async, StorageContext,
 };
+use ai::AssistantToolCall;
 use tracing::instrument;
 
 use crate::ai;

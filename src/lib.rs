@@ -9,7 +9,10 @@ pub mod search_rules;
 pub mod storage;
 
 // Re-export public API from orchestration module for backward compatibility
-pub use orchestration::{ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path};
+pub use orchestration::{
+    ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
+    normalize_tool_path,
+};
 #[cfg(test)]
 mod regression;
 

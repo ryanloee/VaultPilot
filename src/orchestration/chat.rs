@@ -487,3 +487,162 @@ fn build_chat_session_title(text: &str) -> String {
         normalized
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{AnswerCitation, NoteMeta, ThinkingTrace};
+
+    // ── estimate_tokens_for_text ────────────────────────────────────
+
+    #[test]
+    fn estimate_tokens_none_returns_zero() {
+        assert_eq!(estimate_tokens_for_text(None), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_empty_returns_zero() {
+        assert_eq!(estimate_tokens_for_text(Some("")), 0);
+        assert_eq!(estimate_tokens_for_text(Some("   ")), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_ascii_text() {
+        // 4 ASCII chars → ceil(4/4) = 1 token
+        assert_eq!(estimate_tokens_for_text(Some("abcd")), 1);
+        // 8 ASCII chars → ceil(8/4) = 2 tokens
+        assert_eq!(estimate_tokens_for_text(Some("abcdefgh")), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_cjk_text() {
+        // Each CJK char counts as 2 tokens.
+        assert_eq!(estimate_tokens_for_text(Some("你好")), 4);
+    }
+
+    #[test]
+    fn estimate_tokens_mixed_ascii_cjk() {
+        // "hello你好" → ASCII: 5 chars → ceil(5/4)=2, CJK: 2 chars → 4 → total 6
+        assert_eq!(estimate_tokens_for_text(Some("hello你好")), 6);
+    }
+
+    #[test]
+    fn estimate_tokens_ignores_whitespace() {
+        // "a b c" → 3 ASCII non-whitespace → ceil(3/4) = 1
+        assert_eq!(estimate_tokens_for_text(Some("a b c")), 1);
+    }
+
+    // ── estimate_turn_tokens ────────────────────────────────────────
+
+    #[test]
+    fn estimate_turn_tokens_with_attachments() {
+        let attachments = vec![
+            ChatAttachment {
+                path: "a.png".into(),
+                name: "a.png".into(),
+            },
+            ChatAttachment {
+                path: "b.png".into(),
+                name: "b.png".into(),
+            },
+        ];
+        let text_tokens = estimate_tokens_for_text(Some("hello"));
+        let expected = text_tokens + 2 * IMAGE_ATTACHMENT_TOKEN_ESTIMATE;
+        assert_eq!(estimate_turn_tokens("hello", &attachments), expected);
+    }
+
+    // ── build_chat_session_title ────────────────────────────────────
+
+    #[test]
+    fn title_empty_returns_default() {
+        assert_eq!(build_chat_session_title(""), "新对话");
+        assert_eq!(build_chat_session_title("   "), "新对话");
+    }
+
+    #[test]
+    fn title_short_text_returned_as_is() {
+        assert_eq!(build_chat_session_title("hello world"), "hello world");
+    }
+
+    #[test]
+    fn title_long_text_truncated_with_ellipsis() {
+        let long = "a".repeat(30);
+        let title = build_chat_session_title(&long);
+        assert!(title.ends_with("..."));
+        // 28 chars + "..." = 31
+        assert_eq!(title.chars().count(), 31);
+    }
+
+    #[test]
+    fn title_collapses_whitespace() {
+        assert_eq!(build_chat_session_title("hello   world"), "hello world");
+    }
+
+    // ── enrich_turn_for_compression ─────────────────────────────────
+
+    #[test]
+    fn enrich_plain_text_unchanged() {
+        let turn = ChatTurn {
+            text: "hello".into(),
+            ..Default::default()
+        };
+        assert_eq!(enrich_turn_for_compression(&turn), "hello");
+    }
+
+    #[test]
+    fn enrich_appends_attachment_names() {
+        let turn = ChatTurn {
+            text: "see this".into(),
+            attachments: vec![ChatAttachment {
+                path: "a.png".into(),
+                name: "photo.png".into(),
+            }],
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(result.contains("[Attachments: photo.png]"));
+    }
+
+    #[test]
+    fn enrich_appends_citations() {
+        let turn = ChatTurn {
+            text: "according to".into(),
+            citations: vec![AnswerCitation {
+                title: "My Note".into(),
+                path: "notes/my.md".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(result.contains("[Citations: My Note]"));
+    }
+
+    #[test]
+    fn enrich_appends_saved_note_title() {
+        let turn = ChatTurn {
+            text: "saved".into(),
+            saved_note: Some(NoteMeta {
+                title: "Important Note".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(result.contains("[Saved note: Important Note]"));
+    }
+
+    #[test]
+    fn enrich_appends_thinking_trace_summary() {
+        let turn = ChatTurn {
+            text: "thinking".into(),
+            thinking_trace: Some(ThinkingTrace {
+                summary: "Analyzed 3 sources".into(),
+                steps: vec![],
+            }),
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(result.contains("[Thinking trace summary: Analyzed 3 sources]"));
+    }
+}

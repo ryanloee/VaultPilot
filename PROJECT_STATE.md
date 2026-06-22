@@ -29,8 +29,10 @@
 29|5. ⚪ UI/功能增强（新功能、交互优化）
 30|6. 📝 文档和测试覆盖
 31|
-32|## 已完成记录
-33|<!-- 由 pr-review 任务在合并/关闭 PR 后更新 -->
+## 已完成记录
+<!-- 由 pr-review 任务在合并/关闭 PR 后更新 -->
+- #1342 + #1343: Agent Mode Phase 3.2 — run_agent() 自主工具循环 + CLI agent 命令 (PR #1346 已合并)
+- #1344: MainWindow.Chat.cs 拆分为 4 个 partial class 文件 (PR #1347 已合并)
 34|- #217: WinUI 启动冒烟测试 — CI 每次 push/PR + release 验证 (PR #757 已合并)
 35|- #500: MCP server tool errors sanitize_error() 包装 (PR #505 已合并)
 36|- #501: build_note_path 使用完整 UUID 消除截断 (PR #506 已合并)

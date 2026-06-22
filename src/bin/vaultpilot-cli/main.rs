@@ -737,67 +737,76 @@ async fn handle_agent(
         ..Default::default()
     };
 
-    eprintln!("🤖 Agent starting — max {} steps, {} write mode",
+    eprintln!(
+        "🤖 Agent starting — max {} steps, {} write mode",
         max_steps,
-        if auto_approve { "auto-approve" } else { "read-only" }
+        if auto_approve {
+            "auto-approve"
+        } else {
+            "read-only"
+        }
     );
 
-    let result = vaultpilot_lib::agent::run_agent(
-        &settings,
-        context,
-        prompt,
-        config,
-        |event| {
-            match event {
-                vaultpilot_lib::agent::AgentEvent::Thinking { step } => {
-                    eprintln!("\n🧠 Step {step}: thinking...");
-                }
-                vaultpilot_lib::agent::AgentEvent::ToolCall { step, tool, args } => {
-                    eprintln!("🔧 Step {step}: calling {tool}({args})");
-                }
-                vaultpilot_lib::agent::AgentEvent::ToolResult { step: _, tool, result_preview, is_error } => {
-                    let status = if *is_error { "❌" } else { "✅" };
-                    eprintln!("   {status} {tool} → {result_preview}");
-                }
-                vaultpilot_lib::agent::AgentEvent::FinalAnswer { text: _ } => {
-                    eprintln!("\n🤖 Agent completed!");
-                }
-                vaultpilot_lib::agent::AgentEvent::WriteApprovalNeeded { tool, args } => {
-                    eprintln!("⚠️  Write operation: {tool}({args})");
-                    if auto_approve {
-                        eprintln!("   Auto-approved");
-                        return true;
-                    }
-                    eprint!("   Approve? [y/N]: ");
-                    let mut input = String::new();
-                    std::io::stdin().read_line(&mut input).unwrap_or_default();
-                    let approved = input.trim().eq_ignore_ascii_case("y");
-                    if !approved {
-                        eprintln!("   Denied by user");
-                    }
-                    return approved;
-                }
-                vaultpilot_lib::agent::AgentEvent::StepLimitReached { steps } => {
-                    eprintln!("⚠️  Step limit reached ({steps} steps)");
-                }
-                vaultpilot_lib::agent::AgentEvent::TokenBudgetExceeded { tokens_used, budget } => {
-                    eprintln!("⚠️  Token budget exceeded ({tokens_used}/{budget})");
-                }
-                vaultpilot_lib::agent::AgentEvent::Timeout => {
-                    eprintln!("⏰ Session timed out");
-                }
-                vaultpilot_lib::agent::AgentEvent::Error { message } => {
-                    eprintln!("❌ Error: {message}");
-                }
+    let result = vaultpilot_lib::agent::run_agent(&settings, context, prompt, config, |event| {
+        match event {
+            vaultpilot_lib::agent::AgentEvent::Thinking { step } => {
+                eprintln!("\n🧠 Step {step}: thinking...");
             }
-            true // default: continue
-        },
-    )
+            vaultpilot_lib::agent::AgentEvent::ToolCall { step, tool, args } => {
+                eprintln!("🔧 Step {step}: calling {tool}({args})");
+            }
+            vaultpilot_lib::agent::AgentEvent::ToolResult {
+                step: _,
+                tool,
+                result_preview,
+                is_error,
+            } => {
+                let status = if *is_error { "❌" } else { "✅" };
+                eprintln!("   {status} {tool} → {result_preview}");
+            }
+            vaultpilot_lib::agent::AgentEvent::FinalAnswer { text: _ } => {
+                eprintln!("\n🤖 Agent completed!");
+            }
+            vaultpilot_lib::agent::AgentEvent::WriteApprovalNeeded { tool, args } => {
+                eprintln!("⚠️  Write operation: {tool}({args})");
+                if auto_approve {
+                    eprintln!("   Auto-approved");
+                    return true;
+                }
+                eprint!("   Approve? [y/N]: ");
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap_or_default();
+                let approved = input.trim().eq_ignore_ascii_case("y");
+                if !approved {
+                    eprintln!("   Denied by user");
+                }
+                return approved;
+            }
+            vaultpilot_lib::agent::AgentEvent::StepLimitReached { steps } => {
+                eprintln!("⚠️  Step limit reached ({steps} steps)");
+            }
+            vaultpilot_lib::agent::AgentEvent::TokenBudgetExceeded {
+                tokens_used,
+                budget,
+            } => {
+                eprintln!("⚠️  Token budget exceeded ({tokens_used}/{budget})");
+            }
+            vaultpilot_lib::agent::AgentEvent::Timeout => {
+                eprintln!("⏰ Session timed out");
+            }
+            vaultpilot_lib::agent::AgentEvent::Error { message } => {
+                eprintln!("❌ Error: {message}");
+            }
+        }
+        true // default: continue
+    })
     .await?;
 
-    eprintln!("\n📊 Stats: {} steps, {} tokens used", result.steps_used, result.tokens_used);
-    serde_json::to_value(&result)
-        .map_err(|e| anyhow::anyhow!("serialization failed: {}", e))
+    eprintln!(
+        "\n📊 Stats: {} steps, {} tokens used",
+        result.steps_used, result.tokens_used
+    );
+    serde_json::to_value(&result).map_err(|e| anyhow::anyhow!("serialization failed: {}", e))
 }
 
 fn exit_ok(pretty: &bool, value: Value) -> ! {

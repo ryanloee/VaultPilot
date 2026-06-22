@@ -5,7 +5,7 @@ pub mod parsing;
 pub use context::{resolve_context_window, resolve_max_output_tokens};
 
 // Re-export public types so callers can use `ai::ChatAnswerResult` etc.
-pub use client::RequestUsage;
+pub use client::{send_request_streaming, RequestUsage};
 pub use parsing::{
     AssistantToolCall, ChatAnswerResult, RecordInteractionResult, ToolSelectionResult,
 };

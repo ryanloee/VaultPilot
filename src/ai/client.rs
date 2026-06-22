@@ -114,6 +114,8 @@ pub(super) struct AnthropicRequest<'a> {
     temperature: f32,
     system: &'a str,
     messages: Vec<AnthropicMessage>,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +146,8 @@ pub(super) struct OpenAiRequest<'a> {
     pub(super) max_tokens: u32,
     pub(super) temperature: f32,
     pub(super) messages: Vec<OpenAiMessage>,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    stream: bool,
 }
 
 /// Request struct for OpenAI reasoning models (o1/o3/o4) which require
@@ -153,6 +157,8 @@ pub(super) struct OpenAiReasoningRequest<'a> {
     pub(super) model: &'a str,
     pub(super) max_completion_tokens: u32,
     pub(super) messages: Vec<OpenAiMessage>,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -233,6 +239,7 @@ pub(super) async fn send_request_with_temperature(
                     role: "user".to_string(),
                     content: content_blocks,
                 }],
+                stream: false,
             };
             serde_json::to_vec(&payload)?.into()
         }
@@ -247,6 +254,7 @@ pub(super) async fn send_request_with_temperature(
                     model: &provider.model,
                     max_completion_tokens: max_output,
                     messages,
+                    stream: false,
                 };
                 serde_json::to_vec(&payload)?
             } else {
@@ -255,6 +263,7 @@ pub(super) async fn send_request_with_temperature(
                     max_tokens: max_output,
                     temperature,
                     messages,
+                    stream: false,
                 };
                 serde_json::to_vec(&payload)?
             };
@@ -407,6 +416,158 @@ pub(super) async fn send_request_with_temperature(
     }
 
     Err(anyhow!("API request failed after retries"))
+}
+/// Send a streaming request to the AI provider. Calls `on_chunk` for each
+/// text delta received. Returns the full accumulated text.
+pub async fn send_request_streaming(
+    settings: &AppSettings,
+    system: &str,
+    prompt: &str,
+    image_paths: &[String],
+    temperature: f32,
+    mut on_chunk: impl FnMut(&str),
+) -> Result<String> {
+    let provider = settings.effective_provider();
+    if provider.api_key.trim().is_empty() {
+        return Err(anyhow!("API key is empty"));
+    }
+
+    let provider_type = provider.effective_provider_type();
+    let resolved_addrs = validate_base_url(&provider.base_url).await?;
+    let client = get_or_build_client(
+        &provider.api_key,
+        provider.request_timeout_ms,
+        provider_type,
+        &provider.base_url,
+        &resolved_addrs,
+    )?;
+
+    let endpoint = normalize_endpoint(&provider.base_url, provider_type);
+
+    let body: Bytes = match provider_type {
+        crate::models::ProviderType::Anthropic => {
+            let content_blocks = build_input_blocks(prompt, image_paths).await?;
+            let payload = AnthropicRequest {
+                model: &provider.model,
+                max_tokens: resolve_max_output_tokens(&provider.model, provider.max_output_tokens),
+                temperature,
+                system,
+                messages: vec![AnthropicMessage {
+                    role: "user".to_string(),
+                    content: content_blocks,
+                }],
+                stream: true,
+            };
+            serde_json::to_vec(&payload)?.into()
+        }
+        crate::models::ProviderType::OpenAi => {
+            let messages =
+                build_openai_messages(&provider.model, system, prompt, image_paths).await?;
+            let max_output = resolve_max_output_tokens(&provider.model, provider.max_output_tokens);
+            let body_bytes = if is_openai_reasoning_model(&provider.model) {
+                let payload = OpenAiReasoningRequest {
+                    model: &provider.model,
+                    max_completion_tokens: max_output,
+                    messages,
+                    stream: true,
+                };
+                serde_json::to_vec(&payload)?
+            } else {
+                let payload = OpenAiRequest {
+                    model: &provider.model,
+                    max_tokens: max_output,
+                    temperature,
+                    messages,
+                    stream: true,
+                };
+                serde_json::to_vec(&payload)?
+            };
+            body_bytes.into()
+        }
+    };
+
+    let response = client
+        .post(&endpoint)
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "Streaming API request failed ({}): {}",
+            status.as_u16(),
+            crate::sanitize_error(&text)
+        ));
+    }
+
+    let mut accumulated = String::new();
+    let mut buf = BytesMut::new();
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
+        buf.extend_from_slice(&chunk);
+
+        // Process complete lines
+        while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
+            let line_bytes = buf.split_to(newline_pos + 1);
+            let line = std::str::from_utf8(&line_bytes)
+                .unwrap_or("")
+                .trim_end_matches('\r')
+                .trim_end_matches('\n');
+
+            if line.is_empty() {
+                continue;
+            }
+
+            // Skip "event:" lines (Anthropic) and "id:" / "retry:" metadata
+            if line.starts_with("event:") || line.starts_with("id:") || line.starts_with("retry:") {
+                continue;
+            }
+
+            if let Some(data) = line.strip_prefix("data: ") {
+                let data = data.trim();
+                if data == "[DONE]" {
+                    return Ok(accumulated);
+                }
+
+                // Parse SSE data based on provider type
+                match provider_type {
+                    crate::models::ProviderType::OpenAi => {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(text) = parsed["choices"][0]["delta"]["content"].as_str() {
+                                if !text.is_empty() {
+                                    accumulated.push_str(text);
+                                    on_chunk(text);
+                                }
+                            }
+                        }
+                    }
+                    crate::models::ProviderType::Anthropic => {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                            let event_type = parsed["type"].as_str().unwrap_or("");
+                            if event_type == "content_block_delta" {
+                                if let Some(text) = parsed["delta"]["text"].as_str() {
+                                    if !text.is_empty() {
+                                        accumulated.push_str(text);
+                                        on_chunk(text);
+                                    }
+                                }
+                            } else if event_type == "message_stop" {
+                                return Ok(accumulated);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(accumulated)
 }
 
 pub(super) fn should_retry_transport_error(error: &reqwest::Error) -> bool {

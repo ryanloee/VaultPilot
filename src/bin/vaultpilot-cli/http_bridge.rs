@@ -7,12 +7,14 @@ use std::time::Instant;
 use anyhow::Result;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, Sse};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::convert::Infallible;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
@@ -390,76 +392,158 @@ async fn http_chat_completions(
     State(state): State<Arc<HttpBridgeState>>,
     headers: HeaderMap,
     Json(request): Json<OpenAiChatCompletionsRequest>,
-) -> Result<Json<OpenAiChatCompletionsResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
-    require_bridge_token(&state, &headers)?;
-    if request.stream {
-        return Err(openai_error(
-            StatusCode::BAD_REQUEST,
-            "stream=true is not supported by VaultPilot yet",
-        ));
+) -> axum::response::Response {
+    if let Err(e) = require_bridge_token(&state, &headers) {
+        return e.into_response();
     }
 
-    let settings = load_settings_async(&state.context).await.map_err(|error| {
-        tracing::warn!("http_chat_completions: failed to load settings: {error}");
-        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load settings")
-    })?;
+    let settings = match load_settings_async(&state.context).await {
+        Ok(s) => s,
+        Err(error) => {
+            tracing::warn!("http_chat_completions: failed to load settings: {error}");
+            return openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load settings")
+                .into_response();
+        }
+    };
     let requested_model = request.model.trim().to_string();
     let vault_root = PathBuf::from(&settings.vault_dir);
-    let (question, history, image_paths) = openai_request_to_dialog(request, &vault_root)
-        .map_err(|message| openai_error(StatusCode::BAD_REQUEST, &message))?;
+    let is_stream = request.stream;
+    let model_id = if requested_model.is_empty() {
+        bridge_model_id(&settings)
+    } else {
+        requested_model.clone()
+    };
+    let (question, history, image_paths) = match openai_request_to_dialog(request, &vault_root) {
+        Ok(v) => v,
+        Err(message) => return openai_error(StatusCode::BAD_REQUEST, &message).into_response(),
+    };
 
-    let answer = ask_with_ai_with_context(
-        &state.context,
-        question,
-        Some(history),
-        if image_paths.is_empty() {
-            None
-        } else {
-            Some(image_paths)
-        },
-        None,
-        |_, _| (),
-    )
-    .await
-    .map_err(|error| {
-        tracing::warn!("http_chat_completions: upstream AI service error: {error}");
-        openai_error(StatusCode::BAD_GATEWAY, "Upstream service error")
-    })?;
+    if is_stream {
+        // Streaming mode: use channel-based SSE approach
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+        let settings_arc = Arc::new(settings);
+        let system_owned = vaultpilot_lib::prompting::general_chat_system_prompt();
+        let user_prompt_owned =
+            vaultpilot_lib::prompting::general_chat_user_prompt(&question, &history);
+        let model_for_task = model_id;
 
-    let prompt_tokens = answer
-        .context_status
-        .as_ref()
-        .and_then(|status| status.last_request_input_tokens)
-        .unwrap_or_default();
-    let completion_tokens = answer
-        .context_status
-        .as_ref()
-        .and_then(|status| status.last_request_output_tokens)
-        .unwrap_or_default();
+        tokio::spawn(async move {
+            let result = vaultpilot_lib::ai::send_request_streaming(
+                &settings_arc,
+                &system_owned,
+                &user_prompt_owned,
+                &image_paths,
+                0.2,
+                |chunk| {
+                    let chunk_data = serde_json::json!({
+                        "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
+                        "object": "chat.completion.chunk",
+                        "created": Utc::now().timestamp(),
+                        "model": model_for_task,
+                        "choices": [{
+                            "index": 0,
+                            "delta": { "content": chunk },
+                            "finish_reason": null
+                        }]
+                    });
+                    let _ = tx.blocking_send(Ok(Event::default().data(chunk_data.to_string())));
+                },
+            )
+            .await;
 
-    Ok(Json(OpenAiChatCompletionsResponse {
-        id: format!("chatcmpl-{}", Uuid::new_v4().simple()),
-        object: "chat.completion",
-        created: Utc::now().timestamp(),
-        model: if requested_model.is_empty() {
-            bridge_model_id(&settings)
-        } else {
-            requested_model
-        },
-        choices: vec![OpenAiChoice {
-            index: 0,
-            message: OpenAiAssistantMessage {
-                role: "assistant",
-                content: answer.answer,
+            match result {
+                Ok(_) => {
+                    let finish_data = serde_json::json!({
+                        "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
+                        "object": "chat.completion.chunk",
+                        "created": Utc::now().timestamp(),
+                        "model": model_for_task,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop"
+                        }]
+                    });
+                    let _ = tx.blocking_send(Ok(Event::default().data(finish_data.to_string())));
+                    let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                }
+                Err(error) => {
+                    tracing::warn!("http_chat_completions streaming error: {error}");
+                    let error_data = serde_json::json!({
+                        "error": {
+                            "message": "Upstream service error",
+                            "type": "upstream_error",
+                            "code": "upstream_error"
+                        }
+                    });
+                    let _ = tx.blocking_send(Ok(Event::default().data(error_data.to_string())));
+                    let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                }
+            }
+        });
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Sse::new(stream).into_response()
+    } else {
+        // Non-streaming mode: original behavior
+        let answer = match ask_with_ai_with_context(
+            &state.context,
+            question,
+            Some(history),
+            if image_paths.is_empty() {
+                None
+            } else {
+                Some(image_paths)
             },
-            finish_reason: "stop",
-        }],
-        usage: OpenAiUsage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens: prompt_tokens + completion_tokens,
-        },
-    }))
+            None,
+            |_, _| (),
+        )
+        .await
+        {
+            Ok(a) => a,
+            Err(error) => {
+                tracing::warn!("http_chat_completions: upstream AI service error: {error}");
+                return openai_error(StatusCode::BAD_GATEWAY, "Upstream service error")
+                    .into_response();
+            }
+        };
+
+        let prompt_tokens = answer
+            .context_status
+            .as_ref()
+            .and_then(|status| status.last_request_input_tokens)
+            .unwrap_or_default();
+        let completion_tokens = answer
+            .context_status
+            .as_ref()
+            .and_then(|status| status.last_request_output_tokens)
+            .unwrap_or_default();
+
+        Json(OpenAiChatCompletionsResponse {
+            id: format!("chatcmpl-{}", Uuid::new_v4().simple()),
+            object: "chat.completion",
+            created: Utc::now().timestamp(),
+            model: if requested_model.is_empty() {
+                bridge_model_id(&settings)
+            } else {
+                requested_model
+            },
+            choices: vec![OpenAiChoice {
+                index: 0,
+                message: OpenAiAssistantMessage {
+                    role: "assistant",
+                    content: answer.answer,
+                },
+                finish_reason: "stop",
+            }],
+            usage: OpenAiUsage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: prompt_tokens + completion_tokens,
+            },
+        })
+        .into_response()
+    }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────

@@ -495,9 +495,18 @@ pub enum AgentEvent {
     /// LLM is processing.
     Thinking { step: usize },
     /// Agent is calling a tool.
-    ToolCall { step: usize, tool: String, args: String },
+    ToolCall {
+        step: usize,
+        tool: String,
+        args: String,
+    },
     /// Tool execution completed.
-    ToolResult { step: usize, tool: String, result_preview: String, is_error: bool },
+    ToolResult {
+        step: usize,
+        tool: String,
+        result_preview: String,
+        is_error: bool,
+    },
     /// Agent produced the final answer.
     FinalAnswer { text: String },
     /// Write operation needs user approval.
@@ -541,7 +550,9 @@ pub async fn run_agent(
     mut on_event: impl FnMut(&AgentEvent) -> bool,
 ) -> Result<AgentResult> {
     let proxy = ToolProxy::new(config.clone(), &settings.vault_dir);
-    let max_steps = if config.limits.max_tool_calls > 0 && (config.limits.max_tool_calls as usize) < DEFAULT_MAX_STEPS {
+    let max_steps = if config.limits.max_tool_calls > 0
+        && (config.limits.max_tool_calls as usize) < DEFAULT_MAX_STEPS
+    {
         config.limits.max_tool_calls as usize
     } else {
         DEFAULT_MAX_STEPS
@@ -563,7 +574,13 @@ pub async fn run_agent(
         // Ask LLM what tool to call
         let selection = ai::select_tool_call(settings, prompt, &[], &[], &tool_transcripts)
             .await
-            .map_err(|e| anyhow!("LLM call failed at step {}: {}", step + 1, sanitize_error(&e.to_string())))?;
+            .map_err(|e| {
+                anyhow!(
+                    "LLM call failed at step {}: {}",
+                    step + 1,
+                    sanitize_error(&e.to_string())
+                )
+            })?;
 
         total_tokens += selection.usage.input_tokens.unwrap_or(0) as u64
             + selection.usage.output_tokens.unwrap_or(0) as u64;
@@ -583,15 +600,21 @@ pub async fn run_agent(
                 let answer = if tool_transcripts.is_empty() {
                     crate::ai::answer_question(settings, prompt, &[], &[], &[])
                         .await
-                        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+                        .map_err(|e| {
+                            anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
+                        })?
                 } else {
                     crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[])
                         .await
-                        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+                        .map_err(|e| {
+                            anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
+                        })?
                 };
                 total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
                     + answer.usage.output_tokens.unwrap_or(0) as u64;
-                on_event(&AgentEvent::FinalAnswer { text: answer.answer.clone() });
+                on_event(&AgentEvent::FinalAnswer {
+                    text: answer.answer.clone(),
+                });
                 return Ok(AgentResult {
                     answer: answer.answer,
                     steps_used: step + 1,
@@ -684,16 +707,17 @@ async fn execute_tool(
     settings: &crate::models::AppSettings,
     tool_call: &ai::AssistantToolCall,
 ) -> (String, bool) {
-    use crate::storage::{
-        load_context_notes_async, load_recent_notes_for_overview_async,
-    };
+    use crate::storage::{load_context_notes_async, load_recent_notes_for_overview_async};
 
     match tool_call {
         ai::AssistantToolCall::None => ("no tool selected".into(), false),
         ai::AssistantToolCall::SearchNotes { query, limit } => {
-            match load_context_notes_async(context, query, &[], limit.saturating_mul(3).max(8)).await {
+            match load_context_notes_async(context, query, &[], limit.saturating_mul(3).max(8))
+                .await
+            {
                 Ok(docs) => {
-                    let summary = docs.iter()
+                    let summary = docs
+                        .iter()
                         .take(*limit)
                         .map(|d| format!("- {} ({})", d.meta.title, d.meta.path))
                         .collect::<Vec<_>>()
@@ -710,7 +734,8 @@ async fn execute_tool(
         ai::AssistantToolCall::ListNotes { limit } => {
             match load_recent_notes_for_overview_async(context, *limit).await {
                 Ok(docs) => {
-                    let summary = docs.iter()
+                    let summary = docs
+                        .iter()
                         .map(|d| format!("- {} ({})", d.meta.title, d.meta.path))
                         .collect::<Vec<_>>()
                         .join("\n");
@@ -793,7 +818,10 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
     const MAX_READ: usize = 50 * 1024;
     if content.len() > MAX_READ {
         let truncated: String = content.chars().take(MAX_READ).collect();
-        Ok(format!("{}\n[... truncated at {} chars]", truncated, MAX_READ))
+        Ok(format!(
+            "{}\n[... truncated at {} chars]",
+            truncated, MAX_READ
+        ))
     } else {
         Ok(content)
     }
@@ -802,7 +830,13 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
 fn slugify(title: &str) -> String {
     let mut slug: String = title
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     // Collapse consecutive dashes
     while slug.contains("--") {

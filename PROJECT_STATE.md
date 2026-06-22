@@ -801,3 +801,29 @@
   - 默认端口 8766
 - 测试: cargo test 全通过, clippy 零警告, cargo fmt 干净
 - 项目状态: 1 open issue (#913 Agent Mode), 2 open PR (#1308, #1309), v0.3.38
+
+## 修复阶段 fix-2 (循环#266)
+- #1310 → PR #1312: http_bridge.rs 34 个纯函数单元测试 (消除 750 行零测试盲区)
+  - constant_time_eq: 5 tests (安全关键时序比较)
+  - validate_http_bridge_binding: 4 tests (安全绑定验证)
+  - normalize_bridge_token: 4 tests (token 标准化)
+  - bridge_token_from_headers: 6 tests (Bearer/header 解析)
+  - bridge_model_id: 3 tests (模型 ID 格式化)
+  - openai_request_to_dialog: 5 tests (消息解析和验证)
+  - render_openai_message_content: 4 tests (多模态内容解析)
+  - RateLimiter: 3 tests (速率限制器行为)
+- #1311 → PR #1313: mcp_server.rs 20 个纯函数单元测试 (消除 1556 行零测试盲区)
+  - negotiate_mcp_protocol_version: 4 tests (MCP 协议版本协商)
+  - escape_xml_content: 6 tests (prompt injection 防护)
+  - sanitize_mcp_prompt_content: 2 tests (完整包装格式)
+  - mcp_tool_success/error: 2 tests (MCP 响应格式)
+  - mcp_tools: 3 tests (工具 schema 完整性)
+  - McpResponse: 2 tests (JSON-RPC 结构)
+- #1314 → PR #1315: markdown_utils.rs 24 个纯函数单元测试
+  - strip_markdown_wrapper_tags: 4 tests
+  - strip_inline_markdown: 9 tests (bold/italic/strikethrough/code-span)
+  - strip_markdown_list_marker: 6 tests
+  - simplify_cli_text: 5 tests
+- 测试: 398 lib + 12 agent + 40 cli = 450 全通过, clippy 零警告
+- 项目状态: 4 open issues (#913, #1305, #1306, #1314), 5 open PR (#1308, #1309, #1312, #1313, #1315), v0.3.38
+- 下一步: review 阶段合并 PR

@@ -121,28 +121,124 @@ pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
     (128_000, "heuristic_default".to_string())
 }
 
+/// A model output-token rule for the built-in registry.
+///
+/// Same matching semantics as `ContextWindowRule`: all `substrings` must appear
+/// in the lowercased model name for the rule to match.  First match wins.
+struct OutputTokenRule {
+    substrings: &'static [&'static str],
+    tokens: u32,
+}
+
+/// Data-driven output token limits by model family.
+///
+/// Order matters: more specific patterns before general ones.
+static MODEL_OUTPUT_TOKEN_RULES: &[OutputTokenRule] = &[
+    // ── Anthropic ────────────────────────────────────────────────────
+    // Opus variants have a lower default output ceiling.
+    OutputTokenRule {
+        substrings: &["claude", "opus"],
+        tokens: 4096,
+    },
+    // ── OpenAI ───────────────────────────────────────────────────────
+    OutputTokenRule {
+        substrings: &["gpt-4.1"],
+        tokens: 16384,
+    },
+    OutputTokenRule {
+        substrings: &["gpt-5"],
+        tokens: 16384,
+    },
+    OutputTokenRule {
+        substrings: &["gpt-4o"],
+        tokens: 16384,
+    },
+];
+
 /// Resolve the maximum output tokens to use for an API request.
 ///
-/// Priority: explicit user configuration > model-name heuristic > default (8192).
+/// Priority: explicit user configuration > model-name registry > reasoning
+/// model heuristic > default (8192).
 pub fn resolve_max_output_tokens(model: &str, configured: Option<u32>) -> u32 {
     if let Some(value) = configured.filter(|v| *v > 0) {
         return value;
     }
 
     let model_lower = model.trim().to_ascii_lowercase();
-    if model_lower.contains("claude-3-opus") || model_lower.contains("claude-opus") {
-        return 4096;
+
+    // Data-driven registry (same pattern as resolve_context_window).
+    for rule in MODEL_OUTPUT_TOKEN_RULES {
+        if rule.substrings.iter().all(|s| model_lower.contains(s)) {
+            return rule.tokens;
+        }
     }
-    if model_lower.contains("gpt-4o")
-        || model_lower.contains("gpt-4.1")
-        || model_lower.contains("gpt-5")
-    {
-        return 16384;
-    }
-    // #742: Reasoning models (o1/o3/o4) support 32768+ output tokens
+
+    // Reasoning models (o1/o3/o4) support 32768+ output tokens (#742).
     if is_openai_reasoning_model(&model_lower) {
         return 32768;
     }
 
     8192
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_tokens_claude_opus_returns_4096() {
+        assert_eq!(resolve_max_output_tokens("claude-3-opus", None), 4096);
+        assert_eq!(resolve_max_output_tokens("claude-opus-4", None), 4096);
+        assert_eq!(
+            resolve_max_output_tokens("anthropic/claude-opus-4", None),
+            4096
+        );
+    }
+
+    #[test]
+    fn output_tokens_gpt_models_return_16384() {
+        assert_eq!(resolve_max_output_tokens("gpt-4o", None), 16384);
+        assert_eq!(resolve_max_output_tokens("gpt-4.1", None), 16384);
+        assert_eq!(resolve_max_output_tokens("gpt-5", None), 16384);
+        assert_eq!(resolve_max_output_tokens("openai/gpt-4o", None), 16384);
+    }
+
+    #[test]
+    fn output_tokens_reasoning_models_return_32768() {
+        assert_eq!(resolve_max_output_tokens("o1-mini", None), 32768);
+        assert_eq!(resolve_max_output_tokens("o3-mini", None), 32768);
+        assert_eq!(resolve_max_output_tokens("o4-mini", None), 32768);
+    }
+
+    #[test]
+    fn output_tokens_unknown_model_returns_8192() {
+        assert_eq!(resolve_max_output_tokens("unknown-model", None), 8192);
+        assert_eq!(resolve_max_output_tokens("deepseek-chat", None), 8192);
+        assert_eq!(resolve_max_output_tokens("gemini-pro", None), 8192);
+    }
+
+    #[test]
+    fn output_tokens_explicit_override_wins() {
+        assert_eq!(resolve_max_output_tokens("gpt-4o", Some(4096)), 4096);
+        assert_eq!(resolve_max_output_tokens("o1-mini", Some(1000)), 1000);
+        // Zero and None should fall through to heuristic.
+        assert_eq!(resolve_max_output_tokens("gpt-4o", Some(0)), 16384);
+        assert_eq!(resolve_max_output_tokens("gpt-4o", None), 16384);
+    }
+
+    #[test]
+    fn output_tokens_claude_non_opus_returns_default() {
+        // Sonnet / Haiku should get the default, not Opus's 4096.
+        assert_eq!(resolve_max_output_tokens("claude-3-5-sonnet", None), 8192);
+        assert_eq!(resolve_max_output_tokens("claude-3-haiku", None), 8192);
+    }
+
+    #[test]
+    fn output_tokens_registry_rules_are_addable() {
+        // Verify the static array is non-empty and contains expected entries.
+        assert!(!MODEL_OUTPUT_TOKEN_RULES.is_empty());
+        // First rule should be claude+opus.
+        assert_eq!(MODEL_OUTPUT_TOKEN_RULES[0].substrings, &["claude", "opus"]);
+        assert_eq!(MODEL_OUTPUT_TOKEN_RULES[0].tokens, 4096);
+    }
 }

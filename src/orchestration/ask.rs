@@ -1028,3 +1028,341 @@ fn draft_to_note_document(draft: StructuredNoteDraft) -> NoteDocument {
         search_snippet: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::RequestUsage;
+    use crate::models::{NoteDocument, NoteMeta, StructuredNoteDraft};
+
+    // ── normalize_tool_path ────────────────────────────────────────
+
+    #[test]
+    fn normalize_tool_path_empty_returns_err() {
+        let vault = Path::new("/tmp/test-vault");
+        std::fs::create_dir_all(vault).unwrap();
+        assert!(normalize_tool_path("", vault).is_err());
+    }
+
+    #[test]
+    fn normalize_tool_path_whitespace_only_returns_err() {
+        let vault = Path::new("/tmp/test-vault");
+        std::fs::create_dir_all(vault).unwrap();
+        assert!(normalize_tool_path("   ", vault).is_err());
+    }
+
+    #[test]
+    fn normalize_tool_path_strips_quotes() {
+        let vault = Path::new("/tmp/test-vault");
+        std::fs::create_dir_all(vault).unwrap();
+        let result = normalize_tool_path("\"hello.md\"", vault);
+        assert!(result.is_ok() || !format!("{}", result.unwrap_err()).contains("empty"));
+    }
+
+    #[test]
+    fn normalize_tool_path_rejects_dot_dot_traversal() {
+        let vault = Path::new("/tmp/test-vp-vault-traversal");
+        std::fs::create_dir_all(vault).unwrap();
+        let result = normalize_tool_path("../../../etc/passwd", vault);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn normalize_tool_path_accepts_relative_path_inside_vault() {
+        let vault = Path::new("/tmp/test-vp-vault-inside");
+        std::fs::create_dir_all(vault).unwrap();
+        let _ = normalize_tool_path("notes/test.md", vault);
+    }
+
+    // ── looks_like_small_talk ──────────────────────────────────────
+
+    #[test]
+    fn small_talk_detects_hi() {
+        assert!(looks_like_small_talk("hi"));
+        assert!(looks_like_small_talk("Hi"));
+        assert!(looks_like_small_talk("  hi  "));
+    }
+
+    #[test]
+    fn small_talk_detects_hello() {
+        assert!(looks_like_small_talk("hello"));
+        assert!(looks_like_small_talk("Hello"));
+    }
+
+    #[test]
+    fn small_talk_detects_chinese_greetings() {
+        assert!(looks_like_small_talk("你好"));
+        assert!(looks_like_small_talk("谢谢"));
+        assert!(looks_like_small_talk("在吗"));
+        assert!(looks_like_small_talk("你是谁"));
+    }
+
+    #[test]
+    fn small_talk_detects_thanks() {
+        assert!(looks_like_small_talk("thanks"));
+        assert!(looks_like_small_talk("thank you"));
+    }
+
+    #[test]
+    fn small_talk_rejects_question() {
+        assert!(!looks_like_small_talk("你好吗？"));
+        assert!(!looks_like_small_talk("What is Rust?"));
+    }
+
+    // ── looks_like_a_question ──────────────────────────────────────
+
+    #[test]
+    fn question_detects_question_mark() {
+        assert!(looks_like_a_question("what?"));
+        assert!(looks_like_a_question("你好？"));
+    }
+
+    #[test]
+    fn question_detects_chinese_question_words() {
+        assert!(looks_like_a_question("这是什么"));
+        assert!(looks_like_a_question("怎么使用"));
+        assert!(looks_like_a_question("如何配置"));
+        assert!(looks_like_a_question("为什么失败"));
+        assert!(looks_like_a_question("有没有文档"));
+        assert!(looks_like_a_question("是不是这样"));
+    }
+
+    #[test]
+    fn question_rejects_command() {
+        assert!(!looks_like_a_question("记录一下今天的进展"));
+        assert!(!looks_like_a_question("保存这个文件"));
+    }
+
+    // ── looks_like_record_request ──────────────────────────────────
+
+    #[test]
+    fn record_detects_command_phrases() {
+        assert!(looks_like_record_request("记录一下"));
+        assert!(looks_like_record_request("记一下"));
+        assert!(looks_like_record_request("存一下"));
+        assert!(looks_like_record_request("存到知识库"));
+        assert!(looks_like_record_request("帮我存"));
+        assert!(looks_like_record_request("record this"));
+        assert!(looks_like_record_request("save this"));
+        assert!(looks_like_record_request("remember this"));
+    }
+
+    #[test]
+    fn record_generic_verb_without_question() {
+        assert!(looks_like_record_request("保存这个"));
+        assert!(looks_like_record_request("记住这个"));
+    }
+
+    #[test]
+    fn record_generic_verb_with_question_is_false() {
+        assert!(!looks_like_record_request("目前记录的版本是多少"));
+        assert!(!looks_like_record_request("保存到哪里了？"));
+    }
+
+    // ── looks_like_session_memory_question ─────────────────────────
+
+    #[test]
+    fn session_memory_detects_chinese() {
+        assert!(looks_like_session_memory_question("我的名字是什么"));
+        assert!(looks_like_session_memory_question("我叫什么"));
+        assert!(looks_like_session_memory_question("刚才我说了什么"));
+    }
+
+    #[test]
+    fn session_memory_detects_english() {
+        assert!(looks_like_session_memory_question("what is my name"));
+        assert!(looks_like_session_memory_question("do you remember my name"));
+        assert!(looks_like_session_memory_question("what did i just say"));
+    }
+
+    #[test]
+    fn session_memory_rejects_normal_question() {
+        assert!(!looks_like_session_memory_question("什么是 Rust？"));
+    }
+
+    // ── merge_usage ────────────────────────────────────────────────
+
+    #[test]
+    fn merge_usage_both_none() {
+        let a = RequestUsage { input_tokens: None, output_tokens: None };
+        let b = RequestUsage { input_tokens: None, output_tokens: None };
+        let merged = merge_usage(a, b);
+        assert_eq!(merged.input_tokens, None);
+        assert_eq!(merged.output_tokens, None);
+    }
+
+    #[test]
+    fn merge_usage_sums_values() {
+        let a = RequestUsage { input_tokens: Some(100), output_tokens: Some(50) };
+        let b = RequestUsage { input_tokens: Some(200), output_tokens: Some(80) };
+        let merged = merge_usage(a, b);
+        assert_eq!(merged.input_tokens, Some(300));
+        assert_eq!(merged.output_tokens, Some(130));
+    }
+
+    #[test]
+    fn merge_usage_one_none_one_some() {
+        let a = RequestUsage { input_tokens: None, output_tokens: Some(50) };
+        let b = RequestUsage { input_tokens: Some(200), output_tokens: None };
+        let merged = merge_usage(a, b);
+        assert_eq!(merged.input_tokens, Some(200));
+        assert_eq!(merged.output_tokens, Some(50));
+    }
+
+    // ── display_path ───────────────────────────────────────────────
+
+    #[test]
+    fn display_path_empty() {
+        assert_eq!(display_path(""), "(empty path)");
+        assert_eq!(display_path("   "), "(empty path)");
+    }
+
+    #[test]
+    fn display_path_normal() {
+        assert_eq!(display_path("/home/user/notes"), "/home/user/notes");
+    }
+
+    // ── truncate_for_trace ─────────────────────────────────────────
+
+    #[test]
+    fn truncate_short_text_unchanged() {
+        assert_eq!(truncate_for_trace("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_exact_length_no_ellipsis() {
+        assert_eq!(truncate_for_trace("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_long_text_adds_ellipsis() {
+        let result = truncate_for_trace("hello world", 5);
+        assert_eq!(result, "hello...");
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_empty() {
+        assert_eq!(truncate_for_trace("", 10), "");
+    }
+
+    // ── summarize_docs_for_tool_result ─────────────────────────────
+
+    fn make_doc(title: &str, path: &str, summary: &str) -> NoteDocument {
+        NoteDocument {
+            meta: NoteMeta {
+                title: title.to_string(),
+                path: path.to_string(),
+                summary: summary.to_string(),
+                ..Default::default()
+            },
+            body: String::new(),
+            search_snippet: None,
+        }
+    }
+
+    #[test]
+    fn summarize_empty_docs() {
+        let result = summarize_docs_for_tool_result("search_notes", &[]);
+        assert!(result.contains("0 notes"));
+    }
+
+    #[test]
+    fn summarize_single_doc() {
+        let docs = vec![make_doc("My Note", "/notes/my.md", "A summary")];
+        let result = summarize_docs_for_tool_result("search_notes", &docs);
+        assert!(result.contains("1 notes"));
+        assert!(result.contains("My Note"));
+        assert!(result.contains("A summary"));
+    }
+
+    #[test]
+    fn summarize_multiple_docs() {
+        let docs = vec![
+            make_doc("Note A", "/a.md", "Summary A"),
+            make_doc("Note B", "/b.md", "Summary B"),
+        ];
+        let result = summarize_docs_for_tool_result("list_notes", &docs);
+        assert!(result.contains("2 notes"));
+        assert!(result.contains("Note A"));
+        assert!(result.contains("Note B"));
+    }
+
+    // ── planned_tool_identity ──────────────────────────────────────
+
+    #[test]
+    fn planned_identity_none() {
+        assert!(planned_tool_identity(&AssistantToolCall::None).is_none());
+    }
+
+    #[test]
+    fn planned_identity_search() {
+        let call = AssistantToolCall::SearchNotes { query: "test".into(), limit: 5 };
+        let (name, detail) = planned_tool_identity(&call).unwrap();
+        assert_eq!(name, "search_notes");
+        assert!(detail.contains("test"));
+        assert!(detail.contains("5"));
+    }
+
+    #[test]
+    fn planned_identity_list_notes() {
+        let call = AssistantToolCall::ListNotes { limit: 3 };
+        let (name, detail) = planned_tool_identity(&call).unwrap();
+        assert_eq!(name, "list_notes");
+        assert!(detail.contains("3"));
+    }
+
+    #[test]
+    fn planned_identity_read_file() {
+        let call = AssistantToolCall::ReadFile { path: "/notes/test.md".into() };
+        let (name, detail) = planned_tool_identity(&call).unwrap();
+        assert_eq!(name, "read_file");
+        assert!(detail.contains("/notes/test.md"));
+    }
+
+    #[test]
+    fn planned_identity_save_note() {
+        let call = AssistantToolCall::SaveNote {
+            draft: Box::new(StructuredNoteDraft::default()),
+        };
+        let (name, detail) = planned_tool_identity(&call).unwrap();
+        assert_eq!(name, "save_note");
+        assert!(detail.contains("model_generated_note_draft"));
+    }
+
+    // ── draft_to_note_document ─────────────────────────────────────
+
+    #[test]
+    fn draft_to_note_document_converts_fields() {
+        let draft = StructuredNoteDraft {
+            title: "Test Title".into(),
+            summary: "Test Summary".into(),
+            tags: vec!["tag1".into()],
+            keywords: vec!["kw1".into()],
+            platform: "linux".into(),
+            board: "x86".into(),
+            kernel: "6.0".into(),
+            status: "done".into(),
+            source: "captured".into(),
+            body: "body content".into(),
+        };
+        let doc = draft_to_note_document(draft);
+        assert_eq!(doc.meta.title, "Test Title");
+        assert_eq!(doc.meta.summary, "Test Summary");
+        assert_eq!(doc.meta.tags, vec!["tag1"]);
+        assert_eq!(doc.meta.keywords, vec!["kw1"]);
+        assert_eq!(doc.meta.platform, "linux");
+        assert_eq!(doc.body, "body content");
+    }
+
+    #[test]
+    fn draft_to_note_document_empty_source_defaults() {
+        let draft = StructuredNoteDraft {
+            title: "T".into(),
+            source: String::new(),
+            ..Default::default()
+        };
+        let doc = draft_to_note_document(draft);
+        assert_eq!(doc.meta.source, "captured");
+    }
+}

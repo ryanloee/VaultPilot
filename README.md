@@ -15,6 +15,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2B-0078D4" alt="Windows" />
   <img src="https://img.shields.io/badge/linux-CLI%20only-FCC624" alt="Linux CLI" />
+  <img src="https://img.shields.io/badge/android-APK-3DDC84" alt="Android" />
   <img src="https://img.shields.io/badge/rust-2021-orange" alt="Rust" />
   <img src="https://img.shields.io/badge/.NET-8-512BD4" alt=".NET 8" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" />
@@ -36,33 +37,35 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 | **Image Intelligence** | OCR text extraction, perceptual hashing for near-duplicate detection, and semantic similarity for image-based search. |
 | **Conversation Memory** | Multi-session chat with automatic context compression when conversations get long. |
 | **AI Tool Use** | The agent can search notes, read files, list directories, and save notes — all grounded in your local vault. |
+| **Agent Mode** | Autonomous multi-step tool-calling loop — the AI plans, executes tools, and iterates until the task is done. |
 | **Markdown Import** | Bulk-import existing `.md` files into the indexed vault. |
 | **Offline-First** | Notes and search work without a network. AI features only need an API key. |
 
 ## Architecture
 
 ```
-┌──────────────────────────────┐
-│  VaultPilot.WinUI.exe (C#)   │  WinUI 3 desktop shell
-│  ┌──────────┐ ┌────────────┐ │
-│  │ Chat UI  │ │ Settings   │ │
-│  └────┬─────┘ └────────────┘ │
-│       │ JSON-RPC (stdin/out) │
-│  ┌────▼──────────────────┐   │
-│  │  BackendClient.cs     │   │
-│  └────┬──────────────────┘   │
-└───────┼──────────────────────┘
-        │
-┌───────▼──────────────────────┐
-│  vaultpilot-agent.exe (Rust) │
-│  ┌────────┐ ┌──────┐        │
-│  │ ai.rs  │ │storage│        │
-│  └────────┘ └──┬───┘        │
-│  ┌────────┐    │             │
-│  │prompt. │    │             │
-│  │  rs    │    ▼             │
-│  └────────┘  SQLite + .md   │
-└──────────────────────────────┘
+┌──────────────────────────────┐   ┌──────────────────────────┐
+│  VaultPilot.WinUI.exe (C#)   │   │  mobile/ (React Native)  │
+│  WinUI 3 desktop shell       │   │  Expo / Android APK      │
+│  ┌──────────┐ ┌────────────┐ │   │  ┌──────────┐            │
+│  │ Chat UI  │ │ Settings   │ │   │  │ Chat UI  │            │
+│  └────┬─────┘ └────────────┘ │   │  └────┬─────┘            │
+│       │ JSON-RPC (stdin/out) │   │       │ HTTPS             │
+│  ┌────▼──────────────────┐   │   │  ┌────▼──────────────┐   │
+│  │  BackendClient.cs     │   │   │  │  Expo HTTP client │   │
+│  └────┬──────────────────┘   │   │  └────┬──────────────┘   │
+└───────┼──────────────────────┘   └───────┼──────────────────┘
+        │                                  │
+┌───────▼──────────────────────────────────▼───────────────────┐
+│  vaultpilot-agent (Rust) / vaultpilot-cli                    │
+│  ┌────────┐ ┌──────────┐ ┌───────┐                          │
+│  │ ai.rs  │ │ agent.rs │ │storage│                          │
+│  └────────┘ └──────────┘ └──┬───┘                           │
+│  ┌────────┐    │                                           │
+│  │prompt. │    ▼                                           │
+│  │  rs    │  SQLite + .md                                  │
+│  └────────┘                                                │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -85,6 +88,17 @@ Main outputs:
 
 - `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
 - `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
+
+### Android (Mobile)
+
+The mobile app is built with React Native (Expo). It runs standalone — no desktop connection needed.
+
+```bash
+cd mobile
+npm install
+npx expo start          # development
+npx expo export --platform android  # production build
+```
 
 ### Install
 
@@ -113,11 +127,12 @@ dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | WinUI 3 / .NET 8 |
+| Desktop Frontend | WinUI 3 / .NET 8 |
+| Mobile Frontend | React Native (Expo) |
 | Backend | Rust (Tokio, Axum, Reqwest) |
 | Storage | SQLite (FTS5) + Markdown files |
-| AI | Anthropic Messages API with tool use |
-| Packaging | Velopack (auto-update, x86/x64) |
+| AI | Anthropic Messages API with tool use + Agent Mode |
+| Packaging | Velopack (Windows auto-update), APK (Android) |
 
 ## Documentation
 
@@ -174,6 +189,7 @@ VaultPilot 是一个面向工程师的**本地优先 AI 知识助手**。帮助�
 ## 核心功能
 
 - **有据可依的 AI 问答** — 用自然语言提问，VaultPilot 会先检索你的本地笔记库，再让 AI 基于这些笔记生成回答，并附上引用来源
+- **Agent 模式** — AI 自主执行多步工具调用循环：规划、执行工具、迭代直到完成任务
 - **全文搜索** — SQLite FTS5 索引，支持中文分词、同义词扩展和多信号排序
 - **结构化笔记管理** — Markdown 文件 + 元数据（标签、关键词、平台、板卡、内核、状态）
 - **图片智能检索** — OCR 文字提取、感知哈希去重、语义相似度匹配
@@ -203,6 +219,17 @@ chmod +x ./scripts/build-linux-cli.sh
 - `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
 - `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
 
+### Android (移动端)
+
+移动端使用 React Native (Expo) 构建，独立运行，不依赖桌面端。
+
+```bash
+cd mobile
+npm install
+npx expo start          # 开发模式
+npx expo export --platform android  # 生产构建
+```
+
 ### 安装
 
 从 [Releases](https://github.com/ryanloee/VaultPilot/releases) 下载最新版本：
@@ -229,11 +256,12 @@ dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | WinUI 3 / .NET 8 |
+| 桌面前端 | WinUI 3 / .NET 8 |
+| 移动端前端 | React Native (Expo) |
 | 后端 | Rust (Tokio, Axum, Reqwest) |
 | 存储 | SQLite (FTS5) + Markdown 文件 |
-| AI | Anthropic Messages API (工具调用) |
-| 打包 | Velopack (自动更新, x86/x64) |
+| AI | Anthropic Messages API (工具调用 + Agent 模式) |
+| 打包 | Velopack (Windows 自动更新), APK (Android) |
 
 ## 许可证
 

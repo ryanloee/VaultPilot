@@ -52,13 +52,13 @@ function extractKeywords(text: string): string[] {
 
   const tokens = text
     .split(/[\s,，。.!！?？;；:：、\n\r]+/)
-    .flatMap(t => t.split(/(?<=[\u4e00-\u9fff])(?=[^\u4e00-\u9fff])|(?<=[^\u4e00-\u9fff])(?=[\u4e00-\u9fff])/))
+    .flatMap(t => t.split(/(?<=[\u3000-\u9fff\uac00-\ud7af])(?=[^\u3000-\u9fff\uac00-\ud7af])|(?<=[^\u3000-\u9fff\uac00-\ud7af])(?=[\u3000-\u9fff\uac00-\ud7af])/))
     .map(t => t.trim().toLowerCase())
     .filter(t => {
       if (!t) return false;
       if (stopWords.has(t)) return false;
       // CJK: allow single chars (they're meaningful); Latin: require 2+
-      const isCJK = /[\u4e00-\u9fff]/.test(t);
+      const isCJK = /[\u3000-\u9fff\uac00-\ud7af]/.test(t);
       return isCJK ? t.length >= 1 : t.length >= 2;
     });
 
@@ -67,11 +67,11 @@ function extractKeywords(text: string): string[] {
   if (result.length === 0) {
     const relaxed = text
       .split(/[\s,\u3002\uff0e.!\uff01?\uff1f;\uff1b:\uff1a\u3001\n\r]+/)
-      .flatMap(t => t.split(/(?<=[一-鿿])(?=[^一-鿿])|(?<=[^一-鿿])(?=[一-鿿])/))
+      .flatMap(t => t.split(/(?<=[\u3000-\u9fff\uac00-\ud7af])(?=[^\u3000-\u9fff\uac00-\ud7af])|(?<=[^\u3000-\u9fff\uac00-\ud7af])(?=[\u3000-\u9fff\uac00-\ud7af])/))
       .map(t => t.trim().toLowerCase())
       .filter(t => {
         if (!t) return false;
-        const isCJK = /[\u4e00-\u9fff]/.test(t);
+        const isCJK = /[\u3000-\u9fff\uac00-\ud7af]/.test(t);
         return isCJK ? t.length >= 2 : t.length >= 3;
       });
     return [...new Set(relaxed)].slice(0, 10);

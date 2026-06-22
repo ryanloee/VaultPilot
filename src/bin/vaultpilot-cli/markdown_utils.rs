@@ -183,3 +183,151 @@ fn strip_inline_markdown(line: &str) -> String {
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── strip_markdown_wrapper_tags ────────────────────────────────
+
+    #[test]
+    fn strip_wrapper_tags_basic() {
+        let input = "<vp-markdown>hello</vp-markdown>";
+        assert_eq!(strip_markdown_wrapper_tags(input), "hello");
+    }
+
+    #[test]
+    fn strip_wrapper_tags_with_whitespace() {
+        let input = "  <vp-markdown>content</vp-markdown>  ";
+        assert_eq!(strip_markdown_wrapper_tags(input), "content");
+    }
+
+    #[test]
+    fn strip_wrapper_tags_plain_text_unchanged() {
+        assert_eq!(strip_markdown_wrapper_tags("no tags here"), "no tags here");
+    }
+
+    #[test]
+    fn strip_wrapper_tags_only_open() {
+        assert_eq!(
+            strip_markdown_wrapper_tags("<vp-markdown>incomplete"),
+            "<vp-markdown>incomplete"
+        );
+    }
+
+    // ── strip_inline_markdown ─────────────────────────────────────
+
+    #[test]
+    fn strip_bold() {
+        assert_eq!(strip_inline_markdown("**bold**"), "bold");
+    }
+
+    #[test]
+    fn strip_italic_star() {
+        assert_eq!(strip_inline_markdown("*italic*"), "italic");
+    }
+
+    #[test]
+    fn strip_italic_underscore() {
+        assert_eq!(strip_inline_markdown("_italic_"), "italic");
+    }
+
+    #[test]
+    fn strip_bold_underscore() {
+        assert_eq!(strip_inline_markdown("__bold__"), "bold");
+    }
+
+    #[test]
+    fn strip_strikethrough() {
+        assert_eq!(strip_inline_markdown("~~struck~~"), "struck");
+    }
+
+    #[test]
+    fn preserve_code_span() {
+        assert_eq!(strip_inline_markdown("`code`"), "`code`");
+    }
+
+    #[test]
+    fn plain_text_unchanged() {
+        assert_eq!(strip_inline_markdown("hello world"), "hello world");
+    }
+
+    #[test]
+    fn strip_bold_with_surrounding_text() {
+        assert_eq!(
+            strip_inline_markdown("before **bold** after"),
+            "before bold after"
+        );
+    }
+
+    #[test]
+    fn unclosed_bold_passthrough() {
+        // Unclosed ** should pass through the * as regular chars
+        let result = strip_inline_markdown("**unclosed");
+        // The ** gets consumed as opening, then no closing found
+        assert_eq!(result, "unclosed");
+    }
+
+    // ── strip_markdown_list_marker ────────────────────────────────
+
+    #[test]
+    fn strip_dash_bullet() {
+        assert_eq!(strip_markdown_list_marker("- item"), "item");
+    }
+
+    #[test]
+    fn strip_star_bullet() {
+        assert_eq!(strip_markdown_list_marker("* item"), "item");
+    }
+
+    #[test]
+    fn strip_plus_bullet() {
+        assert_eq!(strip_markdown_list_marker("+ item"), "item");
+    }
+
+    #[test]
+    fn strip_numbered_list() {
+        assert_eq!(strip_markdown_list_marker("1. first"), "first");
+    }
+
+    #[test]
+    fn strip_multi_digit_number() {
+        assert_eq!(strip_markdown_list_marker("12. twelfth"), "twelfth");
+    }
+
+    #[test]
+    fn no_marker_unchanged() {
+        assert_eq!(strip_markdown_list_marker("plain text"), "plain text");
+    }
+
+    // ── simplify_cli_text ─────────────────────────────────────────
+
+    #[test]
+    fn simplify_removes_headings() {
+        assert_eq!(simplify_cli_text("# Heading"), "Heading");
+    }
+
+    #[test]
+    fn simplify_removes_code_blocks() {
+        let input = "before\n```\ncode here\n```\nafter";
+        assert_eq!(simplify_cli_text(input), "before\ncode here\nafter");
+    }
+
+    #[test]
+    fn simplify_collapses_empty_lines() {
+        let input = "line1\n\n\nline2";
+        assert_eq!(simplify_cli_text(input), "line1\n\nline2");
+    }
+
+    #[test]
+    fn simplify_strips_wrapper_and_content() {
+        let input = "<vp-markdown>**bold** text</vp-markdown>";
+        assert_eq!(simplify_cli_text(input), "bold text");
+    }
+
+    #[test]
+    fn simplify_trims_trailing_whitespace() {
+        let input = "content\n\n";
+        assert_eq!(simplify_cli_text(input), "content");
+    }
+}

@@ -9,7 +9,7 @@
 //! - **Fail-closed**: any sandbox violation terminates the agent immediately.
 //! - **Auditable**: every tool call is logged for security review.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -480,6 +480,370 @@ impl AgentSession {
         let _ = tokio::join!(stdout_task, stderr_task);
 
         Ok(status.code().unwrap_or(-1))
+    }
+}
+
+// ── Built-in agent loop (Phase 3.2) ──────────────────────────────────────
+
+use crate::ai;
+use crate::storage::StorageContext;
+
+/// Progress event emitted during agent execution.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    /// LLM is processing.
+    Thinking { step: usize },
+    /// Agent is calling a tool.
+    ToolCall { step: usize, tool: String, args: String },
+    /// Tool execution completed.
+    ToolResult { step: usize, tool: String, result_preview: String, is_error: bool },
+    /// Agent produced the final answer.
+    FinalAnswer { text: String },
+    /// Write operation needs user approval.
+    WriteApprovalNeeded { tool: String, args: String },
+    /// Step limit reached before completion.
+    StepLimitReached { steps: usize },
+    /// Token budget exceeded.
+    TokenBudgetExceeded { tokens_used: u64, budget: u64 },
+    /// Agent session timed out.
+    Timeout,
+    /// Error occurred.
+    Error { message: String },
+}
+
+/// Result of an agent execution session.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentResult {
+    pub answer: String,
+    pub steps_used: usize,
+    pub tokens_used: u64,
+    pub audit_log: Vec<AgentAuditEntry>,
+}
+
+/// Maximum tool-calling rounds in the agent loop.
+const DEFAULT_MAX_STEPS: usize = 20;
+
+/// Run an autonomous agent loop: prompt → LLM → tool call → execute → repeat.
+///
+/// The agent uses `select_tool_call` to decide which tool to invoke, executes
+/// it through the sandboxed `ToolProxy`, and feeds results back to the LLM
+/// until it produces a final answer or hits a resource limit.
+///
+/// `on_event` is called for every significant progress change.
+/// For write operations, `on_event` receives `WriteApprovalNeeded` — the
+/// callback should return `true` to approve or `false` to deny.
+pub async fn run_agent(
+    settings: &crate::models::AppSettings,
+    context: &StorageContext,
+    prompt: &str,
+    config: AgentConfig,
+    mut on_event: impl FnMut(&AgentEvent) -> bool,
+) -> Result<AgentResult> {
+    let proxy = ToolProxy::new(config.clone(), &settings.vault_dir);
+    let max_steps = if config.limits.max_tool_calls > 0 && (config.limits.max_tool_calls as usize) < DEFAULT_MAX_STEPS {
+        config.limits.max_tool_calls as usize
+    } else {
+        DEFAULT_MAX_STEPS
+    };
+    let token_budget = config.limits.max_tokens;
+
+    let mut tool_transcripts: Vec<String> = Vec::new();
+    let mut total_tokens: u64 = 0;
+
+    for step in 0..max_steps {
+        // Timeout check
+        if proxy.elapsed() > config.limits.max_duration {
+            on_event(&AgentEvent::Timeout);
+            break;
+        }
+
+        on_event(&AgentEvent::Thinking { step: step + 1 });
+
+        // Ask LLM what tool to call
+        let selection = ai::select_tool_call(settings, prompt, &[], &[], &tool_transcripts)
+            .await
+            .map_err(|e| anyhow!("LLM call failed at step {}: {}", step + 1, sanitize_error(&e.to_string())))?;
+
+        total_tokens += selection.usage.input_tokens.unwrap_or(0) as u64
+            + selection.usage.output_tokens.unwrap_or(0) as u64;
+
+        // Token budget check
+        if token_budget > 0 && total_tokens > token_budget {
+            on_event(&AgentEvent::TokenBudgetExceeded {
+                tokens_used: total_tokens,
+                budget: token_budget,
+            });
+            break;
+        }
+
+        match selection.tool_call {
+            ai::AssistantToolCall::None => {
+                // LLM decided no more tools needed — generate final answer
+                let answer = if tool_transcripts.is_empty() {
+                    crate::ai::answer_question(settings, prompt, &[], &[], &[])
+                        .await
+                        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+                } else {
+                    crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[])
+                        .await
+                        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+                };
+                total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
+                    + answer.usage.output_tokens.unwrap_or(0) as u64;
+                on_event(&AgentEvent::FinalAnswer { text: answer.answer.clone() });
+                return Ok(AgentResult {
+                    answer: answer.answer,
+                    steps_used: step + 1,
+                    tokens_used: total_tokens,
+                    audit_log: proxy.audit_log(),
+                });
+            }
+            tool_call => {
+                let tool_name = tool_display_name(&tool_call);
+                let args_summary = tool_args_summary(&tool_call);
+
+                // ToolProxy sandbox check
+                let check = proxy.check_tool_call(tool_name, &args_summary)?;
+                if !check.allowed {
+                    tool_transcripts.push(format!(
+                        "TOOL: {}\nSTATUS: denied\nINPUT:\n{}\nOUTPUT:\ntool error: {}",
+                        tool_name, args_summary, check.reason
+                    ));
+                    continue;
+                }
+
+                // Write approval callback
+                if ToolProxy::is_write_tool(tool_name) {
+                    let approved = on_event(&AgentEvent::WriteApprovalNeeded {
+                        tool: tool_name.to_string(),
+                        args: args_summary.clone(),
+                    });
+                    if !approved {
+                        tool_transcripts.push(format!(
+                            "TOOL: {}\nSTATUS: denied\nINPUT:\n{}\nOUTPUT:\ntool error: write denied by user",
+                            tool_name, args_summary
+                        ));
+                        continue;
+                    }
+                }
+
+                on_event(&AgentEvent::ToolCall {
+                    step: step + 1,
+                    tool: tool_name.to_string(),
+                    args: args_summary.clone(),
+                });
+
+                // Execute the tool
+                let (result, is_error) = execute_tool(context, settings, &tool_call).await;
+                let preview = truncate_preview(&result, 200);
+
+                on_event(&AgentEvent::ToolResult {
+                    step: step + 1,
+                    tool: tool_name.to_string(),
+                    result_preview: preview,
+                    is_error,
+                });
+
+                tool_transcripts.push(format!(
+                    "TOOL: {}\nSTATUS: {}\nINPUT:\n{}\nOUTPUT:\n{}",
+                    tool_name,
+                    if is_error { "error" } else { "ok" },
+                    args_summary,
+                    result
+                ));
+            }
+        }
+    }
+
+    // Exited loop without a final answer — generate one from accumulated results
+    on_event(&AgentEvent::StepLimitReached { steps: max_steps });
+    let answer = if tool_transcripts.is_empty() {
+        crate::ai::answer_question(settings, prompt, &[], &[], &[])
+            .await
+            .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+    } else {
+        crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[])
+            .await
+            .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+    };
+    total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
+        + answer.usage.output_tokens.unwrap_or(0) as u64;
+    Ok(AgentResult {
+        answer: answer.answer,
+        steps_used: max_steps,
+        tokens_used: total_tokens,
+        audit_log: proxy.audit_log(),
+    })
+}
+
+/// Execute a tool call against the vault storage layer.
+/// Returns (output, is_error).
+async fn execute_tool(
+    context: &StorageContext,
+    settings: &crate::models::AppSettings,
+    tool_call: &ai::AssistantToolCall,
+) -> (String, bool) {
+    use crate::storage::{
+        load_context_notes_async, load_recent_notes_for_overview_async,
+    };
+
+    match tool_call {
+        ai::AssistantToolCall::None => ("no tool selected".into(), false),
+        ai::AssistantToolCall::SearchNotes { query, limit } => {
+            match load_context_notes_async(context, query, &[], limit.saturating_mul(3).max(8)).await {
+                Ok(docs) => {
+                    let summary = docs.iter()
+                        .take(*limit)
+                        .map(|d| format!("- {} ({})", d.meta.title, d.meta.path))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if summary.is_empty() {
+                        ("No matching notes found.".into(), false)
+                    } else {
+                        (format!("Found {} notes:\n{}", docs.len(), summary), false)
+                    }
+                }
+                Err(e) => (format!("tool error: {}", e), true),
+            }
+        }
+        ai::AssistantToolCall::ListNotes { limit } => {
+            match load_recent_notes_for_overview_async(context, *limit).await {
+                Ok(docs) => {
+                    let summary = docs.iter()
+                        .map(|d| format!("- {} ({})", d.meta.title, d.meta.path))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if summary.is_empty() {
+                        ("No notes in vault.".into(), false)
+                    } else {
+                        (format!("{} notes:\n{}", docs.len(), summary), false)
+                    }
+                }
+                Err(e) => (format!("tool error: {}", e), true),
+            }
+        }
+        ai::AssistantToolCall::ListDirectory { path } => {
+            let vault_root = Path::new(&settings.vault_dir);
+            match list_directory_for_agent(path, vault_root) {
+                Ok(output) => (output, false),
+                Err(e) => (format!("tool error: {}", e), true),
+            }
+        }
+        ai::AssistantToolCall::ReadFile { path } => {
+            let vault_root = Path::new(&settings.vault_dir);
+            match read_file_for_agent(path, vault_root) {
+                Ok(output) => (output, false),
+                Err(e) => (format!("tool error: {}", e), true),
+            }
+        }
+        ai::AssistantToolCall::SaveNote { draft } => {
+            use crate::storage::save_note_with_images_async;
+            let note = crate::models::NoteDocument {
+                meta: crate::models::NoteMeta {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    title: draft.title.clone(),
+                    path: format!("{}.md", slugify(&draft.title)),
+                    tags: draft.tags.clone(),
+                    keywords: draft.keywords.clone(),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                    ..Default::default()
+                },
+                body: draft.body.clone(),
+                ..Default::default()
+            };
+            match save_note_with_images_async(context, note, &[]).await {
+                Ok(saved) => (
+                    format!("Note saved: {} at {}", saved.meta.title, saved.meta.path),
+                    false,
+                ),
+                Err(e) => (format!("tool error: save_note failed: {}", e), true),
+            }
+        }
+    }
+}
+
+fn list_directory_for_agent(path: &str, vault_root: &Path) -> Result<String> {
+    let directory = crate::normalize_tool_path(path, vault_root)?;
+    if !directory.exists() {
+        return Err(anyhow!("path does not exist: {}", path));
+    }
+    if !directory.is_dir() {
+        return Err(anyhow!("path is not a directory: {}", path));
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&directory)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        entries.push(format!("{}{}", name, if is_dir { "/" } else { "" }));
+    }
+    entries.sort();
+    Ok(entries.join("\n"))
+}
+
+fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
+    let file_path = crate::normalize_tool_path(path, vault_root)?;
+    if !file_path.exists() {
+        return Err(anyhow!("file does not exist: {}", path));
+    }
+    let content = std::fs::read_to_string(&file_path)?;
+    // Cap at 50KB to prevent token explosion
+    const MAX_READ: usize = 50 * 1024;
+    if content.len() > MAX_READ {
+        let truncated: String = content.chars().take(MAX_READ).collect();
+        Ok(format!("{}\n[... truncated at {} chars]", truncated, MAX_READ))
+    } else {
+        Ok(content)
+    }
+}
+
+fn slugify(title: &str) -> String {
+    let mut slug: String = title
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    // Collapse consecutive dashes
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn tool_display_name(tool: &ai::AssistantToolCall) -> &'static str {
+    match tool {
+        ai::AssistantToolCall::None => "none",
+        ai::AssistantToolCall::SearchNotes { .. } => "search_notes",
+        ai::AssistantToolCall::ListNotes { .. } => "list_notes",
+        ai::AssistantToolCall::ListDirectory { .. } => "list_directory",
+        ai::AssistantToolCall::ReadFile { .. } => "read_file",
+        ai::AssistantToolCall::SaveNote { .. } => "save_note",
+    }
+}
+
+fn tool_args_summary(tool: &ai::AssistantToolCall) -> String {
+    match tool {
+        ai::AssistantToolCall::None => "{}".into(),
+        ai::AssistantToolCall::SearchNotes { query, limit } => {
+            format!("query={} limit={}", query, limit)
+        }
+        ai::AssistantToolCall::ListNotes { limit } => format!("limit={}", limit),
+        ai::AssistantToolCall::ListDirectory { path } => format!("path={}", path),
+        ai::AssistantToolCall::ReadFile { path } => format!("path={}", path),
+        ai::AssistantToolCall::SaveNote { draft } => {
+            format!("title={}", draft.title)
+        }
+    }
+}
+
+fn truncate_preview(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = chars[..max_chars].iter().collect();
+        format!("{truncated}…")
     }
 }
 

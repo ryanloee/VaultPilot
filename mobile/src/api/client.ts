@@ -121,16 +121,9 @@ export async function chat(
 
 // ── Anthropic Messages API ────────────────────────────────
 
-/** Convert OpenAI-style content parts to Anthropic format (shared by chat + chatWithReconnect). */
-export function toAnthropicContent(content: string | ContentPart[]): string | Record<string, unknown>[] {
-  if (typeof content === 'string') return content;
-  return content.map(p => {
-    if (p.type === 'text') return p;
-    const match = p.image_url.url.match(/^data:(image\/\w+);base64,(.+)$/);
-    if (match) return { type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } };
-    return { type: 'text', text: '[image unavailable]' };
-  });
-}
+// Re-export pure conversion functions from clientPure.ts
+export { toAnthropicContent, convertAnthropicEvent, wrapNonStreamingResponse, normalizeAnthropicBase } from './clientPure';
+import { toAnthropicContent, convertAnthropicEvent, wrapNonStreamingResponse, normalizeAnthropicBase } from './clientPure';
 
 async function chatAnthropic(
   apiBase: string, apiKey: string, model: string,
@@ -148,8 +141,7 @@ async function chatAnthropic(
     signal.addEventListener('abort', onSignalAbort, { once: true });
   }
 
-  // Strip /v1 suffix to avoid double /v1 path when appending /v1/messages
-  const base = normalizeApiBase(apiBase).replace(/\/v\d+.*$/, '');
+  const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
   const body: Record<string, unknown> = {
     model,
     max_tokens: 4096,
@@ -216,16 +208,8 @@ async function chatAnthropic(
               }
               if (!line.startsWith('data:')) continue;
               const data = line.slice(5).trimStart();
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-                  // Convert to OpenAI format
-                  const openai = JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] });
-                  ctrl.enqueue(new TextEncoder().encode(`data: ${openai}\n\n`));
-                } else if (parsed.type === 'message_stop') {
-                  ctrl.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
-                }
-              } catch {}
+              const result = convertAnthropicEvent(currentEvent, data);
+              if (result) ctrl.enqueue(new TextEncoder().encode(result));
             }
           }
           ctrl.close();
@@ -312,13 +296,7 @@ async function chatOpenAI(
     // If non-streaming fallback, wrap JSON response as a single-chunk SSE stream
     if (!res.headers.get('content-type')?.includes('text/event-stream')) {
       const json = await res.json();
-      const message = json.choices?.[0]?.message ?? {};
-      const delta: Record<string, unknown> = {};
-      if (message.content) delta.content = message.content;
-      if (message.tool_calls) delta.tool_calls = message.tool_calls;
-      if (message.function_call) delta.function_call = message.function_call;
-      const finish_reason = json.choices?.[0]?.finish_reason;
-      const encoded = new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\ndata: [DONE]\n\n`);
+      const encoded = wrapNonStreamingResponse(json);
       return new ReadableStream({
         start(controller) { controller.enqueue(encoded); controller.close(); },
       });
@@ -392,17 +370,13 @@ function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uin
             if (line.startsWith('event:')) { currentEvent = line.slice(6).trim(); continue; }
             if (!line.startsWith('data:')) continue;
             const data = line.slice(5).trimStart();
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-                const openai = JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] });
-                ctrl.enqueue(encoder.encode(`data: ${openai}\n\n`));
-              } else if (parsed.type === 'message_stop') {
-                ctrl.enqueue(encoder.encode('data: [DONE]\n\n'));
-                ctrl.close();
-                return;
-              }
-            } catch { /* skip unparseable */ }
+            const result = convertAnthropicEvent(currentEvent, data);
+            if (result === 'data: [DONE]\n\n') {
+              ctrl.enqueue(encoder.encode(result));
+              ctrl.close();
+              return;
+            }
+            if (result) ctrl.enqueue(encoder.encode(result));
           }
         }
       } catch (e) { ctrl.error(e); }
@@ -430,7 +404,7 @@ export async function chatWithReconnect(
     const systemMsgs = messages.filter(m => m.role === 'system');
     const nonSystem = messages.filter(m => m.role !== 'system');
     const systemText = systemMsgs.map(m => m.content).join('\n') || undefined;
-    const anthropicBase = base.replace(/\/v\d+.*$/, '');
+    const anthropicBase = normalizeAnthropicBase(base);
     const body: Record<string, unknown> = {
       model,
       max_tokens: 4096,
@@ -481,8 +455,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
 
     if (format === 'anthropic') {
       // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
-      // Strip /v1 suffix to avoid double /v1 path
-      const base = normalizeApiBase(apiBase).replace(/\/v\d+.*$/, '');
+      const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
       const res = await fetch(`${base}/v1/messages`, {
         method: 'POST',
         headers: {

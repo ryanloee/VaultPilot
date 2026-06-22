@@ -1,24 +1,21 @@
-import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  View, Text, TextInput, FlatList, TouchableOpacity,
-  KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet, Alert,
-  NativeSyntheticEvent, NativeScrollEvent,
+  View, ActivityIndicator, StyleSheet, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { useAppStore, getColors } from '../store';
-import MarkdownPreview from '../components/MarkdownPreview';
 import { chatWithReconnect } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, parseToolCalls, executeSave } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 import type { ChatScreenProps } from '../navigation/types';
-import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview, MAX_HISTORY_MESSAGES } from '../utils/chatHelpers';
+import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview } from '../utils/chatHelpers';
 import { useVoiceInput } from '../utils/useVoiceInput';
 import { useNetworkState } from '../utils/networkState';
+import { ChatHeader, MessageList, InputBar, OfflineBanner, ScrollToBottomButton } from '../components/chat';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; attachments?: { name: string; type: 'image' | 'file' }[]; }
 interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
@@ -35,62 +32,6 @@ function inferMime(name: string, fallback: string): string {
   return ext && map[ext] ? map[ext] : fallback;
 }
 
-
-const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, onDelete, onResend }: {
-  item: Msg; isDark: boolean; accentColor: string;
-  onDelete?: () => void; onResend?: () => void;
-}) {
-  const c = getColors(isDark, accentColor);
-  const isAssistant = item.role === 'assistant';
-  const handleLongPress = () => {
-    if (!item.content) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const actions: { text: string; onPress?: () => void; style?: 'default' | 'cancel' | 'destructive' }[] = [
-      { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
-    ];
-    if (onResend) actions.push({ text: '重新发送', onPress: onResend });
-    if (onDelete) actions.push({ text: '删除', style: 'destructive', onPress: onDelete });
-    actions.push({ text: '取消', style: 'cancel' });
-    Alert.alert('消息操作', '', actions);
-  };
-  return (
-    <TouchableOpacity
-      onLongPress={handleLongPress}
-      activeOpacity={0.8}
-      accessibilityRole="text"
-      accessibilityLabel={`${item.role === 'user' ? '你的消息' : 'AI 回复'}: ${item.content?.slice(0, 50) || '思考中'}`}
-    >
-      <View style={[s.bubble, item.role === 'user'
-        ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
-        : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
-        {/* Attachment indicators for user messages */}
-        {item.attachments && item.attachments.length > 0 && (
-          <View style={s.msgAttachRow}>
-            {item.attachments.map((att, i) => (
-              <View key={i} style={[s.msgAttachChip, { borderColor: c.border }]}>
-                <Text style={{ fontSize: 12, color: c.textSecondary }}>
-                  {att.type === 'image' ? '🖼' : '📄'} {att.name}
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
-        {isAssistant && item.content ? (
-          <>
-            <MarkdownPreview content={item.content} textColor={c.aiText} accentColor={accentColor} isDark={isDark} />
-            {item.streaming && <Text style={{ color: accentColor, fontSize: 15 }}> ▌</Text>}
-          </>
-        ) : (
-          <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
-            {item.content || (item.streaming ? '思考中...' : '')}
-            {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
-          </Text>
-        )}
-      </View>
-    </TouchableOpacity>
-  );
-});
-
 export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
@@ -102,10 +43,11 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const [title, setTitle] = useState('新对话');
   const [loading, setLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
-  const listRef = useRef<FlatList>(null);
   const msgsRef = useRef<Msg[]>([]);
   const voice = useVoiceInput();
   const { isOnline } = useNetworkState();
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   // Append voice transcript to input when recognition completes
   useEffect(() => {
@@ -114,10 +56,6 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       voice.setTranscript('');
     }
   }, [voice.transcript, voice.isListening]);
-  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nearBottomRef = useRef(true);
-  const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   const pickImage = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -224,7 +162,6 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
-      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
     };
   }, []);
 
@@ -412,33 +349,13 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     setInput(msg.content);
   }, [sessionId]);
 
-  // Debounced scroll-to-end — only when user is near bottom
-  const scrollToEndDebounced = useCallback((force = false) => {
-    if (!force && !nearBottomRef.current) return;
-    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
-    scrollTimerRef.current = setTimeout(() => {
-      listRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+  const handleScrollToEnd = useCallback(() => {
+    setShowScrollBtn(false);
   }, []);
-
-  // Wrapper for onContentSizeChange (ignores width/height params)
-  const onContentSizeChange = useCallback(() => { scrollToEndDebounced(); }, [scrollToEndDebounced]);
-
-  // Track whether user is near the bottom
-  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-    const near = distanceFromBottom < 120;
-    nearBottomRef.current = near;
-    setShowScrollBtn(!near && msgs.length > 0);
-  }, [msgs.length]);
-
-  // Scroll when new messages arrive (user sends → force scroll)
-  useEffect(() => { scrollToEndDebounced(true); }, [msgs.length]);
 
   if (loading) {
     return (
-      <SafeAreaView style={[s.center, { backgroundColor: c.bg }]}>
+      <SafeAreaView style={[styles.center, { backgroundColor: c.bg }]}>
         <ActivityIndicator color={accentColor} size="large" />
       </SafeAreaView>
     );
@@ -446,247 +363,64 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior="height" keyboardVerticalOffset={0}>
-      {/* Header */}
-      <View style={[s.header, { borderBottomColor: c.border }]}>
-        <TouchableOpacity onPress={() => navigation.navigate('Sessions')} style={s.sessionsBtn}
-          accessibilityRole="button" accessibilityLabel="打开对话列表">
-          <Text style={{ color: accentColor, fontSize: 14 }}>☰ 对话</Text>
-        </TouchableOpacity>
-        <Text style={[s.titleText, { color: c.text }]} numberOfLines={1}
-          accessibilityRole="header">{title}</Text>
-        <TouchableOpacity onPress={newChat} style={[s.newChatBtn, { borderColor: c.border }]}
-          accessibilityRole="button" accessibilityLabel="新建对话">
-          <Text style={{ color: accentColor, fontSize: 14 }}>＋</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Offline banner */}
-      {!isOnline && (
-        <View style={{ backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}>📡 离线模式 — 笔记可查看编辑，聊天需联网</Text>
-        </View>
-      )}
-
-      {/* Message list */}
-      <FlatList
-        ref={listRef}
-        data={msgs}
-        renderItem={({ item }) => (
-          <MessageBubble
-            item={item}
-            isDark={isDark}
-            accentColor={accentColor}
-            onDelete={() => handleDeleteMsg(item.id)}
-            onResend={item.role === 'user' ? () => handleResend(item.id) : undefined}
-          />
-        )}
-        keyExtractor={item => item.id}
-        contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
-        onContentSizeChange={() => scrollToEndDebounced()}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        removeClippedSubviews={Platform.OS === 'android'}
-        initialNumToRender={15}
-        maxToRenderPerBatch={10}
-        windowSize={11}
-        ListEmptyComponent={
-          <View style={s.emptyContainer}>
-            <Text style={[s.emptyTitle, { color: c.text }]}>👋 你好，我是 VaultPilot AI</Text>
-            <Text style={[s.emptySubtitle, { color: c.textSecondary }]}>有什么可以帮你的？试试这些问题：</Text>
-            {['帮我总结一篇笔记', '解释一下这个概念', '写一段代码'].map((q) => (
-              <TouchableOpacity key={q} style={[s.suggestionBtn, { borderColor: c.border }]} onPress={() => setInput(q)}
-                accessibilityRole="button" accessibilityLabel={`使用建议: ${q}`}>
-                <Text style={[s.suggestionText, { color: accentColor }]}>{q}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        }
+      <ChatHeader
+        title={title}
+        accentColor={accentColor}
+        borderColor={c.border}
+        textColor={c.text}
+        onSessionsPress={() => navigation.navigate('Sessions')}
+        onNewChatPress={newChat}
       />
 
-      {showScrollBtn && (
-        <TouchableOpacity
-          onPress={() => { nearBottomRef.current = true; setShowScrollBtn(false); listRef.current?.scrollToEnd({ animated: true }); }}
-          style={[s.scrollBtn, { backgroundColor: c.inputBg, borderColor: c.border }]}
-          accessibilityRole="button" accessibilityLabel="滚动到底部"
-        >
-          <Text style={{ color: accentColor, fontSize: 16 }}>↓</Text>
-        </TouchableOpacity>
-      )}
+      <OfflineBanner visible={!isOnline} />
 
-      {/* Attachment preview chips */}
-      {attachments.length > 0 && (
-        <View style={[s.attachRow, { backgroundColor: c.bgSecondary }]}>
-          {attachments.map((att, i) => (
-            <View key={i} style={[s.attachChip, { borderColor: c.border }]}>
-              <Text style={[s.attachName, { color: c.text }]} numberOfLines={1}>
-                {att.type === 'image' ? '🖼' : '📄'} {att.name}
-              </Text>
-              <TouchableOpacity onPress={() => setAttachments(prev => prev.filter((_, j) => j !== i))}>
-                <Text style={{ color: '#EF4444', fontSize: 14 }}>✕</Text>
-              </TouchableOpacity>
-            </View>
-          ))}
-        </View>
-      )}
+      <MessageList
+        messages={msgs}
+        isDark={isDark}
+        accentColor={accentColor}
+        textColor={c.text}
+        textColorSecondary={c.textSecondary}
+        borderColor={c.border}
+        onDeleteMessage={handleDeleteMsg}
+        onResendMessage={handleResend}
+        onScrollToEnd={handleScrollToEnd}
+      />
 
-      {/* Input bar */}
-      <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
-        <View style={s.quickActions}>
-          <TouchableOpacity
-            style={[s.quickBtn, { borderColor: c.border }]}
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); takePhoto(); }}
-            accessibilityRole="button" accessibilityLabel="拍照"
-          >
-            <Text style={{ fontSize: 16 }}>📷</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[s.quickBtn, { borderColor: c.border }]}
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); pickImage(); }}
-            accessibilityRole="button" accessibilityLabel="从相册选择"
-          >
-            <Text style={{ fontSize: 16 }}>🖼</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[s.quickBtn, { borderColor: c.border }]}
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); pickDocument(); }}
-            accessibilityRole="button" accessibilityLabel="选择文件"
-          >
-            <Text style={{ fontSize: 16 }}>📄</Text>
-          </TouchableOpacity>
-        </View>
-        <TextInput
-          style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
-          value={input}
-          onChangeText={setInput}
-          onContentSizeChange={e => setInputHeight(e.nativeEvent.contentSize.height)}
-          placeholder="输入消息..."
-          placeholderTextColor={c.textSecondary}
-          maxLength={4000}
-          editable={!streaming}
-          returnKeyType="send"
-          blurOnSubmit
-          onSubmitEditing={send}
-          accessibilityLabel="消息输入框"
-        />
-        {/* Voice input button */}
-        {voice.isAvailable && !streaming && (
-          <TouchableOpacity
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              voice.isListening ? voice.stopListening() : voice.startListening();
-            }}
-            style={[s.sendBtn, { backgroundColor: voice.isListening ? '#EF4444' : c.border }]}
-            accessibilityRole="button"
-            accessibilityLabel={voice.isListening ? '停止录音' : '语音输入'}
-          >
-            <Text style={s.sendText}>{voice.isListening ? '⏹' : '🎤'}</Text>
-          </TouchableOpacity>
-        )}
-        {streaming ? (
-          <TouchableOpacity onPress={stop} style={[s.sendBtn, { backgroundColor: '#EF4444' }]}
-            accessibilityRole="button" accessibilityLabel="停止生成">
-            <Text style={s.sendText}>■</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            onPress={send}
-            style={[s.sendBtn, { backgroundColor: (input.trim() || attachments.length > 0) ? accentColor : c.border }]}
-            disabled={!input.trim() && attachments.length === 0}
-            accessibilityRole="button" accessibilityLabel="发送消息"
-          >
-            <Text style={s.sendText}>➤</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </KeyboardAvoidingView>
+      <ScrollToBottomButton
+        visible={showScrollBtn}
+        accentColor={accentColor}
+        bgColor={c.inputBg}
+        borderColor={c.border}
+        onPress={handleScrollToEnd}
+      />
+
+      <InputBar
+        input={input}
+        inputHeight={inputHeight}
+        streaming={streaming}
+        attachments={attachments}
+        accentColor={accentColor}
+        bgColor={c.bg}
+        inputBgColor={c.inputBg}
+        textColor={c.text}
+        textColorSecondary={c.textSecondary}
+        borderColor={c.border}
+        voiceAvailable={voice.isAvailable}
+        voiceListening={voice.isListening}
+        onInputChange={setInput}
+        onInputHeightChange={setInputHeight}
+        onSend={send}
+        onStop={stop}
+        onTakePhoto={takePhoto}
+        onPickImage={pickImage}
+        onPickDocument={pickDocument}
+        onRemoveAttachment={(index) => setAttachments(prev => prev.filter((_, i) => i !== index))}
+        onVoiceToggle={() => voice.isListening ? voice.stopListening() : voice.startListening()}
+      />
     </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  bubble: {
-    maxWidth: '80%', paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: 16, marginBottom: 8,
-  },
-  inputBar: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    padding: 8, borderTopWidth: 1,
-  },
-  quickActions: {
-    flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: 6,
-  },
-  quickBtn: {
-    width: 34, height: 34, borderRadius: 17,
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1,
-  },
-  attachBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    justifyContent: 'center', alignItems: 'center',
-    marginRight: 6,
-  },
-  attachRow: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 6,
-    paddingHorizontal: 12, paddingVertical: 6,
-  },
-  attachChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: 12, borderWidth: 1,
-  },
-  attachName: { fontSize: 12, maxWidth: 150 },
-  msgAttachRow: {
-    flexDirection: 'row', flexWrap: 'wrap', gap: 4,
-    marginBottom: 6,
-  },
-  msgAttachChip: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 8, paddingVertical: 3,
-    borderRadius: 8, borderWidth: 1, backgroundColor: 'rgba(128,128,128,0.08)',
-  },
-  textInput: {
-    flex: 1, borderWidth: 1, borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 15,
-  },
-  sendBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    justifyContent: 'center', alignItems: 'center', marginLeft: 8,
-  },
-  sendText: { color: '#FFF', fontSize: 18 },
-  newChatBtn: {
-    paddingVertical: 6, paddingHorizontal: 12,
-    borderWidth: 1, borderRadius: 16,
-  },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1,
-  },
-  sessionsBtn: {
-    paddingVertical: 6, paddingHorizontal: 10,
-  },
-  titleText: {
-    fontSize: 17, fontWeight: '600', flex: 1, textAlign: 'center',
-  },
-  emptyContainer: {
-    flex: 1, justifyContent: 'center', alignItems: 'center',
-    paddingTop: 80, paddingHorizontal: 32,
-  },
-  emptyTitle: { fontSize: 22, fontWeight: '700', marginBottom: 8 },
-  emptySubtitle: { fontSize: 15, marginBottom: 20, textAlign: 'center' },
-  suggestionBtn: {
-    borderWidth: 1, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 16,
-    marginBottom: 8, alignSelf: 'stretch',
-  },
-  suggestionText: { fontSize: 15 },
-  scrollBtn: {
-    position: 'absolute', bottom: 70, alignSelf: 'center',
-    width: 36, height: 36, borderRadius: 18,
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, elevation: 2,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15, shadowRadius: 2,
-  },
 });

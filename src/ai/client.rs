@@ -1100,19 +1100,25 @@ mod tests {
 
     #[test]
     fn ipv6_public() {
-        assert!(!is_private_ip(IpAddr::V6("2606:4700:4700::1111".parse().unwrap())));
+        assert!(!is_private_ip(IpAddr::V6(
+            "2606:4700:4700::1111".parse().unwrap()
+        )));
     }
 
     #[test]
     fn ipv6_ipv4_mapped_private() {
         // ::ffff:10.0.0.1 maps to 10.0.0.1 which is private
-        assert!(is_private_ip(IpAddr::V6("::ffff:10.0.0.1".parse().unwrap())));
+        assert!(is_private_ip(IpAddr::V6(
+            "::ffff:10.0.0.1".parse().unwrap()
+        )));
     }
 
     #[test]
     fn ipv6_ipv4_mapped_public() {
         // ::ffff:8.8.8.8 maps to 8.8.8.8 which is public
-        assert!(!is_private_ip(IpAddr::V6("::ffff:8.8.8.8".parse().unwrap())));
+        assert!(!is_private_ip(IpAddr::V6(
+            "::ffff:8.8.8.8".parse().unwrap()
+        )));
     }
 
     // ── normalize_endpoint ───────────────────────────────────────
@@ -1120,7 +1126,10 @@ mod tests {
     #[test]
     fn normalize_anthropic_full_path() {
         assert_eq!(
-            normalize_endpoint("https://api.anthropic.com/v1/messages", ProviderType::Anthropic),
+            normalize_endpoint(
+                "https://api.anthropic.com/v1/messages",
+                ProviderType::Anthropic
+            ),
             "https://api.anthropic.com/v1/messages"
         );
     }
@@ -1144,7 +1153,10 @@ mod tests {
     #[test]
     fn normalize_openai_full_path() {
         assert_eq!(
-            normalize_endpoint("https://api.openai.com/v1/chat/completions", ProviderType::OpenAi),
+            normalize_endpoint(
+                "https://api.openai.com/v1/chat/completions",
+                ProviderType::OpenAi
+            ),
             "https://api.openai.com/v1/chat/completions"
         );
     }
@@ -1225,7 +1237,10 @@ mod tests {
 
     #[test]
     fn retryable_too_many_requests() {
-        assert!(is_retryable_provider_error(200, "Too many requests, please slow down"));
+        assert!(is_retryable_provider_error(
+            200,
+            "Too many requests, please slow down"
+        ));
     }
 
     #[test]

@@ -623,6 +623,7 @@ mod tests {
                 role: "user".to_string(),
                 content: OpenAiContent::Text("hello".to_string()),
             }],
+            stream: false,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["model"], "o3-mini");
@@ -641,6 +642,7 @@ mod tests {
                 role: "user".to_string(),
                 content: OpenAiContent::Text("hello".to_string()),
             }],
+            stream: false,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["model"], "gpt-4o");

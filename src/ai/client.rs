@@ -115,7 +115,7 @@ pub(super) struct AnthropicRequest<'a> {
     system: &'a str,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
-    stream: bool,
+    pub(super) stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,7 +147,7 @@ pub(super) struct OpenAiRequest<'a> {
     pub(super) temperature: f32,
     pub(super) messages: Vec<OpenAiMessage>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
-    stream: bool,
+    pub(super) stream: bool,
 }
 
 /// Request struct for OpenAI reasoning models (o1/o3/o4) which require
@@ -158,7 +158,7 @@ pub(super) struct OpenAiReasoningRequest<'a> {
     pub(super) max_completion_tokens: u32,
     pub(super) messages: Vec<OpenAiMessage>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
-    stream: bool,
+    pub(super) stream: bool,
 }
 
 #[derive(Debug, Serialize)]

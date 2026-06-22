@@ -1332,8 +1332,12 @@ fn is_cjk_stop_char(ch: char) -> bool {
 fn is_cjk(ch: char) -> bool {
     matches!(
         ch,
-        '\u{3400}'..='\u{4DBF}'   // CJK Unified Ideographs Extension A
+        '\u{3000}'..='\u{303F}'   // CJK Symbols and Punctuation
+        | '\u{3040}'..='\u{309F}'   // Japanese Hiragana
+        | '\u{30A0}'..='\u{30FF}'   // Japanese Katakana
+        | '\u{3400}'..='\u{4DBF}'   // CJK Unified Ideographs Extension A
         | '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
+        | '\u{AC00}'..='\u{D7AF}'   // Korean Hangul Syllables
         | '\u{F900}'..='\u{FAFF}'   // CJK Compatibility Ideographs
         | '\u{20000}'..='\u{2A6DF}' // CJK Extension B
         | '\u{2A700}'..='\u{2B73F}' // CJK Extension C

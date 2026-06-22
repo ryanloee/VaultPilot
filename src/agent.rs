@@ -375,10 +375,12 @@ impl ToolProxy {
 
     /// Summarize args for audit log — cap at 200 chars to avoid log bloat.
     fn summarize_args(args_json: &str) -> String {
-        if args_json.len() <= 200 {
+        let chars: Vec<char> = args_json.chars().collect();
+        if chars.len() <= 200 {
             args_json.to_string()
         } else {
-            format!("{}…", &args_json[..200])
+            let truncated: String = chars[..200].iter().collect();
+            format!("{truncated}…")
         }
     }
 }
@@ -496,12 +498,14 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     let mut pi = 0;
     let mut ti = 0;
-    let mut star_pi = 0;
+    let mut star_pi = usize::MAX; // sentinel: no star matched yet
     let mut star_ti = 0;
-    let mut matched = true;
 
     while ti < text.len() {
-        if pi < pattern.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
+        if pi < pattern.len()
+            && (pattern[pi] == text[ti]
+                || (pattern[pi] == '?' && text[ti] != '/' && text[ti] != '\\'))
+        {
             pi += 1;
             ti += 1;
         } else if pi < pattern.len() && pattern[pi] == '*' {
@@ -515,25 +519,23 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
                 star_ti = ti;
                 pi += 1;
             }
-            matched = true;
-        } else if star_pi > 0 || (star_pi == 0 && pi > 0 && pattern[pi - 1] == '*') {
-            // For single *, don't match path separators
-            if star_pi > 0 && star_pi + 1 < pattern.len() && pattern[star_pi + 1] == '*' {
+        } else if star_pi != usize::MAX {
+            // Backtrack to the last star
+            if star_pi + 1 < pattern.len() && pattern[star_pi + 1] == '*' {
                 // ** matches everything
                 star_ti += 1;
                 ti = star_ti;
                 pi = star_pi + 2;
             } else if text[ti] != '/' && text[ti] != '\\' {
+                // * doesn't match path separators
                 star_ti += 1;
                 ti = star_ti;
                 pi = star_pi + 1;
             } else {
-                matched = false;
-                break;
+                return false;
             }
         } else {
-            matched = false;
-            break;
+            return false;
         }
     }
 
@@ -542,7 +544,7 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
         pi += 1;
     }
 
-    matched && pi == pattern.len()
+    pi == pattern.len()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -774,5 +776,42 @@ mod tests {
         assert!(!super::glob_match("daily-notes/*", "other/2024.md"));
         assert!(super::glob_match("inbox/*.md", "inbox/quick.md"));
         assert!(!super::glob_match("inbox/*.md", "inbox/quick.txt"));
+    }
+
+    // Regression: #1326 — summarize_args must not panic on CJK UTF-8 boundary
+    #[test]
+    fn summarize_args_cjk_no_panic() {
+        let cjk: String = "中".repeat(300); // 300 chars (> 200 limit), 900 bytes
+        let result = ToolProxy::summarize_args(&cjk);
+        assert!(result.ends_with('…'));
+        assert!(result.chars().count() <= 201); // 200 chars + ellipsis
+    }
+
+    #[test]
+    fn summarize_args_ascii_still_works() {
+        let short = "{\"query\":\"hello\"}";
+        assert_eq!(ToolProxy::summarize_args(short), short);
+    }
+
+    // Regression: #1326 — glob_match ** must match paths with /
+    #[test]
+    fn glob_match_double_star_matches_paths() {
+        assert!(super::glob_match("**", "a/b"));
+        assert!(super::glob_match("**", "a/b/c/d"));
+        assert!(super::glob_match("**", ""));
+        assert!(super::glob_match("**", "single"));
+        assert!(super::glob_match("prefix/**", "prefix/a/b"));
+        assert!(super::glob_match("**/suffix", "a/b/suffix"));
+        assert!(super::glob_match("a/**/b", "a/x/y/b"));
+    }
+
+    // Regression: #1326 — glob_match ? must not match path separators
+    #[test]
+    fn glob_match_question_mark_rejects_slash() {
+        assert!(super::glob_match("?", "a"));
+        assert!(super::glob_match("?", "中"));
+        assert!(!super::glob_match("?", "/"));
+        assert!(!super::glob_match("?", "\\"));
+        assert!(!super::glob_match("a/?/b", "a//b"));
     }
 }

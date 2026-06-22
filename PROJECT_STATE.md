@@ -841,3 +841,30 @@
 - 依赖: npm 有 3 个 minor/major 更新 (async-storage 3.x, react-native 0.86, safe-area-context 5.8)，均非 patch 版本，按规则跳过
 - 项目状态: 1 open issue (#913 Agent Mode), 0 open PR, v0.3.40
 - 结论: 项目健康，无需额外维护操作
+
+## PR 审核（循环#268）
+| PR | 标题 | 逻辑 | 测试 | 安全 | 决策 |
+|----|------|------|------|------|------|
+| #1339 | refactor(mobile): split ChatScreen.tsx into 5 sub-components | ✅ | ✅ | ✅ | 合并 |
+| #1340 | refactor(mobile): extract client.ts pure functions + 27 tests | ✅ | ✅ | ✅ | 合并 |
+| #1341 | refactor(mobile): split SettingsScreen.tsx into 5 sub-components | ✅ | ✅ | ✅ | 合并 |
+- 3 PR 全部 CI 通过（build/cargo audit/clippy/fmt/test/linux-cli-build/winui-build）
+- 移动端重构：大文件拆分为子组件，纯函数提取提升可测试性
+- 发版: v0.3.40 → v0.3.41 (tag v0.3.41 已推送)
+- 项目状态: 1 open issue (#913 Agent Mode), 0 open PR, v0.3.41
+
+## 讨论阶段 (循环#275)
+- v0.3.41 零缺陷状态，919+ 测试通过，Clippy 干净
+- 1 open issue (#913 Agent Mode)，0 open PR
+- 项目进入"后重构成熟期"——所有大文件拆分完成，模块化架构健康
+- 创建 3 个新 issue:
+  - #1342: P1 Agent Mode Phase 3.2 — 内置 agent loop (tool-calling loop + step limit + token budget + 流式输出 + 写入审核)
+  - #1343: P1 CLI vaultpilot agent 命令 — 用户可感知的 Agent Mode 入口
+  - #1344: P2 WinUI MainWindow.Chat.cs 拆分 (1255 行 → 4 个 partial class 文件)
+- 三回合讨论核心结论:
+  1. Agent Mode Phase 3.2 采用内置 agent loop 而非外部进程 spawn（更安全、更统一、利用已有 MCP tools）
+  2. CLI 优先发布 Agent Mode（命令行天然适合 agent 交互，无需 UI 设计）
+  3. WinUI 拆分延后到 v0.5.0，Agent Mode 优先级更高
+- 竞品洞察: Obsidian Copilot v3.3.3 在做大规模代码清理为大功能发布准备，Agent Mode 尚未正式发布但 Copilot Plus 已提供付费 agentic AI；AFFiNE 已有 Android App 验证移动端独立 App 需求
+- 路线图: v0.4.0 = Agent Mode Phase 3.2 + CLI agent 命令；v0.5.0 = WinUI 拆分 + Agent Mode Mobile UI
+- 项目状态: 4 open issues (#913, #1342, #1343, #1344), 0 open PR, v0.3.41

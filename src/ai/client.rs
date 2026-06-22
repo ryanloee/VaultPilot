@@ -959,3 +959,386 @@ pub(super) fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
         || detail.to_ascii_lowercase().contains("too many requests")
         || detail.to_ascii_lowercase().contains("rate limit")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ProviderType;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    // ── detect_image_media_type ──────────────────────────────────
+
+    #[test]
+    fn detect_png() {
+        assert_eq!(detect_image_media_type("photo.png").unwrap(), "image/png");
+    }
+
+    #[test]
+    fn detect_jpg() {
+        assert_eq!(detect_image_media_type("photo.jpg").unwrap(), "image/jpeg");
+    }
+
+    #[test]
+    fn detect_jpeg() {
+        assert_eq!(detect_image_media_type("photo.jpeg").unwrap(), "image/jpeg");
+    }
+
+    #[test]
+    fn detect_webp() {
+        assert_eq!(detect_image_media_type("photo.webp").unwrap(), "image/webp");
+    }
+
+    #[test]
+    fn detect_gif() {
+        assert_eq!(detect_image_media_type("photo.gif").unwrap(), "image/gif");
+    }
+
+    #[test]
+    fn detect_uppercase_extension() {
+        assert_eq!(detect_image_media_type("photo.PNG").unwrap(), "image/png");
+    }
+
+    #[test]
+    fn detect_with_path() {
+        assert_eq!(
+            detect_image_media_type("/home/user/vault/images/test.jpeg").unwrap(),
+            "image/jpeg"
+        );
+    }
+
+    #[test]
+    fn detect_unsupported_format() {
+        assert!(detect_image_media_type("photo.bmp").is_err());
+    }
+
+    #[test]
+    fn detect_no_extension() {
+        assert!(detect_image_media_type("Makefile").is_err());
+    }
+
+    // ── is_private_ip ────────────────────────────────────────────
+
+    #[test]
+    fn private_10_x() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    }
+
+    #[test]
+    fn private_172_16() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
+    }
+
+    #[test]
+    fn private_192_168() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+    }
+
+    #[test]
+    fn loopback_127() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+    }
+
+    #[test]
+    fn link_local_169_254() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
+    }
+
+    #[test]
+    fn broadcast() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255))));
+    }
+
+    #[test]
+    fn unspecified_0_0_0_0() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
+    }
+
+    #[test]
+    fn cgnat_100_64() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
+    }
+
+    #[test]
+    fn benchmarking_198_18() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1))));
+    }
+
+    #[test]
+    fn reserved_240() {
+        assert!(is_private_ip(IpAddr::V4(Ipv4Addr::new(240, 0, 0, 1))));
+    }
+
+    #[test]
+    fn public_ip() {
+        assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn public_ip_cloudflare() {
+        assert!(!is_private_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+    }
+
+    #[test]
+    fn ipv6_loopback() {
+        assert!(is_private_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn ipv6_unspecified() {
+        assert!(is_private_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+    }
+
+    #[test]
+    fn ipv6_link_local() {
+        assert!(is_private_ip(IpAddr::V6("fe80::1".parse().unwrap())));
+    }
+
+    #[test]
+    fn ipv6_unique_local() {
+        assert!(is_private_ip(IpAddr::V6("fc00::1".parse().unwrap())));
+    }
+
+    #[test]
+    fn ipv6_public() {
+        assert!(!is_private_ip(IpAddr::V6(
+            "2606:4700:4700::1111".parse().unwrap()
+        )));
+    }
+
+    #[test]
+    fn ipv6_ipv4_mapped_private() {
+        // ::ffff:10.0.0.1 maps to 10.0.0.1 which is private
+        assert!(is_private_ip(IpAddr::V6(
+            "::ffff:10.0.0.1".parse().unwrap()
+        )));
+    }
+
+    #[test]
+    fn ipv6_ipv4_mapped_public() {
+        // ::ffff:8.8.8.8 maps to 8.8.8.8 which is public
+        assert!(!is_private_ip(IpAddr::V6(
+            "::ffff:8.8.8.8".parse().unwrap()
+        )));
+    }
+
+    // ── normalize_endpoint ───────────────────────────────────────
+
+    #[test]
+    fn normalize_anthropic_full_path() {
+        assert_eq!(
+            normalize_endpoint(
+                "https://api.anthropic.com/v1/messages",
+                ProviderType::Anthropic
+            ),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn normalize_anthropic_v1_suffix() {
+        assert_eq!(
+            normalize_endpoint("https://api.anthropic.com/v1", ProviderType::Anthropic),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn normalize_anthropic_bare_url() {
+        assert_eq!(
+            normalize_endpoint("https://api.anthropic.com", ProviderType::Anthropic),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn normalize_openai_full_path() {
+        assert_eq!(
+            normalize_endpoint(
+                "https://api.openai.com/v1/chat/completions",
+                ProviderType::OpenAi
+            ),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn normalize_openai_v1_suffix() {
+        assert_eq!(
+            normalize_endpoint("https://api.openai.com/v1", ProviderType::OpenAi),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn normalize_openai_bare_url() {
+        assert_eq!(
+            normalize_endpoint("https://api.openai.com", ProviderType::OpenAi),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn normalize_trailing_slash() {
+        assert_eq!(
+            normalize_endpoint("https://api.openai.com/", ProviderType::OpenAi),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn normalize_whitespace() {
+        assert_eq!(
+            normalize_endpoint("  https://api.openai.com  ", ProviderType::OpenAi),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    // ── normalize_messages_endpoint ──────────────────────────────
+
+    #[test]
+    fn normalize_messages_legacy_wrapper() {
+        assert_eq!(
+            normalize_messages_endpoint("https://api.anthropic.com/v1"),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    // ── is_retryable_provider_error ──────────────────────────────
+
+    #[test]
+    fn retryable_429() {
+        assert!(is_retryable_provider_error(429, "rate limited"));
+    }
+
+    #[test]
+    fn retryable_500() {
+        assert!(is_retryable_provider_error(500, "internal error"));
+    }
+
+    #[test]
+    fn retryable_502() {
+        assert!(is_retryable_provider_error(502, "bad gateway"));
+    }
+
+    #[test]
+    fn retryable_503() {
+        assert!(is_retryable_provider_error(503, "service unavailable"));
+    }
+
+    #[test]
+    fn retryable_504() {
+        assert!(is_retryable_provider_error(504, "gateway timeout"));
+    }
+
+    #[test]
+    fn retryable_chinese_rate_limit() {
+        assert!(is_retryable_provider_error(200, "访问量过大"));
+    }
+
+    #[test]
+    fn retryable_too_many_requests() {
+        assert!(is_retryable_provider_error(
+            200,
+            "Too many requests, please slow down"
+        ));
+    }
+
+    #[test]
+    fn retryable_rate_limit_in_detail() {
+        assert!(is_retryable_provider_error(200, "Rate limit exceeded"));
+    }
+
+    #[test]
+    fn not_retryable_400() {
+        assert!(!is_retryable_provider_error(400, "bad request"));
+    }
+
+    #[test]
+    fn not_retryable_401() {
+        assert!(!is_retryable_provider_error(401, "unauthorized"));
+    }
+
+    #[test]
+    fn not_retryable_403() {
+        assert!(!is_retryable_provider_error(403, "forbidden"));
+    }
+
+    #[test]
+    fn not_retryable_404() {
+        assert!(!is_retryable_provider_error(404, "not found"));
+    }
+
+    #[test]
+    fn not_retryable_501() {
+        assert!(!is_retryable_provider_error(501, "not implemented"));
+    }
+
+    // ── format_transport_error ───────────────────────────────────
+
+    #[tokio::test]
+    async fn format_timeout_error() {
+        // Make a request that will timeout
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(1))
+            .build()
+            .unwrap();
+        let err = client
+            .get("http://192.0.2.1:12345/test") // TEST-NET, unreachable
+            .send()
+            .await
+            .unwrap_err();
+        let msg = format_transport_error(&err, "http://api.example.com/v1/chat");
+        // Should contain the host, not the path
+        assert!(msg.contains("api.example.com"));
+        assert!(!msg.contains("/v1/chat"));
+    }
+
+    #[tokio::test]
+    async fn format_connect_error() {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let err = client
+            .get("http://127.0.0.1:1/v1/test")
+            .send()
+            .await
+            .unwrap_err();
+        let msg = format_transport_error(&err, "http://127.0.0.1:1/v1/test");
+        assert!(msg.contains("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn format_strips_userinfo() {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(1))
+            .build()
+            .unwrap();
+        let err = client
+            .get("http://192.0.2.1:12345/test")
+            .send()
+            .await
+            .unwrap_err();
+        let msg = format_transport_error(&err, "https://user:pass@api.example.com/v1");
+        // Should NOT contain credentials
+        assert!(!msg.contains("user:pass"));
+        assert!(!msg.contains("/v1"));
+        assert!(msg.contains("api.example.com"));
+    }
+
+    // ── should_retry_transport_error ─────────────────────────────
+
+    #[tokio::test]
+    async fn should_retry_connect_error() {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let err = client
+            .get("http://127.0.0.1:1/test")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(should_retry_transport_error(&err));
+    }
+}

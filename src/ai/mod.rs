@@ -5,7 +5,7 @@ pub mod parsing;
 pub use context::{resolve_context_window, resolve_max_output_tokens};
 
 // Re-export public types so callers can use `ai::ChatAnswerResult` etc.
-pub use client::RequestUsage;
+pub use client::{send_request_streaming, RequestUsage};
 pub use parsing::{
     AssistantToolCall, ChatAnswerResult, RecordInteractionResult, ToolSelectionResult,
 };
@@ -623,6 +623,7 @@ mod tests {
                 role: "user".to_string(),
                 content: OpenAiContent::Text("hello".to_string()),
             }],
+            stream: false,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["model"], "o3-mini");
@@ -641,6 +642,7 @@ mod tests {
                 role: "user".to_string(),
                 content: OpenAiContent::Text("hello".to_string()),
             }],
+            stream: false,
         };
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["model"], "gpt-4o");

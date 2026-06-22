@@ -943,4 +943,156 @@ mod tests {
             "should not double-escape"
         );
     }
+
+    // ── User prompt function tests (#1322) ────────────────────────────
+
+    #[test]
+    fn answer_user_prompt_includes_question_and_notes() {
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                id: "n1".to_string(),
+                title: "Rust Tips".to_string(),
+                path: "/vault/rust.md".to_string(),
+                tags: vec!["rust".to_string()],
+                keywords: vec!["borrow".to_string()],
+                ..Default::default()
+            },
+            body: "Use &str instead of &String".to_string(),
+            search_snippet: Some("==borrow== checker tips".to_string()),
+        }];
+        let history = vec![ConversationTurn {
+            role: "user".to_string(),
+            text: "tell me about Rust".to_string(),
+        }];
+        let prompt = answer_user_prompt("how to borrow?", &docs, &history);
+
+        assert!(prompt.contains("how to borrow?"));
+        assert!(prompt.contains("<user_input>"));
+        assert!(prompt.contains("Rust Tips"));
+        assert!(prompt.contains("NOTE_ID: n1"));
+        assert!(prompt.contains("user: tell me about Rust"));
+        assert!(prompt.contains("<conversation_history>"));
+    }
+
+    #[test]
+    fn answer_user_prompt_empty_docs_and_history() {
+        let prompt = answer_user_prompt("hello", &[], &[]);
+        assert!(prompt.contains("hello"));
+        assert!(prompt.contains("(none)"));
+    }
+
+    #[test]
+    fn record_user_prompt_includes_input_and_notes() {
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                id: "r1".to_string(),
+                title: "Setup".to_string(),
+                path: "/vault/setup.md".to_string(),
+                tags: vec![],
+                keywords: vec![],
+                ..Default::default()
+            },
+            body: "apt install nginx".to_string(),
+            search_snippet: None,
+        }];
+        let prompt = record_user_prompt("save this: install nginx", &docs);
+
+        assert!(prompt.contains("save this: install nginx"));
+        assert!(prompt.contains("<user_input>"));
+        assert!(prompt.contains("Setup"));
+        assert!(prompt.contains("apt install nginx"));
+        assert!(prompt.contains("\"source\":\"captured\""));
+    }
+
+    #[test]
+    fn record_user_prompt_empty_docs() {
+        let prompt = record_user_prompt("my note content", &[]);
+        assert!(prompt.contains("my note content"));
+        assert!(prompt.contains("(none)"));
+    }
+
+    #[test]
+    fn compression_user_prompt_includes_summary_and_history() {
+        let history = vec![
+            ConversationTurn {
+                role: "user".to_string(),
+                text: "question 1".to_string(),
+            },
+            ConversationTurn {
+                role: "assistant".to_string(),
+                text: "answer 1".to_string(),
+            },
+        ];
+        let prompt = compression_user_prompt("previous summary here", &history);
+
+        assert!(prompt.contains("previous summary here"));
+        assert!(prompt.contains("<user_input>"));
+        assert!(prompt.contains("user: question 1"));
+        assert!(prompt.contains("assistant: answer 1"));
+        assert!(prompt.contains("<conversation_history>"));
+        assert!(prompt.contains("\"summary\""));
+    }
+
+    #[test]
+    fn compression_user_prompt_empty_summary_shows_none() {
+        let prompt = compression_user_prompt("  ", &[]);
+        assert!(prompt.contains("(none)"));
+    }
+
+    #[test]
+    fn note_selection_user_prompt_includes_candidates() {
+        let candidates = vec![NoteMeta {
+            id: "c1".to_string(),
+            title: "Docker Guide".to_string(),
+            path: "/vault/docker.md".to_string(),
+            tags: vec!["docker".to_string()],
+            keywords: vec!["container".to_string()],
+            summary: "Docker basics".to_string(),
+            ..Default::default()
+        }];
+        let history = vec![ConversationTurn {
+            role: "user".to_string(),
+            text: "how to docker?".to_string(),
+        }];
+        let prompt = note_selection_user_prompt("docker setup", &candidates, &history);
+
+        assert!(prompt.contains("docker setup"));
+        assert!(prompt.contains("Docker Guide"));
+        assert!(prompt.contains("c1"));
+        assert!(prompt.contains("\"noteIds\""));
+        assert!(prompt.contains("<conversation_history>"));
+    }
+
+    #[test]
+    fn note_selection_user_prompt_empty_candidates() {
+        let prompt = note_selection_user_prompt("test", &[], &[]);
+        assert!(prompt.contains("test"));
+        assert!(prompt.contains("(none)"));
+    }
+
+    #[test]
+    fn tool_call_retry_user_prompt_includes_retry_instructions() {
+        let history = vec![ConversationTurn {
+            role: "user".to_string(),
+            text: "find my notes".to_string(),
+        }];
+        let prompt =
+            tool_call_retry_user_prompt("find notes", false, &history, &[], "not valid json");
+
+        assert!(prompt.contains("previous response was invalid"));
+        assert!(prompt.contains("not valid json"));
+        assert!(prompt.contains("Fix it now"));
+        assert!(prompt.contains("find notes"));
+        // Should include the base tool_call_user_prompt content
+        assert!(prompt.contains("search_notes"));
+    }
+
+    #[test]
+    fn tool_call_retry_user_prompt_includes_prior_results() {
+        let prior = vec!["search_notes returned 3 items".to_string()];
+        let prompt = tool_call_retry_user_prompt("find more", true, &[], &prior, "bad response");
+
+        assert!(prompt.contains("search_notes returned 3 items"));
+        assert!(prompt.contains("Has images: yes"));
+    }
 }

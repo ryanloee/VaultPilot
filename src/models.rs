@@ -1502,4 +1502,168 @@ mod tests {
         assert_eq!(masked.base_url, "https://api.openai.com/v1");
         assert_eq!(masked.model, "gpt-4o");
     }
+
+    // ── effective_provider() ──
+
+    #[test]
+    fn effective_provider_falls_back_to_legacy_when_empty() {
+        let settings = AppSettings {
+            provider: ProviderConfig {
+                name: "legacy".into(),
+                base_url: "https://legacy.api".into(),
+                ..Default::default()
+            },
+            providers: Vec::new(),
+            ..Default::default()
+        };
+        assert_eq!(settings.effective_provider().name, "legacy");
+    }
+
+    #[test]
+    fn effective_provider_uses_active_from_list() {
+        let settings = AppSettings {
+            providers: vec![
+                ProviderConfig {
+                    name: "first".into(),
+                    ..Default::default()
+                },
+                ProviderConfig {
+                    name: "second".into(),
+                    ..Default::default()
+                },
+            ],
+            active_provider_index: 1,
+            ..Default::default()
+        };
+        assert_eq!(settings.effective_provider().name, "second");
+    }
+
+    #[test]
+    fn effective_provider_clamps_out_of_bounds_index() {
+        let settings = AppSettings {
+            providers: vec![ProviderConfig {
+                name: "only".into(),
+                ..Default::default()
+            }],
+            active_provider_index: 99,
+            ..Default::default()
+        };
+        assert_eq!(settings.effective_provider().name, "only");
+    }
+
+    #[test]
+    fn effective_provider_mut_modifies_correct_entry() {
+        let mut settings = AppSettings {
+            providers: vec![
+                ProviderConfig {
+                    name: "first".into(),
+                    model: "m1".into(),
+                    ..Default::default()
+                },
+                ProviderConfig {
+                    name: "second".into(),
+                    model: "m2".into(),
+                    ..Default::default()
+                },
+            ],
+            active_provider_index: 0,
+            ..Default::default()
+        };
+        settings.effective_provider_mut().model = "updated".into();
+        assert_eq!(settings.providers[0].model, "updated");
+        assert_eq!(settings.providers[1].model, "m2");
+    }
+
+    // ── migrate_providers() ──
+
+    #[test]
+    fn migrate_providers_moves_legacy_to_list() {
+        let mut settings = AppSettings {
+            provider: ProviderConfig {
+                name: String::new(),
+                base_url: "https://api.example.com".into(),
+                model: "test-model".into(),
+                ..Default::default()
+            },
+            providers: Vec::new(),
+            ..Default::default()
+        };
+        settings.migrate_providers();
+        assert_eq!(settings.providers.len(), 1);
+        assert_eq!(settings.providers[0].name, "Default");
+        assert_eq!(settings.providers[0].base_url, "https://api.example.com");
+    }
+
+    #[test]
+    fn migrate_providers_preserves_existing_name() {
+        let mut settings = AppSettings {
+            provider: ProviderConfig {
+                name: "MyProvider".into(),
+                base_url: "https://api.example.com".into(),
+                ..Default::default()
+            },
+            providers: Vec::new(),
+            ..Default::default()
+        };
+        settings.migrate_providers();
+        assert_eq!(settings.providers[0].name, "MyProvider");
+    }
+
+    #[test]
+    fn migrate_providers_skips_when_list_non_empty() {
+        let mut settings = AppSettings {
+            provider: ProviderConfig {
+                base_url: "https://legacy.api".into(),
+                ..Default::default()
+            },
+            providers: vec![ProviderConfig {
+                name: "existing".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        settings.migrate_providers();
+        assert_eq!(settings.providers.len(), 1);
+        assert_eq!(settings.providers[0].name, "existing");
+    }
+
+    #[test]
+    fn migrate_providers_skips_when_base_url_empty() {
+        let mut settings = AppSettings {
+            provider: ProviderConfig {
+                base_url: String::new(),
+                ..Default::default()
+            },
+            providers: Vec::new(),
+            ..Default::default()
+        };
+        settings.migrate_providers();
+        assert!(settings.providers.is_empty());
+    }
+
+    // ── ProviderType::from_base_url() ──
+
+    #[test]
+    fn provider_type_from_base_url_anthropic() {
+        assert_eq!(
+            ProviderType::from_base_url("https://api.anthropic.com/v1"),
+            ProviderType::Anthropic
+        );
+    }
+
+    #[test]
+    fn provider_type_from_base_url_openai() {
+        assert_eq!(
+            ProviderType::from_base_url("https://api.openai.com/v1"),
+            ProviderType::OpenAi
+        );
+    }
+
+    #[test]
+    fn provider_type_from_base_url_unknown() {
+        assert_eq!(
+            ProviderType::from_base_url("https://custom.api.com"),
+            ProviderType::OpenAi
+        );
+    }
 }

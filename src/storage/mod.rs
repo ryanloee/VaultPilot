@@ -4373,6 +4373,104 @@ mod tests {
     }
 
     #[test]
+    fn normalize_settings_vault_dir_override_wins() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-override-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let override_dir = temp.join("my-vault");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: Some(override_dir.clone()),
+        };
+        let mut settings = AppSettings {
+            vault_dir: "/old/path".into(),
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        assert_eq!(settings.vault_dir, override_dir.to_string_lossy());
+    }
+
+    #[test]
+    fn normalize_settings_clamps_active_provider_index() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-clamp-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings {
+            providers: vec![ProviderConfig::default()],
+            active_provider_index: 5,
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        assert_eq!(settings.active_provider_index, 0);
+    }
+
+    #[test]
+    fn normalize_settings_multi_provider_gets_defaults() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-multi-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings {
+            providers: vec![
+                ProviderConfig {
+                    base_url: "".into(),
+                    model: "".into(),
+                    request_timeout_ms: 0,
+                    context_window_tokens: Some(0),
+                    ..Default::default()
+                },
+                ProviderConfig {
+                    base_url: "https://custom.api".into(),
+                    model: "custom-model".into(),
+                    request_timeout_ms: 30_000,
+                    context_window_tokens: Some(4096),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        // First provider: empty fields get defaults
+        assert_eq!(
+            settings.providers[0].base_url,
+            crate::models::default_base_url()
+        );
+        assert_eq!(settings.providers[0].model, crate::models::default_model());
+        assert_eq!(
+            settings.providers[0].request_timeout_ms,
+            crate::models::default_timeout_ms()
+        );
+        assert!(settings.providers[0].context_window_tokens.is_none());
+        // Second provider: non-empty fields preserved
+        assert_eq!(settings.providers[1].base_url, "https://custom.api");
+        assert_eq!(settings.providers[1].model, "custom-model");
+        assert_eq!(settings.providers[1].request_timeout_ms, 30_000);
+        assert_eq!(settings.providers[1].context_window_tokens, Some(4096));
+    }
+
+    #[test]
     fn for_cli_uses_vault_local_state_paths_when_override_is_provided() {
         let temp = std::env::temp_dir().join(format!(
             "vaultpilot-cli-paths-{}",

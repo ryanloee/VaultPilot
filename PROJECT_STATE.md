@@ -759,3 +759,12 @@
 - npm outdated: react-native 0.85→0.86 / async-storage 2.2→3.1 / safe-area-context 5.7→5.8（均为 major/minor 跳版本，维护阶段不更新）
 - 项目状态: 0 open issue, 0 open PR, v0.3.38 — 零缺陷维护态
 - 下一步: maintenance 阶段
+
+## 维护阶段 (循环#263)
+- 补充测试: 为 `src/orchestration/ask.rs` (1030行, 原 0 测试) 添加 38 个单元测试 (PR #1304 已合并)
+- 覆盖函数: normalize_tool_path, looks_like_small_talk, looks_like_a_question, looks_like_record_request, looks_like_session_memory_question, merge_usage, display_path, truncate_for_trace, summarize_docs_for_tool_result, planned_tool_identity, draft_to_note_document
+- 安全关键: normalize_tool_path 路径穿越防护已覆盖 (dot-dot traversal, quotes stripping)
+- 测试总数: 398 全通过
+- clippy: 零警告
+- CI: main 全绿
+- 剩余缺口: ai/client.rs (961行), orchestration/chat.rs 已有测试, ai/parsing.rs 已通过 ai/mod.rs 覆盖

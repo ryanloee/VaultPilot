@@ -78,6 +78,11 @@
 78|- #62: tray exit calls cleanup before terminating (PR #267 已合并)
 79|- #71: _chatState SemaphoreSlim 同步 (PR #268 已合并)
 80|- #86: 剪贴板图片清理，最多保留 50 个 (PR #269 已合并)
+- #1294: sanitize_error URL 参数 redaction — api-key/access_token/secret/token (PR #1297 已合并)
+- #1295: CLI HTTP bridge SSE streaming 支持 (PR #1298 已合并)
+- #1296: ai/mod.rs 拆分为 client + parsing 模块 (PR #1299 已合并)
+- #1300: MODEL_OUTPUT_TOKEN_RULES 数据驱动重构 (PR #1302 已合并)
+- #1301: orchestration/chat.rs 16 个单元测试 (PR #1303 已合并)
 81|- #130 + #72: SolidColorBrush 静态缓存减少 GC 压力 (PR #271 已合并)
 82|- #90: AddTurn List 预分配替代 Concat+ToArray (PR #273 已合并)
 83|- #46: 全局异常处理 + 单实例 Mutex (PR #274 已合并)
@@ -752,6 +757,5 @@
 - 依赖安全: cargo audit 干净（304 crate，零漏洞）
 - 技术债务: 无 TODO/FIXME/HACK
 - npm outdated: react-native 0.85→0.86 / async-storage 2.2→3.1 / safe-area-context 5.7→5.8（均为 major/minor 跳版本，维护阶段不更新）
-- Open issue: #1294 (sanitize_error URL 参数 redaction — 安全/bug，留待下轮 fix)
-- 项目状态: 1 open issue (#1294), 0 open PR, v0.3.36 — 零缺陷维护态
-- 下一步: discussion 阶段
+- 项目状态: 0 open issue, 0 open PR, v0.3.38 — 零缺陷维护态
+- 下一步: maintenance 阶段

@@ -1213,3 +1213,293 @@ mod tests {
         assert!(!super::glob_match("a/?/b", "a//b"));
     }
 }
+
+// ── Additional unit tests for pure functions ──────────────────────────────
+
+#[cfg(test)]
+mod pure_function_tests {
+    use super::*;
+    use std::fs;
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(slugify("Hello World"), "Hello-World");
+        assert_eq!(slugify("test.md"), "test-md");
+        assert_eq!(slugify("hello"), "hello");
+    }
+
+    #[test]
+    fn slugify_special_chars() {
+        assert_eq!(slugify("Hello! @#$% World"), "Hello-World");
+        assert_eq!(slugify("path/to/file"), "path-to-file");
+    }
+
+    #[test]
+    fn slugify_consecutive_dashes_collapsed() {
+        assert_eq!(slugify("a---b"), "a-b");
+        assert_eq!(slugify("--test--"), "test");
+    }
+
+    #[test]
+    fn slugify_preserves_alphanumeric_and_dashes() {
+        assert_eq!(slugify("my-note_v2"), "my-note_v2");
+        assert_eq!(slugify("2024-01-15"), "2024-01-15");
+    }
+
+    #[test]
+    fn slugify_empty_string() {
+        assert_eq!(slugify(""), "");
+        assert_eq!(slugify("---"), "");
+    }
+
+    #[test]
+    fn tool_display_name_all_variants() {
+        assert_eq!(tool_display_name(&ai::AssistantToolCall::None), "none");
+        assert_eq!(
+            tool_display_name(&ai::AssistantToolCall::SearchNotes {
+                query: "q".into(),
+                limit: 5
+            }),
+            "search_notes"
+        );
+        assert_eq!(
+            tool_display_name(&ai::AssistantToolCall::ListNotes { limit: 10 }),
+            "list_notes"
+        );
+        assert_eq!(
+            tool_display_name(&ai::AssistantToolCall::ListDirectory {
+                path: "/".into()
+            }),
+            "list_directory"
+        );
+        assert_eq!(
+            tool_display_name(&ai::AssistantToolCall::ReadFile {
+                path: "test.md".into()
+            }),
+            "read_file"
+        );
+    }
+
+    #[test]
+    fn tool_args_summary_search_notes() {
+        let tc = ai::AssistantToolCall::SearchNotes {
+            query: "rust".into(),
+            limit: 5,
+        };
+        assert_eq!(tool_args_summary(&tc), "query=rust limit=5");
+    }
+
+    #[test]
+    fn tool_args_summary_list_notes() {
+        let tc = ai::AssistantToolCall::ListNotes { limit: 20 };
+        assert_eq!(tool_args_summary(&tc), "limit=20");
+    }
+
+    #[test]
+    fn tool_args_summary_list_directory() {
+        let tc = ai::AssistantToolCall::ListDirectory {
+            path: "docs/".into(),
+        };
+        assert_eq!(tool_args_summary(&tc), "path=docs/");
+    }
+
+    #[test]
+    fn tool_args_summary_read_file() {
+        let tc = ai::AssistantToolCall::ReadFile {
+            path: "notes/todo.md".into(),
+        };
+        assert_eq!(tool_args_summary(&tc), "path=notes/todo.md");
+    }
+
+    #[test]
+    fn tool_args_summary_none() {
+        assert_eq!(tool_args_summary(&ai::AssistantToolCall::None), "{}");
+    }
+
+    #[test]
+    fn truncate_preview_short_string() {
+        assert_eq!(truncate_preview("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_preview_exact_boundary() {
+        assert_eq!(truncate_preview("12345", 5), "12345");
+    }
+
+    #[test]
+    fn truncate_preview_long_string() {
+        let result = truncate_preview("hello world", 5);
+        assert!(result.ends_with('…'));
+        assert_eq!(result, "hello…");
+    }
+
+    #[test]
+    fn truncate_preview_cjk_boundary() {
+        // CJK chars are multi-byte but single char
+        let cjk = "中".repeat(100);
+        let result = truncate_preview(&cjk, 50);
+        assert!(result.ends_with('…'));
+        assert_eq!(result.chars().count(), 51); // 50 + ellipsis
+    }
+
+    #[test]
+    fn truncate_preview_empty_string() {
+        assert_eq!(truncate_preview("", 10), "");
+    }
+
+    #[test]
+    fn agent_resource_limits_default() {
+        let limits = AgentResourceLimits::default();
+        assert_eq!(limits.max_duration, Duration::from_secs(300));
+        assert_eq!(limits.max_tool_calls, 100);
+        assert_eq!(limits.max_tokens, 0);
+    }
+
+    #[test]
+    fn agent_config_default() {
+        let config = AgentConfig::default();
+        assert_eq!(config.name, "unnamed");
+        assert_eq!(config.permission, AgentPermission::ReadOnly);
+        assert!(config.allowed_tools.is_empty());
+        assert!(config.write_patterns.is_empty());
+    }
+
+    #[test]
+    fn agent_permission_default_is_read_only() {
+        assert_eq!(AgentPermission::default(), AgentPermission::ReadOnly);
+    }
+
+    #[test]
+    fn tool_proxy_result_fields() {
+        let r = ToolProxyResult {
+            allowed: true,
+            reason: "ok".into(),
+        };
+        assert!(r.allowed);
+        assert_eq!(r.reason, "ok");
+    }
+
+    #[test]
+    fn tool_proxy_session_elapsed() {
+        let (tmp, config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        let proxy = ToolProxy::new(config, &tmp);
+        // elapsed should be very small right after creation
+        assert!(proxy.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn tool_proxy_tool_call_count_starts_at_zero() {
+        let (tmp, config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        let proxy = ToolProxy::new(config, &tmp);
+        assert_eq!(proxy.tool_call_count(), 0);
+    }
+
+    #[test]
+    fn tool_proxy_tool_call_count_increments() {
+        let (tmp, config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        let proxy = ToolProxy::new(config, &tmp);
+        proxy
+            .check_tool_call("search_notes", r#"{"query":"a"}"#)
+            .unwrap();
+        assert_eq!(proxy.tool_call_count(), 1);
+        proxy
+            .check_tool_call("search_notes", r#"{"query":"b"}"#)
+            .unwrap();
+        assert_eq!(proxy.tool_call_count(), 2);
+    }
+
+    #[test]
+    fn tool_proxy_read_file_allows_in_vault_subdir() {
+        let (tmp, config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        std::fs::create_dir_all(tmp.join("notes")).unwrap();
+        std::fs::write(tmp.join("notes/todo.md"), "# Todo").unwrap();
+        let proxy = ToolProxy::new(config, &tmp);
+        let r = proxy
+            .check_tool_call("read_file", r#"{"path":"notes/todo.md"}"#)
+            .unwrap();
+        assert!(r.allowed, "subdir path should be allowed: {:?}", r.reason);
+    }
+
+    #[test]
+    fn tool_proxy_list_directory_allows_in_vault() {
+        let (tmp, config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        let proxy = ToolProxy::new(config, &tmp);
+        let r = proxy
+            .check_tool_call("list_directory", r#"{"path":"."}"#)
+            .unwrap();
+        assert!(r.allowed, "list vault root should be allowed: {:?}", r.reason);
+    }
+
+    #[test]
+    fn tool_proxy_custom_whitelist_blocks_unlisted() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.allowed_tools = vec!["search_notes".into()];
+        let proxy = ToolProxy::new(config, &tmp);
+        let r = proxy
+            .check_tool_call("list_notes", r#"{"limit":10}"#)
+            .unwrap();
+        assert!(!r.allowed, "unlisted tool should be blocked");
+    }
+
+    #[test]
+    fn tool_proxy_write_pattern_with_subdir() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.permission = AgentPermission::ReadWrite;
+        config.write_patterns = vec!["daily-notes/*".into()];
+        std::fs::create_dir_all(tmp.join("daily-notes")).unwrap();
+        std::fs::write(tmp.join("daily-notes/2024-06-23.md"), "").unwrap();
+        let proxy = ToolProxy::new(config, &tmp);
+        let r = proxy
+            .check_tool_call(
+                "save_note",
+                r#"{"path":"daily-notes/2024-06-23.md"}"#,
+            )
+            .unwrap();
+        assert!(r.allowed, "daily-notes/* should match: {:?}", r.reason);
+    }
+
+    #[test]
+    fn tool_proxy_write_pattern_wildcard_all() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.permission = AgentPermission::ReadWrite;
+        config.write_patterns = vec!["**".into()];
+        std::fs::create_dir_all(tmp.join("any/path")).unwrap();
+        std::fs::write(tmp.join("any/path/file.md"), "").unwrap();
+        let proxy = ToolProxy::new(config, &tmp);
+        let r = proxy
+            .check_tool_call("save_note", r#"{"path":"any/path/file.md"}"#)
+            .unwrap();
+        assert!(r.allowed, "** should match any path: {:?}", r.reason);
+    }
+
+    // Use setup from the parent module
+    fn setup() -> (PathBuf, AgentConfig) {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot_agent_test_{}_{}",
+            std::process::id(),
+            n
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(tmp.join("hello.md"), "# Hello\nWorld").unwrap();
+        let config = AgentConfig::default();
+        (tmp, config)
+    }
+
+    struct TestGuard(PathBuf);
+    impl Drop for TestGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}

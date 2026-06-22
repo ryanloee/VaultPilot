@@ -181,10 +181,14 @@ impl ToolProxy {
             // Check write pattern whitelist
             if let Some(path_value) = Self::extract_path_arg(tool, args_json) {
                 if !self.is_path_writable(&path_value) {
-                    let entry = self.deny(tool, args_json, &format!(
-                        "write denied: path '{}' does not match write patterns",
-                        sanitize_error(&path_value)
-                    ));
+                    let entry = self.deny(
+                        tool,
+                        args_json,
+                        &format!(
+                            "write denied: path '{}' does not match write patterns",
+                            sanitize_error(&path_value)
+                        ),
+                    );
                     return Ok(entry);
                 }
             }
@@ -255,14 +259,16 @@ impl ToolProxy {
             return false;
         }
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
-        let relative = if let Ok(stripped) = std::path::Path::new(trimmed).strip_prefix(&self.vault_dir) {
-            stripped.to_string_lossy().to_string()
-        } else {
-            trimmed.to_string()
-        };
-        self.config.write_patterns.iter().any(|pattern| {
-            glob_match(pattern, &relative)
-        })
+        let relative =
+            if let Ok(stripped) = std::path::Path::new(trimmed).strip_prefix(&self.vault_dir) {
+                stripped.to_string_lossy().to_string()
+            } else {
+                trimmed.to_string()
+            };
+        self.config
+            .write_patterns
+            .iter()
+            .any(|pattern| glob_match(pattern, &relative))
     }
 
     /// Confine a path to the vault directory. Relative paths are resolved
@@ -431,11 +437,14 @@ impl AgentSession {
         // Set environment variables for the agent
         cmd.env("VAULTPILOT_VAULT_DIR", vault_dir);
         cmd.env("VAULTPILOT_AGENT_NAME", &self.config.name);
-        cmd.env("VAULTPILOT_PERMISSION", format!("{:?}", self.config.permission));
+        cmd.env(
+            "VAULTPILOT_PERMISSION",
+            format!("{:?}", self.config.permission),
+        );
 
-        let mut child = cmd.spawn().map_err(|e| {
-            anyhow!("failed to spawn agent process '{}': {}", command, e)
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| anyhow!("failed to spawn agent process '{}': {}", command, e))?;
 
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
@@ -455,13 +464,15 @@ impl AgentSession {
         });
 
         // Apply timeout from resource limits
-        let status = tokio::time::timeout(
-            self.config.limits.max_duration,
-            child.wait(),
-        )
-        .await
-        .map_err(|_| anyhow!("agent process timed out after {:?}", self.config.limits.max_duration))?
-        .map_err(|e| anyhow!("failed to wait for agent process: {}", e))?;
+        let status = tokio::time::timeout(self.config.limits.max_duration, child.wait())
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "agent process timed out after {:?}",
+                    self.config.limits.max_duration
+                )
+            })?
+            .map_err(|e| anyhow!("failed to wait for agent process: {}", e))?;
 
         // Wait for output tasks to finish
         let _ = tokio::join!(stdout_task, stderr_task);

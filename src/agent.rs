@@ -1,10 +1,10 @@
-//! Agent Mode Phase 1 — sandboxed external AI agent integration.
+//! Agent Mode — sandboxed external AI agent integration.
 //!
 //! Lets VaultPilot run external AI agents (Claude Code, Codex, etc.) inside
 //! the vault with strict permission and resource controls.
 //!
 //! # Design principles
-//! - **Least privilege**: agents start read-only; write access is Phase 2.
+//! - **Least privilege**: agents start read-only; write access requires explicit pattern whitelist.
 //! - **Vault-scoped**: all file operations are confined to `vault_dir`.
 //! - **Fail-closed**: any sandbox violation terminates the agent immediately.
 //! - **Auditable**: every tool call is logged for security review.
@@ -68,6 +68,9 @@ pub struct AgentConfig {
     pub limits: AgentResourceLimits,
     /// Whitelisted tool names. Empty = all read-only tools allowed.
     pub allowed_tools: Vec<String>,
+    /// Glob patterns for writable paths (e.g. "*.md", "daily-notes/*", "inbox/*").
+    /// Only enforced when `permission` is `ReadWrite`. Empty = no write access.
+    pub write_patterns: Vec<String>,
 }
 
 impl Default for AgentConfig {
@@ -77,6 +80,7 @@ impl Default for AgentConfig {
             permission: AgentPermission::ReadOnly,
             limits: AgentResourceLimits::default(),
             allowed_tools: Vec::new(),
+            write_patterns: Vec::new(),
         }
     }
 }
@@ -169,9 +173,25 @@ impl ToolProxy {
         }
 
         // 4. Write permission check
-        if Self::is_write_tool(tool) && self.config.permission == AgentPermission::ReadOnly {
-            let entry = self.deny(tool, args_json, "write denied: agent is read-only");
-            return Ok(entry);
+        if Self::is_write_tool(tool) {
+            if self.config.permission == AgentPermission::ReadOnly {
+                let entry = self.deny(tool, args_json, "write denied: agent is read-only");
+                return Ok(entry);
+            }
+            // Check write pattern whitelist
+            if let Some(path_value) = Self::extract_path_arg(tool, args_json) {
+                if !self.is_path_writable(&path_value) {
+                    let entry = self.deny(
+                        tool,
+                        args_json,
+                        &format!(
+                            "write denied: path '{}' does not match write patterns",
+                            sanitize_error(&path_value)
+                        ),
+                    );
+                    return Ok(entry);
+                }
+            }
         }
 
         // 5. Path confinement for file-path tools
@@ -230,6 +250,25 @@ impl ToolProxy {
             }
             _ => None,
         }
+    }
+
+    /// Check if a path matches the write pattern whitelist.
+    /// Patterns are glob-style: "*.md", "daily-notes/*", "inbox/*".
+    fn is_path_writable(&self, path: &str) -> bool {
+        if self.config.write_patterns.is_empty() {
+            return false;
+        }
+        let trimmed = path.trim().trim_matches('"').trim_matches('`');
+        let relative =
+            if let Ok(stripped) = std::path::Path::new(trimmed).strip_prefix(&self.vault_dir) {
+                stripped.to_string_lossy().to_string()
+            } else {
+                trimmed.to_string()
+            };
+        self.config
+            .write_patterns
+            .iter()
+            .any(|pattern| glob_match(pattern, &relative))
     }
 
     /// Confine a path to the vault directory. Relative paths are resolved
@@ -347,6 +386,8 @@ impl ToolProxy {
 // ── Agent session ─────────────────────────────────────────────────────────
 
 /// High-level agent session that ties together config, proxy, and lifecycle.
+///
+/// Phase 2: supports spawning external agent processes with stdout/stderr streaming.
 pub struct AgentSession {
     pub config: AgentConfig,
     proxy: Arc<ToolProxy>,
@@ -372,6 +413,136 @@ impl AgentSession {
     pub fn proxy(&self) -> Arc<ToolProxy> {
         self.proxy.clone()
     }
+
+    /// Run an external command as an agent subprocess.
+    /// Streams stdout/stderr to the provided callbacks.
+    /// Returns the exit code on completion.
+    pub async fn run_command(
+        &self,
+        command: &str,
+        args: &[String],
+        vault_dir: &std::path::Path,
+        mut on_stdout: impl FnMut(&str) + Send + 'static,
+        mut on_stderr: impl FnMut(&str) + Send + 'static,
+    ) -> Result<i32> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::process::Command;
+
+        let mut cmd = Command::new(command);
+        cmd.args(args);
+        cmd.current_dir(vault_dir);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        // Set environment variables for the agent
+        cmd.env("VAULTPILOT_VAULT_DIR", vault_dir);
+        cmd.env("VAULTPILOT_AGENT_NAME", &self.config.name);
+        cmd.env(
+            "VAULTPILOT_PERMISSION",
+            format!("{:?}", self.config.permission),
+        );
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| anyhow!("failed to spawn agent process '{}': {}", command, e))?;
+
+        let stdout = child.stdout.take().expect("stdout was piped");
+        let stderr = child.stderr.take().expect("stderr was piped");
+
+        let stdout_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                on_stdout(&line);
+            }
+        });
+
+        let stderr_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                on_stderr(&line);
+            }
+        });
+
+        // Apply timeout from resource limits
+        let status = tokio::time::timeout(self.config.limits.max_duration, child.wait())
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "agent process timed out after {:?}",
+                    self.config.limits.max_duration
+                )
+            })?
+            .map_err(|e| anyhow!("failed to wait for agent process: {}", e))?;
+
+        // Wait for output tasks to finish
+        let _ = tokio::join!(stdout_task, stderr_task);
+
+        Ok(status.code().unwrap_or(-1))
+    }
+}
+
+// ── Glob matching ────────────────────────────────────────────────────────
+
+/// Simple glob pattern matching. Supports:
+/// - `*` matches any sequence of characters (except path separator)
+/// - `**` matches any sequence including path separators
+/// - `?` matches a single character
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    let text_chars: Vec<char> = text.chars().collect();
+    glob_match_inner(&pattern_chars, &text_chars)
+}
+
+fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
+    let mut pi = 0;
+    let mut ti = 0;
+    let mut star_pi = 0;
+    let mut star_ti = 0;
+    let mut matched = true;
+
+    while ti < text.len() {
+        if pi < pattern.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < pattern.len() && pattern[pi] == '*' {
+            // Handle ** (matches everything including /)
+            if pi + 1 < pattern.len() && pattern[pi + 1] == '*' {
+                star_pi = pi;
+                star_ti = ti;
+                pi += 2;
+            } else {
+                star_pi = pi;
+                star_ti = ti;
+                pi += 1;
+            }
+            matched = true;
+        } else if star_pi > 0 || (star_pi == 0 && pi > 0 && pattern[pi - 1] == '*') {
+            // For single *, don't match path separators
+            if star_pi > 0 && star_pi + 1 < pattern.len() && pattern[star_pi + 1] == '*' {
+                // ** matches everything
+                star_ti += 1;
+                ti = star_ti;
+                pi = star_pi + 2;
+            } else if text[ti] != '/' && text[ti] != '\\' {
+                star_ti += 1;
+                ti = star_ti;
+                pi = star_pi + 1;
+            } else {
+                matched = false;
+                break;
+            }
+        } else {
+            matched = false;
+            break;
+        }
+    }
+
+    // Consume trailing stars
+    while pi < pattern.len() && pattern[pi] == '*' {
+        pi += 1;
+    }
+
+    matched && pi == pattern.len()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -536,5 +707,72 @@ mod tests {
         let r = session.check("search_notes", r#"{"query":"hi"}"#).unwrap();
         assert!(r.allowed);
         assert_eq!(session.audit_log().len(), 1);
+    }
+    #[test]
+    fn write_pattern_allows_matching_path() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.permission = AgentPermission::ReadWrite;
+        config.write_patterns = vec!["*.md".into(), "daily-notes/*".into()];
+        let proxy = ToolProxy::new(config, &tmp);
+
+        // Create the files so path confinement works
+        std::fs::write(tmp.join("test.md"), "").unwrap();
+        std::fs::create_dir_all(tmp.join("daily-notes")).unwrap();
+        std::fs::write(tmp.join("daily-notes/2024-01-01.md"), "").unwrap();
+
+        let r = proxy
+            .check_tool_call("save_note", r#"{"path":"test.md"}"#)
+            .unwrap();
+        assert!(r.allowed, "*.md should match test.md: {:?}", r.reason);
+
+        let r = proxy
+            .check_tool_call("save_note", r#"{"path":"daily-notes/2024-01-01.md"}"#)
+            .unwrap();
+        assert!(r.allowed, "daily-notes/* should match: {:?}", r.reason);
+    }
+
+    #[test]
+    fn write_pattern_blocks_non_matching_path() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.permission = AgentPermission::ReadWrite;
+        config.write_patterns = vec!["*.md".into()];
+        let proxy = ToolProxy::new(config, &tmp);
+
+        std::fs::write(tmp.join("secret.txt"), "").unwrap();
+
+        let r = proxy
+            .check_tool_call("save_note", r#"{"path":"secret.txt"}"#)
+            .unwrap();
+        assert!(!r.allowed, "*.md should not match secret.txt");
+        assert!(r.reason.contains("does not match write patterns"));
+    }
+
+    #[test]
+    fn write_pattern_empty_blocks_all_writes() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.permission = AgentPermission::ReadWrite;
+        config.write_patterns = vec![];
+        let proxy = ToolProxy::new(config, &tmp);
+
+        std::fs::write(tmp.join("test.md"), "").unwrap();
+
+        let r = proxy
+            .check_tool_call("save_note", r#"{"path":"test.md"}"#)
+            .unwrap();
+        assert!(!r.allowed, "empty write_patterns should block all writes");
+    }
+
+    #[test]
+    fn glob_match_basic_patterns() {
+        assert!(super::glob_match("*.md", "test.md"));
+        assert!(super::glob_match("*.md", "hello.md"));
+        assert!(!super::glob_match("*.md", "test.txt"));
+        assert!(super::glob_match("daily-notes/*", "daily-notes/2024.md"));
+        assert!(!super::glob_match("daily-notes/*", "other/2024.md"));
+        assert!(super::glob_match("inbox/*.md", "inbox/quick.md"));
+        assert!(!super::glob_match("inbox/*.md", "inbox/quick.txt"));
     }
 }

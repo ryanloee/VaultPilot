@@ -1,6 +1,7 @@
 using VaultPilot.WinUI.Controls;
 using VaultPilot.WinUI.Models;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System.Diagnostics;

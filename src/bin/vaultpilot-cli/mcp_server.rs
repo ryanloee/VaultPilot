@@ -1,7 +1,12 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::Json;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
@@ -305,6 +310,81 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
     tokio::time::sleep(SHUTDOWN_DRAIN_TIMEOUT).await;
 
     Ok(())
+}
+
+// ─── HTTP MCP server ────────────────────────────────────────────
+
+struct McpHttpState {
+    context: StorageContext,
+    server_state: tokio::sync::Mutex<McpServerState>,
+    token: Option<String>,
+}
+
+pub(super) async fn run_mcp_http_server(
+    context: StorageContext,
+    host: String,
+    port: u16,
+    token: Option<String>,
+) -> Result<()> {
+    use std::net::{IpAddr, SocketAddr};
+
+    let ip: IpAddr = host
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid host '{}': {}", host, e))?;
+
+    // Non-loopback binding requires token auth (same policy as HTTP bridge)
+    crate::http_bridge::validate_http_bridge_binding(ip, token.as_deref())?;
+
+    let address = SocketAddr::new(ip, port);
+    let state = Arc::new(McpHttpState {
+        context,
+        server_state: tokio::sync::Mutex::new(McpServerState {
+            initialized: false,
+            protocol_version: MCP_PROTOCOL_VERSION.to_string(),
+        }),
+        token,
+    });
+
+    let app = axum::Router::new()
+        .route("/mcp", axum::routing::post(mcp_http_handler))
+        .with_state(state);
+
+    eprintln!("MCP HTTP server listening on {address}");
+    eprintln!("  POST /mcp  — JSON-RPC endpoint");
+
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn mcp_http_handler(
+    State(state): State<Arc<McpHttpState>>,
+    headers: HeaderMap,
+    Json(request): Json<McpRequest>,
+) -> Json<McpResponse> {
+    // Token auth: require bearer token if configured
+    if let Some(ref expected) = state.token {
+        let auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let token = auth.strip_prefix("Bearer ").unwrap_or("");
+        if token != expected.as_str() {
+            return Json(McpResponse::error(
+                Value::Null,
+                -32600,
+                "unauthorized".to_string(),
+                None,
+            ));
+        }
+    }
+
+    let mut server_state = state.server_state.lock().await;
+
+    match handle_mcp_request(&state.context, &mut server_state, request).await {
+        Some(resp) => Json(resp),
+        None => Json(McpResponse::ok(Value::Null, Value::Null)),
+    }
 }
 
 // ─── Request handler ──────────────────────────────────────────────
@@ -1719,5 +1799,32 @@ mod tests {
         assert!(resp.result.is_none());
         assert!(resp.error.is_some());
         assert_eq!(resp.error.as_ref().unwrap().code, -32600);
+    }
+
+    // ── MCP HTTP server binding validation (regression for #1306) ──
+
+    #[test]
+    fn mcp_http_rejects_non_loopback_without_token() {
+        // Non-loopback binding without token must fail (same as HTTP bridge)
+        let result =
+            crate::http_bridge::validate_http_bridge_binding("192.168.1.1".parse().unwrap(), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("--token"));
+    }
+
+    #[test]
+    fn mcp_http_allows_loopback_without_token() {
+        let result =
+            crate::http_bridge::validate_http_bridge_binding("127.0.0.1".parse().unwrap(), None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn mcp_http_allows_non_loopback_with_token() {
+        let result = crate::http_bridge::validate_http_bridge_binding(
+            "192.168.1.1".parse().unwrap(),
+            Some("secret"),
+        );
+        assert!(result.is_ok());
     }
 }

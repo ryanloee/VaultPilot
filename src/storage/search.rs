@@ -12,7 +12,8 @@ use crate::models::{NoteDocument, NoteMeta, SearchQuery, SearchResult};
 
 use super::{open_connection, StorageContext};
 
-use super::{compute_image_perceptual_hash, extract_image_text, load_note_body_from_meta};
+use super::notes::extract_image_text;
+use super::{compute_image_perceptual_hash, load_note_body_from_meta};
 
 #[derive(Debug, Clone)]
 struct AttachmentEntry {

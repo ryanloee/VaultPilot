@@ -9,10 +9,8 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::models::{NoteDocument, NoteMeta};
-    use crate::storage::{
-        build_related_query, find_related_notes_with_context, save_note_with_context,
-        StorageContext,
-    };
+    use crate::storage::notes::build_related_query;
+    use crate::storage::{find_related_notes_with_context, save_note_with_context, StorageContext};
     use chrono::Utc;
 
     fn setup_temp_context() -> (PathBuf, StorageContext) {

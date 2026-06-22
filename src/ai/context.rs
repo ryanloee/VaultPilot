@@ -229,10 +229,7 @@ mod tests {
     #[test]
     fn output_tokens_claude_non_opus_returns_default() {
         // Sonnet / Haiku should get the default, not Opus's 4096.
-        assert_eq!(
-            resolve_max_output_tokens("claude-3-5-sonnet", None),
-            8192
-        );
+        assert_eq!(resolve_max_output_tokens("claude-3-5-sonnet", None), 8192);
         assert_eq!(resolve_max_output_tokens("claude-3-haiku", None), 8192);
     }
 

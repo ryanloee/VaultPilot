@@ -35,6 +35,13 @@ function extractKeywords(text: string): string[] {
     '这', '他', '她', '它', '们', '那', '些', '吗', '呢', '啊', '吧',
     '把', '被', '从', '而', '或', '及', '其', '且', '因', '但', '如', '所',
     '之', '乎', '矣', '哉',
+    // Japanese particles (Hiragana grammatical markers) — #1334
+    'は', 'が', 'を', 'に', 'で', 'へ', 'と', 'も', 'か', 'よ', 'ね',
+    'な', 'の', 'ば', 'て', 'だ', 'から', 'まで', 'より', 'など',
+    'です', 'ます', 'した', 'して', 'ている', 'ていた',
+    // Korean particles — #1334
+    '은', '는', '이', '가', '을', '를', '에', '의', '과', '와',
+    '도', '만', '로', '으로', '에게', '한테', '까지', '부터', '에서',
     'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
     'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'shall',
     'should', 'may', 'might', 'can', 'could', 'i', 'you', 'he', 'she',

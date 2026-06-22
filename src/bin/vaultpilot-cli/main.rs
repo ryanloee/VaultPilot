@@ -34,7 +34,7 @@ use markdown_utils::{
     strip_cli_markdown_from_chat_result, strip_cli_markdown_from_chat_state,
     strip_cli_markdown_from_grounded_answer,
 };
-use mcp_server::run_mcp_server;
+use mcp_server::{run_mcp_http_server, run_mcp_server};
 
 // ─── CLI definitions ──────────────────────────────────────────────
 
@@ -130,6 +130,21 @@ enum Commands {
 
     /// Start an MCP stdio server for VaultPilot's built-in model chat interface
     Mcp,
+
+    /// Start an MCP HTTP server with optional token auth for external AI agents
+    McpHttp {
+        /// Bind host, for example 127.0.0.1
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Bind port
+        #[arg(long, default_value_t = 8766)]
+        port: u16,
+
+        /// Require this bearer token for authentication
+        #[arg(long)]
+        token: Option<String>,
+    },
 
     /// List registered plugins
     Plugins,
@@ -308,6 +323,11 @@ fn main() {
         _ => None,
     };
 
+    let mcp_http_target = match &cli.command {
+        Commands::McpHttp { host, port, token } => Some((host.clone(), *port, token.clone())),
+        _ => None,
+    };
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -321,6 +341,14 @@ fn main() {
     if let Some((host, port, token)) = serve_target {
         if let Err(err) = runtime.block_on(run_http_bridge(context, host, port, token)) {
             eprintln!("HTTP bridge failed: {err}");
+            process::exit(1);
+        }
+        return;
+    }
+
+    if let Some((host, port, token)) = mcp_http_target {
+        if let Err(err) = runtime.block_on(run_mcp_http_server(context, host, port, token)) {
+            eprintln!("MCP HTTP server failed: {err}");
             process::exit(1);
         }
         return;
@@ -410,6 +438,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Mcp => Ok(serde_json::json!({
             "message": "The MCP server is started by running `vaultpilot-cli mcp` directly."
+        })),
+        Commands::McpHttp { .. } => Ok(serde_json::json!({
+            "message": "The MCP HTTP server is started by running `vaultpilot-cli mcp-http` directly."
         })),
         Commands::Vault { action } => handle_vault(context, action),
         Commands::Plugins => {

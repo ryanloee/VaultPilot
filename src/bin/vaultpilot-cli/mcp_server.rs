@@ -1,7 +1,12 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::Json;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
@@ -305,6 +310,77 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
     tokio::time::sleep(SHUTDOWN_DRAIN_TIMEOUT).await;
 
     Ok(())
+}
+
+// ─── HTTP MCP server ────────────────────────────────────────────
+
+struct McpHttpState {
+    context: StorageContext,
+    server_state: tokio::sync::Mutex<McpServerState>,
+    token: Option<String>,
+}
+
+pub(super) async fn run_mcp_http_server(
+    context: StorageContext,
+    host: String,
+    port: u16,
+    token: Option<String>,
+) -> Result<()> {
+    use std::net::{IpAddr, SocketAddr};
+
+    let ip: IpAddr = host
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid host '{}': {}", host, e))?;
+    let address = SocketAddr::new(ip, port);
+    let state = Arc::new(McpHttpState {
+        context,
+        server_state: tokio::sync::Mutex::new(McpServerState {
+            initialized: false,
+            protocol_version: MCP_PROTOCOL_VERSION.to_string(),
+        }),
+        token,
+    });
+
+    let app = axum::Router::new()
+        .route("/mcp", axum::routing::post(mcp_http_handler))
+        .with_state(state);
+
+    eprintln!("MCP HTTP server listening on {address}");
+    eprintln!("  POST /mcp  — JSON-RPC endpoint");
+
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn mcp_http_handler(
+    State(state): State<Arc<McpHttpState>>,
+    headers: HeaderMap,
+    Json(request): Json<McpRequest>,
+) -> Json<McpResponse> {
+    // Token auth: require bearer token if configured
+    if let Some(ref expected) = state.token {
+        let auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let token = auth.strip_prefix("Bearer ").unwrap_or("");
+        if token != expected.as_str() {
+            return Json(McpResponse::error(
+                Value::Null,
+                -32600,
+                "unauthorized".to_string(),
+                None,
+            ));
+        }
+    }
+
+    let mut server_state = state.server_state.lock().await;
+
+    match handle_mcp_request(&state.context, &mut server_state, request).await {
+        Some(resp) => Json(resp),
+        None => Json(McpResponse::ok(Value::Null, Value::Null)),
+    }
 }
 
 // ─── Request handler ──────────────────────────────────────────────

@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::models::{AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery, SearchResult};
+use crate::models::{
+    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery, SearchResult,
+};
 
 mod backup;
 mod chat;
@@ -302,7 +304,6 @@ pub fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
     })
 }
 
-
 /// Get a database connection from the connection pool.
 /// Returns a `PooledConnection` that is automatically returned to the pool on drop.
 pub(super) fn open_connection(context: &StorageContext) -> Result<(PooledConnection, AppSettings)> {
@@ -555,7 +556,10 @@ pub async fn load_note_async(ctx: &StorageContext, note_id: &str) -> Result<Note
 
 #[cfg(test)]
 mod tests {
-    use super::search::{image_similarity_score, derived_note_id, slugify, fallback_title, fallback_source, sanitize_terms, hash_content, is_markdown_file};
+    use super::search::{
+        derived_note_id, fallback_source, fallback_title, hash_content, image_similarity_score,
+        is_markdown_file, sanitize_terms, slugify,
+    };
     use super::settings::normalize_settings;
     use super::*;
     use crate::models::{ChatSession, ProviderConfig};

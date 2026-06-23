@@ -486,7 +486,10 @@ async fn handle_request(
         }
         "respondToWriteApproval" => {
             let params: RespondToWriteApprovalParams = parse_params(&request.params)?;
-            let tx = AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let tx = AGENT_APPROVAL
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
             match tx {
                 Some(tx) => {
                     let _ = tx.send(params.approved);

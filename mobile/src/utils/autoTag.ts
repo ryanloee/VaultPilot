@@ -52,13 +52,13 @@ export function extractAutoTags(title: string, content: string, maxTags = 5): st
   const combined = `${cleanTitle} ${cleanTitle} ${cleanContent}`; // title weighted 2x
 
   // Tokenize: Latin words (3+ chars) and CJK bigrams (2 chars)
-  const rawTokens = combined.match(/[\u4e00-\u9fff\u3400-\u4dbf]+|[a-zA-Z]{3,}/g);
+  const rawTokens = combined.match(/[\u3000-\u9fff\u3400-\u4dbf\uac00-\ud7af]+|[a-zA-Z]{3,}/g);
   if (!rawTokens) return [];
 
   // Expand CJK runs into bigrams for better keyword extraction
   const tokens: string[] = [];
   for (const t of rawTokens) {
-    if (/^[\u4e00-\u9fff\u3400-\u4dbf]+$/.test(t)) {
+    if (/^[\u3000-\u9fff\u3400-\u4dbf\uac00-\ud7af]+$/.test(t)) {
       // CJK: extract bigrams
       for (let i = 0; i <= t.length - 2; i++) {
         tokens.push(t.slice(i, i + 2));

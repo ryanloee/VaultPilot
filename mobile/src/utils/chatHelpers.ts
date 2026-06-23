@@ -87,3 +87,18 @@ export function buildSavePreview(content: string, maxLen: number = 200): string 
   if (content.length <= maxLen) return content;
   return content.slice(0, maxLen) + '...';
 }
+
+/**
+ * Infer MIME type from file name/extension.
+ * Returns the fallback if extension is unknown.
+ */
+export function inferMime(name: string, fallback: string): string {
+  const ext = name.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+    jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    pdf: 'application/pdf', doc: 'application/msword',
+    txt: 'text/plain', md: 'text/markdown',
+  };
+  return ext && map[ext] ? map[ext] : fallback;
+}

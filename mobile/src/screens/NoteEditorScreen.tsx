@@ -94,7 +94,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
       }
       // Queue for backend sync if offline
       if (!isOnline) {
-        queuePendingSync(noteId).catch(() => {});
+        queuePendingSync(noteId).catch(e => console.warn('[NoteEditor] queuePendingSync failed:', e));
       }
     } catch (e) {
       console.warn('[NoteEditor] Save failed:', e);
@@ -125,7 +125,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
       }
       // Save folder on unmount only if actually changed
       if (currentFolderRef.current !== originalFolderRef.current) {
-        moveToFolder(noteId, currentFolderRef.current).catch(() => {});
+        moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder on unmount failed:', e));
       }
     };
   }, [noteId]);

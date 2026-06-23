@@ -72,7 +72,7 @@ export function extractCJKNgrams(text: string): string[] {
  * - Generate CJK 2-gram + 3-gram ngrams
  * - Filter stop words and noise
  */
-function extractKeywords(text: string): string[] {
+export function extractKeywords(text: string): string[] {
   const stopWords = new Set([
     // CJK grammatical particles and pronouns
     '的', '了', '是', '在', '我', '和', '就', '不', '都', '也', '到', '着',

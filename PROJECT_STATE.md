@@ -1109,3 +1109,13 @@
 - #1466 → PR #1469: stripMarkdown exported from autoTag.ts + 14 direct tests
 - #1467 → PR #1470: inferMime extracted from ChatScreen.tsx to chatHelpers.ts + 15 tests
 - 33 tests added (838 mobile tests total), 97 Rust tests pass, Clippy clean
+
+## Maintenance Cycle (2026-06-24)
+- 依赖更新: mobile navigation patch deps (@react-navigation/bottom-tabs 7.18.3, native 7.3.4, native-stack 7.17.6, safe-area-context 5.8.0)
+- 健康检查:
+  - Rust: 97 tests pass, Clippy clean, cargo audit clean, cargo outdated clean
+  - Mobile: tsc --noEmit clean, expo export clean
+  - CI: main 最新 run 为 success
+  - 0 open PR, 2 open issues (#913, #1360)
+  - npm audit: 30 moderate (全部为 Expo 上游内部依赖链，非项目可控)
+- v0.3.52 锁文件更新已推送 (commit d372c9c)

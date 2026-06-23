@@ -46,6 +46,9 @@
 - #1447: pending_syncs UNIQUE index 去重修复 (PR #1450 已合并)
 - #1448: useNetworkState 挂载时主动检查网络连接 (PR #1451 已合并)
 - #1449: flushPendingSyncs 边界测试补充 (PR #1452 已合并)
+- #1453: WriteApprovalDialog human-readable diff 预览 (PR #1456 已合并)
+- #1454: run_agent() 异常路径 12 个集成测试 (PR #1457 已合并)
+- #1455: 移动端 sync + settingsSync 边界测试 (PR #1458 已合并)
 - #217: WinUI 启动冒烟测试
 - #500: MCP server tool errors sanitize_error() 包装 (PR #505 已合并)
 - #501: build_note_path 使用完整 UUID 消除截断 (PR #506 已合并)

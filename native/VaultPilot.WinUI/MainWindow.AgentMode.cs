@@ -13,15 +13,42 @@ namespace VaultPilot.WinUI;
 public sealed partial class MainWindow : Window
 {
     private bool _agentModeActive;
+    private static bool _agentGuideShown;
     private int _agentCurrentStep;
     private int _agentMaxSteps = 20;
     private CancellationTokenSource? _agentCts;
 
-    private void OnAgentModeClicked(object sender, RoutedEventArgs e)
+    private async void OnAgentModeClicked(object sender, RoutedEventArgs e)
     {
         if (_agentModeActive)
         {
             return;
+        }
+
+        if (!_agentGuideShown)
+        {
+            _agentGuideShown = true;
+            var guide = new ContentDialog
+            {
+                Title = "🤖 Agent 模式",
+                Content = "Agent 模式让 AI 自主执行多步操作：\n\n" +
+                    "• 读取和搜索 vault 中的笔记\n" +
+                    "• 创建、编辑笔记（需要你批准）\n" +
+                    "• 自动使用工具完成复杂任务\n\n" +
+                    "安全特性：\n" +
+                    "• 写入操作会弹出确认对话框\n" +
+                    "• 步数和 Token 有上限保护\n" +
+                    "• 随时可以点击「停止」终止",
+                PrimaryButtonText = "了解，开始使用",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot
+            };
+            var guideResult = await guide.ShowAsync();
+            if (guideResult != ContentDialogResult.Primary)
+            {
+                return;
+            }
         }
 
         var prompt = ComposerBox.Text?.Trim();

@@ -22,6 +22,14 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureColumn('notes', 'starred', 'INTEGER DEFAULT 0');
   await ensureColumn('notes', 'folder', 'TEXT NOT NULL DEFAULT \'\'');
   await ensureColumn('messages', 'attachments', 'TEXT');
+
+  // #1447: Ensure UNIQUE constraint on pending_syncs.note_id for INSERT OR REPLACE dedup
+  const indexes = await db.getAllAsync<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_pending_syncs_note_id'"
+  );
+  if (indexes.length === 0) {
+    await db.execAsync('CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_syncs_note_id ON pending_syncs(note_id)');
+  }
 }
 
 /** Populate FTS tables from existing data (runs once, idempotent via content= sync). */

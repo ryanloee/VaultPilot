@@ -144,4 +144,69 @@ describe('flushPendingSyncs', () => {
     const callHeaders = mockFetch.mock.calls[0][1]?.headers as Record<string, string>;
     expect(callHeaders['Authorization']).toBeUndefined();
   });
+
+  // ── #1449: Additional edge case tests ──
+
+  it('continues to next note after server error (non-network failure)', async () => {
+    mockGetPendingSyncs.mockResolvedValue([
+      { note_id: 'n1' },
+      { note_id: 'n2' },
+      { note_id: 'n3' },
+    ]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    // First returns 500, second succeeds, third succeeds
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await flushPendingSyncs();
+    // n1 failed (server error), n2 and n3 synced
+    expect(result.synced).toBe(2);
+    expect(result.failed).toBe(1);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('handles all notes deleted locally', async () => {
+    mockGetPendingSyncs.mockResolvedValue([
+      { note_id: 'deleted1' },
+      { note_id: 'deleted2' },
+      { note_id: 'deleted3' },
+    ]);
+    mockGetNote.mockResolvedValue(null); // all deleted
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 3, failed: 0 });
+    expect(mockClearPendingSync).toHaveBeenCalledTimes(3);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('passes AbortSignal.timeout to fetch', async () => {
+    const mockTimeout = (globalThis as any).AbortSignal.timeout as jest.Mock;
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: true });
+
+    await flushPendingSyncs();
+    expect(mockTimeout).toHaveBeenCalledWith(10000);
+  });
+
+  it('sends correct PUT body with title and content', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'note-xyz' }]);
+    mockGetNote.mockResolvedValue({ id: 'note-xyz', title: 'My Title', content: 'My Content' });
+    mockFetch.mockResolvedValue({ ok: true });
+
+    await flushPendingSyncs();
+    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(fetchBody).toEqual({ title: 'My Title', content: 'My Content' });
+  });
+
+  it('uses PUT method for sync', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: true });
+
+    await flushPendingSyncs();
+    expect(mockFetch.mock.calls[0][1].method).toBe('PUT');
+  });
 });

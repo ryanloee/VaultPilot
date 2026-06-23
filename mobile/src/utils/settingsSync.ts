@@ -35,7 +35,13 @@ export async function exportSettings(includeKeys = false): Promise<string> {
   const raw = await AsyncStorage.getItem('vaultpilot-store');
   if (!raw) throw new Error('No settings found');
 
-  const stored = JSON.parse(raw);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stored: any;
+  try {
+    stored = JSON.parse(raw);
+  } catch {
+    throw new Error('设置数据已损坏，无法导出');
+  }
   const state = stored?.state ?? stored;
 
   let providers = (state.providers ?? []) as Array<{
@@ -73,7 +79,12 @@ export async function exportSettings(includeKeys = false): Promise<string> {
  * Merges with existing settings — providers are replaced, theme is updated.
  */
 export async function importSettings(json: string): Promise<{ providersImported: number }> {
-  const data: ExportedSettings = JSON.parse(json);
+  let data: ExportedSettings;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    throw new Error('导入数据格式无效，请检查粘贴内容');
+  }
 
   if (data.version !== 1) {
     throw new Error(`Unsupported settings version: ${data.version}`);
@@ -81,7 +92,13 @@ export async function importSettings(json: string): Promise<{ providersImported:
 
   // Update AsyncStorage store
   const raw = await AsyncStorage.getItem('vaultpilot-store');
-  const stored = raw ? JSON.parse(raw) : {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stored: any;
+  try {
+    stored = raw ? JSON.parse(raw) : {};
+  } catch {
+    stored = {};
+  }
   const state = stored?.state ?? stored;
 
   state.themeMode = data.themeMode;

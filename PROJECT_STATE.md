@@ -871,3 +871,30 @@
 - 竞品洞察: Obsidian Copilot v3.3.3 在做大规模代码清理为大功能发布准备，Agent Mode 尚未正式发布但 Copilot Plus 已提供付费 agentic AI；AFFiNE 已有 Android App 验证移动端独立 App 需求
 - 路线图: v0.4.0 = Agent Mode Phase 3.2 + CLI agent 命令；v0.5.0 = WinUI 拆分 + Agent Mode Mobile UI
 - 项目状态: 4 open issues (#913, #1342, #1343, #1344), 0 open PR, v0.3.41
+
+## PR 审核（循环#282）
+- 合并 5 个 PR（全部 CI 通过：build/cargo audit/clippy/fmt/test/linux-cli-build/winui-build）
+- #1352 docs: Agent Mode CLI usage guide (README 双语文档) ✅ 直接合并
+- #1357 fix: replace .expect() in stable_term_hash + 5 unit tests ✅ 直接合并
+- #1356 fix: replace .expect() with graceful error handling in agent.rs + 3 regression tests ✅ 直接合并
+- #1351 test: add 28 unit tests for agent.rs pure functions ✅ 直接合并
+- #1353 feat: WinUI Agent Mode UI (tool call panel + write approval dialog) ✅ 合并，附带 TODO 追踪
+  - 注意：ShowWriteApprovalDialog 中有 TODO（写入审批决策未实际回传后端），需下轮创建 issue
+- 发版: v0.3.41 → v0.3.42 (tag v0.3.42 已推送)
+- 项目状态: 0 open PR, v0.3.42
+
+## 维护阶段 (2026-06-23)
+- Rust: 728 测试全通过 (619 lib + 12 cli + 97 core)，Clippy 无警告，cargo fmt 干净
+- 安全: cargo audit 无漏洞
+- 依赖: Rust deps 全部最新；Mobile 有 3 个 minor 更新（async-storage 2→3, react-native 0.85→0.86, safe-area-context 5.7→5.8），非紧急
+- TODO: 仅 1 处（WinUI MainWindow.AgentMode.cs:287 — 已追踪为 #1358）
+- CI: main 分支干净，旧分支有 cargo fmt 失败（已合并代码无影响）
+- 项目状态: 2 open issues (#913 Agent Mode tracking, #1358 WriteApprovalDialog), 0 open PR, v0.3.42
+- 结论: 项目健康，下一阶段进入讨论轮次
+
+### 循环 #282 讨论结果
+- 创建 #1359: Agent Mode 集成测试（P1）
+- 创建 #1360: 移动端 Agent Mode 技术方案调研（P2）
+- 竞品动态: Obsidian Copilot v4 Agent Mode 正式发布, Google NotebookLM 2.0 agentic 工作流, Notion AI 3.3 Custom Agents
+- 项目状态: 4 open issues (#913, #1358, #1359, #1360), 0 open PR, v0.3.42, 1182 测试通过
+- 下个 fix 阶段优先级: #1358 → #1359 → 移动端 RAG 回归测试

@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.50] - 2026-06-24
+
+### Added
+- WriteApprovalDialog human-readable diff preview (#1453)
+
+### Tests
+- 12 integration tests for `run_agent()` exception paths — malformed JSON, network drop, timeout, approval rejection (#1454)
+- 6 edge case tests for mobile `sync.ts` + `settingsSync.ts` service layer (#1455)
+
+## [0.3.49] - 2026-06-24
+
+### Fixed
+- `pending_syncs` UNIQUE index on `note_id` for INSERT OR REPLACE dedup (#1447)
+- `useNetworkState` calls `checkConnection` on mount (#1448)
+
+### Changed
+- Split `models.rs` (1752 lines) into `provider.rs` + `settings.rs` + `mod.rs` (#1442)
+- Extract `storage/pool.rs` for connection pool management (#1443)
+
+### Tests
+- 26 unit tests for `clientPure.ts` — 5 Anthropic adapter functions (#1441)
+- 5 edge case tests for `flushPendingSyncs` (#1449)
+
+## [0.3.48] - 2026-06-24
+
+### Added
+- Agent Mode first-use onboarding guide — WinUI tooltip + CLI help (#1432)
+
+### Fixed
+- CLI agent prints FinalAnswer text instead of discarding it (#1436)
+- OfflineBanner dark theme support (#1437)
+
+### Changed
+- Extract `store.ts` pure functions + 31 unit tests (#1429)
+- Extract `NoteEditorScreen` pure functions + 29 unit tests (#1430)
+- Create CHANGELOG.md with v0.3.x release history (#1431)
+
 ## [0.3.47] - 2026-06-23
 
 ### Changed
@@ -211,7 +248,10 @@ Key milestones:
 - **v0.2.0**: Initial multi-platform architecture (WinUI + CLI + Android)
 - **v0.3.0**: Agent Mode Phase 1, MCP server, storage refactoring
 
-[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.47...HEAD
+[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.50...HEAD
+[0.3.50]: https://github.com/ryanloee/VaultPilot/compare/v0.3.49...v0.3.50
+[0.3.49]: https://github.com/ryanloee/VaultPilot/compare/v0.3.48...v0.3.49
+[0.3.48]: https://github.com/ryanloee/VaultPilot/compare/v0.3.47...v0.3.48
 [0.3.47]: https://github.com/ryanloee/VaultPilot/compare/v0.3.46...v0.3.47
 [0.3.46]: https://github.com/ryanloee/VaultPilot/compare/v0.3.45...v0.3.46
 [0.3.45]: https://github.com/ryanloee/VaultPilot/compare/v0.3.44...v0.3.45

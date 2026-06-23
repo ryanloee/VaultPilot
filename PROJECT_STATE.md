@@ -369,6 +369,12 @@
 - #1422: rag.ts parseToolCalls + buildSystemPrompt 19 个单元测试 (PR #1424 已合并)
 - #1425: extractKeywords 导出 + 14 个单元测试 (PR #1427 已合并)
 - #1426: buildFtsQuery + escapeLikePattern 导出 + 17 个单元测试 (PR #1428 已合并)
+- #1459: CHANGELOG 补全 v0.3.48-0.3.50 (PR #1460 已合并)
+- #1461 + #1462 + #1463: sync 错误体日志 + dead code 清理 + uuid 导出 (PR #1464 已合并)
+- #1465: ProviderEditor require() → ES import (PR #1468 已合并)
+- #1466: stripMarkdown 导出 + 14 个单元测试 (PR #1469 已合并)
+- #1467: inferMime 从 ChatScreen 提取到 chatHelpers + 15 个测试 (PR #1470 已合并)
+- v0.3.51 版本发布 (tag v0.3.51)
 
 ## 当前进行中
 <!-- 由 issue-monitor 任务在创建 PR 后更新 -->

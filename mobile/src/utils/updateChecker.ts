@@ -7,6 +7,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import { Platform } from 'react-native';
 
 const GITHUB_API = 'https://api.github.com/repos/ryanloee/VaultPilot/releases/latest';
+const GITHUB_RELEASES = 'https://api.github.com/repos/ryanloee/VaultPilot/releases?per_page=5';
 
 export interface UpdateInfo {
   latestVersion: string;
@@ -49,13 +50,52 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
       (a: { name: string }) => a.name.endsWith('.apk')
     );
 
+    // If the latest release has no APK, search recent releases for one that does
+    let finalRelease = release;
+    let finalVersion = latestVersion;
+    let finalApkAsset = apkAsset;
+
+    if (!apkAsset) {
+      try {
+        const listRes = await fetch(GITHUB_RELEASES, {
+          headers: { Accept: 'application/vnd.github+json' },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (listRes.ok) {
+          const releases: Array<{
+            tag_name?: string;
+            assets?: Array<{ name: string; browser_download_url: string }>;
+            html_url?: string;
+            body?: string;
+            published_at?: string;
+          }> = await listRes.json();
+
+          for (const r of releases) {
+            const v = (r.tag_name ?? '').replace(/^v/, '');
+            if (!v || compareSemver(v, currentVersion) <= 0) continue;
+            const asset = (r.assets ?? []).find(
+              (a: { name: string }) => a.name.endsWith('.apk'),
+            );
+            if (asset) {
+              finalRelease = r;
+              finalVersion = v;
+              finalApkAsset = asset;
+              break;
+            }
+          }
+        }
+      } catch (listErr) {
+        console.warn('[UpdateChecker] fallback releases fetch failed:', listErr);
+      }
+    }
+
     return {
-      latestVersion,
+      latestVersion: finalVersion,
       currentVersion,
-      releaseUrl: release.html_url ?? '',
-      body: release.body ?? '',
-      apkUrl: apkAsset?.browser_download_url ?? null,
-      publishedAt: release.published_at ?? '',
+      releaseUrl: finalRelease.html_url ?? '',
+      body: finalRelease.body ?? '',
+      apkUrl: finalApkAsset?.browser_download_url ?? null,
+      publishedAt: finalRelease.published_at ?? '',
     };
   } catch (e) {
     console.warn('[UpdateChecker] fetchLatestRelease failed:', e);

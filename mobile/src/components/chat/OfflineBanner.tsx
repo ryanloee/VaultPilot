@@ -4,29 +4,31 @@ import Icon from '../Icon';
 
 interface OfflineBannerProps {
   visible: boolean;
+  isDark?: boolean;
 }
 
-export default function OfflineBanner({ visible }: OfflineBannerProps) {
+export default function OfflineBanner({ visible, isDark = false }: OfflineBannerProps) {
   if (!visible) return null;
 
+  const bgColor = isDark ? '#451A03' : '#FEF3C7';
+  const textColor = isDark ? '#FDE68A' : '#92400E';
+
   return (
-    <View style={styles.banner}>
-      <Icon name="wifi-off" size={13} color="#92400E" />
-      <Text style={styles.text}> 离线模式 — 笔记可查看编辑，聊天需联网</Text>
+    <View style={[styles.banner, { backgroundColor: bgColor }]}>
+      <Icon name="wifi-off" size={13} color={textColor} />
+      <Text style={[styles.text, { color: textColor }]}> 离线模式 — 笔记可查看编辑，聊天需联网</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   banner: {
-    backgroundColor: '#FEF3C7',
     paddingVertical: 6,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
   },
   text: {
-    color: '#92400E',
     fontSize: 13,
     flex: 1,
   },

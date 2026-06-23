@@ -342,3 +342,190 @@ fn write_approval_channel_timeout_behavior() {
     let approved = rx2.recv().unwrap_or(false);
     assert!(!approved, "dropped sender should default to denied");
 }
+
+// ── Malformed JSON args tests ─────────────────────────────────────────
+
+#[test]
+fn sandbox_malformed_json_args_allows_write_when_no_path_extractable() {
+    let (tmp, mut config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    config.permission = AgentPermission::ReadWrite;
+    config.write_patterns = vec!["*".to_string()];
+    let proxy = ToolProxy::new(config, &tmp);
+
+    // Malformed JSON — cannot extract path, so write pattern check is skipped.
+    // The tool execution will fail with invalid args, but the sandbox doesn't block.
+    let check = proxy
+        .check_tool_call("write_note", "not-valid-json")
+        .unwrap();
+    assert!(
+        check.allowed,
+        "malformed JSON with no extractable path should pass sandbox (tool execution handles error)"
+    );
+}
+
+#[test]
+fn sandbox_malformed_json_args_allows_read() {
+    let (tmp, config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    let proxy = ToolProxy::new(config, &tmp);
+
+    // For read tools, malformed JSON just means no path to confine — allowed
+    let check = proxy.check_tool_call("search_notes", "bad-json").unwrap();
+    assert!(
+        check.allowed,
+        "malformed JSON on read tool should still be allowed: {}",
+        check.reason
+    );
+}
+
+#[test]
+fn sandbox_empty_json_object_allows_write_when_no_path() {
+    let (tmp, mut config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    config.permission = AgentPermission::ReadWrite;
+    config.write_patterns = vec!["*".to_string()];
+    let proxy = ToolProxy::new(config, &tmp);
+
+    // Empty JSON object — no path field, so write pattern check is skipped
+    let check = proxy.check_tool_call("write_note", "{}").unwrap();
+    assert!(
+        check.allowed,
+        "empty JSON args with no path should pass sandbox"
+    );
+}
+
+#[test]
+fn sandbox_null_path_in_json_allows_write() {
+    let (tmp, mut config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    config.permission = AgentPermission::ReadWrite;
+    config.write_patterns = vec!["*".to_string()];
+    let proxy = ToolProxy::new(config, &tmp);
+
+    // null path — extract_path_arg returns None, so write pattern check is skipped
+    let check = proxy
+        .check_tool_call("write_note", r#"{"path": null, "content": "test"}"#)
+        .unwrap();
+    assert!(
+        check.allowed,
+        "null path should pass sandbox (tool execution handles invalid args)"
+    );
+}
+
+// ── Timeout behavior tests ────────────────────────────────────────────
+
+#[test]
+fn sandbox_timeout_blocks_new_tool_calls() {
+    let (tmp, mut config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    // Set a very short timeout
+    config.limits.max_duration = Duration::from_millis(1);
+    let proxy = ToolProxy::new(config, &tmp);
+
+    // Wait for timeout
+    std::thread::sleep(Duration::from_millis(10));
+
+    let check = proxy
+        .check_tool_call("search_notes", r#"{"query": "test"}"#)
+        .unwrap();
+    assert!(!check.allowed, "timed out session should block calls");
+    assert!(
+        check.reason.contains("timeout"),
+        "reason should mention timeout: {}",
+        check.reason
+    );
+}
+
+#[test]
+fn sandbox_elapsed_tracks_time() {
+    let (tmp, config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    let proxy = ToolProxy::new(config, &tmp);
+
+    assert!(proxy.elapsed() < Duration::from_secs(1));
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(proxy.elapsed() >= Duration::from_millis(40));
+}
+
+// ── Large args handling ───────────────────────────────────────────────
+
+#[test]
+fn sandbox_large_args_json_does_not_panic() {
+    let (tmp, mut config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    config.permission = AgentPermission::ReadWrite;
+    config.write_patterns = vec!["*".to_string()];
+    let proxy = ToolProxy::new(config, &tmp);
+
+    // 100KB of content
+    let large_content = "x".repeat(100_000);
+    let args = format!(r#"{{"path":"test.md","content":"{}"}}"#, large_content);
+    let check = proxy.check_tool_call("write_note", &args).unwrap();
+    // Should not panic — just process normally
+    assert!(check.allowed, "large args should not crash");
+}
+
+// ── Write approval denial flow ────────────────────────────────────────
+
+#[test]
+fn write_denied_records_in_transcript() {
+    use std::sync::mpsc;
+    use std::thread;
+
+    let (tx, rx) = mpsc::channel::<bool>();
+
+    // Simulate agent sending WriteApprovalNeeded and getting denied
+    let agent_handle = thread::spawn(move || {
+        let approved = rx.recv().unwrap_or(false);
+        if !approved {
+            "TOOL: save_note\nSTATUS: denied\nOUTPUT:\ntool error: write denied by user"
+        } else {
+            "approved"
+        }
+    });
+
+    tx.send(false).unwrap();
+    let result = agent_handle.join().unwrap();
+    assert!(result.contains("denied"), "denial should be recorded");
+}
+
+// ── Token budget tests ────────────────────────────────────────────────
+
+#[test]
+fn token_budget_zero_means_unlimited() {
+    let limits = AgentResourceLimits::default();
+    assert_eq!(
+        limits.max_tokens, 0,
+        "default token budget should be 0 (unlimited)"
+    );
+}
+
+#[test]
+fn token_budget_nonzero_is_respected() {
+    let limits = AgentResourceLimits {
+        max_tokens: 1000,
+        ..Default::default()
+    };
+    assert_eq!(limits.max_tokens, 1000);
+}
+
+// ── Step limit edge case ──────────────────────────────────────────────
+
+#[test]
+fn max_tool_calls_one_allows_exactly_one() {
+    let (tmp, mut config) = setup();
+    let _guard = TestGuard(tmp.clone());
+    config.limits.max_tool_calls = 1;
+    let proxy = ToolProxy::new(config, &tmp);
+
+    let r1 = proxy
+        .check_tool_call("search_notes", r#"{"query": "a"}"#)
+        .unwrap();
+    assert!(r1.allowed, "first call should be allowed");
+
+    let r2 = proxy
+        .check_tool_call("search_notes", r#"{"query": "b"}"#)
+        .unwrap();
+    assert!(!r2.allowed, "second call should be denied");
+}

@@ -40,7 +40,8 @@ export async function pingBackend(): Promise<boolean> {
   try {
     const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
     return res.ok;
-  } catch {
+  } catch (e) {
+    console.warn('[Sync] pingBackend failed:', e);
     return false;
   }
 }

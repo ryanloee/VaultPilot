@@ -286,21 +286,21 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       // Persist streamed content — separate try-catch so UI content is preserved on failure
       try {
         await updateMessage(aiId, full);
-      } catch {
-        // DB save failed; content stays in UI, user still sees the response
+      } catch (e) {
+        console.warn('[Chat] Failed to persist streamed message:', e);
       }
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
     } catch (err: unknown) {
       // Save whatever partial content was received before the error
       const partial = msgsRef.current.find(m => m.id === aiId)?.content ?? '';
       if (partial) {
-        try { await updateMessage(aiId, partial); } catch { /* best-effort */ }
+        try { await updateMessage(aiId, partial); } catch (e) { console.warn('[Chat] Failed to save partial content:', e); }
       }
       const errMsg = err instanceof Error ? err.message : String(err);
       const errName = err instanceof Error ? err.name : '';
       if (errName === 'AbortError') {
         if (partial) {
-          try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch {}
+          try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch (e) { console.warn('[Chat] Failed to save aborted message:', e); }
         }
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
       } else {

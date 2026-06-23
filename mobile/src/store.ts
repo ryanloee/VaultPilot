@@ -38,7 +38,7 @@ async function loadProviderKeysSecure(): Promise<string[]> {
   try {
     const raw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
     return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+  } catch (e) { console.warn('[Store] Failed to load provider keys from SecureStore:', e); return []; }
 }
 
 interface AppState {

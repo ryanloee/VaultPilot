@@ -21,7 +21,8 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
       const online = res.ok;
       setIsOnline(online);
       return online;
-    } catch {
+    } catch (e) {
+      console.warn('[NetworkState] checkConnection failed:', e);
       setIsOnline(false);
       return false;
     }

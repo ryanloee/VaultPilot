@@ -42,7 +42,7 @@ export function convertAnthropicEvent(event: string, data: string): string | nul
     if (parsed.type === 'message_stop') {
       return 'data: [DONE]\n\n';
     }
-  } catch { /* skip unparseable */ }
+  } catch { /* skip unparseable SSE line — expected for binary/data frames */ }
   return null;
 }
 

@@ -48,8 +48,8 @@ export async function exportSettings(includeKeys = false): Promise<string> {
       const keysRaw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
       const keys: string[] = keysRaw ? JSON.parse(keysRaw) : [];
       providers = providers.map((p, i) => ({ ...p, apiKey: keys[i] ?? '' }));
-    } catch {
-      // SecureStore unavailable — export without keys
+    } catch (e) {
+      console.warn('[SettingsSync] Failed to read SecureStore keys:', e);
     }
   } else {
     // Strip keys
@@ -102,8 +102,8 @@ export async function importSettings(json: string): Promise<{ providersImported:
   if (keys.some(k => k)) {
     try {
       await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
-    } catch {
-      console.warn('[SettingsSync] Failed to save keys to SecureStore');
+    } catch (e) {
+      console.warn('[SettingsSync] Failed to save keys to SecureStore:', e);
     }
   }
 

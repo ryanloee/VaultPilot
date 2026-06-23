@@ -486,7 +486,10 @@ async fn handle_request(
         }
         "respondToWriteApproval" => {
             let params: RespondToWriteApprovalParams = parse_params(&request.params)?;
-            let tx = AGENT_APPROVAL.lock().unwrap().take();
+            let tx = AGENT_APPROVAL
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
             match tx {
                 Some(tx) => {
                     let _ = tx.send(params.approved);
@@ -666,7 +669,7 @@ async fn run_agent_task(
 
                 // Wait for approval from the UI via respondToWriteApproval
                 let (tx, rx) = std::sync::mpsc::channel();
-                *AGENT_APPROVAL.lock().unwrap() = Some(tx);
+                *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                 // Block until approval received (this runs in a background thread,
                 // not on the main stdin loop, so blocking is fine).
                 rx.recv().unwrap_or(false)
@@ -703,7 +706,7 @@ async fn run_agent_task(
     }
 
     // Clear any pending approval channel
-    *AGENT_APPROVAL.lock().unwrap() = None;
+    *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 #[allow(clippy::too_many_arguments)]

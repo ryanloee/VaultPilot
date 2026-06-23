@@ -79,7 +79,8 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
       } else {
         failed++;
       }
-    } catch {
+    } catch (e) {
+      console.warn('[OfflineSync] flush failed for note:', entry.note_id, e);
       failed++;
       // Stop flushing if network error — will retry next time
       break;

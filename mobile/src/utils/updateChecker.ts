@@ -57,7 +57,8 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
       apkUrl: apkAsset?.browser_download_url ?? null,
       publishedAt: release.published_at ?? '',
     };
-  } catch {
+  } catch (e) {
+    console.warn('[UpdateChecker] fetchLatestRelease failed:', e);
     return null;
   }
 }
@@ -93,7 +94,9 @@ export async function downloadAndInstall(
     try {
       const releaseUrl = `https://github.com/ryanloee/VaultPilot/releases/tag/v${version}`;
       await Linking.openURL(releaseUrl);
-    } catch {}
+    } catch (e2) {
+      console.warn('[UpdateChecker] Fallback to release page failed:', e2);
+    }
     return false;
   }
 }

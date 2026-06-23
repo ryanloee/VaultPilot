@@ -20,7 +20,8 @@ const MAX_NOTE_CONTENT_CHARS = 800;
 export function getDeviceLocale(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().locale.split(/[-_]/)[0].toLowerCase();
-  } catch {
+  } catch (e) {
+    console.warn('[RAG] getDeviceLocale fallback to en:', e);
     return 'en';
   }
 }

@@ -56,16 +56,16 @@ export function useVoiceInput() {
   const stopListening = useCallback(async () => {
     try {
       ExpoSpeechRecognitionModule.stop();
-    } catch {
-      // ignore
+    } catch (e) {
+      console.warn('[VoiceInput] stop failed:', e);
     }
   }, []);
 
   const cancelListening = useCallback(async () => {
     try {
       ExpoSpeechRecognitionModule.abort();
-    } catch {
-      // ignore
+    } catch (e) {
+      console.warn('[VoiceInput] cancel failed:', e);
     }
     setIsListening(false);
     setTranscript('');

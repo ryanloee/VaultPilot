@@ -271,6 +271,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
             const action = await executeSave(save);
             actions.push(action);
           } catch (e) {
+            console.warn('[Chat] executeSave failed:', e);
             actions.push(`保存笔记「${save.title}」失败`);
           }
         }

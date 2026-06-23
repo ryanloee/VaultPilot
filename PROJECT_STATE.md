@@ -983,3 +983,10 @@
 - 重点议题：(1) #1358 写入审核回传 P0；(2) 移动端 Agent Mode 渐进式方案；(3) v0.4.0 里程碑发布
 - 竞品：Obsidian Copilot Agent Mode 已正式发布（付费），时间窗口已关闭
 - 路线图：下个fix=#1358+集成测试；v0.4.0=Agent Mode 正式发布；v0.5.0=移动端 Agent Mode Phase 2
+
+## 修复阶段 fix-3 (循环#37)
+- #1414: ChatScreen JSON.parse(m.attachments) unprotected → safeParseAttachments (PR #1418)
+- #1415: settingsSync.ts 3x JSON.parse unprotected → try/catch + 中文错误提示 (PR #1419)
+- #1417: SSE reconnection duplicate content → contentDelivered dedup (PR #1420)
+- 18 个回归测试新增 (9+6+3)
+- 763 Rust + 565 Mobile = 1328 tests pass, Clippy clean

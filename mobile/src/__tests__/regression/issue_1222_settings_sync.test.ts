@@ -132,4 +132,58 @@ describe('Settings Import (#1222)', () => {
   it('should reject invalid JSON', async () => {
     await expect(importSettings('not json')).rejects.toThrow();
   });
+
+  it('should clamp activeProviderIndex to valid range', async () => {
+    const exportWithHighIndex = JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      themeMode: 'dark',
+      accentColor: '#3B82F6',
+      providers: [
+        { name: 'Provider1', apiBase: 'https://api1.com', model: 'm1', apiFormat: 'openai' },
+        { name: 'Provider2', apiBase: 'https://api2.com', model: 'm2', apiFormat: 'openai' },
+      ],
+      activeProviderIndex: 99, // Out of range
+    });
+
+    mockAsyncStorage.setItem.mockResolvedValue(undefined);
+    mockSecureStore.setItemAsync.mockResolvedValue(undefined);
+    await importSettings(exportWithHighIndex);
+
+    const savedArg = mockAsyncStorage.setItem.mock.calls[0][1];
+    const saved = JSON.parse(savedArg);
+    // Should be clamped to last valid index (1)
+    expect(saved.state.activeProviderIndex).toBe(1);
+  });
+
+  it('should handle corrupted existing store gracefully', async () => {
+    // Existing store has corrupted JSON
+    mockAsyncStorage.getItem.mockResolvedValueOnce('corrupted-json{{{');
+    mockAsyncStorage.setItem.mockResolvedValue(undefined);
+    mockSecureStore.setItemAsync.mockResolvedValue(undefined);
+
+    const result = await importSettings(validExport);
+    expect(result.providersImported).toBe(1);
+    // Should still save successfully with fresh state
+    expect(mockAsyncStorage.setItem).toHaveBeenCalled();
+  });
+
+  it('should not save keys to SecureStore when all keys are empty', async () => {
+    const exportNoKeys = JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      themeMode: 'dark',
+      accentColor: '#3B82F6',
+      providers: [
+        { name: 'Provider1', apiBase: 'https://api1.com', model: 'm1', apiFormat: 'openai' },
+      ],
+      activeProviderIndex: 0,
+    });
+
+    mockAsyncStorage.setItem.mockResolvedValue(undefined);
+    await importSettings(exportNoKeys);
+
+    // Should NOT call SecureStore when no keys are present
+    expect(mockSecureStore.setItemAsync).not.toHaveBeenCalled();
+  });
 });

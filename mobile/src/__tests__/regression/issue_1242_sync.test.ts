@@ -346,3 +346,64 @@ describe('getLastSyncTime', () => {
     expect(result).toBe('2026-06-22T00:00:00Z');
   });
 });
+
+// ── syncNotesFromServer edge cases ────────────────────────────────────
+
+describe('syncNotesFromServer edge cases', () => {
+  it('handles notes with missing updatedAt gracefully', async () => {
+    (AsyncStorage.getItem as jest.Mock)
+      .mockResolvedValueOnce('http://localhost:3000')
+      .mockResolvedValueOnce('');
+    mockGetNotes.mockResolvedValue([]);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        notes: [{ id: 'note-1', title: 'No Date' }], // No updatedAt or updated_at
+        total: 1,
+      }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        meta: { id: 'note-1', title: 'No Date' },
+        body: 'content',
+      }),
+    });
+    mockCreateNote.mockResolvedValue('new-id');
+
+    const result = await syncNotesFromServer();
+    expect(result.imported).toBe(1);
+    expect(result.errors).toBe(0);
+  });
+
+  it('handles note detail fetch network error', async () => {
+    (AsyncStorage.getItem as jest.Mock)
+      .mockResolvedValueOnce('http://localhost:3000')
+      .mockResolvedValueOnce('');
+    mockGetNotes.mockResolvedValue([]);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        notes: [{ id: 'note-1', title: 'Fail', updated_at: '2026-06-01T00:00:00Z' }],
+        total: 1,
+      }),
+    });
+    mockFetch.mockRejectedValueOnce(new Error('Network timeout'));
+
+    const result = await syncNotesFromServer();
+    expect(result.errors).toBe(1);
+    expect(result.imported).toBe(0);
+  });
+
+  it('handles list fetch network error', async () => {
+    (AsyncStorage.getItem as jest.Mock)
+      .mockResolvedValueOnce('http://localhost:3000')
+      .mockResolvedValueOnce('');
+
+    mockFetch.mockRejectedValueOnce(new Error('Connection refused'));
+
+    await expect(syncNotesFromServer()).rejects.toThrow('Connection refused');
+  });
+});

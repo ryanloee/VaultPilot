@@ -56,7 +56,7 @@ export default function SettingsScreen() {
             const keys: string[] = JSON.parse(raw);
             const key = keys[activeIdx] ?? '';
             if (key) setApiKey(key);
-          } catch {}
+          } catch (e) { console.warn('[Settings] Failed to restore provider key:', e); }
         });
       }
       setModel(active.model);
@@ -103,7 +103,7 @@ export default function SettingsScreen() {
         setServerToken(cfg.token);
         const ls = await getLastSyncTime();
         setLastSync(ls);
-      } catch {}
+      } catch (e) { console.warn('[Settings] Failed to load server config:', e); }
 
       // Auto-check for updates
       try {
@@ -113,7 +113,7 @@ export default function SettingsScreen() {
           setUpdateInfo(info);
           setShowUpdateModal(true);
         }
-      } catch {}
+      } catch (e) { console.warn('[Settings] Auto-update check failed:', e); }
     })();
   }, []);
 

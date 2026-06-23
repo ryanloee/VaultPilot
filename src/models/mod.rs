@@ -1,253 +1,17 @@
+pub mod provider;
+pub mod settings;
+
+// Re-export all public types for backward compatibility.
+pub use provider::{
+    default_base_url, default_model, default_timeout_ms, ProviderConfig, ProviderType,
+};
+pub use settings::{
+    default_auto_check_updates, default_auto_wake_enabled, default_auto_wake_end_time,
+    default_auto_wake_interval_minutes, default_auto_wake_model, default_auto_wake_prompt,
+    default_auto_wake_start_time, AppSettings,
+};
+
 use serde::{Deserialize, Serialize};
-
-/// The type of AI provider, used to select correct API headers and endpoint format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProviderType {
-    /// Anthropic Messages API (x-api-key header, /v1/messages endpoint).
-    #[default]
-    Anthropic,
-    /// OpenAI-compatible Chat Completions API (Bearer token, /v1/chat/completions endpoint).
-    OpenAi,
-}
-
-impl ProviderType {
-    /// Auto-detect provider type from the base URL.
-    ///
-    /// URLs containing "anthropic" → Anthropic; everything else → OpenAI
-    /// (since OpenAI-compatible is the most common generic format).
-    pub fn from_base_url(base_url: &str) -> Self {
-        let lower = base_url.to_ascii_lowercase();
-        if lower.contains("anthropic") {
-            Self::Anthropic
-        } else {
-            Self::OpenAi
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderConfig {
-    /// Display name for this provider (e.g. "OpenCode Zen", "OpenRouter").
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default = "default_base_url")]
-    pub base_url: String,
-    #[serde(default = "default_model")]
-    pub model: String,
-    #[serde(default = "default_timeout_ms")]
-    pub request_timeout_ms: u64,
-    #[serde(default)]
-    pub context_window_tokens: Option<usize>,
-    #[serde(default)]
-    pub max_output_tokens: Option<u32>,
-    /// Explicit provider type override. When `None`, auto-detected from `base_url`.
-    #[serde(default)]
-    pub provider_type: Option<ProviderType>,
-}
-
-impl ProviderConfig {
-    /// Return a clone with the API key masked for safe serialization.
-    pub fn masked(&self) -> Self {
-        Self {
-            name: self.name.clone(),
-            api_key: mask_secret(&self.api_key),
-            base_url: self.base_url.clone(),
-            model: self.model.clone(),
-            request_timeout_ms: self.request_timeout_ms,
-            context_window_tokens: self.context_window_tokens,
-            max_output_tokens: self.max_output_tokens,
-            provider_type: self.provider_type,
-        }
-    }
-}
-
-impl Default for ProviderConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            api_key: String::new(),
-            base_url: default_base_url(),
-            model: default_model(),
-            request_timeout_ms: default_timeout_ms(),
-            context_window_tokens: None,
-            max_output_tokens: None,
-            provider_type: None,
-        }
-    }
-}
-
-impl std::fmt::Debug for ProviderConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProviderConfig")
-            .field("api_key", &mask_secret(&self.api_key))
-            .field("base_url", &self.base_url)
-            .field("model", &self.model)
-            .field("request_timeout_ms", &self.request_timeout_ms)
-            .field("context_window_tokens", &self.context_window_tokens)
-            .field("max_output_tokens", &self.max_output_tokens)
-            .field("provider_type", &self.provider_type)
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AppSettings {
-    #[serde(default)]
-    pub vault_dir: String,
-    /// Legacy single-provider config (kept for backward compatibility).
-    #[serde(default)]
-    pub provider: ProviderConfig,
-    /// Multi-provider list. When non-empty, overrides `provider`.
-    #[serde(default)]
-    pub providers: Vec<ProviderConfig>,
-    /// Index into `providers` for the currently active provider.
-    #[serde(default)]
-    pub active_provider_index: usize,
-    #[serde(default = "default_auto_check_updates")]
-    pub auto_check_updates: bool,
-    #[serde(default = "default_auto_wake_enabled")]
-    pub auto_wake_enabled: bool,
-    #[serde(default = "default_auto_wake_interval_minutes")]
-    pub auto_wake_interval_minutes: u64,
-    #[serde(default = "default_auto_wake_model")]
-    pub auto_wake_model: String,
-    #[serde(default = "default_auto_wake_start_time")]
-    pub auto_wake_start_time: String,
-    #[serde(default = "default_auto_wake_end_time")]
-    pub auto_wake_end_time: String,
-    /// Prompt sent to the AI when auto-wake fires (#861).
-    #[serde(default = "default_auto_wake_prompt")]
-    pub auto_wake_prompt: String,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            vault_dir: String::new(),
-            provider: ProviderConfig::default(),
-            providers: Vec::new(),
-            active_provider_index: 0,
-            auto_check_updates: default_auto_check_updates(),
-            auto_wake_enabled: default_auto_wake_enabled(),
-            auto_wake_interval_minutes: default_auto_wake_interval_minutes(),
-            auto_wake_model: default_auto_wake_model(),
-            auto_wake_start_time: default_auto_wake_start_time(),
-            auto_wake_end_time: default_auto_wake_end_time(),
-            auto_wake_prompt: default_auto_wake_prompt(),
-        }
-    }
-}
-
-impl AppSettings {
-    /// Return the currently active provider config.
-    /// If `providers` list is non-empty, returns `providers[active_provider_index]`.
-    /// Otherwise falls back to the legacy single `provider` field.
-    pub fn effective_provider(&self) -> &ProviderConfig {
-        if !self.providers.is_empty() {
-            let idx = self.active_provider_index.min(self.providers.len() - 1);
-            &self.providers[idx]
-        } else {
-            &self.provider
-        }
-    }
-
-    /// Mutable version of effective_provider for runtime overrides.
-    pub fn effective_provider_mut(&mut self) -> &mut ProviderConfig {
-        if !self.providers.is_empty() {
-            let idx = self.active_provider_index.min(self.providers.len() - 1);
-            &mut self.providers[idx]
-        } else {
-            &mut self.provider
-        }
-    }
-
-    /// Migrate legacy single `provider` into `providers` list if empty.
-    /// Called after loading settings.
-    pub fn migrate_providers(&mut self) {
-        if self.providers.is_empty() && !self.provider.base_url.is_empty() {
-            self.provider.name = if self.provider.name.is_empty() {
-                "Default".to_string()
-            } else {
-                self.provider.name.clone()
-            };
-            self.providers.push(self.provider.clone());
-        }
-    }
-}
-
-impl ProviderConfig {
-    /// Return the effective provider type, using the explicit override if set,
-    /// otherwise auto-detecting from the base URL.
-    pub fn effective_provider_type(&self) -> ProviderType {
-        self.provider_type
-            .unwrap_or_else(|| ProviderType::from_base_url(&self.base_url))
-    }
-
-    /// Validate provider configuration, returning a list of error messages.
-    /// An empty list means the configuration is valid.
-    pub fn validate(&self) -> Vec<String> {
-        let mut errors = Vec::new();
-
-        // Validate base_url is a valid HTTP(S) URL (if non-empty).
-        let url = self.base_url.trim();
-        if !url.is_empty() && !url.starts_with("http://") && !url.starts_with("https://") {
-            errors.push(format!(
-                "provider.base_url must be an HTTP or HTTPS URL, got: {}",
-                self.base_url
-            ));
-        }
-
-        // Validate request_timeout_ms is in a reasonable range (1s to 10min).
-        if self.request_timeout_ms < 1_000 {
-            errors.push(format!(
-                "provider.request_timeout_ms is too low ({}ms); minimum is 1000ms",
-                self.request_timeout_ms
-            ));
-        } else if self.request_timeout_ms > 600_000 {
-            errors.push(format!(
-                "provider.request_timeout_ms is too high ({}ms); maximum is 600000ms",
-                self.request_timeout_ms
-            ));
-        }
-
-        errors
-    }
-}
-
-impl AppSettings {
-    /// Validate settings after deserialization, returning all error messages at once.
-    /// An empty list means the settings are valid.
-    pub fn validate(&self) -> Vec<String> {
-        let mut errors = Vec::new();
-
-        // Validate vault_dir exists and is a directory (if non-empty).
-        let vault = self.vault_dir.trim();
-        if !vault.is_empty() {
-            let path = std::path::Path::new(vault);
-            if !path.exists() {
-                errors.push(format!("vault_dir does not exist: {}", self.vault_dir));
-            } else if !path.is_dir() {
-                errors.push(format!("vault_dir is not a directory: {}", self.vault_dir));
-            }
-        }
-
-        // Validate api_key is non-empty.
-        let ep = self.effective_provider();
-        if ep.api_key.trim().is_empty() {
-            errors.push("provider.api_key is empty; an API key is required".to_string());
-        }
-
-        // Delegate provider-specific validation.
-        errors.extend(ep.validate());
-
-        errors
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -401,6 +165,10 @@ pub struct ChatSessionOverview {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+}
+
+pub fn default_ai_source() -> String {
+    "captured".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -758,112 +526,9 @@ impl MessageV2 {
     }
 }
 
-/// Mask a secret string for safe display: show first 4 and last 4 chars.
-fn mask_secret(s: &str) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= 12 {
-        if chars.is_empty() {
-            return String::new();
-        }
-        return "*".repeat(chars.len());
-    }
-    let prefix: String = chars[..4].iter().collect();
-    let suffix: String = chars[chars.len() - 4..].iter().collect();
-    format!("{}…{}", prefix, suffix)
-}
-
-pub fn default_base_url() -> String {
-    "https://opencode.ai/zen/v1".to_string()
-}
-
-pub fn default_model() -> String {
-    "deepseek-v4-flash-free".to_string()
-}
-
-pub fn default_timeout_ms() -> u64 {
-    60_000
-}
-
-pub fn default_ai_source() -> String {
-    "captured".to_string()
-}
-
-pub fn default_auto_check_updates() -> bool {
-    true
-}
-
-pub fn default_auto_wake_enabled() -> bool {
-    false
-}
-
-pub fn default_auto_wake_interval_minutes() -> u64 {
-    30
-}
-
-pub fn default_auto_wake_model() -> String {
-    String::new()
-}
-
-pub fn default_auto_wake_start_time() -> String {
-    String::new()
-}
-
-pub fn default_auto_wake_end_time() -> String {
-    String::new()
-}
-
-pub fn default_auto_wake_prompt() -> String {
-    String::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn app_settings_round_trips_with_camel_case() {
-        let settings = AppSettings {
-            vault_dir: "D:\\Vault".to_string(),
-            provider: ProviderConfig {
-                name: "test".to_string(),
-                api_key: "test-key".to_string(),
-                base_url: "https://api.example.com".to_string(),
-                model: "test-model".to_string(),
-                request_timeout_ms: 30_000,
-                context_window_tokens: Some(128_000),
-                max_output_tokens: Some(16384),
-                provider_type: None,
-            },
-            providers: Vec::new(),
-            active_provider_index: 0,
-            auto_check_updates: false,
-            auto_wake_enabled: true,
-            auto_wake_interval_minutes: 60,
-            auto_wake_model: "claude-3-5-haiku-latest".to_string(),
-            auto_wake_start_time: "05:00".to_string(),
-            auto_wake_end_time: "23:00".to_string(),
-            auto_wake_prompt: String::new(),
-        };
-        let json = serde_json::to_string(&settings).expect("serialize");
-        assert!(json.contains("\"vaultDir\""));
-        assert!(json.contains("\"apiKey\""));
-        assert!(json.contains("\"baseUrl\""));
-        assert!(json.contains("\"requestTimeoutMs\""));
-        assert!(json.contains("\"contextWindowTokens\""));
-        assert!(json.contains("\"maxOutputTokens\""));
-        assert!(json.contains("\"autoCheckUpdates\""));
-        assert!(json.contains("\"autoWakeEnabled\""));
-        assert!(json.contains("\"autoWakeIntervalMinutes\""));
-        assert!(json.contains("\"autoWakeModel\""));
-        assert!(json.contains("\"autoWakeStartTime\""));
-        assert!(json.contains("\"autoWakeEndTime\""));
-
-        let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed.vault_dir, settings.vault_dir);
-        assert_eq!(parsed.provider.api_key, settings.provider.api_key);
-        assert_eq!(parsed.provider.context_window_tokens, Some(128_000));
-        assert_eq!(parsed.provider.max_output_tokens, Some(16384));
-    }
 
     #[test]
     fn note_document_round_trips_all_fields() {
@@ -997,7 +662,6 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&no_limit).expect("serialize");
-        // serde serializes Option<T> as null when None
         assert!(json.contains("\"limit\":null"));
 
         let with_limit = SearchQuery {
@@ -1010,7 +674,6 @@ mod tests {
         let json2 = serde_json::to_string(&with_limit).expect("serialize");
         assert!(json2.contains("\"limit\":10"));
 
-        // Round-trip both
         let parsed_none: SearchQuery = serde_json::from_str(&json).expect("deserialize none");
         assert!(parsed_none.limit.is_none());
         let parsed_some: SearchQuery = serde_json::from_str(&json2).expect("deserialize some");
@@ -1020,33 +683,10 @@ mod tests {
     #[test]
     fn structured_note_draft_default_source_is_empty() {
         let draft = StructuredNoteDraft::default();
-        // Default trait gives empty string; "captured" comes from serde default
         assert!(draft.source.is_empty());
-        // Verify serde default when deserializing
         let json = "{}";
         let from_json: StructuredNoteDraft = serde_json::from_str(json).expect("parse");
         assert_eq!(from_json.source, "captured");
-    }
-
-    #[test]
-    fn default_values_are_correct() {
-        let settings = AppSettings::default();
-        assert!(settings.vault_dir.is_empty());
-        assert_eq!(settings.provider.base_url, default_base_url());
-        assert_eq!(settings.provider.model, default_model());
-        assert_eq!(settings.provider.request_timeout_ms, default_timeout_ms());
-        assert!(settings.provider.context_window_tokens.is_none());
-        assert!(settings.auto_check_updates);
-        assert!(!settings.auto_wake_enabled);
-        assert_eq!(settings.auto_wake_interval_minutes, 30);
-        assert!(settings.auto_wake_model.is_empty());
-        assert!(settings.auto_wake_start_time.is_empty());
-        assert!(settings.auto_wake_end_time.is_empty());
-        assert!(settings.auto_wake_prompt.is_empty());
-        assert_eq!(default_model(), "deepseek-v4-flash-free");
-        assert_eq!(default_timeout_ms(), 60_000);
-        assert_eq!(default_ai_source(), "captured");
-        assert!(default_auto_check_updates());
     }
 
     #[test]
@@ -1069,149 +709,6 @@ mod tests {
         assert!(json2.contains("\"indexed\":8"));
     }
 
-    #[test]
-    fn validate_accepts_valid_settings() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                api_key: "sk-test-key".to_string(),
-                base_url: "https://api.anthropic.com/v1/messages".to_string(),
-                request_timeout_ms: 60_000,
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        // vault_dir is empty so it's skipped; api_key + base_url + timeout are valid
-        assert!(settings.validate().is_empty());
-    }
-
-    #[test]
-    fn validate_catches_empty_api_key() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                api_key: String::new(),
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        assert!(errors.iter().any(|e| e.contains("api_key")));
-    }
-
-    #[test]
-    fn validate_catches_whitespace_only_api_key() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                api_key: "   ".to_string(),
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        assert!(errors.iter().any(|e| e.contains("api_key")));
-    }
-
-    #[test]
-    fn validate_catches_invalid_base_url_scheme() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                api_key: "key".to_string(),
-                base_url: "ftp://example.com".to_string(),
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        assert!(errors.iter().any(|e| e.contains("base_url")));
-    }
-
-    #[test]
-    fn validate_accepts_http_base_url() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                api_key: "key".to_string(),
-                base_url: "http://localhost:8080/v1".to_string(),
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        // Only non-base_url errors should appear
-        assert!(!errors.iter().any(|e| e.contains("base_url")));
-    }
-
-    #[test]
-    fn validate_catches_timeout_too_low() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                api_key: "key".to_string(),
-                request_timeout_ms: 500,
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        assert!(errors
-            .iter()
-            .any(|e| e.contains("request_timeout_ms") && e.contains("too low")));
-    }
-
-    #[test]
-    fn validate_catches_timeout_too_high() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                api_key: "key".to_string(),
-                request_timeout_ms: 999_999,
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        assert!(errors
-            .iter()
-            .any(|e| e.contains("request_timeout_ms") && e.contains("too high")));
-    }
-
-    #[test]
-    fn validate_catches_nonexistent_vault_dir() {
-        let settings = AppSettings {
-            vault_dir: "/nonexistent/path/that/does/not/exist".to_string(),
-            provider: ProviderConfig {
-                api_key: "key".to_string(),
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        assert!(errors
-            .iter()
-            .any(|e| e.contains("vault_dir") && e.contains("not exist")));
-    }
-
-    #[test]
-    fn validate_returns_all_errors_at_once() {
-        let settings = AppSettings {
-            vault_dir: "/nonexistent/path".to_string(),
-            provider: ProviderConfig {
-                api_key: String::new(),
-                base_url: "ftp://bad".to_string(),
-                request_timeout_ms: 0,
-                ..ProviderConfig::default()
-            },
-            ..AppSettings::default()
-        };
-        let errors = settings.validate();
-        // Should have errors for: vault_dir, api_key, base_url, timeout
-        assert!(
-            errors.len() >= 4,
-            "expected at least 4 errors, got: {}",
-            errors.len()
-        );
-        assert!(errors.iter().any(|e| e.contains("vault_dir")));
-        assert!(errors.iter().any(|e| e.contains("api_key")));
-        assert!(errors.iter().any(|e| e.contains("base_url")));
-        assert!(errors.iter().any(|e| e.contains("request_timeout_ms")));
-    }
-
     // ── MessageV2 roundtrip tests (#1239) ────────────────────────────────
 
     #[test]
@@ -1226,7 +723,6 @@ mod tests {
         assert!(json.contains("\"id\""));
         assert!(json.contains("\"role\":\"user\""));
         assert!(json.contains("\"content\""));
-        // Empty vecs/maps should be skipped
         assert!(!json.contains("\"attachments\""));
         assert!(!json.contains("\"extensions\""));
 
@@ -1351,7 +847,6 @@ mod tests {
 
     #[test]
     fn message_v2_deserializes_minimal_json() {
-        // Minimal JSON with only content — all other fields should default
         let json = r#"{"content":"hi"}"#;
         let msg: MessageV2 = serde_json::from_str(json).expect("parse");
         assert_eq!(msg.content, "hi");
@@ -1393,8 +888,6 @@ mod tests {
 
     #[test]
     fn message_v2_shared_fixtures_parse() {
-        // Load the shared test fixture file used by all three platforms (#1239).
-        // This ensures the Rust implementation stays in sync with the canonical JSON.
         let raw = std::fs::read_to_string("tests/fixtures/message_v2_fixtures.json")
             .expect("fixture file must exist");
         let root: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
@@ -1405,13 +898,11 @@ mod tests {
             let json_val = &fixture["json"];
             let msg: MessageV2 = serde_json::from_value(json_val.clone())
                 .unwrap_or_else(|e| panic!("fixture '{}': failed to parse MessageV2: {}", name, e));
-            // Every fixture must have an id and content
             assert!(
                 !msg.id.is_empty() || name == "empty_content",
                 "fixture '{}': id should not be empty",
                 name
             );
-            // Validate roundtrip
             let serialized = serde_json::to_string(&msg).expect("serialize");
             let reparsed: MessageV2 = serde_json::from_str(&serialized).expect("roundtrip");
             assert_eq!(reparsed.role, msg.role, "fixture '{}': role mismatch", name);
@@ -1423,330 +914,8 @@ mod tests {
         }
     }
 
-    // ── mask_secret ──
-
     #[test]
-    fn mask_secret_empty_returns_empty() {
-        assert_eq!(mask_secret(""), "");
-    }
-
-    #[test]
-    fn mask_secret_short_fully_masked() {
-        assert_eq!(mask_secret("abc"), "***");
-        assert_eq!(mask_secret("123456789012"), "************");
-    }
-
-    #[test]
-    fn mask_secret_long_shows_prefix_suffix() {
-        let key = "sk-abc...qrst";
-        let masked = mask_secret(key);
-        assert_eq!(masked, "sk-a…qrst");
-        assert!(!masked.contains("bcdefghijklmnop"));
-    }
-
-    #[test]
-    fn mask_secret_exactly_13_chars() {
-        let masked = mask_secret("1234567890123");
-        assert_eq!(masked, "1234…0123");
-    }
-
-    // ── ProviderType::from_base_url ──
-
-    #[test]
-    fn provider_type_detects_anthropic() {
-        assert_eq!(
-            ProviderType::from_base_url("https://api.anthropic.com/v1"),
-            ProviderType::Anthropic
-        );
-        assert_eq!(
-            ProviderType::from_base_url("https://ANTHROPIC.example.com"),
-            ProviderType::Anthropic
-        );
-    }
-
-    #[test]
-    fn provider_type_defaults_to_openai() {
-        assert_eq!(
-            ProviderType::from_base_url("https://api.openai.com/v1"),
-            ProviderType::OpenAi
-        );
-        assert_eq!(
-            ProviderType::from_base_url("https://openrouter.ai/api/v1"),
-            ProviderType::OpenAi
-        );
-        assert_eq!(
-            ProviderType::from_base_url("http://localhost:8080/v1"),
-            ProviderType::OpenAi
-        );
-    }
-
-    // ── masked() ──
-
-    #[test]
-    fn provider_config_masked_hides_api_key() {
-        let provider = ProviderConfig {
-            name: "test".to_string(),
-            api_key: "sk-ver...2345".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o".to_string(),
-            request_timeout_ms: 60_000,
-            context_window_tokens: None,
-            max_output_tokens: None,
-            provider_type: None,
-        };
-        let masked = provider.masked();
-        assert!(!masked.api_key.contains("very-long-secret"));
-        assert!(masked.api_key.contains("sk-v"));
-        assert!(masked.api_key.contains("2345"));
-        assert_eq!(masked.name, "test");
-        assert_eq!(masked.base_url, "https://api.openai.com/v1");
-        assert_eq!(masked.model, "gpt-4o");
-    }
-
-    // ── effective_provider() ──
-
-    #[test]
-    fn effective_provider_falls_back_to_legacy_when_empty() {
-        let settings = AppSettings {
-            provider: ProviderConfig {
-                name: "legacy".into(),
-                base_url: "https://legacy.api".into(),
-                ..Default::default()
-            },
-            providers: Vec::new(),
-            ..Default::default()
-        };
-        assert_eq!(settings.effective_provider().name, "legacy");
-    }
-
-    #[test]
-    fn effective_provider_uses_active_from_list() {
-        let settings = AppSettings {
-            providers: vec![
-                ProviderConfig {
-                    name: "first".into(),
-                    ..Default::default()
-                },
-                ProviderConfig {
-                    name: "second".into(),
-                    ..Default::default()
-                },
-            ],
-            active_provider_index: 1,
-            ..Default::default()
-        };
-        assert_eq!(settings.effective_provider().name, "second");
-    }
-
-    #[test]
-    fn effective_provider_clamps_out_of_bounds_index() {
-        let settings = AppSettings {
-            providers: vec![ProviderConfig {
-                name: "only".into(),
-                ..Default::default()
-            }],
-            active_provider_index: 99,
-            ..Default::default()
-        };
-        assert_eq!(settings.effective_provider().name, "only");
-    }
-
-    #[test]
-    fn effective_provider_mut_modifies_correct_entry() {
-        let mut settings = AppSettings {
-            providers: vec![
-                ProviderConfig {
-                    name: "first".into(),
-                    model: "m1".into(),
-                    ..Default::default()
-                },
-                ProviderConfig {
-                    name: "second".into(),
-                    model: "m2".into(),
-                    ..Default::default()
-                },
-            ],
-            active_provider_index: 0,
-            ..Default::default()
-        };
-        settings.effective_provider_mut().model = "updated".into();
-        assert_eq!(settings.providers[0].model, "updated");
-        assert_eq!(settings.providers[1].model, "m2");
-    }
-
-    // ── migrate_providers() ──
-
-    #[test]
-    fn migrate_providers_moves_legacy_to_list() {
-        let mut settings = AppSettings {
-            provider: ProviderConfig {
-                name: String::new(),
-                base_url: "https://api.example.com".into(),
-                model: "test-model".into(),
-                ..Default::default()
-            },
-            providers: Vec::new(),
-            ..Default::default()
-        };
-        settings.migrate_providers();
-        assert_eq!(settings.providers.len(), 1);
-        assert_eq!(settings.providers[0].name, "Default");
-        assert_eq!(settings.providers[0].base_url, "https://api.example.com");
-    }
-
-    #[test]
-    fn migrate_providers_preserves_existing_name() {
-        let mut settings = AppSettings {
-            provider: ProviderConfig {
-                name: "MyProvider".into(),
-                base_url: "https://api.example.com".into(),
-                ..Default::default()
-            },
-            providers: Vec::new(),
-            ..Default::default()
-        };
-        settings.migrate_providers();
-        assert_eq!(settings.providers[0].name, "MyProvider");
-    }
-
-    #[test]
-    fn migrate_providers_skips_when_list_non_empty() {
-        let mut settings = AppSettings {
-            provider: ProviderConfig {
-                base_url: "https://legacy.api".into(),
-                ..Default::default()
-            },
-            providers: vec![ProviderConfig {
-                name: "existing".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        settings.migrate_providers();
-        assert_eq!(settings.providers.len(), 1);
-        assert_eq!(settings.providers[0].name, "existing");
-    }
-
-    #[test]
-    fn migrate_providers_skips_when_base_url_empty() {
-        let mut settings = AppSettings {
-            provider: ProviderConfig {
-                base_url: String::new(),
-                ..Default::default()
-            },
-            providers: Vec::new(),
-            ..Default::default()
-        };
-        settings.migrate_providers();
-        assert!(settings.providers.is_empty());
-    }
-
-    // ── ProviderType::from_base_url() ──
-
-    #[test]
-    fn provider_type_from_base_url_anthropic() {
-        assert_eq!(
-            ProviderType::from_base_url("https://api.anthropic.com/v1"),
-            ProviderType::Anthropic
-        );
-    }
-
-    #[test]
-    fn provider_type_from_base_url_openai() {
-        assert_eq!(
-            ProviderType::from_base_url("https://api.openai.com/v1"),
-            ProviderType::OpenAi
-        );
-    }
-
-    #[test]
-    fn provider_type_from_base_url_unknown() {
-        assert_eq!(
-            ProviderType::from_base_url("https://custom.api.com"),
-            ProviderType::OpenAi
-        );
-    }
-
-    // ── Edge case tests (#1323) ──
-
-    #[test]
-    fn provider_type_from_empty_url_defaults_to_openai() {
-        assert_eq!(ProviderType::from_base_url(""), ProviderType::OpenAi);
-    }
-
-    #[test]
-    fn provider_type_from_proxy_url_with_anthropic_in_path() {
-        // Proxy URLs with "anthropic" anywhere should be detected
-        assert_eq!(
-            ProviderType::from_base_url("https://proxy.example.com/anthropic/v1"),
-            ProviderType::Anthropic
-        );
-    }
-
-    #[test]
-    fn provider_type_case_insensitive() {
-        assert_eq!(
-            ProviderType::from_base_url("https://API.Anthropic.Com/v1"),
-            ProviderType::Anthropic
-        );
-        assert_eq!(
-            ProviderType::from_base_url("https://ANTHROPIC"),
-            ProviderType::Anthropic
-        );
-    }
-
-    #[test]
-    fn provider_config_masked_with_empty_key() {
-        let provider = ProviderConfig {
-            api_key: String::new(),
-            ..ProviderConfig::default()
-        };
-        let masked = provider.masked();
-        assert!(masked.api_key.is_empty());
-    }
-
-    #[test]
-    fn provider_config_masked_preserves_all_fields() {
-        let provider = ProviderConfig {
-            name: "my-provider".to_string(),
-            api_key: "short".to_string(),
-            base_url: "https://custom.api.com/v1".to_string(),
-            model: "claude-3".to_string(),
-            request_timeout_ms: 45_000,
-            context_window_tokens: Some(200_000),
-            max_output_tokens: Some(8192),
-            provider_type: Some(ProviderType::Anthropic),
-        };
-        let masked = provider.masked();
-        assert_eq!(masked.name, "my-provider");
-        assert_eq!(masked.base_url, "https://custom.api.com/v1");
-        assert_eq!(masked.model, "claude-3");
-        assert_eq!(masked.request_timeout_ms, 45_000);
-        assert_eq!(masked.context_window_tokens, Some(200_000));
-        assert_eq!(masked.max_output_tokens, Some(8192));
-        assert_eq!(masked.provider_type, Some(ProviderType::Anthropic));
-        // Key should be masked (short key = all stars)
-        assert_eq!(masked.api_key, "*****");
-    }
-
-    #[test]
-    fn effective_provider_type_explicit_override() {
-        let provider = ProviderConfig {
-            base_url: "https://api.openai.com/v1".to_string(),
-            provider_type: Some(ProviderType::Anthropic),
-            ..ProviderConfig::default()
-        };
-        // Explicit override takes precedence over URL detection
-        assert_eq!(provider.effective_provider_type(), ProviderType::Anthropic);
-    }
-
-    #[test]
-    fn effective_provider_type_auto_from_url() {
-        let provider = ProviderConfig {
-            base_url: "https://api.anthropic.com/v1".to_string(),
-            provider_type: None,
-            ..ProviderConfig::default()
-        };
-        assert_eq!(provider.effective_provider_type(), ProviderType::Anthropic);
+    fn default_ai_source_value() {
+        assert_eq!(default_ai_source(), "captured");
     }
 }

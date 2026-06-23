@@ -1066,3 +1066,17 @@
   - Mobile: 759 tests pass, tsc --noEmit clean
   - CI: main 最新 run 为 success
   - 0 open PR, 2 open issues (#913, #1360)
+
+## Discussion Cycle #291
+- v0.3.49, 97 Rust + 764 Mobile = 861 tests, Clippy clean
+- 2 open issues (#913, #1360), 0 open PR
+- 创建 3 个新 issue：#1453 (P1 写入审核 diff 预览)、#1454 (P1 agent 异常路径测试)、#1455 (P2 移动端服务层测试)
+- 核心结论：v0.4.0 发版在即，验收标准 = 写入审核 UX + CHANGELOG + 测试补充
+- 移动端 Agent Mode 确定方案 B（远程服务器），v0.5.0 实施
+- 路线图：下个 fix = #1453 + #1454 + #1455；v0.4.0 = Agent Mode 正式发布；v0.5.0 = 移动端 Agent Mode
+
+## Fix Cycle #45 (2026-06-24)
+- #1453 → PR #1456: WriteApprovalDialog human-readable diff preview
+- #1454 → PR #1457: agent exception path integration tests (12 tests)
+- #1455 → PR #1458: mobile sync + settingsSync edge case tests (6 tests)
+- 22 tests added, Clippy clean, all tests pass

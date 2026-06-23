@@ -350,6 +350,10 @@
 - #1311: mcp_server.rs 纯函数零测试 — 添加 20 个单元测试 (PR #1313 已合并)
 - #1314: markdown_utils.rs 纯函数零测试 — 添加 24 个单元测试 (PR #1315 已合并)
 - #1306: MCP HTTP server 外部 AI agent 连接 + 非回环绑定安全验证 (PR #1309 已合并)
+- #1421: updateChecker.ts console.log → console.warn 日志一致性 (PR #1423 已合并)
+- #1422: rag.ts parseToolCalls + buildSystemPrompt 19 个单元测试 (PR #1424 已合并)
+- #1425: extractKeywords 导出 + 14 个单元测试 (PR #1427 已合并)
+- #1426: buildFtsQuery + escapeLikePattern 导出 + 17 个单元测试 (PR #1428 已合并)
 
 ## 当前进行中
 342|<!-- 由 issue-monitor 任务在创建 PR 后更新 -->
@@ -1023,3 +1027,9 @@
 - 重点议题：(1) #1358 写入审核回传 P0；(2) v0.4.0 = Agent Mode 正式发布；(3) Mobile Agent Mode 推到 v0.5.0
 - 竞品：跳过（沿用上轮 Obsidian Copilot Agent Mode）
 - 路线图：下个fix=#1358写入审核+#1359集成测试+测试补充；v0.4.0=Agent Mode正式发布；v0.5.0=Mobile Agent Mode
+
+## 修复周期 #38 (fix-1)
+- #1421: updateChecker.ts console.log → console.warn (PR #1423)
+- #1422: rag.ts parseToolCalls + buildSystemPrompt unit tests — 19 tests (PR #1424)
+- v0.3.46, 97 Rust + 660 Mobile = 757 tests, Clippy clean
+- 2 open issues (#913, #1360), 2 open PR (#1423, #1424)

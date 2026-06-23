@@ -60,6 +60,19 @@ function extractKeywords(text: string): string[] {
   const tokens = text
     .split(/[\s,，。.!！?？;；:：、\n\r]+/)
     .flatMap(t => t.split(/(?<=[\u3000-\u9fff\uac00-\ud7af])(?=[^\u3000-\u9fff\uac00-\ud7af])|(?<=[^\u3000-\u9fff\uac00-\ud7af])(?=[\u3000-\u9fff\uac00-\ud7af])/))
+    .flatMap(t => {
+      // Split long CJK strings into 2-char overlapping segments for better matching
+      // e.g. "你好世界" → ["你好", "好世", "世界"]
+      const isCJK = /[\u3000-\u9fff\uac00-\ud7af]/.test(t);
+      if (isCJK && t.length > 2) {
+        const segs: string[] = [];
+        for (let i = 0; i < t.length - 1; i++) {
+          segs.push(t.slice(i, i + 2));
+        }
+        return segs;
+      }
+      return [t];
+    })
     .map(t => t.trim().toLowerCase())
     .filter(t => {
       if (!t) return false;
@@ -98,7 +111,8 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       ? recentMessages.join(' ') + ' ' + userMessage
       : userMessage;
     const keywords = extractKeywords(allText);
-    if (keywords.length === 0) return null;
+    if (keywords.length === 0) { console.log('[RAG] No keywords extracted from:', allText.slice(0, 50)); return null; }
+    console.log('[RAG] Extracted keywords:', keywords);
 
     const seen = new Set<string>();
     const results: DbNote[] = [];
@@ -117,7 +131,8 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       if (results.length >= MAX_CONTEXT_NOTES) break;
     }
 
-    if (results.length === 0) return null;
+    if (results.length === 0) { console.log('[RAG] No matching notes found for keywords:', keywords.slice(0, 5)); return null; }
+    console.log('[RAG] Found', results.length, 'relevant notes');
 
     const blocks = results.map(n => {
       const title = n.title || (isChinese() ? '无标题' : 'Untitled');
@@ -244,7 +259,10 @@ The complete note content, structured and complete.
   let prompt = base;
 
   if (noteContext) {
-    prompt += `\n\n${noteContext}`;
+    const contextInstructions = zh
+      ? `\n【知识库检索 — 重要】\n以下是根据用户问题从笔记知识库中检索到的相关内容。你必须：\n1. 优先参考这些笔记内容来回答用户的问题\n2. 如果笔记中有相关信息，直接引用并基于笔记内容回答\n3. 如果笔记内容与问题不完全匹配，结合笔记和你的知识综合回答\n4. 回答时可以提及"根据你的笔记..."让用户知道信息来源\n`
+      : `\n[Knowledge Base — Important]\nBelow are relevant notes retrieved from the user's knowledge base. You must:\n1. Prioritize using these notes to answer the user's question\n2. If notes contain relevant info, reference and answer based on them\n3. If notes don't fully match, combine notes with your knowledge\n4. Mention "Based on your notes..." so the user knows the source\n`;
+    prompt += `\n\n${contextInstructions}${noteContext}`;
   }
 
   prompt += noteInstructions;

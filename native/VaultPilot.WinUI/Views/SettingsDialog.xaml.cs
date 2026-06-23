@@ -449,8 +449,7 @@ public sealed partial class SettingsDialog : ContentDialog
                 // Scroll to the first error field
                 if (firstErrorElement != null)
                 {
-                    firstErrorElement.StartBringIntoView(
-                        new BringIntoViewOptions { AnimationRatio = 0 });
+                    firstErrorElement.StartBringIntoView();
                 }
                 else
                 {

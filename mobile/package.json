@@ -28,7 +28,7 @@
   "devDependencies": {
     "@testing-library/react-native": "^14.0.0",
     "@types/jest": "^30.0.0",
-    "@types/react": "~19.2.2",
+    "@types/react": "19.2.3",
     "jest": "^30.4.2",
     "ts-jest": "^29.4.11",
     "typescript": "~6.0.3"
@@ -38,10 +38,12 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "test": "jest --passWithNoTests"
+    "test": "jest --passWithNoTests",
+    "check-react": "node -e \"const rn=require('react-native/package.json'); const r=require('react/package.json'); const want=rn.peerDependencies.react; const got=r.version; if(want.startsWith('^')||want.startsWith('~')){console.log('WARN: react-native peerDep is range ('+want+'), not pinned');} if(got!==want.replace(/[^\\d.]/g,'')){console.error('FATAL: react@'+got+' != react-native wants '+want); process.exit(1);} console.log('OK: react@'+got+' matches react-native@'+rn.version);\""
   },
   "private": true,
   "overrides": {
-    "react": "19.2.3"
+    "react": "19.2.3",
+    "@types/react": "19.2.3"
   }
 }

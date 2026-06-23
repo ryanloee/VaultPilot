@@ -40,6 +40,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify React version consistency
+        run: npm run check-react
+
       - name: Run tests
         run: npm test
 

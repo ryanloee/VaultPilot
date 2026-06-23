@@ -208,7 +208,10 @@ impl ToolProxy {
 
     /// Return the full audit log.
     pub fn audit_log(&self) -> Vec<AgentAuditEntry> {
-        self.audit_log.lock().expect("audit_log poisoned").clone()
+        self.audit_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Number of tool calls so far.
@@ -346,7 +349,7 @@ impl ToolProxy {
         info!(tool = tool, "agent tool call allowed");
         self.audit_log
             .lock()
-            .expect("audit_log poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .push(entry);
         ToolProxyResult {
             allowed: true,
@@ -365,7 +368,7 @@ impl ToolProxy {
         warn!(tool = tool, reason = reason, "agent tool call denied");
         self.audit_log
             .lock()
-            .expect("audit_log poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .push(entry);
         ToolProxyResult {
             allowed: false,
@@ -448,8 +451,14 @@ impl AgentSession {
             .spawn()
             .map_err(|e| anyhow!("failed to spawn agent process '{}': {}", command, e))?;
 
-        let stdout = child.stdout.take().expect("stdout was piped");
-        let stderr = child.stderr.take().expect("stderr was piped");
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("stdout was not piped"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("stderr was not piped"))?;
 
         let stdout_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();

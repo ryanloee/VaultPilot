@@ -22,6 +22,7 @@ mod issue_1175_missing_test_fields;
 mod issue_1326_agent_glob_utf8;
 mod issue_1328_is_cjk_ranges;
 mod issue_1342_agent_loop;
+mod issue_1354_agent_expect;
 mod issue_914_related_notes;
 
 // Example — reference only, delete once you have real regression tests

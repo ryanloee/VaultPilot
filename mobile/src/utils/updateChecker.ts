@@ -2,9 +2,9 @@
  * APK auto-update — check, download, and install.
  */
 
-import { File, Paths } from 'expo-file-system';
+import { File, Paths, getContentUriAsync } from 'expo-file-system';
 import * as IntentLauncher from 'expo-intent-launcher';
-import { Platform, Linking } from 'react-native';
+import { Platform } from 'react-native';
 
 const GITHUB_API = 'https://api.github.com/repos/ryanloee/VaultPilot/releases/latest';
 
@@ -72,6 +72,8 @@ export async function downloadAndInstall(
 
   try {
     const dest = new File(Paths.cache, `VaultPilot-v${version}.apk`);
+    console.log('[UpdateChecker] Downloading APK from:', apkUrl);
+
     const task = File.createDownloadTask(apkUrl, dest, {
       onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
         if (onProgress && totalBytes > 0) {
@@ -81,22 +83,26 @@ export async function downloadAndInstall(
     });
 
     const result = await task.downloadAsync();
-    if (!result?.uri) return false;
+    if (!result?.uri) {
+      console.warn('[UpdateChecker] Download returned no URI');
+      return false;
+    }
+
+    console.log('[UpdateChecker] Downloaded to:', result.uri);
+
+    // Convert file:// URI to content:// URI (required for Android install intent)
+    const contentUri = await getContentUriAsync(result.uri);
+    console.log('[UpdateChecker] Content URI:', contentUri);
 
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
-      data: result.uri,
-      flags: 1,
+      data: contentUri,
+      flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
       type: 'application/vnd.android.package-archive',
     });
+
     return true;
   } catch (e) {
     console.warn('[UpdateChecker] Download/install failed:', e);
-    try {
-      const releaseUrl = `https://github.com/ryanloee/VaultPilot/releases/tag/v${version}`;
-      await Linking.openURL(releaseUrl);
-    } catch (e2) {
-      console.warn('[UpdateChecker] Fallback to release page failed:', e2);
-    }
     return false;
   }
 }

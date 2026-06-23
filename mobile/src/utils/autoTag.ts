@@ -27,7 +27,7 @@ const STOP_WORDS = new Set([
 ]);
 
 /** Markdown/formatting patterns to strip before extraction. */
-function stripMarkdown(text: string): string {
+export function stripMarkdown(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, '') // code blocks
     .replace(/`[^`]+`/g, '')        // inline code

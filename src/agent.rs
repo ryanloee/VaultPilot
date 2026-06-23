@@ -1268,9 +1268,7 @@ mod pure_function_tests {
             "list_notes"
         );
         assert_eq!(
-            tool_display_name(&ai::AssistantToolCall::ListDirectory {
-                path: "/".into()
-            }),
+            tool_display_name(&ai::AssistantToolCall::ListDirectory { path: "/".into() }),
             "list_directory"
         );
         assert_eq!(
@@ -1433,7 +1431,11 @@ mod pure_function_tests {
         let r = proxy
             .check_tool_call("list_directory", r#"{"path":"."}"#)
             .unwrap();
-        assert!(r.allowed, "list vault root should be allowed: {:?}", r.reason);
+        assert!(
+            r.allowed,
+            "list vault root should be allowed: {:?}",
+            r.reason
+        );
     }
 
     #[test]
@@ -1458,10 +1460,7 @@ mod pure_function_tests {
         std::fs::write(tmp.join("daily-notes/2024-06-23.md"), "").unwrap();
         let proxy = ToolProxy::new(config, &tmp);
         let r = proxy
-            .check_tool_call(
-                "save_note",
-                r#"{"path":"daily-notes/2024-06-23.md"}"#,
-            )
+            .check_tool_call("save_note", r#"{"path":"daily-notes/2024-06-23.md"}"#)
             .unwrap();
         assert!(r.allowed, "daily-notes/* should match: {:?}", r.reason);
     }

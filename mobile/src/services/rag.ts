@@ -2,8 +2,14 @@
  * Mobile RAG (Retrieval-Augmented Generation) service.
  * Searches local notes before chat and injects relevant context into prompts.
  * Also handles LLM-initiated note operations (save/search).
+ *
+ * Aligned with Win端 RAG pipeline:
+ * - CJK 2-gram + 3-gram extraction (matching extract_search_terms in search.rs)
+ * - CJK stop char filtering (matching is_cjk_stop_char)
+ * - Forced search on non-trivial questions
+ * - Fallback to recent notes when search returns nothing
  */
-import { searchNotes, createNote, DbNote } from '../db';
+import { searchNotes, getNotes, createNote, DbNote } from '../db';
 
 /** Max notes to inject into context */
 const MAX_CONTEXT_NOTES = 5;
@@ -24,24 +30,62 @@ function isChinese(): boolean {
   return getDeviceLocale().startsWith('zh');
 }
 
+/** CJK stop characters — matching Rust is_cjk_stop_char in search.rs */
+const CJK_STOP_CHARS = new Set(['的', '了', '呢', '吗', '啊', '呀', '吧', '么', '我', '你']);
+
+function isCJK(ch: string): boolean {
+  const code = ch.charCodeAt(0);
+  return (code >= 0x3000 && code <= 0x303F)   // CJK Symbols and Punctuation
+    || (code >= 0x3040 && code <= 0x309F)      // Japanese Hiragana
+    || (code >= 0x30A0 && code <= 0x30FF)      // Japanese Katakana
+    || (code >= 0x3400 && code <= 0x4DBF)      // CJK Extension A
+    || (code >= 0x4E00 && code <= 0x9FFF)      // CJK Unified Ideographs
+    || (code >= 0xAC00 && code <= 0xD7AF)      // Korean Hangul
+    || (code >= 0xF900 && code <= 0xFAFF);     // CJK Compatibility
+}
+
+/**
+ * Extract CJK ngrams (2-char and 3-char) from text, filtering stop chars.
+ * Matches Rust push_cjk_ngrams in search.rs.
+ */
+function extractCJKNgrams(text: string): string[] {
+  const cjkChars = [...text].filter(ch => isCJK(ch) && !CJK_STOP_CHARS.has(ch));
+  const terms = new Set<string>();
+
+  // 2-char ngrams
+  for (let i = 0; i < cjkChars.length - 1; i++) {
+    terms.add(cjkChars[i] + cjkChars[i + 1]);
+  }
+  // 3-char ngrams
+  for (let i = 0; i < cjkChars.length - 2; i++) {
+    terms.add(cjkChars[i] + cjkChars[i + 1] + cjkChars[i + 2]);
+  }
+
+  return [...terms];
+}
+
 /**
  * Extract keywords from user message for note search.
- * Strips common stop words. CJK single chars kept if not in stop list.
+ * Strategy aligned with Win端 extract_search_terms:
+ * - Split mixed CJK/Latin tokens
+ * - Generate CJK 2-gram + 3-gram ngrams
+ * - Filter stop words and noise
  */
 function extractKeywords(text: string): string[] {
   const stopWords = new Set([
-    // Only filter grammatical particles and pronouns, keep meaningful CJK words
+    // CJK grammatical particles and pronouns
     '的', '了', '是', '在', '我', '和', '就', '不', '都', '也', '到', '着',
     '这', '他', '她', '它', '们', '那', '些', '吗', '呢', '啊', '吧',
     '把', '被', '从', '而', '或', '及', '其', '且', '因', '但', '如', '所',
-    '之', '乎', '矣', '哉',
-    // Japanese particles (Hiragana grammatical markers) — #1334
+    '之', '乎', '矣', '哉', '呀', '么',
+    // Japanese particles
     'は', 'が', 'を', 'に', 'で', 'へ', 'と', 'も', 'か', 'よ', 'ね',
     'な', 'の', 'ば', 'て', 'だ', 'から', 'まで', 'より', 'など',
     'です', 'ます', 'した', 'して', 'ている', 'ていた',
-    // Korean particles — #1334
+    // Korean particles
     '은', '는', '이', '가', '을', '를', '에', '의', '과', '와',
     '도', '만', '로', '으로', '에게', '한테', '까지', '부터', '에서',
+    // English stop words
     'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
     'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'shall',
     'should', 'may', 'might', 'can', 'could', 'i', 'you', 'he', 'she',
@@ -55,84 +99,127 @@ function extractKeywords(text: string): string[] {
     'during', 'before', 'after', 'above', 'below', 'to', 'from', 'up',
     'down', 'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further',
     'then', 'once', 'record', 'save', 'note', 'remember', 'please', 'hey',
+    'what', 'how', 'when', 'where', 'why', 'who', 'which',
   ]);
 
-  const tokens = text
+  // Step 1: Split on punctuation/whitespace
+  const rawTokens = text
     .split(/[\s,，。.!！?？;；:：、\n\r]+/)
     .flatMap(t => t.split(/(?<=[\u3000-\u9fff\uac00-\ud7af])(?=[^\u3000-\u9fff\uac00-\ud7af])|(?<=[^\u3000-\u9fff\uac00-\ud7af])(?=[\u3000-\u9fff\uac00-\ud7af])/))
-    .flatMap(t => {
-      // Split long CJK strings into 2-char overlapping segments for better matching
-      // e.g. "你好世界" → ["你好", "好世", "世界"]
-      const isCJK = /[\u3000-\u9fff\uac00-\ud7af]/.test(t);
-      if (isCJK && t.length > 2) {
-        const segs: string[] = [];
-        for (let i = 0; i < t.length - 1; i++) {
-          segs.push(t.slice(i, i + 2));
-        }
-        return segs;
-      }
-      return [t];
-    })
     .map(t => t.trim().toLowerCase())
-    .filter(t => {
-      if (!t) return false;
-      if (stopWords.has(t)) return false;
-      // CJK: allow single chars (they're meaningful); Latin: require 2+
-      const isCJK = /[\u3000-\u9fff\uac00-\ud7af]/.test(t);
-      return isCJK ? t.length >= 1 : t.length >= 2;
-    });
+    .filter(t => t.length >= 2 && !stopWords.has(t));
 
-  const result = [...new Set(tokens)].slice(0, 10);
-  // If no keywords extracted, try with relaxed filtering (keep all CJK chars >= 1)
+  // Step 2: Extract CJK ngrams from the full text (matching Win端 push_cjk_ngrams)
+  const cjkNgrams = extractCJKNgrams(text);
+
+  // Step 3: Merge and deduplicate
+  const allTerms = new Set<string>();
+
+  // Add Latin tokens (>=2 chars, not stop words)
+  for (const token of rawTokens) {
+    if (!isCJK(token[0]) && token.length >= 2) {
+      allTerms.add(token);
+    }
+  }
+
+  // Add CJK ngrams (already filtered stop chars in extractCJKNgrams)
+  for (const ngram of cjkNgrams) {
+    allTerms.add(ngram);
+  }
+
+  // Also add raw CJK tokens that are >= 2 chars and not stop words
+  for (const token of rawTokens) {
+    if (isCJK(token[0]) && token.length >= 2 && !stopWords.has(token)) {
+      allTerms.add(token);
+    }
+  }
+
+  const result = [...allTerms].slice(0, 15);
+
+  // Fallback: if nothing extracted, try relaxed single-char CJK
   if (result.length === 0) {
-    const relaxed = text
-      .split(/[\s,\u3002\uff0e.!\uff01?\uff1f;\uff1b:\uff1a\u3001\n\r]+/)
-      .flatMap(t => t.split(/(?<=[\u3000-\u9fff\uac00-\ud7af])(?=[^\u3000-\u9fff\uac00-\ud7af])|(?<=[^\u3000-\u9fff\uac00-\ud7af])(?=[\u3000-\u9fff\uac00-\ud7af])/))
-      .map(t => t.trim().toLowerCase())
-      .filter(t => {
-        if (!t) return false;
-        const isCJK = /[\u3000-\u9fff\uac00-\ud7af]/.test(t);
-        return isCJK ? t.length >= 2 : t.length >= 3;
-      });
+    const relaxed = [...text]
+      .filter(ch => isCJK(ch) && !CJK_STOP_CHARS.has(ch))
+      .map(ch => ch.toLowerCase());
     return [...new Set(relaxed)].slice(0, 10);
   }
+
   return result;
 }
 
 /**
+ * Detect if this is a trivial/social message that doesn't need note search.
+ * Matches Win端 looks_like_small_talk.
+ */
+function looksLikeSmallTalk(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  const greetings = [
+    '你好', 'hi', 'hello', 'hey', '嗨', '哈喽', '早上好', '下午好', '晚上好',
+    '谢谢', 'thanks', 'thank you', '好的', 'ok', 'okay', '嗯', '对',
+    '再见', 'bye', '拜拜', '晚安',
+  ];
+  return greetings.some(g => lower === g || lower === g + '!' || lower === g + '。');
+}
+
+/**
  * Search notes relevant to the user's message and build context string.
- * Optionally considers recent conversation history for better keyword extraction.
- * Returns null if no relevant notes found.
+ * Considers recent conversation history for better keyword extraction.
+ * Returns null only if no notes exist at all.
+ *
+ * Aligned with Win端 ask_with_ai_with_context:
+ * - Always search for non-trivial questions (forced_search)
+ * - Fallback to recent notes when FTS returns nothing
  */
 export async function buildNoteContext(userMessage: string, recentMessages?: string[]): Promise<string | null> {
   try {
+    // Skip empty messages and trivial messages
+    if (!userMessage.trim() || looksLikeSmallTalk(userMessage)) {
+      console.log('[RAG] Skipping:', userMessage.trim() ? 'small talk' : 'empty message');
+      return null;
+    }
+
+    // Check if we have any notes at all
+    const allNotes = await getNotes();
+    if (allNotes.length === 0) {
+      console.log('[RAG] No notes in database');
+      return null;
+    }
+
     // Extract keywords from current message + recent conversation history
     const allText = recentMessages && recentMessages.length > 0
       ? recentMessages.join(' ') + ' ' + userMessage
       : userMessage;
     const keywords = extractKeywords(allText);
-    if (keywords.length === 0) { console.log('[RAG] No keywords extracted from:', allText.slice(0, 50)); return null; }
     console.log('[RAG] Extracted keywords:', keywords);
 
-    const seen = new Set<string>();
-    const results: DbNote[] = [];
+    // Search with keywords
+    let results: DbNote[] = [];
+    if (keywords.length > 0) {
+      const seen = new Set<string>();
 
-    for (const kw of keywords.slice(0, 5)) {
-      // Escape quotes for FTS safety
-      const safeKw = kw.replace(/"/g, '');
-      if (!safeKw) continue;
-      const notes = await searchNotes(safeKw);
-      for (const n of notes) {
-        if (!seen.has(n.id) && results.length < MAX_CONTEXT_NOTES) {
-          seen.add(n.id);
-          results.push(n);
+      for (const kw of keywords.slice(0, 8)) {
+        const safeKw = kw.replace(/"/g, '');
+        if (!safeKw) continue;
+        const notes = await searchNotes(safeKw);
+        for (const n of notes) {
+          if (!seen.has(n.id) && results.length < MAX_CONTEXT_NOTES) {
+            seen.add(n.id);
+            results.push(n);
+          }
         }
+        if (results.length >= MAX_CONTEXT_NOTES) break;
       }
-      if (results.length >= MAX_CONTEXT_NOTES) break;
     }
 
-    if (results.length === 0) { console.log('[RAG] No matching notes found for keywords:', keywords.slice(0, 5)); return null; }
-    console.log('[RAG] Found', results.length, 'relevant notes');
+    // Fallback: if no search results, use recent notes (matching Win端 load_recent_notes_for_overview)
+    if (results.length === 0) {
+      console.log('[RAG] No search matches, falling back to recent notes');
+      results = allNotes.slice(0, MAX_CONTEXT_NOTES);
+    }
+
+    if (results.length === 0) return null;
+
+    console.log('[RAG] Using', results.length, 'notes for context');
 
     const blocks = results.map(n => {
       const title = n.title || (isChinese() ? '无标题' : 'Untitled');
@@ -221,7 +308,8 @@ export async function executeSave(save: PendingSave): Promise<string> {
 
 /**
  * Build the system prompt with note-awareness instructions.
- * Respects device locale: prompts in Chinese for zh, English otherwise.
+ * Aligned with Win端 answer_system_prompt and tool_result_system_prompt.
+ * Respects device locale.
  */
 export function buildSystemPrompt(noteContext: string | null): string {
   const zh = isChinese();
@@ -259,9 +347,26 @@ The complete note content, structured and complete.
   let prompt = base;
 
   if (noteContext) {
+    // Aligned with Win端 answer_system_prompt:
+    // "Use retrieved local notes when they help answer the question."
+    // "If notes were found, prioritize those notes in the answer."
     const contextInstructions = zh
-      ? `\n【知识库检索 — 重要】\n以下是根据用户问题从笔记知识库中检索到的相关内容。你必须：\n1. 优先参考这些笔记内容来回答用户的问题\n2. 如果笔记中有相关信息，直接引用并基于笔记内容回答\n3. 如果笔记内容与问题不完全匹配，结合笔记和你的知识综合回答\n4. 回答时可以提及"根据你的笔记..."让用户知道信息来源\n`
-      : `\n[Knowledge Base — Important]\nBelow are relevant notes retrieved from the user's knowledge base. You must:\n1. Prioritize using these notes to answer the user's question\n2. If notes contain relevant info, reference and answer based on them\n3. If notes don't fully match, combine notes with your knowledge\n4. Mention "Based on your notes..." so the user knows the source\n`;
+      ? `\n【知识库检索结果 — 重要规则】
+你已经收到了从用户本地知识库中检索到的笔记。必须遵守以下规则：
+- 优先使用这些笔记内容来回答用户的问题
+- 如果笔记中有相关信息，直接引用并基于笔记内容回答，让用户知道信息来自本地记录
+- 如果笔记中包含具体命令、步骤或操作，即使只是部分相关，也要优先展示
+- 只有当笔记确实与问题无关时，才使用你自己的知识补充
+- 回答时提及"根据你的笔记..."或"你的记录显示..."以表明信息来源
+`
+      : `\n[Knowledge Base Results — Important Rules]
+You have received notes retrieved from the user's local knowledge base. Follow these rules:
+- Prioritize using these notes to answer the user's question
+- If notes contain relevant info, cite them and make it obvious what came from local records
+- If a note contains a concrete command or step that partially answers the question, surface it first
+- Only supplement with your own knowledge when notes are truly insufficient
+- Mention "Based on your notes..." or "Your records show..." to indicate the source
+`;
     prompt += `\n\n${contextInstructions}${noteContext}`;
   }
 

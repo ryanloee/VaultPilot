@@ -6,21 +6,29 @@
  */
 
 import { buildNoteContext, parseToolCalls, getDeviceLocale, buildSystemPrompt, executeSave } from '../../services/rag';
-import { searchNotes } from '../../db';
+import { searchNotes, getNotes } from '../../db';
 
 // Mock the db module
 jest.mock('../../db', () => ({
   searchNotes: jest.fn(),
+  getNotes: jest.fn(),
   createNote: jest.fn(),
   updateNote: jest.fn(),
 }));
 
 const mockSearchNotes = searchNotes as jest.MockedFunction<typeof searchNotes>;
+const mockGetNotes = getNotes as jest.MockedFunction<typeof getNotes>;
 const mockCreateNote = require('../../db').createNote as jest.MockedFunction<any>;
 const mockUpdateNote = require('../../db').updateNote as jest.MockedFunction<any>;
 
+// Default: getNotes returns some notes so search is not skipped
+const defaultNotes = [
+  { id: '1', title: 'Default Note', content: 'Default content', starred: 0, folder: '', created_at: 0, updated_at: 0 },
+];
+
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetNotes.mockResolvedValue(defaultNotes);
 });
 
 // ── getDeviceLocale ─────────────────────────────────────────
@@ -40,7 +48,17 @@ describe('buildNoteContext — keyword extraction', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null when only stop words present', async () => {
+  it('falls back to recent notes when only stop words present', async () => {
+    // When only stop words, search returns nothing, but fallback to recent notes
+    mockSearchNotes.mockResolvedValue([]);
+    const result = await buildNoteContext('the a an is are was were');
+    // With fallback, result should not be null if notes exist
+    expect(result).not.toBeNull();
+    expect(result).toContain('Default Note');
+  });
+
+  it('returns null when no notes exist', async () => {
+    mockGetNotes.mockResolvedValue([]);
     const result = await buildNoteContext('the a an is are was were');
     expect(result).toBeNull();
   });
@@ -58,10 +76,10 @@ describe('buildNoteContext — keyword extraction', () => {
     expect(calledWith.some(kw => kw.includes('typescript') || kw.includes('generics'))).toBe(true);
   });
 
-  it('handles CJK text with single-char keywords', async () => {
+  it('handles CJK text with ngram keywords', async () => {
     mockSearchNotes.mockResolvedValue([]);
-    const result = await buildNoteContext('什么是机器学习');
-    // CJK single chars should be extracted as keywords
+    await buildNoteContext('什么是机器学习');
+    // CJK ngrams should be extracted as keywords
     expect(mockSearchNotes).toHaveBeenCalled();
   });
 
@@ -131,7 +149,8 @@ describe('buildNoteContext — keyword extraction', () => {
   it('without recentMessages still works (backward compatible)', async () => {
     mockSearchNotes.mockResolvedValue([]);
     const result = await buildNoteContext('TypeScript generics');
-    expect(result).toBeNull();
+    // With fallback to recent notes, result should not be null
+    expect(result).not.toBeNull();
   });
 });
 

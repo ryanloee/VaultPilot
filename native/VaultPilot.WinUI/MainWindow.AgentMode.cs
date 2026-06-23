@@ -305,13 +305,39 @@ public sealed partial class MainWindow : Window
 
     private async void ShowWriteApprovalDialog(string tool, string args)
     {
+        var (description, preview) = ParseWriteArgs(tool, args);
+
+        var contentStack = new StackPanel { Spacing = 8 };
+        contentStack.Children.Add(new TextBlock
+        {
+            Text = description,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        if (!string.IsNullOrEmpty(preview))
+        {
+            contentStack.Children.Add(new ScrollViewer
+            {
+                MaxHeight = 300,
+                Content = new TextBlock
+                {
+                    Text = preview,
+                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true
+                }
+            });
+        }
+
         var dialog = new ContentDialog
         {
             Title = "写入操作需要批准",
-            Content = $"Agent 需要执行写入操作:\n\n工具: {tool}\n参数: {TruncateString(args, 200)}\n\n是否允许?",
+            Content = contentStack,
             PrimaryButtonText = "批准",
             SecondaryButtonText = "拒绝",
-            DefaultButton = ContentDialogButton.Secondary,
+            DefaultButton = ContentDialogButton.Primary,
             XamlRoot = Content.XamlRoot
         };
 
@@ -331,6 +357,52 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             AppendMessage("错误", $"发送审批决策失败: {LocalizeError(ex.Message)}");
+        }
+    }
+
+    /// <summary>
+    /// Parse write tool args JSON into human-readable description + content preview.
+    /// Returns fallback (truncated raw args) if JSON parsing fails.
+    /// </summary>
+    private static (string Description, string Preview) ParseWriteArgs(string tool, string args)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(args);
+            var root = doc.RootElement;
+
+            var path = root.TryGetProperty("path", out var p) ? p.GetString() : null;
+            var content = root.TryGetProperty("content", out var c) ? c.GetString() : null;
+
+            string description = tool switch
+            {
+                "write_note" or "save_note" => path != null
+                    ? $"将修改文件: {path}"
+                    : "将修改笔记",
+                "delete_note" => path != null
+                    ? $"将删除文件: {path}"
+                    : "将删除笔记",
+                "rename_note" => path != null
+                    ? $"将重命名文件: {path}"
+                    : "将重命名笔记",
+                _ => $"工具: {tool}"
+            };
+
+            string preview = "";
+            if (!string.IsNullOrEmpty(content))
+            {
+                var lines = content.Split('\n');
+                preview = lines.Length > 50
+                    ? string.Join('\n', lines.Take(50)) + $"\n… (共 {lines.Length} 行)"
+                    : content;
+            }
+
+            return (description, preview);
+        }
+        catch
+        {
+            // JSON parse failure — fallback to raw truncated args
+            return ($"工具: {tool}", TruncateString(args, 500));
         }
     }
 

@@ -113,7 +113,7 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
         await updateNote(meta.id, title, content);
         updated++;
       } else {
-        await createNote(title, content);
+        await createNote(title, content, meta.id);
         imported++;
       }
     } catch (e) {

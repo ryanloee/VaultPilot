@@ -89,7 +89,8 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
       const localNote = localMap.get(meta.id);
 
       // Skip if local is same or newer
-      if (localNote && localNote.updated_at >= serverTs) {
+      // localNote.updated_at is in seconds (SQLite strftime('%s')), serverTs is in ms
+      if (localNote && localNote.updated_at * 1000 >= serverTs) {
         skipped++;
         continue;
       }

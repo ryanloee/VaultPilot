@@ -12,7 +12,7 @@ import { chatWithReconnect } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, parseToolCalls, executeSave } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
 import type { ChatScreenProps } from '../navigation/types';
-import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview } from '../utils/chatHelpers';
+import { buildHistory, buildUserContent, formatToolCallResult, buildSavePreview, inferMime } from '../utils/chatHelpers';
 import { useVoiceInput } from '../utils/useVoiceInput';
 import { useNetworkState } from '../utils/networkState';
 import { ChatHeader, MessageList, InputBar, OfflineBanner, ScrollToBottomButton } from '../components/chat';
@@ -26,17 +26,6 @@ function safeParseAttachments(raw: string | null | undefined): { name: string; t
 }
 interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
 
-/** Infer MIME type from file name/extension. */
-function inferMime(name: string, fallback: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
-    jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    pdf: 'application/pdf', doc: 'application/msword',
-    txt: 'text/plain', md: 'text/markdown',
-  };
-  return ext && map[ext] ? map[ext] : fallback;
-}
 
 export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const { isDark, accentColor } = useAppStore();

@@ -22,14 +22,15 @@ use walkdir::WalkDir;
 
 use crate::models::{ExportResult, ImportResult, NoteDocument, NoteMeta, VaultExportResult};
 
+use super::pool::open_connection;
 use super::search::{
     build_attachment_semantic_text, build_text_semantic_vector, derived_note_id, fallback_source,
     fallback_title, hash_content, is_markdown_file, list_all_note_metas, load_note_meta_by_id,
     rank_documents, rank_note_metas, sanitize_terms, serialize_semantic_vector, slugify,
 };
 use super::{
-    atomic_write, load_chat_state_with_context, load_settings_with_context, open_connection,
-    Frontmatter, StorageContext, MAX_NOTE_FILE_SIZE,
+    atomic_write, load_chat_state_with_context, load_settings_with_context, Frontmatter,
+    StorageContext, MAX_NOTE_FILE_SIZE,
 };
 
 // ────────────────────────────────────────────────────────

@@ -503,8 +503,10 @@ fn token_budget_zero_means_unlimited() {
 
 #[test]
 fn token_budget_nonzero_is_respected() {
-    let mut limits = AgentResourceLimits::default();
-    limits.max_tokens = 1000;
+    let limits = AgentResourceLimits {
+        max_tokens: 1000,
+        ..Default::default()
+    };
     assert_eq!(limits.max_tokens, 1000);
 }
 

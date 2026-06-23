@@ -4,12 +4,11 @@
  * db.ts non-FTS LIKE queries used ESCAPE '\\' (two backslashes in SQL)
  * but escapeLikePattern() uses single \ as the escape prefix.
  * This test verifies the escape logic is consistent with ESCAPE '\'.
+ *
+ * Updated for #1426: now imports directly from db.ts instead of replicating.
  */
 
-/** Replicate escapeLikePattern from db.ts */
-function escapeLikePattern(pattern: string): string {
-  return pattern.replace(/[\\%_]/g, ch => `\\${ch}`);
-}
+import { escapeLikePattern } from '../../db';
 
 describe('LIKE ESCAPE consistency (#1384)', () => {
   it('escapeLikePattern escapes % with single backslash prefix', () => {

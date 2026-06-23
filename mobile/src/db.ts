@@ -143,12 +143,12 @@ function uuid(): string {
 }
 
 /** Escape SQL LIKE special characters (%, _, \\) so they match literally. */
-function escapeLikePattern(pattern: string): string {
+export function escapeLikePattern(pattern: string): string {
   return pattern.replace(/[\\%_]/g, ch => `\\${ch}`);
 }
 
 /** Build an FTS5 MATCH query from user input. Splits on whitespace, escapes double quotes, joins with OR. */
-function buildFtsQuery(query: string): string | null {
+export function buildFtsQuery(query: string): string | null {
   const terms = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`);
   const ftsQuery = terms.join(' OR ');
   return ftsQuery || null;

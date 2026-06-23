@@ -87,18 +87,39 @@
                 PlaceholderText="在 opencode.ai/zen 或 openrouter.ai 获取"
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="API Key" />
+            <TextBlock
+                x:Name="ApiKeyError"
+                Foreground="{ThemeResource StatusErrorBrush}"
+                FontSize="12"
+                Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
+                Margin="0,-8,0,0" />
             <TextBox
                 x:Name="BaseUrlBox"
                 Header="接口地址"
                 PlaceholderText="例如 https://opencode.ai/zen/v1"
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="模型服务接口地址" />
+            <TextBlock
+                x:Name="BaseUrlError"
+                Foreground="{ThemeResource StatusErrorBrush}"
+                FontSize="12"
+                Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
+                Margin="0,-8,0,0" />
             <TextBox
                 x:Name="ModelBox"
                 Header="模型"
                 PlaceholderText="例如 deepseek-v4-flash-free"
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="模型名称" />
+            <TextBlock
+                x:Name="ModelError"
+                Foreground="{ThemeResource StatusErrorBrush}"
+                FontSize="12"
+                Visibility="Collapsed"
+                AutomationProperties.LiveSetting="Polite"
+                Margin="0,-8,0,0" />
 
             <!-- Timeout -->
             <TextBox

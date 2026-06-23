@@ -10,6 +10,12 @@ namespace VaultPilot.WinUI.Views;
 /// Settings dialog extracted from MainWindow. Displays provider configuration,
 /// auto-wake options, and general preferences. Validates input before saving.
 /// After ShowAsync(), check UpdatedSettings for the validated result.
+///
+/// Validation is split into two independent groups:
+///   1. Provider fields (API key, base URL, model, timeout, context window)
+///   2. Wake word fields (interval, start/end time format)
+/// Each group validates independently and sets inline errors on the failing field.
+/// Wake word settings are saved even if provider validation fails (partial save).
 /// </summary>
 public sealed partial class SettingsDialog : ContentDialog
 {
@@ -19,6 +25,12 @@ public sealed partial class SettingsDialog : ContentDialog
     private readonly AppSettings _originalSettings;
     private List<ProviderConfig> _providers = new();
     private int _activeProviderIndex;
+
+    /// <summary>
+    /// Tracks whether any provider field was modified since the dialog opened.
+    /// Used to decide whether to validate provider fields on save.
+    /// </summary>
+    private bool _providerFieldsDirty;
 
     /// <summary>
     /// The updated settings after successful validation, or null if the user cancelled.
@@ -53,6 +65,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
         LoadSettings(settings, models, nextWakeText, versionText);
         WireUpButtons();
+        WireUpProviderDirtyTracking();
     }
 
     // ──────────────────────────────────────────────
@@ -135,6 +148,8 @@ public sealed partial class SettingsDialog : ContentDialog
         var ptype = (p.ProviderType ?? "openai").ToLowerInvariant();
         ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1 : 0;
 
+        // Clear dirty flag after loading fields (loading != user editing)
+        _providerFieldsDirty = false;
     }
 
     private void RefreshProviderList()
@@ -163,6 +178,22 @@ public sealed partial class SettingsDialog : ContentDialog
             try { await _openProjectHomepageAsync(); }
             catch (Exception ex) { Trace.TraceError($"ProjectLink error: {ex}"); }
         };
+    }
+
+    /// <summary>
+    /// Wires TextChanged / PasswordChanged / SelectionChanged on provider fields
+    /// so we know if the user actually edited anything. This avoids rejecting a
+    /// save when the user only changed wake word settings.
+    /// </summary>
+    private void WireUpProviderDirtyTracking()
+    {
+        ApiKeyBox.PasswordChanged += (_, _) => _providerFieldsDirty = true;
+        BaseUrlBox.TextChanged += (_, _) => _providerFieldsDirty = true;
+        ModelBox.TextChanged += (_, _) => _providerFieldsDirty = true;
+        TimeoutBox.TextChanged += (_, _) => _providerFieldsDirty = true;
+        ContextWindowBox.TextChanged += (_, _) => _providerFieldsDirty = true;
+        ProviderNameBox.TextChanged += (_, _) => _providerFieldsDirty = true;
+        ProviderTypeBox.SelectionChanged += (_, _) => _providerFieldsDirty = true;
     }
 
     // ──────────────────────────────────────────────
@@ -209,10 +240,19 @@ public sealed partial class SettingsDialog : ContentDialog
     {
         if (_providers.Count <= 1) return;
         _providers.RemoveAt(_activeProviderIndex);
+
+        // Clamp index: must be in [0, Count-1]
         if (_activeProviderIndex >= _providers.Count)
             _activeProviderIndex = _providers.Count - 1;
+        // Also handle the edge case where we removed index 0 and list is now [0..N-1]
+        if (_activeProviderIndex < 0)
+            _activeProviderIndex = 0;
+
         RefreshProviderList();
         LoadProviderFields(_providers[_activeProviderIndex]);
+
+        // Clear any stale inline errors from the deleted provider
+        ClearProviderFieldErrors();
     }
 
     // ──────────────────────────────────────────────
@@ -292,99 +332,153 @@ public sealed partial class SettingsDialog : ContentDialog
         var deferral = args.GetDeferral();
         try
         {
-            var validationErrors = new List<string>();
+            // Clear all previous inline errors
+            ClearProviderFieldErrors();
+            ClearWakeWordFieldErrors();
+            ErrorInfoBar.IsOpen = false;
 
-            var trimmedApiKey = ApiKeyBox.Password.Trim();
-            if (string.IsNullOrEmpty(trimmedApiKey))
+            // Track the first error element so we can scroll to it
+            UIElement? firstErrorElement = null;
+
+            // ── 1. Provider validation (only if user actually changed something) ──
+            bool providerValid = true;
+            if (_providerFieldsDirty)
             {
-                validationErrors.Add("API Key 不能为空。可在 opencode.ai/zen 或 openrouter.ai 免费获取。");
+                var trimmedApiKey = ApiKeyBox.Password.Trim();
+                if (string.IsNullOrEmpty(trimmedApiKey))
+                {
+                    SetFieldError(ApiKeyBox, ApiKeyError, "API Key 不能为空。可在 opencode.ai/zen 或 openrouter.ai 免费获取。");
+                    providerValid = false;
+                    firstErrorElement ??= ApiKeyBox;
+                }
+
+                var trimmedBaseUrl = BaseUrlBox.Text.Trim();
+                if (string.IsNullOrEmpty(trimmedBaseUrl))
+                {
+                    SetFieldError(BaseUrlBox, BaseUrlError, "接口地址不能为空。");
+                    providerValid = false;
+                    firstErrorElement ??= BaseUrlBox;
+                }
+                else if (!Uri.TryCreate(trimmedBaseUrl, UriKind.Absolute, out var parsedUri)
+                         || (parsedUri.Scheme != "http" && parsedUri.Scheme != "https"))
+                {
+                    SetFieldError(BaseUrlBox, BaseUrlError, "接口地址必须是有效的 http:// 或 https:// URL。");
+                    providerValid = false;
+                    firstErrorElement ??= BaseUrlBox;
+                }
+
+                var trimmedModel = ModelBox.Text.Trim();
+                if (string.IsNullOrEmpty(trimmedModel))
+                {
+                    SetFieldError(ModelBox, ModelError, "模型名称不能为空。");
+                    providerValid = false;
+                    firstErrorElement ??= ModelBox;
+                }
+
+                if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs < 1_000)
+                {
+                    SetFieldError(TimeoutBox, TimeoutError, "请求超时不能少于 1,000 毫秒 (1 秒)。");
+                    providerValid = false;
+                    firstErrorElement ??= TimeoutBox;
+                }
+                else if (timeoutMs > 300_000)
+                {
+                    SetFieldError(TimeoutBox, TimeoutError, "请求超时不能超过 300,000 毫秒 (5 分钟)。");
+                    providerValid = false;
+                    firstErrorElement ??= TimeoutBox;
+                }
+
+                if (!string.IsNullOrWhiteSpace(ContextWindowBox.Text))
+                {
+                    if (!ulong.TryParse(ContextWindowBox.Text.Trim(), out var parsedContextWindow))
+                    {
+                        SetFieldError(ContextWindowBox, ContextWindowError, "上下文窗口 Token 数必须是数字。");
+                        providerValid = false;
+                        firstErrorElement ??= ContextWindowBox;
+                    }
+                    else if (parsedContextWindow > 2_000_000)
+                    {
+                        SetFieldError(ContextWindowBox, ContextWindowError, "上下文窗口 Token 数不能超过 2,000,000。");
+                        providerValid = false;
+                        firstErrorElement ??= ContextWindowBox;
+                    }
+                }
             }
 
-            var trimmedBaseUrl = BaseUrlBox.Text.Trim();
-            if (string.IsNullOrEmpty(trimmedBaseUrl))
-            {
-                validationErrors.Add("接口地址不能为空。");
-            }
-            else if (!Uri.TryCreate(trimmedBaseUrl, UriKind.Absolute, out var parsedUri)
-                     || (parsedUri.Scheme != "http" && parsedUri.Scheme != "https"))
-            {
-                validationErrors.Add("接口地址必须是有效的 http:// 或 https:// URL。");
-            }
-
-            var trimmedModel = ModelBox.Text.Trim();
-            if (string.IsNullOrEmpty(trimmedModel))
-            {
-                validationErrors.Add("模型名称不能为空。");
-            }
+            // ── 2. Wake word validation (always, independently) ──
+            bool wakeWordValid = true;
 
             var trimmedWakeStart = AutoWakeStartTimeBox.Text?.Trim() ?? string.Empty;
             if (!string.IsNullOrEmpty(trimmedWakeStart) && !TimeSpan.TryParse(trimmedWakeStart, out _))
             {
-                validationErrors.Add("自动唤醒开始时间格式无效，请使用 HH:mm 格式。");
+                SetFieldError(AutoWakeStartTimeBox, AutoWakeStartTimeError, "时间格式无效，请使用 HH:mm 格式。");
+                wakeWordValid = false;
+                firstErrorElement ??= AutoWakeStartTimeBox;
             }
 
             var trimmedWakeEnd = AutoWakeEndTimeBox.Text?.Trim() ?? string.Empty;
             if (!string.IsNullOrEmpty(trimmedWakeEnd) && !TimeSpan.TryParse(trimmedWakeEnd, out _))
             {
-                validationErrors.Add("自动唤醒结束时间格式无效，请使用 HH:mm 格式。");
-            }
-
-            if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs < 1_000)
-            {
-                validationErrors.Add("请求超时不能少于 1,000 毫秒 (1 秒)。");
-            }
-            else if (timeoutMs > 300_000)
-            {
-                validationErrors.Add("请求超时不能超过 300,000 毫秒 (5 分钟)。");
-            }
-
-            ulong? contextWindowTokens = null;
-            if (!string.IsNullOrWhiteSpace(ContextWindowBox.Text))
-            {
-                if (!ulong.TryParse(ContextWindowBox.Text.Trim(), out var parsedContextWindow))
-                {
-                    validationErrors.Add("上下文窗口 Token 数必须是数字。");
-                }
-                else if (parsedContextWindow > 2_000_000)
-                {
-                    validationErrors.Add("上下文窗口 Token 数不能超过 2,000,000。");
-                }
-                else
-                {
-                    contextWindowTokens = parsedContextWindow;
-                }
+                SetFieldError(AutoWakeEndTimeBox, AutoWakeEndTimeError, "时间格式无效，请使用 HH:mm 格式。");
+                wakeWordValid = false;
+                firstErrorElement ??= AutoWakeEndTimeBox;
             }
 
             ulong autoWakeInterval;
             if (!ulong.TryParse(AutoWakeIntervalBox.Text?.Trim() ?? "30", out autoWakeInterval) || autoWakeInterval == 0)
             {
-                autoWakeInterval = 30;
+                autoWakeInterval = 30; // fallback default
             }
             else if (autoWakeInterval > 1440)
             {
-                validationErrors.Add("自动唤醒间隔不能超过 1,440 分钟 (24 小时)。");
+                SetFieldError(AutoWakeIntervalBox, AutoWakeIntervalError, "自动唤醒间隔不能超过 1,440 分钟 (24 小时)。");
+                wakeWordValid = false;
+                firstErrorElement ??= AutoWakeIntervalBox;
             }
 
-            if (validationErrors.Count > 0)
+            // ── 3. Scroll to first error and abort if anything failed ──
+            if (!providerValid || !wakeWordValid)
             {
-                ErrorInfoBar.Message = string.Join("\n", validationErrors);
+                // Show a summary in the top bar
+                var errorSummary = new List<string>();
+                if (!providerValid) errorSummary.Add("提供商配置有误，请检查上方字段。");
+                if (!wakeWordValid) errorSummary.Add("自动唤醒设置有误，请检查下方字段。");
+                ErrorInfoBar.Message = string.Join("\n", errorSummary);
                 ErrorInfoBar.IsOpen = true;
-                SettingsScroller.ChangeView(null, 0, null, true);
+
+                // Scroll to the first error field
+                if (firstErrorElement != null)
+                {
+                    firstErrorElement.StartBringIntoView(
+                        new BringIntoViewOptions { AnimationRatio = 0 });
+                }
+                else
+                {
+                    SettingsScroller.ChangeView(null, 0, null, true);
+                }
+
                 args.Cancel = true;
                 return;
             }
 
-            ErrorInfoBar.IsOpen = false;
-
-            var autoWakeModel = (AutoWakeModelBox.Text ?? string.Empty).Trim();
-
-            // Save current provider fields back to the list
+            // ── 4. Build settings from validated fields ──
+            // Always write current provider fields back to the list (harmless if unchanged).
+            var trimmedApiKey2 = ApiKeyBox.Password.Trim();
+            var trimmedBaseUrl2 = BaseUrlBox.Text.Trim();
+            var trimmedModel2 = ModelBox.Text.Trim();
+            var timeoutMs2 = ulong.TryParse(TimeoutBox.Text.Trim(), out var t2) ? t2 : 60000;
+            ulong? contextWindowTokens2 = null;
+            if (ulong.TryParse(ContextWindowBox.Text.Trim(), out var cw2))
+                contextWindowTokens2 = cw2;
             var ptype = ProviderTypeBox.SelectedIndex == 1 ? "anthropic" : "openai";
+
             _providers[_activeProviderIndex] = new ProviderConfig(
-                trimmedApiKey, trimmedBaseUrl, trimmedModel,
-                timeoutMs, contextWindowTokens,
+                trimmedApiKey2, trimmedBaseUrl2, trimmedModel2,
+                timeoutMs2, contextWindowTokens2,
                 _providers[_activeProviderIndex].MaxOutputTokens,
                 ptype, ProviderNameBox.Text.Trim());
+
+            var autoWakeModel = (AutoWakeModelBox.Text ?? string.Empty).Trim();
 
             UpdatedSettings = new AppSettings(
                 VaultBox.Text.Trim(),
@@ -403,8 +497,8 @@ public sealed partial class SettingsDialog : ContentDialog
         {
             // Show error and keep the dialog open so the user can retry or cancel.
             ErrorInfoBar.Message = $"保存设置失败：{error.Message}";
-            SettingsScroller.ChangeView(null, 0, null, true);
             ErrorInfoBar.IsOpen = true;
+            SettingsScroller.ChangeView(null, 0, null, true);
             args.Cancel = true;
         }
         finally
@@ -440,5 +534,45 @@ public sealed partial class SettingsDialog : ContentDialog
         box.ClearValue(TextBox.BorderBrushProperty);
         errorBlock.Text = string.Empty;
         errorBlock.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Overload for PasswordBox (API Key field). Sets the border to error color
+    /// and shows the adjacent error TextBlock.
+    /// </summary>
+    private static void SetFieldError(PasswordBox box, TextBlock errorBlock, string message)
+    {
+        box.BorderBrush = GetThemeBrush("StatusErrorBrush");
+        errorBlock.Text = message;
+        errorBlock.Visibility = Visibility.Visible;
+    }
+
+    private static void ClearFieldError(PasswordBox box, TextBlock errorBlock)
+    {
+        box.ClearValue(PasswordBox.BorderBrushProperty);
+        errorBlock.Text = string.Empty;
+        errorBlock.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Clears all inline errors on provider fields.
+    /// </summary>
+    private void ClearProviderFieldErrors()
+    {
+        ClearFieldError(ApiKeyBox, ApiKeyError);
+        ClearFieldError(BaseUrlBox, BaseUrlError);
+        ClearFieldError(ModelBox, ModelError);
+        ClearFieldError(TimeoutBox, TimeoutError);
+        ClearFieldError(ContextWindowBox, ContextWindowError);
+    }
+
+    /// <summary>
+    /// Clears all inline errors on wake word fields.
+    /// </summary>
+    private void ClearWakeWordFieldErrors()
+    {
+        ClearFieldError(AutoWakeIntervalBox, AutoWakeIntervalError);
+        ClearFieldError(AutoWakeStartTimeBox, AutoWakeStartTimeError);
+        ClearFieldError(AutoWakeEndTimeBox, AutoWakeEndTimeError);
     }
 }

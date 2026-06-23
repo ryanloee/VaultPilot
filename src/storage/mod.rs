@@ -12,9 +12,9 @@ use crate::models::{
 };
 
 mod backup;
-mod pool;
 mod chat;
 pub(crate) mod notes;
+mod pool;
 mod search;
 mod settings;
 
@@ -89,12 +89,9 @@ pub(super) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-
-
 /// Maximum note file size (10 MiB) — prevents OOM from oversized markdown files
 /// during import or vault rebuild (#827).
 const MAX_NOTE_FILE_SIZE: u64 = 10 * 1024 * 1024;
-
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Frontmatter {
@@ -187,8 +184,6 @@ pub fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
         search_snippet: None,
     })
 }
-
-
 
 pub(super) fn compute_image_perceptual_hash(path: &Path) -> Option<u64> {
     // Guard: skip files larger than 50 MB to prevent OOM from crafted images (#718)
@@ -319,7 +314,6 @@ pub async fn load_note_async(ctx: &StorageContext, note_id: &str) -> Result<Note
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use super::pool::AppPaths;
     use super::search::{
         derived_note_id, fallback_source, fallback_title, hash_content, image_similarity_score,
@@ -329,6 +323,7 @@ mod tests {
     use super::*;
     use crate::models::{ChatSession, ProviderConfig};
     use chrono::Utc;
+    use std::path::PathBuf;
 
     fn setup_temp_context() -> (PathBuf, StorageContext) {
         let temp = std::env::temp_dir().join(format!(

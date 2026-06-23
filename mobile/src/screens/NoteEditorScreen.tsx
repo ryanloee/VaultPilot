@@ -8,7 +8,7 @@ import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import Icon from '../components/Icon';
+import Icon, { IconName } from '../components/Icon';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
 import { extractAutoTags } from '../utils/autoTag';
 import { queuePendingSync } from '../db';
@@ -344,7 +344,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               onPress={() => insertFormat(t.insert)}
             >
               {'icon' in t ? (
-                <Icon name={t.icon} size={16} color={c.text} />
+                <Icon name={t.icon as IconName} size={16} color={c.text} />
               ) : (
                 <Text style={[s.toolLabel, { color: c.text }]}>{t.label}</Text>
               )}

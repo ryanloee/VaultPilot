@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking } from 'react-native';
 import type { UpdateInfo } from '../../utils/updateChecker';
 import { downloadAndInstall } from '../../utils/updateChecker';
 
@@ -78,12 +78,20 @@ export default function UpdateModal({
           ) : error ? (
             <View style={{ marginTop: 16 }}>
               <Text style={{ color: '#ff4444', textAlign: 'center', marginBottom: 12 }}>{error}</Text>
-              <TouchableOpacity
-                style={[styles.modalClose, { borderColor, flex: 1 }]}
-                onPress={() => { setError(null); onClose(); }}
-              >
-                <Text style={{ color: textColorSecondary, textAlign: 'center' }}>关闭</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <TouchableOpacity
+                  style={[styles.modalClose, { borderColor, flex: 1 }]}
+                  onPress={() => { setError(null); onClose(); }}
+                >
+                  <Text style={{ color: textColorSecondary, textAlign: 'center' }}>关闭</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalClose, { borderColor: accentColor, backgroundColor: accentColor + '15', flex: 1 }]}
+                  onPress={() => Linking.openURL(updateInfo.releaseUrl)}
+                >
+                  <Text style={{ color: accentColor, fontWeight: '600', textAlign: 'center' }}>手动下载</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ) : (
             <>
@@ -99,7 +107,7 @@ export default function UpdateModal({
                     styles.modalClose,
                     { borderColor: accentColor, backgroundColor: accentColor + '15', flex: 1 },
                   ]}
-                  onPress={updateInfo.apkUrl ? handleDownload : onClose}
+                  onPress={updateInfo.apkUrl ? handleDownload : () => Linking.openURL(updateInfo.releaseUrl)}
                 >
                   <Text style={{ color: accentColor, fontWeight: '600', textAlign: 'center' }}>
                     {updateInfo.apkUrl ? '下载更新' : '查看发布页'}

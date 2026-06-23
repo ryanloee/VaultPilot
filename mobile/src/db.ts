@@ -199,7 +199,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
   if (!ftsSupported) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbSession>(
-      `SELECT * FROM sessions WHERE title LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50`,
+      `SELECT * FROM sessions WHERE title LIKE ? ESCAPE '\' ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`]
     );
   }
@@ -211,7 +211,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
     `SELECT DISTINCT s.* FROM sessions s
      LEFT JOIN messages m ON s.id = m.session_id
      LEFT JOIN messages_fts fts ON m.rowid = fts.rowid
-     WHERE messages_fts MATCH ? OR s.title LIKE ? ESCAPE '\\'
+     WHERE messages_fts MATCH ? OR s.title LIKE ? ESCAPE '\'
      ORDER BY s.updated_at DESC LIMIT 50`,
     [ftsQuery, `%${escaped}%`]
   );
@@ -338,7 +338,7 @@ export async function searchNotes(query: string): Promise<DbNote[]> {
   if (!ftsSupported) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbNote>(
-      `SELECT * FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50`,
+      `SELECT * FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\' ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`, `%${escaped}%`]
     );
   }
@@ -394,7 +394,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
     noteResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'note' as type, id, title,
               SUBSTR(content, 1, 120) as snippet, updated_at
-       FROM notes WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
+       FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\'
        ORDER BY updated_at DESC LIMIT ?`,
       [`%${escaped}%`, `%${escaped}%`, limit]
     );
@@ -422,7 +422,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
               s.id as sessionId
        FROM messages m
        INNER JOIN sessions s ON m.session_id = s.id
-       WHERE m.content LIKE ? ESCAPE '\\'
+       WHERE m.content LIKE ? ESCAPE '\'
        ORDER BY m.created_at DESC LIMIT ?`,
       [`%${escaped}%`, limit]
     );

@@ -28,9 +28,10 @@ use super::search::{
     rank_documents, rank_note_metas, sanitize_terms, serialize_semantic_vector, slugify,
 };
 use super::{
-    atomic_write, load_chat_state_with_context, load_settings_with_context, open_connection,
+    atomic_write, load_chat_state_with_context, load_settings_with_context,
     Frontmatter, StorageContext, MAX_NOTE_FILE_SIZE,
 };
+use super::pool::open_connection;
 
 // ────────────────────────────────────────────────────────
 // Note CRUD

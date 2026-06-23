@@ -5,7 +5,8 @@ use tracing::warn;
 
 use crate::models::AppSettings;
 
-use super::{atomic_write, AppPaths, StorageContext};
+use super::atomic_write;
+use super::pool::{AppPaths, StorageContext};
 
 pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     if let Some(vault_dir_override) = &paths.vault_dir_override {
@@ -171,7 +172,7 @@ pub fn save_settings_with_context(
         .pool
         .get()
         .with_context(|| "failed to get connection from pool")?;
-    super::ensure_schema(&connection)?;
+    super::pool::ensure_schema(&connection)?;
     // Update the cached settings after successful write.
     {
         let mut cache = context

@@ -10,7 +10,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::models::{NoteDocument, NoteMeta, SearchQuery, SearchResult};
 
-use super::{open_connection, StorageContext};
+use super::pool::open_connection;
+use super::StorageContext;
 
 use super::notes::extract_image_text;
 use super::{compute_image_perceptual_hash, load_note_body_from_meta};

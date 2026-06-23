@@ -285,6 +285,51 @@ describe('syncNotesFromServer', () => {
       }),
     );
   });
+
+  it('paginates when server has more than 200 notes (#1398)', async () => {
+    (AsyncStorage.getItem as jest.Mock)
+      .mockResolvedValueOnce('http://localhost:3000')
+      .mockResolvedValueOnce('');
+    mockGetNotes.mockResolvedValue([]);
+
+    // Generate 200 notes for first page (full page)
+    const page1Notes = Array.from({ length: 200 }, (_, i) => ({
+      id: `note-${i}`, title: `Note ${i}`, updated_at: '2026-01-01T00:00:00Z',
+    }));
+    // 50 notes for second page (partial page = last)
+    const page2Notes = Array.from({ length: 50 }, (_, i) => ({
+      id: `note-${200 + i}`, title: `Note ${200 + i}`, updated_at: '2026-01-01T00:00:00Z',
+    }));
+
+    // First page (offset=0, limit=200)
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ notes: page1Notes, total: 250 }),
+    });
+    // Second page (offset=200, limit=200)
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ notes: page2Notes, total: 250 }),
+    });
+    // 250 detail fetches (all notes are new)
+    for (let i = 0; i < 250; i++) {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          meta: { id: `note-${i}`, title: `Note ${i}` },
+          body: `Content ${i}`,
+        }),
+      });
+    }
+
+    const result = await syncNotesFromServer();
+    expect(result.imported).toBe(250);
+    // Verify pagination: first call should have offset=0, second should have offset=200
+    const firstCallUrl = mockFetch.mock.calls[0][0] as string;
+    const secondCallUrl = mockFetch.mock.calls[1][0] as string;
+    expect(firstCallUrl).toContain('offset=0');
+    expect(secondCallUrl).toContain('offset=200');
+  });
 });
 
 // ── getLastSyncTime ─────────────────────────────────────────

@@ -764,8 +764,9 @@ async fn handle_agent(
                 let status = if *is_error { "❌" } else { "✅" };
                 eprintln!("   {status} {tool} → {result_preview}");
             }
-            vaultpilot_lib::agent::AgentEvent::FinalAnswer { text: _ } => {
+            vaultpilot_lib::agent::AgentEvent::FinalAnswer { text } => {
                 eprintln!("\n🤖 Agent completed!");
+                println!("{text}");
             }
             vaultpilot_lib::agent::AgentEvent::WriteApprovalNeeded { tool, args } => {
                 eprintln!("⚠️  Write operation: {tool}({args})");

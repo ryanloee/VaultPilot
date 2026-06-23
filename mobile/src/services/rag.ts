@@ -34,7 +34,7 @@ function isChinese(): boolean {
 /** CJK stop characters — matching Rust is_cjk_stop_char in search.rs */
 const CJK_STOP_CHARS = new Set(['的', '了', '呢', '吗', '啊', '呀', '吧', '么', '我', '你']);
 
-function isCJK(ch: string): boolean {
+export function isCJK(ch: string): boolean {
   const code = ch.charCodeAt(0);
   return (code >= 0x3000 && code <= 0x303F)   // CJK Symbols and Punctuation
     || (code >= 0x3040 && code <= 0x309F)      // Japanese Hiragana
@@ -49,7 +49,7 @@ function isCJK(ch: string): boolean {
  * Extract CJK ngrams (2-char and 3-char) from text, filtering stop chars.
  * Matches Rust push_cjk_ngrams in search.rs.
  */
-function extractCJKNgrams(text: string): string[] {
+export function extractCJKNgrams(text: string): string[] {
   const cjkChars = [...text].filter(ch => isCJK(ch) && !CJK_STOP_CHARS.has(ch));
   const terms = new Set<string>();
 
@@ -152,7 +152,7 @@ function extractKeywords(text: string): string[] {
  * Detect if this is a trivial/social message that doesn't need note search.
  * Matches Win端 looks_like_small_talk.
  */
-function looksLikeSmallTalk(text: string): boolean {
+export function looksLikeSmallTalk(text: string): boolean {
   const lower = text.trim().toLowerCase();
   const greetings = [
     '你好', 'hi', 'hello', 'hey', '嗨', '哈喽', '早上好', '下午好', '晚上好',

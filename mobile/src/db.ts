@@ -382,12 +382,14 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
   const db = await getDb();
   const limit = 20;
   const escaped = escapeLikePattern(query);
+  const ftsQuery = ftsSupported ? buildFtsQuery(query) : null;
+
+  // Early return if FTS query is empty (whitespace-only input)
+  if (ftsSupported && !ftsQuery) return [];
 
   // Search notes
   let noteResults: GlobalSearchResult[];
-  if (ftsSupported) {
-    const ftsQuery = buildFtsQuery(query);
-    if (!ftsQuery) return [];
+  if (ftsQuery) {
     noteResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'note' as type, n.id, n.title,
               SUBSTR(n.content, 1, 120) as snippet, n.updated_at
@@ -409,9 +411,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
 
   // Search session messages (join back to get session title)
   let sessionResults: GlobalSearchResult[];
-  if (ftsSupported) {
-    const ftsQuery = buildFtsQuery(query);
-    if (!ftsQuery) return [];
+  if (ftsQuery) {
     sessionResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'session' as type, m.id, s.title,
               SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,

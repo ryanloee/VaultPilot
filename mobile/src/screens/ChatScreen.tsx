@@ -417,6 +417,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         onPickDocument={pickDocument}
         onRemoveAttachment={(index) => setAttachments(prev => prev.filter((_, i) => i !== index))}
         onVoiceToggle={() => voice.isListening ? voice.stopListening() : voice.startListening()}
+        onEmojiSelect={(emoji) => setInput(prev => prev + emoji)}
       />
     </SafeAreaView>
   );

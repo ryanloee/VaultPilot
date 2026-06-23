@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System.Text.Json;
+using VaultPilot.WinUI.Models;
 
 namespace VaultPilot.WinUI;
 

@@ -141,7 +141,7 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   return dbPromise;
 }
 
-function uuid(): string {
+export function uuid(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
   // Fallback for devices where crypto is unavailable
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {

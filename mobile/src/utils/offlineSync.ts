@@ -19,7 +19,7 @@ import { getServerConfig } from '../services/sync';
 /** Hook: returns pending sync count and auto-flushes when online. */
 export function usePendingSync(): { pendingCount: number; refresh: () => Promise<void> } {
   const [pendingCount, setPendingCount] = useState(0);
-  const { isOnline, checkConnection } = useNetworkState();
+  const { isOnline } = useNetworkState();
   const prevOnline = useRef(isOnline);
 
   const refresh = useCallback(async () => {

@@ -259,9 +259,9 @@ describe('syncNotesFromServer', () => {
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
 
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 403 });
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 403, text: () => Promise.resolve('Forbidden') });
 
-    await expect(syncNotesFromServer()).rejects.toThrow('获取笔记列表失败: 403');
+    await expect(syncNotesFromServer()).rejects.toThrow('获取笔记列表失败: 403 — Forbidden');
   });
 
   it('uses Authorization header when token is set', async () => {
@@ -405,5 +405,19 @@ describe('syncNotesFromServer edge cases', () => {
     mockFetch.mockRejectedValueOnce(new Error('Connection refused'));
 
     await expect(syncNotesFromServer()).rejects.toThrow('Connection refused');
+  });
+
+  it('throws when list endpoint fails without readable body (#1461)', async () => {
+    (AsyncStorage.getItem as jest.Mock)
+      .mockResolvedValueOnce('http://localhost:3000')
+      .mockResolvedValueOnce('');
+
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      text: () => Promise.reject(new Error('no body')),
+    });
+
+    await expect(syncNotesFromServer()).rejects.toThrow('获取笔记列表失败: 502');
   });
 });

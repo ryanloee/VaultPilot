@@ -119,14 +119,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
 
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
-      {!isOnline && (
-        <View style={{ backgroundColor: '#F59E0B20', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text style={{ color: '#F59E0B', fontSize: 13 }}>📴 离线模式</Text>
-          {pendingCount > 0 && (
-            <Text style={{ color: '#F59E0B', fontSize: 12 }}>{pendingCount} 条待同步</Text>
-          )}
-        </View>
-      )}
+
       {/* Search bar */}
       <View style={[s.searchBar, { borderColor: c.border }]}>
         <Text style={{ color: c.textSecondary, fontSize: 16 }}>🔍 </Text>
@@ -143,7 +136,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
       {/* Offline banner */}
       {!isOnline && (
         <View style={{ backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}>📡 离线模式 — 本地笔记可查看编辑</Text>
+          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}>📡 离线模式 — 本地笔记可查看编辑{pendingCount > 0 ? ` · ${pendingCount} 条待同步` : ''}</Text>
         </View>
       )}
 

@@ -233,7 +233,8 @@ fn stable_term_hash(text: &str) -> u64 {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
     let digest = hasher.finalize();
-    let bytes: [u8; 8] = digest[..8].try_into().expect("hash prefix");
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
     u64::from_le_bytes(bytes)
 }
 
@@ -2175,5 +2176,41 @@ mod tests {
         .expect("search filtered");
         assert_eq!(results.notes.len(), 1, "page should contain 1 note");
         assert_eq!(results.total, 1, "total should reflect the 1 matching note");
+    }
+
+    // ── stable_term_hash ──────────────────────────────────────────
+
+    #[test]
+    fn stable_term_hash_deterministic() {
+        let h1 = stable_term_hash("hello world");
+        let h2 = stable_term_hash("hello world");
+        assert_eq!(h1, h2, "same input must produce same hash");
+    }
+
+    #[test]
+    fn stable_term_hash_different_inputs_differ() {
+        let h1 = stable_term_hash("hello");
+        let h2 = stable_term_hash("world");
+        assert_ne!(h1, h2, "different inputs should produce different hashes");
+    }
+
+    #[test]
+    fn stable_term_hash_empty_string() {
+        // Should not panic
+        let _ = stable_term_hash("");
+    }
+
+    #[test]
+    fn stable_term_hash_cjk() {
+        // Should not panic on CJK characters
+        let h = stable_term_hash("你好世界");
+        assert_eq!(h, stable_term_hash("你好世界"));
+    }
+
+    #[test]
+    fn stable_term_hash_long_input() {
+        let long_text = "a".repeat(10_000);
+        let h = stable_term_hash(&long_text);
+        assert_ne!(h, 0); // very unlikely to be zero
     }
 }

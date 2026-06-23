@@ -123,10 +123,16 @@ export async function parseSSEStreamWithReconnect(
   // Deduplicate done:true across retries — prevent caller from receiving
   // multiple stream-end signals when a retry follows a partial completion.
   let doneSignaled = false;
+  // Track whether any content was delivered — if so, don't retry to avoid
+  // sending duplicate content (the server re-sends from the beginning).
+  let contentDelivered = false;
   const wrappedOnChunk = (chunk: StreamChunk) => {
     if (chunk.done) {
       if (doneSignaled) return;
       doneSignaled = true;
+    }
+    if (!chunk.done && (chunk.content || chunk.tool_calls)) {
+      contentDelivered = true;
     }
     onChunk(chunk);
   };
@@ -155,6 +161,17 @@ export async function parseSSEStreamWithReconnect(
       // Don't retry client errors (4xx) — they won't succeed on retry
       const status = (err as { status?: number }).status;
       if (status !== undefined && status >= 400 && status < 500) throw err;
+
+      // If content was already delivered, retrying would send duplicate text.
+      // End the stream gracefully instead of retrying.
+      if (contentDelivered) {
+        console.warn('[SSE] Connection lost after content delivery — ending stream (no retry to avoid duplicates)');
+        if (!doneSignaled) {
+          doneSignaled = true;
+          onChunk({ done: true });
+        }
+        return;
+      }
 
       if (attempt < maxRetries) {
         const delay = baseDelay * Math.pow(2, attempt);

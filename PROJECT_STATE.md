@@ -915,3 +915,16 @@
 - #1364 test: normalize_settings unit tests (12 tests) (#1362) ✅ 直接合并
 - 发版: v0.3.42 → v0.3.43 (tag v0.3.43 已推送)
 - 项目状态: 0 open PR, v0.3.43
+
+## 讨论（循环#284）
+- v0.3.43 零缺陷状态，97 Rust + 473 Mobile = 570 测试通过，Clippy 干净
+- 2 open issues (#1360 移动端 Agent Mode 调研, #913 Agent Mode 主 issue), 0 open PR
+- 最近提交: commit 9b9346d (应用内 APK 下载 + React 版本锁定) 直接推到 main 未经 PR 流程
+- **P1 发现**: UpdateModal 两个 UX bug
+  - Bug 1: apkUrl 为 null 时"查看发布页"按钮调用 onClose() 而非打开 releaseUrl
+  - Bug 2: 错误状态无"手动下载"fallback 按钮
+- **P1 发现**: downloadAndInstall 和 UpdateModal 职责混乱，fallback 逻辑需统一到 UpdateModal
+- **P1 发现**: downloadAndInstall 零测试覆盖（仅 compareSemver 有测试）
+- **战略决策**: Agent Mode 后产品方向——深度优先（全 vault 读取 + 笔记创建 + 跨 session 记忆）
+- **长期规划**: 移动端 Agent Mode (#1360) 短期方案 B(远程服务器) 验证需求，长期方案 A(本地 Rust FFI)
+- 下个 fix 周期目标: UpdateModal bug 修复 + downloadAndInstall 测试 + agent.rs 边界条件测试

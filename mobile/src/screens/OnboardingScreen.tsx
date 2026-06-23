@@ -66,7 +66,6 @@ export default function OnboardingScreen({ onComplete }: Props) {
         store.addProvider(provider);
         await saveSettings({ apiBase, apiKey, model, apiFormat });
         await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
-        setTimeout(onComplete, 600);
       } else {
         setTestResult(`❌ ${res.error ?? '连接失败'}`);
       }
@@ -251,7 +250,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
 
         <TouchableOpacity
           style={[styles.primaryBtn, { backgroundColor: testing ? c.textSecondary : store.accentColor }]}
-          onPress={handleTestAndSave}
+          onPress={testResult?.startsWith('✅') ? onComplete : handleTestAndSave}
           disabled={testing}
         >
           {testing ? (

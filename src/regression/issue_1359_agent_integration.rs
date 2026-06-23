@@ -311,9 +311,7 @@ fn write_approval_channel_coordination() {
 
     let (tx, rx) = mpsc::channel();
 
-    let agent_handle = thread::spawn(move || {
-        rx.recv().unwrap_or(false)
-    });
+    let agent_handle = thread::spawn(move || rx.recv().unwrap_or(false));
 
     tx.send(true).unwrap();
 

@@ -928,3 +928,24 @@
 - **战略决策**: Agent Mode 后产品方向——深度优先（全 vault 读取 + 笔记创建 + 跨 session 记忆）
 - **长期规划**: 移动端 Agent Mode (#1360) 短期方案 B(远程服务器) 验证需求，长期方案 A(本地 Rust FFI)
 - 下个 fix 周期目标: UpdateModal bug 修复 + downloadAndInstall 测试 + agent.rs 边界条件测试
+
+## 修复（fix-2 周期 #31）
+- #1380 bug: UpdateModal '查看发布页' 按钮调用 onClose() 而非打开 releaseUrl + 错误状态无手动下载按钮 → PR #1382
+- #1381 test: chatHelpers.ts 4 个纯函数 24 个单元测试 → PR #1383
+- 新增 25 个测试（24 chatHelpers + 1 UpdateModal 回归）
+- 编译/测试/Clippy：通过（476 mobile tests pass）
+- 项目状态: 5 open PR (#1377, #1378, #1379, #1382, #1383), 5 open issues (#1360, #913, #1380, #1381, 已有PR的)
+
+## PR 审核（循环#285）— 8 个 PR 全部合并
+- 合并 8 个 PR（全部 CI 通过：build/cargo audit/clippy/fmt/test/linux-cli-build/winui-build/Check regression tests）
+- #1377 fix: syncNotesFromServer preserves server note ID (#1374) ✅ 直接合并
+- #1378 fix: console.warn in NoteEditorScreen silent catches (#1375) ✅ 直接合并
+- #1379 fix: console.warn in ChatScreen executeSave catch (#1376) ✅ 直接合并
+- #1382 fix: UpdateModal fallback buttons — open release URL + manual download (#1380) ✅ 直接合并
+- #1383 test: chatHelpers.ts pure function unit tests — 24 tests (#1381) ✅ 直接合并
+- #1387 fix: LIKE ESCAPE backslash mismatch in non-FTS queries (#1384) ✅ 直接合并
+- #1388 fix: remove duplicate offline banner in NotesScreen (#1385) ✅ 直接合并
+- #1389 fix: OnboardingScreen '完成' button re-tests and duplicates provider (#1386) ✅ 直接合并
+- 发版: v0.3.43 → v0.3.44 (tag v0.3.44 已推送)
+- 新增 4 个回归测试文件 + 修复 4 个测试
+- 项目状态: 0 open PR, v0.3.44

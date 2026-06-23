@@ -379,7 +379,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         onNewChatPress={newChat}
       />
 
-      <OfflineBanner visible={!isOnline} />
+      <OfflineBanner visible={!isOnline} isDark={isDark} />
 
       <MessageList
         messages={msgs}

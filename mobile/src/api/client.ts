@@ -122,8 +122,8 @@ export async function chat(
 // ── Anthropic Messages API ────────────────────────────────
 
 // Re-export pure conversion functions from clientPure.ts
-export { toAnthropicContent, convertAnthropicEvent, wrapNonStreamingResponse, normalizeAnthropicBase } from './clientPure';
-import { toAnthropicContent, convertAnthropicEvent, wrapNonStreamingResponse, normalizeAnthropicBase } from './clientPure';
+export { toAnthropicContent, convertAnthropicEvent, wrapNonStreamingResponse, normalizeAnthropicBase, extractTextContent } from './clientPure';
+import { toAnthropicContent, convertAnthropicEvent, wrapNonStreamingResponse, normalizeAnthropicBase, extractTextContent } from './clientPure';
 
 async function chatAnthropic(
   apiBase: string, apiKey: string, model: string,
@@ -131,7 +131,7 @@ async function chatAnthropic(
 ): Promise<ReadableStream<Uint8Array>> {
   const systemMsgs = messages.filter(m => m.role === 'system');
   const nonSystem = messages.filter(m => m.role !== 'system');
-  const systemText = systemMsgs.map(m => m.content).join('\n') || undefined;
+  const systemText = systemMsgs.map(m => extractTextContent(m.content)).join('\n') || undefined;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -403,7 +403,7 @@ export async function chatWithReconnect(
     // Anthropic Messages API format
     const systemMsgs = messages.filter(m => m.role === 'system');
     const nonSystem = messages.filter(m => m.role !== 'system');
-    const systemText = systemMsgs.map(m => m.content).join('\n') || undefined;
+    const systemText = systemMsgs.map(m => extractTextContent(m.content)).join('\n') || undefined;
     const anthropicBase = normalizeAnthropicBase(base);
     const body: Record<string, unknown> = {
       model,

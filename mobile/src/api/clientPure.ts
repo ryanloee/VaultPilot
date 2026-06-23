@@ -78,6 +78,21 @@ export function wrapNonStreamingResponse(json: NonStreamingResponse): Uint8Array
   return encoded;
 }
 
+// ── Content text extraction ─────────────────────────────────
+
+/**
+ * Extract plain text from content that may be a string or ContentPart[].
+ * Returns the concatenated text portions; ignores image_url parts.
+ * Fixes #1396: .join('\n') on ContentPart[] produces [object Object].
+ */
+export function extractTextContent(content: string | ContentPart[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map(p => p.text)
+    .join('\n');
+}
+
 // ── Anthropic base URL normalization ─────────────────────────
 
 /**

@@ -13,6 +13,7 @@ import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags,
 import { extractAutoTags } from '../utils/autoTag';
 import { queuePendingSync } from '../db';
 import { useNetworkState } from '../utils/networkState';
+import { applyFormat, buildClipboardText, buildAiPrefill, shouldAutoTag, parseNewTag } from '../utils/noteEditorPure';
 import type { NoteEditorScreenProps, RootTabParamList } from '../navigation/types';
 import { useNavigation } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
@@ -81,7 +82,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     try {
       await updateNote(noteId, t ?? title, ct ?? content);
       // Auto-tag if note has no tags yet
-      if (tags.length === 0 && (t ?? title).trim()) {
+      if (shouldAutoTag(tags, t ?? title)) {
         const suggestions = extractAutoTags(t ?? title, ct ?? content);
         for (const tag of suggestions) {
           if (!tags.includes(tag)) {
@@ -162,13 +163,12 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
   ];
 
   const handleAiAction = (action: typeof AI_ACTIONS[0]) => {
-    const noteText = content || title || '';
-    if (!noteText.trim()) {
+    const prefill = buildAiPrefill(action.prompt, content, title);
+    if (!prefill) {
       Alert.alert('提示', '笔记内容为空，无法使用 AI 助手');
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const prefill = `${action.prompt}\n\n${noteText.slice(0, 2000)}`;
     // Navigate to Chat tab with pre-filled text
     rootNav.navigate('Chat', { screen: 'ChatMain', params: { prefillText: prefill } });
   };
@@ -183,19 +183,12 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
 
   const insertFormat = (syntax: string) => {
     const { start, end } = selectionRef.current;
-    const isPrefix = syntax.endsWith(' ');
     setContent(prev => {
-      const before = prev.slice(0, start);
-      const selected = prev.slice(start, end);
-      const after = prev.slice(end);
-      const next = isPrefix
-        ? before + syntax + selected + after
-        : before + syntax + selected + syntax + after;
-      const newPos = isPrefix ? start + syntax.length + selected.length : start + syntax.length + selected.length + syntax.length;
-      selectionRef.current = { start: newPos, end: newPos };
-      contentRef.current = next;
-      autoSave(titleRef.current, next);
-      return next;
+      const result = applyFormat(prev, start, end, syntax);
+      selectionRef.current = { start: result.cursorPos, end: result.cursorPos };
+      contentRef.current = result.content;
+      autoSave(titleRef.current, result.content);
+      return result.content;
     });
   };
 
@@ -224,7 +217,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
         </Text>
         <View style={s.headerActions}>
           <TouchableOpacity onPress={() => {
-            const text = content ? (title ? `${title}\n\n${content}` : content) : '';
+            const text = buildClipboardText(title, content);
             if (text) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); Clipboard.setStringAsync(text); }
           }}>
             <Text style={[s.headerBtn, { color: accentColor }]}>复制</Text>
@@ -284,8 +277,8 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               placeholder="+ 标签"
               placeholderTextColor={c.textSecondary}
               onSubmitEditing={async () => {
-                const tag = newTag.trim();
-                if (tag && !tags.includes(tag)) {
+                const tag = parseNewTag(newTag, tags);
+                if (tag) {
                   try {
                     await addTag(noteId, tag);
                     setTags(prev => [...prev, tag]);

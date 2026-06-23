@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import Icon from '../Icon';
 
 interface ChatHeaderProps {
   title: string;
@@ -26,7 +27,10 @@ export default function ChatHeader({
         accessibilityRole="button"
         accessibilityLabel="打开对话列表"
       >
-        <Text style={{ color: accentColor, fontSize: 14 }}>☰ 对话</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Icon name="menu" size={14} color={accentColor} />
+          <Text style={{ color: accentColor, fontSize: 14 }}>对话</Text>
+        </View>
       </TouchableOpacity>
       <Text
         style={[styles.titleText, { color: textColor }]}
@@ -41,7 +45,7 @@ export default function ChatHeader({
         accessibilityRole="button"
         accessibilityLabel="新建对话"
       >
-        <Text style={{ color: accentColor, fontSize: 14 }}>＋</Text>
+        <Icon name="plus" size={14} color={accentColor} />
       </TouchableOpacity>
     </View>
   );

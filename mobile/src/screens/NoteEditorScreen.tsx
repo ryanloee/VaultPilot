@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
+import Icon from '../components/Icon';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
 import { extractAutoTags } from '../utils/autoTag';
 import { queuePendingSync } from '../db';
@@ -150,7 +151,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     { label: '`', insert: '`', desc: '代码' },
     { label: '#', insert: '# ', desc: '标题' },
     { label: '-', insert: '- ', desc: '列表' },
-    { label: '🔗', insert: '[]()', desc: '链接' },
+    { label: '🔗', insert: '[]()', desc: '链接', icon: 'link' as const },
   ];
 
   const AI_ACTIONS = [
@@ -334,7 +335,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
             style={[s.toolBtn, { borderColor: previewMode ? accentColor : c.border, backgroundColor: previewMode ? accentColor + '20' : 'transparent' }]}
             onPress={() => setPreviewMode(v => !v)}
           >
-            <Text style={[s.toolLabel, { color: previewMode ? accentColor : c.text }]}>{previewMode ? '✏️' : '👁'}</Text>
+            <Icon name={previewMode ? 'edit' : 'eye'} size={16} color={previewMode ? accentColor : c.text} />
           </TouchableOpacity>
           {!previewMode && TOOLBAR.map((t) => (
             <TouchableOpacity
@@ -342,14 +343,18 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               style={[s.toolBtn, { borderColor: c.border }]}
               onPress={() => insertFormat(t.insert)}
             >
-              <Text style={[s.toolLabel, { color: c.text }]}>{t.label}</Text>
+              {'icon' in t ? (
+                <Icon name={t.icon} size={16} color={c.text} />
+              ) : (
+                <Text style={[s.toolLabel, { color: c.text }]}>{t.label}</Text>
+              )}
             </TouchableOpacity>
           ))}
           <TouchableOpacity
             style={[s.toolBtn, { borderColor: accentColor, backgroundColor: accentColor + '15' }]}
             onPress={showAiActions}
           >
-            <Text style={[s.toolLabel, { color: accentColor }]}>🤖</Text>
+            <Icon name="chatbubble" size={16} color={accentColor} />
           </TouchableOpacity>
         </ScrollView>
       </View>

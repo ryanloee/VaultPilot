@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import Icon from '../Icon';
 
 interface OfflineBannerProps {
   visible: boolean;
@@ -10,7 +11,8 @@ export default function OfflineBanner({ visible }: OfflineBannerProps) {
 
   return (
     <View style={styles.banner}>
-      <Text style={styles.text}>📡 离线模式 — 笔记可查看编辑，聊天需联网</Text>
+      <Icon name="wifi-off" size={13} color="#92400E" />
+      <Text style={styles.text}> 离线模式 — 笔记可查看编辑，聊天需联网</Text>
     </View>
   );
 }

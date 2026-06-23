@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet } from 'react-native';
 import type { ApiFormat, ProviderConfig } from '../../store';
 import type { PROVIDERS } from '../../store';
+import Icon from '../../components/Icon';
 
 interface ProviderEditorProps {
   provider: ProviderConfig;
@@ -114,7 +115,7 @@ export default function ProviderEditor({
           autoCorrect={false}
         />
         <TouchableOpacity onPress={onShowKeyToggle} style={styles.eyeBtn}>
-          <Text style={{ color: textColorSecondary, fontSize: 18 }}>{showKey ? '🙈' : '👁'}</Text>
+          <Icon name={showKey ? 'eye-off' : 'eye'} size={18} color={textColorSecondary} />
         </TouchableOpacity>
       </View>
 

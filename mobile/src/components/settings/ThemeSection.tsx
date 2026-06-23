@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ACCENT_COLORS } from '../../store';
+import Icon from '../../components/Icon';
 
 interface ThemeSectionProps {
   themeMode: string;
@@ -39,9 +40,16 @@ export default function ThemeSection({
             ]}
             onPress={() => onThemeChange(mode)}
           >
-            <Text style={{ color: themeMode === mode ? accentColor : textColor }}>
-              {mode === 'light' ? '☀️ 亮色' : mode === 'dark' ? '🌙 暗色' : '🔄 跟随系统'}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Icon
+                name={mode === 'light' ? 'sun' : mode === 'dark' ? 'moon' : 'refresh'}
+                size={14}
+                color={themeMode === mode ? accentColor : textColor}
+              />
+              <Text style={{ color: themeMode === mode ? accentColor : textColor }}>
+                {mode === 'light' ? '亮色' : mode === 'dark' ? '暗色' : '跟随系统'}
+              </Text>
+            </View>
           </TouchableOpacity>
         ))}
       </View>

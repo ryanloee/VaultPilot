@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import MarkdownPreview from '../MarkdownPreview';
+import Icon from '../Icon';
 import { getColors } from '../../store';
 
 interface Message {
@@ -75,7 +76,7 @@ const MessageBubble = memo(function MessageBubble({
                 style={[styles.msgAttachChip, { borderColor: c.border }]}
               >
                 <Text style={{ fontSize: 12, color: c.textSecondary }}>
-                  {att.type === 'image' ? '🖼' : '📄'} {att.name}
+                  <Icon name={att.type === 'image' ? 'image' : 'document'} size={12} color={c.textSecondary} /> {att.name}
                 </Text>
               </View>
             ))}

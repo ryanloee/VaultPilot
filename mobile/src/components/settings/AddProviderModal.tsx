@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, StyleSheet } from 'react-native';
 import { PROVIDERS } from '../../store';
+import Icon from '../../components/Icon';
 
 interface AddProviderModalProps {
   visible: boolean;
@@ -44,7 +45,10 @@ export default function AddProviderModal({
               </TouchableOpacity>
             ))}
             <TouchableOpacity style={[styles.modalItem, { borderColor }]} onPress={onAddCustom}>
-              <Text style={[styles.modalItemName, { color: accentColor }]}>✏️ 自定义提供商</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Icon name="edit" size={16} color={accentColor} />
+                <Text style={[styles.modalItemName, { color: accentColor }]}>自定义提供商</Text>
+              </View>
             </TouchableOpacity>
           </ScrollView>
           <TouchableOpacity style={[styles.modalClose, { borderColor }]} onPress={onClose}>

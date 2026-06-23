@@ -5,6 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { globalSearch, GlobalSearchResult } from '../db';
+import Icon from '../components/Icon';
 import type { SearchScreenProps } from '../navigation/types';
 import { fmtTime } from '../utils/timeFormat';
 
@@ -66,7 +67,7 @@ export default function SearchScreen({ navigation }: SearchScreenProps) {
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
       <View style={[s.searchBar, { borderColor: c.border }]}>
-        <Text style={{ color: c.textSecondary, fontSize: 16 }}>🔍 </Text>
+        <Icon name="search" size={16} color={c.textSecondary} />
         <TextInput
           style={[s.searchInput, { color: c.text }]}
           placeholder="搜索对话和笔记..."

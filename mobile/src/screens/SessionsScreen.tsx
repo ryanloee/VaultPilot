@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAppStore, getColors } from '../store';
 import { getSessions, deleteSession, toggleArchive, togglePin, renameSession, searchSessions, DbSession } from '../db';
+import Icon from '../components/Icon';
 import type { SessionsScreenProps } from '../navigation/types';
 import { fmtTime } from '../utils/timeFormat';
 
@@ -181,7 +182,7 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
       </View>
 
       <View style={[s.searchBar, { borderColor: c.border }]}>
-        <Text style={{ color: c.textSecondary, fontSize: 16 }}>🔍 </Text>
+        <Icon name="search" size={16} color={c.textSecondary} />
         <TextInput
           style={[s.searchInput, { color: c.text }]}
           placeholder="搜索对话..."
@@ -214,7 +215,7 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
             >
               <View style={s.cardHeader}>
                 <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>
-                  {item.pinned ? '📌 ' : ''}{item.title}
+                  {item.pinned ? <Icon name="pin" size={14} color={c.textSecondary} style={{ marginRight: 4 }} /> : null}{item.title}
                 </Text>
                 <Text style={[s.cardTime, { color: c.textSecondary }]}>{fmtTime(item.updated_at)}</Text>
               </View>

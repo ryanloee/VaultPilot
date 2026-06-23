@@ -11,5 +11,7 @@ module.exports = {
     '^expo-file-system$': '<rootDir>/src/__mocks__/expo-file-system.ts',
     '^expo-intent-launcher$': '<rootDir>/src/__mocks__/expo-intent-launcher.ts',
     '^react-native$': '<rootDir>/src/__mocks__/react-native.ts',
+    '^@expo/vector-icons/Ionicons$': '<rootDir>/src/__mocks__/expo-vector-icons.js',
+    '^@expo/vector-icons$': '<rootDir>/src/__mocks__/expo-vector-icons.js',
   },
 };

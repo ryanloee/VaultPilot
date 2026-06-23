@@ -7,6 +7,7 @@ import { useAppStore, getColors, PROVIDERS, type ApiFormat, type ProviderConfig 
 import { checkApi, saveSettings } from '../api/client';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Icon from '../components/Icon';
 
 const ONBOARDING_KEY = 'cfg_onboarding_done';
 
@@ -96,7 +97,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: c.bg }]}>
         <View style={styles.center}>
-          <Text style={styles.logo}>🚀</Text>
+          <Icon name="rocket" size={64} color={store.accentColor} />
           <Text style={[styles.title, { color: c.text }]}>欢迎使用 VaultPilot</Text>
           <Text style={[styles.subtitle, { color: c.textSecondary }]}>
             AI 驱动的个人知识管理助手{'\n'}三端原生 · 本地优先 · 用户自备 Key
@@ -140,7 +141,10 @@ export default function OnboardingScreen({ onComplete }: Props) {
             style={[styles.providerCard, { borderColor: store.accentColor, backgroundColor: c.inputBg }]}
             onPress={startCustom}
           >
-            <Text style={[styles.providerName, { color: store.accentColor }]}>✏️ 自定义提供商</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Icon name="edit" size={17} color={store.accentColor} />
+              <Text style={[styles.providerName, { color: store.accentColor }]}>自定义提供商</Text>
+            </View>
             <Text style={[styles.providerDetail, { color: c.textSecondary }]}>手动填写 API 地址</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.backBtn} onPress={() => setStep(0)}>
@@ -188,7 +192,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
               placeholderTextColor={c.textSecondary}
             />
             <TouchableOpacity onPress={() => setShowKey(!showKey)} style={styles.eyeBtn}>
-              <Text style={{ color: c.textSecondary, fontSize: 18 }}>{showKey ? '🙈' : '👁'}</Text>
+              <Icon name={showKey ? 'eye-off' : 'eye'} size={18} color={c.textSecondary} />
             </TouchableOpacity>
           </View>
 

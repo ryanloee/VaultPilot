@@ -11,6 +11,7 @@ import { exportSettings, importSettings } from '../utils/settingsSync';
 import * as Clipboard from 'expo-clipboard';
 import { getServerConfig, setServerConfig, syncNotesFromServer, getLastSyncTime } from '../services/sync';
 import { ProviderList, ProviderEditor, ThemeSection, UpdateModal, AddProviderModal } from '../components/settings';
+import Icon from '../components/Icon';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
@@ -344,7 +345,10 @@ export default function SettingsScreen() {
               }
             }}
           >
-            <Text style={[styles.btnText, { color: store.accentColor }]}>📤 导出设置</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Icon name="export" size={16} color={store.accentColor} style={{ marginRight: 6 }} />
+              <Text style={[styles.btnText, { color: store.accentColor }]}>导出设置</Text>
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.btn, { borderColor: c.border }]}
@@ -359,7 +363,10 @@ export default function SettingsScreen() {
               }
             }}
           >
-            <Text style={[styles.btnText, { color: c.text }]}>📥 从剪贴板导入</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Icon name="import" size={16} color={c.text} style={{ marginRight: 6 }} />
+              <Text style={[styles.btnText, { color: c.text }]}>从剪贴板导入</Text>
+            </View>
           </TouchableOpacity>
         </View>
 

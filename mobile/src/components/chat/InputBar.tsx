@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Animated, FlatList } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import Icon from '../Icon';
 
 interface Attachment {
   name: string;
@@ -117,10 +118,10 @@ export default function InputBar({
   };
 
   const quickActions = [
-    { icon: '📷', label: '拍照', onPress: () => { closeAll(); onTakePhoto(); } },
-    { icon: '🖼️', label: '相册', onPress: () => { closeAll(); onPickImage(); } },
-    { icon: '📄', label: '文件', onPress: () => { closeAll(); onPickDocument(); } },
-    { icon: '😊', label: '表情', onPress: () => { toggleEmojiPicker(); } },
+    { iconName: 'camera' as const, label: '拍照', onPress: () => { closeAll(); onTakePhoto(); } },
+    { iconName: 'image' as const, label: '相册', onPress: () => { closeAll(); onPickImage(); } },
+    { iconName: 'document' as const, label: '文件', onPress: () => { closeAll(); onPickDocument(); } },
+    { iconName: 'smile' as const, label: '表情', onPress: () => { toggleEmojiPicker(); } },
   ];
 
   return (
@@ -131,7 +132,7 @@ export default function InputBar({
           {attachments.map((att, i) => (
             <View key={i} style={[styles.attachChip, { borderColor, backgroundColor: inputBgColor }]}>
               <Text style={[styles.attachName, { color: textColorSecondary }]} numberOfLines={1}>
-                {att.type === 'image' ? '🖼 ' : '📄 '}{att.name}
+                <Icon name={att.type === 'image' ? 'image' : 'document'} size={12} color={textColorSecondary} /> {att.name}
               </Text>
               <TouchableOpacity onPress={() => onRemoveAttachment(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <Text style={[styles.attachRemove, { color: textColorSecondary }]}>✕</Text>
@@ -157,7 +158,7 @@ export default function InputBar({
                 style={[styles.expandedBtn, { borderColor: accentColor + '40', backgroundColor: accentColor + '10' }]}
                 onPress={action.onPress}
               >
-                <Text style={styles.expandedIcon}>{action.icon}</Text>
+                <Icon name={action.iconName} size={22} color={textColorSecondary} />
                 <Text style={[styles.expandedLabel, { color: textColorSecondary }]}>{action.label}</Text>
               </TouchableOpacity>
             ))}
@@ -215,9 +216,7 @@ export default function InputBar({
           style={[styles.plusBtn, plusExpanded && { backgroundColor: accentColor + '20' }]}
           onPress={togglePlus}
         >
-          <Text style={[styles.plusIcon, { color: plusExpanded ? accentColor : textColorSecondary }]}>
-            {plusExpanded ? '✕' : '＋'}
-          </Text>
+          <Icon name={plusExpanded ? 'close' : 'plus'} size={20} color={plusExpanded ? accentColor : textColorSecondary} />
         </TouchableOpacity>
 
         {/* Text input */}
@@ -247,7 +246,7 @@ export default function InputBar({
           style={[styles.emojiBtn, showEmojiPicker && { backgroundColor: accentColor + '20' }]}
           onPress={toggleEmojiPicker}
         >
-          <Text style={[styles.emojiBtnText, { color: showEmojiPicker ? accentColor : textColorSecondary }]}>😊</Text>
+          <Icon name="smile" size={20} color={showEmojiPicker ? accentColor : textColorSecondary} />
         </TouchableOpacity>
 
         {/* Voice button */}
@@ -256,16 +255,14 @@ export default function InputBar({
             style={[styles.voiceBtn, voiceListening && { backgroundColor: '#FF3B3020' }]}
             onPress={onVoiceToggle}
           >
-            <Text style={[styles.voiceIcon, { color: voiceListening ? '#FF3B30' : textColorSecondary }]}>
-              {voiceListening ? '⏹' : '🎤'}
-            </Text>
+            <Icon name={voiceListening ? 'stop' : 'mic'} size={18} color={voiceListening ? '#FF3B30' : textColorSecondary} />
           </TouchableOpacity>
         )}
 
         {/* Send / Stop button */}
         {streaming ? (
           <TouchableOpacity style={[styles.sendBtn, { backgroundColor: '#FF3B30' }]} onPress={onStop}>
-            <Text style={styles.sendText}>■</Text>
+            <Icon name="stop" size={16} color="#fff" />
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -273,7 +270,7 @@ export default function InputBar({
             onPress={onSend}
             disabled={!input.trim()}
           >
-            <Text style={[styles.sendText, { color: input.trim() ? '#fff' : textColorSecondary }]}>➤</Text>
+            <Icon name="send" size={16} color={input.trim() ? '#fff' : textColorSecondary} />
           </TouchableOpacity>
         )}
       </View>

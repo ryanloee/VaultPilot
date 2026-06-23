@@ -7,6 +7,7 @@ import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
+import Icon from '../components/Icon';
 import type { NotesScreenProps } from '../navigation/types';
 import { fmtTime } from '../utils/timeFormat';
 import { useNetworkState } from '../utils/networkState';
@@ -122,7 +123,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
 
       {/* Search bar */}
       <View style={[s.searchBar, { borderColor: c.border }]}>
-        <Text style={{ color: c.textSecondary, fontSize: 16 }}>🔍 </Text>
+        <Icon name="search" size={16} color={c.textSecondary} />
         <TextInput
           style={[s.searchInput, { color: c.text }]}
           placeholder="搜索笔记..."
@@ -136,7 +137,8 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
       {/* Offline banner */}
       {!isOnline && (
         <View style={{ backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}>📡 离线模式 — 本地笔记可查看编辑{pendingCount > 0 ? ` · ${pendingCount} 条待同步` : ''}</Text>
+          <Icon name="wifi-off" size={13} color="#92400E" />
+          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}> 离线模式 — 本地笔记可查看编辑{pendingCount > 0 ? ` · ${pendingCount} 条待同步` : ''}</Text>
         </View>
       )}
 

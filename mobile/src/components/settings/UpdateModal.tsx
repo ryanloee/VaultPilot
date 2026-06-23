@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking } from 'react-native';
 import type { UpdateInfo } from '../../utils/updateChecker';
 import { downloadAndInstall } from '../../utils/updateChecker';
+import Icon from '../../components/Icon';
 
 interface UpdateModalProps {
   visible: boolean;
@@ -54,7 +55,10 @@ export default function UpdateModal({
     <Modal visible={visible} transparent animationType="slide">
       <View style={styles.modalOverlay}>
         <View style={[styles.modalContent, { backgroundColor: cardBgColor }]}>
-          <Text style={[styles.sectionTitle, { color: textColor }]}>🎉 发现新版本</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Icon name="star" size={20} color={textColor} />
+            <Text style={[styles.sectionTitle, { color: textColor }]}>发现新版本</Text>
+          </View>
           <Text style={{ color: textColor, fontSize: 16, marginTop: 8 }}>
             v{updateInfo.currentVersion} → v{updateInfo.latestVersion}
           </Text>

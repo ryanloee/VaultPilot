@@ -178,6 +178,37 @@
                                                 <TextBlock Text="正在接入原生 Windows 界面。" TextWrapping="Wrap" />
                                             </StackPanel>
                                         </ScrollViewer>
+                                        <!-- Agent tool call status panel -->
+                                        <Border
+                                            x:Name="AgentToolCallPanel"
+                                            Grid.Row="1"
+                                            Padding="12"
+                                            Margin="0,8,0,0"
+                                            CornerRadius="6"
+                                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            BorderThickness="1"
+                                            Visibility="Collapsed"
+                                            AutomationProperties.Name="Agent 工具调用面板">
+                                            <Grid RowSpacing="8">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <!-- Agent status header -->
+                                                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                                                    <ProgressRing x:Name="AgentProgressRing" IsActive="True" Width="16" Height="16" />
+                                                    <TextBlock x:Name="AgentStatusText" Text="Agent 运行中..." FontWeight="SemiBold" />
+                                                    <TextBlock x:Name="AgentStepCount" Text="步骤: 0/20" Opacity="0.7" />
+                                                    <TextBlock x:Name="AgentTokenCount" Text="Token: 0" Opacity="0.7" />
+                                                </StackPanel>
+                                                <!-- Tool call list -->
+                                                <ScrollViewer Grid.Row="1" MaxHeight="200" VerticalScrollBarVisibility="Auto">
+                                                    <StackPanel x:Name="AgentToolCallList" Spacing="4" />
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </Border>
                                         <Button
                                             x:Name="JumpLatestButton"
                                             Margin="0,8,0,0"
@@ -306,6 +337,18 @@
                                             Visibility="Collapsed"
                                             Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                                             AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求" />
+                                        <Button
+                                            x:Name="AgentModeButton"
+                                            Content="Agent"
+                                            ToolTipService.ToolTip="启动 Agent 模式 — AI 自主执行多步工具调用"
+                                            Foreground="{ThemeResource SystemFillColorAttentionBrush}"
+                                            AutomationProperties.Name="Agent 模式" AutomationProperties.HelpText="启动自主 AI Agent 执行多步工具调用" />
+                                        <Button
+                                            x:Name="StopAgentButton"
+                                            Content="停止"
+                                            Visibility="Collapsed"
+                                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                            AutomationProperties.Name="停止 Agent" AutomationProperties.HelpText="立即终止 Agent 执行" />
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>

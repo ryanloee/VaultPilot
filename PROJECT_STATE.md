@@ -949,3 +949,30 @@
 - 发版: v0.3.43 → v0.3.44 (tag v0.3.44 已推送)
 - 新增 4 个回归测试文件 + 修复 4 个测试
 - 项目状态: 0 open PR, v0.3.44
+
+## Fix Cycle 33 (fix-1)
+- #1390 bug: syncNotesFromServer timestamp unit mismatch — seconds vs milliseconds → PR #1391
+  - P0 data integrity bug: localNote.updated_at (seconds from SQLite strftime('%s')) compared with serverTs (milliseconds from Date.getTime())
+  - Fix: multiply localNote.updated_at by 1000 before comparison
+  - 3 regression tests
+- #1392 refactor: db.ts FTS5 query construction deduplication → PR #1393
+  - Extracted buildFtsQuery() helper from 4 duplicate inline constructions
+  - 4 regression tests
+- #1394 test: checkForUpdate unit tests → PR #1395
+  - 10 edge case tests for checkForUpdate()
+  - Covers: version comparison, API errors, network errors, missing assets
+- 17 new tests total
+- 编译/测试：通过（522 mobile tests pass）
+
+## Review Cycle 33
+| PR | 标题 | 逻辑 | 测试 | 安全 | 决策 |
+|----|------|------|------|------|------|
+| #1401 | paginate syncNotesFromServer for large vaults (#1398) | ✅ | ✅ | ✅ | 合并 |
+| #1400 | looksLikeSmallTalk + extractCJKNgrams + isCJK unit tests (#1397) | ✅ | ✅ | ✅ | 合并 |
+| #1399 | extract text from ContentPart[] in system messages (#1396) | ✅ | ✅ | ✅ | 合并 |
+| #1395 | checkForUpdate unit tests — 10 edge case tests (#1394) | ✅ | ✅ | ✅ | 合并 |
+| #1393 | extract buildFtsQuery helper — deduplicate 4 inline FTS5 query constructions (#1392) | ✅ | ✅ | ✅ | 合并 |
+| #1391 | sync timestamp unit mismatch — seconds vs milliseconds (#1390) | ✅ | ✅ | ✅ | 合并 |
+- 发版: v0.3.44 → v0.3.45 (tag v0.3.45 已推送)
+- 6 个 PR 全部合并，667 行新增代码
+- 项目状态: 0 open PR, v0.3.45

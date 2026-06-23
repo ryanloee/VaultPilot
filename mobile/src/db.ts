@@ -142,9 +142,16 @@ function uuid(): string {
   });
 }
 
-/** Escape SQL LIKE special characters (%, _, \) so they match literally. */
+/** Escape SQL LIKE special characters (%, _, \\) so they match literally. */
 function escapeLikePattern(pattern: string): string {
   return pattern.replace(/[\\%_]/g, ch => `\\${ch}`);
+}
+
+/** Build an FTS5 MATCH query from user input. Splits on whitespace, escapes double quotes, joins with OR. */
+function buildFtsQuery(query: string): string | null {
+  const terms = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`);
+  const ftsQuery = terms.join(' OR ');
+  return ftsQuery || null;
 }
 
 export interface DbSession {
@@ -203,7 +210,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
       [`%${escaped}%`]
     );
   }
-  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+  const ftsQuery = buildFtsQuery(query);
   if (!ftsQuery) return [];
   const escaped = escapeLikePattern(query);
   // FTS5 on message content + LIKE on session title (titles are short, LIKE is fine)
@@ -342,7 +349,7 @@ export async function searchNotes(query: string): Promise<DbNote[]> {
       [`%${escaped}%`, `%${escaped}%`]
     );
   }
-  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+  const ftsQuery = buildFtsQuery(query);
   if (!ftsQuery) return [];
   const ftsResults = await db.getAllAsync<DbNote>(
     `SELECT n.* FROM notes n
@@ -379,7 +386,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
   // Search notes
   let noteResults: GlobalSearchResult[];
   if (ftsSupported) {
-    const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+    const ftsQuery = buildFtsQuery(query);
     if (!ftsQuery) return [];
     noteResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'note' as type, n.id, n.title,
@@ -403,7 +410,8 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
   // Search session messages (join back to get session title)
   let sessionResults: GlobalSearchResult[];
   if (ftsSupported) {
-    const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ');
+    const ftsQuery = buildFtsQuery(query);
+    if (!ftsQuery) return [];
     sessionResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'session' as type, m.id, s.title,
               SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,

@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet } from 'react-native';
 import type { ApiFormat, ProviderConfig } from '../../store';
-import type { PROVIDERS } from '../../store';
+import { PROVIDERS } from '../../store';
 import Icon from '../../components/Icon';
 
 interface ProviderEditorProps {
@@ -55,9 +55,6 @@ export default function ProviderEditor({
   onSelectPreset,
   provider,
 }: ProviderEditorProps) {
-  // We need PROVIDERS for presets — import from store
-  const { PROVIDERS } = require('../../store');
-
   return (
     <View style={[styles.editSection, { borderColor }]}>
       <Text style={[styles.label, { color: textColorSecondary }]}>名称</Text>
@@ -70,7 +67,7 @@ export default function ProviderEditor({
 
       <Text style={[styles.label, { color: textColorSecondary }]}>快速选择</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-        {PROVIDERS.map((p: any) => (
+        {PROVIDERS.map((p) => (
           <TouchableOpacity
             key={p.name}
             style={[

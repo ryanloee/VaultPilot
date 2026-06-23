@@ -904,3 +904,14 @@
 - 创建 #1362: normalize_settings 零测试覆盖 → PR #1364 (12 单元测试)
 - 创建 #1363: SettingsScreen 静默 catch 块 → PR #1365 (console.warn)
 - 项目状态: 3 open issues (#913, #1360, #1362 待合并), 2 open PR (#1364, #1365), v0.3.42, 109 Rust + 455 Mobile 测试通过
+
+## PR 审核（循环#283）
+- 合并 6 个 PR（全部 CI 通过：build/cargo audit/clippy/fmt/test/linux-cli-build/winui-build）
+- #1373 fix: autoTag.ts CJK regex — include Japanese/Korean ranges (#1372) ✅ 直接合并
+- #1371 test: add flushPendingSyncs unit tests (8 tests) (#1368) ✅ 直接合并
+- #1370 fix: add console.warn to mobile silent catch blocks (13 catch blocks across 10 files) (#1367) ✅ 直接合并
+- #1369 fix: replace .unwrap() on Mutex locks in vaultpilot-agent.rs (#1366) ✅ 直接合并
+- #1365 fix: mobile SettingsScreen silent catch blocks (3 catch blocks) (#1363) ✅ 直接合并
+- #1364 test: normalize_settings unit tests (12 tests) (#1362) ✅ 直接合并
+- 发版: v0.3.42 → v0.3.43 (tag v0.3.43 已推送)
+- 项目状态: 0 open PR, v0.3.43

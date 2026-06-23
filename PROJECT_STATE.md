@@ -1033,3 +1033,14 @@
 - #1422: rag.ts parseToolCalls + buildSystemPrompt unit tests — 19 tests (PR #1424)
 - v0.3.46, 97 Rust + 660 Mobile = 757 tests, Clippy clean
 - 2 open issues (#913, #1360), 2 open PR (#1423, #1424)
+
+## PR 审核 review (循环#289)
+| PR | 标题 | 逻辑 | 测试 | 安全 | 决策 |
+|----|------|------|------|------|------|
+| #1423 | updateChecker.ts console.log → console.warn (#1421) | ✅ | ✅ | ✅ | 合并 |
+| #1424 | rag.ts parseToolCalls + buildSystemPrompt unit tests — 19 tests (#1422) | ✅ | ✅ | ✅ | 合并 |
+| #1427 | export extractKeywords from rag.ts + 14 unit tests (#1425) | ✅ | ✅ | ✅ | 合并 |
+| #1428 | export buildFtsQuery + escapeLikePattern from db.ts (#1426) | ✅ | ✅ | ✅ | 合并 |
+- 发版: v0.3.46 → v0.3.47 (tag v0.3.47 已推送)
+- 4 个 PR 全部合并，409 行新增代码（5 个测试文件 + 1 个 bug 修复 + 2 个 refactor）
+- 项目状态: 0 open PR, v0.3.47

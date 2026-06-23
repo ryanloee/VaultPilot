@@ -18,6 +18,12 @@ import { useNetworkState } from '../utils/networkState';
 import { ChatHeader, MessageList, InputBar, OfflineBanner, ScrollToBottomButton } from '../components/chat';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; attachments?: { name: string; type: 'image' | 'file' }[]; }
+
+/** Safe JSON.parse for message attachments — returns undefined on corrupt data. */
+function safeParseAttachments(raw: string | null | undefined): { name: string; type: 'image' | 'file' }[] | undefined {
+  if (!raw) return undefined;
+  try { return JSON.parse(raw); } catch { return undefined; }
+}
 interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
 
 /** Infer MIME type from file name/extension. */
@@ -101,7 +107,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       const history = await getMessages(sid);
       setMsgs(history.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
-        attachments: m.attachments ? JSON.parse(m.attachments) : undefined,
+        attachments: safeParseAttachments(m.attachments),
       })));
     } catch (e) {
       console.warn('[Chat] loadSession failed:', e);
@@ -124,7 +130,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           const history = await getMessages(existing.id);
           setMsgs(history.map(m => ({
             id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
-            attachments: m.attachments ? JSON.parse(m.attachments) : undefined,
+            attachments: safeParseAttachments(m.attachments),
           })));
         } else {
           const id = await createSession('新对话');

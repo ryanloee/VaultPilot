@@ -154,8 +154,31 @@ describe('syncNotesFromServer', () => {
     expect(result.updated).toBe(0);
     expect(result.skipped).toBe(0);
     expect(result.errors).toBe(0);
-    expect(mockCreateNote).toHaveBeenCalledWith('Test Note', 'Note content here');
+    expect(mockCreateNote).toHaveBeenCalledWith('Test Note', 'Note content here', 'note-1');
     expect(mockUpdateNote).not.toHaveBeenCalled();
+  });
+
+  it('no duplicate notes on re-sync — server ID preserved', async () => {
+    (AsyncStorage.getItem as jest.Mock)
+      .mockResolvedValueOnce('http://localhost:3000')
+      .mockResolvedValueOnce('');
+    // Local has the note with the SAME server ID (from previous sync)
+    mockGetNotes.mockResolvedValue([
+      { id: 'note-1', title: 'Test Note', content: 'Note content here', starred: 0, folder: '', created_at: 0, updated_at: Date.now() },
+    ]);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        notes: [{ id: 'note-1', title: 'Test Note', updated_at: '2020-01-01T00:00:00Z' }],
+        total: 1,
+      }),
+    });
+
+    const result = await syncNotesFromServer();
+    expect(result.skipped).toBe(1);
+    expect(result.imported).toBe(0);
+    expect(mockCreateNote).not.toHaveBeenCalled();
   });
 
   it('skips notes where local is newer', async () => {

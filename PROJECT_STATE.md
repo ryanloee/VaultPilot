@@ -990,3 +990,21 @@
 - #1417: SSE reconnection duplicate content → contentDelivered dedup (PR #1420)
 - 18 个回归测试新增 (9+6+3)
 - 763 Rust + 565 Mobile = 1328 tests pass, Clippy clean
+
+## Review Cycle 34
+| PR | 标题 | 逻辑 | 测试 | 安全 | 决策 |
+|----|------|------|------|------|------|
+| #1420 | SSE reconnection no longer sends duplicate content (#1417) | ✅ | ✅ | ✅ | 合并 |
+| #1419 | wrap JSON.parse in settingsSync.ts with try/catch (#1415) | ✅ | ✅ | ✅ | 合并 |
+| #1418 | protect JSON.parse(m.attachments) with safeParseAttachments (#1414) | ✅ | ✅ | ✅ | 合并 |
+| #1413 | messageV2.ts + clientUtils.ts pure function unit tests — 21 tests (#1410) | ✅ | ✅ | ✅ | 合并 |
+| #1412 | latex.ts pure function unit tests — 30 tests (#1409) | ✅ | ✅ | ✅ | 合并 |
+| #1411 | console.log → console.warn consistency + sse.ts silent catch (#1408) | ✅ | ✅ | ✅ | 合并 |
+| #1407 | fmtTime unit tests — 7 tests (#1404) | ✅ | ✅ | ✅ | 合并 |
+| #1406 | globalSearch buildFtsQuery dedup (#1403) | ✅ | ✅ | ✅ | 合并 |
+| #1405 | add console.warn to SettingsScreen + UpdateModal catch blocks (#1402) | ✅ | ✅ | ✅ | 合并 |
+- 发版: v0.3.45 → v0.3.46 (tag v0.3.46 已推送)
+- 9 个 PR 全部合并，765 行新增代码（6 个测试文件 + 3 个 bug 修复）
+- 763 Rust + 636 Mobile = 1399 tests pass, Clippy clean
+- 预先存在问题: issue_1336_chat_screen_split.test.ts Icon.tsx 模块编译错误（非本次引入）
+- 项目状态: 0 open PR, v0.3.46

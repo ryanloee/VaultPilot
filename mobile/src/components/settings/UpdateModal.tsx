@@ -42,7 +42,8 @@ export default function UpdateModal({
       if (!ok) {
         setError('下载或安装失败，请手动下载');
       }
-    } catch {
+    } catch (e) {
+      console.warn('[UpdateModal] Download failed:', e);
       setError('下载失败，请手动下载');
     } finally {
       setDownloading(false);

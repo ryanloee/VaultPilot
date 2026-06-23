@@ -127,7 +127,8 @@ export default function SettingsScreen() {
       } else {
         Alert.alert('已是最新', `当前版本 v${appJson.expo.version} 已是最新`);
       }
-    } catch {
+    } catch (e) {
+      console.warn('[Settings] Check update failed:', e);
       Alert.alert('检查失败', '无法连接到更新服务器');
     } finally {
       setCheckingUpdate(false);

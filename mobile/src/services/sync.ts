@@ -149,9 +149,9 @@ export async function autoSyncOnStartup(): Promise<SyncResult | null> {
     const reachable = await pingBackend();
     if (!reachable) return null;
 
-    console.log('[Sync] Backend reachable, starting auto-sync...');
+    console.warn('[Sync] Backend reachable, starting auto-sync...');
     const result = await syncNotesFromServer();
-    console.log('[Sync] Auto-sync complete:', result);
+    console.warn('[Sync] Auto-sync complete:', result);
     return result;
   } catch (e) {
     console.warn('[Sync] Auto-sync failed:', e);

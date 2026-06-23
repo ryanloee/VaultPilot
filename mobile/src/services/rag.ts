@@ -175,14 +175,14 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
   try {
     // Skip empty messages and trivial messages
     if (!userMessage.trim() || looksLikeSmallTalk(userMessage)) {
-      console.log('[RAG] Skipping:', userMessage.trim() ? 'small talk' : 'empty message');
+      console.warn('[RAG] Skipping:', userMessage.trim() ? 'small talk' : 'empty message');
       return null;
     }
 
     // Check if we have any notes at all
     const allNotes = await getNotes();
     if (allNotes.length === 0) {
-      console.log('[RAG] No notes in database');
+      console.warn('[RAG] No notes in database');
       return null;
     }
 
@@ -191,7 +191,7 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       ? recentMessages.join(' ') + ' ' + userMessage
       : userMessage;
     const keywords = extractKeywords(allText);
-    console.log('[RAG] Extracted keywords:', keywords);
+    console.warn('[RAG] Extracted keywords:', keywords);
 
     // Search with keywords
     let results: DbNote[] = [];
@@ -214,13 +214,13 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
 
     // Fallback: if no search results, use recent notes (matching Win端 load_recent_notes_for_overview)
     if (results.length === 0) {
-      console.log('[RAG] No search matches, falling back to recent notes');
+      console.warn('[RAG] No search matches, falling back to recent notes');
       results = allNotes.slice(0, MAX_CONTEXT_NOTES);
     }
 
     if (results.length === 0) return null;
 
-    console.log('[RAG] Using', results.length, 'notes for context');
+    console.warn('[RAG] Using', results.length, 'notes for context');
 
     const blocks = results.map(n => {
       const title = n.title || (isChinese() ? '无标题' : 'Untitled');

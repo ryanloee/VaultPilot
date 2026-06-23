@@ -93,7 +93,7 @@ export function parseSSEStream(
         reader.releaseLock();
         resolve();
       } catch (err) {
-        await reader.cancel().catch(() => {});
+        await reader.cancel().catch(e => console.warn("[SSE] reader.cancel failed:", e));
         reader.releaseLock();
         if (options?.signal?.aborted) {
           reject(new DOMException('Aborted', 'AbortError'));

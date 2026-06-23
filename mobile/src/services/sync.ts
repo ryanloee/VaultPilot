@@ -55,23 +55,28 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  // List all notes from server
-  const listRes = await fetch(`${url}/api/notes?limit=200`, {
-    headers,
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!listRes.ok) throw new Error(`获取笔记列表失败: ${listRes.status}`);
+  // Paginate through all notes from server (#1398)
+  const PAGE_SIZE = 200;
+  const MAX_NOTES = 10000; // safety limit
+  const allServerNotes: Array<{
+    id: string; title: string; tags?: string[]; updatedAt?: string; updated_at?: string;
+  }> = [];
 
-  const { notes: serverNotes } = await listRes.json() as {
-    notes: Array<{
-      id: string;
-      title: string;
-      tags?: string[];
-      updatedAt?: string;
-      updated_at?: string;
-    }>;
-    total: number;
-  };
+  for (let offset = 0; offset < MAX_NOTES; offset += PAGE_SIZE) {
+    const listRes = await fetch(`${url}/api/notes?limit=${PAGE_SIZE}&offset=${offset}`, {
+      headers,
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!listRes.ok) throw new Error(`获取笔记列表失败: ${listRes.status}`);
+
+    const { notes } = await listRes.json() as {
+      notes: typeof allServerNotes;
+      total: number;
+    };
+
+    allServerNotes.push(...notes);
+    if (notes.length < PAGE_SIZE) break; // last page
+  }
 
   let imported = 0;
   let updated = 0;
@@ -82,7 +87,7 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
   const localNotes = await getNotes();
   const localMap = new Map(localNotes.map(n => [n.id, n]));
 
-  for (const meta of serverNotes) {
+  for (const meta of allServerNotes) {
     try {
       const serverUpdated = meta.updatedAt ?? meta.updated_at ?? '';
       const serverTs = serverUpdated ? new Date(serverUpdated).getTime() : 0;

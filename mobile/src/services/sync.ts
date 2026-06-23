@@ -67,7 +67,10 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
       headers,
       signal: AbortSignal.timeout(30000),
     });
-    if (!listRes.ok) throw new Error(`获取笔记列表失败: ${listRes.status}`);
+    if (!listRes.ok) {
+      const errBody = await listRes.text().catch(() => '');
+      throw new Error(`获取笔记列表失败: ${listRes.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ''}`);
+    }
 
     const { notes } = await listRes.json() as {
       notes: typeof allServerNotes;
@@ -105,7 +108,11 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
         headers,
         signal: AbortSignal.timeout(10000),
       });
-      if (!noteRes.ok) { errors++; continue; }
+      if (!noteRes.ok) {
+        console.warn(`[Sync] Failed to fetch note ${meta.id}: HTTP ${noteRes.status}`);
+        errors++;
+        continue;
+      }
 
       const noteData = await noteRes.json() as {
         meta: { id: string; title: string; tags?: string[] };

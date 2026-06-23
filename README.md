@@ -114,6 +114,56 @@ Download the latest installer from [Releases](https://github.com/ryanloee/VaultP
 3. Import existing Markdown notes or start writing new ones
 4. Ask questions in the chat
 
+### Agent Mode (CLI)
+
+VaultPilot's Agent Mode lets you run an autonomous AI agent that plans, executes tools, and iterates until your task is complete.
+
+```bash
+# Basic usage — agent will search your vault, read files, and answer
+vaultpilot agent "Summarize my notes from this week"
+
+# Limit the number of tool-calling steps (default: 20)
+vaultpilot agent --max-steps 10 "Find all TODO items in my vault"
+
+# Auto-approve write operations (⚠️ use with caution)
+vaultpilot agent --auto-approve "Create a daily note for today"
+```
+
+**How it works:**
+1. The agent receives your prompt and plans a strategy
+2. It calls tools (search_notes, read_file, list_directory, save_note) to gather information
+3. Results are fed back to the LLM for the next step
+4. The loop continues until the agent produces a final answer or hits a limit
+
+**Available tools:**
+| Tool | Description |
+|------|-------------|
+| `search_notes` | Full-text search across your vault |
+| `read_file` | Read a specific file (capped at 50KB) |
+| `list_directory` | List files in a directory |
+| `list_notes` | List recent notes |
+| `save_note` | Save a new note (requires approval) |
+
+**Safety features:**
+- 🔒 **Vault-scoped**: All file operations are confined to your vault directory
+- 🛡️ **Read-only by default**: Write operations require explicit approval
+- 📋 **Audit log**: Every tool call is logged for review
+- ⏱️ **Resource limits**: 5-minute timeout, 100 tool calls max, configurable step limit
+
+> ⚠️ **Warning**: The `--auto-approve` flag skips write confirmation. Only use it for trusted tasks.
+
+**MCP Server Integration:**
+
+External AI agents (Claude Code, Codex, etc.) can also interact with your vault via the MCP protocol:
+
+```bash
+# Start MCP stdio server (for local agent integration)
+vaultpilot mcp
+
+# Start MCP HTTP server (for remote agent integration)
+vaultpilot mcp-http --token YOUR_SECRET_TOKEN
+```
+
 ### Build from Source
 
 See [docs/build.md](docs/build.md) for detailed build instructions.
@@ -243,6 +293,44 @@ npx expo export --platform android  # 生产构建
 2. 在设置中配置知识库目录和 API Key
 3. 导入现有 Markdown 笔记，或直接开始记录
 4. 在聊天框中提问
+
+### Agent 模式（CLI）
+
+VaultPilot 的 Agent 模式让 AI 自主执行多步工具调用循环：规划、执行工具、迭代直到完成任务。
+
+```bash
+# 基本用法 — Agent 会搜索笔记库、读取文件、回答问题
+vaultpilot agent "总结我这周的笔记"
+
+# 限制工具调用步骤数（默认：20）
+vaultpilot agent --max-steps 10 "找到我笔记库中所有的 TODO"
+
+# 自动批准写入操作（⚠️ 谨慎使用）
+vaultpilot agent --auto-approve "创建今天的日记"
+```
+
+**工作流程：**
+1. Agent 接收你的提示并制定策略
+2. 调用工具（search_notes、read_file、list_directory、save_note）收集信息
+3. 将结果反馈给 LLM 进行下一步
+4. 循环继续直到 Agent 给出最终答案或达到限制
+
+**可用工具：**
+| 工具 | 描述 |
+|------|------|
+| `search_notes` | 全文搜索笔记库 |
+| `read_file` | 读取指定文件（上限 50KB） |
+| `list_directory` | 列出目录中的文件 |
+| `list_notes` | 列出最近的笔记 |
+| `save_note` | 保存新笔记（需要批准） |
+
+**安全特性：**
+- 🔒 **Vault 范围限制**：所有文件操作限制在笔记库目录内
+- 🛡️ **默认只读**：写入操作需要显式批准
+- 📋 **审计日志**：每次工具调用都有记录
+- ⏱️ **资源限制**：5 分钟超时、最多 100 次工具调用、可配置步骤限制
+
+> ⚠️ **警告**：`--auto-approve` 跳过写入确认，仅用于可信任务。
 
 ### 从源码构建
 

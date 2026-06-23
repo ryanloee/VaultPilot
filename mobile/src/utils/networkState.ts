@@ -39,9 +39,12 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
       win.addEventListener('offline', handleOffline);
     }
 
-    // Initial check
+    // #1448: Initial connectivity check — actively verify network reachability
+    // instead of relying solely on navigator.onLine (unreliable in RN).
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       setIsOnline(false);
+    } else {
+      checkConnection();
     }
 
     return () => {
@@ -50,7 +53,7 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
         win.removeEventListener('offline', handleOffline);
       }
     };
-  }, []);
+  }, [checkConnection]);
 
   return { isOnline, checkConnection };
 }

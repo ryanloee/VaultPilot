@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -10,6 +11,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing_subscriber::EnvFilter;
+use vaultpilot_lib::agent::{
+    AgentConfig, AgentEvent as LibAgentEvent, AgentPermission, AgentResourceLimits,
+};
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
     import_markdown_async, initialize_storage_async, list_notes_async, load_chat_state_async,
@@ -18,6 +22,28 @@ use vaultpilot_lib::storage::{
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
 };
+
+// ── Agent session state ─────────────────────────────────────────────────
+// Allows runAgent (background task) and respondToWriteApproval (main loop)
+// to coordinate write-approval decisions via a oneshot channel.
+
+/// Shared state for the active agent session's write-approval channel.
+static AGENT_APPROVAL: StdMutex<Option<std::sync::mpsc::Sender<bool>>> = StdMutex::new(None);
+
+/// Shared stdout writer — ensures atomic line writes from both the main loop
+/// and the background agent task.
+struct SharedWriter {
+    inner: StdMutex<Box<dyn Write + Send>>,
+}
+
+impl SharedWriter {
+    fn write_line(&self, line: &str) {
+        if let Ok(mut w) = self.inner.lock() {
+            let _ = writeln!(w, "{line}");
+            let _ = w.flush();
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,7 +107,9 @@ fn main() {
     vaultpilot_lib::search_rules::SearchRules::init_from_file(&rules_path);
 
     let stdin = io::stdin();
-    let mut stdout = io::stdout();
+    let shared_writer: Arc<SharedWriter> = Arc::new(SharedWriter {
+        inner: StdMutex::new(Box::new(io::stdout())),
+    });
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -170,8 +198,7 @@ fn main() {
                 ),
             );
             if let Ok(serialized) = serde_json::to_string(&response) {
-                let _ = writeln!(stdout, "{serialized}");
-                let _ = stdout.flush();
+                shared_writer.write_line(&serialized);
             }
             continue;
         }
@@ -188,8 +215,7 @@ fn main() {
                     vaultpilot_lib::sanitize_error(&format!("invalid UTF-8 in request: {e}")),
                 );
                 if let Ok(serialized) = serde_json::to_string(&response) {
-                    let _ = writeln!(stdout, "{serialized}");
-                    let _ = stdout.flush();
+                    shared_writer.write_line(&serialized);
                 }
                 continue;
             }
@@ -197,7 +223,11 @@ fn main() {
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
         let line = line.to_string();
         let response = match runtime.block_on(async {
-            tokio::time::timeout(REQUEST_TIMEOUT, handle_line(&context, &line, &mut stdout)).await
+            tokio::time::timeout(
+                REQUEST_TIMEOUT,
+                handle_line(&context, &line, &shared_writer),
+            )
+            .await
         }) {
             Ok(response) => response,
             Err(_elapsed) => {
@@ -217,10 +247,7 @@ fn main() {
         };
 
         if let Ok(serialized) = serde_json::to_string(&response) {
-            if writeln!(stdout, "{serialized}").is_err() || stdout.flush().is_err() {
-                log_agent_event("stdout_error", "stdout write failed, exiting agent loop");
-                break;
-            }
+            shared_writer.write_line(&serialized);
         }
     }
 }
@@ -295,7 +322,7 @@ fn log_agent_event(event: &str, detail: &str) {
 async fn handle_line(
     context: &StorageContext,
     line: &str,
-    stdout: &mut impl Write,
+    writer: &Arc<SharedWriter>,
 ) -> AgentResponse {
     let request = match serde_json::from_str::<AgentRequest>(line) {
         Ok(request) => request,
@@ -311,7 +338,7 @@ async fn handle_line(
         }
     };
 
-    match handle_request(context, &request, stdout).await {
+    match handle_request(context, &request, writer).await {
         Ok(result) => AgentResponse::ok(request.id, result),
         Err(error) => AgentResponse::error(request.id, "request_failed", error),
     }
@@ -320,7 +347,7 @@ async fn handle_line(
 async fn handle_request(
     context: &StorageContext,
     request: &AgentRequest,
-    stdout: &mut impl Write,
+    writer: &Arc<SharedWriter>,
 ) -> Result<Value, String> {
     match request.method.as_str() {
         "ping" => Ok(serde_json::json!({ "ok": true })),
@@ -392,7 +419,19 @@ async fn handle_request(
                 params.history,
                 params.image_paths,
                 params.model_override,
-                |stage, detail| emit_agent_status(stdout, stage, detail),
+                |stage, detail| {
+                    writer.write_line(
+                        &serde_json::to_string(&AgentEvent {
+                            event: "agentStatus".to_string(),
+                            payload: AgentStatusPayload {
+                                stage: stage.to_string(),
+                                detail,
+                                timestamp: Utc::now().to_rfc3339(),
+                            },
+                        })
+                        .unwrap_or_default(),
+                    )
+                },
             )
             .await;
             serialize_string_result(result)
@@ -403,10 +442,58 @@ async fn handle_request(
                 context,
                 params.summary,
                 params.history,
-                |stage, detail| emit_agent_status(stdout, stage, detail),
+                |stage, detail| {
+                    writer.write_line(
+                        &serde_json::to_string(&AgentEvent {
+                            event: "agentStatus".to_string(),
+                            payload: AgentStatusPayload {
+                                stage: stage.to_string(),
+                                detail,
+                                timestamp: Utc::now().to_rfc3339(),
+                            },
+                        })
+                        .unwrap_or_default(),
+                    )
+                },
             )
             .await;
             serialize_string_result(result)
+        }
+        "runAgent" => {
+            let params: RunAgentParams = parse_params(&request.params)?;
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let ctx = context.clone();
+            let writer: Arc<SharedWriter> = Arc::clone(writer);
+            let prompt = params.prompt.clone();
+            let max_steps = params.max_steps.unwrap_or(20);
+            let auto_approve = params.auto_approve.unwrap_or(false);
+
+            // Spawn agent in background so main loop can continue processing
+            // respondToWriteApproval requests.
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to create agent runtime");
+                rt.block_on(async move {
+                    run_agent_task(&settings, &ctx, &prompt, max_steps, auto_approve, writer).await;
+                });
+            });
+
+            Ok(serde_json::json!({ "status": "started" }))
+        }
+        "respondToWriteApproval" => {
+            let params: RespondToWriteApprovalParams = parse_params(&request.params)?;
+            let tx = AGENT_APPROVAL.lock().unwrap().take();
+            match tx {
+                Some(tx) => {
+                    let _ = tx.send(params.approved);
+                    Ok(serde_json::json!({ "ok": true }))
+                }
+                None => Err("no active agent session waiting for approval".to_string()),
+            }
         }
         method => Err(format!("unknown method: {method}")),
     }
@@ -444,24 +531,215 @@ where
         })
 }
 
-fn emit_agent_status(stdout: &mut impl Write, stage: &str, detail: String) {
-    let event = AgentEvent {
-        event: "agentStatus".to_string(),
-        payload: AgentStatusPayload {
-            stage: stage.to_string(),
-            detail,
-            timestamp: Utc::now().to_rfc3339(),
+/// Run an agent session in the background. Emits events via `writer` and
+/// handles write-approval through the global `AGENT_APPROVAL` channel.
+async fn run_agent_task(
+    settings: &AppSettings,
+    context: &StorageContext,
+    prompt: &str,
+    max_steps: usize,
+    auto_approve: bool,
+    writer: Arc<SharedWriter>,
+) {
+    let config = AgentConfig {
+        name: "vaultpilot-agent-ui".into(),
+        permission: AgentPermission::ReadWrite,
+        limits: AgentResourceLimits {
+            max_duration: Duration::from_secs(300),
+            max_tool_calls: max_steps as u64,
+            max_tokens: 0,
         },
+        ..AgentConfig::default()
     };
 
-    if let Ok(serialized) = serde_json::to_string(&event) {
-        if writeln!(stdout, "{serialized}").is_err() {
-            return;
+    let result = vaultpilot_lib::agent::run_agent(settings, context, prompt, config, |event| {
+        match event {
+            LibAgentEvent::Thinking { step } => {
+                emit_event(
+                    &writer,
+                    "thinking",
+                    &format!("Step {step}"),
+                    Some(*step),
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                true
+            }
+            LibAgentEvent::ToolCall { step, tool, args } => {
+                emit_event(
+                    &writer,
+                    "toolCall",
+                    &format!("Calling {tool}"),
+                    Some(*step),
+                    Some(tool),
+                    Some(args),
+                    None,
+                    None,
+                );
+                true
+            }
+            LibAgentEvent::ToolResult {
+                step,
+                tool,
+                result_preview,
+                is_error,
+            } => {
+                emit_event(
+                    &writer,
+                    "toolResult",
+                    result_preview,
+                    Some(*step),
+                    Some(tool),
+                    None,
+                    Some(result_preview),
+                    Some(*is_error),
+                );
+                true
+            }
+            LibAgentEvent::FinalAnswer { text } => {
+                emit_event(&writer, "finalAnswer", text, None, None, None, None, None);
+                true
+            }
+            LibAgentEvent::StepLimitReached { steps } => {
+                emit_event(
+                    &writer,
+                    "stepLimitReached",
+                    &format!("{steps} steps reached"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                true
+            }
+            LibAgentEvent::TokenBudgetExceeded {
+                tokens_used,
+                budget,
+            } => {
+                emit_event(
+                    &writer,
+                    "tokenBudgetExceeded",
+                    &format!("{tokens_used}/{budget}"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                true
+            }
+            LibAgentEvent::Timeout => {
+                emit_event(
+                    &writer,
+                    "timeout",
+                    "Agent timed out",
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                true
+            }
+            LibAgentEvent::Error { message } => {
+                emit_event(&writer, "error", message, None, None, None, None, None);
+                true
+            }
+            LibAgentEvent::WriteApprovalNeeded { tool, args } => {
+                emit_event(
+                    &writer,
+                    "writeApprovalNeeded",
+                    &format!("Write approval needed for {tool}"),
+                    None,
+                    Some(tool),
+                    Some(args),
+                    None,
+                    None,
+                );
+
+                if auto_approve {
+                    return true;
+                }
+
+                // Wait for approval from the UI via respondToWriteApproval
+                let (tx, rx) = std::sync::mpsc::channel();
+                *AGENT_APPROVAL.lock().unwrap() = Some(tx);
+                // Block until approval received (this runs in a background thread,
+                // not on the main stdin loop, so blocking is fine).
+                rx.recv().unwrap_or(false)
+            }
         }
-        if let Err(e) = stdout.flush() {
-            eprintln!("[emit_agent_status] Failed to flush stdout: {e}");
+    })
+    .await;
+
+    match result {
+        Ok(result) => {
+            let final_event = serde_json::json!({
+                "event": "agentStatus",
+                "payload": {
+                    "stage": "agentCompleted",
+                    "detail": result.answer,
+                    "stepsUsed": result.steps_used,
+                    "tokensUsed": result.tokens_used,
+                    "timestamp": Utc::now().to_rfc3339()
+                }
+            });
+            writer.write_line(&final_event.to_string());
+        }
+        Err(e) => {
+            let err_event = serde_json::json!({
+                "event": "agentStatus",
+                "payload": {
+                    "stage": "error",
+                    "detail": vaultpilot_lib::sanitize_error(&e.to_string()),
+                    "timestamp": Utc::now().to_rfc3339()
+                }
+            });
+            writer.write_line(&err_event.to_string());
         }
     }
+
+    // Clear any pending approval channel
+    *AGENT_APPROVAL.lock().unwrap() = None;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_event(
+    writer: &SharedWriter,
+    stage: &str,
+    detail: &str,
+    step: Option<usize>,
+    tool: Option<&str>,
+    args: Option<&str>,
+    result_preview: Option<&str>,
+    is_error: Option<bool>,
+) {
+    let mut payload = serde_json::json!({
+        "stage": stage,
+        "detail": detail,
+        "timestamp": Utc::now().to_rfc3339()
+    });
+    if let Some(s) = step {
+        payload["step"] = serde_json::json!(s);
+    }
+    if let Some(t) = tool {
+        payload["tool"] = serde_json::json!(t);
+    }
+    if let Some(a) = args {
+        payload["args"] = serde_json::json!(a);
+    }
+    if let Some(r) = result_preview {
+        payload["resultPreview"] = serde_json::json!(r);
+    }
+    if let Some(e) = is_error {
+        payload["isError"] = serde_json::json!(e);
+    }
+
+    let event = serde_json::json!({ "event": "agentStatus", "payload": payload });
+    writer.write_line(&event.to_string());
 }
 
 fn read_image_preview(path: &str) -> Result<String, String> {
@@ -578,6 +856,22 @@ struct AskWithAiParams {
 struct CompressChatHistoryParams {
     summary: Option<ConversationSummary>,
     history: Vec<ConversationTurn>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunAgentParams {
+    prompt: String,
+    #[serde(default)]
+    max_steps: Option<usize>,
+    #[serde(default)]
+    auto_approve: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RespondToWriteApprovalParams {
+    approved: bool,
 }
 
 impl AgentResponse {

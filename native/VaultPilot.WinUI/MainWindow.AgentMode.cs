@@ -85,28 +85,26 @@ public sealed partial class MainWindow : Window
                 autoApprove
             };
 
+            // runAgent returns immediately with { status: "started" }
+            // Agent events arrive via AgentStatusReceived → HandleAgentEvent
             var result = await SendWithTimeoutAsync(
                 token => _backendClient.SendAsync<JsonElement>("runAgent", request, token),
                 "runAgent");
 
             if (ct.IsCancellationRequested) return;
 
-            // Display final answer
+            // Check if the request was accepted
+            if (result.TryGetProperty("status", out var statusEl) && statusEl.GetString() == "started")
+            {
+                // Agent is running in background — events will arrive via HandleAgentEvent
+                return;
+            }
+
+            // Fallback: if the response contains a final answer (e.g., single-step agent)
             if (result.TryGetProperty("answer", out var answerEl))
             {
                 var answer = answerEl.GetString() ?? "Agent 未返回结果";
                 AppendMessage("Agent", answer);
-            }
-
-            if (result.TryGetProperty("stepsUsed", out var stepsEl))
-            {
-                _agentCurrentStep = stepsEl.GetInt32();
-                AgentStepCount.Text = $"步骤: {_agentCurrentStep}/{_agentMaxSteps}";
-            }
-
-            if (result.TryGetProperty("tokensUsed", out var tokensEl))
-            {
-                AgentTokenCount.Text = $"Token: {tokensEl.GetUInt64()}";
             }
 
             DispatcherQueue.TryEnqueue(() =>
@@ -133,77 +131,83 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void HandleAgentEvent(JsonElement evt)
+    private void HandleAgentEvent(AgentStatusEvent status)
     {
-        if (!evt.TryGetProperty("type", out var typeEl))
-            return;
-
-        var type = typeEl.GetString();
-        DispatcherQueue.TryEnqueue(() =>
+        var stage = status.Stage;
+        switch (stage)
         {
-            switch (type)
-            {
-                case "thinking":
-                    if (evt.TryGetProperty("step", out var stepEl))
-                    {
-                        _agentCurrentStep = stepEl.GetInt32();
-                        AgentStepCount.Text = $"步骤: {_agentCurrentStep}/{_agentMaxSteps}";
-                        AgentStatusText.Text = "Agent 思考中...";
-                    }
-                    break;
+            case "thinking":
+                if (status.Step is { } step)
+                {
+                    _agentCurrentStep = step;
+                    AgentStepCount.Text = $"步骤: {_agentCurrentStep}/{_agentMaxSteps}";
+                    AgentStatusText.Text = "Agent 思考中...";
+                }
+                break;
 
-                case "tool_call":
-                    if (evt.TryGetProperty("tool", out var toolEl))
-                    {
-                        var tool = toolEl.GetString() ?? "unknown";
-                        var args = evt.TryGetProperty("args", out var argsEl) ? argsEl.GetString() : "";
-                        AddToolCallEntry(tool, args ?? "", isRunning: true);
-                        AgentStatusText.Text = $"执行工具: {tool}";
-                    }
-                    break;
+            case "toolCall":
+                var tool = status.Tool ?? "unknown";
+                var args = status.Args ?? "";
+                AddToolCallEntry(tool, args, isRunning: true);
+                AgentStatusText.Text = $"执行工具: {tool}";
+                break;
 
-                case "tool_result":
-                    if (evt.TryGetProperty("tool", out var resultToolEl))
-                    {
-                        var tool = resultToolEl.GetString() ?? "unknown";
-                        var preview = evt.TryGetProperty("result_preview", out var previewEl) ? previewEl.GetString() : "";
-                        var isError = evt.TryGetProperty("is_error", out var errEl) && errEl.GetBoolean();
-                        UpdateLastToolCallResult(tool, preview ?? "", isError);
-                    }
-                    break;
+            case "toolResult":
+                var resultTool = status.Tool ?? "unknown";
+                var preview = status.ResultPreview ?? "";
+                var isError = status.IsError ?? false;
+                UpdateLastToolCallResult(resultTool, preview, isError);
+                break;
 
-                case "write_approval_needed":
-                    if (evt.TryGetProperty("tool", out var writeToolEl))
-                    {
-                        var tool = writeToolEl.GetString() ?? "unknown";
-                        var args = evt.TryGetProperty("args", out var writeArgsEl) ? writeArgsEl.GetString() : "";
-                        ShowWriteApprovalDialog(tool, args ?? "");
-                    }
-                    break;
+            case "writeApprovalNeeded":
+                var writeTool = status.Tool ?? "unknown";
+                var writeArgs = status.Args ?? "";
+                ShowWriteApprovalDialog(writeTool, writeArgs);
+                break;
 
-                case "final_answer":
-                    AgentStatusText.Text = "Agent 生成最终回答...";
-                    break;
+            case "finalAnswer":
+                AgentStatusText.Text = "Agent 生成最终回答...";
+                break;
 
-                case "step_limit_reached":
-                    StopAgentMode("步骤限制已达");
-                    break;
+            case "agentCompleted":
+                AppendMessage("Agent", status.Detail);
+                if (status.StepsUsed is { } stepsUsed)
+                {
+                    _agentCurrentStep = stepsUsed;
+                    AgentStepCount.Text = $"步骤: {_agentCurrentStep}/{_agentMaxSteps}";
+                }
+                if (status.TokensUsed is { } tokensUsed)
+                {
+                    AgentTokenCount.Text = $"Token: {tokensUsed}";
+                }
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    _agentModeActive = false;
+                    AgentModeButton.Visibility = Visibility.Visible;
+                    StopAgentButton.Visibility = Visibility.Collapsed;
+                    AgentProgressRing.IsActive = false;
+                    AgentStatusText.Text = "Agent 完成";
+                    UpdateStatusBar("success", "Agent 模式", "任务完成");
+                });
+                break;
 
-                case "token_budget_exceeded":
-                    StopAgentMode("Token 预算已超");
-                    break;
+            case "stepLimitReached":
+                StopAgentMode("步骤限制已达");
+                break;
 
-                case "timeout":
-                    StopAgentMode("执行超时");
-                    break;
+            case "tokenBudgetExceeded":
+                StopAgentMode("Token 预算已超");
+                break;
 
-                case "error":
-                    var msg = evt.TryGetProperty("message", out var msgEl) ? msgEl.GetString() : "未知错误";
-                    AppendMessage("Agent 错误", msg ?? "未知错误");
-                    StopAgentMode("执行出错");
-                    break;
-            }
-        });
+            case "timeout":
+                StopAgentMode("执行超时");
+                break;
+
+            case "error":
+                AppendMessage("Agent 错误", status.Detail ?? "未知错误");
+                StopAgentMode("执行出错");
+                break;
+        }
     }
 
     private void AddToolCallEntry(string tool, string args, bool isRunning)
@@ -284,15 +288,21 @@ public sealed partial class MainWindow : Window
         };
 
         var result = await dialog.ShowAsync();
-        // TODO: Send approval/denial back to backend
-        // For now, just log the decision
-        if (result == ContentDialogResult.Primary)
+        var approved = result == ContentDialogResult.Primary;
+
+        AppendMessage("Agent", approved
+            ? $"已批准写入操作: {tool}"
+            : $"已拒绝写入操作: {tool}");
+
+        // Send approval decision back to backend
+        try
         {
-            AppendMessage("Agent", $"已批准写入操作: {tool}");
+            await _backendClient.SendAsync<object>("respondToWriteApproval",
+                new { approved }, _agentCts?.Token ?? CancellationToken.None);
         }
-        else
+        catch (Exception ex)
         {
-            AppendMessage("Agent", $"已拒绝写入操作: {tool}");
+            AppendMessage("错误", $"发送审批决策失败: {LocalizeError(ex.Message)}");
         }
     }
 

@@ -652,7 +652,15 @@ public sealed partial class MainWindow : Window
     {
         DispatcherQueue.TryEnqueue(() =>
         {
-            UpdateStatusBar("info", LocalizeStage(status.Stage), LocalizeStatusDetail(status.Detail));
+            // Route agent-mode events to HandleAgentEvent
+            if (_agentModeActive)
+            {
+                HandleAgentEvent(status);
+            }
+            else
+            {
+                UpdateStatusBar("info", LocalizeStage(status.Stage), LocalizeStatusDetail(status.Detail));
+            }
         });
     }
 

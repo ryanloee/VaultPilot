@@ -127,6 +127,15 @@ public sealed record AgentStatusEvent
     public string Detail { get; init; } = string.Empty;
     public string Timestamp { get; init; } = string.Empty;
 
+    // Agent Mode fields (populated for agent events)
+    public int? Step { get; init; }
+    public string? Tool { get; init; }
+    public string? Args { get; init; }
+    public string? ResultPreview { get; init; }
+    public bool? IsError { get; init; }
+    public int? StepsUsed { get; init; }
+    public ulong? TokensUsed { get; init; }
+
     [JsonConstructor]
     public AgentStatusEvent() { }
 

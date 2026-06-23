@@ -1097,3 +1097,9 @@
 - #1462 → PR #1464: offlineSync.ts unused checkConnection removal
 - #1463 → PR #1464: db.ts uuid() export + 6 unit tests
 - 7 tests added (812 mobile tests total), 97 Rust tests pass, Clippy clean
+
+## Fix Cycle #47 (fix-3, 2026-06-24)
+- #1465 → PR #1468: ProviderEditor.tsx require() replaced with ES import + (p: any) removed
+- #1466 → PR #1469: stripMarkdown exported from autoTag.ts + 14 direct tests
+- #1467 → PR #1470: inferMime extracted from ChatScreen.tsx to chatHelpers.ts + 15 tests
+- 33 tests added (838 mobile tests total), 97 Rust tests pass, Clippy clean

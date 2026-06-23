@@ -81,6 +81,52 @@ export const PROVIDERS = [
   { name: 'Anthropic', base: 'https://api.anthropic.com', format: 'anthropic' as const, models: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022'] },
 ];
 
+// ── Pure helper functions (exported for testing) ──────────
+
+/** Clamp provider index to valid range. */
+export function clampProviderIndex(index: number, providerCount: number): number {
+  if (providerCount === 0) return 0;
+  return Math.min(index, providerCount - 1);
+}
+
+/** Remove a provider by index, returning a new array. */
+export function removeProviderFromList(providers: ProviderConfig[], index: number): ProviderConfig[] {
+  return providers.filter((_, i) => i !== index);
+}
+
+/** Compute the new active index after removing a provider. */
+export function computeActiveIndexAfterRemove(currentIndex: number, newLength: number): number {
+  if (newLength === 0) return 0;
+  return currentIndex >= newLength ? newLength - 1 : currentIndex;
+}
+
+/** Update a provider at index with partial fields, returning a new array. */
+export function updateProviderInList(providers: ProviderConfig[], index: number, patch: Partial<ProviderConfig>): ProviderConfig[] {
+  const next = [...providers];
+  next[index] = { ...next[index], ...patch };
+  return next;
+}
+
+/** Merge partial API settings into current state. */
+export function mergeApiSettings(current: { apiBase: string; apiKey: string; model: string; apiFormat: ApiFormat }, patch: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }) {
+  return {
+    apiBase: patch.apiBase ?? current.apiBase,
+    apiKey: patch.apiKey ?? current.apiKey,
+    model: patch.model ?? current.model,
+    apiFormat: patch.apiFormat ?? current.apiFormat,
+  };
+}
+
+/** Strip API keys from providers for AsyncStorage persistence. */
+export function sanitizeForPersistence(providers: ProviderConfig[]): ProviderConfig[] {
+  return providers.map(p => ({ ...p, apiKey: '' }));
+}
+
+/** Restore API keys into providers from SecureStore keys array. */
+export function restoreProviderKeys(providers: ProviderConfig[], keys: string[]): ProviderConfig[] {
+  return providers.map((p, i) => ({ ...p, apiKey: keys[i] ?? '' }));
+}
+
 const LIGHT_COLORS = {
   bg: '#FFFFFF', bgSecondary: '#F3F4F6', text: '#111827', textSecondary: '#6B7280',
   border: '#E5E7EB', card: '#FFFFFF', inputBg: '#F9FAFB',
@@ -112,7 +158,7 @@ export function getColors(isDark: boolean, accent: string): ColorScheme {
 /** Sync legacy flat fields from the active provider so client.ts keeps working. */
 function syncLegacyFields(set: (partial: Partial<AppState>) => void, providers: ProviderConfig[], activeProviderIndex: number) {
   if (providers.length === 0) return;
-  const idx = Math.min(activeProviderIndex, providers.length - 1);
+  const idx = clampProviderIndex(activeProviderIndex, providers.length);
   const p = providers[idx];
   set({
     apiBase: p.apiBase,
@@ -137,16 +183,11 @@ export const useAppStore = create<AppState>()(
       model: 'deepseek-v4-flash-free',
       apiFormat: 'openai' as ApiFormat,
       setApiSettings: (s) => set((state) => {
-        const newState = {
-          apiBase: s.apiBase ?? state.apiBase,
-          apiKey: s.apiKey ?? state.apiKey,
-          model: s.model ?? state.model,
-          apiFormat: s.apiFormat ?? state.apiFormat,
-        };
+        const newState = mergeApiSettings(state, s);
         // Also sync to active provider
         const providers = [...state.providers];
         if (providers.length > 0) {
-          const idx = Math.min(state.activeProviderIndex, providers.length - 1);
+          const idx = clampProviderIndex(state.activeProviderIndex, providers.length);
           providers[idx] = { ...providers[idx], ...newState };
           saveProviderKeysSecure(providers);
         }
@@ -165,11 +206,8 @@ export const useAppStore = create<AppState>()(
       }),
 
       removeProvider: (index) => set((state) => {
-        const providers = state.providers.filter((_, i) => i !== index);
-        let activeProviderIndex = state.activeProviderIndex;
-        if (activeProviderIndex >= providers.length) {
-          activeProviderIndex = Math.max(0, providers.length - 1);
-        }
+        const providers = removeProviderFromList(state.providers, index);
+        const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, providers.length);
         if (providers.length > 0) {
           setTimeout(() => syncLegacyFields(set, providers, activeProviderIndex), 0);
         }
@@ -178,9 +216,8 @@ export const useAppStore = create<AppState>()(
       }),
 
       updateProvider: (index, p) => set((state) => {
-        const providers = [...state.providers];
-        providers[index] = { ...providers[index], ...p };
-        if (index === Math.min(state.activeProviderIndex, providers.length - 1)) {
+        const providers = updateProviderInList(state.providers, index, p);
+        if (index === clampProviderIndex(state.activeProviderIndex, providers.length)) {
           setTimeout(() => syncLegacyFields(set, providers, state.activeProviderIndex), 0);
         }
         saveProviderKeysSecure(providers);
@@ -188,7 +225,7 @@ export const useAppStore = create<AppState>()(
       }),
 
       setActiveProvider: (index) => set((state) => {
-        const activeProviderIndex = Math.min(index, state.providers.length - 1);
+        const activeProviderIndex = clampProviderIndex(index, state.providers.length);
         setTimeout(() => syncLegacyFields(set, state.providers, activeProviderIndex), 0);
         return { activeProviderIndex };
       }),
@@ -203,7 +240,7 @@ export const useAppStore = create<AppState>()(
         // apiKey excluded — stored in SecureStore instead
         model: state.model,
         apiFormat: state.apiFormat,
-        providers: state.providers.map(p => ({ ...p, apiKey: '' })),
+        providers: sanitizeForPersistence(state.providers),
         activeProviderIndex: state.activeProviderIndex,
       }),
       onRehydrateStorage: () => (state) => {
@@ -211,12 +248,8 @@ export const useAppStore = create<AppState>()(
         // Restore API keys from SecureStore after hydration
         loadProviderKeysSecure().then(keys => {
           if (keys.length === 0) return;
-          const providers = state.providers.map((p, i) => ({
-            ...p,
-            apiKey: keys[i] ?? '',
-          }));
-          state.providers = providers;
-          syncLegacyFields(useAppStore.setState, providers, state.activeProviderIndex);
+          state.providers = restoreProviderKeys(state.providers, keys);
+          syncLegacyFields(useAppStore.setState, state.providers, state.activeProviderIndex);
         });
       },
     }

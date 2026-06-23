@@ -112,7 +112,7 @@ export async function downloadAndInstall(
 
   try {
     const dest = new File(Paths.cache, `VaultPilot-v${version}.apk`);
-    console.log('[UpdateChecker] Downloading APK from:', apkUrl);
+    console.warn('[UpdateChecker] Downloading APK from:', apkUrl);
 
     const task = File.createDownloadTask(apkUrl, dest, {
       onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
@@ -128,11 +128,11 @@ export async function downloadAndInstall(
       return false;
     }
 
-    console.log('[UpdateChecker] Downloaded to:', result.uri);
+    console.warn('[UpdateChecker] Downloaded to:', result.uri);
 
     // Convert file:// URI to content:// URI (required for Android install intent)
     const contentUri = await getContentUriAsync(result.uri);
-    console.log('[UpdateChecker] Content URI:', contentUri);
+    console.warn('[UpdateChecker] Content URI:', contentUri);
 
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
       data: contentUri,

@@ -47,6 +47,164 @@ pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{default_base_url, default_model, default_timeout_ms, ProviderConfig};
+    use std::path::PathBuf;
+
+    fn make_paths(vault_override: Option<&str>) -> AppPaths {
+        AppPaths {
+            settings_path: PathBuf::from("/tmp/test/settings.json"),
+            database_path: PathBuf::from("/tmp/test/db.sqlite"),
+            chat_state_path: PathBuf::from("/tmp/test/chat.json"),
+            default_vault_dir: PathBuf::from("/tmp/default_vault"),
+            vault_dir_override: vault_override.map(PathBuf::from),
+        }
+    }
+
+    fn make_settings(vault_dir: &str) -> AppSettings {
+        AppSettings {
+            vault_dir: vault_dir.to_string(),
+            ..AppSettings::default()
+        }
+    }
+
+    #[test]
+    fn normalize_uses_vault_dir_override() {
+        let paths = make_paths(Some("/custom/vault"));
+        let mut s = make_settings("");
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.vault_dir, "/custom/vault");
+    }
+
+    #[test]
+    fn normalize_fills_empty_vault_dir_with_default() {
+        let paths = make_paths(None);
+        let mut s = make_settings("");
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.vault_dir, "/tmp/default_vault");
+    }
+
+    #[test]
+    fn normalize_preserves_non_empty_vault_dir() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/my/vault");
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.vault_dir, "/my/vault");
+    }
+
+    #[test]
+    fn normalize_fills_empty_base_url() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.provider.base_url = String::new();
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.provider.base_url, default_base_url());
+    }
+
+    #[test]
+    fn normalize_fills_empty_model() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.provider.model = String::new();
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.provider.model, default_model());
+    }
+
+    #[test]
+    fn normalize_fills_zero_timeout() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.provider.request_timeout_ms = 0;
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.provider.request_timeout_ms, default_timeout_ms());
+    }
+
+    #[test]
+    fn normalize_converts_zero_context_window_to_none() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.provider.context_window_tokens = Some(0);
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.provider.context_window_tokens, None);
+    }
+
+    #[test]
+    fn normalize_preserves_non_zero_context_window() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.provider.context_window_tokens = Some(8192);
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.provider.context_window_tokens, Some(8192));
+    }
+
+    #[test]
+    fn normalize_multi_provider_list() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.providers = vec![
+            ProviderConfig {
+                name: "p1".into(),
+                base_url: String::new(),
+                model: String::new(),
+                request_timeout_ms: 0,
+                context_window_tokens: Some(0),
+                ..ProviderConfig::default()
+            },
+            ProviderConfig {
+                name: "p2".into(),
+                base_url: "https://custom.api/v1".into(),
+                model: "gpt-4".into(),
+                request_timeout_ms: 30000,
+                context_window_tokens: Some(4096),
+                ..ProviderConfig::default()
+            },
+        ];
+        normalize_settings(&mut s, &paths);
+        // First provider gets defaults
+        assert_eq!(s.providers[0].base_url, default_base_url());
+        assert_eq!(s.providers[0].model, default_model());
+        assert_eq!(s.providers[0].request_timeout_ms, default_timeout_ms());
+        assert_eq!(s.providers[0].context_window_tokens, None);
+        // Second provider preserves custom values
+        assert_eq!(s.providers[1].base_url, "https://custom.api/v1");
+        assert_eq!(s.providers[1].model, "gpt-4");
+        assert_eq!(s.providers[1].request_timeout_ms, 30000);
+        assert_eq!(s.providers[1].context_window_tokens, Some(4096));
+    }
+
+    #[test]
+    fn normalize_clamps_active_provider_index() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.providers = vec![ProviderConfig::default()];
+        s.active_provider_index = 5;
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.active_provider_index, 0);
+    }
+
+    #[test]
+    fn normalize_preserves_valid_active_provider_index() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.providers = vec![ProviderConfig::default(), ProviderConfig::default()];
+        s.active_provider_index = 1;
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.active_provider_index, 1);
+    }
+
+    #[test]
+    fn normalize_empty_providers_no_clamp() {
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.active_provider_index = 99;
+        normalize_settings(&mut s, &paths);
+        // No providers → no clamping
+        assert_eq!(s.active_provider_index, 99);
+    }
+}
+
 pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSettings> {
     // Return cached settings if available, avoiding redundant disk I/O.
     let cache = context

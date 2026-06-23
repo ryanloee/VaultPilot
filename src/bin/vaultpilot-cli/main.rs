@@ -112,6 +112,14 @@ enum Commands {
     },
 
     /// Run an autonomous AI agent loop (prompt → tool calls → answer)
+    ///
+    /// The agent reads your vault, searches notes, and uses tools to answer.
+    /// Write operations require your approval (unless --auto-approve).
+    ///
+    /// Examples:
+    ///   vaultpilot agent "summarize my recent notes"
+    ///   vaultpilot agent "find notes about Rust and create a summary" --auto-approve
+    ///   vaultpilot agent "organize my tags" --max-steps 10
     Agent {
         /// The prompt / task for the agent
         prompt: String,

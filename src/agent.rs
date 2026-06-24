@@ -474,16 +474,16 @@ impl AgentSession {
             }
         });
 
-        // Apply timeout from resource limits
-        let status = tokio::time::timeout(self.config.limits.max_duration, child.wait())
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "agent process timed out after {:?}",
-                    self.config.limits.max_duration
-                )
-            })?
-            .map_err(|e| anyhow!("failed to wait for agent process: {}", e))?;
+        // Apply timeout from resource limits — kill child on timeout to avoid zombie
+        let status = tokio::select! {
+            result = child.wait() => {
+                result.map_err(|e| anyhow!("failed to wait for agent process: {}", e))?
+            }
+            _ = tokio::time::sleep(self.config.limits.max_duration) => {
+                let _ = child.kill().await;
+                anyhow::bail!("agent process timed out after {:?}", self.config.limits.max_duration);
+            }
+        };
 
         // Wait for output tasks to finish
         let _ = tokio::join!(stdout_task, stderr_task);
@@ -1548,5 +1548,26 @@ mod pure_function_tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    // Regression: #1507 — run_command timeout must kill child process
+    #[tokio::test]
+    async fn run_command_timeout_kills_child() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.limits.max_duration = Duration::from_millis(200);
+        let session = AgentSession::new(config, &tmp);
+
+        let result = session
+            .run_command("sleep", &["60".into()], &tmp, |_| {}, |_| {})
+            .await;
+
+        assert!(result.is_err(), "should return timeout error");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("timed out"),
+            "error should mention timeout: {}",
+            err
+        );
     }
 }

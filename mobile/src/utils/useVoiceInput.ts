@@ -63,7 +63,7 @@ export function useVoiceInput() {
 
   const stopListening = useCallback(async () => {
     try {
-      ExpoSpeechRecognitionModule.stop();
+      await ExpoSpeechRecognitionModule.stop();
     } catch (e) {
       console.warn('[VoiceInput] stop failed:', e);
     }
@@ -71,7 +71,7 @@ export function useVoiceInput() {
 
   const cancelListening = useCallback(async () => {
     try {
-      ExpoSpeechRecognitionModule.abort();
+      await ExpoSpeechRecognitionModule.abort();
     } catch (e) {
       console.warn('[VoiceInput] cancel failed:', e);
     }

@@ -1489,6 +1489,45 @@ mod pure_function_tests {
         assert!(r.allowed, "** should match any path: {:?}", r.reason);
     }
 
+    // ── extract_path_arg ─────────────────────────────────────────
+
+    #[test]
+    fn extract_path_arg_read_file() {
+        let path = ToolProxy::extract_path_arg("read_file", r#"{"path":"/notes/test.md"}"#);
+        assert_eq!(path, Some("/notes/test.md".into()));
+    }
+
+    #[test]
+    fn extract_path_arg_save_note() {
+        let path =
+            ToolProxy::extract_path_arg("save_note", r#"{"path":"daily/2024.md","body":"x"}"#);
+        assert_eq!(path, Some("daily/2024.md".into()));
+    }
+
+    #[test]
+    fn extract_path_arg_unknown_tool_returns_none() {
+        let path = ToolProxy::extract_path_arg("search_notes", r#"{"query":"test"}"#);
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn extract_path_arg_missing_path_field() {
+        let path = ToolProxy::extract_path_arg("read_file", r#"{"limit":5}"#);
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn extract_path_arg_invalid_json() {
+        let path = ToolProxy::extract_path_arg("read_file", "not json");
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn extract_path_arg_empty_json() {
+        let path = ToolProxy::extract_path_arg("read_file", "{}");
+        assert_eq!(path, None);
+    }
+
     // Use setup from the parent module
     fn setup() -> (PathBuf, AgentConfig) {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);

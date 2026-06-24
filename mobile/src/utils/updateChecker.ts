@@ -2,7 +2,7 @@
  * APK auto-update — check, download, and install.
  */
 
-import { File, Paths } from 'expo-file-system';
+import { File, Directory, Paths } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { Platform } from 'react-native';
@@ -114,28 +114,27 @@ export async function downloadAndInstall(
   try {
     console.warn('[UpdateChecker] Downloading APK from:', apkUrl);
 
-    // Use downloadFileAsync (recommended in SDK 56) with progress tracking via DownloadTask
-    const dest = new File(Paths.cache, `VaultPilot-v${version}.apk`);
+    // Use Directory as destination (File.downloadFileAsync requires Directory, not File)
+    const downloadDir = new Directory(Paths.cache, 'updates');
+    if (!downloadDir.exists) downloadDir.create();
 
-    // Try downloadFileAsync first (simpler, more reliable)
-    const output = await File.downloadFileAsync(apkUrl, dest);
+    const result = await File.downloadFileAsync(apkUrl, downloadDir);
 
-    if (!output?.uri) {
+    if (!result?.uri) {
       console.warn('[UpdateChecker] Download returned no URI');
       return false;
     }
 
-    console.warn('[UpdateChecker] Downloaded to:', output.uri);
+    console.warn('[UpdateChecker] Downloaded to:', result.uri);
 
     // Convert file:// URI to content:// URI (required for Android install intent)
-    const contentUri = await FileSystem.getContentUriAsync(output.uri);
+    const contentUri = await FileSystem.getContentUriAsync(result.uri);
     console.warn('[UpdateChecker] Content URI:', contentUri);
 
-    // FLAG_GRANT_READ_URI_PERMISSION (1) + FLAG_ACTIVITY_NEW_TASK (0x10000000)
+    // Launch system package installer
     await IntentLauncher.startActivityAsync('android.intent.action.INSTALL_PACKAGE', {
       data: contentUri,
-      flags: 0x10000001,
-      type: 'application/vnd.android.package-archive',
+      flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
     });
 
     return true;

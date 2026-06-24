@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  View, ActivityIndicator, StyleSheet, Alert,
+  View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Alert,
   KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -45,6 +45,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [scrollTrigger, setScrollTrigger] = useState(0);
+  const [initError, setInitError] = useState<string | null>(null);
 
   // Append voice transcript to input when recognition completes
   useEffect(() => {
@@ -133,12 +134,42 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         }
       } catch (e) {
         console.warn('[Chat] session init failed:', e);
-        Alert.alert('初始化失败', String(e));
+        setInitError(String(e));
       } finally {
         setLoading(false);
       }
     })();
   }, []);
+
+  // Retry initialization after failure
+  const retryInit = useCallback(async () => {
+    setInitError(null);
+    setLoading(true);
+    try {
+      if (route.params?.sessionId) {
+        await loadSession(route.params.sessionId, route.params.title || '对话');
+      } else {
+        const existing = await getLatestSession();
+        if (existing) {
+          setSessionId(existing.id);
+          setTitle(existing.title);
+          const history = await getMessages(existing.id);
+          setMsgs(history.map(m => ({
+            id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+            attachments: safeParseAttachments(m.attachments),
+          })));
+        } else {
+          const id = await createSession('新对话');
+          setSessionId(id);
+        }
+      }
+    } catch (e) {
+      console.warn('[Chat] session init retry failed:', e);
+      setInitError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [route.params?.sessionId, route.params?.title, loadSession]);
 
   // Keep ref in sync with state so send() reads latest messages
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
@@ -369,6 +400,25 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     );
   }
 
+  if (initError) {
+    return (
+      <SafeAreaView style={[styles.center, { backgroundColor: c.bg }]}>
+        <Text style={{ color: c.text, fontSize: 16, textAlign: 'center', marginBottom: 8 }}>
+          初始化会话失败
+        </Text>
+        <Text style={{ color: c.textSecondary, fontSize: 13, textAlign: 'center', marginBottom: 20, paddingHorizontal: 32 }}>
+          {initError}
+        </Text>
+        <TouchableOpacity
+          style={[styles.retryBtn, { backgroundColor: accentColor }]}
+          onPress={retryInit}
+        >
+          <Text style={{ color: '#FFF', fontSize: 15, fontWeight: '600' }}>重试</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
       <KeyboardAvoidingView
@@ -441,4 +491,5 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
 
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  retryBtn: { paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8 },
 });

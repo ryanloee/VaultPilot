@@ -13,12 +13,12 @@ describe('Voice module contract (#887)', () => {
     ExpoSpeechRecognitionModule.start({
       lang: 'zh-CN',
       interimResults: true,
-      continuous: false,
+      continuous: true,
     });
     expect(ExpoSpeechRecognitionModule.start).toHaveBeenCalledWith({
       lang: 'zh-CN',
       interimResults: true,
-      continuous: false,
+      continuous: true,
     });
   });
 

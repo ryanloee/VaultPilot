@@ -45,7 +45,7 @@ export function useVoiceInput() {
       ExpoSpeechRecognitionModule.start({
         lang: locale,
         interimResults: true,
-        continuous: false,
+        continuous: true,
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '无法启动语音识别';

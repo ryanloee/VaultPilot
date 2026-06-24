@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, ActivityIndicator, StyleSheet, Alert,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -359,6 +360,11 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+      >
       <ChatHeader
         title={title}
         accentColor={accentColor}
@@ -414,6 +420,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         onVoiceToggle={() => voice.isListening ? voice.stopListening() : voice.startListening()}
         onEmojiSelect={(emoji) => setInput(prev => prev + emoji)}
       />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

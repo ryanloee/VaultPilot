@@ -55,6 +55,8 @@
 - #1488: orchestration/chat.rs 22 个纯函数边界测试 (PR #1491 已合并)
 - #1489: orchestration/chat.rs 19 个会话管理函数边界测试 (PR #1492 已合并)
 - #1490: prompting.rs 14 个边界测试 — render、escape、system prompt 完整性 (PR #1493 已合并)
+- #1509 + #1510: MCP HTTP server auth 安全加固 — constant-time token compare + RFC 7235 Bearer scheme (PR #1514 已合并)
+- #1511 + #1512 + #1513: 移动端 chat 超时 + loadSession 错误处理 + SSE 429 重试 (PR #1514 已合并)
 - #217: WinUI 启动冒烟测试
 - #500: MCP server tool errors sanitize_error() 包装 (PR #505 已合并)
 - #501: build_note_path 使用完整 UUID 消除截断 (PR #506 已合并)

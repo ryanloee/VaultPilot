@@ -313,10 +313,11 @@ async fn http_list_notes(
     let notes = list_notes_async(&state.context)
         .await
         .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let total = notes.len();
     let notes: Vec<_> = notes.into_iter().take(limit).collect();
     Ok(Json(serde_json::json!({
         "notes": notes,
-        "total": notes.len()
+        "total": total
     })))
 }
 

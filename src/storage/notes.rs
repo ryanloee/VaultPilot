@@ -1664,6 +1664,180 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_id_prefix_strips_path_traversal() {
+        // sanitize_id_prefix takes 8 chars first, then filters
+        // "../../../etc/passwd" → take(8) = "../../../" → filter = ""
+        assert_eq!(sanitize_id_prefix("../../../etc/passwd"), "");
+        // "..\\..\\windows" → take(8) = "..\\..\\wi" → filter = "wi"
+        assert_eq!(sanitize_id_prefix("..\\..\\windows"), "wi");
+        // "a/b/c" → take(8) = "a/b/c" → filter = "abc"
+        assert_eq!(sanitize_id_prefix("a/b/c"), "abc");
+    }
+
+    #[test]
+    fn sanitize_id_prefix_only_ascii_alphanumeric_and_dash() {
+        assert_eq!(sanitize_id_prefix("abc-123"), "abc-123");
+        assert_eq!(sanitize_id_prefix("日本語テスト"), "");
+        assert_eq!(sanitize_id_prefix("a b c"), "abc");
+        assert_eq!(sanitize_id_prefix("test@#$%"), "test");
+    }
+
+    #[test]
+    fn sanitize_id_prefix_limits_to_8_chars() {
+        assert_eq!(sanitize_id_prefix("1234567890"), "12345678");
+        assert_eq!(sanitize_id_prefix("a"), "a");
+        assert_eq!(sanitize_id_prefix(""), "");
+    }
+
+    #[test]
+    fn sanitize_id_prefix_empty_after_filtering() {
+        assert_eq!(sanitize_id_prefix("..."), "");
+        assert_eq!(sanitize_id_prefix("/\\./"), "");
+        assert_eq!(sanitize_id_prefix("日本語"), "");
+    }
+
+    #[test]
+    fn sanitize_filename_basic_ascii() {
+        assert_eq!(sanitize_filename("Hello World"), "Hello-World");
+        assert_eq!(sanitize_filename("test_file"), "test_file");
+        assert_eq!(sanitize_filename("my-note"), "my-note");
+    }
+
+    #[test]
+    fn sanitize_filename_cjk_with_deunicode() {
+        // deunicode converts CJK to romanized form
+        let result = sanitize_filename("测试笔记");
+        assert!(!result.is_empty());
+        assert!(!result.contains(' '));
+    }
+
+    #[test]
+    fn sanitize_filename_special_chars_to_dashes() {
+        let result = sanitize_filename("hello/world\\test");
+        assert!(!result.contains('/'));
+        assert!(!result.contains('\\'));
+        assert!(result.contains('-'));
+    }
+
+    #[test]
+    fn sanitize_filename_empty_or_whitespace_returns_untitled() {
+        assert_eq!(sanitize_filename(""), "untitled");
+        assert_eq!(sanitize_filename("   "), "untitled");
+        assert_eq!(sanitize_filename("---"), "untitled");
+    }
+
+    #[test]
+    fn sanitize_filename_consecutive_special_chars_collapsed() {
+        let result = sanitize_filename("a///b\\\\\\c");
+        // Multiple consecutive non-alphanumeric chars become single dash
+        assert_eq!(result.matches('-').count(), 2); // a-b-c
+    }
+
+    #[test]
+    fn extract_summary_skips_code_blocks_and_headings() {
+        let body = "# Title\n\n```code block```\n\nActual content here.\n\nMore text.";
+        let summary = extract_summary(body);
+        assert!(!summary.contains("# Title"));
+        assert!(!summary.contains("```"));
+        assert!(summary.contains("Actual content here"));
+    }
+
+    #[test]
+    fn extract_summary_limits_to_180_chars() {
+        let long_text = "a".repeat(300);
+        let summary = extract_summary(&long_text);
+        assert!(summary.len() <= 180);
+    }
+
+    #[test]
+    fn extract_summary_empty_body() {
+        let summary = extract_summary("");
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn detect_title_h1_takes_priority() {
+        let body = "# Real Title\n\nSome content\n## Subtitle";
+        let tmp = std::env::temp_dir().join("test.md");
+        assert_eq!(detect_title(body, &tmp), "Real Title");
+    }
+
+    #[test]
+    fn detect_title_empty_h1_falls_through() {
+        let body = "# \n\nSome content";
+        let tmp = std::env::temp_dir().join("fallback.md");
+        // Empty H1 should fall through to file stem
+        assert_eq!(detect_title(body, &tmp), "fallback");
+    }
+
+    #[test]
+    fn detect_title_no_heading_uses_file_stem() {
+        let body = "Just some text\nNo headings here";
+        let tmp = std::env::temp_dir().join("my_note.md");
+        assert_eq!(detect_title(body, &tmp), "my note");
+    }
+
+    #[test]
+    fn detect_title_stem_with_underscores_and_dashes() {
+        let body = "text";
+        let tmp = std::env::temp_dir().join("my_cool-note.md");
+        assert_eq!(detect_title(body, &tmp), "my cool note");
+    }
+
+    #[test]
+    fn unique_asset_third_occurrence() {
+        let mut seen = HashSet::new();
+        seen.insert("img.png".to_string());
+        seen.insert("img-1.png".to_string());
+        assert_eq!(unique_asset_name("img.png", &mut seen), "img-2.png");
+    }
+
+    #[test]
+    fn unique_asset_preserves_extension() {
+        let mut seen = HashSet::new();
+        seen.insert("photo.jpg".to_string());
+        assert_eq!(unique_asset_name("photo.jpg", &mut seen), "photo-1.jpg");
+    }
+
+    #[test]
+    fn unique_asset_multiple_dots_in_name() {
+        let mut seen = HashSet::new();
+        // slugify converts dots to dashes: "file.backup.tar" → "file-backup-tar"
+        assert_eq!(
+            unique_asset_name("file.backup.tar.gz", &mut seen),
+            "file-backup-tar.gz"
+        );
+    }
+
+    #[test]
+    fn build_related_query_extracts_keywords() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                id: "test".to_string(),
+                title: "Rust Programming Guide".to_string(),
+                tags: vec!["rust".to_string(), "programming".to_string()],
+                ..Default::default()
+            },
+            body: "This is about Rust language and cargo build system".to_string(),
+            ..Default::default()
+        };
+        let query = build_related_query(&doc);
+        assert!(!query.is_empty());
+        // Should contain some keywords from title or tags
+        assert!(
+            query.to_lowercase().contains("rust") || query.to_lowercase().contains("programming")
+        );
+    }
+
+    #[test]
+    fn build_related_query_empty_doc() {
+        let doc = NoteDocument::default();
+        let query = build_related_query(&doc);
+        // Should handle empty doc gracefully — just verify no panic
+        let _ = query;
+    }
+
+    #[test]
     fn extracts_markdown_image_refs() {
         let body = "## 图片记录\n\n![boot-log](attachments/boot-log.png)\n\n![scope](./attachments/scope.jpg)";
         let refs = extract_note_image_refs(body);

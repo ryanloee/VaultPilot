@@ -895,8 +895,7 @@ mod tests {
         assert!(result.contains("[Thinking trace summary: Thought]"));
     }
 
-
-        #[test]
+    #[test]
     fn resolve_create_new_session_when_empty() {
         let mut state = ChatState {
             sessions: vec![],
@@ -909,7 +908,7 @@ mod tests {
         assert_eq!(state.current_session_id, id);
     }
 
-        #[test]
+    #[test]
     fn resolve_create_new_session_when_forced() {
         let existing = ChatSession {
             id: "s1".into(),
@@ -925,7 +924,7 @@ mod tests {
         assert_eq!(state.sessions.len(), 2);
     }
 
-        #[test]
+    #[test]
     fn resolve_find_existing_session_by_id() {
         let existing = ChatSession {
             id: "s1".into(),
@@ -940,7 +939,7 @@ mod tests {
         assert_eq!(id, "s1");
     }
 
-        #[test]
+    #[test]
     fn resolve_nonexistent_session_id_returns_error() {
         let existing = ChatSession {
             id: "s1".into(),
@@ -955,7 +954,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
-        #[test]
+    #[test]
     fn resolve_falls_back_to_first_session() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -974,7 +973,7 @@ mod tests {
         assert_eq!(id, "s1"); // falls back to first
     }
 
-        #[test]
+    #[test]
     fn resolve_empty_session_id_ignores_and_uses_current() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -989,7 +988,7 @@ mod tests {
         assert_eq!(id, "s1");
     }
 
-        #[test]
+    #[test]
     fn append_turn_updates_title_from_default() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -1013,7 +1012,7 @@ mod tests {
         assert_eq!(session.turns.len(), 1);
     }
 
-        #[test]
+    #[test]
     fn append_turn_preserves_non_default_title() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -1035,7 +1034,7 @@ mod tests {
         assert_eq!(session.title, "My Chat"); // preserved
     }
 
-        #[test]
+    #[test]
     fn append_turn_nonexistent_session_errors() {
         let mut state = ChatState {
             sessions: vec![],
@@ -1051,7 +1050,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-        #[test]
+    #[test]
     fn append_turn_assistant_does_not_change_title() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -1073,7 +1072,7 @@ mod tests {
         assert_eq!(session.title, "新对话"); // assistant turn doesn't change title
     }
 
-        #[test]
+    #[test]
     fn replace_existing_session() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -1094,7 +1093,7 @@ mod tests {
         assert_eq!(state.sessions.len(), 1);
     }
 
-        #[test]
+    #[test]
     fn replace_nonexistent_session_errors() {
         let mut state = ChatState {
             sessions: vec![],
@@ -1108,7 +1107,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-        #[test]
+    #[test]
     fn history_with_summary_and_turns() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -1146,7 +1145,7 @@ mod tests {
         assert_eq!(history[2].role, "assistant");
     }
 
-        #[test]
+    #[test]
     fn history_empty_summary_no_system_turn() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -1172,7 +1171,7 @@ mod tests {
         assert_eq!(history.len(), 1); // only the user turn, no summary turn
     }
 
-        #[test]
+    #[test]
     fn history_filters_empty_text_turns() {
         let s1 = ChatSession {
             id: "s1".into(),
@@ -1206,7 +1205,7 @@ mod tests {
         assert_eq!(history.len(), 2); // empty-text turn filtered out
     }
 
-        #[test]
+    #[test]
     fn history_nonexistent_session_errors() {
         let state = ChatState {
             sessions: vec![],
@@ -1216,12 +1215,12 @@ mod tests {
         assert!(result.is_err());
     }
 
-        #[test]
+    #[test]
     fn estimate_turn_no_text_no_attachments() {
         assert_eq!(estimate_turn_tokens("", &[]), 0);
     }
 
-        #[test]
+    #[test]
     fn estimate_turn_multiple_attachments() {
         let attachments = vec![
             ChatAttachment {
@@ -1242,7 +1241,7 @@ mod tests {
         assert_eq!(tokens, 1 + 3 * IMAGE_ATTACHMENT_TOKEN_ESTIMATE);
     }
 
-        #[test]
+    #[test]
     fn estimate_turn_cjk_with_attachments() {
         let attachments = vec![ChatAttachment {
             path: "a".into(),
@@ -1252,5 +1251,4 @@ mod tests {
         // 4 CJK chars = 8 tokens, + 1200
         assert_eq!(tokens, 8 + IMAGE_ATTACHMENT_TOKEN_ESTIMATE);
     }
-
 }

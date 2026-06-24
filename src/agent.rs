@@ -631,7 +631,13 @@ pub async fn run_agent(
                 } else {
                     tokio::time::timeout(
                         remaining,
-                        crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
+                        crate::ai::answer_after_tools(
+                            settings,
+                            prompt,
+                            &tool_transcripts,
+                            &[],
+                            &[],
+                        ),
                     )
                     .await
                     .map_err(|_| anyhow!("final answer LLM call timed out"))?

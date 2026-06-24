@@ -28,14 +28,20 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
   }, []);
 
   // Initial load
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    refresh().catch(e => console.warn('[OfflineSync] refresh failed:', e));
+  }, [refresh]);
 
   // Auto-flush when transitioning from offline → online
   useEffect(() => {
+    let cancelled = false;
     if (isOnline && !prevOnline.current) {
-      flushPendingSyncs().then(() => refresh());
+      flushPendingSyncs()
+        .then(() => { if (!cancelled) refresh(); })
+        .catch(e => console.warn('[OfflineSync] flush failed:', e));
     }
     prevOnline.current = isOnline;
+    return () => { cancelled = true; };
   }, [isOnline, refresh]);
 
   return { pendingCount, refresh };
@@ -66,7 +72,7 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch(`${url}/api/notes/${entry.note_id}`, {
+      const res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
         method: 'PUT',
         headers,
         body: JSON.stringify({ title: note.title, content: note.content }),

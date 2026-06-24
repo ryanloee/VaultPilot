@@ -907,6 +907,7 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     let mut ti = 0;
     let mut star_pi = usize::MAX; // sentinel: no star matched yet
     let mut star_ti = 0;
+    let mut star_resume_pi = 0; // where to resume pattern after ** on backtrack
 
     while ti < text.len() {
         if pi < pattern.len()
@@ -921,10 +922,17 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
                 star_pi = pi;
                 star_ti = ti;
                 pi += 2;
+                // ** at a segment boundary: skip the following '/' so that
+                // ** can match zero path segments (e.g. "**/suffix" ~ "suffix")
+                if pi < pattern.len() && pattern[pi] == '/' {
+                    pi += 1;
+                }
+                star_resume_pi = pi;
             } else {
                 star_pi = pi;
                 star_ti = ti;
                 pi += 1;
+                star_resume_pi = pi;
             }
         } else if star_pi != usize::MAX {
             // Backtrack to the last star
@@ -932,7 +940,7 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
                 // ** matches everything
                 star_ti += 1;
                 ti = star_ti;
-                pi = star_pi + 2;
+                pi = star_resume_pi;
             } else if text[ti] != '/' && text[ti] != '\\' {
                 // * doesn't match path separators
                 star_ti += 1;
@@ -1210,6 +1218,14 @@ mod tests {
         assert!(super::glob_match("prefix/**", "prefix/a/b"));
         assert!(super::glob_match("**/suffix", "a/b/suffix"));
         assert!(super::glob_match("a/**/b", "a/x/y/b"));
+    }
+
+    // Regression: #1529 — ** must match zero path segments
+    #[test]
+    fn glob_match_double_star_matches_zero_segments() {
+        assert!(super::glob_match("**/suffix", "suffix"));
+        assert!(super::glob_match("a/**/b", "a/b"));
+        assert!(super::glob_match("**/a/b", "a/b"));
     }
 
     // Regression: #1326 — glob_match ? must not match path separators

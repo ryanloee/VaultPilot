@@ -1499,7 +1499,8 @@ mod pure_function_tests {
 
     #[test]
     fn extract_path_arg_save_note() {
-        let path = ToolProxy::extract_path_arg("save_note", r#"{"path":"daily/2024.md","body":"x"}"#);
+        let path =
+            ToolProxy::extract_path_arg("save_note", r#"{"path":"daily/2024.md","body":"x"}"#);
         assert_eq!(path, Some("daily/2024.md".into()));
     }
 

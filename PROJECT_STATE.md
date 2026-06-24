@@ -1124,3 +1124,8 @@
   - 0 open PR, 2 open issues (#913, #1360)
   - npm audit: 30 moderate (全部为 Expo 上游内部依赖链，非项目可控)
 - v0.3.52 锁文件更新已推送 (commit d372c9c)
+
+## Review Cycle (2026-06-24)
+- PR #1481 ✅ 合并: SettingsScreen testConnection 传递 model 参数到 checkApi
+- PR #1480 ✅ 合并: globalSearch FTS fallback 补充 session title 搜索
+- 2 PRs merged (< 3), 不触发发版

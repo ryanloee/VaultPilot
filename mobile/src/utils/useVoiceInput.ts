@@ -2,7 +2,7 @@
  * Voice input hook using expo-speech-recognition.
  * Provides speech-to-text for the chat input.
  */
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Alert } from 'react-native';
 import {
   ExpoSpeechRecognitionModule,
@@ -20,7 +20,15 @@ export function useVoiceInput() {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const isAvailable = useRef(true);
+  const [isAvailable, setIsAvailable] = useState(false);
+
+  useEffect(() => {
+    try {
+      setIsAvailable(ExpoSpeechRecognitionModule.isRecognitionAvailable());
+    } catch {
+      setIsAvailable(false);
+    }
+  }, []);
 
   useSpeechRecognitionEvent('start', () => setIsListening(true));
   useSpeechRecognitionEvent('end', () => setIsListening(false));
@@ -75,7 +83,7 @@ export function useVoiceInput() {
     isListening,
     transcript,
     error,
-    isAvailable: isAvailable.current,
+    isAvailable,
     startListening,
     stopListening,
     cancelListening,

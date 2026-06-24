@@ -44,6 +44,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const { isOnline } = useNetworkState();
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [scrollTrigger, setScrollTrigger] = useState(0);
 
   // Append voice transcript to input when recognition completes
   useEffect(() => {
@@ -310,7 +311,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       setStreaming(false);
       abortRef.current = null;
     }
-  }, [input, streaming, sessionId]);
+  }, [input, streaming, sessionId, attachments]);
 
   // Create a new conversation
   const newChat = useCallback(async () => {
@@ -348,6 +349,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
 
   const handleScrollToEnd = useCallback(() => {
     setShowScrollBtn(false);
+    setScrollTrigger(t => t + 1);
   }, []);
 
   if (loading) {
@@ -386,6 +388,9 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         onDeleteMessage={handleDeleteMsg}
         onResendMessage={handleResend}
         onScrollToEnd={handleScrollToEnd}
+        onNearBottomChange={(near) => setShowScrollBtn(!near)}
+        scrollTrigger={scrollTrigger}
+        onSuggestion={(text) => setInput(text)}
       />
 
       <ScrollToBottomButton

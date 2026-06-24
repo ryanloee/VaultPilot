@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import { View, Text, FlatList, TouchableOpacity, Platform, StyleSheet } from 'react-native';
 import { NativeSyntheticEvent, NativeScrollEvent } from 'react-native';
 import MessageBubble from './MessageBubble';
@@ -22,6 +22,9 @@ interface MessageListProps {
   onDeleteMessage: (msgId: string) => void;
   onResendMessage: (msgId: string) => void;
   onScrollToEnd: () => void;
+  onNearBottomChange?: (nearBottom: boolean) => void;
+  scrollTrigger?: number;
+  onSuggestion?: (text: string) => void;
 }
 
 export default function MessageList({
@@ -34,6 +37,9 @@ export default function MessageList({
   onDeleteMessage,
   onResendMessage,
   onScrollToEnd,
+  onNearBottomChange,
+  scrollTrigger,
+  onSuggestion,
 }: MessageListProps) {
   const listRef = useRef<FlatList>(null);
   const nearBottomRef = useRef(true);
@@ -51,15 +57,26 @@ export default function MessageList({
     scrollToEndDebounced();
   }, [scrollToEndDebounced]);
 
+  // When parent triggers scroll (button press), scroll to bottom
+  useEffect(() => {
+    if (scrollTrigger !== undefined && scrollTrigger > 0) {
+      nearBottomRef.current = true;
+      listRef.current?.scrollToEnd({ animated: true });
+    }
+  }, [scrollTrigger]);
+
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
       const distanceFromBottom =
         contentSize.height - layoutMeasurement.height - contentOffset.y;
       const near = distanceFromBottom < 120;
-      nearBottomRef.current = near;
+      if (near !== nearBottomRef.current) {
+        nearBottomRef.current = near;
+        onNearBottomChange?.(near);
+      }
     },
-    []
+    [onNearBottomChange]
   );
 
   const handleScrollToEnd = useCallback(() => {
@@ -107,6 +124,7 @@ export default function MessageList({
                 style={[styles.suggestionBtn, { borderColor }]}
                 accessibilityRole="button"
                 accessibilityLabel={`使用建议: ${q}`}
+                onPress={() => onSuggestion?.(q)}
               >
                 <Text style={[styles.suggestionText, { color: accentColor }]}>
                   {q}

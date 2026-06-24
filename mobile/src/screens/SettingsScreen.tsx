@@ -297,8 +297,12 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[styles.saveBtn, { backgroundColor: store.accentColor, flex: 1 }]}
             onPress={async () => {
-              await setServerConfig(serverUrl, serverToken);
-              Alert.alert('已保存', '后端服务器配置已保存');
+              try {
+                await setServerConfig(serverUrl, serverToken);
+                Alert.alert('已保存', '后端服务器配置已保存');
+              } catch (e) {
+                Alert.alert('保存失败', e instanceof Error ? e.message : '请重试');
+              }
             }}
           >
             <Text style={styles.saveBtnText}>保存</Text>

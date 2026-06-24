@@ -1390,4 +1390,122 @@ mod tests {
         let doc = draft_to_note_document(draft);
         assert_eq!(doc.meta.source, "captured");
     }
+
+    // ── trim_path_candidate ──────────────────────────────────────
+
+    #[test]
+    fn trim_path_candidate_empty() {
+        assert_eq!(trim_path_candidate(""), "");
+    }
+
+    #[test]
+    fn trim_path_candidate_strips_quotes() {
+        assert_eq!(trim_path_candidate("\"hello.md\""), "hello.md");
+        assert_eq!(trim_path_candidate("'notes/test'"), "notes/test");
+        assert_eq!(trim_path_candidate("`path`"), "path");
+    }
+
+    #[test]
+    fn trim_path_candidate_strips_brackets() {
+        assert_eq!(trim_path_candidate("(file.md)"), "file.md");
+        assert_eq!(trim_path_candidate("[file.md]"), "file.md");
+        assert_eq!(trim_path_candidate("{file.md}"), "file.md");
+        assert_eq!(trim_path_candidate("<file.md>"), "file.md");
+    }
+
+    #[test]
+    fn trim_path_candidate_strips_cjk_punctuation() {
+        assert_eq!(trim_path_candidate("hello.md，"), "hello.md");
+        assert_eq!(trim_path_candidate("。test.md"), "test.md");
+    }
+
+    #[test]
+    fn trim_path_candidate_strips_multiple_chars() {
+        assert_eq!(trim_path_candidate(",\"hello.md\";"), "hello.md");
+    }
+
+    #[test]
+    fn trim_path_candidate_normal_path_unchanged() {
+        assert_eq!(trim_path_candidate("/notes/test.md"), "/notes/test.md");
+    }
+
+    #[test]
+    fn trim_path_candidate_whitespace_only() {
+        assert_eq!(trim_path_candidate("   "), "");
+    }
+
+    // ── build_agent_trace ────────────────────────────────────────
+
+    #[test]
+    fn build_agent_trace_empty_no_forced_search() {
+        let trace = build_agent_trace(&[], false);
+        assert!(trace.summary.contains("直接回答"));
+        assert_eq!(trace.steps.len(), 1);
+        assert!(trace.steps[0].detail.contains("没有执行额外工具"));
+    }
+
+    #[test]
+    fn build_agent_trace_empty_with_forced_search() {
+        let trace = build_agent_trace(&[], true);
+        assert!(trace.summary.contains("直接回答"));
+        assert_eq!(trace.steps.len(), 2);
+        assert!(trace.steps[0].detail.contains("检索优先"));
+        assert!(trace.steps[1].detail.contains("没有执行额外工具"));
+    }
+
+    #[test]
+    fn build_agent_trace_single_tool() {
+        let tools = vec![ToolExecution::new("search_notes", "query=test", "found 3", false)];
+        let trace = build_agent_trace(&tools, false);
+        assert!(trace.summary.contains("1 个工具步骤"));
+        assert_eq!(trace.steps.len(), 1);
+        assert!(trace.steps[0].detail.contains("search_notes"));
+        assert!(trace.steps[0].detail.contains("query=test"));
+        assert!(trace.steps[0].detail.contains("found 3"));
+    }
+
+    #[test]
+    fn build_agent_trace_multiple_tools() {
+        let tools = vec![
+            ToolExecution::new("search_notes", "q1", "r1", false),
+            ToolExecution::new("read_file", "path=/a.md", "content", false),
+        ];
+        let trace = build_agent_trace(&tools, false);
+        assert!(trace.summary.contains("2 个工具步骤"));
+        assert_eq!(trace.steps.len(), 2);
+        assert!(trace.steps[0].title.contains("1"));
+        assert!(trace.steps[1].title.contains("2"));
+    }
+
+    #[test]
+    fn build_agent_trace_forced_search_with_tools() {
+        let tools = vec![ToolExecution::new("search_notes", "q", "r", false)];
+        let trace = build_agent_trace(&tools, true);
+        assert_eq!(trace.steps.len(), 2);
+        assert!(trace.steps[0].detail.contains("检索优先"));
+        assert!(trace.steps[1].detail.contains("search_notes"));
+    }
+
+    // ── is_existing_local_path ───────────────────────────────────
+
+    #[test]
+    fn is_existing_local_path_empty_returns_false() {
+        assert!(!is_existing_local_path(""));
+    }
+
+    #[test]
+    fn is_existing_local_path_no_prefix_returns_false() {
+        // "hello.md" doesn't start with / or \\ so returns false
+        assert!(!is_existing_local_path("hello.md"));
+    }
+
+    #[test]
+    fn is_existing_local_path_relative_path_returns_false() {
+        assert!(!is_existing_local_path("notes/test.md"));
+    }
+
+    #[test]
+    fn is_existing_local_path_nonexistent_absolute_returns_false() {
+        assert!(!is_existing_local_path("/nonexistent/path/xyz123.md"));
+    }
 }

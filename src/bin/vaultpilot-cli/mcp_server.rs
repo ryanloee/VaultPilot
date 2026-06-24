@@ -383,7 +383,9 @@ pub(super) async fn run_mcp_http_server(
 
     let app = axum::Router::new()
         .route("/mcp", axum::routing::post(mcp_http_handler))
-        .layer(tower_http::limit::RequestBodyLimitLayer::new(10 * 1024 * 1024)) // 10 MB limit (#1575)
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(
+            10 * 1024 * 1024,
+        )) // 10 MB limit (#1575)
         .with_state(state);
 
     eprintln!("MCP HTTP server listening on {address}");

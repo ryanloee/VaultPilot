@@ -869,10 +869,23 @@ mod tests {
     fn enrich_turn_all_metadata_combined() {
         let turn = ChatTurn {
             text: "complete".into(),
-            attachments: vec![ChatAttachment { path: "a".into(), name: "img.png".into() }],
-            citations: vec![AnswerCitation { title: "Ref".into(), path: "p".into(), ..Default::default() }],
-            saved_note: Some(NoteMeta { title: "Note".into(), ..Default::default() }),
-            thinking_trace: Some(ThinkingTrace { summary: "Thought".into(), steps: vec![] }),
+            attachments: vec![ChatAttachment {
+                path: "a".into(),
+                name: "img.png".into(),
+            }],
+            citations: vec![AnswerCitation {
+                title: "Ref".into(),
+                path: "p".into(),
+                ..Default::default()
+            }],
+            saved_note: Some(NoteMeta {
+                title: "Note".into(),
+                ..Default::default()
+            }),
+            thinking_trace: Some(ThinkingTrace {
+                summary: "Thought".into(),
+                steps: vec![],
+            }),
             ..Default::default()
         };
         let result = enrich_turn_for_compression(&turn);

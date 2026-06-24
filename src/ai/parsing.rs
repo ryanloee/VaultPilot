@@ -1351,4 +1351,63 @@ mod tests {
         let resp: OpenAiResponse = serde_json::from_str(json).unwrap();
         assert!(resp.error.is_some());
     }
+
+    // --- SaveNote draft edge cases ---
+
+    #[test]
+    fn parse_tool_call_save_note_empty_body_uses_heuristic() {
+        let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":""}}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::SaveNote { draft } => {
+                // empty body triggers heuristic fallback
+                assert!(!draft.body.is_empty());
+            }
+            _ => panic!("Expected SaveNote"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_save_note_whitespace_title_uses_fallback() {
+        let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"   ","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"some content"}}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::SaveNote { draft } => {
+                // whitespace-only title gets heuristic fallback
+                assert_ne!(draft.title, "   ");
+                assert!(!draft.title.is_empty());
+            }
+            _ => panic!("Expected SaveNote"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_save_note_duplicate_tags_deduped() {
+        let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":["rust","rust"," coding ","coding"],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"B"}}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::SaveNote { draft } => {
+                // tags should be deduped and trimmed
+                let rust_count = draft.tags.iter().filter(|t| t.as_str() == "rust").count();
+                assert_eq!(rust_count, 1);
+                assert!(draft.tags.contains(&"coding".to_string()));
+            }
+            _ => panic!("Expected SaveNote"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_save_note_missing_optional_fields() {
+        let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"","tags":[],"keywords":[],"status":"","source":"","body":"content"}}"#;
+        let result = parse_tool_call(text, "q").unwrap();
+        match result {
+            AssistantToolCall::SaveNote { draft } => {
+                assert_eq!(draft.title, "T");
+                assert_eq!(draft.status, "已记录");
+                assert_eq!(draft.source, "captured");
+                assert_eq!(draft.body, "content");
+            }
+            _ => panic!("Expected SaveNote"),
+        }
+    }
 }

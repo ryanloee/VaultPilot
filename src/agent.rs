@@ -162,7 +162,9 @@ impl ToolProxy {
         }
 
         // 2. Resource limits — tool call count
-        let count = self.tool_call_count.fetch_add(1, Ordering::Relaxed);
+        // Check the count without incrementing — only allowed calls should
+        // consume quota (#1535).
+        let count = self.tool_call_count.load(Ordering::Relaxed);
         if count >= self.config.limits.max_tool_calls {
             let entry = self.deny(tool, args_json, "tool call limit exceeded");
             return Ok(entry);
@@ -204,6 +206,8 @@ impl ToolProxy {
             }
         }
 
+        // All checks passed — now increment the counter and allow.
+        self.tool_call_count.fetch_add(1, Ordering::Relaxed);
         let entry = self.allow(tool, args_json);
         Ok(entry)
     }

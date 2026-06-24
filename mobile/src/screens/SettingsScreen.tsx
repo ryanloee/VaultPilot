@@ -151,7 +151,7 @@ export default function SettingsScreen() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await checkApi({ apiBase, apiKey, apiFormat });
+      const res = await checkApi({ apiBase, apiKey, model, apiFormat });
       setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
     } catch (e: unknown) {
       setTestResult(`❌ ${e instanceof Error ? e.message : '连接失败'}`);

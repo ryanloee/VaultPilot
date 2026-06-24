@@ -762,8 +762,18 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
                 &lines[tail_start..],
             )
         } else {
-            // File is small enough — show head portion only, no overlapping tail
-            (0usize, String::new(), &lines[..head_count], &lines[0..0])
+            // File has fewer lines than head+tail budget — show head only,
+            // but still respect the character limit.
+            let mut keep = 1usize;
+            let mut chars = 0usize;
+            for (i, line) in lines[..head_count].iter().enumerate() {
+                chars += line.chars().count();
+                if chars > READ_FILE_MAX_CHARS {
+                    break;
+                }
+                keep = i + 1;
+            }
+            (0usize, String::new(), &lines[..keep], &lines[0..0])
         };
 
     let shown_chars: usize = effective_head
@@ -783,7 +793,7 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
         output.push_str(line);
         output.push('\n');
     }
-    if skipped_lines > 0 {
+    if !effective_tail.is_empty() || skipped_lines > 0 {
         output.push_str(&format!(
             "\n... [{skipped_lines} lines / {skipped_chars} chars omitted — showing {} of {} total chars; first {head_lines} and last {tail_lines} lines kept] ...\n\n",
             shown_chars,

@@ -1129,3 +1129,15 @@
 - PR #1481 ✅ 合并: SettingsScreen testConnection 传递 model 参数到 checkApi
 - PR #1480 ✅ 合并: globalSearch FTS fallback 补充 session title 搜索
 - 2 PRs merged (< 3), 不触发发版
+
+## Maintenance Cycle (2026-06-24) — Branch Cleanup
+- **本地分支清理**: 422 stale branches → 0 (全部为已合并/已关闭 PR 的残留分支)
+  - 394 branches 匹配已合并 PR（通过 gh pr list --state merged 交叉验证）
+  - 28 branches 为已关闭但未合并 PR 或无 PR 的残留
+- **健康检查**:
+  - Rust: 97 tests pass, Clippy clean, cargo audit clean
+  - Mobile: 879 tests pass (71 suites), tsc clean
+  - CI: main 最新 run 为 success
+  - 0 open PR, 2 open issues (#913, #1360)
+  - 0 TODO/FIXME/HACK in codebase
+- **npm 过时依赖**: react 19.2.3→19.2.7 (patch), react-native 0.85.3→0.86.0 (minor, 暂不更新)

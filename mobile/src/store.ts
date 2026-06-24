@@ -200,34 +200,52 @@ export const useAppStore = create<AppState>()(
       addProvider: (p) => set((state) => {
         const providers = [...state.providers, p];
         const activeProviderIndex = providers.length - 1;
-        setTimeout(() => syncLegacyFields(set, providers, activeProviderIndex), 0);
         saveProviderKeysSecure(providers);
-        return { providers, activeProviderIndex };
+        const active = providers[activeProviderIndex];
+        return {
+          providers, activeProviderIndex,
+          apiBase: active.apiBase, apiKey: active.apiKey,
+          model: active.model, apiFormat: active.apiFormat,
+        };
       }),
 
       removeProvider: (index) => set((state) => {
         const providers = removeProviderFromList(state.providers, index);
         const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, providers.length);
-        if (providers.length > 0) {
-          setTimeout(() => syncLegacyFields(set, providers, activeProviderIndex), 0);
-        }
         saveProviderKeysSecure(providers);
-        return { providers, activeProviderIndex };
+        const update: Partial<AppState> = { providers, activeProviderIndex };
+        if (providers.length > 0) {
+          const active = providers[activeProviderIndex];
+          update.apiBase = active.apiBase;
+          update.apiKey = active.apiKey;
+          update.model = active.model;
+          update.apiFormat = active.apiFormat;
+        }
+        return update;
       }),
 
       updateProvider: (index, p) => set((state) => {
         const providers = updateProviderInList(state.providers, index, p);
-        if (index === clampProviderIndex(state.activeProviderIndex, providers.length)) {
-          setTimeout(() => syncLegacyFields(set, providers, state.activeProviderIndex), 0);
-        }
         saveProviderKeysSecure(providers);
-        return { providers };
+        const update: Partial<AppState> = { providers };
+        if (index === clampProviderIndex(state.activeProviderIndex, providers.length)) {
+          const active = providers[index];
+          update.apiBase = active.apiBase;
+          update.apiKey = active.apiKey;
+          update.model = active.model;
+          update.apiFormat = active.apiFormat;
+        }
+        return update;
       }),
 
       setActiveProvider: (index) => set((state) => {
         const activeProviderIndex = clampProviderIndex(index, state.providers.length);
-        setTimeout(() => syncLegacyFields(set, state.providers, activeProviderIndex), 0);
-        return { activeProviderIndex };
+        const active = state.providers[activeProviderIndex];
+        return {
+          activeProviderIndex,
+          apiBase: active.apiBase, apiKey: active.apiKey,
+          model: active.model, apiFormat: active.apiFormat,
+        };
       }),
     }),
     {

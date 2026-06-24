@@ -119,6 +119,7 @@ export async function downloadAndInstall(
     if (!downloadDir.exists) downloadDir.create();
 
     const result = await File.downloadFileAsync(apkUrl, downloadDir, {
+      idempotent: true,
       onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
         if (onProgress && totalBytes > 0) {
           onProgress(Math.round((bytesWritten / totalBytes) * 100));

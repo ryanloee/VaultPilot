@@ -266,11 +266,11 @@ export default function InputBar({
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            style={[styles.sendBtn, { backgroundColor: input.trim() ? accentColor : borderColor }]}
+            style={[styles.sendBtn, { backgroundColor: (input.trim() || attachments.length > 0) ? accentColor : borderColor }]}
             onPress={onSend}
-            disabled={!input.trim()}
+            disabled={!input.trim() && attachments.length === 0}
           >
-            <Icon name="send" size={16} color={input.trim() ? '#fff' : textColorSecondary} />
+            <Icon name="send" size={16} color={(input.trim() || attachments.length > 0) ? '#fff' : textColorSecondary} />
           </TouchableOpacity>
         )}
       </View>

@@ -1080,4 +1080,128 @@ mod tests {
         assert!(rl.check("b"));
         assert!(!rl.check("b"));
     }
+
+    // ── render_openai_message_content boundary ────────────────────
+
+    #[test]
+    fn render_empty_parts_array() {
+        let (text, images) =
+            render_openai_message_content(OpenAiMessageContent::Parts(vec![]), Path::new("/vault"))
+                .unwrap();
+        assert_eq!(text, "");
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn render_whitespace_only_text_part_filtered() {
+        let (text, images) = render_openai_message_content(
+            OpenAiMessageContent::Parts(vec![OpenAiContentPart {
+                kind: "text".into(),
+                text: Some("   ".into()),
+                image_url: None,
+            }]),
+            Path::new("/vault"),
+        )
+        .unwrap();
+        // Whitespace-only text parts should be filtered out
+        assert_eq!(text, "");
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn render_text_part_with_none_text() {
+        let (text, images) = render_openai_message_content(
+            OpenAiMessageContent::Parts(vec![OpenAiContentPart {
+                kind: "text".into(),
+                text: None,
+                image_url: None,
+            }]),
+            Path::new("/vault"),
+        )
+        .unwrap();
+        assert_eq!(text, "");
+        assert!(images.is_empty());
+    }
+
+    // ── bridge_model_id boundary ──────────────────────────────────
+
+    #[test]
+    fn model_id_with_colon_in_name() {
+        let mut settings = AppSettings::default();
+        settings.provider.model = "provider/model:v1".into();
+        assert_eq!(
+            bridge_model_id(&settings),
+            "vaultpilot-chat:provider/model:v1"
+        );
+    }
+
+    #[test]
+    fn model_id_with_unicode() {
+        let mut settings = AppSettings::default();
+        settings.provider.model = "模型v1".into();
+        assert_eq!(bridge_model_id(&settings), "vaultpilot-chat:模型v1");
+    }
+
+    // ── RateLimiter boundary ──────────────────────────────────────
+
+    #[test]
+    fn rate_limiter_zero_limit_blocks_immediately() {
+        let rl = RateLimiter::new(0, std::time::Duration::from_secs(60));
+        assert!(!rl.check("key"));
+    }
+
+    // ── openai_request_to_dialog boundary ─────────────────────────
+
+    #[test]
+    fn dialog_system_message_in_history() {
+        let req = OpenAiChatCompletionsRequest {
+            model: "test".into(),
+            messages: vec![
+                OpenAiChatMessage {
+                    role: "system".into(),
+                    content: OpenAiMessageContent::Text("You are helpful".into()),
+                },
+                OpenAiChatMessage {
+                    role: "user".into(),
+                    content: OpenAiMessageContent::Text("hello".into()),
+                },
+            ],
+            stream: false,
+        };
+        let (question, history, _) = openai_request_to_dialog(req, Path::new("/vault")).unwrap();
+        assert_eq!(question, "hello");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].role, "system");
+        assert_eq!(history[0].text, "You are helpful");
+    }
+
+    #[test]
+    fn dialog_whitespace_only_history_skipped() {
+        let req = OpenAiChatCompletionsRequest {
+            model: "test".into(),
+            messages: vec![
+                OpenAiChatMessage {
+                    role: "user".into(),
+                    content: OpenAiMessageContent::Text("   ".into()),
+                },
+                OpenAiChatMessage {
+                    role: "assistant".into(),
+                    content: OpenAiMessageContent::Text("   ".into()),
+                },
+                OpenAiChatMessage {
+                    role: "user".into(),
+                    content: OpenAiMessageContent::Text("real question".into()),
+                },
+            ],
+            stream: false,
+        };
+        let (question, history, _) = openai_request_to_dialog(req, Path::new("/vault")).unwrap();
+        assert_eq!(question, "real question");
+        // Whitespace-only messages should be filtered from history
+        assert!(
+            history.is_empty(),
+            "whitespace-only history should be empty, got {}",
+            history.len()
+        );
+    }
 }

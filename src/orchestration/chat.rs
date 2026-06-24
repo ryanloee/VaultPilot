@@ -645,4 +645,240 @@ mod tests {
         let result = enrich_turn_for_compression(&turn);
         assert!(result.contains("[Thinking trace summary: Analyzed 3 sources]"));
     }
+
+    // ── append_ocr_text_to_prompt (#1488) ─────────────────────────
+
+    #[test]
+    fn ocr_empty_parts_returns_original() {
+        let result = append_ocr_text_to_prompt("hello".into(), &[]);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn ocr_single_part_appended() {
+        let result = append_ocr_text_to_prompt("prompt".into(), &["OCR text".into()]);
+        assert!(result.starts_with("prompt"));
+        assert!(result.contains(OCR_SECTION_HEADER));
+        assert!(result.contains("OCR text"));
+    }
+
+    #[test]
+    fn ocr_multiple_parts_joined_with_newline() {
+        let parts = vec!["line1".into(), "line2".into(), "line3".into()];
+        let result = append_ocr_text_to_prompt("q".into(), &parts);
+        assert!(result.contains("line1\nline2\nline3"));
+    }
+
+    // ── find_chat_session (#1488) ─────────────────────────────────
+
+    #[test]
+    fn find_existing_session() {
+        let session = ChatSession {
+            id: "s1".into(),
+            title: "Test".into(),
+            ..Default::default()
+        };
+        let state = ChatState {
+            sessions: vec![session],
+            current_session_id: "s1".into(),
+        };
+        assert!(find_chat_session(&state, "s1").is_some());
+        assert_eq!(find_chat_session(&state, "s1").unwrap().title, "Test");
+    }
+
+    #[test]
+    fn find_nonexistent_session_returns_none() {
+        let state = ChatState {
+            sessions: vec![],
+            current_session_id: String::new(),
+        };
+        assert!(find_chat_session(&state, "missing").is_none());
+    }
+
+    #[test]
+    fn find_session_wrong_id_returns_none() {
+        let session = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
+        let state = ChatState {
+            sessions: vec![session],
+            current_session_id: "s1".into(),
+        };
+        assert!(find_chat_session(&state, "s2").is_none());
+    }
+
+    // ── new_chat_session (#1488) ──────────────────────────────────
+
+    #[test]
+    fn new_session_with_title() {
+        let session = new_chat_session(Some("My Title"));
+        assert_eq!(session.title, "My Title");
+        assert!(session.turns.is_empty());
+        assert!(session.summary.is_none());
+    }
+
+    #[test]
+    fn new_session_empty_title_uses_default() {
+        let session = new_chat_session(Some("   "));
+        assert_eq!(session.title, "新对话");
+    }
+
+    #[test]
+    fn new_session_none_title_uses_default() {
+        let session = new_chat_session(None);
+        assert_eq!(session.title, "新对话");
+    }
+
+    #[test]
+    fn new_session_has_unique_id() {
+        let s1 = new_chat_session(None);
+        let s2 = new_chat_session(None);
+        assert_ne!(s1.id, s2.id);
+    }
+
+    // ── build_chat_attachments (#1488) ────────────────────────────
+
+    #[test]
+    fn build_attachments_empty() {
+        assert!(build_chat_attachments(&[]).is_empty());
+    }
+
+    #[test]
+    fn build_attachments_extracts_filename() {
+        let paths = vec!["/tmp/photo.jpg".into(), "/docs/report.pdf".into()];
+        let atts = build_chat_attachments(&paths);
+        assert_eq!(atts.len(), 2);
+        assert_eq!(atts[0].name, "photo.jpg");
+        assert_eq!(atts[1].name, "report.pdf");
+        assert_eq!(atts[0].path, "/tmp/photo.jpg");
+    }
+
+    #[test]
+    fn build_attachments_path_without_filename() {
+        // Path "/" → file_name() returns None → fallback "image"
+        let paths = vec!["/".into()];
+        let atts = build_chat_attachments(&paths);
+        assert_eq!(atts.len(), 1);
+        assert_eq!(atts[0].name, "image");
+    }
+
+    // ── build_chat_session_title CJK (#1488) ─────────────────────
+
+    #[test]
+    fn title_pure_cjk_within_limit() {
+        let title = build_chat_session_title("今天天气很好");
+        assert_eq!(title, "今天天气很好"); // 6 chars, well under 28
+    }
+
+    #[test]
+    fn title_pure_cjk_exceeds_limit() {
+        let long_cjk = "中".repeat(30);
+        let title = build_chat_session_title(&long_cjk);
+        assert!(title.ends_with("..."));
+        assert_eq!(title.chars().count(), 31); // 28 + "..."
+    }
+
+    #[test]
+    fn title_mixed_cjk_ascii() {
+        let title = build_chat_session_title("Hello 世界 test");
+        assert_eq!(title, "Hello 世界 test"); // 14 chars
+    }
+
+    // ── estimate_session_tokens (#1488) ───────────────────────────
+
+    #[test]
+    fn estimate_session_empty_turns() {
+        let session = ChatSession {
+            turns: vec![],
+            ..Default::default()
+        };
+        assert_eq!(estimate_session_tokens(&session), 0);
+    }
+
+    #[test]
+    fn estimate_session_with_summary_and_turns() {
+        let session = ChatSession {
+            summary: Some(crate::models::ConversationSummary {
+                text: "hello".into(),
+                generated_at: String::new(),
+                covered_turn_count: 1,
+                compression_count: 1,
+            }),
+            turns: vec![ChatTurn {
+                text: "test".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let tokens = estimate_session_tokens(&session);
+        // summary "hello" = 2, turn "test" = 1 → total 3
+        assert_eq!(tokens, 3);
+    }
+
+    #[test]
+    fn estimate_session_with_image_attachment() {
+        let session = ChatSession {
+            turns: vec![ChatTurn {
+                text: "see this".into(),
+                attachments: vec![ChatAttachment {
+                    path: "a.png".into(),
+                    name: "a.png".into(),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let tokens = estimate_session_tokens(&session);
+        // "see this" = 8 chars → ceil(8/4)=2, + 1200 attachment
+        assert_eq!(tokens, 2 + IMAGE_ATTACHMENT_TOKEN_ESTIMATE);
+    }
+
+    // ── enrich_turn edge cases (#1488) ────────────────────────────
+
+    #[test]
+    fn enrich_turn_empty_attachment_name_filtered() {
+        let turn = ChatTurn {
+            text: "text".into(),
+            attachments: vec![ChatAttachment {
+                path: "a.png".into(),
+                name: String::new(), // empty name should be filtered
+            }],
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(!result.contains("[Attachments:"));
+    }
+
+    #[test]
+    fn enrich_turn_empty_citation_title_uses_path() {
+        let turn = ChatTurn {
+            text: "text".into(),
+            citations: vec![AnswerCitation {
+                title: String::new(),
+                path: "notes/tip.md".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(result.contains("[Citations: notes/tip.md]"));
+    }
+
+    #[test]
+    fn enrich_turn_all_metadata_combined() {
+        let turn = ChatTurn {
+            text: "complete".into(),
+            attachments: vec![ChatAttachment { path: "a".into(), name: "img.png".into() }],
+            citations: vec![AnswerCitation { title: "Ref".into(), path: "p".into(), ..Default::default() }],
+            saved_note: Some(NoteMeta { title: "Note".into(), ..Default::default() }),
+            thinking_trace: Some(ThinkingTrace { summary: "Thought".into(), steps: vec![] }),
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(result.contains("[Attachments: img.png]"));
+        assert!(result.contains("[Citations: Ref]"));
+        assert!(result.contains("[Saved note: Note]"));
+        assert!(result.contains("[Thinking trace summary: Thought]"));
+    }
 }

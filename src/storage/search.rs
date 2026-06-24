@@ -2214,4 +2214,229 @@ mod tests {
         let h = stable_term_hash(&long_text);
         assert_ne!(h, 0); // very unlikely to be zero
     }
+
+    // ── 1.26 normalize_search_text boundary ──
+
+    #[test]
+    fn normalize_search_text_empty_string() {
+        assert_eq!(normalize_search_text(""), "");
+    }
+
+    #[test]
+    fn normalize_search_text_special_chars_become_spaces() {
+        // Punctuation, brackets, etc. should be replaced with spaces
+        let result = normalize_search_text("hello!@#world");
+        assert_eq!(result, "hello   world");
+    }
+
+    #[test]
+    fn normalize_search_text_preserves_underscores_and_dashes() {
+        let result = normalize_search_text("note-id_v2.md");
+        assert_eq!(result, "note-id_v2.md");
+    }
+
+    // ── 1.27 normalize_query_for_search boundary ──
+
+    #[test]
+    fn normalize_query_empty_string() {
+        assert_eq!(normalize_query_for_search(""), "");
+    }
+
+    #[test]
+    fn normalize_query_all_noise_returns_empty() {
+        // All tokens are noise phrases
+        let result = normalize_query_for_search("告诉我帮我请问");
+        assert!(
+            result.trim().is_empty(),
+            "all-noise query should collapse, got: '{result}'"
+        );
+    }
+
+    #[test]
+    fn normalize_query_preserves_real_content_among_noise() {
+        let result = normalize_query_for_search("请问mmc模块怎么配置");
+        assert!(result.contains("mmc"), "should keep 'mmc', got: '{result}'");
+        assert!(
+            result.contains("模块"),
+            "should keep '模块', got: '{result}'"
+        );
+        assert!(
+            result.contains("配置"),
+            "should keep '配置', got: '{result}'"
+        );
+    }
+
+    // ── 1.28 extract_search_terms boundary ──
+
+    #[test]
+    fn extract_terms_empty_string() {
+        let terms = extract_search_terms("");
+        assert!(terms.is_empty(), "empty input should yield no terms");
+    }
+
+    #[test]
+    fn extract_terms_single_char_filtered_out() {
+        // Single-char tokens are filtered by push_search_term (len <= 1)
+        let terms = extract_search_terms("a b c");
+        assert!(terms.is_empty(), "single-char tokens should be filtered");
+    }
+
+    #[test]
+    fn extract_terms_deduplicates() {
+        let terms = extract_search_terms("mmc mmc mmc");
+        let mmc_count = terms.iter().filter(|t| *t == "mmc").count();
+        assert_eq!(
+            mmc_count, 1,
+            "duplicate 'mmc' should be deduped, got {mmc_count}"
+        );
+    }
+
+    // ── 1.29 filter_by_date_range ──
+
+    #[test]
+    fn filter_date_range_no_filters_returns_all() {
+        let notes = vec![
+            NoteMeta {
+                id: "1".into(),
+                created_at: "2026-01-01".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "2".into(),
+                created_at: "2026-06-01".into(),
+                ..Default::default()
+            },
+        ];
+        let result = filter_by_date_range(notes, None, None, None, None);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn filter_date_range_created_after() {
+        let notes = vec![
+            NoteMeta {
+                id: "1".into(),
+                created_at: "2026-01-01".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "2".into(),
+                created_at: "2026-06-01".into(),
+                ..Default::default()
+            },
+        ];
+        let result = filter_by_date_range(notes, Some("2026-03-01"), None, None, None);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "2");
+    }
+
+    #[test]
+    fn filter_date_range_created_before() {
+        let notes = vec![
+            NoteMeta {
+                id: "1".into(),
+                created_at: "2026-01-01".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "2".into(),
+                created_at: "2026-06-01".into(),
+                ..Default::default()
+            },
+        ];
+        let result = filter_by_date_range(notes, None, Some("2026-03-01"), None, None);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "1");
+    }
+
+    #[test]
+    fn filter_date_range_empty_date_skips_filter() {
+        // Notes with empty created_at should pass through
+        let notes = vec![NoteMeta {
+            id: "1".into(),
+            created_at: String::new(),
+            ..Default::default()
+        }];
+        let result = filter_by_date_range(notes, Some("2026-01-01"), None, None, None);
+        assert_eq!(result.len(), 1, "empty date should not be filtered");
+    }
+
+    #[test]
+    fn filter_date_range_modified_filters() {
+        let notes = vec![
+            NoteMeta {
+                id: "1".into(),
+                updated_at: "2026-01-15".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "2".into(),
+                updated_at: "2026-06-15".into(),
+                ..Default::default()
+            },
+        ];
+        let result =
+            filter_by_date_range(notes, None, None, Some("2026-03-01"), Some("2026-12-01"));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "2");
+    }
+
+    // ── 1.30 document_relevance_score boundary ──
+
+    #[test]
+    fn relevance_score_empty_body_zero() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                title: "Title".into(),
+                ..Default::default()
+            },
+            body: String::new(),
+            search_snippet: None,
+        };
+        // No matching terms in title either
+        assert_eq!(document_relevance_score("mmc", &doc), 0);
+    }
+
+    #[test]
+    fn relevance_score_title_match_higher_than_body_only() {
+        let title_doc = NoteDocument {
+            meta: NoteMeta {
+                title: "mmc configuration guide".into(),
+                ..Default::default()
+            },
+            body: "unrelated content".into(),
+            search_snippet: None,
+        };
+        let body_doc = NoteDocument {
+            meta: NoteMeta {
+                title: "unrelated".into(),
+                ..Default::default()
+            },
+            body: "mmc configuration guide".into(),
+            search_snippet: None,
+        };
+        let title_score = document_relevance_score("mmc", &title_doc);
+        let body_score = document_relevance_score("mmc", &body_doc);
+        assert!(
+            title_score > body_score,
+            "title match ({title_score}) should beat body-only ({body_score})"
+        );
+    }
+
+    #[test]
+    fn relevance_score_tag_match_contributes() {
+        let doc = NoteDocument {
+            meta: NoteMeta {
+                title: "Note".into(),
+                tags: vec!["hardware".into(), "mmc".into()],
+                ..Default::default()
+            },
+            body: "unrelated".into(),
+            search_snippet: None,
+        };
+        assert!(
+            document_relevance_score("mmc", &doc) > 0,
+            "tag match should yield positive score"
+        );
+    }
 }

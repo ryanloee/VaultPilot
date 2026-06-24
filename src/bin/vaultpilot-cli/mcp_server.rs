@@ -211,6 +211,9 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                     let room = MAX_MCP_LINE_BYTES - buf.len();
                     let take = end.min(room);
                     buf.extend_from_slice(&chunk_buf[..take]);
+                    if take < end {
+                        exceeded = true; // data was truncated, mark as oversized
+                    }
                     break 'read;
                 }
                 // No newline found — append the whole chunk.

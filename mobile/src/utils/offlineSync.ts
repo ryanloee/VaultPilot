@@ -13,8 +13,13 @@ import {
   clearPendingSync,
   getNote,
   queuePendingSync,
+  incrementPendingSyncRetry,
+  getPendingSyncRetryCount,
 } from '../db';
 import { getServerConfig } from '../services/sync';
+
+/** Maximum retry attempts for server errors (5xx) before giving up. */
+const MAX_RETRY_ATTEMPTS = 5;
 
 /** Hook: returns pending sync count and auto-flushes when online. */
 export function usePendingSync(): { pendingCount: number; refresh: () => Promise<void> } {
@@ -82,7 +87,19 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
       if (res.ok) {
         await clearPendingSync(entry.note_id);
         synced++;
+      } else if (res.status >= 400 && res.status < 500) {
+        // Client error (4xx): clear entry, won't succeed on retry
+        console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: client error ${res.status}`);
+        await clearPendingSync(entry.note_id);
+        synced++;
       } else {
+        // Server error (5xx): increment retry count
+        await incrementPendingSyncRetry(entry.note_id);
+        const retryCount = await getPendingSyncRetryCount(entry.note_id);
+        if (retryCount >= MAX_RETRY_ATTEMPTS) {
+          console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded`);
+          await clearPendingSync(entry.note_id);
+        }
         failed++;
       }
     } catch (e) {

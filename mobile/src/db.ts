@@ -96,7 +96,8 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           note_id TEXT NOT NULL,
           action TEXT NOT NULL DEFAULT 'update',
-          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+          created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+          retry_count INTEGER NOT NULL DEFAULT 0
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
@@ -485,6 +486,25 @@ export async function queuePendingSync(noteId: string, action = 'update'): Promi
   );
 }
 
+/** Increment retry count for a pending sync entry. */
+export async function incrementPendingSyncRetry(noteId: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'UPDATE pending_syncs SET retry_count = retry_count + 1 WHERE note_id = ?',
+    [noteId]
+  );
+}
+
+/** Get retry count for a pending sync entry. */
+export async function getPendingSyncRetryCount(noteId: string): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ retry_count: number }>(
+    'SELECT retry_count FROM pending_syncs WHERE note_id = ?',
+    [noteId]
+  );
+  return row?.retry_count ?? 0;
+}
+
 /** Count of notes waiting to sync. */
 export async function getPendingSyncCount(): Promise<number> {
   const db = await getDb();
@@ -495,7 +515,7 @@ export async function getPendingSyncCount(): Promise<number> {
 /** Get all pending sync entries. */
 export async function getPendingSyncs(): Promise<Array<{ id: number; note_id: string; action: string }>> {
   const db = await getDb();
-  return db.getAllAsync<{ id: number; note_id: string; action: string }>(
+  return db.getAllAsync<{ id: number; note_id: string; action: string; retry_count: number }>(
     'SELECT * FROM pending_syncs ORDER BY created_at ASC'
   );
 }

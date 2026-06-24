@@ -1,5 +1,5 @@
 /**
- * Regression tests for offlineSync flushPendingSyncs (#1368).
+ * Regression tests for offlineSync flushPendingSyncs (#1368, #1596).
  *
  * Verifies:
  * 1. Empty server config → returns {synced: 0, failed: 0}
@@ -8,6 +8,9 @@
  * 4. Deleted note locally → clears pending, counts as synced
  * 5. Server returns non-ok → increments failed
  * 6. Network error mid-flush → stops and returns partial counts
+ * 7. 4xx error → clears entry from queue
+ * 8. 5xx error → increments retry count
+ * 9. 5xx error max retries → clears entry from queue
  */
 
 const mockGetServerConfig = jest.fn();
@@ -16,6 +19,8 @@ const mockGetNote = jest.fn();
 const mockClearPendingSync = jest.fn();
 const mockGetPendingSyncCount = jest.fn().mockResolvedValue(0);
 const mockQueuePendingSync = jest.fn();
+const mockIncrementPendingSyncRetry = jest.fn();
+const mockGetPendingSyncRetryCount = jest.fn();
 
 jest.mock('../../services/sync', () => ({
   getServerConfig: mockGetServerConfig,
@@ -27,6 +32,8 @@ jest.mock('../../db', () => ({
   clearPendingSync: mockClearPendingSync,
   getPendingSyncCount: mockGetPendingSyncCount,
   queuePendingSync: mockQueuePendingSync,
+  incrementPendingSyncRetry: mockIncrementPendingSyncRetry,
+  getPendingSyncRetryCount: mockGetPendingSyncRetryCount,
 }));
 
 jest.mock('expo-sqlite', () => ({
@@ -57,6 +64,8 @@ describe('flushPendingSyncs', () => {
     mockGetPendingSyncs.mockResolvedValue([]);
     mockGetNote.mockResolvedValue(null);
     mockClearPendingSync.mockResolvedValue(undefined);
+    mockIncrementPendingSyncRetry.mockResolvedValue(undefined);
+    mockGetPendingSyncRetryCount.mockResolvedValue(0);
   });
 
   it('returns zeros when no server URL configured', async () => {
@@ -102,7 +111,7 @@ describe('flushPendingSyncs', () => {
 
     const result = await flushPendingSyncs();
     expect(result).toEqual({ synced: 0, failed: 1 });
-    expect(mockClearPendingSync).not.toHaveBeenCalled();
+    expect(mockIncrementPendingSyncRetry).toHaveBeenCalledWith('n1');
   });
 
   it('stops flushing on network error and returns partial counts', async () => {
@@ -208,5 +217,75 @@ describe('flushPendingSyncs', () => {
 
     await flushPendingSyncs();
     expect(mockFetch.mock.calls[0][1].method).toBe('PUT');
+  });
+
+  // ── #1596: Fix for non-OK response handling ──
+
+  it('clears entry on 4xx client error', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(mockClearPendingSync).toHaveBeenCalledWith('n1');
+    expect(mockIncrementPendingSyncRetry).not.toHaveBeenCalled();
+  });
+
+  it('clears entry on 400 bad request', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 400 });
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(mockClearPendingSync).toHaveBeenCalledWith('n1');
+  });
+
+  it('increments retry count on 5xx server error', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 500 });
+    mockGetPendingSyncRetryCount.mockResolvedValue(1);
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 0, failed: 1 });
+    expect(mockIncrementPendingSyncRetry).toHaveBeenCalledWith('n1');
+    expect(mockGetPendingSyncRetryCount).toHaveBeenCalledWith('n1');
+    expect(mockClearPendingSync).not.toHaveBeenCalled();
+  });
+
+  it('clears entry after max retry attempts exceeded', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 500 });
+    mockGetPendingSyncRetryCount.mockResolvedValue(5); // MAX_RETRY_ATTEMPTS = 5
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 0, failed: 1 });
+    expect(mockIncrementPendingSyncRetry).toHaveBeenCalledWith('n1');
+    expect(mockGetPendingSyncRetryCount).toHaveBeenCalledWith('n1');
+    expect(mockClearPendingSync).toHaveBeenCalledWith('n1');
+  });
+
+  it('handles mixed 4xx and 5xx errors correctly', async () => {
+    mockGetPendingSyncs.mockResolvedValue([
+      { note_id: 'n1' },
+      { note_id: 'n2' },
+      { note_id: 'n3' },
+    ]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 404 }) // 4xx: clear
+      .mockResolvedValueOnce({ ok: false, status: 500 }) // 5xx: retry
+      .mockResolvedValueOnce({ ok: false, status: 503 }); // 5xx: retry
+    mockGetPendingSyncRetryCount
+      .mockResolvedValueOnce(1) // n2 after first retry
+      .mockResolvedValueOnce(1); // n3 after first retry
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 1, failed: 2 });
+    expect(mockClearPendingSync).toHaveBeenCalledTimes(1); // Only n1 cleared
+    expect(mockIncrementPendingSyncRetry).toHaveBeenCalledTimes(2); // n2 and n3
   });
 });

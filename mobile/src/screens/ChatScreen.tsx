@@ -293,20 +293,22 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       }
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
     } catch (err: unknown) {
-      // Save whatever partial content was received before the error
       const partial = msgsRef.current.find(m => m.id === aiId)?.content ?? '';
-      if (partial) {
-        try { await updateMessage(aiId, partial); } catch (e) { console.warn('[Chat] Failed to save partial content:', e); }
-      }
       const errMsg = err instanceof Error ? err.message : String(err);
       const errName = err instanceof Error ? err.name : '';
+
       if (errName === 'AbortError') {
         if (partial) {
           try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch (e) { console.warn('[Chat] Failed to save aborted message:', e); }
+        } else {
+          try { await deleteMessage(aiId); } catch (e) { console.warn('[Chat] Failed to delete empty aborted message:', e); }
+          setMsgs(prev => prev.filter(m => m.id !== aiId));
         }
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
       } else {
-        // Append error marker without discarding streamed content; mark as error to filter from API history
+        if (partial) {
+          try { await updateMessage(aiId, partial); } catch (e) { console.warn('[Chat] Failed to save partial content:', e); }
+        }
         setMsgs(prev => prev.map(m => m.id === aiId
           ? { ...m, content: m.content ? `${m.content}\n\n❌ ${errMsg}` : `❌ ${errMsg}`, streaming: false, isError: true }
           : m));

@@ -34,23 +34,25 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
 
 /** Populate FTS tables from existing data (runs once, idempotent via content= sync). */
 async function migrateFts(db: SQLite.SQLiteDatabase): Promise<void> {
-  // Rebuild FTS content from source tables — safe to run on every open
-  // because content= tables auto-sync via triggers for new writes.
-  // This only catches rows inserted before triggers were created.
-  const msgCount = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM messages_fts');
-  const noteCount = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM notes_fts');
-  if (msgCount && msgCount.c === 0) {
-    const msgs = await db.getAllAsync<{ rowid: number; content: string }>('SELECT rowid, content FROM messages');
+  // Wrap all inserts in a single transaction so an interruption cannot
+  // leave the FTS index in a partially-populated state (#1516).
+  // Use NOT IN subqueries against the content tables so that rows missed
+  // by a previously interrupted migration are picked up on the next open.
+  await db.withTransactionAsync(async () => {
+    const msgs = await db.getAllAsync<{ rowid: number; content: string }>(
+      'SELECT rowid, content FROM messages WHERE rowid NOT IN (SELECT rowid FROM messages_fts)'
+    );
     for (const m of msgs) {
       await db.runAsync('INSERT INTO messages_fts(rowid, content) VALUES (?, ?)', [m.rowid, m.content]);
     }
-  }
-  if (noteCount && noteCount.c === 0) {
-    const notes = await db.getAllAsync<{ rowid: number; title: string; content: string }>('SELECT rowid, title, content FROM notes');
+
+    const notes = await db.getAllAsync<{ rowid: number; title: string; content: string }>(
+      'SELECT rowid, title, content FROM notes WHERE rowid NOT IN (SELECT rowid FROM notes_fts)'
+    );
     for (const n of notes) {
       await db.runAsync('INSERT INTO notes_fts(rowid, title, content) VALUES (?, ?, ?)', [n.rowid, n.title, n.content]);
     }
-  }
+  });
 }
 
 export async function getDb(): Promise<SQLite.SQLiteDatabase> {

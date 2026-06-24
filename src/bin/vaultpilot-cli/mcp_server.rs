@@ -364,12 +364,15 @@ async fn mcp_http_handler(
 ) -> Json<McpResponse> {
     // Token auth: require bearer token if configured
     if let Some(ref expected) = state.token {
-        let auth = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let token = auth.strip_prefix("Bearer ").unwrap_or("");
-        if token != expected.as_str() {
+        let Some(token) = crate::http_bridge::bridge_token_from_headers(&headers) else {
+            return Json(McpResponse::error(
+                Value::Null,
+                -32600,
+                "unauthorized".to_string(),
+                None,
+            ));
+        };
+        if !crate::http_bridge::constant_time_eq(token.as_bytes(), expected.as_bytes()) {
             return Json(McpResponse::error(
                 Value::Null,
                 -32600,

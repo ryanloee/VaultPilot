@@ -771,12 +771,19 @@ pub(super) fn bridge_token_from_headers(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiErrorEnvelope>) {
+    let kind = match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => "authentication_error",
+        StatusCode::NOT_FOUND => "not_found_error",
+        StatusCode::TOO_MANY_REQUESTS => "rate_limit_error",
+        s if s.is_client_error() => "invalid_request_error",
+        _ => "api_error",
+    };
     (
         status,
         Json(OpenAiErrorEnvelope {
             error: OpenAiError {
                 message: message.to_string(),
-                kind: "invalid_request_error",
+                kind,
             },
         }),
     )

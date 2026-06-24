@@ -165,7 +165,7 @@ export function looksLikeSmallTalk(text: string): boolean {
 }
 
 /** Check if user message explicitly asks about notes/records. */
-function isNoteRelatedQuery(text: string): boolean {
+export function isNoteRelatedQuery(text: string): boolean {
   return /笔记|记录|保存|记了|记过|知识库|notes?|save|record/i.test(text);
 }
 

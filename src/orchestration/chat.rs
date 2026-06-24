@@ -894,4 +894,363 @@ mod tests {
         assert!(result.contains("[Saved note: Note]"));
         assert!(result.contains("[Thinking trace summary: Thought]"));
     }
+
+
+        #[test]
+    fn resolve_create_new_session_when_empty() {
+        let mut state = ChatState {
+            sessions: vec![],
+            current_session_id: String::new(),
+        };
+        let (id, is_new) = resolve_or_create_chat_session(&mut state, None, false).unwrap();
+        assert!(is_new);
+        assert!(!id.is_empty());
+        assert_eq!(state.sessions.len(), 1);
+        assert_eq!(state.current_session_id, id);
+    }
+
+        #[test]
+    fn resolve_create_new_session_when_forced() {
+        let existing = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![existing],
+            current_session_id: "s1".into(),
+        };
+        let (id, is_new) = resolve_or_create_chat_session(&mut state, None, true).unwrap();
+        assert!(is_new);
+        assert_ne!(id, "s1");
+        assert_eq!(state.sessions.len(), 2);
+    }
+
+        #[test]
+    fn resolve_find_existing_session_by_id() {
+        let existing = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![existing],
+            current_session_id: "s1".into(),
+        };
+        let (id, is_new) = resolve_or_create_chat_session(&mut state, Some("s1"), false).unwrap();
+        assert!(!is_new);
+        assert_eq!(id, "s1");
+    }
+
+        #[test]
+    fn resolve_nonexistent_session_id_returns_error() {
+        let existing = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![existing],
+            current_session_id: "s1".into(),
+        };
+        let result = resolve_or_create_chat_session(&mut state, Some("missing"), false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+        #[test]
+    fn resolve_falls_back_to_first_session() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
+        let s2 = ChatSession {
+            id: "s2".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![s1, s2],
+            current_session_id: "nonexistent".into(), // invalid current
+        };
+        let (id, is_new) = resolve_or_create_chat_session(&mut state, None, false).unwrap();
+        assert!(!is_new);
+        assert_eq!(id, "s1"); // falls back to first
+    }
+
+        #[test]
+    fn resolve_empty_session_id_ignores_and_uses_current() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let (id, is_new) = resolve_or_create_chat_session(&mut state, Some("  "), false).unwrap();
+        assert!(!is_new);
+        assert_eq!(id, "s1");
+    }
+
+        #[test]
+    fn append_turn_updates_title_from_default() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            title: "新对话".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let turn = ChatTurn {
+            id: "t1".into(),
+            role: "user".into(),
+            text: "Tell me about Rust programming".into(),
+            ..Default::default()
+        };
+        append_turn_to_session(&mut state, "s1", turn).unwrap();
+        // Title should be updated from "新对话" to first message's text
+        let session = find_chat_session(&state, "s1").unwrap();
+        assert_ne!(session.title, "新对话");
+        assert_eq!(session.turns.len(), 1);
+    }
+
+        #[test]
+    fn append_turn_preserves_non_default_title() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            title: "My Chat".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let turn = ChatTurn {
+            id: "t1".into(),
+            role: "user".into(),
+            text: "hello".into(),
+            ..Default::default()
+        };
+        append_turn_to_session(&mut state, "s1", turn).unwrap();
+        let session = find_chat_session(&state, "s1").unwrap();
+        assert_eq!(session.title, "My Chat"); // preserved
+    }
+
+        #[test]
+    fn append_turn_nonexistent_session_errors() {
+        let mut state = ChatState {
+            sessions: vec![],
+            current_session_id: String::new(),
+        };
+        let turn = ChatTurn {
+            id: "t1".into(),
+            role: "user".into(),
+            text: "hi".into(),
+            ..Default::default()
+        };
+        let result = append_turn_to_session(&mut state, "missing", turn);
+        assert!(result.is_err());
+    }
+
+        #[test]
+    fn append_turn_assistant_does_not_change_title() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            title: "新对话".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let turn = ChatTurn {
+            id: "t1".into(),
+            role: "assistant".into(),
+            text: "Here's my answer".into(),
+            ..Default::default()
+        };
+        append_turn_to_session(&mut state, "s1", turn).unwrap();
+        let session = find_chat_session(&state, "s1").unwrap();
+        assert_eq!(session.title, "新对话"); // assistant turn doesn't change title
+    }
+
+        #[test]
+    fn replace_existing_session() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            title: "Old".into(),
+            ..Default::default()
+        };
+        let mut state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let updated = ChatSession {
+            id: "s1".into(),
+            title: "Updated".into(),
+            ..Default::default()
+        };
+        replace_chat_session(&mut state, updated).unwrap();
+        assert_eq!(find_chat_session(&state, "s1").unwrap().title, "Updated");
+        assert_eq!(state.sessions.len(), 1);
+    }
+
+        #[test]
+    fn replace_nonexistent_session_errors() {
+        let mut state = ChatState {
+            sessions: vec![],
+            current_session_id: String::new(),
+        };
+        let updated = ChatSession {
+            id: "missing".into(),
+            ..Default::default()
+        };
+        let result = replace_chat_session(&mut state, updated);
+        assert!(result.is_err());
+    }
+
+        #[test]
+    fn history_with_summary_and_turns() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            summary: Some(crate::models::ConversationSummary {
+                text: "Discussed Rust".into(),
+                generated_at: String::new(),
+                covered_turn_count: 2,
+                compression_count: 1,
+            }),
+            turns: vec![
+                ChatTurn {
+                    id: "t1".into(),
+                    role: "user".into(),
+                    text: "hi".into(),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    id: "t2".into(),
+                    role: "assistant".into(),
+                    text: "hello".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let history = current_session_history(&state, "s1").unwrap();
+        // Summary turn + 2 message turns = 3
+        assert_eq!(history.len(), 3);
+        assert!(history[0].text.contains("摘要"));
+        assert_eq!(history[1].role, "user");
+        assert_eq!(history[2].role, "assistant");
+    }
+
+        #[test]
+    fn history_empty_summary_no_system_turn() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            summary: Some(crate::models::ConversationSummary {
+                text: "  ".into(), // empty-ish summary
+                generated_at: String::new(),
+                covered_turn_count: 0,
+                compression_count: 1,
+            }),
+            turns: vec![ChatTurn {
+                id: "t1".into(),
+                role: "user".into(),
+                text: "hi".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let history = current_session_history(&state, "s1").unwrap();
+        assert_eq!(history.len(), 1); // only the user turn, no summary turn
+    }
+
+        #[test]
+    fn history_filters_empty_text_turns() {
+        let s1 = ChatSession {
+            id: "s1".into(),
+            turns: vec![
+                ChatTurn {
+                    id: "t1".into(),
+                    role: "user".into(),
+                    text: "hi".into(),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    id: "t2".into(),
+                    role: "assistant".into(),
+                    text: "  ".into(),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    id: "t3".into(),
+                    role: "user".into(),
+                    text: "bye".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let state = ChatState {
+            sessions: vec![s1],
+            current_session_id: "s1".into(),
+        };
+        let history = current_session_history(&state, "s1").unwrap();
+        assert_eq!(history.len(), 2); // empty-text turn filtered out
+    }
+
+        #[test]
+    fn history_nonexistent_session_errors() {
+        let state = ChatState {
+            sessions: vec![],
+            current_session_id: String::new(),
+        };
+        let result = current_session_history(&state, "missing");
+        assert!(result.is_err());
+    }
+
+        #[test]
+    fn estimate_turn_no_text_no_attachments() {
+        assert_eq!(estimate_turn_tokens("", &[]), 0);
+    }
+
+        #[test]
+    fn estimate_turn_multiple_attachments() {
+        let attachments = vec![
+            ChatAttachment {
+                path: "a.png".into(),
+                name: "a.png".into(),
+            },
+            ChatAttachment {
+                path: "b.png".into(),
+                name: "b.png".into(),
+            },
+            ChatAttachment {
+                path: "c.png".into(),
+                name: "c.png".into(),
+            },
+        ];
+        let tokens = estimate_turn_tokens("text", &attachments);
+        // "text" = 4 chars → 1 token, + 3 × 1200 = 3601
+        assert_eq!(tokens, 1 + 3 * IMAGE_ATTACHMENT_TOKEN_ESTIMATE);
+    }
+
+        #[test]
+    fn estimate_turn_cjk_with_attachments() {
+        let attachments = vec![ChatAttachment {
+            path: "a".into(),
+            name: "a".into(),
+        }];
+        let tokens = estimate_turn_tokens("你好世界", &attachments);
+        // 4 CJK chars = 8 tokens, + 1200
+        assert_eq!(tokens, 8 + IMAGE_ATTACHMENT_TOKEN_ESTIMATE);
+    }
+
 }

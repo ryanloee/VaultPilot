@@ -559,7 +559,10 @@ pub async fn send_request_streaming(
                 }
 
                 // Skip "event:" lines (Anthropic) and "id:" / "retry:" metadata
-                if line.starts_with("event:") || line.starts_with("id:") || line.starts_with("retry:") {
+                if line.starts_with("event:")
+                    || line.starts_with("id:")
+                    || line.starts_with("retry:")
+                {
                     continue;
                 }
 
@@ -573,7 +576,9 @@ pub async fn send_request_streaming(
                     match provider_type {
                         crate::models::ProviderType::OpenAi => {
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                                if let Some(text) = parsed["choices"][0]["delta"]["content"].as_str() {
+                                if let Some(text) =
+                                    parsed["choices"][0]["delta"]["content"].as_str()
+                                {
                                     if !text.is_empty() {
                                         accumulated.push_str(text);
                                         on_chunk(text);

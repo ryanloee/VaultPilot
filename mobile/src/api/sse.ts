@@ -1,3 +1,5 @@
+import { isRetryable } from './clientUtils';
+
 export interface StreamChunk {
   content?: string;
   tool_calls?: Array<{ id: string; name: string; arguments: string }>;
@@ -160,7 +162,7 @@ export async function parseSSEStreamWithReconnect(
 
       // Don't retry client errors (4xx) — they won't succeed on retry
       const status = (err as { status?: number }).status;
-      if (status !== undefined && status >= 400 && status < 500) throw err;
+      if (status !== undefined && status >= 400 && status < 500 && !isRetryable(status)) throw err;
 
       // If content was already delivered, retrying would send duplicate text.
       // End the stream gracefully instead of retrying.

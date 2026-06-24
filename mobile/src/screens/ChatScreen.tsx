@@ -90,6 +90,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
     abortRef.current?.abort();
+    const prevMsgs = msgsRef.current;
     setSessionId(sid);
     setTitle(sessionTitle);
     setMsgs([]);
@@ -102,6 +103,9 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       })));
     } catch (e) {
       console.warn('[Chat] loadSession failed:', e);
+      Alert.alert('加载会话失败', '无法读取消息记录，请重试', [
+        { text: '确定', onPress: () => setMsgs(prevMsgs) },
+      ]);
     }
   }, []);
 

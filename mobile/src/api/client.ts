@@ -413,35 +413,71 @@ export async function chatWithReconnect(
     };
     if (systemText) body.system = systemText;
 
-    await parseSSEStreamWithReconnect(
-      `${anthropicBase}/v1/messages`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
+    // Wrap signal with timeout (same pattern as chatAnthropic)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+    const onSignalAbort = signal ? () => controller.abort(signal.reason) : undefined;
+    if (signal && onSignalAbort) {
+      signal.addEventListener('abort', onSignalAbort, { once: true });
+    }
+
+    try {
+      await parseSSEStreamWithReconnect(
+        `${anthropicBase}/v1/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-      },
-      onChunk,
-      { ...options, signal, transformBody: wrapAnthropicBody },
-    );
+        onChunk,
+        { ...options, signal: controller.signal, transformBody: wrapAnthropicBody },
+      );
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === 'AbortError' && !signal?.aborted) {
+        throw new Error('请求超时（2 分钟），请检查网络或服务端状态');
+      }
+      throw e;
+    } finally {
+      clearTimeout(timeout);
+      if (onSignalAbort) signal?.removeEventListener('abort', onSignalAbort);
+    }
     return;
   }
 
   // OpenAI-compatible format (default)
   const body = JSON.stringify({ model, messages, stream: true });
-  await parseSSEStreamWithReconnect(
-    `${base}/chat/completions`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body,
-    },
-    onChunk,
-    { ...options, signal },
-  );
+  // Wrap signal with timeout (same pattern as chatOpenAI)
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  const onSignalAbort = signal ? () => controller.abort(signal.reason) : undefined;
+  if (signal && onSignalAbort) {
+    signal.addEventListener('abort', onSignalAbort, { once: true });
+  }
+
+  try {
+    await parseSSEStreamWithReconnect(
+      `${base}/chat/completions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body,
+      },
+      onChunk,
+      { ...options, signal: controller.signal },
+    );
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError' && !signal?.aborted) {
+      throw new Error('请求超时（2 分钟），请检查网络或服务端状态');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+    if (onSignalAbort) signal?.removeEventListener('abort', onSignalAbort);
+  }
 }
 
 // ── Health Check ──────────────────────────────────────────

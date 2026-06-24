@@ -835,10 +835,7 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
             end -= 1;
         }
         let truncated = &content[..end];
-        Ok(format!(
-            "{}\n[... truncated at {} bytes]",
-            truncated, end
-        ))
+        Ok(format!("{}\n[... truncated at {} bytes]", truncated, end))
     } else {
         Ok(content)
     }

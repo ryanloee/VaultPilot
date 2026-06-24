@@ -709,8 +709,14 @@ mod tests {
 
     #[test]
     fn resolve_falls_back_to_first_session() {
-        let s1 = ChatSession { id: "s1".into(), ..Default::default() };
-        let s2 = ChatSession { id: "s2".into(), ..Default::default() };
+        let s1 = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
+        let s2 = ChatSession {
+            id: "s2".into(),
+            ..Default::default()
+        };
         let mut state = ChatState {
             sessions: vec![s1, s2],
             current_session_id: "nonexistent".into(), // invalid current
@@ -722,7 +728,10 @@ mod tests {
 
     #[test]
     fn resolve_empty_session_id_ignores_and_uses_current() {
-        let s1 = ChatSession { id: "s1".into(), ..Default::default() };
+        let s1 = ChatSession {
+            id: "s1".into(),
+            ..Default::default()
+        };
         let mut state = ChatState {
             sessions: vec![s1],
             current_session_id: "s1".into(),
@@ -786,7 +795,12 @@ mod tests {
             sessions: vec![],
             current_session_id: String::new(),
         };
-        let turn = ChatTurn { id: "t1".into(), role: "user".into(), text: "hi".into(), ..Default::default() };
+        let turn = ChatTurn {
+            id: "t1".into(),
+            role: "user".into(),
+            text: "hi".into(),
+            ..Default::default()
+        };
         let result = append_turn_to_session(&mut state, "missing", turn);
         assert!(result.is_err());
     }
@@ -863,8 +877,18 @@ mod tests {
                 compression_count: 1,
             }),
             turns: vec![
-                ChatTurn { id: "t1".into(), role: "user".into(), text: "hi".into(), ..Default::default() },
-                ChatTurn { id: "t2".into(), role: "assistant".into(), text: "hello".into(), ..Default::default() },
+                ChatTurn {
+                    id: "t1".into(),
+                    role: "user".into(),
+                    text: "hi".into(),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    id: "t2".into(),
+                    role: "assistant".into(),
+                    text: "hello".into(),
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };
@@ -890,9 +914,12 @@ mod tests {
                 covered_turn_count: 0,
                 compression_count: 1,
             }),
-            turns: vec![
-                ChatTurn { id: "t1".into(), role: "user".into(), text: "hi".into(), ..Default::default() },
-            ],
+            turns: vec![ChatTurn {
+                id: "t1".into(),
+                role: "user".into(),
+                text: "hi".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let state = ChatState {
@@ -908,9 +935,24 @@ mod tests {
         let s1 = ChatSession {
             id: "s1".into(),
             turns: vec![
-                ChatTurn { id: "t1".into(), role: "user".into(), text: "hi".into(), ..Default::default() },
-                ChatTurn { id: "t2".into(), role: "assistant".into(), text: "  ".into(), ..Default::default() },
-                ChatTurn { id: "t3".into(), role: "user".into(), text: "bye".into(), ..Default::default() },
+                ChatTurn {
+                    id: "t1".into(),
+                    role: "user".into(),
+                    text: "hi".into(),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    id: "t2".into(),
+                    role: "assistant".into(),
+                    text: "  ".into(),
+                    ..Default::default()
+                },
+                ChatTurn {
+                    id: "t3".into(),
+                    role: "user".into(),
+                    text: "bye".into(),
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };
@@ -942,9 +984,18 @@ mod tests {
     #[test]
     fn estimate_turn_multiple_attachments() {
         let attachments = vec![
-            ChatAttachment { path: "a.png".into(), name: "a.png".into() },
-            ChatAttachment { path: "b.png".into(), name: "b.png".into() },
-            ChatAttachment { path: "c.png".into(), name: "c.png".into() },
+            ChatAttachment {
+                path: "a.png".into(),
+                name: "a.png".into(),
+            },
+            ChatAttachment {
+                path: "b.png".into(),
+                name: "b.png".into(),
+            },
+            ChatAttachment {
+                path: "c.png".into(),
+                name: "c.png".into(),
+            },
         ];
         let tokens = estimate_turn_tokens("text", &attachments);
         // "text" = 4 chars → 1 token, + 3 × 1200 = 3601
@@ -953,7 +1004,10 @@ mod tests {
 
     #[test]
     fn estimate_turn_cjk_with_attachments() {
-        let attachments = vec![ChatAttachment { path: "a".into(), name: "a".into() }];
+        let attachments = vec![ChatAttachment {
+            path: "a".into(),
+            name: "a".into(),
+        }];
         let tokens = estimate_turn_tokens("你好世界", &attachments);
         // 4 CJK chars = 8 tokens, + 1200
         assert_eq!(tokens, 8 + IMAGE_ATTACHMENT_TOKEN_ESTIMATE);

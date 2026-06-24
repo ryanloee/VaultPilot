@@ -567,6 +567,60 @@ pub async fn send_request_streaming(
         }
     }
 
+    // Process any remaining data in buf that wasn't terminated by a newline.
+    // The stream may end without a trailing \n, leaving the final SSE frame
+    // unprocessed. (Fixes #1597)
+    if !buf.is_empty() {
+        let line = std::str::from_utf8(&buf)
+            .unwrap_or("")
+            .trim_end_matches('\r')
+            .trim_end_matches('\n');
+
+        if !line.is_empty()
+            && !line.starts_with("event:")
+            && !line.starts_with("id:")
+            && !line.starts_with("retry:")
+        {
+            if let Some(data) = line.strip_prefix("data: ") {
+                let data = data.trim();
+                if data != "[DONE]" {
+                    match provider_type {
+                        crate::models::ProviderType::OpenAi => {
+                            if let Ok(parsed) =
+                                serde_json::from_str::<serde_json::Value>(data)
+                            {
+                                if let Some(text) =
+                                    parsed["choices"][0]["delta"]["content"].as_str()
+                                {
+                                    if !text.is_empty() {
+                                        accumulated.push_str(text);
+                                        on_chunk(text);
+                                    }
+                                }
+                            }
+                        }
+                        crate::models::ProviderType::Anthropic => {
+                            if let Ok(parsed) =
+                                serde_json::from_str::<serde_json::Value>(data)
+                            {
+                                let event_type = parsed["type"].as_str().unwrap_or("");
+                                if event_type == "content_block_delta" {
+                                    if let Some(text) = parsed["delta"]["text"].as_str()
+                                    {
+                                        if !text.is_empty() {
+                                            accumulated.push_str(text);
+                                            on_chunk(text);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(accumulated)
 }
 

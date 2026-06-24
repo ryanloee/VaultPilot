@@ -12,6 +12,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -851,7 +853,14 @@ fn slugify(title: &str) -> String {
     while slug.contains("--") {
         slug = slug.replace("--", "-");
     }
-    slug.trim_matches('-').to_string()
+    let cleaned = slug.trim_matches('-').to_string();
+    if cleaned.is_empty() {
+        let mut hasher = DefaultHasher::new();
+        title.hash(&mut hasher);
+        format!("note-{:08x}", hasher.finish())
+    } else {
+        cleaned
+    }
 }
 
 fn tool_display_name(tool: &ai::AssistantToolCall) -> &'static str {
@@ -1258,8 +1267,9 @@ mod pure_function_tests {
 
     #[test]
     fn slugify_empty_string() {
-        assert_eq!(slugify(""), "");
-        assert_eq!(slugify("---"), "");
+        // Empty/special-char-only inputs now produce a hash-based fallback
+        assert!(slugify("").starts_with("note-"));
+        assert!(slugify("---").starts_with("note-"));
     }
 
     #[test]

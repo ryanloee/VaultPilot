@@ -9,11 +9,11 @@
 //! - **Fail-closed**: any sandbox violation terminates the agent immediately.
 //! - **Auditable**: every tool call is logged for security review.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};

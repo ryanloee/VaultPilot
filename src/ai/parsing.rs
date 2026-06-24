@@ -348,15 +348,11 @@ pub(super) fn generate_programmatic_snippet(body: &str, query: &str) -> String {
 
     // Truncate if too long.
     if snippet.len() > 500 {
-        format!(
-            "{}…",
-            &snippet[..snippet
-                .char_indices()
-                .take_while(|(i, _)| *i < 498)
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(498)]
-        )
+        let mut end = 498;
+        while end > 0 && !snippet.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &snippet[..end])
     } else {
         snippet
     }

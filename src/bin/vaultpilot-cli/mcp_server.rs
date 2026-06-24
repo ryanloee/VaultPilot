@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Runtime;
 
 use axum::extract::State;
@@ -21,6 +22,7 @@ use super::{chat_session_overview, new_cli_chat_session};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const MCP_FALLBACK_PROTOCOL_VERSION: &str = "2024-11-05";
+const AI_CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 // ─── Types ────────────────────────────────────────────────────────
 
@@ -1302,21 +1304,24 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
         }
     };
 
-    match chat_with_ai_with_context(
-        context,
-        args.session_id,
-        args.message,
-        if args.image_paths.is_empty() {
-            None
-        } else {
-            Some(args.image_paths)
-        },
-        args.create_new_session,
-        |_, _| (),
+    match tokio::time::timeout(
+        AI_CALL_TIMEOUT,
+        chat_with_ai_with_context(
+            context,
+            args.session_id,
+            args.message,
+            if args.image_paths.is_empty() {
+                None
+            } else {
+                Some(args.image_paths)
+            },
+            args.create_new_session,
+            |_, _| (),
+        ),
     )
     .await
     {
-        Ok(result) => {
+        Ok(Ok(result)) => {
             let summary = format!(
                 "Assistant reply from session \"{}\":\n{}",
                 escape_xml_content(&result.session_title),
@@ -1325,7 +1330,8 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
             let structured = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
             mcp_tool_success(summary, structured)
         }
-        Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
+        Ok(Err(error)) => mcp_tool_error(sanitize_error(&error.to_string())),
+        Err(_elapsed) => mcp_tool_error("AI call timed out after 120 seconds".to_string()),
     }
 }
 
@@ -1646,12 +1652,18 @@ async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
         Some(q) => q.to_string(),
         None => return mcp_tool_error("ask requires 'question' parameter".to_string()),
     };
-    match ask_with_ai_with_context(context, question, None, None, None, |_, _| ()).await {
-        Ok(answer) => {
+    match tokio::time::timeout(
+        AI_CALL_TIMEOUT,
+        ask_with_ai_with_context(context, question, None, None, None, |_, _| ()),
+    )
+    .await
+    {
+        Ok(Ok(answer)) => {
             let summary = format!("Answer: {}", escape_xml_content(&answer.answer));
             mcp_tool_success(summary, serde_json::to_value(&answer).unwrap_or_default())
         }
-        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+        Ok(Err(e)) => mcp_tool_error(sanitize_error(&e.to_string())),
+        Err(_elapsed) => mcp_tool_error("AI call timed out after 120 seconds".to_string()),
     }
 }
 

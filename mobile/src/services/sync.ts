@@ -143,25 +143,31 @@ export async function getLastSyncTime(): Promise<string | null> {
   return AsyncStorage.getItem(LAST_SYNC_KEY);
 }
 
+export type AutoSyncResult =
+  | { status: 'skipped'; reason: 'no_config' | 'unreachable' }
+  | { status: 'done'; result: SyncResult }
+  | { status: 'error'; error: string };
+
 /**
  * Auto-sync on startup: if backend is configured and reachable, sync notes.
- * Returns the sync result if sync was attempted, null if skipped.
+ * Returns a discriminated union so callers can distinguish "not configured"
+ * from "backend unreachable" from "sync error".
  * Non-blocking — errors are caught and logged, never thrown.
  */
-export async function autoSyncOnStartup(): Promise<SyncResult | null> {
+export async function autoSyncOnStartup(): Promise<AutoSyncResult> {
   try {
     const { url } = await getServerConfig();
-    if (!url) return null;
+    if (!url) return { status: 'skipped', reason: 'no_config' };
 
     const reachable = await pingBackend();
-    if (!reachable) return null;
+    if (!reachable) return { status: 'skipped', reason: 'unreachable' };
 
     console.warn('[Sync] Backend reachable, starting auto-sync...');
     const result = await syncNotesFromServer();
     console.warn('[Sync] Auto-sync complete:', result);
-    return result;
+    return { status: 'done', result };
   } catch (e) {
     console.warn('[Sync] Auto-sync failed:', e);
-    return null;
+    return { status: 'error', error: String(e) };
   }
 }

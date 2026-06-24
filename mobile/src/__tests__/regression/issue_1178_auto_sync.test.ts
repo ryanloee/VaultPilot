@@ -32,18 +32,18 @@ beforeEach(async () => {
 });
 
 describe('autoSyncOnStartup', () => {
-  it('returns null when no backend url configured', async () => {
+  it('returns skipped when no backend url configured', async () => {
     const result = await autoSyncOnStartup();
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'skipped', reason: 'no_config' });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('returns null when backend is unreachable', async () => {
+  it('returns skipped when backend is unreachable', async () => {
     await AsyncStorage.setItem('cfg_backend_url', 'http://192.168.1.100:3000');
     mockFetch.mockRejectedValueOnce(new Error('Connection refused'));
 
     const result = await autoSyncOnStartup();
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: 'skipped', reason: 'unreachable' });
   });
 
   it('syncs notes when backend is reachable', async () => {
@@ -59,13 +59,15 @@ describe('autoSyncOnStartup', () => {
     });
 
     const result = await autoSyncOnStartup();
-    expect(result).not.toBeNull();
-    expect(result!.imported).toBe(0);
-    expect(result!.skipped).toBe(0);
-    expect(result!.errors).toBe(0);
+    expect(result.status).toBe('done');
+    if (result.status === 'done') {
+      expect(result.result.imported).toBe(0);
+      expect(result.result.skipped).toBe(0);
+      expect(result.result.errors).toBe(0);
+    }
   });
 
-  it('returns null on sync error (does not throw)', async () => {
+  it('returns error on sync failure (does not throw)', async () => {
     await AsyncStorage.setItem('cfg_backend_url', 'http://192.168.1.100:3000');
 
     // pingBackend succeeds
@@ -74,8 +76,11 @@ describe('autoSyncOnStartup', () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
     const result = await autoSyncOnStartup();
-    // Should catch the error and return null instead of throwing
-    expect(result).toBeNull();
+    // Should catch the error and return error status instead of throwing
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error).toBeTruthy();
+    }
   });
 
   it('does not block app startup (fire-and-forget pattern)', async () => {

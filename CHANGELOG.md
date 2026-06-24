@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.53] - 2026-06-24
+
+### Fixed
+- Mobile attachments, send button, suggestions list, progress indicator, voice input, scroll behavior (#1453-#1458)
+- Mobile APK update: use `Directory` for `downloadFileAsync` + `INSTALL_PACKAGE` intent on Android 13+
+- Mobile `globalSearch` FTS fallback now searches session titles, not just message content (#1478, #1480)
+- Mobile `SettingsScreen` testConnection passes model parameter to `checkApi` (#1479, #1481)
+- Cargo fmt indentation in `chat.rs` resolve_* tests
+
+### Tests
+- `search.rs` 17 boundary tests — search core functions (#1482)
+- `mcp_server.rs` 13 boundary tests — MCP tool processing (#1483)
+- `http_bridge.rs` 8 boundary tests — pure functions (#1486)
+- `prompting.rs` 14 boundary tests — render, escape, system prompt completeness (#1490)
+- `orchestration/chat.rs` 22 pure function + 19 session management boundary tests (#1488, #1489)
+
 ## [0.3.52] - 2026-06-24
 
 ### Fixed
@@ -279,7 +295,8 @@ Key milestones:
 - **v0.2.0**: Initial multi-platform architecture (WinUI + CLI + Android)
 - **v0.3.0**: Agent Mode Phase 1, MCP server, storage refactoring
 
-[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.52...HEAD
+[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.53...HEAD
+[0.3.53]: https://github.com/ryanloee/VaultPilot/compare/v0.3.52...v0.3.53
 [0.3.52]: https://github.com/ryanloee/VaultPilot/compare/v0.3.51...v0.3.52
 [0.3.51]: https://github.com/ryanloee/VaultPilot/compare/v0.3.50...v0.3.51
 [0.3.50]: https://github.com/ryanloee/VaultPilot/compare/v0.3.49...v0.3.50

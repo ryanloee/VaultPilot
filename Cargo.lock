@@ -2298,7 +2298,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vaultpilot"
-version = "0.3.55"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2322,6 +2322,7 @@ dependencies = [
  "subtle",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",

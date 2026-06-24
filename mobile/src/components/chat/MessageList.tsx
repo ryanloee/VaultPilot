@@ -45,6 +45,12 @@ export default function MessageList({
   const nearBottomRef = useRef(true);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    };
+  }, []);
+
   const scrollToEndDebounced = useCallback((force = false) => {
     if (!force && !nearBottomRef.current) return;
     if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);

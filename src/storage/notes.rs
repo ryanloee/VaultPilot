@@ -605,7 +605,7 @@ pub(super) fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     }
     // #848: Fallback — file ends with "\n---" and no trailing newline.
     // Common with programmatic file generation or truncated files.
-    if let Some(end_index) = inner.rfind("\n---") {
+    if let Some(end_index) = inner.find("\n---") {
         if end_index + 4 == inner.len() {
             let yaml = &inner[..end_index];
             let frontmatter = match serde_yaml_ng::from_str::<Frontmatter>(yaml) {

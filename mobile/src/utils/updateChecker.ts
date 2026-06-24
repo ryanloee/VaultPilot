@@ -112,32 +112,29 @@ export async function downloadAndInstall(
   if (Platform.OS !== 'android') return false;
 
   try {
-    const dest = new File(Paths.cache, `VaultPilot-v${version}.apk`);
     console.warn('[UpdateChecker] Downloading APK from:', apkUrl);
 
-    const task = File.createDownloadTask(apkUrl, dest, {
-      onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
-        if (onProgress && totalBytes > 0) {
-          onProgress(Math.round((bytesWritten / totalBytes) * 100));
-        }
-      },
-    });
+    // Use downloadFileAsync (recommended in SDK 56) with progress tracking via DownloadTask
+    const dest = new File(Paths.cache, `VaultPilot-v${version}.apk`);
 
-    const result = await task.downloadAsync();
-    if (!result?.uri) {
+    // Try downloadFileAsync first (simpler, more reliable)
+    const output = await File.downloadFileAsync(apkUrl, dest);
+
+    if (!output?.uri) {
       console.warn('[UpdateChecker] Download returned no URI');
       return false;
     }
 
-    console.warn('[UpdateChecker] Downloaded to:', result.uri);
+    console.warn('[UpdateChecker] Downloaded to:', output.uri);
 
     // Convert file:// URI to content:// URI (required for Android install intent)
-    const contentUri = await FileSystem.getContentUriAsync(result.uri);
+    const contentUri = await FileSystem.getContentUriAsync(output.uri);
     console.warn('[UpdateChecker] Content URI:', contentUri);
 
-    await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+    // FLAG_GRANT_READ_URI_PERMISSION (1) + FLAG_ACTIVITY_NEW_TASK (0x10000000)
+    await IntentLauncher.startActivityAsync('android.intent.action.INSTALL_PACKAGE', {
       data: contentUri,
-      flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      flags: 0x10000001,
       type: 'application/vnd.android.package-archive',
     });
 

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.54] - 2026-06-24
+
+### Fixed
+- Cargo fmt indentation in `agent.rs` extract_path_arg test
+
+### Tests
+- `storage/notes.rs` 21 boundary tests — sanitize_filename, sanitize_id_prefix, build_related_query (#1502)
+- `agent.rs` 6 boundary tests — ToolProxy::extract_path_arg (#1496)
+- `ai/parsing.rs` 4 boundary tests — SaveNote draft edge cases (#1495)
+- `orchestration/ask.rs` 16 boundary tests — build_agent_trace, trim_path_candidate (#1494)
+
 ## [0.3.53] - 2026-06-24
 
 ### Fixed
@@ -295,7 +306,8 @@ Key milestones:
 - **v0.2.0**: Initial multi-platform architecture (WinUI + CLI + Android)
 - **v0.3.0**: Agent Mode Phase 1, MCP server, storage refactoring
 
-[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.53...HEAD
+[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.54...HEAD
+[0.3.54]: https://github.com/ryanloee/VaultPilot/compare/v0.3.53...v0.3.54
 [0.3.53]: https://github.com/ryanloee/VaultPilot/compare/v0.3.52...v0.3.53
 [0.3.52]: https://github.com/ryanloee/VaultPilot/compare/v0.3.51...v0.3.52
 [0.3.51]: https://github.com/ryanloee/VaultPilot/compare/v0.3.50...v0.3.51

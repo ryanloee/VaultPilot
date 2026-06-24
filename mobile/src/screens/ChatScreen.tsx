@@ -330,6 +330,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       setMsgs([]);
     } catch (e) {
       console.warn('[Chat] newChat failed:', e);
+      Alert.alert('创建失败', '无法创建新对话，请重试');
     }
   }, []);
 

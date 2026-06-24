@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.52] - 2026-06-24
+
+### Fixed
+- `globalSearch` FTS→LIKE fallback when FTS returns empty (common with CJK text) (#1471)
+- `globalSearch` LIKE fallback now also searches session titles, not just message content (#1476)
+- Replace remaining `any` types with proper TypeScript types in mobile (#1474)
+
+### Tests
+- 3 regression tests for `globalSearch` FTS→LIKE fallback (#1471)
+- 1 regression test for session title LIKE search (#1476)
+- 13 unit tests for `isNoteRelatedQuery` CJK/English detection (#1473)
+
 ## [0.3.51] - 2026-06-24
 
 ### Fixed
@@ -267,7 +279,8 @@ Key milestones:
 - **v0.2.0**: Initial multi-platform architecture (WinUI + CLI + Android)
 - **v0.3.0**: Agent Mode Phase 1, MCP server, storage refactoring
 
-[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.51...HEAD
+[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.52...HEAD
+[0.3.52]: https://github.com/ryanloee/VaultPilot/compare/v0.3.51...v0.3.52
 [0.3.51]: https://github.com/ryanloee/VaultPilot/compare/v0.3.50...v0.3.51
 [0.3.50]: https://github.com/ryanloee/VaultPilot/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ryanloee/VaultPilot/compare/v0.3.48...v0.3.49

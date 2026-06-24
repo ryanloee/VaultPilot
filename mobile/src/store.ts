@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import { Alert } from 'react-native';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -31,6 +32,11 @@ async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void
     await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
   } catch (e) {
     console.warn('[SecureStore] Failed to save provider keys:', e);
+    Alert.alert(
+      '存储警告',
+      'API Key 未能安全保存，重启后可能丢失。请检查设备存储空间。',
+      [{ text: '知道了' }],
+    );
   }
 }
 
@@ -266,7 +272,11 @@ export const useAppStore = create<AppState>()(
         if (!state) return;
         // Restore API keys from SecureStore after hydration
         loadProviderKeysSecure().then(keys => {
-          if (keys.length === 0) return;
+          if (keys.length === 0) {
+            // SecureStore returned empty — check if providers already have keys (from current session)
+            const hasExistingKeys = state.providers.some(p => p.apiKey && p.apiKey.length > 0);
+            if (hasExistingKeys) return; // Don't overwrite existing keys with empty ones (#1577)
+          }
           const restored = restoreProviderKeys(state.providers, keys);
           useAppStore.setState({ providers: restored });
           syncLegacyFields(useAppStore.setState, restored, state.activeProviderIndex);

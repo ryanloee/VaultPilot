@@ -286,7 +286,38 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
         }
 
         let response = match serde_json::from_str::<McpRequest>(&line) {
-            Ok(request) => handle_mcp_request(context, &mut state, request).await,
+            Ok(request) => {
+                if request.method == "initialize" && request.jsonrpc == "2.0" {
+                    let id = request.id.unwrap_or(Value::Null);
+                    let requested_version = request
+                        .params
+                        .get("protocolVersion")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    state.initialized = true;
+                    state.protocol_version =
+                        negotiate_mcp_protocol_version(requested_version).to_string();
+                    Some(McpResponse::ok(
+                        id,
+                        serde_json::json!({
+                            "protocolVersion": state.protocol_version,
+                            "capabilities": {
+                                "tools": { "listChanged": false },
+                                "resources": { "listChanged": false },
+                                "prompts": { "listChanged": false }
+                            },
+                            "serverInfo": {
+                                "name": "vaultpilot",
+                                "title": "VaultPilot MCP",
+                                "version": env!("CARGO_PKG_VERSION")
+                            },
+                            "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
+                        }),
+                    ))
+                } else {
+                    handle_mcp_request(context, &state, request).await
+                }
+            }
             Err(error) => Some(McpResponse::error(
                 Value::Null,
                 -32700,
@@ -316,7 +347,7 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
 
 struct McpHttpState {
     context: StorageContext,
-    server_state: tokio::sync::Mutex<McpServerState>,
+    server_state: tokio::sync::RwLock<McpServerState>,
     token: Option<String>,
 }
 
@@ -338,7 +369,7 @@ pub(super) async fn run_mcp_http_server(
     let address = SocketAddr::new(ip, port);
     let state = Arc::new(McpHttpState {
         context,
-        server_state: tokio::sync::Mutex::new(McpServerState {
+        server_state: tokio::sync::RwLock::new(McpServerState {
             initialized: false,
             protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         }),
@@ -382,9 +413,43 @@ async fn mcp_http_handler(
         }
     }
 
-    let mut server_state = state.server_state.lock().await;
+    // Handle initialize with write lock; all other requests with read lock
+    if request.method == "initialize" {
+        let mut server_state = state.server_state.write().await;
+        let requested_version = request
+            .params
+            .get("protocolVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        server_state.initialized = true;
+        server_state.protocol_version =
+            negotiate_mcp_protocol_version(requested_version).to_string();
+        let protocol_version = server_state.protocol_version.clone();
+        // Drop the lock before responding
+        drop(server_state);
 
-    match handle_mcp_request(&state.context, &mut server_state, request).await {
+        return Json(McpResponse::ok(
+            request.id.unwrap_or(Value::Null),
+            serde_json::json!({
+                "protocolVersion": protocol_version,
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "resources": { "listChanged": false },
+                    "prompts": { "listChanged": false }
+                },
+                "serverInfo": {
+                    "name": "vaultpilot",
+                    "title": "VaultPilot MCP",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
+                "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
+            }),
+        ));
+    }
+
+    let server_state = state.server_state.read().await;
+
+    match handle_mcp_request(&state.context, &server_state, request).await {
         Some(resp) => Json(resp),
         None => Json(McpResponse::ok(Value::Null, Value::Null)),
     }
@@ -394,7 +459,7 @@ async fn mcp_http_handler(
 
 async fn handle_mcp_request(
     context: &StorageContext,
-    state: &mut McpServerState,
+    state: &McpServerState,
     request: McpRequest,
 ) -> Option<McpResponse> {
     if request.jsonrpc != "2.0" {
@@ -408,37 +473,13 @@ async fn handle_mcp_request(
 
     match request.method.as_str() {
         "initialize" => {
-            let id = request.id.unwrap_or(Value::Null);
-            let requested_version = request
-                .params
-                .get("protocolVersion")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            state.initialized = true;
-            state.protocol_version = negotiate_mcp_protocol_version(requested_version).to_string();
-
-            Some(McpResponse::ok(
-                id,
-                serde_json::json!({
-                    "protocolVersion": state.protocol_version,
-                    "capabilities": {
-                        "tools": {
-                            "listChanged": false
-                        },
-                        "resources": {
-                            "listChanged": false
-                        },
-                        "prompts": {
-                            "listChanged": false
-                        }
-                    },
-                    "serverInfo": {
-                        "name": "vaultpilot",
-                        "title": "VaultPilot MCP",
-                        "version": env!("CARGO_PKG_VERSION")
-                    },
-                    "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
-                }),
+            // Should have been handled by the caller (HTTP handler or stdin handler)
+            // If we reach here, return an error
+            Some(McpResponse::error(
+                request.id.unwrap_or(Value::Null),
+                -32600,
+                "initialize must be handled before handle_mcp_request".to_string(),
+                None,
             ))
         }
         "notifications/initialized" => None,

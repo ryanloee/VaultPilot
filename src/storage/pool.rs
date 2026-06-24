@@ -251,3 +251,120 @@ fn ensure_attachment_columns(connection: &Connection) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn in_memory_conn() -> Connection {
+        Connection::open_in_memory().expect("failed to open in-memory SQLite")
+    }
+
+    #[test]
+    fn ensure_schema_creates_tables_on_fresh_db() {
+        let conn = in_memory_conn();
+        ensure_schema(&conn).unwrap();
+
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert!(tables.contains(&"notes".to_string()), "notes table missing");
+        assert!(
+            tables.contains(&"attachments".to_string()),
+            "attachments table missing"
+        );
+
+        let vtables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_fts%' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert!(
+            vtables.iter().any(|t| t.contains("note_fts")),
+            "note_fts missing"
+        );
+        assert!(
+            vtables.iter().any(|t| t.contains("attachment_fts")),
+            "attachment_fts missing"
+        );
+
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn ensure_schema_is_idempotent() {
+        let conn = in_memory_conn();
+        ensure_schema(&conn).unwrap();
+        ensure_schema(&conn).unwrap();
+    }
+
+    #[test]
+    fn ensure_schema_skips_when_version_already_set() {
+        let conn = in_memory_conn();
+        conn.execute_batch("PRAGMA user_version = 1;").unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let count: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='notes'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "should not create tables on fast path");
+    }
+
+    #[test]
+    fn ensure_attachment_columns_adds_all_columns() {
+        let conn = in_memory_conn();
+        conn.execute_batch(
+            "CREATE TABLE attachments (id TEXT PRIMARY KEY, note_id TEXT NOT NULL, path TEXT NOT NULL, created_at TEXT NOT NULL);",
+        ).unwrap();
+
+        ensure_attachment_columns(&conn).unwrap();
+
+        let columns: HashSet<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(attachments)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+
+        for col in [
+            "file_name",
+            "stem",
+            "ocr_text",
+            "semantic_vector",
+            "perceptual_hash",
+        ] {
+            assert!(
+                columns.contains(col),
+                "column '{col}' missing after ensure_attachment_columns"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_attachment_columns_is_idempotent() {
+        let conn = in_memory_conn();
+        conn.execute_batch(
+            "CREATE TABLE attachments (id TEXT PRIMARY KEY, note_id TEXT NOT NULL, path TEXT NOT NULL, created_at TEXT NOT NULL);",
+        ).unwrap();
+
+        ensure_attachment_columns(&conn).unwrap();
+        ensure_attachment_columns(&conn).unwrap();
+    }
+}

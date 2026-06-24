@@ -159,7 +159,14 @@ export function looksLikeSmallTalk(text: string): boolean {
     '谢谢', 'thanks', 'thank you', '好的', 'ok', 'okay', '嗯', '对',
     '再见', 'bye', '拜拜', '晚安',
   ];
+  // If user mentions notes/records, never treat as small talk
+  if (/笔记|记录|保存|记了|记过|note|save|record/i.test(lower)) return false;
   return greetings.some(g => lower === g || lower === g + '!' || lower === g + '。');
+}
+
+/** Check if user message explicitly asks about notes/records. */
+function isNoteRelatedQuery(text: string): boolean {
+  return /笔记|记录|保存|记了|记过|知识库|notes?|save|record/i.test(text);
 }
 
 /**
@@ -192,6 +199,22 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       : userMessage;
     const keywords = extractKeywords(allText);
     console.warn('[RAG] Extracted keywords:', keywords);
+
+    // If user explicitly asks about notes, skip keyword search and inject all recent
+    if (isNoteRelatedQuery(userMessage)) {
+      console.warn('[RAG] Note-related query detected, injecting all recent notes');
+      const results = allNotes.slice(0, MAX_CONTEXT_NOTES);
+      const blocks = results.map(n => {
+        const title = n.title || (isChinese() ? '无标题' : 'Untitled');
+        const content = n.content.length > MAX_NOTE_CONTENT_CHARS
+          ? n.content.slice(0, MAX_NOTE_CONTENT_CHARS) + '...'
+          : n.content;
+        return `【${title}】\n${content}`;
+      });
+      return isChinese()
+        ? `以下是用户保存的所有笔记（共${allNotes.length}条）：\n\n${blocks.join('\n\n---\n\n')}`
+        : `Here are all the user's saved notes (${allNotes.length} total):\n\n${blocks.join('\n\n---\n\n')}`;
+    }
 
     // Search with keywords
     let results: DbNote[] = [];

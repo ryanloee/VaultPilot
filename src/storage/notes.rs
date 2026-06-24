@@ -1211,9 +1211,25 @@ fn extract_note_image_refs(body: &str) -> Vec<String> {
     let mut refs = Vec::new();
     let mut seen = HashSet::new();
     let mut offset = 0usize;
+    let mut in_code_block = false;
 
     while let Some(start) = body[offset..].find("![") {
         let absolute_start = offset + start;
+
+        // Update fenced-code-block state by scanning for ``` markers
+        // in the text between the previous position and this match.
+        for line in body[offset..absolute_start].lines() {
+            if line.trim_start().starts_with("```") {
+                in_code_block = !in_code_block;
+            }
+        }
+
+        // Skip image syntax that appears inside a fenced code block.
+        if in_code_block {
+            offset = absolute_start + 2;
+            continue;
+        }
+
         let Some(open) = body[absolute_start..].find("](") else {
             offset = absolute_start + 2;
             continue;

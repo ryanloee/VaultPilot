@@ -2,7 +2,8 @@
  * APK auto-update — check, download, and install.
  */
 
-import { File, Paths, getContentUriAsync } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { Platform } from 'react-native';
 
@@ -131,7 +132,7 @@ export async function downloadAndInstall(
     console.warn('[UpdateChecker] Downloaded to:', result.uri);
 
     // Convert file:// URI to content:// URI (required for Android install intent)
-    const contentUri = await getContentUriAsync(result.uri);
+    const contentUri = await FileSystem.getContentUriAsync(result.uri);
     console.warn('[UpdateChecker] Content URI:', contentUri);
 
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {

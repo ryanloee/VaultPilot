@@ -3,6 +3,7 @@
  * Usage: <Icon name="camera" size={18} color="#fff" />
  */
 import React from 'react';
+import type { StyleProp, ViewStyle } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 export type IconName =
@@ -60,7 +61,7 @@ interface IconProps {
   name: IconName;
   size?: number;
   color?: string;
-  style?: any;
+  style?: StyleProp<ViewStyle>;
 }
 
 export default function Icon({ name, size = 18, color = '#000', style }: IconProps) {

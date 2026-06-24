@@ -7,6 +7,12 @@
 
 import { useEffect, useState, useCallback } from 'react';
 
+/** Typed accessor for globalThis event listeners (browser/RN). */
+interface GlobalEventBus {
+  addEventListener(type: string, listener: () => void): void;
+  removeEventListener(type: string, listener: () => void): void;
+}
+
 /** Simple online/offline state hook. */
 export function useNetworkState(): { isOnline: boolean; checkConnection: () => Promise<boolean> } {
   const [isOnline, setIsOnline] = useState(true);
@@ -33,7 +39,7 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
     const handleOffline = () => setIsOnline(false);
 
     // Listen to browser/RN online/offline events
-    const win = globalThis as any;
+    const win = globalThis as Partial<GlobalEventBus>;
     if (win.addEventListener) {
       win.addEventListener('online', handleOnline);
       win.addEventListener('offline', handleOffline);

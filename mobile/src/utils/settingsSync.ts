@@ -36,7 +36,7 @@ export async function exportSettings(includeKeys = false): Promise<string> {
   if (!raw) throw new Error('No settings found');
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let stored: any;
+  let stored: Record<string, any>;
   try {
     stored = JSON.parse(raw);
   } catch {
@@ -93,7 +93,7 @@ export async function importSettings(json: string): Promise<{ providersImported:
   // Update AsyncStorage store
   const raw = await AsyncStorage.getItem('vaultpilot-store');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let stored: any;
+  let stored: Record<string, any>;
   try {
     stored = raw ? JSON.parse(raw) : {};
   } catch {

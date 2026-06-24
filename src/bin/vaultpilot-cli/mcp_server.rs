@@ -1427,6 +1427,50 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
+/// MCP schema sends flat fields (title, tags, keywords, ...) but NoteDocument
+/// nests them under meta{}. This struct matches the MCP input shape.
+#[derive(Deserialize)]
+struct FlatNoteInput {
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default)]
+    platform: String,
+    #[serde(default)]
+    board: String,
+    #[serde(default)]
+    kernel: String,
+    #[serde(default)]
+    status: String,
+}
+
+impl FlatNoteInput {
+    fn into_note_document(self) -> NoteDocument {
+        NoteDocument {
+            meta: NoteMeta {
+                title: self.title,
+                summary: self.summary,
+                tags: self.tags,
+                keywords: self.keywords,
+                platform: self.platform,
+                board: self.board,
+                kernel: self.kernel,
+                status: self.status,
+                ..Default::default()
+            },
+            body: self.body,
+            ..Default::default()
+        }
+    }
+}
+
 fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
     // Storage layer clamps to 200 (storage.rs:558), so align the MCP cap.
     let limit = arguments
@@ -1470,7 +1514,7 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
 }
 
 fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
-    let note: NoteDocument = match serde_json::from_value(arguments) {
+    let flat: FlatNoteInput = match serde_json::from_value(arguments) {
         Ok(n) => n,
         Err(e) => {
             return mcp_tool_error(sanitize_error(&format!(
@@ -1478,6 +1522,7 @@ fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
             )))
         }
     };
+    let note = flat.into_note_document();
     match save_note_with_context(context, note) {
         Ok(saved) => mcp_tool_success(
             format!("Created note '{}'", escape_xml_content(&saved.meta.title)),
@@ -1951,5 +1996,59 @@ mod tests {
     fn negotiate_whitespace_only() {
         let result = negotiate_mcp_protocol_version("   ");
         assert_eq!(result, MCP_PROTOCOL_VERSION);
+    }
+
+    // ── FlatNoteInput → NoteDocument (#1506) ─────────────────────
+
+    #[test]
+    fn flat_note_input_preserves_all_meta() {
+        let json = serde_json::json!({
+            "body": "hello",
+            "title": "My Title",
+            "summary": "brief",
+            "tags": ["rust", "cli"],
+            "keywords": ["tool"],
+            "platform": "linux",
+            "board": "main",
+            "kernel": "6.1",
+            "status": "active"
+        });
+        let flat: FlatNoteInput = serde_json::from_value(json).unwrap();
+        let doc = flat.into_note_document();
+        assert_eq!(doc.body, "hello");
+        assert_eq!(doc.meta.title, "My Title");
+        assert_eq!(doc.meta.summary, "brief");
+        assert_eq!(doc.meta.tags, vec!["rust", "cli"]);
+        assert_eq!(doc.meta.keywords, vec!["tool"]);
+        assert_eq!(doc.meta.platform, "linux");
+        assert_eq!(doc.meta.board, "main");
+        assert_eq!(doc.meta.kernel, "6.1");
+        assert_eq!(doc.meta.status, "active");
+    }
+
+    #[test]
+    fn flat_note_input_defaults_missing_fields() {
+        let json = serde_json::json!({ "body": "content only" });
+        let flat: FlatNoteInput = serde_json::from_value(json).unwrap();
+        let doc = flat.into_note_document();
+        assert_eq!(doc.body, "content only");
+        assert_eq!(doc.meta.title, "");
+        assert!(doc.meta.tags.is_empty());
+    }
+
+    #[test]
+    fn old_note_document_loses_flat_fields() {
+        // Regression: direct deserialization of flat JSON into NoteDocument
+        // silently drops title/tags/keywords (old buggy behavior).
+        let json = serde_json::json!({
+            "body": "hello",
+            "title": "Should Be Lost",
+            "tags": ["a"]
+        });
+        let doc: NoteDocument = serde_json::from_value(json).unwrap();
+        assert_eq!(doc.body, "hello");
+        // These are the BUG: title and tags are silently dropped
+        assert_eq!(doc.meta.title, ""); // was lost under old code
+        assert!(doc.meta.tags.is_empty()); // was lost under old code
     }
 }

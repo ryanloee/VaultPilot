@@ -49,6 +49,12 @@
 - #1453: WriteApprovalDialog human-readable diff 预览 (PR #1456 已合并)
 - #1454: run_agent() 异常路径 12 个集成测试 (PR #1457 已合并)
 - #1455: 移动端 sync + settingsSync 边界测试 (PR #1458 已合并)
+- #1482: search.rs 搜索核心函数 17 个边界测试 (PR #1484 已合并)
+- #1483: mcp_server.rs MCP 工具处理函数 13 个边界测试 (PR #1485 已合并)
+- #1486: http_bridge.rs 纯函数 8 个边界测试 (PR #1487 已合并)
+- #1488: orchestration/chat.rs 22 个纯函数边界测试 (PR #1491 已合并)
+- #1489: orchestration/chat.rs 19 个会话管理函数边界测试 (PR #1492 已合并)
+- #1490: prompting.rs 14 个边界测试 — render、escape、system prompt 完整性 (PR #1493 已合并)
 - #217: WinUI 启动冒烟测试
 - #500: MCP server tool errors sanitize_error() 包装 (PR #505 已合并)
 - #501: build_note_path 使用完整 UUID 消除截断 (PR #506 已合并)

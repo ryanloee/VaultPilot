@@ -586,16 +586,21 @@ pub async fn run_agent(
 
         on_event(&AgentEvent::Thinking { step: step + 1 });
 
-        // Ask LLM what tool to call
-        let selection = ai::select_tool_call(settings, prompt, &[], &[], &tool_transcripts)
-            .await
-            .map_err(|e| {
-                anyhow!(
-                    "LLM call failed at step {}: {}",
-                    step + 1,
-                    sanitize_error(&e.to_string())
-                )
-            })?;
+        // Ask LLM what tool to call (with per-step timeout — #1574)
+        let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
+        let selection = tokio::time::timeout(
+            remaining,
+            ai::select_tool_call(settings, prompt, &[], &[], &tool_transcripts),
+        )
+        .await
+        .map_err(|_| anyhow!("LLM call timed out at step {}", step + 1))?
+        .map_err(|e| {
+            anyhow!(
+                "LLM call failed at step {}: {}",
+                step + 1,
+                sanitize_error(&e.to_string())
+            )
+        })?;
 
         total_tokens += selection.usage.input_tokens.unwrap_or(0) as u64
             + selection.usage.output_tokens.unwrap_or(0) as u64;
@@ -611,19 +616,28 @@ pub async fn run_agent(
 
         match selection.tool_call {
             ai::AssistantToolCall::None => {
-                // LLM decided no more tools needed — generate final answer
+                // LLM decided no more tools needed — generate final answer (with timeout — #1574)
+                let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
                 let answer = if tool_transcripts.is_empty() {
-                    crate::ai::answer_question(settings, prompt, &[], &[], &[])
-                        .await
-                        .map_err(|e| {
-                            anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
-                        })?
+                    tokio::time::timeout(
+                        remaining,
+                        crate::ai::answer_question(settings, prompt, &[], &[], &[]),
+                    )
+                    .await
+                    .map_err(|_| anyhow!("final answer LLM call timed out"))?
+                    .map_err(|e| {
+                        anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
+                    })?
                 } else {
-                    crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[])
-                        .await
-                        .map_err(|e| {
-                            anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
-                        })?
+                    tokio::time::timeout(
+                        remaining,
+                        crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
+                    )
+                    .await
+                    .map_err(|_| anyhow!("final answer LLM call timed out"))?
+                    .map_err(|e| {
+                        anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
+                    })?
                 };
                 total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
                     + answer.usage.output_tokens.unwrap_or(0) as u64;
@@ -696,14 +710,24 @@ pub async fn run_agent(
 
     // Exited loop without a final answer — generate one from accumulated results
     on_event(&AgentEvent::StepLimitReached { steps: max_steps });
+    // Final LLM call with per-step timeout (#1574)
+    let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
     let answer = if tool_transcripts.is_empty() {
-        crate::ai::answer_question(settings, prompt, &[], &[], &[])
-            .await
-            .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+        tokio::time::timeout(
+            remaining,
+            crate::ai::answer_question(settings, prompt, &[], &[], &[]),
+        )
+        .await
+        .map_err(|_| anyhow!("final answer LLM call timed out"))?
+        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
     } else {
-        crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[])
-            .await
-            .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+        tokio::time::timeout(
+            remaining,
+            crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
+        )
+        .await
+        .map_err(|_| anyhow!("final answer LLM call timed out"))?
+        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
     };
     total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
         + answer.usage.output_tokens.unwrap_or(0) as u64;

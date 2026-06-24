@@ -1095,4 +1095,178 @@ mod tests {
         assert!(prompt.contains("search_notes returned 3 items"));
         assert!(prompt.contains("Has images: yes"));
     }
+
+    // ── Boundary tests (#1490) ────────────────────────────────────
+
+    #[test]
+    fn render_notes_multiple_documents() {
+        let docs = vec![
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n1".into(),
+                    title: "First".into(),
+                    path: "/a.md".into(),
+                    tags: vec![],
+                    keywords: vec![],
+                    ..Default::default()
+                },
+                body: "body one".into(),
+                search_snippet: None,
+            },
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n2".into(),
+                    title: "Second".into(),
+                    path: "/b.md".into(),
+                    tags: vec![],
+                    keywords: vec![],
+                    ..Default::default()
+                },
+                body: "body two".into(),
+                search_snippet: None,
+            },
+        ];
+        let rendered = render_notes(&docs);
+        assert!(rendered.contains("NOTE_ID: n1"));
+        assert!(rendered.contains("NOTE_ID: n2"));
+        assert!(rendered.contains("body one"));
+        assert!(rendered.contains("body two"));
+    }
+
+    #[test]
+    fn render_candidate_notes_empty_summary() {
+        let candidates = vec![NoteMeta {
+            id: "c1".into(),
+            title: "No Summary".into(),
+            path: "/x.md".into(),
+            summary: String::new(), // empty summary
+            keywords: vec![],
+            ..Default::default()
+        }];
+        let rendered = render_candidate_notes(&candidates);
+        assert!(rendered.contains("NOTE_ID: c1"));
+        assert!(rendered.contains("No Summary"));
+    }
+
+    #[test]
+    fn render_candidate_notes_multiple() {
+        let candidates = vec![
+            NoteMeta {
+                id: "c1".into(),
+                title: "A".into(),
+                summary: "SA".into(),
+                keywords: vec![],
+                path: "/a".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "c2".into(),
+                title: "B".into(),
+                summary: "SB".into(),
+                keywords: vec![],
+                path: "/b".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "c3".into(),
+                title: "C".into(),
+                summary: "SC".into(),
+                keywords: vec![],
+                path: "/c".into(),
+                ..Default::default()
+            },
+        ];
+        let rendered = render_candidate_notes(&candidates);
+        assert!(rendered.contains("c1"));
+        assert!(rendered.contains("c2"));
+        assert!(rendered.contains("c3"));
+    }
+
+    #[test]
+    fn render_tool_results_special_chars() {
+        let results = vec!["Result with <tags> & \"quotes\"".to_string()];
+        let rendered = render_tool_results(&results);
+        assert!(rendered.contains("<tags>"));
+        assert!(rendered.contains("&"));
+        assert!(rendered.contains("\"quotes\""));
+    }
+
+    #[test]
+    fn escape_xml_close_tags_nested() {
+        let input = "a </note> b </note> c";
+        let escaped = escape_xml_close_tags(input);
+        assert!(escaped.contains("<//note>"));
+        assert!(!escaped.contains("</note>"));
+    }
+
+    #[test]
+    fn escape_xml_close_tags_empty() {
+        assert_eq!(escape_xml_close_tags(""), "");
+    }
+
+    #[test]
+    fn ingest_system_prompt_contains_key_instructions() {
+        let prompt = ingest_system_prompt();
+        assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
+        assert!(prompt.contains("ai_workflow_manual"));
+        assert!(prompt.contains("tool_selection"));
+        assert!(prompt.contains("capture_note"));
+    }
+
+    #[test]
+    fn answer_system_prompt_contains_key_instructions() {
+        let prompt = answer_system_prompt();
+        assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
+        assert!(prompt.contains("ai_workflow_manual"));
+        assert!(prompt.contains("tool_selection"));
+    }
+
+    #[test]
+    fn tool_call_system_prompt_contains_key_instructions() {
+        let prompt = tool_call_system_prompt();
+        assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
+        assert!(prompt.contains("ai_workflow_manual"));
+        assert!(prompt.contains("JSON"));
+        assert!(prompt.contains("search_notes"));
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("save_note"));
+    }
+
+    #[test]
+    fn general_chat_system_prompt_contains_key_instructions() {
+        let prompt = general_chat_system_prompt();
+        assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
+        assert!(prompt.contains("ai_workflow_manual"));
+        assert!(prompt.contains("tool_selection"));
+    }
+
+    #[test]
+    fn note_selection_system_prompt_contains_key_instructions() {
+        let prompt = note_selection_system_prompt();
+        assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
+        assert!(prompt.contains("ai_workflow_manual"));
+        assert!(prompt.contains("note-selection"));
+        assert!(prompt.contains("JSON"));
+    }
+
+    #[test]
+    fn sanitize_user_input_empty() {
+        let result = sanitize_user_input("");
+        assert!(result.starts_with("<user_input>"));
+        assert!(result.ends_with("</user_input>"));
+    }
+
+    #[test]
+    fn sanitize_note_content_empty() {
+        let result = sanitize_note_content("");
+        assert!(result.starts_with("<note_content>"));
+        assert!(result.ends_with("</note_content>"));
+    }
+
+    #[test]
+    fn sanitize_history_empty() {
+        let result = sanitize_history("");
+        assert!(result.starts_with("<conversation_history>"));
+        assert!(result.ends_with("</conversation_history>"));
+    }
 }

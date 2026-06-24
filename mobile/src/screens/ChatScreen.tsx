@@ -40,6 +40,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const [loading, setLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const msgsRef = useRef<Msg[]>([]);
+  const loadSeqRef = useRef(0); // Track load sequence to prevent race conditions (#1576)
   const voice = useVoiceInput();
   const { isOnline } = useNetworkState();
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -91,6 +92,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
     abortRef.current?.abort();
+    const seq = ++loadSeqRef.current; // Increment sequence for race condition protection (#1576)
     const prevMsgs = msgsRef.current;
     setSessionId(sid);
     setTitle(sessionTitle);
@@ -98,6 +100,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     setInput('');
     try {
       const history = await getMessages(sid);
+      if (seq !== loadSeqRef.current) return; // Stale load, discard result (#1576)
       setMsgs(history.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
         attachments: safeParseAttachments(m.attachments),

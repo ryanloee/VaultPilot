@@ -15,6 +15,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::convert::Infallible;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
@@ -419,37 +421,53 @@ async fn http_chat_completions(
     };
 
     if is_stream {
-        // Streaming mode: use channel-based SSE approach
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+        // Streaming mode: use channel-based SSE approach with cancellation support
+        // #1521: Use unbounded channel for the sync callback to avoid blocking_send,
+        // and CancellationToken to stop the upstream request when the client disconnects.
+        let (sse_tx, sse_rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let settings_arc = Arc::new(settings);
         let system_owned = vaultpilot_lib::prompting::general_chat_system_prompt();
         let user_prompt_owned =
             vaultpilot_lib::prompting::general_chat_user_prompt(&question, &history);
         let model_for_task = model_id;
+        let cancel = CancellationToken::new();
 
+        // Upstream request task: runs the AI streaming request, sends chunks
+        // via unbounded channel (non-blocking for the sync callback).
+        let cancel_upstream = cancel.clone();
         tokio::spawn(async move {
-            let result = vaultpilot_lib::ai::send_request_streaming(
-                &settings_arc,
-                &system_owned,
-                &user_prompt_owned,
-                &image_paths,
-                0.2,
-                |chunk| {
-                    let chunk_data = serde_json::json!({
-                        "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
-                        "object": "chat.completion.chunk",
-                        "created": Utc::now().timestamp(),
-                        "model": model_for_task,
-                        "choices": [{
-                            "index": 0,
-                            "delta": { "content": chunk },
-                            "finish_reason": null
-                        }]
-                    });
-                    let _ = tx.blocking_send(Ok(Event::default().data(chunk_data.to_string())));
-                },
-            )
-            .await;
+            let chunk_tx_ref = &chunk_tx;
+            let model_ref = &model_for_task;
+            let result = tokio::select! {
+                biased;
+                _ = cancel_upstream.cancelled() => {
+                    tracing::info!("client disconnected, cancelling upstream AI request");
+                    return;
+                }
+                result = vaultpilot_lib::ai::send_request_streaming(
+                    &settings_arc,
+                    &system_owned,
+                    &user_prompt_owned,
+                    &image_paths,
+                    0.2,
+                    |chunk| {
+                        let chunk_data = serde_json::json!({
+                            "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
+                            "object": "chat.completion.chunk",
+                            "created": Utc::now().timestamp(),
+                            "model": model_ref,
+                            "choices": [{
+                                "index": 0,
+                                "delta": { "content": chunk },
+                                "finish_reason": null
+                            }]
+                        });
+                        // unbounded send never blocks the executor thread
+                        let _ = chunk_tx_ref.send(chunk_data.to_string());
+                    },
+                ) => result,
+            };
 
             match result {
                 Ok(_) => {
@@ -464,8 +482,8 @@ async fn http_chat_completions(
                             "finish_reason": "stop"
                         }]
                     });
-                    let _ = tx.blocking_send(Ok(Event::default().data(finish_data.to_string())));
-                    let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                    let _ = chunk_tx.send(finish_data.to_string());
+                    let _ = chunk_tx.send("[DONE]".to_string());
                 }
                 Err(error) => {
                     tracing::warn!("http_chat_completions streaming error: {error}");
@@ -476,13 +494,28 @@ async fn http_chat_completions(
                             "code": "upstream_error"
                         }
                     });
-                    let _ = tx.blocking_send(Ok(Event::default().data(error_data.to_string())));
-                    let _ = tx.blocking_send(Ok(Event::default().data("[DONE]")));
+                    let _ = chunk_tx.send(error_data.to_string());
+                    let _ = chunk_tx.send("[DONE]".to_string());
+                }
+            }
+            // chunk_tx is dropped here, causing chunk_rx to return None
+        });
+
+        // Forwarding task: reads from the unbounded channel and sends to the
+        // bounded SSE channel. Detects client disconnect via send failure and
+        // triggers cancellation of the upstream task.
+        let cancel_forwarder = cancel.clone();
+        tokio::spawn(async move {
+            while let Some(data) = chunk_rx.recv().await {
+                if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
+                    // SSE receiver dropped — client disconnected
+                    cancel_forwarder.cancel();
+                    break;
                 }
             }
         });
 
-        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let stream = ReceiverStream::new(sse_rx);
         Sse::new(stream).into_response()
     } else {
         // Non-streaming mode: original behavior

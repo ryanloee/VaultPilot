@@ -266,8 +266,9 @@ export const useAppStore = create<AppState>()(
         // Restore API keys from SecureStore after hydration
         loadProviderKeysSecure().then(keys => {
           if (keys.length === 0) return;
-          state.providers = restoreProviderKeys(state.providers, keys);
-          syncLegacyFields(useAppStore.setState, state.providers, state.activeProviderIndex);
+          const restored = restoreProviderKeys(state.providers, keys);
+          useAppStore.setState({ providers: restored });
+          syncLegacyFields(useAppStore.setState, restored, state.activeProviderIndex);
         });
       },
     }

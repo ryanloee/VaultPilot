@@ -395,7 +395,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
   // Early return if FTS query is empty (whitespace-only input)
   if (ftsSupported && !ftsQuery) return [];
 
-  // Search notes
+  // Search notes — FTS with LIKE fallback when FTS returns empty (common with CJK)
   let noteResults: GlobalSearchResult[];
   if (ftsQuery) {
     noteResults = await db.getAllAsync<GlobalSearchResult>(
@@ -407,6 +407,15 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
        ORDER BY n.updated_at DESC LIMIT ?`,
       [ftsQuery, limit]
     );
+    if (noteResults.length === 0) {
+      noteResults = await db.getAllAsync<GlobalSearchResult>(
+        `SELECT 'note' as type, id, title,
+                SUBSTR(content, 1, 120) as snippet, updated_at
+         FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\'
+         ORDER BY updated_at DESC LIMIT ?`,
+        [`%${escaped}%`, `%${escaped}%`, limit]
+      );
+    }
   } else {
     noteResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'note' as type, id, title,
@@ -417,7 +426,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
     );
   }
 
-  // Search session messages (join back to get session title)
+  // Search session messages — FTS with LIKE fallback
   let sessionResults: GlobalSearchResult[];
   if (ftsQuery) {
     sessionResults = await db.getAllAsync<GlobalSearchResult>(
@@ -431,6 +440,18 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
        ORDER BY m.created_at DESC LIMIT ?`,
       [ftsQuery, limit]
     );
+    if (sessionResults.length === 0) {
+      sessionResults = await db.getAllAsync<GlobalSearchResult>(
+        `SELECT 'session' as type, m.id, s.title,
+                SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
+                s.id as sessionId
+         FROM messages m
+         INNER JOIN sessions s ON m.session_id = s.id
+         WHERE m.content LIKE ? ESCAPE '\'
+         ORDER BY m.created_at DESC LIMIT ?`,
+        [`%${escaped}%`, limit]
+      );
+    }
   } else {
     sessionResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'session' as type, m.id, s.title,

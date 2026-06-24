@@ -1215,11 +1215,13 @@ fn extract_note_image_refs(body: &str) -> Vec<String> {
     while let Some(start) = body[offset..].find("![") {
         let absolute_start = offset + start;
         let Some(open) = body[absolute_start..].find("](") else {
-            break;
+            offset = absolute_start + 2;
+            continue;
         };
         let path_start = absolute_start + open + 2;
         let Some(close) = body[path_start..].find(')') else {
-            break;
+            offset = path_start;
+            continue;
         };
         let raw = body[path_start..path_start + close]
             .trim()

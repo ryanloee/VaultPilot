@@ -245,6 +245,7 @@ export const useAppStore = create<AppState>()(
       }),
 
       setActiveProvider: (index) => set((state) => {
+        if (state.providers.length === 0) return {}; // Guard against empty providers (#1578)
         const activeProviderIndex = clampProviderIndex(index, state.providers.length);
         const active = state.providers[activeProviderIndex];
         return {

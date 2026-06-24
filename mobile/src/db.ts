@@ -459,9 +459,9 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
               s.id as sessionId
        FROM messages m
        INNER JOIN sessions s ON m.session_id = s.id
-       WHERE m.content LIKE ? ESCAPE '\'
+       WHERE m.content LIKE ? ESCAPE '\' OR s.title LIKE ? ESCAPE '\'
        ORDER BY m.created_at DESC LIMIT ?`,
-      [`%${escaped}%`, limit]
+      [`%${escaped}%`, `%${escaped}%`, limit]
     );
   }
 

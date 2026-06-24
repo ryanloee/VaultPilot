@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.51] - 2026-06-24
+
+### Fixed
+- APK in-app update intent not launching on Android 13+ (#54b140f)
+- Mobile keyboard-aware input + voice continuous recording (#5648870)
+- Mobile RAG force-inject notes when user asks about notes (#b158a0e)
+- `ProviderEditor.tsx` replace `require()` with proper ES import (#1465)
+- Sync error body logging + dead code cleanup + uuid export (#1461, #1462, #1463)
+
+### Changed
+- Extract `inferMime` from `ChatScreen.tsx` to `chatHelpers.ts` (#1467)
+- Export `stripMarkdown` from `autoTag.ts` for direct testing (#1466)
+- Mobile `@types/react` bump to 19.2.17
+
+### Tests
+- 15 tests for `inferMime` pure function (#1467)
+- 14 tests for `stripMarkdown` pure function (#1466)
+- 6 tests for `uuid()` format/uniqueness/fallback (#1463)
+
 ## [0.3.50] - 2026-06-24
 
 ### Added
@@ -248,7 +267,8 @@ Key milestones:
 - **v0.2.0**: Initial multi-platform architecture (WinUI + CLI + Android)
 - **v0.3.0**: Agent Mode Phase 1, MCP server, storage refactoring
 
-[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.50...HEAD
+[Unreleased]: https://github.com/ryanloee/VaultPilot/compare/v0.3.51...HEAD
+[0.3.51]: https://github.com/ryanloee/VaultPilot/compare/v0.3.50...v0.3.51
 [0.3.50]: https://github.com/ryanloee/VaultPilot/compare/v0.3.49...v0.3.50
 [0.3.49]: https://github.com/ryanloee/VaultPilot/compare/v0.3.48...v0.3.49
 [0.3.48]: https://github.com/ryanloee/VaultPilot/compare/v0.3.47...v0.3.48

@@ -486,104 +486,93 @@ pub async fn send_request_streaming(
         }
     };
 
-    let response = client
-        .post(&endpoint)
-        .header("content-type", "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let text = response.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "Streaming API request failed ({}): {}",
-            status.as_u16(),
-            crate::sanitize_error(&text)
-        ));
-    }
-
-    let mut accumulated = String::new();
-    let mut buf = BytesMut::new();
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
-        buf.extend_from_slice(&chunk);
-
-        // Process complete lines
-        while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
-            let line_bytes = buf.split_to(newline_pos + 1);
-            let line = std::str::from_utf8(&line_bytes)
-                .unwrap_or("")
-                .trim_end_matches('\r')
-                .trim_end_matches('\n');
-
-            if line.is_empty() {
-                continue;
-            }
-
-            // Skip "event:" lines (Anthropic) and "id:" / "retry:" metadata
-            if line.starts_with("event:") || line.starts_with("id:") || line.starts_with("retry:") {
-                continue;
-            }
-
-            if let Some(data) = line.strip_prefix("data: ") {
-                let data = data.trim();
-                if data == "[DONE]" {
-                    return Ok(accumulated);
-                }
-
-                // Parse SSE data based on provider type
-                match provider_type {
-                    crate::models::ProviderType::OpenAi => {
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                            if let Some(text) = parsed["choices"][0]["delta"]["content"].as_str() {
-                                if !text.is_empty() {
-                                    accumulated.push_str(text);
-                                    on_chunk(text);
-                                }
-                            }
-                        }
-                    }
-                    crate::models::ProviderType::Anthropic => {
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                            let event_type = parsed["type"].as_str().unwrap_or("");
-                            if event_type == "content_block_delta" {
-                                if let Some(text) = parsed["delta"]["text"].as_str() {
-                                    if !text.is_empty() {
-                                        accumulated.push_str(text);
-                                        on_chunk(text);
-                                    }
-                                }
-                            } else if event_type == "message_stop" {
-                                return Ok(accumulated);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Process any remaining data in buf that wasn't terminated by a newline.
-    // The stream may end without a trailing \n, leaving the final SSE frame
-    // unprocessed. (Fixes #1597)
-    if !buf.is_empty() {
-        let line = std::str::from_utf8(&buf)
-            .unwrap_or("")
-            .trim_end_matches('\r')
-            .trim_end_matches('\n');
-
-        if !line.is_empty()
-            && !line.starts_with("event:")
-            && !line.starts_with("id:")
-            && !line.starts_with("retry:")
+    for attempt in 0..3 {
+        let response = match client
+            .post(&endpoint)
+            .header("content-type", "application/json")
+            .body(body.clone())
+            .send()
+            .await
         {
-            if let Some(data) = line.strip_prefix("data: ") {
-                let data = data.trim();
-                if data != "[DONE]" {
+            Ok(response) => response,
+            Err(error) => {
+                if should_retry_transport_error(&error) && attempt < 2 {
+                    warn!(attempt = attempt + 1, error = %crate::sanitize_error(&error.to_string()), "streaming transport error, retrying");
+                    let base = 2u64.pow(attempt as u32 + 1);
+                    let jitter = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos() as u64
+                        % base;
+                    sleep(Duration::from_secs(base + jitter)).await;
+                    continue;
+                }
+                return Err(anyhow!(format_transport_error(&error, &endpoint)));
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+
+            if is_retryable_provider_error(status.as_u16(), &text) && attempt < 2 {
+                warn!(
+                    attempt = attempt + 1,
+                    status = status.as_u16(),
+                    "retryable streaming API error, retrying"
+                );
+                let base = 2u64.pow(attempt as u32 + 1);
+                let jitter = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64
+                    % base;
+                sleep(Duration::from_secs(base + jitter)).await;
+                continue;
+            }
+
+            return Err(anyhow!(
+                "Streaming API request failed ({}): {}",
+                status.as_u16(),
+                crate::sanitize_error(&text)
+            ));
+        }
+
+        let mut accumulated = String::new();
+        let mut buf = BytesMut::new();
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
+            buf.extend_from_slice(&chunk);
+
+            // Process complete lines
+            while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
+                let line_bytes = buf.split_to(newline_pos + 1);
+                let line = std::str::from_utf8(&line_bytes)
+                    .unwrap_or("")
+                    .trim_end_matches('\r')
+                    .trim_end_matches('\n');
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Skip "event:" lines (Anthropic) and "id:" / "retry:" metadata
+                if line.starts_with("event:")
+                    || line.starts_with("id:")
+                    || line.starts_with("retry:")
+                {
+                    continue;
+                }
+
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+                    if data == "[DONE]" {
+                        return Ok(accumulated);
+                    }
+
+                    // Parse SSE data based on provider type
                     match provider_type {
                         crate::models::ProviderType::OpenAi => {
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
@@ -607,6 +596,8 @@ pub async fn send_request_streaming(
                                             on_chunk(text);
                                         }
                                     }
+                                } else if event_type == "message_stop" {
+                                    return Ok(accumulated);
                                 }
                             }
                         }
@@ -614,9 +605,62 @@ pub async fn send_request_streaming(
                 }
             }
         }
+
+        // Process any remaining data in buf that wasn't terminated by a newline.
+        // The stream may end without a trailing \n, leaving the final SSE frame
+        // unprocessed. (Fixes #1597)
+        if !buf.is_empty() {
+            let line = std::str::from_utf8(&buf)
+                .unwrap_or("")
+                .trim_end_matches('\r')
+                .trim_end_matches('\n');
+
+            if !line.is_empty()
+                && !line.starts_with("event:")
+                && !line.starts_with("id:")
+                && !line.starts_with("retry:")
+            {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let data = data.trim();
+                    if data != "[DONE]" {
+                        match provider_type {
+                            crate::models::ProviderType::OpenAi => {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
+                                {
+                                    if let Some(text) =
+                                        parsed["choices"][0]["delta"]["content"].as_str()
+                                    {
+                                        if !text.is_empty() {
+                                            accumulated.push_str(text);
+                                            on_chunk(text);
+                                        }
+                                    }
+                                }
+                            }
+                            crate::models::ProviderType::Anthropic => {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
+                                {
+                                    let event_type = parsed["type"].as_str().unwrap_or("");
+                                    if event_type == "content_block_delta" {
+                                        if let Some(text) = parsed["delta"]["text"].as_str() {
+                                            if !text.is_empty() {
+                                                accumulated.push_str(text);
+                                                on_chunk(text);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return Ok(accumulated);
     }
 
-    Ok(accumulated)
+    Err(anyhow!("Streaming API request failed after retries"))
 }
 
 pub(super) fn should_retry_transport_error(error: &reqwest::Error) -> bool {

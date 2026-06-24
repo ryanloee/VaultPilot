@@ -1455,7 +1455,12 @@ mod tests {
 
     #[test]
     fn build_agent_trace_single_tool() {
-        let tools = vec![ToolExecution::new("search_notes", "query=test", "found 3", false)];
+        let tools = vec![ToolExecution::new(
+            "search_notes",
+            "query=test",
+            "found 3",
+            false,
+        )];
         let trace = build_agent_trace(&tools, false);
         assert!(trace.summary.contains("1 个工具步骤"));
         assert_eq!(trace.steps.len(), 1);

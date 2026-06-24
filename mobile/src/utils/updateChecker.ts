@@ -118,7 +118,13 @@ export async function downloadAndInstall(
     const downloadDir = new Directory(Paths.cache, 'updates');
     if (!downloadDir.exists) downloadDir.create();
 
-    const result = await File.downloadFileAsync(apkUrl, downloadDir);
+    const result = await File.downloadFileAsync(apkUrl, downloadDir, {
+      onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
+        if (onProgress && totalBytes > 0) {
+          onProgress(Math.round((bytesWritten / totalBytes) * 100));
+        }
+      },
+    });
 
     if (!result?.uri) {
       console.warn('[UpdateChecker] Download returned no URI');

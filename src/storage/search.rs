@@ -340,7 +340,7 @@ fn build_note_filter_clause(query: &SearchQuery) -> (String, Vec<Box<dyn rusqlit
     for (col, op, val) in date_filters {
         if let Some(v) = val {
             if !v.is_empty() {
-                conditions.push(format!("{col} {op} ?{param_idx}"));
+                conditions.push(format!("({col} = '' OR {col} {op} ?{param_idx})"));
                 params.push(Box::new(v.to_string()));
                 param_idx += 1;
             }

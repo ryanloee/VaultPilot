@@ -46,13 +46,14 @@ export default function SettingsScreen() {
 
   // Sync local state when active provider changes or key is restored from SecureStore
   useEffect(() => {
+    let cancelled = false;
     if (active) {
       setApiBase(active.apiBase);
       if (active.apiKey) {
         setApiKey(active.apiKey);
       } else {
         SecureStore.getItemAsync('vaultpilot_provider_keys').then(raw => {
-          if (!raw) return;
+          if (cancelled || !raw) return;
           try {
             const keys: string[] = JSON.parse(raw);
             const key = keys[activeIdx] ?? '';
@@ -64,10 +65,12 @@ export default function SettingsScreen() {
       setApiFormat(active.apiFormat);
       setProviderName(active.name);
     }
+    return () => { cancelled = true; };
   }, [activeIdx, active?.apiKey]);
 
   // Load saved settings on mount
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const [api, themeMode, accentColor] = await Promise.all([
@@ -75,6 +78,7 @@ export default function SettingsScreen() {
           AsyncStorage.getItem(THEME_KEY),
           AsyncStorage.getItem(ACCENT_KEY),
         ]);
+        if (cancelled) return;
         if (store.providers.length === 0 && api.apiBase) {
           const migrated: ProviderConfig = {
             name: '默认',
@@ -96,26 +100,31 @@ export default function SettingsScreen() {
         if (themeMode && isValidThemeMode(themeMode)) store.setThemeMode(themeMode);
         if (accentColor) store.setAccentColor(accentColor);
       } catch (e) {
-        console.warn('[Settings] Failed to load:', e);
+        if (!cancelled) console.warn('[Settings] Failed to load:', e);
       }
+      if (cancelled) return;
       try {
         const cfg = await getServerConfig();
+        if (cancelled) return;
         setServerUrl(cfg.url);
         setServerToken(cfg.token);
         const ls = await getLastSyncTime();
-        setLastSync(ls);
-      } catch (e) { console.warn('[Settings] Failed to load server config:', e); }
+        if (!cancelled) setLastSync(ls);
+      } catch (e) { if (!cancelled) console.warn('[Settings] Failed to load server config:', e); }
 
       // Auto-check for updates
+      if (cancelled) return;
       try {
         const skipVersion = await AsyncStorage.getItem(SKIP_UPDATE_KEY);
         const info = await checkForUpdate(appJson.expo.version);
+        if (cancelled) return;
         if (info && info.latestVersion !== skipVersion) {
           setUpdateInfo(info);
           setShowUpdateModal(true);
         }
-      } catch (e) { console.warn('[Settings] Auto-update check failed:', e); }
+      } catch (e) { if (!cancelled) console.warn('[Settings] Auto-update check failed:', e); }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   const handleCheckUpdate = async () => {

@@ -828,11 +828,14 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
     // Cap at 50KB to prevent token explosion
     const MAX_READ: usize = 50 * 1024;
     if content.len() > MAX_READ {
-        let truncated: String = content.chars().take(MAX_READ).collect();
-        Ok(format!(
-            "{}\n[... truncated at {} chars]",
-            truncated, MAX_READ
-        ))
+        // Find the largest char boundary at or before MAX_READ to avoid
+        // panicking on a mid-char slice (#1536).
+        let mut end = MAX_READ;
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
+        let truncated = &content[..end];
+        Ok(format!("{}\n[... truncated at {} bytes]", truncated, end))
     } else {
         Ok(content)
     }

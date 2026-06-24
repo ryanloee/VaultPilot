@@ -181,6 +181,8 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         attData.push({ base64, mime });
       } catch (e) {
         console.warn('[Chat] Failed to read attachment:', att.name, e);
+        Alert.alert('附件读取失败', `无法读取「${att.name}」，请重新选择`);
+        return;
       }
     }
     const userContent = buildUserContent(userText, attData);

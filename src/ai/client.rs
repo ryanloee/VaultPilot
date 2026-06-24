@@ -586,9 +586,7 @@ pub async fn send_request_streaming(
                 if data != "[DONE]" {
                     match provider_type {
                         crate::models::ProviderType::OpenAi => {
-                            if let Ok(parsed) =
-                                serde_json::from_str::<serde_json::Value>(data)
-                            {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                                 if let Some(text) =
                                     parsed["choices"][0]["delta"]["content"].as_str()
                                 {
@@ -600,13 +598,10 @@ pub async fn send_request_streaming(
                             }
                         }
                         crate::models::ProviderType::Anthropic => {
-                            if let Ok(parsed) =
-                                serde_json::from_str::<serde_json::Value>(data)
-                            {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                                 let event_type = parsed["type"].as_str().unwrap_or("");
                                 if event_type == "content_block_delta" {
-                                    if let Some(text) = parsed["delta"]["text"].as_str()
-                                    {
+                                    if let Some(text) = parsed["delta"]["text"].as_str() {
                                         if !text.is_empty() {
                                             accumulated.push_str(text);
                                             on_chunk(text);

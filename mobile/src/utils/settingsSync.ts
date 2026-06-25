@@ -103,25 +103,22 @@ export async function importSettings(json: string): Promise<{ providersImported:
 
   state.themeMode = data.themeMode;
   state.accentColor = data.accentColor;
-  state.providers = data.providers.map(p => ({ ...p, apiKey: '' })); // keys go to SecureStore
   state.activeProviderIndex = Math.min(data.activeProviderIndex, data.providers.length - 1);
 
-  // Save back
+  // Save API keys to SecureStore FIRST — if this fails we must not overwrite
+  // the existing provider list with empty keys, otherwise keys are lost.
+  const keys = data.providers.map(p => p.apiKey ?? '');
+  if (keys.some(k => k)) {
+    await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+  }
+
+  // Only after SecureStore succeeded, write providers with keys stripped to AsyncStorage
+  state.providers = data.providers.map(p => ({ ...p, apiKey: '' })); // keys go to SecureStore
   if (stored?.state) {
     stored.state = state;
     await AsyncStorage.setItem('vaultpilot-store', JSON.stringify(stored));
   } else {
     await AsyncStorage.setItem('vaultpilot-store', JSON.stringify({ state }));
-  }
-
-  // Save API keys to SecureStore
-  const keys = data.providers.map(p => p.apiKey ?? '');
-  if (keys.some(k => k)) {
-    try {
-      await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
-    } catch (e) {
-      console.warn('[SettingsSync] Failed to save keys to SecureStore:', e);
-    }
   }
 
   return { providersImported: data.providers.length };

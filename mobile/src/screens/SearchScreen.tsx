@@ -16,19 +16,25 @@ export default function SearchScreen({ navigation }: SearchScreenProps) {
   const [results, setResults] = useState<GlobalSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim()) { setResults([]); setSearched(false); return; }
     const currentId = ++requestIdRef.current;
     setLoading(true);
+    setError(null);
     try {
       const data = await globalSearch(q.trim());
       if (requestIdRef.current !== currentId) return;
       setResults(data);
       setSearched(true);
     } catch (e) {
+      if (requestIdRef.current !== currentId) return;
       console.warn('[Search] failed:', e);
+      setError(e instanceof Error ? e.message : '搜索失败，请重试');
+      setSearched(true);
+      setResults([]);
     } finally {
       if (requestIdRef.current === currentId) setLoading(false);
     }
@@ -96,7 +102,11 @@ export default function SearchScreen({ navigation }: SearchScreenProps) {
           keyExtractor={item => `${item.type}-${item.id}`}
           contentContainerStyle={{ padding: 16 }}
           ListEmptyComponent={
-            searched ? (
+            error ? (
+              <View style={s.center}>
+                <Text style={[s.emptyText, { color: '#EF4444' }]}>{error}</Text>
+              </View>
+            ) : searched ? (
               <View style={s.center}>
                 <Text style={[s.emptyText, { color: c.textSecondary }]}>没有找到匹配内容</Text>
               </View>

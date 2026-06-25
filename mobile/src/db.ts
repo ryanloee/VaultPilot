@@ -5,12 +5,22 @@ let ftsSupported = true;
 
 /** Ensure columns added after the initial schema exist on existing installs. */
 async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+  /** Reject identifiers with non-alphanumeric/underscore chars to prevent SQL injection. */
+  function assertSafeIdentifier(name: string): void {
+    if (!/^[\w]+$/.test(name)) {
+      throw new Error(`Unsafe SQL identifier: ${name}`);
+    }
+  }
+
   const columns = async (table: string): Promise<Set<string>> => {
+    assertSafeIdentifier(table);
     const info = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
     return new Set(info.map(c => c.name));
   };
 
   const ensureColumn = async (table: string, col: string, decl: string) => {
+    assertSafeIdentifier(table);
+    assertSafeIdentifier(col);
     const cols = await columns(table);
     if (!cols.has(col)) {
       await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);

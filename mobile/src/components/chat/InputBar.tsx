@@ -170,8 +170,9 @@ export default function InputBar({
   const togglePlus = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (plusExpanded) {
-      Animated.timing(expandAnim, { toValue: 0, duration: 150, useNativeDriver: false }).start();
-      setPlusExpanded(false);
+      Animated.timing(expandAnim, { toValue: 0, duration: 150, useNativeDriver: false }).start(({ finished }) => {
+        if (finished) setPlusExpanded(false);
+      });
     } else {
       setShowEmojiPicker(false);
       Animated.timing(expandAnim, { toValue: 1, duration: 150, useNativeDriver: false }).start();

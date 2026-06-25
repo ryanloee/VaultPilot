@@ -193,7 +193,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     if (route.params?.sessionId && route.params.sessionId !== sessionId) {
       loadSession(route.params.sessionId, route.params.title || '对话');
     }
-  }, [route.params?.sessionId]);
+  }, [route.params?.sessionId, sessionId, loadSession]);
 
   // Handle prefillText from NoteEditor AI assistant
   useEffect(() => {

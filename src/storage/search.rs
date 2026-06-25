@@ -69,11 +69,12 @@ pub fn search_notes_with_context(
             limit + offset
         };
         let fts_results = rank_note_metas(context, &connection, &query.text, &[], fetch_limit)?;
-        let notes = if fts_results.is_empty() {
+        let (notes, used_like_fallback) = if fts_results.is_empty() {
             // Fuzzy/approximate fallback: split query into words and use LIKE
-            query_like_note_metas(&connection, &query.text, fetch_limit)?
+            let like_results = query_like_note_metas(&connection, &query.text, fetch_limit)?;
+            (like_results, true)
         } else {
-            fts_results
+            (fts_results, false)
         };
         // NOTE: offset is NOT applied here — it must be applied AFTER in-memory
         // filtering so that page boundaries are correct for filtered results.
@@ -82,7 +83,13 @@ pub fn search_notes_with_context(
         // are active. With filters, use the post-filtering count as an upper bound
         // (some matches may be filtered out, making this an overcount).
         let fts_total = if !notes.is_empty() {
-            count_fts_matches(&connection, &query.text).unwrap_or(notes.len())
+            if used_like_fallback {
+                // FTS COUNT(*) would return 0 for LIKE-only matches;
+                // use a dedicated LIKE COUNT for accurate pagination.
+                count_like_matches(&connection, &query.text).unwrap_or(notes.len())
+            } else {
+                count_fts_matches(&connection, &query.text).unwrap_or(notes.len())
+            }
         } else {
             0
         };
@@ -521,6 +528,39 @@ fn filter_by_date_range(
 }
 
 /// Count total FTS5 matches for a query without fetching rows.
+/// Count total matches for a LIKE-based search (used when FTS5 has no results).
+fn count_like_matches(connection: &Connection, query_text: &str) -> Result<usize> {
+    let words: Vec<&str> = query_text
+        .split_whitespace()
+        .filter(|w| w.len() >= 2)
+        .take(20)
+        .collect();
+    if words.is_empty() {
+        return Ok(0);
+    }
+
+    let mut conditions = Vec::new();
+    let mut param_values: Vec<String> = Vec::new();
+    for word in &words {
+        let escaped = escape_like_pattern(&word.to_lowercase());
+        let pattern = format!("%{}%", escaped);
+        conditions.push("(LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(summary) LIKE ? ESCAPE '\\')");
+        param_values.push(pattern.clone());
+        param_values.push(pattern);
+    }
+    let where_clause = conditions.join(" OR ");
+    let sql = format!("SELECT COUNT(*) FROM notes WHERE {}", where_clause);
+
+    let mut statement = connection.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(|v| v as &dyn rusqlite::types::ToSql)
+        .collect();
+
+    let count: i64 = statement.query_row(param_refs.as_slice(), |row| row.get(0))?;
+    Ok(count as usize)
+}
+
 fn count_fts_matches(connection: &Connection, text: &str) -> Result<usize> {
     let fts_query = make_fts_query(text);
     if fts_query.trim().is_empty() {

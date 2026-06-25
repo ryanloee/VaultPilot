@@ -796,7 +796,6 @@ mod tests {
         assert!(result.errors.is_empty());
     }
 
-
     #[test]
     fn settings_round_trip() {
         let (_temp, ctx) = setup_temp_context();

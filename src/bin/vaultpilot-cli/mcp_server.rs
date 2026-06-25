@@ -1756,7 +1756,11 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
     let vault_dir = context.vault_dir();
     let vault_canonical = match vault_dir.canonicalize() {
         Ok(v) => v,
-        Err(e) => return mcp_tool_error(sanitize_error(&format!("cannot resolve vault directory: {e}"))),
+        Err(e) => {
+            return mcp_tool_error(sanitize_error(&format!(
+                "cannot resolve vault directory: {e}"
+            )))
+        }
     };
     for raw_path in &paths {
         let candidate = std::path::Path::new(raw_path);

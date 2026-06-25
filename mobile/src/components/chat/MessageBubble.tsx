@@ -11,6 +11,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   streaming?: boolean;
+  streamStatus?: string;
   isError?: boolean;
   attachments?: { name: string; type: 'image' | 'file' }[];
 }
@@ -102,7 +103,7 @@ const MessageBubble = memo(function MessageBubble({
               lineHeight: 22,
             }}
           >
-            {item.content || (item.streaming ? '思考中...' : '')}
+            {item.content || (item.streaming ? (item.streamStatus || '思考中...') : '')}
             {item.streaming && (
               <Text style={{ color: accentColor }}> ▌</Text>
             )}

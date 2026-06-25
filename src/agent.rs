@@ -874,16 +874,16 @@ async fn execute_tool(
                 .await
             {
                 Ok(docs) => {
-                    let displayed: Vec<_> = docs
+                    let summary = docs
                         .iter()
                         .take(*limit)
                         .map(|d| format!("- {} ({})", d.meta.title, d.meta.path))
-                        .collect();
-                    let summary = displayed.join("\n");
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     if summary.is_empty() {
                         ("No matching notes found.".into(), false)
                     } else {
-                        (format!("Found {} notes:\n{}", displayed.len(), summary), false)
+                        (format!("Found {} notes:\n{}", docs.len(), summary), false)
                     }
                 }
                 Err(e) => (format!("tool error: {}", e), true),

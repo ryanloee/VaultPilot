@@ -265,8 +265,12 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               key={t}
               style={[s.tagChip, { backgroundColor: accentColor + '20', borderColor: accentColor }]}
               onLongPress={async () => {
-                await removeTag(noteId, t);
-                setTags(prev => { tagsRef.current = prev.filter(x => x !== t); return tagsRef.current; });
+                try {
+                  await removeTag(noteId, t);
+                  setTags(prev => { tagsRef.current = prev.filter(x => x !== t); return tagsRef.current; });
+                } catch (e) {
+                  Alert.alert('删除标签失败', String(e));
+                }
               }}
             >
               <Text style={[s.tagText, { color: accentColor }]}>#{t}</Text>

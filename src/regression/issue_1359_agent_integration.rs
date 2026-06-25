@@ -346,21 +346,25 @@ fn write_approval_channel_timeout_behavior() {
 // ── Malformed JSON args tests ─────────────────────────────────────────
 
 #[test]
-fn sandbox_malformed_json_args_allows_write_when_no_path_extractable() {
+fn sandbox_malformed_json_args_denies_write_when_no_path_extractable() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
     config.write_patterns = vec!["*".to_string()];
     let proxy = ToolProxy::new(config, &tmp);
 
-    // Malformed JSON — cannot extract path, so write pattern check is skipped.
-    // The tool execution will fail with invalid args, but the sandbox doesn't block.
+    // Malformed JSON — cannot extract path, write tool should be denied
     let check = proxy
         .check_tool_call("write_note", "not-valid-json")
         .unwrap();
     assert!(
-        check.allowed,
-        "malformed JSON with no extractable path should pass sandbox (tool execution handles error)"
+        !check.allowed,
+        "malformed JSON with no extractable path should be denied for write tools"
+    );
+    assert!(
+        check.reason.contains("missing"),
+        "reason should mention missing path: {}",
+        check.reason
     );
 }
 
@@ -380,37 +384,34 @@ fn sandbox_malformed_json_args_allows_read() {
 }
 
 #[test]
-fn sandbox_empty_json_object_allows_write_when_no_path() {
+fn sandbox_empty_json_object_denies_write_when_no_path() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
     config.write_patterns = vec!["*".to_string()];
     let proxy = ToolProxy::new(config, &tmp);
 
-    // Empty JSON object — no path field, so write pattern check is skipped
+    // Empty JSON object — no path field, write tool should be denied
     let check = proxy.check_tool_call("write_note", "{}").unwrap();
     assert!(
-        check.allowed,
-        "empty JSON args with no path should pass sandbox"
+        !check.allowed,
+        "empty JSON args with no path should be denied for write tools"
     );
 }
 
 #[test]
-fn sandbox_null_path_in_json_allows_write() {
+fn sandbox_null_path_in_json_denies_write() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
     config.write_patterns = vec!["*".to_string()];
     let proxy = ToolProxy::new(config, &tmp);
 
-    // null path — extract_path_arg returns None, so write pattern check is skipped
+    // null path — extract_path_arg returns None, write tool should be denied
     let check = proxy
         .check_tool_call("write_note", r#"{"path": null, "content": "test"}"#)
         .unwrap();
-    assert!(
-        check.allowed,
-        "null path should pass sandbox (tool execution handles invalid args)"
-    );
+    assert!(!check.allowed, "null path should be denied for write tools");
 }
 
 // ── Timeout behavior tests ────────────────────────────────────────────

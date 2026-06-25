@@ -183,15 +183,25 @@ impl ToolProxy {
                 return Ok(entry);
             }
             // Check write pattern whitelist
-            if let Some(path_value) = Self::extract_path_arg(tool, args_json) {
-                if !self.is_path_writable(&path_value) {
+            match Self::extract_path_arg(tool, args_json) {
+                Some(path_value) => {
+                    if !self.is_path_writable(&path_value) {
+                        let entry = self.deny(
+                            tool,
+                            args_json,
+                            &format!(
+                                "write denied: path '{}' does not match write patterns",
+                                sanitize_error(&path_value)
+                            ),
+                        );
+                        return Ok(entry);
+                    }
+                }
+                None => {
                     let entry = self.deny(
                         tool,
                         args_json,
-                        &format!(
-                            "write denied: path '{}' does not match write patterns",
-                            sanitize_error(&path_value)
-                        ),
+                        "write denied: missing required 'path' argument",
                     );
                     return Ok(entry);
                 }
@@ -199,10 +209,22 @@ impl ToolProxy {
         }
 
         // 5. Path confinement for file-path tools
-        if let Some(path_value) = Self::extract_path_arg(tool, args_json) {
-            if let Err(e) = self.confine_path(&path_value) {
-                let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
-                return Ok(entry);
+        match Self::extract_path_arg(tool, args_json) {
+            Some(path_value) => {
+                if let Err(e) = self.confine_path(&path_value) {
+                    let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
+                    return Ok(entry);
+                }
+            }
+            None => {
+                // Write tools already denied above. For read tools that
+                // take a path (read_file, list_directory), missing path
+                // is also a problem — deny it. Tools that don't take a
+                // path at all (e.g. search_notes) are unaffected.
+                if Self::takes_path(tool) && !Self::is_write_tool(tool) {
+                    let entry = self.deny(tool, args_json, "missing required 'path' argument");
+                    return Ok(entry);
+                }
             }
         }
 
@@ -262,6 +284,19 @@ impl ToolProxy {
         matches!(
             tool,
             "save_note" | "write_note" | "delete_note" | "rename_note"
+        )
+    }
+
+    /// Whether the tool is expected to take a `path` argument.
+    fn takes_path(tool: &str) -> bool {
+        matches!(
+            tool,
+            "read_file"
+                | "list_directory"
+                | "write_note"
+                | "save_note"
+                | "delete_note"
+                | "rename_note"
         )
     }
 

@@ -336,10 +336,8 @@ async function chatOpenAI(
     }
     throw e;
   } finally {
-    if (!streamingReturned) {
-      clearTimeout(timeout);
-      if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
-    }
+    clearTimeout(timeout);
+    if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
   }
 }
 

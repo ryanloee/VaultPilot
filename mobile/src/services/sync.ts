@@ -82,7 +82,7 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
         break; // got a response (even if not ok), stop retrying
       } catch (fetchErr: unknown) {
         lastNetworkErr = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
-        if (lastNetworkErr.name === 'AbortError' || attempt >= MAX_RETRIES) throw lastNetworkErr;
+        if (attempt >= MAX_RETRIES) throw lastNetworkErr;
         // network error → retry
       }
     }

@@ -96,6 +96,100 @@ pub async fn chat_with_ai_with_context(
     })
 }
 
+/// Intermediate context produced by [`prepare_chat_for_ai`] and consumed by
+/// [`finalize_chat_with_ai_answer`].  Splitting the chat flow this way lets
+/// callers release any coarse-grained lock between the prepare phase (state
+/// I/O) and the expensive AI call.
+pub struct PreparedChatContext {
+    pub active_session_id: String,
+    pub created_session: bool,
+    pub prompt: String,
+    pub history: Vec<ConversationTurn>,
+    pub images: Vec<String>,
+}
+
+/// Phase 1 of a chat exchange: load state, resolve/create session, append the
+/// user turn, and persist.  Returns a [`PreparedChatContext`] that carries all
+/// the data needed for the subsequent AI call and finalisation.
+pub async fn prepare_chat_for_ai(
+    context: &StorageContext,
+    session_id: Option<String>,
+    question: String,
+    image_paths: Option<Vec<String>>,
+    create_new_session: bool,
+    mut emit_status: impl FnMut(&str, String),
+) -> Result<PreparedChatContext, anyhow::Error> {
+    let settings = initialize_storage_async(context).await?;
+    let mut state = load_chat_state_async(context).await?;
+    let images = image_paths.unwrap_or_default();
+    let trimmed_question = question.trim().to_string();
+    if trimmed_question.is_empty() && images.is_empty() {
+        return Err(anyhow::anyhow!("question is empty"));
+    }
+
+    let prompt = build_effective_question(&trimmed_question, &images).await;
+    let user_display = if trimmed_question.is_empty() {
+        "（发送了一张图片）".to_string()
+    } else {
+        trimmed_question
+    };
+    let attachments = build_chat_attachments(&images);
+    let (active_session_id, created_session) =
+        resolve_or_create_chat_session(&mut state, session_id.as_deref(), create_new_session)?;
+
+    compress_chat_session_if_needed(
+        context,
+        &settings,
+        &mut state,
+        &active_session_id,
+        &prompt,
+        &attachments,
+        &mut emit_status,
+    )
+    .await?;
+
+    let history = current_session_history(&state, &active_session_id)?;
+    let user_turn = build_chat_turn("user", &user_display, None, &attachments);
+    append_turn_to_session(&mut state, &active_session_id, user_turn)?;
+    save_chat_state_async(context, &state).await?;
+
+    Ok(PreparedChatContext {
+        active_session_id,
+        created_session,
+        prompt,
+        history,
+        images,
+    })
+}
+
+/// Phase 3 of a chat exchange: reload state, append the assistant turn, and
+/// persist.  Must be called *after* the AI call that produced `answer`.
+pub async fn finalize_chat_with_ai_answer(
+    context: &StorageContext,
+    prepared: PreparedChatContext,
+    answer: GroundedAnswer,
+) -> Result<ChatExchangeResult, anyhow::Error> {
+    let mut state = load_chat_state_async(context).await?;
+    let assistant_turn = build_chat_turn("assistant", &answer.answer, Some(&answer), &[]);
+    append_turn_to_session(&mut state, &prepared.active_session_id, assistant_turn)?;
+    state = save_chat_state_async(context, &state).await?;
+
+    let session = find_chat_session(&state, &prepared.active_session_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "chat session not found after save: {}",
+            prepared.active_session_id
+        )
+    })?;
+
+    Ok(ChatExchangeResult {
+        session_id: session.id.clone(),
+        session_title: session.title.clone(),
+        created_session: prepared.created_session,
+        answer,
+        state,
+    })
+}
+
 pub async fn build_effective_question(question: &str, image_paths: &[String]) -> String {
     let mut prompt = if question.trim().is_empty() {
         IMAGE_ONLY_PROMPT.to_string()

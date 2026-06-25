@@ -86,12 +86,7 @@ pub fn search_notes_with_context(
         } else {
             0
         };
-        let initial_total = if has_filters {
-            // Will be recomputed after in-memory filtering below.
-            0usize
-        } else {
-            fts_total
-        };
+        let initial_total = fts_total;
         (notes, initial_total)
     };
 
@@ -121,7 +116,8 @@ pub fn search_notes_with_context(
     let total = if query.text.trim().is_empty() {
         total
     } else if has_filters {
-        notes.len()
+        // Use FTS total as upper bound to avoid undercounting pagination
+        total.max(notes.len())
     } else {
         // total was set to fts_total (FTS COUNT(*)) above; use it directly.
         // If the FTS count underestimates due to LIKE fallback, use max.

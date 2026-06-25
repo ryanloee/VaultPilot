@@ -283,6 +283,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
 
+    let full = '';
     try {
       // RAG: search notes for relevant context, considering recent conversation
       const recentTexts = prevMsgs.slice(-6).map(m => m.content).filter(Boolean);
@@ -297,7 +298,6 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       const history = buildHistory(prevMsgs, systemPrompt, userContent);
 
       abortRef.current = new AbortController();
-      let full = '';
 
       await chatWithReconnect(history, (chunk) => {
         if (chunk.done) return;

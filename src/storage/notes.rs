@@ -177,6 +177,66 @@ pub fn import_markdown_with_context(
     context: &StorageContext,
     paths: &[String],
 ) -> Result<ImportResult> {
+    // #1826: Validate that all import paths are confined within the vault
+    // directory to prevent path traversal attacks via MCP.
+    let vault_dir = context
+        .paths
+        .vault_dir_override
+        .as_ref()
+        .unwrap_or(&context.paths.default_vault_dir);
+    let vault_canonical = vault_dir.canonicalize().with_context(|| {
+        format!(
+            "cannot resolve vault directory '{}'",
+            vault_dir.display()
+        )
+    })?;
+    for raw_path in paths {
+        let candidate = Path::new(raw_path);
+        let resolved = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            vault_dir.join(candidate)
+        };
+        // Try canonicalize (requires the path to exist).
+        if let Ok(canonical) = resolved.canonicalize() {
+            if !canonical.starts_with(&vault_canonical) {
+                return Err(anyhow!(
+                    "import path '{}' is outside the vault directory",
+                    raw_path
+                ));
+            }
+        } else {
+            // Path doesn't exist yet — walk up to nearest existing ancestor
+            // and verify it is inside the vault.
+            let mut probe = resolved.as_path();
+            let mut confined = false;
+            while let Some(parent) = probe.parent() {
+                if parent.as_os_str().is_empty() {
+                    break;
+                }
+                if parent.exists() {
+                    if let Ok(pc) = parent.canonicalize() {
+                        if !pc.starts_with(&vault_canonical) {
+                            return Err(anyhow!(
+                                "import path '{}' is outside the vault directory",
+                                raw_path
+                            ));
+                        }
+                        confined = true;
+                    }
+                    break;
+                }
+                probe = parent;
+            }
+            if !confined && !probe.exists() {
+                return Err(anyhow!(
+                    "import path '{}' cannot be resolved",
+                    raw_path
+                ));
+            }
+        }
+    }
+
     let (connection, _) = open_connection(context)?;
     let mut result = ImportResult::default();
     for file in collect_markdown_files(paths) {

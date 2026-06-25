@@ -779,7 +779,9 @@ mod tests {
         let (_temp, ctx) = setup_temp_context();
         initialize_storage_with_context(&ctx).expect("init");
 
-        let import_dir = _temp.join("import-source");
+        // #1826: Import source must be inside the vault directory.
+        let vault_dir = _temp.join("vault");
+        let import_dir = vault_dir.join("import-source");
         fs::create_dir_all(&import_dir).expect("import dir");
         let md_file = import_dir.join("imported-note.md");
         fs::write(
@@ -792,6 +794,27 @@ mod tests {
             .expect("import");
         assert_eq!(result.imported, 1);
         assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn import_markdown_rejects_path_outside_vault() {
+        // #1826: Verify that importing from outside the vault directory is blocked.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let outside_dir = _temp.join("outside-vault");
+        fs::create_dir_all(&outside_dir).expect("outside dir");
+        let md_file = outside_dir.join("sensitive.md");
+        fs::write(&md_file, "---\ntitle: Sensitive\n---\n\nsecret content\n")
+            .expect("write md");
+
+        let result = import_markdown_with_context(&ctx, &[md_file.to_string_lossy().to_string()]);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("outside the vault directory"),
+            "unexpected error: {err_msg}"
+        );
     }
 
     #[test]

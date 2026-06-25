@@ -17,7 +17,9 @@ use vaultpilot_lib::storage::{
     rebuild_index_with_context, save_chat_state_with_context, save_note_with_context,
     search_notes_async, search_notes_with_context, StorageContext,
 };
-use vaultpilot_lib::{ask_with_ai_with_context, chat_with_ai_with_context, sanitize_error};
+use vaultpilot_lib::{
+    ask_with_ai_with_context, finalize_chat_with_ai_answer, prepare_chat_for_ai, sanitize_error,
+};
 
 use super::{chat_session_overview, new_cli_chat_session};
 
@@ -1374,10 +1376,10 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
         }
     };
 
-    let _guard = context.chat_state_lock.lock().await;
-    match tokio::time::timeout(
-        AI_CALL_TIMEOUT,
-        chat_with_ai_with_context(
+    // Phase 1: Load state, add user turn, persist – under lock.
+    let prepared = {
+        let _guard = context.chat_state_lock.lock().await;
+        match prepare_chat_for_ai(
             context,
             args.session_id,
             args.message,
@@ -1388,19 +1390,49 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
             },
             args.create_new_session,
             |_, _| (),
+        )
+        .await
+        {
+            Ok(ctx) => ctx,
+            Err(error) => return mcp_tool_error(sanitize_error(&error.to_string())),
+        }
+    };
+    // Lock is released – concurrent chat.new / chat.delete can proceed.
+
+    // Phase 2: AI call (potentially slow) – no lock held.
+    let answer = tokio::time::timeout(
+        AI_CALL_TIMEOUT,
+        ask_with_ai_with_context(
+            context,
+            prepared.prompt.clone(),
+            Some(prepared.history.clone()),
+            if prepared.images.is_empty() {
+                None
+            } else {
+                Some(prepared.images.clone())
+            },
+            None,
+            |_, _| (),
         ),
     )
-    .await
-    {
-        Ok(Ok(result)) => {
-            let summary = format!(
-                "Assistant reply from session \"{}\":\n{}",
-                escape_xml_content(&result.session_title),
-                escape_xml_content(&result.answer.answer)
-            );
-            let structured = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
-            mcp_tool_success(summary, structured)
-        }
+    .await;
+
+    // Phase 3: Persist assistant turn – under lock.
+    let _guard = context.chat_state_lock.lock().await;
+    match answer {
+        Ok(Ok(answer)) => match finalize_chat_with_ai_answer(context, prepared, answer).await {
+            Ok(result) => {
+                let summary = format!(
+                    "Assistant reply from session \"{}\":\n{}",
+                    escape_xml_content(&result.session_title),
+                    escape_xml_content(&result.answer.answer)
+                );
+                let structured =
+                    serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
+                mcp_tool_success(summary, structured)
+            }
+            Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
+        },
         Ok(Err(error)) => mcp_tool_error(sanitize_error(&error.to_string())),
         Err(_elapsed) => mcp_tool_error("AI call timed out after 120 seconds".to_string()),
     }

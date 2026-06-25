@@ -68,6 +68,14 @@ impl StorageContext {
         })
     }
 
+    /// Returns the effective vault directory (override or default).
+    pub fn vault_dir(&self) -> &std::path::Path {
+        self.paths
+            .vault_dir_override
+            .as_deref()
+            .unwrap_or(&self.paths.default_vault_dir)
+    }
+
     pub fn for_sidecar() -> Result<Self> {
         let config_root = std::env::var_os("APPDATA")
             .map(PathBuf::from)

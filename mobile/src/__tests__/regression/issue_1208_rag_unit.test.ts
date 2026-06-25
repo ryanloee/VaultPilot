@@ -161,7 +161,7 @@ describe('buildNoteContext — keyword extraction', () => {
 
 describe('parseToolCalls — edge cases', () => {
   it('handles multiple SAVE_NOTE markers', () => {
-    const resp = 'Start\n[SAVE_NOTE: Title 1]Content 1\n[SAVE_NOTE: Title 2]Content 2\nEnd';
+    const resp = 'Start\n[SAVE_NOTE: Title 1\nContent 1\n[SAVE_NOTE: Title 2\nContent 2\nEnd';
     const { cleaned, pendingSaves } = parseToolCalls(resp);
     expect(pendingSaves).toHaveLength(2);
     expect(pendingSaves[0].title).toBe('Title 1');
@@ -169,7 +169,7 @@ describe('parseToolCalls — edge cases', () => {
   });
 
   it('handles empty content after marker', () => {
-    const resp = 'text\n[SAVE_NOTE: Empty]';
+    const resp = 'text\n[SAVE_NOTE: Empty\n';
     const { cleaned, pendingSaves } = parseToolCalls(resp);
     // Empty content — marker is preserved since no save is created
     expect(pendingSaves).toHaveLength(0);
@@ -183,14 +183,14 @@ describe('parseToolCalls — edge cases', () => {
   });
 
   it('preserves content containing [ characters (#1187 regression)', () => {
-    const resp = '[SAVE_NOTE: Code]Use array[0] to access first element';
+    const resp = '[SAVE_NOTE: Code\nUse array[0] to access first element';
     const { cleaned, pendingSaves } = parseToolCalls(resp);
     expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].content).toBe('Use array[0] to access first element');
   });
 
   it('handles empty title (skips marker)', () => {
-    const resp = 'text\n[SAVE_NOTE: ]content here';
+    const resp = 'text\n[SAVE_NOTE: \ncontent here';
     const { cleaned, pendingSaves } = parseToolCalls(resp);
     expect(pendingSaves).toHaveLength(0);
   });
@@ -253,7 +253,7 @@ describe('executeSave', () => {
 
 describe('parseToolCalls — additional edge cases', () => {
   it('handles content with multiple [ characters after title', () => {
-    const resp = '[SAVE_NOTE: Arrays]Use arr[0] and arr[1] for access';
+    const resp = '[SAVE_NOTE: Arrays\nUse arr[0] and arr[1] for access';
     const { cleaned, pendingSaves } = parseToolCalls(resp);
     expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].content).toBe('Use arr[0] and arr[1] for access');
@@ -261,7 +261,7 @@ describe('parseToolCalls — additional edge cases', () => {
   });
 
   it('handles marker at very start of response', () => {
-    const resp = '[SAVE_NOTE: First]Content from start';
+    const resp = '[SAVE_NOTE: First\nContent from start';
     const { cleaned, pendingSaves } = parseToolCalls(resp);
     expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].title).toBe('First');
@@ -276,14 +276,14 @@ describe('parseToolCalls — additional edge cases', () => {
   });
 
   it('handles title with special characters', () => {
-    const resp = '[SAVE_NOTE: C++ 与 Rust 对比]内容在这里';
+    const resp = '[SAVE_NOTE: C++ 与 Rust 对比\n内容在这里';
     const { pendingSaves } = parseToolCalls(resp);
     expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].title).toBe('C++ 与 Rust 对比');
   });
 
   it('handles content spanning multiple lines', () => {
-    const resp = '[SAVE_NOTE: Multi]\nLine 1\nLine 2\nLine 3';
+    const resp = '[SAVE_NOTE: Multi\nLine 1\nLine 2\nLine 3';
     const { pendingSaves } = parseToolCalls(resp);
     expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].content).toContain('Line 1');

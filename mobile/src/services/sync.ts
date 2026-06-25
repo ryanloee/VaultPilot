@@ -3,7 +3,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createNote, updateNote, getNote, getNotes, type DbNote } from '../db';
+import { createNote, updateNote, getNoteTimestamps } from '../db';
 
 const SERVER_URL_KEY = 'cfg_backend_url';
 const SERVER_TOKEN_KEY = 'cfg_backend_token';
@@ -87,8 +87,9 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
   let errors = 0;
 
   // Get local notes for comparison
-  const localNotes = await getNotes();
-  const localMap = new Map(localNotes.map(n => [n.id, n]));
+  // 只加载 id 和 updated_at，避免全量 content 导致 OOM (#1668)
+  const localTimestamps = await getNoteTimestamps();
+  const localMap = new Map(localTimestamps.map(n => [n.id, n]));
 
   for (const meta of allServerNotes) {
     try {

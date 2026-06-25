@@ -15,9 +15,11 @@ jest.mock('../../db', () => ({
   updateNote: jest.fn(),
   getNote: jest.fn(),
   getNotes: jest.fn(),
+  getNoteTimestamps: jest.fn(),
 }));
 
 const mockGetNotes = require('../../db').getNotes as jest.MockedFunction<any>;
+const mockGetNoteTimestamps = require('../../db').getNoteTimestamps as jest.MockedFunction<any>;
 
 // Mock global fetch
 const mockFetch = jest.fn();
@@ -27,7 +29,7 @@ const mockFetch = jest.fn();
 beforeEach(async () => {
   jest.clearAllMocks();
   mockFetch.mockReset();
-  mockGetNotes.mockResolvedValue([]);
+  mockGetNoteTimestamps.mockResolvedValue([]);
   await AsyncStorage.clear();
 });
 
@@ -48,7 +50,7 @@ describe('autoSyncOnStartup', () => {
 
   it('syncs notes when backend is reachable', async () => {
     await AsyncStorage.setItem('cfg_backend_url', 'http://192.168.1.100:3000');
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteTimestamps.mockResolvedValue([]);
 
     // pingBackend → /health
     mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });

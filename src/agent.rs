@@ -633,10 +633,20 @@ pub async fn run_agent(
     let mut tool_transcripts: Vec<String> = Vec::new();
     let mut total_tokens: u64 = 0;
 
+    // Track why the loop exited so we can emit the correct event
+    // and avoid spurious StepLimitReached / extra LLM calls (#1689).
+    enum ExitReason {
+        StepLimit,
+        Timeout,
+        TokenBudget,
+    }
+    let mut exit_reason = ExitReason::StepLimit;
+
     for step in 0..max_steps {
         // Timeout check
         if proxy.elapsed() > config.limits.max_duration {
             on_event(&AgentEvent::Timeout);
+            exit_reason = ExitReason::Timeout;
             break;
         }
 
@@ -667,6 +677,7 @@ pub async fn run_agent(
                 tokens_used: total_tokens,
                 budget: token_budget,
             });
+            exit_reason = ExitReason::TokenBudget;
             break;
         }
 
@@ -791,6 +802,21 @@ pub async fn run_agent(
     }
 
     // Exited loop without a final answer — generate one from accumulated results
+    // Only emit StepLimitReached and make a final LLM call if the loop actually
+    // exhausted all steps. For timeout / token-budget exits the correct event
+    // was already emitted above and an extra LLM call would waste tokens (#1689).
+    match exit_reason {
+        ExitReason::Timeout | ExitReason::TokenBudget => {
+            return Ok(AgentResult {
+                answer: String::new(),
+                steps_used: max_steps,
+                tokens_used: total_tokens,
+                audit_log: proxy.audit_log(),
+            });
+        }
+        ExitReason::StepLimit => {}
+    }
+
     on_event(&AgentEvent::StepLimitReached { steps: max_steps });
     // Final LLM call with per-step timeout (#1574)
     let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
@@ -1030,7 +1056,9 @@ fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
         }
         ai::AssistantToolCall::ReadFile { path } => serde_json::json!({"path": path}).to_string(),
         ai::AssistantToolCall::SaveNote { draft } => {
-            serde_json::json!({"path": format!("{}.md", slugify(&draft.title)),
+            let note_id = uuid::Uuid::new_v4().to_string();
+            let short_id = note_id[..8].to_string();
+            serde_json::json!({"path": format!("{}-{}.md", slugify(&draft.title), short_id),
                               "title": draft.title})
             .to_string()
         }

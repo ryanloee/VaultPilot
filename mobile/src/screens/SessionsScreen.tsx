@@ -134,11 +134,11 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
   };
 
   const handleArchive = async (id: string) => {
-    try { await toggleArchive(id); await load(); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
+    try { await toggleArchive(id); await load(search); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
   };
 
   const handlePin = async (id: string) => {
-    try { await togglePin(id); await load(); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
+    try { await togglePin(id); await load(search); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
   };
 
   const handleRename = async () => {

@@ -41,6 +41,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const abortRef = useRef<AbortController | null>(null);
   const msgsRef = useRef<Msg[]>([]);
   const loadSeqRef = useRef(0); // Track load sequence to prevent race conditions (#1576)
+  const initialMountRef = useRef(true); // Skip nav-params effect on first mount (#1619)
   const voice = useVoiceInput();
   const { isOnline } = useNetworkState();
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -180,6 +181,11 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
 
   // Handle navigation params when returning from SessionsScreen
   useEffect(() => {
+    // Skip on first mount — init effect already handles route.params.sessionId (#1619)
+    if (initialMountRef.current) {
+      initialMountRef.current = false;
+      return;
+    }
     if (route.params?.sessionId && route.params.sessionId !== sessionId) {
       loadSession(route.params.sessionId, route.params.title || '对话');
     }

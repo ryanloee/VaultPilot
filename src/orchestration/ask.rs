@@ -307,7 +307,7 @@ pub async fn ask_with_ai_with_context(
                     is_error,
                 ));
             }
-            AssistantToolCall::SaveNote { draft } => {
+            AssistantToolCall::SaveNote { draft, .. } => {
                 emit_status("saving", "Saving generated note".to_string());
                 match save_note_with_images_async(context, draft_to_note_document(*draft), &images)
                     .await
@@ -1359,6 +1359,7 @@ mod tests {
     fn planned_identity_save_note() {
         let call = AssistantToolCall::SaveNote {
             draft: Box::new(StructuredNoteDraft::default()),
+            note_id: uuid::Uuid::new_v4().to_string(),
         };
         let (name, detail) = planned_tool_identity(&call).unwrap();
         assert_eq!(name, "save_note");

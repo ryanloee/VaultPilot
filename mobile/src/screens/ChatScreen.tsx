@@ -92,6 +92,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
     abortRef.current?.abort();
+    setInitError(null);
     const seq = ++loadSeqRef.current; // Increment sequence for race condition protection (#1576)
     const prevMsgs = msgsRef.current;
     setSessionId(sid);

@@ -66,8 +66,8 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
   }> = [];
 
   for (let offset = 0; offset < MAX_NOTES; offset += PAGE_SIZE) {
-    let listRes: Response | null = null;
-    let lastListError: Error | null = null;
+    let listRes: Response | undefined;
+    let lastNetworkErr: Error | undefined;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
@@ -78,18 +78,20 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
           headers,
           signal: AbortSignal.timeout(30000),
         });
-        if (listRes.ok) break;
-        if (listRes.status >= 500) continue;
-        break;
+        if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
+        break; // got a response (even if not ok), stop retrying
       } catch (fetchErr: unknown) {
-        lastListError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
-        if (lastListError.name === 'AbortError') break;
+        lastNetworkErr = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
+        if (lastNetworkErr.name === 'AbortError' || attempt >= MAX_RETRIES) throw lastNetworkErr;
         // network error → retry
       }
     }
-    if (!listRes || !listRes.ok) {
-      const status = listRes?.status ?? 'network';
-      throw new Error(`获取笔记列表失败: ${status}`);
+    if (!listRes) {
+      throw lastNetworkErr ?? new Error('获取笔记列表失败: network');
+    }
+    if (!listRes.ok) {
+      const errBody = await listRes.text().catch(() => '');
+      throw new Error(`获取笔记列表失败: ${listRes.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ''}`);
     }
 
     const { notes } = await listRes.json() as {

@@ -399,7 +399,7 @@ pub(super) async fn run_mcp_http_server(
 async fn mcp_http_handler(
     State(state): State<Arc<McpHttpState>>,
     headers: HeaderMap,
-    Json(request): Json<McpRequest>,
+    body: String,
 ) -> Json<McpResponse> {
     // Token auth: require bearer token if configured
     if let Some(ref expected) = state.token {
@@ -420,6 +420,19 @@ async fn mcp_http_handler(
             ));
         }
     }
+
+    // Parse request manually to return JSON-RPC error on malformed input
+    let request: McpRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return Json(McpResponse::error(
+                Value::Null,
+                -32700,
+                format!("failed to parse JSON-RPC request: {e}"),
+                None,
+            ));
+        }
+    };
 
     // Handle initialize with write lock; all other requests with read lock
     if request.method == "initialize" && request.jsonrpc == "2.0" {

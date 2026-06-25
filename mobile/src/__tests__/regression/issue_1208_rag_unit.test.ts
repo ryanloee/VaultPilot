@@ -6,28 +6,31 @@
  */
 
 import { buildNoteContext, parseToolCalls, getDeviceLocale, buildSystemPrompt, executeSave } from '../../services/rag';
-import { searchNotes, getNotes } from '../../db';
+import { searchNotes, getNotes, getNoteCount } from '../../db';
 
 // Mock the db module
 jest.mock('../../db', () => ({
   searchNotes: jest.fn(),
   getNotes: jest.fn(),
+  getNoteCount: jest.fn(),
   createNote: jest.fn(),
   updateNote: jest.fn(),
 }));
 
 const mockSearchNotes = searchNotes as jest.MockedFunction<typeof searchNotes>;
 const mockGetNotes = getNotes as jest.MockedFunction<typeof getNotes>;
+const mockGetNoteCount = getNoteCount as jest.MockedFunction<typeof getNoteCount>;
 const mockCreateNote = require('../../db').createNote as jest.MockedFunction<any>;
 const mockUpdateNote = require('../../db').updateNote as jest.MockedFunction<any>;
 
-// Default: getNotes returns some notes so search is not skipped
+// Default: getNoteCount returns non-zero, getNotes returns some notes
 const defaultNotes = [
   { id: '1', title: 'Default Note', content: 'Default content', starred: 0, folder: '', created_at: 0, updated_at: 0 },
 ];
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetNoteCount.mockResolvedValue(defaultNotes.length);
   mockGetNotes.mockResolvedValue(defaultNotes);
 });
 
@@ -58,7 +61,7 @@ describe('buildNoteContext — keyword extraction', () => {
   });
 
   it('returns null when no notes exist', async () => {
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteCount.mockResolvedValue(0);
     const result = await buildNoteContext('the a an is are was were');
     expect(result).toBeNull();
   });

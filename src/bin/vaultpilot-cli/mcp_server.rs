@@ -192,7 +192,6 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                 let want = capacity_left.min(CHUNK_SIZE);
                 if want == 0 {
                     // Already at limit — drain byte-by-byte until newline.
-                    exceeded = true;
                     match reader.read(&mut chunk_buf[..1]).await {
                         Ok(0) | Err(_) => break,
                         Ok(_) => {}
@@ -200,6 +199,7 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                     if chunk_buf[0] == b'\n' {
                         break;
                     }
+                    exceeded = true;
                     continue;
                 }
                 let n = match reader.read(&mut chunk_buf[..want]).await {

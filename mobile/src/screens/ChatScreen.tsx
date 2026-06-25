@@ -374,12 +374,13 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
 
       if (errName === 'AbortError') {
         if (partial) {
-          try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch (e) { console.warn('[Chat] Failed to save aborted message:', e); }
+          const abortedContent = partial + '\n\n_[响应被中止]_';
+          try { await updateMessage(aiId, abortedContent); } catch (e) { console.warn('[Chat] Failed to save aborted message:', e); }
+          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: abortedContent, streaming: false } : m));
         } else {
           try { await deleteMessage(aiId); } catch (e) { console.warn('[Chat] Failed to delete empty aborted message:', e); }
           setMsgs(prev => prev.filter(m => m.id !== aiId));
         }
-        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
       } else {
         if (partial) {
           try { await updateMessage(aiId, partial); } catch (e) { console.warn('[Chat] Failed to save partial content:', e); }

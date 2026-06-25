@@ -182,8 +182,26 @@ fn machine_salt() -> Vec<u8> {
                         if let Some(dir) = id_path.parent() {
                             let _ = std::fs::create_dir_all(dir);
                         }
-                        let _ = std::fs::write(&id_path, &new_id);
-                        salt.extend_from_slice(new_id.as_bytes());
+                        // Verify write succeeded; if it fails (common in macOS
+                        // App Sandbox), fall back to a deterministic salt based
+                        // on the HOME path so that the derived key remains
+                        // stable across restarts (fixes #1676).
+                        if std::fs::write(&id_path, &new_id).is_ok()
+                            && std::fs::read_to_string(&id_path)
+                                .map(|s| s.trim().to_string())
+                                .ok()
+                                .as_deref()
+                                == Some(new_id.as_str())
+                        {
+                            salt.extend_from_slice(new_id.as_bytes());
+                        } else {
+                            tracing::warn!(
+                                "Failed to persist .machine-id, \
+                                 using deterministic fallback"
+                            );
+                            salt.extend_from_slice(home.to_string_lossy().as_bytes());
+                            salt.extend_from_slice(b"vaultpilot-macos-fallback-v1");
+                        }
                     }
                 }
             }

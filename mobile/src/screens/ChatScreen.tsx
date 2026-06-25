@@ -301,6 +301,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
               { text: '拒绝', style: 'cancel', onPress: () => resolve(false) },
               { text: '保存', onPress: () => resolve(true) },
             ],
+            { onDismiss: () => resolve(false) },
           );
         });
         if (confirmed) {

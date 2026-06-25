@@ -39,22 +39,25 @@ pub(crate) fn auto_backup_database(db_path: &Path) -> Result<()> {
     let max_backups = 3;
 
     // Rotate existing backups: .bak.2 -> delete, .bak.1 -> .bak.2, .bak -> .bak.1
+    // First delete any backup that would overflow, then rotate in reverse order.
+    // This prevents data loss when intermediate backups are missing.
+    for i in (1..max_backups).rev() {
+        let path = backup_dir.join(format!("{file_name_str}.bak.{i}"));
+        if path.exists() && i + 1 >= max_backups {
+            if let Err(e) = fs::remove_file(&path) {
+                tracing::warn!(path = %path.display(), error = %e, "Failed to remove old backup");
+            }
+        }
+    }
     for i in (1..max_backups).rev() {
         let older = backup_dir.join(format!("{file_name_str}.bak.{i}"));
         let newer = backup_dir.join(format!("{file_name_str}.bak.{}", i + 1));
         if older.exists() {
-            if i + 1 >= max_backups {
-                // Delete the oldest backup
-                if let Err(e) = fs::remove_file(&older) {
-                    tracing::warn!(path = %older.display(), error = %e, "Failed to remove old backup");
-                }
-            } else {
-                // On Windows, rename fails if the destination already exists.
-                // Remove the destination first to ensure the rename succeeds.
-                windows_remove_if_exists(&newer);
-                if let Err(e) = fs::rename(&older, &newer) {
-                    tracing::warn!(from = %older.display(), to = %newer.display(), error = %e, "Failed to rotate backup");
-                }
+            // On Windows, rename fails if the destination already exists.
+            // Remove the destination first to ensure the rename succeeds.
+            windows_remove_if_exists(&newer);
+            if let Err(e) = fs::rename(&older, &newer) {
+                tracing::warn!(from = %older.display(), to = %newer.display(), error = %e, "Failed to rotate backup");
             }
         }
     }
@@ -87,6 +90,7 @@ pub(crate) fn auto_backup_database(db_path: &Path) -> Result<()> {
     }
 
     // Copy current database to .bak
+    let current_bak = backup_dir.join(format!("{file_name_str}.bak"));
     fs::copy(db_path, &current_bak).with_context(|| {
         format!(
             "failed to backup database from {} to {}",

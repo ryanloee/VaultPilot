@@ -1,7 +1,7 @@
 /**
  * Unit tests for rag.ts parseToolCalls + buildSystemPrompt (#1422).
  *
- * parseToolCalls: pure parser for [SAVE_NOTE: title] markers.
+ * parseToolCalls: pure parser for [SAVE_NOTE: title\ncontent] markers (newline-delimited).
  * buildSystemPrompt: prompt builder with security rules + note instructions.
  */
 
@@ -17,7 +17,7 @@ describe('parseToolCalls', () => {
   });
 
   it('parses a single SAVE_NOTE marker', () => {
-    const input = 'Here is the note:\n[SAVE_NOTE: My Title]\nSome content here.';
+    const input = 'Here is the note:\n[SAVE_NOTE: My Title\nSome content here.';
     const result = parseToolCalls(input);
     expect(result.pendingSaves).toEqual([
       { title: 'My Title', content: 'Some content here.' },
@@ -26,7 +26,7 @@ describe('parseToolCalls', () => {
   });
 
   it('parses multiple SAVE_NOTE markers', () => {
-    const input = 'Notes:\n[SAVE_NOTE: Title A]\nContent A\n[SAVE_NOTE: Title B]\nContent B';
+    const input = 'Notes:\n[SAVE_NOTE: Title A\nContent A\n[SAVE_NOTE: Title B\nContent B';
     const result = parseToolCalls(input);
     expect(result.pendingSaves).toHaveLength(2);
     expect(result.pendingSaves[0]).toEqual({ title: 'Title A', content: 'Content A' });
@@ -35,21 +35,21 @@ describe('parseToolCalls', () => {
   });
 
   it('trims whitespace from title and content', () => {
-    const input = '[SAVE_NOTE:  Spaced Title  ]\n  Spaced Content  ';
+    const input = '[SAVE_NOTE:  Spaced Title  \n  Spaced Content  ';
     const result = parseToolCalls(input);
     expect(result.pendingSaves[0].title).toBe('Spaced Title');
     expect(result.pendingSaves[0].content).toBe('Spaced Content');
   });
 
   it('skips marker with empty title', () => {
-    const input = 'Before [SAVE_NOTE: ]\nContent after empty title';
+    const input = 'Before [SAVE_NOTE: \nContent after empty title';
     const result = parseToolCalls(input);
-    // Empty title → skip, content after ] is treated as plain text
+    // Empty title → skip, content after \n is treated as plain text
     expect(result.pendingSaves).toEqual([]);
   });
 
   it('skips marker with empty (whitespace-only) content', () => {
-    const input = 'Before [SAVE_NOTE: Title]\n   ';
+    const input = 'Before [SAVE_NOTE: Title\n   ';
     const result = parseToolCalls(input);
     // Whitespace-only content trims to empty → not added to pendingSaves
     expect(result.pendingSaves).toEqual([]);
@@ -66,21 +66,21 @@ describe('parseToolCalls', () => {
   });
 
   it('handles marker at start of response', () => {
-    const input = '[SAVE_NOTE: First]\nFirst content';
+    const input = '[SAVE_NOTE: First\nFirst content';
     const result = parseToolCalls(input);
     expect(result.pendingSaves).toHaveLength(1);
     expect(result.cleaned).toBe('');
   });
 
   it('handles content with special characters', () => {
-    const input = '[SAVE_NOTE: Code Snippet]\n```js\nconsole.log("hello");\n```';
+    const input = '[SAVE_NOTE: Code Snippet\n```js\nconsole.log("hello");\n```';
     const result = parseToolCalls(input);
     expect(result.pendingSaves[0].content).toContain('```js');
     expect(result.pendingSaves[0].content).toContain('console.log');
   });
 
   it('strips marker and content, preserves surrounding text', () => {
-    const input = 'Intro text.\n[SAVE_NOTE: Note]\nNote body.\nClosing text.';
+    const input = 'Intro text.\n[SAVE_NOTE: Note\nNote body.\nClosing text.';
     const result = parseToolCalls(input);
     // Content = "Note body.\nClosing text." — all stripped with marker
     expect(result.cleaned).toBe('Intro text.');

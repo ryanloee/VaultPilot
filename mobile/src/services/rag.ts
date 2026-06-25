@@ -277,7 +277,7 @@ export interface PendingSave {
  * that contains '[' characters — fixes #1187.
  *
  * Supported marker:
- *   [SAVE_NOTE: title] content
+ *   [SAVE_NOTE: title\n *   content
  */
 export function parseToolCalls(response: string): {
   cleaned: string;
@@ -294,14 +294,17 @@ export function parseToolCalls(response: string): {
     if (markerIdx === -1) break;
 
     const titleStart = markerIdx + markerTag.length;
-    const closeBracket = response.indexOf(']', titleStart);
-    if (closeBracket === -1) break;
+    // Use newline to find title end — the title is always on the same line as
+    // [SAVE_NOTE:, content starts on the next line.  Using indexOf(']') breaks
+    // when the title itself contains brackets (e.g. "什么是 [机器学习]").
+    const titleEnd = response.indexOf('\n', titleStart);
+    if (titleEnd === -1) break;
 
-    const title = response.slice(titleStart, closeBracket).trim();
-    if (!title) { searchFrom = closeBracket + 1; continue; }
+    const title = response.slice(titleStart, titleEnd).trim();
+    if (!title) { searchFrom = titleEnd + 1; continue; }
 
-    // Content: everything after "]" until next marker or end
-    const contentStart = closeBracket + 1;
+    // Content: everything after newline until next marker or end
+    const contentStart = titleEnd + 1;
     const nextMarker = response.indexOf(markerTag, contentStart);
     const contentEnd = nextMarker !== -1 ? nextMarker : response.length;
     const content = response.slice(contentStart, contentEnd).trim();
@@ -358,13 +361,13 @@ export function buildSystemPrompt(noteContext: string | null): string {
   const noteInstructions = zh
     ? `\n你有笔记能力：
 - 当用户说"记录"、"保存"、"记下"时，使用以下格式保存笔记：
-[SAVE_NOTE: 笔记标题]
+[SAVE_NOTE: 笔记标题
 笔记的完整内容，要结构化、完整。
 - 标题要简洁有意义，内容要完整。
 - 保存后正常回复用户，说明已保存。`
     : `\nYou have note abilities:
 - When the user says "record", "save", "note down", etc., save a note using the format:
-[SAVE_NOTE: note title]
+[SAVE_NOTE: note title
 The complete note content, structured and complete.
 - Titles should be concise and meaningful, content should be complete.
 - After saving, reply normally and confirm the note was saved.`;

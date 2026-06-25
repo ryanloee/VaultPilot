@@ -1469,7 +1469,11 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
             state.sessions.retain(|s| s.id != args.session_id);
             let deleted = state.sessions.len() != original_len;
             // Reset current_session_id if it points to a deleted or missing session
-            if !state.sessions.iter().any(|s| s.id == state.current_session_id) {
+            if !state
+                .sessions
+                .iter()
+                .any(|s| s.id == state.current_session_id)
+            {
                 state.current_session_id = state
                     .sessions
                     .first()

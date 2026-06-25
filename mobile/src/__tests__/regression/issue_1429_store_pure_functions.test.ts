@@ -93,21 +93,28 @@ describe('removeProviderFromList', () => {
 
 describe('computeActiveIndexAfterRemove', () => {
   test('returns 0 for empty list', () => {
-    expect(computeActiveIndexAfterRemove(2, 0)).toBe(0);
+    expect(computeActiveIndexAfterRemove(2, 0, 0)).toBe(0);
   });
 
-  test('keeps index when still in range', () => {
-    expect(computeActiveIndexAfterRemove(0, 3)).toBe(0);
-    expect(computeActiveIndexAfterRemove(1, 3)).toBe(1);
+  test('keeps index when removed item is after active', () => {
+    expect(computeActiveIndexAfterRemove(0, 2, 3)).toBe(0);
+    expect(computeActiveIndexAfterRemove(1, 2, 3)).toBe(1);
   });
 
-  test('clamps when index exceeds new length', () => {
-    expect(computeActiveIndexAfterRemove(2, 2)).toBe(1);
-    expect(computeActiveIndexAfterRemove(5, 1)).toBe(0);
+  test('shifts index left when removed item is before active', () => {
+    // providers: A(0), B(1), C(2), active=B(1), remove A(0) → B becomes 0
+    expect(computeActiveIndexAfterRemove(1, 0, 2)).toBe(0);
+    // providers: A(0), B(1), C(2), active=C(2), remove A(0) → C becomes 1
+    expect(computeActiveIndexAfterRemove(2, 0, 2)).toBe(1);
   });
 
-  test('edge: index equals new length', () => {
-    expect(computeActiveIndexAfterRemove(2, 2)).toBe(1);
+  test('clamps when active item itself is deleted', () => {
+    expect(computeActiveIndexAfterRemove(2, 2, 2)).toBe(1);
+    expect(computeActiveIndexAfterRemove(5, 5, 1)).toBe(0);
+  });
+
+  test('edge: index equals new length after deletion', () => {
+    expect(computeActiveIndexAfterRemove(2, 2, 2)).toBe(1);
   });
 });
 

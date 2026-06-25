@@ -58,7 +58,7 @@ describe('syncLegacyFields race condition fix (#regression)', () => {
     it('active provider fields are correct after removal', () => {
       const providers = [makeProvider('a'), makeProvider('b'), makeProvider('c')];
       const remaining = removeProviderFromList(providers, 1); // remove 'b'
-      const activeProviderIndex = computeActiveIndexAfterRemove(1, remaining.length);
+      const activeProviderIndex = computeActiveIndexAfterRemove(1, 1, remaining.length);
       const active = remaining[activeProviderIndex];
 
       // After removing index 1, active index stays 1 which is now 'c'

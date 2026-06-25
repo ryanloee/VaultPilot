@@ -104,9 +104,18 @@ export function removeProviderFromList(providers: ProviderConfig[], index: numbe
 }
 
 /** Compute the new active index after removing a provider. */
-export function computeActiveIndexAfterRemove(currentIndex: number, newLength: number): number {
+export function computeActiveIndexAfterRemove(currentIndex: number, removedIndex: number, newLength: number): number {
   if (newLength === 0) return 0;
-  return currentIndex >= newLength ? newLength - 1 : currentIndex;
+  if (currentIndex === removedIndex) {
+    // Active item was deleted — clamp to valid range
+    return Math.min(currentIndex, newLength - 1);
+  }
+  if (removedIndex < currentIndex) {
+    // Deleted item was before active — shift left by one
+    return currentIndex - 1;
+  }
+  // Deleted item was after active — index unchanged
+  return currentIndex;
 }
 
 /** Update a provider at index with partial fields, returning a new array. */
@@ -230,7 +239,7 @@ export const useAppStore = create<AppState>()(
         let updatedProviders: ProviderConfig[] | undefined;
         set((state) => {
           const providers = removeProviderFromList(state.providers, index);
-          const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, providers.length);
+          const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, index, providers.length);
           updatedProviders = providers;
           const update: Partial<AppState> = { providers, activeProviderIndex };
           if (providers.length > 0) {

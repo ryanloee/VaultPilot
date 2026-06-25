@@ -919,13 +919,12 @@ async fn execute_tool(
                 Err(e) => (format!("tool error: task join failed: {}", e), true),
             }
         }
-        ai::AssistantToolCall::SaveNote { draft } => {
+        ai::AssistantToolCall::SaveNote { draft, note_id } => {
             use crate::storage::save_note_with_images_async;
-            let note_id = uuid::Uuid::new_v4().to_string();
             let short_id = note_id[..8].to_string();
             let note = crate::models::NoteDocument {
                 meta: crate::models::NoteMeta {
-                    id: note_id,
+                    id: note_id.clone(),
                     title: draft.title.clone(),
                     path: format!("{}-{}.md", slugify(&draft.title), short_id),
                     tags: draft.tags.clone(),
@@ -1034,7 +1033,7 @@ fn tool_args_summary(tool: &ai::AssistantToolCall) -> String {
         ai::AssistantToolCall::ListNotes { limit } => format!("limit={}", limit),
         ai::AssistantToolCall::ListDirectory { path } => format!("path={}", path),
         ai::AssistantToolCall::ReadFile { path } => format!("path={}", path),
-        ai::AssistantToolCall::SaveNote { draft } => {
+        ai::AssistantToolCall::SaveNote { draft, .. } => {
             format!("title={}", draft.title)
         }
     }
@@ -1055,8 +1054,7 @@ fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
             serde_json::json!({"path": path}).to_string()
         }
         ai::AssistantToolCall::ReadFile { path } => serde_json::json!({"path": path}).to_string(),
-        ai::AssistantToolCall::SaveNote { draft } => {
-            let note_id = uuid::Uuid::new_v4().to_string();
+        ai::AssistantToolCall::SaveNote { draft, note_id } => {
             let short_id = note_id[..8].to_string();
             serde_json::json!({"path": format!("{}-{}.md", slugify(&draft.title), short_id),
                               "title": draft.title})

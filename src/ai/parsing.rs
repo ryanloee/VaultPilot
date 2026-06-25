@@ -44,6 +44,7 @@ pub enum AssistantToolCall {
     },
     SaveNote {
         draft: Box<StructuredNoteDraft>,
+        note_id: String,
     },
 }
 
@@ -454,6 +455,7 @@ pub(super) fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToo
                 .ok_or_else(|| anyhow!("save_note was selected but noteDraft is missing"))?;
             Ok(AssistantToolCall::SaveNote {
                 draft: Box::new(draft),
+                note_id: uuid::Uuid::new_v4().to_string(),
             })
         }
         other => Err(anyhow!(
@@ -970,7 +972,7 @@ mod tests {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"B"}}"#;
         let result = parse_tool_call(text, "q").unwrap();
         match result {
-            AssistantToolCall::SaveNote { draft } => {
+            AssistantToolCall::SaveNote { draft, .. } => {
                 assert_eq!(draft.title, "T");
             }
             _ => panic!("Expected SaveNote"),
@@ -1355,7 +1357,7 @@ mod tests {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":""}}"#;
         let result = parse_tool_call(text, "q").unwrap();
         match result {
-            AssistantToolCall::SaveNote { draft } => {
+            AssistantToolCall::SaveNote { draft, .. } => {
                 // empty body triggers heuristic fallback
                 assert!(!draft.body.is_empty());
             }
@@ -1368,7 +1370,7 @@ mod tests {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"   ","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"some content"}}"#;
         let result = parse_tool_call(text, "q").unwrap();
         match result {
-            AssistantToolCall::SaveNote { draft } => {
+            AssistantToolCall::SaveNote { draft, .. } => {
                 // whitespace-only title gets heuristic fallback
                 assert_ne!(draft.title, "   ");
                 assert!(!draft.title.is_empty());
@@ -1382,7 +1384,7 @@ mod tests {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":["rust","rust"," coding ","coding"],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"B"}}"#;
         let result = parse_tool_call(text, "q").unwrap();
         match result {
-            AssistantToolCall::SaveNote { draft } => {
+            AssistantToolCall::SaveNote { draft, .. } => {
                 // tags should be deduped and trimmed
                 let rust_count = draft.tags.iter().filter(|t| t.as_str() == "rust").count();
                 assert_eq!(rust_count, 1);
@@ -1397,7 +1399,7 @@ mod tests {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"","tags":[],"keywords":[],"status":"","source":"","body":"content"}}"#;
         let result = parse_tool_call(text, "q").unwrap();
         match result {
-            AssistantToolCall::SaveNote { draft } => {
+            AssistantToolCall::SaveNote { draft, .. } => {
                 assert_eq!(draft.title, "T");
                 assert_eq!(draft.status, "已记录");
                 assert_eq!(draft.source, "captured");

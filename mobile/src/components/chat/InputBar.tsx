@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Animated, FlatList } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import Icon from '../Icon';
@@ -22,6 +22,7 @@ interface InputBarProps {
   borderColor: string;
   voiceAvailable: boolean;
   voiceListening: boolean;
+  voiceVolume: number; // 0-1 normalized
   onInputChange: (text: string) => void;
   onInputHeightChange: (height: number) => void;
   onSend: () => void;
@@ -34,7 +35,72 @@ interface InputBarProps {
   onEmojiSelect?: (emoji: string) => void;
 }
 
-/* ── Emoji data (common emoji organized by category) ── */
+/* ── Animated audio waveform bar ── */
+const WAVEFORM_BAR_COUNT = 24;
+
+function AudioWaveform({ volume, color }: { volume: number; color: string }) {
+  const bars = useRef(
+    Array.from({ length: WAVEFORM_BAR_COUNT }, () => new Animated.Value(0.15)),
+  ).current;
+
+  useEffect(() => {
+    const animations = bars.map((bar, i) => {
+      // Each bar reacts slightly differently to create natural wave
+      const phase = (i / WAVEFORM_BAR_COUNT) * Math.PI * 2;
+      const jitter = Math.sin(phase) * 0.15 + Math.cos(phase * 0.7) * 0.1;
+      const target = Math.max(0.1, Math.min(1, volume + jitter));
+      return Animated.timing(bar, {
+        toValue: target,
+        duration: 80,
+        useNativeDriver: false,
+      });
+    });
+    Animated.parallel(animations).start();
+  }, [volume]);
+
+  return (
+    <View style={waveformStyles.container}>
+      {bars.map((bar, i) => (
+        <Animated.View
+          key={i}
+          style={[
+            waveformStyles.bar,
+            {
+              backgroundColor: color,
+              height: bar.interpolate({
+                inputRange: [0, 1],
+                outputRange: [3, 28],
+              }),
+              opacity: bar.interpolate({
+                inputRange: [0.1, 1],
+                outputRange: [0.3, 1],
+              }),
+            },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
+const waveformStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 40,
+    gap: 2,
+    paddingHorizontal: 8,
+  },
+  bar: {
+    width: 3,
+    borderRadius: 1.5,
+    minHeight: 3,
+  },
+});
+
+/* ── Emoji data ── */
 const EMOJI_CATEGORIES = [
   {
     name: '常用',
@@ -67,6 +133,7 @@ export default function InputBar({
   borderColor,
   voiceAvailable,
   voiceListening,
+  voiceVolume,
   onInputChange,
   onInputHeightChange,
   onSend,
@@ -82,6 +149,23 @@ export default function InputBar({
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [activeEmojiCategory, setActiveEmojiCategory] = useState(0);
   const expandAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Pulsing mic icon animation while recording
+  useEffect(() => {
+    if (voiceListening) {
+      const pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.3, duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+        ]),
+      );
+      pulse.start();
+      return () => pulse.stop();
+    } else {
+      pulseAnim.setValue(1);
+    }
+  }, [voiceListening]);
 
   const togglePlus = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -169,7 +253,6 @@ export default function InputBar({
       {/* Emoji picker panel */}
       {showEmojiPicker && (
         <View style={[styles.emojiPanel, { backgroundColor: inputBgColor, borderTopColor: borderColor }]}>
-          {/* Category tabs */}
           <View style={[styles.emojiTabs, { borderBottomColor: borderColor }]}>
             {EMOJI_CATEGORIES.map((cat, i) => (
               <TouchableOpacity
@@ -190,7 +273,6 @@ export default function InputBar({
               <Text style={[styles.emojiTabText, { color: textColorSecondary }]}>✕</Text>
             </TouchableOpacity>
           </View>
-          {/* Emoji grid */}
           <FlatList
             data={EMOJI_CATEGORIES[activeEmojiCategory].emojis}
             numColumns={8}
@@ -219,37 +301,49 @@ export default function InputBar({
           <Icon name={plusExpanded ? 'close' : 'plus'} size={20} color={plusExpanded ? accentColor : textColorSecondary} />
         </TouchableOpacity>
 
-        {/* Text input */}
-        <TextInput
-          style={[
-            styles.textInput,
-            {
-              color: textColor,
-              backgroundColor: inputBgColor,
-              borderColor,
-              height: Math.max(40, Math.min(inputHeight, 120)),
-            },
-          ]}
-          value={input}
-          onChangeText={onInputChange}
-          onContentSizeChange={(e) => onInputHeightChange(e.nativeEvent.contentSize.height)}
-          placeholder="输入消息..."
-          placeholderTextColor={textColorSecondary}
-          multiline
-          maxLength={4000}
-          editable={!streaming}
-          onFocus={closeAll}
-        />
+        {/* Text input / Waveform (when recording) */}
+        {voiceListening ? (
+          <View style={[styles.waveformContainer, { backgroundColor: inputBgColor, borderColor }]}>
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+              <Icon name="mic" size={16} color="#FF3B30" />
+            </Animated.View>
+            <AudioWaveform volume={voiceVolume} color={accentColor} />
+            <Text style={[styles.recordingHint, { color: textColorSecondary }]}>点击麦克风停止</Text>
+          </View>
+        ) : (
+          <TextInput
+            style={[
+              styles.textInput,
+              {
+                color: textColor,
+                backgroundColor: inputBgColor,
+                borderColor,
+                height: Math.max(40, Math.min(inputHeight, 120)),
+              },
+            ]}
+            value={input}
+            onChangeText={onInputChange}
+            onContentSizeChange={(e) => onInputHeightChange(e.nativeEvent.contentSize.height)}
+            placeholder="输入消息..."
+            placeholderTextColor={textColorSecondary}
+            multiline
+            maxLength={4000}
+            editable={!streaming}
+            onFocus={closeAll}
+          />
+        )}
 
         {/* Emoji button */}
-        <TouchableOpacity
-          style={[styles.emojiBtn, showEmojiPicker && { backgroundColor: accentColor + '20' }]}
-          onPress={toggleEmojiPicker}
-        >
-          <Icon name="smile" size={20} color={showEmojiPicker ? accentColor : textColorSecondary} />
-        </TouchableOpacity>
+        {!voiceListening && (
+          <TouchableOpacity
+            style={[styles.emojiBtn, showEmojiPicker && { backgroundColor: accentColor + '20' }]}
+            onPress={toggleEmojiPicker}
+          >
+            <Icon name="smile" size={20} color={showEmojiPicker ? accentColor : textColorSecondary} />
+          </TouchableOpacity>
+        )}
 
-        {/* Voice button */}
+        {/* Voice button — always visible when available */}
         {voiceAvailable && (
           <TouchableOpacity
             style={[styles.voiceBtn, voiceListening && { backgroundColor: '#FF3B3020' }]}
@@ -299,7 +393,6 @@ const styles = StyleSheet.create({
   },
   attachName: { fontSize: 12, maxWidth: 120 },
   attachRemove: { fontSize: 12, fontWeight: '600' },
-  /* Expanded panel */
   expandedPanel: {
     overflow: 'hidden',
     borderBottomWidth: 1,
@@ -318,9 +411,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
   },
-  expandedIcon: { fontSize: 22, marginBottom: 2 },
   expandedLabel: { fontSize: 10, fontWeight: '500' },
-  /* Emoji picker */
   emojiPanel: {
     borderTopWidth: 1,
     maxHeight: 260,
@@ -350,7 +441,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   emojiText: { fontSize: 24 },
-  /* Input bar */
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -365,7 +455,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  plusIcon: { fontSize: 20, fontWeight: '600' },
   textInput: {
     flex: 1,
     borderWidth: 1,
@@ -376,6 +465,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 20,
   },
+  waveformContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    height: 40,
+    gap: 6,
+  },
+  recordingHint: {
+    fontSize: 11,
+    flexShrink: 0,
+  },
   emojiBtn: {
     width: 36,
     height: 36,
@@ -383,7 +486,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  emojiBtnText: { fontSize: 20 },
   voiceBtn: {
     width: 36,
     height: 36,
@@ -391,7 +493,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  voiceIcon: { fontSize: 18 },
   sendBtn: {
     width: 36,
     height: 36,
@@ -399,5 +500,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendText: { fontSize: 16, fontWeight: '600' },
 });

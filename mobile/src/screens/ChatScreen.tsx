@@ -503,6 +503,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         borderColor={c.border}
         voiceAvailable={voice.isAvailable}
         voiceListening={voice.isListening}
+        voiceVolume={voice.volumeLevel}
         onInputChange={setInput}
         onInputHeightChange={setInputHeight}
         onSend={send}

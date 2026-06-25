@@ -30,10 +30,14 @@ export function useVoiceInput() {
     }
   }, []);
 
-  // 组件卸载时停止语音识别，防止麦克风泄漏 (#1667)
+  // Stop voice recognition on unmount to release microphone (#1667)
   useEffect(() => {
     return () => {
-      ExpoSpeechRecognitionModule.abort().catch(() => {});
+      try {
+        ExpoSpeechRecognitionModule.abort();
+      } catch {
+        // ignore cleanup errors
+      }
     };
   }, []);
 

@@ -818,17 +818,29 @@ async fn execute_tool(
             }
         }
         ai::AssistantToolCall::ListDirectory { path } => {
-            let vault_root = Path::new(&settings.vault_dir);
-            match list_directory_for_agent(path, vault_root) {
-                Ok(output) => (output, false),
-                Err(e) => (format!("tool error: {}", e), true),
+            let vault_root = PathBuf::from(&settings.vault_dir);
+            let path_owned = path.clone();
+            match tokio::task::spawn_blocking(move || {
+                list_directory_for_agent(&path_owned, &vault_root)
+            })
+            .await
+            {
+                Ok(Ok(output)) => (output, false),
+                Ok(Err(e)) => (format!("tool error: {}", e), true),
+                Err(e) => (format!("tool error: task join failed: {}", e), true),
             }
         }
         ai::AssistantToolCall::ReadFile { path } => {
-            let vault_root = Path::new(&settings.vault_dir);
-            match read_file_for_agent(path, vault_root) {
-                Ok(output) => (output, false),
-                Err(e) => (format!("tool error: {}", e), true),
+            let vault_root = PathBuf::from(&settings.vault_dir);
+            let path_owned = path.clone();
+            match tokio::task::spawn_blocking(move || {
+                read_file_for_agent(&path_owned, &vault_root)
+            })
+            .await
+            {
+                Ok(Ok(output)) => (output, false),
+                Ok(Err(e)) => (format!("tool error: {}", e), true),
+                Err(e) => (format!("tool error: task join failed: {}", e), true),
             }
         }
         ai::AssistantToolCall::SaveNote { draft } => {

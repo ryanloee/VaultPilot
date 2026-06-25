@@ -468,9 +468,15 @@ async fn mcp_http_handler(
         ));
     }
 
-    let server_state = state.server_state.read().await;
+    let state_snapshot = {
+        let guard = state.server_state.read().await;
+        McpServerState {
+            initialized: guard.initialized,
+            protocol_version: guard.protocol_version.clone(),
+        }
+    };
 
-    match handle_mcp_request(&state.context, &server_state, request).await {
+    match handle_mcp_request(&state.context, &state_snapshot, request).await {
         Some(resp) => Json(resp),
         None => Json(McpResponse::ok(Value::Null, Value::Null)),
     }

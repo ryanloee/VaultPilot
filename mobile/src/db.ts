@@ -535,7 +535,7 @@ export async function getPendingSyncCount(): Promise<number> {
 }
 
 /** Get all pending sync entries. */
-export async function getPendingSyncs(): Promise<Array<{ id: number; note_id: string; action: string }>> {
+export async function getPendingSyncs(): Promise<Array<{ id: number; note_id: string; action: string; retry_count: number }>> {
   const db = await getDb();
   return db.getAllAsync<{ id: number; note_id: string; action: string; retry_count: number }>(
     'SELECT * FROM pending_syncs ORDER BY created_at ASC'

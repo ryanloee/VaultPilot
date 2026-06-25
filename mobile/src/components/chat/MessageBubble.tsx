@@ -103,7 +103,7 @@ const MessageBubble = memo(function MessageBubble({
               lineHeight: 22,
             }}
           >
-            {item.content || (item.streaming ? (item.streamStatus || '思考中...') : '')}
+            {item.content || (item.isError ? '⚠️ 发送失败' : (item.streaming ? (item.streamStatus || '思考中...') : ''))}
             {item.streaming && (
               <Text style={{ color: accentColor }}> ▌</Text>
             )}

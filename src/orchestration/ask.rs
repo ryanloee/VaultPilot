@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::models::{
     AppSettings, ContextStatus, ConversationTurn, GroundedAnswer, NoteDocument, NoteMeta,
@@ -15,6 +16,9 @@ use tracing::instrument;
 use crate::ai;
 
 use super::chat::build_effective_question;
+
+/// Per-AI-call timeout to prevent indefinite hangs in the orchestration layer.
+const AI_CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
 pub struct ToolExecution {
@@ -84,14 +88,18 @@ pub async fn ask_with_ai_with_context(
             .map(ToolExecution::render_for_model)
             .collect::<Vec<_>>();
 
-        let selection = ai::select_tool_call(
-            &settings,
-            &effective_question,
-            &images,
-            &history,
-            &tool_history,
+        let selection = tokio::time::timeout(
+            AI_CALL_TIMEOUT,
+            ai::select_tool_call(
+                &settings,
+                &effective_question,
+                &images,
+                &history,
+                &tool_history,
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| anyhow::anyhow!("AI call timed out (select_tool_call)"))??;
         usage = merge_usage(usage, selection.usage);
 
         let forced_local_path_tool =
@@ -386,13 +394,23 @@ async fn finalize_grounded_answer(
     forced_search: bool,
 ) -> Result<GroundedAnswer, anyhow::Error> {
     let answer = if tool_results.is_empty() {
-        ai::answer_question(settings, question, &[], images, history).await?
+        tokio::time::timeout(
+            AI_CALL_TIMEOUT,
+            ai::answer_question(settings, question, &[], images, history),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("AI call timed out (answer_question)"))??
     } else {
         let transcript = tool_results
             .iter()
             .map(ToolExecution::render_for_model)
             .collect::<Vec<_>>();
-        ai::answer_after_tools(settings, question, &transcript, docs, history).await?
+        tokio::time::timeout(
+            AI_CALL_TIMEOUT,
+            ai::answer_after_tools(settings, question, &transcript, docs, history),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("AI call timed out (answer_after_tools)"))??
     };
 
     let usage = merge_usage(usage, answer.usage);

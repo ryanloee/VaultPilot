@@ -805,8 +805,7 @@ mod tests {
         let outside_dir = _temp.join("outside-vault");
         fs::create_dir_all(&outside_dir).expect("outside dir");
         let md_file = outside_dir.join("sensitive.md");
-        fs::write(&md_file, "---\ntitle: Sensitive\n---\n\nsecret content\n")
-            .expect("write md");
+        fs::write(&md_file, "---\ntitle: Sensitive\n---\n\nsecret content\n").expect("write md");
 
         let result = import_markdown_with_context(&ctx, &[md_file.to_string_lossy().to_string()]);
         assert!(result.is_err());

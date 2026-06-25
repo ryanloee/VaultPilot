@@ -184,12 +184,9 @@ pub fn import_markdown_with_context(
         .vault_dir_override
         .as_ref()
         .unwrap_or(&context.paths.default_vault_dir);
-    let vault_canonical = vault_dir.canonicalize().with_context(|| {
-        format!(
-            "cannot resolve vault directory '{}'",
-            vault_dir.display()
-        )
-    })?;
+    let vault_canonical = vault_dir
+        .canonicalize()
+        .with_context(|| format!("cannot resolve vault directory '{}'", vault_dir.display()))?;
     for raw_path in paths {
         let candidate = Path::new(raw_path);
         let resolved = if candidate.is_absolute() {
@@ -229,10 +226,7 @@ pub fn import_markdown_with_context(
                 probe = parent;
             }
             if !confined && !probe.exists() {
-                return Err(anyhow!(
-                    "import path '{}' cannot be resolved",
-                    raw_path
-                ));
+                return Err(anyhow!("import path '{}' cannot be resolved", raw_path));
             }
         }
     }

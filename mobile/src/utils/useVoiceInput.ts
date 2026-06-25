@@ -1,8 +1,8 @@
 /**
- * Voice input hook using expo-speech-recognition.
- * Provides speech-to-text for the chat input.
+ * Voice input hook using expo-speech-recognition (cloud API mode).
  *
  * Manual-stop mode: user must explicitly tap the mic button to stop.
+ * Auto-restart: cloud API may disconnect on silence; we restart transparently.
  * Exposes volumeLevel (0-1) for waveform visualization.
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -26,7 +26,10 @@ export function useVoiceInput() {
   const [error, setError] = useState<string | null>(null);
   const [isAvailable, setIsAvailable] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState(0);
+
   const shouldStopRef = useRef(false); // true only when user explicitly stops
+  const localeRef = useRef('zh-CN');
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     try {
@@ -36,25 +39,27 @@ export function useVoiceInput() {
     }
   }, []);
 
-  // Stop voice recognition on unmount to release microphone (#1667)
+  // Stop voice recognition on unmount
   useEffect(() => {
     return () => {
-      try {
-        ExpoSpeechRecognitionModule.abort();
-      } catch {
-        // ignore cleanup errors
-      }
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      try { ExpoSpeechRecognitionModule.abort(); } catch {}
     };
   }, []);
 
-  useSpeechRecognitionEvent('start', () => setIsListening(true));
+  const doStart = useCallback((locale: string) => {
+    ExpoSpeechRecognitionModule.start({
+      lang: locale,
+      interimResults: true,
+      continuous: true,
+      volumeChangeEventOptions: { enabled: true, intervalMillis: 80 },
+    });
+  }, []);
 
-  useSpeechRecognitionEvent('end', () => {
-    if (shouldStopRef.current) {
-      shouldStopRef.current = false;
-    }
-    setIsListening(false);
-    setVolumeLevel(0);
+  // ── Events ──
+
+  useSpeechRecognitionEvent('start', () => {
+    setIsListening(true);
   });
 
   useSpeechRecognitionEvent('result', (event) => {
@@ -62,21 +67,44 @@ export function useVoiceInput() {
     if (text) setTranscript(text);
   });
 
-  useSpeechRecognitionEvent('error', (event) => {
-    // Don't stop on minor errors; only stop on fatal ones
-    const fatal = ['not-allowed', 'service-not-allowed', 'audio-capture'];
-    if (fatal.includes(event.error)) {
-      setError(event.message || '语音识别失败');
+  // Cloud API may end the session on silence — auto-restart if user didn't stop
+  useSpeechRecognitionEvent('end', () => {
+    if (shouldStopRef.current) {
+      shouldStopRef.current = false;
       setIsListening(false);
+      setVolumeLevel(0);
+    } else {
+      // Cloud API dropped — restart transparently after short delay
+      restartTimerRef.current = setTimeout(() => {
+        try { doStart(localeRef.current); } catch {}
+      }, 200);
     }
   });
 
-  // Volume change events for waveform visualization
+  useSpeechRecognitionEvent('error', (event) => {
+    // Fatal errors: stop completely
+    const fatal = ['not-allowed', 'service-not-allowed'];
+    if (fatal.includes(event.error)) {
+      setError(event.message || '语音识别失败');
+      shouldStopRef.current = true; // prevent restart
+      setIsListening(false);
+      return;
+    }
+    // Transient errors (network, no-speech, timeout, etc.): auto-restart
+    if (!shouldStopRef.current) {
+      restartTimerRef.current = setTimeout(() => {
+        try { doStart(localeRef.current); } catch {}
+      }, 300);
+    }
+  });
+
+  // Volume change for waveform visualization
   useSpeechRecognitionEvent('volumechange', (event) => {
-    // value ranges from -2 to 10; normalize to 0-1
     const normalized = Math.max(0, Math.min(1, (event.value + 2) / 12));
     setVolumeLevel(normalized);
   });
+
+  // ── Public API ──
 
   const startListening = useCallback(async (locale = 'zh-CN') => {
     try {
@@ -88,22 +116,16 @@ export function useVoiceInput() {
       setError(null);
       setTranscript('');
       shouldStopRef.current = false;
-      ExpoSpeechRecognitionModule.start({
-        lang: locale,
-        interimResults: true,
-        continuous: true,
-        volumeChangeEventOptions: {
-          enabled: true,
-          intervalMillis: 80, // smooth waveform updates
-        },
-      });
+      localeRef.current = locale;
+      doStart(locale);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '无法启动语音识别';
       setError(msg);
     }
-  }, []);
+  }, [doStart]);
 
   const stopListening = useCallback(async () => {
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
     shouldStopRef.current = true;
     try {
       await ExpoSpeechRecognitionModule.stop();
@@ -113,6 +135,7 @@ export function useVoiceInput() {
   }, []);
 
   const cancelListening = useCallback(async () => {
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
     shouldStopRef.current = true;
     try {
       await ExpoSpeechRecognitionModule.abort();

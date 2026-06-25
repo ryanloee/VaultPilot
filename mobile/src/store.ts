@@ -40,11 +40,14 @@ async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void
   }
 }
 
-async function loadProviderKeysSecure(): Promise<string[]> {
+async function loadProviderKeysSecure(): Promise<string[] | null> {
   try {
     const raw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
     return raw ? JSON.parse(raw) : [];
-  } catch (e) { console.warn('[Store] Failed to load provider keys from SecureStore:', e); return []; }
+  } catch (e) {
+    console.warn('[Store] Failed to load provider keys from SecureStore:', e);
+    return null; // Signal load failure — caller must handle to avoid wiping keys (#1629)
+  }
 }
 
 interface AppState {
@@ -272,12 +275,22 @@ export const useAppStore = create<AppState>()(
         if (!state) return;
         // Restore API keys from SecureStore after hydration
         loadProviderKeysSecure().then(keys => {
-          if (keys.length === 0) {
+          if (keys === null) {
+            // SecureStore read failed — preserve existing keys to avoid wiping (#1629)
+            Alert.alert(
+              '密钥加载失败',
+              '无法从安全存储读取 API Key，已保留当前会话中的密钥。重启应用后可能需要重新输入。',
+              [{ text: '知道了' }],
+            );
+            return;
+          }
+          const safeKeys: string[] = keys;
+          if (safeKeys.length === 0) {
             // SecureStore returned empty — check if providers already have keys (from current session)
             const hasExistingKeys = state.providers.some(p => p.apiKey && p.apiKey.length > 0);
             if (hasExistingKeys) return; // Don't overwrite existing keys with empty ones (#1577)
           }
-          const restored = restoreProviderKeys(state.providers, keys);
+          const restored = restoreProviderKeys(state.providers, safeKeys);
           useAppStore.setState({ providers: restored });
           syncLegacyFields(useAppStore.setState, restored, state.activeProviderIndex);
         });

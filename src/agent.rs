@@ -833,10 +833,8 @@ async fn execute_tool(
         ai::AssistantToolCall::ReadFile { path } => {
             let vault_root = PathBuf::from(&settings.vault_dir);
             let path_owned = path.clone();
-            match tokio::task::spawn_blocking(move || {
-                read_file_for_agent(&path_owned, &vault_root)
-            })
-            .await
+            match tokio::task::spawn_blocking(move || read_file_for_agent(&path_owned, &vault_root))
+                .await
             {
                 Ok(Ok(output)) => (output, false),
                 Ok(Err(e)) => (format!("tool error: {}", e), true),

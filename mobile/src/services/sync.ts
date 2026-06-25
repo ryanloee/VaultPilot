@@ -9,6 +9,9 @@ const SERVER_URL_KEY = 'cfg_backend_url';
 const SERVER_TOKEN_KEY = 'cfg_backend_token';
 const LAST_SYNC_KEY = 'cfg_last_sync_at';
 
+const MAX_RETRIES = 2;
+const RETRY_BASE_MS = 1000;
+
 export interface SyncResult {
   imported: number;
   updated: number;
@@ -104,13 +107,33 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
         continue;
       }
 
-      // Fetch full note
-      const noteRes = await fetch(`${url}/api/notes/${encodeURIComponent(meta.id)}`, {
-        headers,
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!noteRes.ok) {
-        console.warn(`[Sync] Failed to fetch note ${meta.id}: HTTP ${noteRes.status}`);
+      // Fetch full note (with retry on transient failures, matching client.ts pattern)
+      let noteRes: Response | null = null;
+      let lastFetchError: Error | null = null;
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        if (attempt > 0) {
+          const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+          await new Promise(r => setTimeout(r, delay));
+        }
+        try {
+          noteRes = await fetch(`${url}/api/notes/${encodeURIComponent(meta.id)}`, {
+            headers,
+            signal: AbortSignal.timeout(10000),
+          });
+          if (noteRes.ok) break; // success
+          // Retry on 5xx (transient server errors)
+          if (noteRes.status >= 500) continue;
+          // 4xx — non-retryable, break immediately
+          break;
+        } catch (fetchErr: unknown) {
+          lastFetchError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
+          if (lastFetchError.name === 'AbortError') break; // don't retry timeouts that user aborted
+          // network error → retry
+        }
+      }
+      if (!noteRes || !noteRes.ok) {
+        const status = noteRes?.status ?? 'network';
+        console.warn(`[Sync] Failed to fetch note ${meta.id} after ${MAX_RETRIES + 1} attempts: HTTP ${status}`);
         errors++;
         continue;
       }

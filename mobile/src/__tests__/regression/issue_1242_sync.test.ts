@@ -20,11 +20,13 @@ jest.mock('../../db', () => ({
   updateNote: jest.fn(),
   getNote: jest.fn(),
   getNotes: jest.fn(),
+  getNoteTimestamps: jest.fn(),
 }));
 
 const mockCreateNote = require('../../db').createNote as jest.MockedFunction<any>;
 const mockUpdateNote = require('../../db').updateNote as jest.MockedFunction<any>;
 const mockGetNotes = require('../../db').getNotes as jest.MockedFunction<any>;
+const mockGetNoteTimestamps = require('../../db').getNoteTimestamps as jest.MockedFunction<any>;
 
 // Mock global fetch
 const mockFetch = jest.fn();
@@ -35,7 +37,7 @@ beforeEach(async () => {
   jest.clearAllMocks();
   await AsyncStorage.clear();
   mockFetch.mockReset();
-  mockGetNotes.mockResolvedValue([]);
+  mockGetNoteTimestamps.mockResolvedValue([]);
 });
 
 // ── getServerConfig ─────────────────────────────────────────
@@ -128,7 +130,7 @@ describe('syncNotesFromServer', () => {
     (AsyncStorage.getItem as jest.Mock)
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteTimestamps.mockResolvedValue([]);
 
     // First call: list notes
     mockFetch.mockResolvedValueOnce({
@@ -163,8 +165,8 @@ describe('syncNotesFromServer', () => {
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
     // Local has the note with the SAME server ID (from previous sync)
-    mockGetNotes.mockResolvedValue([
-      { id: 'note-1', title: 'Test Note', content: 'Note content here', starred: 0, folder: '', created_at: 0, updated_at: Date.now() },
+    mockGetNoteTimestamps.mockResolvedValue([
+      { id: 'note-1', updated_at: Math.floor(Date.now() / 1000) },
     ]);
 
     mockFetch.mockResolvedValueOnce({
@@ -186,8 +188,8 @@ describe('syncNotesFromServer', () => {
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
 
-    mockGetNotes.mockResolvedValue([
-      { id: 'note-1', title: 'Old', content: '', starred: 0, folder: '', created_at: 0, updated_at: Date.now() },
+    mockGetNoteTimestamps.mockResolvedValue([
+      { id: 'note-1', updated_at: Math.floor(Date.now() / 1000) },
     ]);
 
     mockFetch.mockResolvedValueOnce({
@@ -209,8 +211,8 @@ describe('syncNotesFromServer', () => {
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
 
-    mockGetNotes.mockResolvedValue([
-      { id: 'note-1', title: 'Old', content: 'old content', starred: 0, folder: '', created_at: 0, updated_at: 1000 },
+    mockGetNoteTimestamps.mockResolvedValue([
+      { id: 'note-1', updated_at: 1000 },
     ]);
 
     mockFetch.mockResolvedValueOnce({
@@ -238,7 +240,7 @@ describe('syncNotesFromServer', () => {
     (AsyncStorage.getItem as jest.Mock)
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteTimestamps.mockResolvedValue([]);
 
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -268,7 +270,7 @@ describe('syncNotesFromServer', () => {
     (AsyncStorage.getItem as jest.Mock)
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('my-secret-token');
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteTimestamps.mockResolvedValue([]);
 
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -290,7 +292,7 @@ describe('syncNotesFromServer', () => {
     (AsyncStorage.getItem as jest.Mock)
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteTimestamps.mockResolvedValue([]);
 
     // Generate 200 notes for first page (full page)
     const page1Notes = Array.from({ length: 200 }, (_, i) => ({
@@ -354,7 +356,7 @@ describe('syncNotesFromServer edge cases', () => {
     (AsyncStorage.getItem as jest.Mock)
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteTimestamps.mockResolvedValue([]);
 
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -381,7 +383,7 @@ describe('syncNotesFromServer edge cases', () => {
     (AsyncStorage.getItem as jest.Mock)
       .mockResolvedValueOnce('http://localhost:3000')
       .mockResolvedValueOnce('');
-    mockGetNotes.mockResolvedValue([]);
+    mockGetNoteTimestamps.mockResolvedValue([]);
 
     mockFetch.mockResolvedValueOnce({
       ok: true,

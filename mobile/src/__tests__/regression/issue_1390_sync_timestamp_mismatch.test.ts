@@ -17,11 +17,13 @@ jest.mock('../../db', () => ({
   updateNote: jest.fn(),
   getNote: jest.fn(),
   getNotes: jest.fn(),
+  getNoteTimestamps: jest.fn(),
 }));
 
 const mockCreateNote = require('../../db').createNote as jest.MockedFunction<any>;
 const mockUpdateNote = require('../../db').updateNote as jest.MockedFunction<any>;
 const mockGetNotes = require('../../db').getNotes as jest.MockedFunction<any>;
+const mockGetNoteTimestamps = require('../../db').getNoteTimestamps as jest.MockedFunction<any>;
 
 const mockFetch = jest.fn();
 (globalThis as any).fetch = mockFetch;
@@ -30,7 +32,7 @@ beforeEach(async () => {
   jest.clearAllMocks();
   await AsyncStorage.clear();
   mockFetch.mockReset();
-  mockGetNotes.mockResolvedValue([]);
+  mockGetNoteTimestamps.mockResolvedValue([]);
 });
 
 describe('sync timestamp unit mismatch (#1390)', () => {
@@ -39,8 +41,8 @@ describe('sync timestamp unit mismatch (#1390)', () => {
 
     // Local note updated at 2026-06-23T12:00:00Z in seconds (SQLite format)
     const localSeconds = Math.floor(new Date('2026-06-23T12:00:00Z').getTime() / 1000);
-    mockGetNotes.mockResolvedValue([
-      { id: 'note-1', title: 'Local', content: 'local content', starred: 0, folder: '', created_at: 0, updated_at: localSeconds },
+    mockGetNoteTimestamps.mockResolvedValue([
+      { id: 'note-1', updated_at: localSeconds },
     ]);
 
     // Server note updated at 2026-06-23T10:00:00Z (older than local)
@@ -65,8 +67,8 @@ describe('sync timestamp unit mismatch (#1390)', () => {
 
     // Local note updated at 2026-06-23T10:00:00Z in seconds
     const localSeconds = Math.floor(new Date('2026-06-23T10:00:00Z').getTime() / 1000);
-    mockGetNotes.mockResolvedValue([
-      { id: 'note-1', title: 'Old', content: 'old', starred: 0, folder: '', created_at: 0, updated_at: localSeconds },
+    mockGetNoteTimestamps.mockResolvedValue([
+      { id: 'note-1', updated_at: localSeconds },
     ]);
 
     // Server note updated at 2026-06-23T12:00:00Z (newer than local)
@@ -97,8 +99,8 @@ describe('sync timestamp unit mismatch (#1390)', () => {
     // Both at exactly 2026-06-23T12:00:00Z
     const ts = new Date('2026-06-23T12:00:00Z');
     const localSeconds = Math.floor(ts.getTime() / 1000);
-    mockGetNotes.mockResolvedValue([
-      { id: 'note-1', title: 'Note', content: '', starred: 0, folder: '', created_at: 0, updated_at: localSeconds },
+    mockGetNoteTimestamps.mockResolvedValue([
+      { id: 'note-1', updated_at: localSeconds },
     ]);
 
     mockFetch.mockResolvedValueOnce({

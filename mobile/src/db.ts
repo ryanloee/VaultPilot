@@ -330,6 +330,12 @@ export async function getNotes(folder?: string, limit?: number): Promise<DbNote[
   return db.getAllAsync<DbNote>('SELECT * FROM notes ORDER BY starred DESC, updated_at DESC');
 }
 
+/** 只加载 id 和 updated_at，用于同步比较，避免全量 content 导致 OOM (#1668) */
+export async function getNoteTimestamps(): Promise<Array<{ id: string; updated_at: number }>> {
+  const db = await getDb();
+  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes');
+}
+
 export async function getFolders(): Promise<string[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{ folder: string }>(

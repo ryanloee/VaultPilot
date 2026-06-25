@@ -495,8 +495,8 @@ fn planned_tool_identity(tool_call: &AssistantToolCall) -> Option<(&'static str,
         AssistantToolCall::ReadFile { path } => {
             Some(("read_file", format!("path={}", path.trim())))
         }
-        AssistantToolCall::SaveNote { .. } => {
-            Some(("save_note", "model_generated_note_draft".to_string()))
+        AssistantToolCall::SaveNote { draft, .. } => {
+            Some(("save_note", format!("save_note:{}", draft.title)))
         }
     }
 }

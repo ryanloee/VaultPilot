@@ -1590,6 +1590,12 @@ fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
             )))
         }
     };
+    if flat.title.trim().is_empty() {
+        return mcp_tool_error("notes.create requires a non-empty 'title'".to_string());
+    }
+    if flat.body.trim().is_empty() {
+        return mcp_tool_error("notes.create requires a non-empty 'body'".to_string());
+    }
     let note = flat.into_note_document();
     match save_note_with_context(context, note) {
         Ok(saved) => mcp_tool_success(

@@ -208,15 +208,23 @@ export default function SettingsScreen() {
     if (preset.models.length && !model) setModel(preset.models[0]);
   };
 
-  const handleThemeChange = (mode: 'light' | 'dark' | 'system') => {
+  const handleThemeChange = async (mode: 'light' | 'dark' | 'system') => {
     store.setThemeMode(mode);
     if (mode !== 'system') store.setIsDark(mode === 'dark');
-    AsyncStorage.setItem(THEME_KEY, mode);
+    try {
+      await AsyncStorage.setItem(THEME_KEY, mode);
+    } catch (e) {
+      console.warn('[Settings] Failed to persist theme mode:', e);
+    }
   };
 
-  const handleAccentChange = (color: string) => {
+  const handleAccentChange = async (color: string) => {
     store.setAccentColor(color);
-    AsyncStorage.setItem(ACCENT_KEY, color);
+    try {
+      await AsyncStorage.setItem(ACCENT_KEY, color);
+    } catch (e) {
+      console.warn('[Settings] Failed to persist accent color:', e);
+    }
   };
 
   const handleSkipUpdate = async () => {

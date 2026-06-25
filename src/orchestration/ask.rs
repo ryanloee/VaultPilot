@@ -316,6 +316,7 @@ pub async fn ask_with_ai_with_context(
                 ));
             }
             AssistantToolCall::SaveNote { draft, .. } => {
+                let note_identity = format!("save_note:{}", draft.title);
                 emit_status("saving", "Saving generated note".to_string());
                 match save_note_with_images_async(context, draft_to_note_document(*draft), &images)
                     .await
@@ -328,7 +329,7 @@ pub async fn ask_with_ai_with_context(
                         saved_note = Some(saved.meta.clone());
                         tool_results.push(ToolExecution::new(
                             "save_note",
-                            "model_generated_note_draft".to_string(),
+                            note_identity.clone(),
                             result,
                             false,
                         ));
@@ -355,7 +356,7 @@ pub async fn ask_with_ai_with_context(
                         let error_msg = format!("tool error: save_note failed: {}", error);
                         tool_results.push(ToolExecution::new(
                             "save_note",
-                            "model_generated_note_draft".to_string(),
+                            note_identity.clone(),
                             error_msg,
                             true,
                         ));
@@ -1386,7 +1387,8 @@ mod tests {
         };
         let (name, detail) = planned_tool_identity(&call).unwrap();
         assert_eq!(name, "save_note");
-        assert!(detail.contains("model_generated_note_draft"));
+        assert!(detail.starts_with("save_note:"));
+        assert_eq!(detail, "save_note:");
     }
 
     // ── draft_to_note_document ─────────────────────────────────────

@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    list_notes_async, load_note_async, load_settings_async, search_notes_async, StorageContext,
+    load_note_async, load_settings_async, search_notes_async, StorageContext,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path};
 
@@ -310,14 +310,17 @@ async fn http_list_notes(
         .and_then(|s| s.parse().ok())
         .unwrap_or(50)
         .min(200);
-    let notes = list_notes_async(&state.context)
+    let query = SearchQuery {
+        text: String::new(),
+        limit: Some(limit),
+        ..Default::default()
+    };
+    let result = search_notes_async(&state.context, query)
         .await
         .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
-    let total = notes.len();
-    let notes: Vec<_> = notes.into_iter().take(limit).collect();
     Ok(Json(serde_json::json!({
-        "notes": notes,
-        "total": total
+        "notes": result.notes,
+        "total": result.total
     })))
 }
 

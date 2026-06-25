@@ -23,6 +23,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
   const rootNav = useNavigation<NavigationProp<RootTabParamList>>();
   const { isDark, accentColor } = useAppStore();
   const { isOnline } = useNetworkState();
+  const isOnlineRef = useRef(isOnline);
   const c = getColors(isDark, accentColor);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -38,6 +39,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
   const contentRef = useRef('');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
   const currentFolderRef = useRef('');
   const originalFolderRef = useRef('');
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
@@ -97,7 +99,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
         }
       }
       // Queue for backend sync if offline
-      if (!isOnline) {
+      if (!isOnlineRef.current) {
         queuePendingSync(noteId).catch(e => console.warn('[NoteEditor] queuePendingSync failed:', e));
       }
     } catch (e) {

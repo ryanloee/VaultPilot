@@ -49,14 +49,12 @@ export function useVoiceInput() {
 
   useSpeechRecognitionEvent('start', () => setIsListening(true));
 
-  // Manual-stop mode: only set isListening=false when user explicitly stopped
   useSpeechRecognitionEvent('end', () => {
     if (shouldStopRef.current) {
       shouldStopRef.current = false;
-      setIsListening(false);
     }
-    // If not user-stopped (system timeout), keep isListening=true
-    // The recognition will restart or stay in listening state
+    setIsListening(false);
+    setVolumeLevel(0);
   });
 
   useSpeechRecognitionEvent('result', (event) => {

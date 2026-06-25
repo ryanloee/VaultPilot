@@ -306,12 +306,26 @@ export async function toggleStar(id: string): Promise<void> {
   await db.runAsync('UPDATE notes SET starred = 1 - starred WHERE id = ?', [id]);
 }
 
-export async function getNotes(folder?: string): Promise<DbNote[]> {
+export async function getNoteCount(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM notes');
+  return row?.count ?? 0;
+}
+
+export async function getNotes(folder?: string, limit?: number): Promise<DbNote[]> {
   const db = await getDb();
   if (folder !== undefined) {
+    if (limit !== undefined) {
+      return db.getAllAsync<DbNote>(
+        'SELECT * FROM notes WHERE folder = ? ORDER BY starred DESC, updated_at DESC LIMIT ?', [folder, limit]
+      );
+    }
     return db.getAllAsync<DbNote>(
       'SELECT * FROM notes WHERE folder = ? ORDER BY starred DESC, updated_at DESC', [folder]
     );
+  }
+  if (limit !== undefined) {
+    return db.getAllAsync<DbNote>('SELECT * FROM notes ORDER BY starred DESC, updated_at DESC LIMIT ?', [limit]);
   }
   return db.getAllAsync<DbNote>('SELECT * FROM notes ORDER BY starred DESC, updated_at DESC');
 }

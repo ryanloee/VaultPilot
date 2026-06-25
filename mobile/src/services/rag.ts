@@ -9,7 +9,7 @@
  * - Forced search on non-trivial questions
  * - Fallback to recent notes when search returns nothing
  */
-import { searchNotes, getNotes, createNote, DbNote } from '../db';
+import { searchNotes, getNotes, getNoteCount, createNote, DbNote } from '../db';
 
 /** Max notes to inject into context */
 const MAX_CONTEXT_NOTES = 5;
@@ -186,9 +186,9 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       return null;
     }
 
-    // Check if we have any notes at all
-    const allNotes = await getNotes();
-    if (allNotes.length === 0) {
+    // Check if we have any notes at all (lightweight COUNT query, no full table load)
+    const noteCount = await getNoteCount();
+    if (noteCount === 0) {
       console.warn('[RAG] No notes in database');
       return null;
     }
@@ -203,7 +203,7 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
     // If user explicitly asks about notes, skip keyword search and inject all recent
     if (isNoteRelatedQuery(userMessage)) {
       console.warn('[RAG] Note-related query detected, injecting all recent notes');
-      const results = allNotes.slice(0, MAX_CONTEXT_NOTES);
+      const results = await getNotes(undefined, MAX_CONTEXT_NOTES);
       const blocks = results.map(n => {
         const title = n.title || (isChinese() ? '无标题' : 'Untitled');
         const content = n.content.length > MAX_NOTE_CONTENT_CHARS
@@ -212,8 +212,8 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
         return `【${title}】\n${content}`;
       });
       return isChinese()
-        ? `以下是用户保存的所有笔记（共${allNotes.length}条）：\n\n${blocks.join('\n\n---\n\n')}`
-        : `Here are all the user's saved notes (${allNotes.length} total):\n\n${blocks.join('\n\n---\n\n')}`;
+        ? `以下是用户保存的所有笔记（共${noteCount}条）：\n\n${blocks.join('\n\n---\n\n')}`
+        : `Here are all the user's saved notes (${noteCount} total):\n\n${blocks.join('\n\n---\n\n')}`;
     }
 
     // Search with keywords
@@ -238,7 +238,7 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
     // Fallback: if no search results, use recent notes (matching Win端 load_recent_notes_for_overview)
     if (results.length === 0) {
       console.warn('[RAG] No search matches, falling back to recent notes');
-      results = allNotes.slice(0, MAX_CONTEXT_NOTES);
+      results = await getNotes(undefined, MAX_CONTEXT_NOTES);
     }
 
     if (results.length === 0) return null;

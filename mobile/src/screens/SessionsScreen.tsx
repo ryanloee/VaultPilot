@@ -86,18 +86,22 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
   const [showArchived, setShowArchived] = useState(false);
   const [renameTarget, setRenameTarget] = useState<DbSession | null>(null);
   const [renameText, setRenameText] = useState('');
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async (query?: string) => {
+    const currentId = ++requestIdRef.current;
     try {
       const data = query?.trim()
         ? await searchSessions(query.trim())
         : await getSessions(showArchived);
+      if (requestIdRef.current !== currentId) return;
       setSessions(data);
     } catch (e: unknown) {
+      if (requestIdRef.current !== currentId) return;
       console.warn('[Sessions] load failed:', e);
       Alert.alert('加载失败', e instanceof Error ? e.message : '请重试');
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === currentId) setLoading(false);
     }
   }, [showArchived]);
 

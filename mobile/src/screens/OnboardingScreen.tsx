@@ -64,8 +64,8 @@ export default function OnboardingScreen({ onComplete }: Props) {
           model,
           apiFormat,
         };
-        store.addProvider(provider);
         await saveSettings({ apiBase, apiKey, model, apiFormat });
+        store.addProvider(provider);
         await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
       } else {
         setTestResult(`❌ ${res.error ?? '连接失败'}`);

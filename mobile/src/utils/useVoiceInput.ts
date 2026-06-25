@@ -30,6 +30,13 @@ export function useVoiceInput() {
     }
   }, []);
 
+  // 组件卸载时停止语音识别，防止麦克风泄漏 (#1667)
+  useEffect(() => {
+    return () => {
+      ExpoSpeechRecognitionModule.abort().catch(() => {});
+    };
+  }, []);
+
   useSpeechRecognitionEvent('start', () => setIsListening(true));
   useSpeechRecognitionEvent('end', () => setIsListening(false));
   useSpeechRecognitionEvent('result', (event) => {

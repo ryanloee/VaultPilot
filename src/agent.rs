@@ -716,8 +716,21 @@ pub async fn run_agent(
                     args: args_summary.clone(),
                 });
 
-                // Execute the tool
-                let (result, is_error) = execute_tool(context, settings, &tool_call).await;
+                // Execute the tool (with timeout — #1602)
+                let remaining =
+                    config.limits.max_duration.saturating_sub(proxy.elapsed());
+                let (result, is_error) =
+                    match tokio::time::timeout(remaining, execute_tool(context, settings, &tool_call))
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(_) => (
+                            format!("tool error: {} timed out after {}s",
+                                    tool_name,
+                                    remaining.as_secs()),
+                            true,
+                        ),
+                    };
                 let preview = truncate_preview(&result, 200);
 
                 on_event(&AgentEvent::ToolResult {

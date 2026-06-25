@@ -365,13 +365,15 @@ export async function getAllTags(): Promise<string[]> {
   return rows.map(r => r.tag);
 }
 
-export async function searchNotes(query: string): Promise<DbNote[]> {
+export async function searchNotes(query: string, folder?: string): Promise<DbNote[]> {
   const db = await getDb();
+  const folderFilter = folder !== undefined ? ' AND folder = ?' : '';
+  const folderParams = folder !== undefined ? [folder] : [];
   if (!ftsSupported) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbNote>(
-      `SELECT * FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\' ORDER BY updated_at DESC LIMIT 50`,
-      [`%${escaped}%`, `%${escaped}%`]
+      `SELECT * FROM notes WHERE (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
+      [`%${escaped}%`, `%${escaped}%`, ...folderParams]
     );
   }
   const ftsQuery = buildFtsQuery(query);
@@ -379,16 +381,16 @@ export async function searchNotes(query: string): Promise<DbNote[]> {
   const ftsResults = await db.getAllAsync<DbNote>(
     `SELECT n.* FROM notes n
      INNER JOIN notes_fts fts ON n.rowid = fts.rowid
-     WHERE notes_fts MATCH ?
+     WHERE notes_fts MATCH ?${folderFilter.replace('folder', 'n.folder')}
      ORDER BY n.updated_at DESC LIMIT 50`,
-    [ftsQuery]
+    [ftsQuery, ...folderParams]
   );
   // Fallback to LIKE search if FTS returns no results (common with CJK text)
   if (ftsResults.length === 0) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbNote>(
-      `SELECT * FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\' ORDER BY updated_at DESC LIMIT 50`,
-      [`%${escaped}%`, `%${escaped}%`]
+      `SELECT * FROM notes WHERE (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
+      [`%${escaped}%`, `%${escaped}%`, ...folderParams]
     );
   }
   return ftsResults;

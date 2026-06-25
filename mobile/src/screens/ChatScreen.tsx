@@ -328,6 +328,12 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         await updateMessage(aiId, full);
       } catch (e) {
         console.warn('[Chat] Failed to persist streamed message:', e);
+        Alert.alert(
+          '保存失败',
+          'AI 回复未能保存到本地，切换会话后将丢失。请检查存储空间后重试。',
+          [{ text: '重试', onPress: () => updateMessage(aiId, full).catch(() => {}) }],
+        );
+        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: true } : m));
       }
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
     } catch (err: unknown) {

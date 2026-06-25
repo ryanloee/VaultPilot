@@ -6,7 +6,7 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 #[cfg(target_os = "windows")]
@@ -1404,9 +1404,19 @@ pub async fn vault_export_async(
 /// Spawn-blocking wrapper for [`ocr_image_text`].
 pub async fn ocr_image_text_async(path: &Path) -> Result<String> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || ocr_image_text(&path))
-        .await
-        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+    let path_display = path.display().to_string();
+    match tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || ocr_image_text(&path)),
+    )
+    .await
+    {
+        Ok(inner) => inner.map_err(|e| anyhow!("spawn_blocking failed: {e}"))?,
+        Err(_) => {
+            warn!(path = %path_display, "OCR timed out after 30s");
+            Ok(String::new())
+        }
+    }
 }
 
 /// Spawn-blocking wrapper for [`load_recent_notes_for_overview`].

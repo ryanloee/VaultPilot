@@ -210,7 +210,8 @@ impl ToolProxy {
         // Using a CAS loop to avoid TOCTOU race (#1572).
         loop {
             let current = self.tool_call_count.load(Ordering::Acquire);
-            if self.config.limits.max_tool_calls > 0 && current >= self.config.limits.max_tool_calls {
+            if self.config.limits.max_tool_calls > 0 && current >= self.config.limits.max_tool_calls
+            {
                 let entry = self.deny(tool, args_json, "tool call limit exceeded");
                 return Ok(entry);
             }

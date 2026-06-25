@@ -1736,10 +1736,8 @@ mod pure_function_tests {
 
     #[test]
     fn extract_path_args_rename_note() {
-        let paths = ToolProxy::extract_path_args(
-            "rename_note",
-            r#"{"path":"old.md","newPath":"new.md"}"#,
-        );
+        let paths =
+            ToolProxy::extract_path_args("rename_note", r#"{"path":"old.md","newPath":"new.md"}"#);
         assert_eq!(paths, vec!["old.md", "new.md"]);
     }
 

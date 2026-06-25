@@ -1700,43 +1700,52 @@ mod pure_function_tests {
         assert!(r.allowed, "** should match any path: {:?}", r.reason);
     }
 
-    // ── extract_path_arg ─────────────────────────────────────────
+    // ── extract_path_args ─────────────────────────────────────────
 
     #[test]
-    fn extract_path_arg_read_file() {
-        let path = ToolProxy::extract_path_arg("read_file", r#"{"path":"/notes/test.md"}"#);
-        assert_eq!(path, Some("/notes/test.md".into()));
+    fn extract_path_args_read_file() {
+        let paths = ToolProxy::extract_path_args("read_file", r#"{"path":"/notes/test.md"}"#);
+        assert_eq!(paths, vec!["/notes/test.md"]);
     }
 
     #[test]
-    fn extract_path_arg_save_note() {
-        let path =
-            ToolProxy::extract_path_arg("save_note", r#"{"path":"daily/2024.md","body":"x"}"#);
-        assert_eq!(path, Some("daily/2024.md".into()));
+    fn extract_path_args_save_note() {
+        let paths =
+            ToolProxy::extract_path_args("save_note", r#"{"path":"daily/2024.md","body":"x"}"#);
+        assert_eq!(paths, vec!["daily/2024.md"]);
     }
 
     #[test]
-    fn extract_path_arg_unknown_tool_returns_none() {
-        let path = ToolProxy::extract_path_arg("search_notes", r#"{"query":"test"}"#);
-        assert_eq!(path, None);
+    fn extract_path_args_rename_note() {
+        let paths = ToolProxy::extract_path_args(
+            "rename_note",
+            r#"{"path":"old.md","newPath":"new.md"}"#,
+        );
+        assert_eq!(paths, vec!["old.md", "new.md"]);
     }
 
     #[test]
-    fn extract_path_arg_missing_path_field() {
-        let path = ToolProxy::extract_path_arg("read_file", r#"{"limit":5}"#);
-        assert_eq!(path, None);
+    fn extract_path_args_unknown_tool_returns_empty() {
+        let paths = ToolProxy::extract_path_args("search_notes", r#"{"query":"test"}"#);
+        assert!(paths.is_empty());
     }
 
     #[test]
-    fn extract_path_arg_invalid_json() {
-        let path = ToolProxy::extract_path_arg("read_file", "not json");
-        assert_eq!(path, None);
+    fn extract_path_args_missing_path_field() {
+        let paths = ToolProxy::extract_path_args("read_file", r#"{"limit":5}"#);
+        assert!(paths.is_empty());
     }
 
     #[test]
-    fn extract_path_arg_empty_json() {
-        let path = ToolProxy::extract_path_arg("read_file", "{}");
-        assert_eq!(path, None);
+    fn extract_path_args_invalid_json() {
+        let paths = ToolProxy::extract_path_args("read_file", "not json");
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn extract_path_args_empty_json() {
+        let paths = ToolProxy::extract_path_args("read_file", "{}");
+        assert!(paths.is_empty());
     }
 
     // Use setup from the parent module

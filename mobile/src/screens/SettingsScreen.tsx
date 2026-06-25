@@ -147,9 +147,9 @@ export default function SettingsScreen() {
 
   const saveActiveProvider = async () => {
     if (activeIdx < 0) return;
-    store.updateProvider(activeIdx, { name: providerName, apiBase, apiKey, model, apiFormat });
     try {
       await saveSettings({ apiBase, apiKey, model, apiFormat });
+      store.updateProvider(activeIdx, { name: providerName, apiBase, apiKey, model, apiFormat });
       Alert.alert('已保存', '设置已保存');
     } catch (e: unknown) {
       Alert.alert('保存失败', e instanceof Error ? e.message : '请重试');

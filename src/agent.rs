@@ -650,6 +650,7 @@ pub async fn run_agent(
         TokenBudget,
     }
     let mut exit_reason = ExitReason::StepLimit;
+    let mut actual_steps = 0usize;
 
     for step in 0..max_steps {
         // Timeout check
@@ -808,6 +809,7 @@ pub async fn run_agent(
                 ));
             }
         }
+        actual_steps = step + 1;
     }
 
     // Exited loop without a final answer — generate one from accumulated results
@@ -818,7 +820,7 @@ pub async fn run_agent(
         ExitReason::Timeout | ExitReason::TokenBudget => {
             return Ok(AgentResult {
                 answer: String::new(),
-                steps_used: max_steps,
+                steps_used: actual_steps,
                 tokens_used: total_tokens,
                 audit_log: proxy.audit_log(),
             });

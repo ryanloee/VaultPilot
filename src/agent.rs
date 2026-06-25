@@ -635,7 +635,11 @@ pub async fn run_agent(
 
     // Track why the loop exited so we can emit the correct event
     // and avoid spurious StepLimitReached / extra LLM calls (#1689).
-    enum ExitReason { StepLimit, Timeout, TokenBudget }
+    enum ExitReason {
+        StepLimit,
+        Timeout,
+        TokenBudget,
+    }
     let mut exit_reason = ExitReason::StepLimit;
 
     for step in 0..max_steps {

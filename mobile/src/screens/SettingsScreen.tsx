@@ -229,7 +229,11 @@ export default function SettingsScreen() {
 
   const handleSkipUpdate = async () => {
     if (updateInfo) {
-      await AsyncStorage.setItem(SKIP_UPDATE_KEY, updateInfo.latestVersion);
+      try {
+        await AsyncStorage.setItem(SKIP_UPDATE_KEY, updateInfo.latestVersion);
+      } catch (e) {
+        console.warn('[Settings] Failed to persist skip version:', e);
+      }
     }
     setShowUpdateModal(false);
   };

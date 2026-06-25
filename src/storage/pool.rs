@@ -148,6 +148,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         connection.execute_batch(
             "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
+        ensure_attachment_columns(connection)?;
         return Ok(());
     }
 
@@ -217,6 +218,16 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
 }
 
 fn ensure_attachment_columns(connection: &Connection) -> Result<()> {
+    // Check if attachments table exists; skip migration if it doesn't.
+    let table_exists: bool = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='attachments'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table_exists {
+        return Ok(());
+    }
+
     let mut statement = connection.prepare("PRAGMA table_info(attachments)")?;
     let columns = statement
         .query_map([], |row| row.get::<_, String>(1))?

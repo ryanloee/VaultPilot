@@ -271,7 +271,7 @@ export default function SettingsScreen() {
             onApiKeyChange={setApiKey}
             onModelChange={setModel}
             onApiFormatChange={setApiFormat}
-            onShowKeyToggle={() => setShowKey(!showKey)}
+            onShowKeyToggle={() => setShowKey(prev => !prev)}
             onTestConnection={testConnection}
             onSave={saveActiveProvider}
             onSelectPreset={selectPresetUrl}

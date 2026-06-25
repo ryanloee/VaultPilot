@@ -88,8 +88,12 @@ export default function OnboardingScreen({ onComplete }: Props) {
         apiFormat: 'openai',
       });
     }
-    await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
-    onComplete();
+    try {
+      await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
+      onComplete();
+    } catch {
+      onComplete();
+    }
   };
 
   // ── Step 0: Welcome ──

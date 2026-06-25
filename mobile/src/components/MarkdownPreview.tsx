@@ -134,6 +134,17 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
     }
   }
 
+  // Handle unclosed code blocks (e.g. stream interrupted, truncated output)
+  if (inCodeBlock && codeLines.length > 0) {
+    elements.push(
+      <View key={`code-${codeKey++}`} style={[styles.codeBlock, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6' }]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <Text style={{ color: textColor, fontSize: 13, fontFamily: 'monospace' }}>{codeLines.join('\n')}</Text>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return <>{elements}</>;
 }
 

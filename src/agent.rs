@@ -859,11 +859,13 @@ async fn execute_tool(
         }
         ai::AssistantToolCall::SaveNote { draft } => {
             use crate::storage::save_note_with_images_async;
+            let note_id = uuid::Uuid::new_v4().to_string();
+            let short_id = note_id[..8].to_string();
             let note = crate::models::NoteDocument {
                 meta: crate::models::NoteMeta {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: note_id,
                     title: draft.title.clone(),
-                    path: format!("{}.md", slugify(&draft.title)),
+                    path: format!("{}-{}.md", slugify(&draft.title), short_id),
                     tags: draft.tags.clone(),
                     keywords: draft.keywords.clone(),
                     created_at: chrono::Utc::now().to_rfc3339(),

@@ -114,9 +114,8 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       console.warn('[Chat] loadSession failed:', e);
       setSessionId(prevSessionId);
       setTitle(prevTitle);
-      Alert.alert('加载会话失败', '无法读取消息记录，请重试', [
-        { text: '确定', onPress: () => setMsgs(prevMsgs) },
-      ]);
+      setMsgs(prevMsgs);
+      Alert.alert('加载会话失败', '无法读取消息记录，请重试');
     }
   }, [sessionId, title]);
 

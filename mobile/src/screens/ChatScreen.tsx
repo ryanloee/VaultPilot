@@ -358,7 +358,20 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         Alert.alert(
           '保存失败',
           'AI 回复未能保存到本地，切换会话后将丢失。请检查存储空间后重试。',
-          [{ text: '重试', onPress: () => updateMessage(aiId, full).catch(() => {}) }],
+          [{
+            text: '重试',
+            onPress: async () => {
+              try {
+                await updateMessage(aiId, full);
+                // Retry succeeded: clear error marker (#1726)
+                setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: false } : m));
+              } catch (retryErr) {
+                // Retry failed: inform user instead of silently swallowing (#1726)
+                console.warn('[Chat] Retry persist failed:', retryErr);
+                Alert.alert('重试失败', '请检查存储空间后再次重试');
+              }
+            },
+          }],
         );
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: true } : m));
       }

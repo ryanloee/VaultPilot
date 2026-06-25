@@ -300,6 +300,8 @@ export const useAppStore = create<AppState>()(
         if (!state) return;
         // Restore API keys from SecureStore after hydration
         loadProviderKeysSecure().then(keys => {
+          // Use fresh state snapshot instead of the potentially stale closure capture (#1770)
+          const fresh = useAppStore.getState();
           if (keys === null) {
             // SecureStore read failed — preserve existing keys to avoid wiping (#1629)
             Alert.alert(
@@ -312,12 +314,12 @@ export const useAppStore = create<AppState>()(
           const safeKeys: string[] = keys;
           if (safeKeys.length === 0) {
             // SecureStore returned empty — check if providers already have keys (from current session)
-            const hasExistingKeys = state.providers.some(p => p.apiKey && p.apiKey.length > 0);
+            const hasExistingKeys = fresh.providers.some(p => p.apiKey && p.apiKey.length > 0);
             if (hasExistingKeys) return; // Don't overwrite existing keys with empty ones (#1577)
           }
-          const restored = restoreProviderKeys(state.providers, safeKeys);
+          const restored = restoreProviderKeys(fresh.providers, safeKeys);
           useAppStore.setState({ providers: restored });
-          syncLegacyFields(useAppStore.setState, restored, state.activeProviderIndex);
+          syncLegacyFields(useAppStore.setState, restored, fresh.activeProviderIndex);
         });
       },
     }

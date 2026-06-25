@@ -544,6 +544,12 @@ pub async fn send_request_streaming(
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
+            if buf.len() + chunk.len() > MAX_RESPONSE_SIZE {
+                return Err(anyhow!(
+                    "Streaming API response exceeds {}MB size limit, possible misconfigured endpoint",
+                    MAX_RESPONSE_SIZE / (1024 * 1024)
+                ));
+            }
             buf.extend_from_slice(&chunk);
 
             // Process complete lines
@@ -580,6 +586,12 @@ pub async fn send_request_streaming(
                                     parsed["choices"][0]["delta"]["content"].as_str()
                                 {
                                     if !text.is_empty() {
+                                        if accumulated.len() + text.len() > MAX_RESPONSE_SIZE {
+                                            return Err(anyhow!(
+                                                "Streaming response text exceeds {}MB size limit",
+                                                MAX_RESPONSE_SIZE / (1024 * 1024)
+                                            ));
+                                        }
                                         accumulated.push_str(text);
                                         on_chunk(text);
                                     }
@@ -592,6 +604,12 @@ pub async fn send_request_streaming(
                                 if event_type == "content_block_delta" {
                                     if let Some(text) = parsed["delta"]["text"].as_str() {
                                         if !text.is_empty() {
+                                            if accumulated.len() + text.len() > MAX_RESPONSE_SIZE {
+                                                return Err(anyhow!(
+                                                    "Streaming response text exceeds {}MB size limit",
+                                                    MAX_RESPONSE_SIZE / (1024 * 1024)
+                                                ));
+                                            }
                                             accumulated.push_str(text);
                                             on_chunk(text);
                                         }

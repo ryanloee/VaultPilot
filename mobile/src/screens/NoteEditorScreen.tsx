@@ -251,8 +251,26 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
             style={[s.folderInput, { color: c.text, borderColor: c.border }]}
             value={folder}
             onChangeText={(f) => { setFolder(f); currentFolderRef.current = f; }}
-            onBlur={() => { moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder failed:', e)); }}
-            onSubmitEditing={() => { moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder failed:', e)); }}
+            onBlur={async () => {
+              try {
+                await moveToFolder(noteId, currentFolderRef.current);
+              } catch (e) {
+                console.warn('[NoteEditor] moveToFolder failed:', e);
+                setFolder(originalFolderRef.current);
+                currentFolderRef.current = originalFolderRef.current;
+                Alert.alert('移动失败', '文件夹修改未保存，请重试');
+              }
+            }}
+            onSubmitEditing={async () => {
+              try {
+                await moveToFolder(noteId, currentFolderRef.current);
+              } catch (e) {
+                console.warn('[NoteEditor] moveToFolder failed:', e);
+                setFolder(originalFolderRef.current);
+                currentFolderRef.current = originalFolderRef.current;
+                Alert.alert('移动失败', '文件夹修改未保存，请重试');
+              }
+            }}
             placeholder="输入文件夹名称"
             placeholderTextColor={c.textSecondary}
           />

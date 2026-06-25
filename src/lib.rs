@@ -170,8 +170,18 @@ pub fn sanitize_error(message: &str) -> String {
             }
         }
 
-        out.push(bytes[i] as char);
-        i += 1;
+        // Determine the number of bytes for this UTF-8 character so that
+        // multi-byte characters (e.g. CJK, emoji) are preserved intact.
+        let char_len = match bytes[i] {
+            0x00..=0x7F => 1,
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => 1, // continuation or invalid byte – emit as-is
+        };
+        let end = (i + char_len).min(len);
+        out.push_str(&message[i..end]);
+        i += char_len;
     }
 
     out
@@ -308,5 +318,28 @@ mod tests {
         let input = "error: file not found";
         let result = sanitize_error(input);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn sanitize_error_preserves_multibyte_utf8() {
+        let input = "错误：文件未找到";
+        let result = sanitize_error(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn sanitize_error_preserves_mixed_ascii_and_utf8() {
+        let input = "error: 文件 not found — 你好世界 🌍";
+        let result = sanitize_error(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn sanitize_error_redacts_key_with_utf8_context() {
+        let input = "错误 key sk-abcdefghijklmnopqrstuvwxyz end";
+        let result = sanitize_error(input);
+        assert!(result.contains("sk-[REDACTED]"));
+        assert!(result.contains("错误"));
+        assert!(result.contains("end"));
     }
 }

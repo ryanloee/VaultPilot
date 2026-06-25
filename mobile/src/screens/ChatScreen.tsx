@@ -159,34 +159,29 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const retryInit = useCallback(async () => {
     setInitError(null);
     setLoading(true);
-    const seq = ++loadSeqRef.current; // Race condition protection for retry (#1725)
     try {
       if (route.params?.sessionId) {
         await loadSession(route.params.sessionId, route.params.title || '对话');
       } else {
         const existing = await getLatestSession();
-        if (seq !== loadSeqRef.current) return; // Stale retry, discard result (#1725)
         if (existing) {
           setSessionId(existing.id);
           setTitle(existing.title);
           const history = await getMessages(existing.id);
-          if (seq !== loadSeqRef.current) return; // Stale after second await (#1725)
           setMsgs(history.map(m => ({
             id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
             attachments: safeParseAttachments(m.attachments),
           })));
         } else {
           const id = await createSession('新对话');
-          if (seq !== loadSeqRef.current) return; // Stale after createSession (#1725)
           setSessionId(id);
         }
       }
     } catch (e) {
-      if (seq !== loadSeqRef.current) return; // Stale error, discard (#1725)
       console.warn('[Chat] session init retry failed:', e);
       setInitError(String(e));
     } finally {
-      if (seq === loadSeqRef.current) setLoading(false); // Only clear loading if still current (#1725)
+      setLoading(false);
     }
   }, [route.params?.sessionId, route.params?.title, loadSession]);
 
@@ -359,18 +354,15 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           '保存失败',
           'AI 回复未能保存到本地，切换会话后将丢失。请检查存储空间后重试。',
           [{
-            text: '重试',
-            onPress: async () => {
+            text: '重试', onPress: async () => {
               try {
                 await updateMessage(aiId, full);
-                // Retry succeeded: clear error marker (#1726)
                 setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: false } : m));
               } catch (retryErr) {
-                // Retry failed: inform user instead of silently swallowing (#1726)
                 console.warn('[Chat] Retry persist failed:', retryErr);
-                Alert.alert('重试失败', '请检查存储空间后再次重试');
+                Alert.alert('重试失败', '请检查存储空间后再次重试。');
               }
-            },
+            }
           }],
         );
         setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: true } : m));

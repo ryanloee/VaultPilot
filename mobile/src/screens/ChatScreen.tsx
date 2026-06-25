@@ -110,6 +110,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
         attachments: safeParseAttachments(m.attachments),
       })));
     } catch (e) {
+      if (seq !== loadSeqRef.current) return; // Stale load, discard result (#1682)
       console.warn('[Chat] loadSession failed:', e);
       setSessionId(prevSessionId);
       setTitle(prevTitle);
@@ -196,6 +197,8 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     }
     if (route.params?.sessionId && route.params.sessionId !== sessionId) {
       loadSession(route.params.sessionId, route.params.title || '对话');
+      // Clear params to prevent infinite retry loop on failure (#1683)
+      navigation.setParams({ sessionId: undefined, title: undefined });
     }
   }, [route.params?.sessionId, sessionId, loadSession]);
 

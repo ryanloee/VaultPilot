@@ -535,7 +535,16 @@ impl AgentSession {
         // Apply timeout from resource limits — kill child on timeout to avoid zombie
         let status = tokio::select! {
             result = child.wait() => {
-                result.map_err(|e| anyhow!("failed to wait for agent process: {}", e))?
+                match result {
+                    Ok(status) => status,
+                    Err(e) => {
+                        let _ = child.kill().await;
+                        stdout_task.abort();
+                        stderr_task.abort();
+                        let _ = tokio::join!(stdout_task, stderr_task);
+                        anyhow::bail!("failed to wait for agent process: {}", e);
+                    }
+                }
             }
             _ = tokio::time::sleep(self.config.limits.max_duration) => {
                 let _ = child.kill().await;

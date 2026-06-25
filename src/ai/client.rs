@@ -575,6 +575,9 @@ pub async fn send_request_streaming(
                 if let Some(data) = line.strip_prefix("data: ") {
                     let data = data.trim();
                     if data == "[DONE]" {
+                        if accumulated.trim().is_empty() {
+                            return Err(anyhow!("API returned an empty response"));
+                        }
                         return Ok(accumulated);
                     }
 
@@ -615,6 +618,9 @@ pub async fn send_request_streaming(
                                         }
                                     }
                                 } else if event_type == "message_stop" {
+                                    if accumulated.trim().is_empty() {
+                                        return Err(anyhow!("API returned an empty response"));
+                                    }
                                     return Ok(accumulated);
                                 }
                             }
@@ -675,6 +681,9 @@ pub async fn send_request_streaming(
             }
         }
 
+        if accumulated.trim().is_empty() {
+            return Err(anyhow!("API returned an empty response"));
+        }
         return Ok(accumulated);
     }
 

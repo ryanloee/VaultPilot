@@ -411,10 +411,7 @@ fn sandbox_null_path_in_json_denies_write() {
     let check = proxy
         .check_tool_call("write_note", r#"{"path": null, "content": "test"}"#)
         .unwrap();
-    assert!(
-        !check.allowed,
-        "null path should be denied for write tools"
-    );
+    assert!(!check.allowed, "null path should be denied for write tools");
 }
 
 // ── Timeout behavior tests ────────────────────────────────────────────

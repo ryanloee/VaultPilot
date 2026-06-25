@@ -222,11 +222,7 @@ impl ToolProxy {
                 // is also a problem — deny it. Tools that don't take a
                 // path at all (e.g. search_notes) are unaffected.
                 if Self::takes_path(tool) && !Self::is_write_tool(tool) {
-                    let entry = self.deny(
-                        tool,
-                        args_json,
-                        "missing required 'path' argument",
-                    );
+                    let entry = self.deny(tool, args_json, "missing required 'path' argument");
                     return Ok(entry);
                 }
             }
@@ -294,8 +290,12 @@ impl ToolProxy {
     fn takes_path(tool: &str) -> bool {
         matches!(
             tool,
-            "read_file" | "list_directory" | "write_note" | "save_note" | "delete_note"
-            | "rename_note"
+            "read_file"
+                | "list_directory"
+                | "write_note"
+                | "save_note"
+                | "delete_note"
+                | "rename_note"
         )
     }
 

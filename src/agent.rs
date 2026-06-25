@@ -964,13 +964,11 @@ fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
         ai::AssistantToolCall::ListDirectory { path } => {
             serde_json::json!({"path": path}).to_string()
         }
-        ai::AssistantToolCall::ReadFile { path } => {
-            serde_json::json!({"path": path}).to_string()
-        }
+        ai::AssistantToolCall::ReadFile { path } => serde_json::json!({"path": path}).to_string(),
         ai::AssistantToolCall::SaveNote { draft } => {
             serde_json::json!({"path": format!("{}.md", slugify(&draft.title)),
                               "title": draft.title})
-                .to_string()
+            .to_string()
         }
     }
 }

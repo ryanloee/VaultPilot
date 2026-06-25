@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking } from 'react-native';
 import type { UpdateInfo } from '../../utils/updateChecker';
 import { downloadAndInstall } from '../../utils/updateChecker';
@@ -30,25 +30,62 @@ export default function UpdateModal({
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const isMounted = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      isMounted.current = false;
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   if (!updateInfo) return null;
 
+  const resetDownloadState = () => {
+    setDownloading(false);
+    setProgress(0);
+    setError(null);
+  };
+
   const handleDownload = async () => {
     if (!updateInfo.apkUrl) return;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setDownloading(true);
     setProgress(0);
     setError(null);
     try {
       const ok = await downloadAndInstall(updateInfo.apkUrl, updateInfo.latestVersion, setProgress);
-      if (!ok) {
+      if (controller.signal.aborted) return;
+      if (!ok && isMounted.current) {
         setError('下载或安装失败，请手动下载');
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       console.warn('[UpdateModal] Download failed:', e);
-      setError('下载失败，请手动下载');
+      if (isMounted.current) {
+        setError('下载失败，请手动下载');
+      }
     } finally {
-      setDownloading(false);
+      if (isMounted.current) {
+        setDownloading(false);
+      }
     }
+  };
+
+  const handleClose = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    resetDownloadState();
+    onClose();
+  };
+
+  const handleSkip = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    resetDownloadState();
+    onSkip();
   };
 
   return (
@@ -86,7 +123,7 @@ export default function UpdateModal({
               <View style={{ flexDirection: 'row', gap: 12 }}>
                 <TouchableOpacity
                   style={[styles.modalClose, { borderColor, flex: 1 }]}
-                  onPress={() => { setError(null); onClose(); }}
+                  onPress={() => { setError(null); handleClose(); }}
                 >
                   <Text style={{ color: textColorSecondary, textAlign: 'center' }}>关闭</Text>
                 </TouchableOpacity>
@@ -103,7 +140,7 @@ export default function UpdateModal({
               <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
                 <TouchableOpacity
                   style={[styles.modalClose, { borderColor, flex: 1 }]}
-                  onPress={onSkip}
+                  onPress={handleSkip}
                 >
                   <Text style={{ color: textColorSecondary, textAlign: 'center' }}>跳过此版本</Text>
                 </TouchableOpacity>
@@ -119,7 +156,7 @@ export default function UpdateModal({
                   </Text>
                 </TouchableOpacity>
               </View>
-              <TouchableOpacity style={{ paddingVertical: 10, alignItems: 'center' }} onPress={onClose}>
+              <TouchableOpacity style={{ paddingVertical: 10, alignItems: 'center' }} onPress={handleClose}>
                 <Text style={{ color: textColorSecondary, fontSize: 13 }}>稍后提醒</Text>
               </TouchableOpacity>
             </>

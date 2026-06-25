@@ -55,7 +55,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       setInput(prev => prev ? `${prev} ${voice.transcript}` : voice.transcript);
       voice.setTranscript('');
     }
-  }, [voice.transcript, voice.isListening]);
+  }, [voice.transcript, voice.isListening, voice.setTranscript]);
 
   const pickImage = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

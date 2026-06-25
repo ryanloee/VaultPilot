@@ -96,6 +96,8 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     setInitError(null);
     const seq = ++loadSeqRef.current; // Increment sequence for race condition protection (#1576)
     const prevMsgs = msgsRef.current;
+    const prevSessionId = sessionId;
+    const prevTitle = title;
     setSessionId(sid);
     setTitle(sessionTitle);
     setMsgs([]);
@@ -109,11 +111,13 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       })));
     } catch (e) {
       console.warn('[Chat] loadSession failed:', e);
+      setSessionId(prevSessionId);
+      setTitle(prevTitle);
       Alert.alert('加载会话失败', '无法读取消息记录，请重试', [
         { text: '确定', onPress: () => setMsgs(prevMsgs) },
       ]);
     }
-  }, []);
+  }, [sessionId, title]);
 
   // Init session — from route params or latest active session
   useEffect(() => {
@@ -279,16 +283,21 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
 
+    let full = '';
     try {
       // RAG: search notes for relevant context, considering recent conversation
       const recentTexts = prevMsgs.slice(-6).map(m => m.content).filter(Boolean);
-      const noteContext = await buildNoteContext(userText, recentTexts);
+      let noteContext: string | null = null;
+      try {
+        noteContext = await buildNoteContext(userText, recentTexts);
+      } catch (e) {
+        console.warn('[Chat] buildNoteContext failed, continuing without note context:', e);
+      }
       const systemPrompt = buildSystemPrompt(noteContext);
 
       const history = buildHistory(prevMsgs, systemPrompt, userContent);
 
       abortRef.current = new AbortController();
-      let full = '';
 
       await chatWithReconnect(history, (chunk) => {
         if (chunk.done) return;
@@ -347,7 +356,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
       }
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
     } catch (err: unknown) {
-      const partial = msgsRef.current.find(m => m.id === aiId)?.content ?? '';
+      const partial = full || msgsRef.current.find(m => m.id === aiId)?.content || '';
       const errMsg = err instanceof Error ? err.message : String(err);
       const errName = err instanceof Error ? err.name : '';
 

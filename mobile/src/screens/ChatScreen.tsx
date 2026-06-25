@@ -42,6 +42,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   const msgsRef = useRef<Msg[]>([]);
   const loadSeqRef = useRef(0); // Track load sequence to prevent race conditions (#1576)
   const initialMountRef = useRef(true); // Skip nav-params effect on first mount (#1619)
+  const sendingRef = useRef(false); // Synchronous guard against duplicate sends (#1832)
   const voice = useVoiceInput();
   const { isOnline } = useNetworkState();
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -224,182 +225,187 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   }, []);
 
   const send = useCallback(async () => {
-    if ((!input.trim() && attachments.length === 0) || streaming || !sessionId) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const userText = input.trim();
-    const currentAttachments = [...attachments];
-
-    // Read attachments as base64 before clearing
-    const attData: { base64: string; mime: string }[] = [];
-    for (const att of currentAttachments) {
-      try {
-        const base64 = await FileSystem.readAsStringAsync(att.uri, { encoding: FileSystem.EncodingType.Base64 });
-        const mime = inferMime(att.name, att.type === 'image' ? 'image/jpeg' : 'application/octet-stream');
-        attData.push({ base64, mime });
-      } catch (e) {
-        console.warn('[Chat] Failed to read attachment:', att.name, e);
-        Alert.alert('附件读取失败', `无法读取「${att.name}」，请重新选择`);
-        return;
-      }
-    }
-    const userContent = buildUserContent(userText, attData);
-
-    // Add user message — only clear input after persistence succeeds
-    let userId: string;
-    let activeSessionId = sessionId;
-    const attMeta = currentAttachments.map(a => ({ name: a.name, type: a.type }));
+    if ((!input.trim() && attachments.length === 0) || sendingRef.current || !sessionId) return;
+    sendingRef.current = true;
     try {
-      userId = await addMessage(activeSessionId, 'user', userText, attMeta);
-    } catch (e: unknown) {
-      // FOREIGN KEY = session was deleted/reset; recreate and retry
-      if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      const userText = input.trim();
+      const currentAttachments = [...attachments];
+
+      // Read attachments as base64 before clearing
+      const attData: { base64: string; mime: string }[] = [];
+      for (const att of currentAttachments) {
         try {
-          const newId = await createSession('新对话');
-          setSessionId(newId);
-          activeSessionId = newId;
-          userId = await addMessage(newId, 'user', userText, attMeta);
-        } catch (e2) {
-          console.warn('[Chat] addMessage retry failed:', e2);
-          Alert.alert('发送失败', '无法创建对话，请重试');
+          const base64 = await FileSystem.readAsStringAsync(att.uri, { encoding: FileSystem.EncodingType.Base64 });
+          const mime = inferMime(att.name, att.type === 'image' ? 'image/jpeg' : 'application/octet-stream');
+          attData.push({ base64, mime });
+        } catch (e) {
+          console.warn('[Chat] Failed to read attachment:', att.name, e);
+          Alert.alert('附件读取失败', `无法读取「${att.name}」，请重新选择`);
           return;
         }
-      } else {
-        console.warn('[Chat] addMessage failed:', e);
-        Alert.alert('发送失败', String(e));
+      }
+      const userContent = buildUserContent(userText, attData);
+
+      // Add user message — only clear input after persistence succeeds
+      let userId: string;
+      let activeSessionId = sessionId;
+      const attMeta = currentAttachments.map(a => ({ name: a.name, type: a.type }));
+      try {
+        userId = await addMessage(activeSessionId, 'user', userText, attMeta);
+      } catch (e: unknown) {
+        // FOREIGN KEY = session was deleted/reset; recreate and retry
+        if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
+          try {
+            const newId = await createSession('新对话');
+            setSessionId(newId);
+            activeSessionId = newId;
+            userId = await addMessage(newId, 'user', userText, attMeta);
+          } catch (e2) {
+            console.warn('[Chat] addMessage retry failed:', e2);
+            Alert.alert('发送失败', '无法创建对话，请重试');
+            return;
+          }
+        } else {
+          console.warn('[Chat] addMessage failed:', e);
+          Alert.alert('发送失败', String(e));
+          return;
+        }
+      }
+      setInput('');
+      setInputHeight(0);
+      setAttachments([]);
+      const userMsg: Msg = { id: userId, role: 'user', content: userText, attachments: attMeta.length > 0 ? attMeta : undefined };
+      // Snapshot before state update — msgsRef may or may not be flushed by React
+      // before we build the API history, so pin it here.
+      const prevMsgs = [...msgsRef.current];
+      setMsgs(prev => [...prev, userMsg]);
+
+      // Save AI placeholder to DB upfront — stable id, no key change later
+      let aiId: string;
+      try {
+        aiId = await addMessage(activeSessionId, 'assistant', '');
+      } catch (e) {
+        console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
+        Alert.alert('发送失败', '无法创建 AI 回复记录');
         return;
       }
-    }
-    setInput('');
-    setInputHeight(0);
-    setAttachments([]);
-    const userMsg: Msg = { id: userId, role: 'user', content: userText, attachments: attMeta.length > 0 ? attMeta : undefined };
-    // Snapshot before state update — msgsRef may or may not be flushed by React
-    // before we build the API history, so pin it here.
-    const prevMsgs = [...msgsRef.current];
-    setMsgs(prev => [...prev, userMsg]);
+      const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
+      setMsgs(prev => [...prev, aiMsg]);
+      setStreaming(true);
 
-    // Save AI placeholder to DB upfront — stable id, no key change later
-    let aiId: string;
-    try {
-      aiId = await addMessage(activeSessionId, 'assistant', '');
-    } catch (e) {
-      console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
-      Alert.alert('发送失败', '无法创建 AI 回复记录');
-      return;
-    }
-    const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
-    setMsgs(prev => [...prev, aiMsg]);
-    setStreaming(true);
-
-    let full = '';
-    try {
-      // RAG: search notes for relevant context, considering recent conversation
-      const recentTexts = prevMsgs.slice(-6).map(m => m.content).filter(Boolean);
-      let noteContext: string | null = null;
+      let full = '';
       try {
-        noteContext = await buildNoteContext(userText, recentTexts);
-      } catch (e) {
-        console.warn('[Chat] buildNoteContext failed, continuing without note context:', e);
-      }
-      const systemPrompt = buildSystemPrompt(noteContext);
-
-      const history = buildHistory(prevMsgs, systemPrompt, userContent);
-
-      abortRef.current = new AbortController();
-
-      await chatWithReconnect(history, (chunk) => {
-        if (chunk.done) return;
-        if (chunk.content) {
-          full += chunk.content;
-          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full } : m));
+        // RAG: search notes for relevant context, considering recent conversation
+        const recentTexts = prevMsgs.slice(-6).map(m => m.content).filter(Boolean);
+        let noteContext: string | null = null;
+        try {
+          noteContext = await buildNoteContext(userText, recentTexts);
+        } catch (e) {
+          console.warn('[Chat] buildNoteContext failed, continuing without note context:', e);
         }
-      }, abortRef.current.signal);
+        const systemPrompt = buildSystemPrompt(noteContext);
 
-      // Parse tool calls (save notes etc.) — don't execute yet
-      const { cleaned, pendingSaves } = parseToolCalls(full);
+        const history = buildHistory(prevMsgs, systemPrompt, userContent);
 
-      // Ask user to confirm each pending save
-      const actions: string[] = [];
-      for (const save of pendingSaves) {
-        const confirmed = await new Promise<boolean>((resolve) => {
-          Alert.alert(
-            '保存笔记？',
-            `AI 想要保存笔记「${save.title}」\n\n${buildSavePreview(save.content)}`,
-            [
-              { text: '拒绝', style: 'cancel', onPress: () => resolve(false) },
-              { text: '保存', onPress: () => resolve(true) },
-            ],
-            { onDismiss: () => resolve(false) },
-          );
-        });
-        if (confirmed) {
-          try {
-            const action = await executeSave(save);
-            actions.push(action);
-          } catch (e) {
-            console.warn('[Chat] executeSave failed:', e);
-            actions.push(`保存笔记「${save.title}」失败`);
+        abortRef.current = new AbortController();
+
+        await chatWithReconnect(history, (chunk) => {
+          if (chunk.done) return;
+          if (chunk.content) {
+            full += chunk.content;
+            setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full } : m));
+          }
+        }, abortRef.current.signal);
+
+        // Parse tool calls (save notes etc.) — don't execute yet
+        const { cleaned, pendingSaves } = parseToolCalls(full);
+
+        // Ask user to confirm each pending save
+        const actions: string[] = [];
+        for (const save of pendingSaves) {
+          const confirmed = await new Promise<boolean>((resolve) => {
+            Alert.alert(
+              '保存笔记？',
+              `AI 想要保存笔记「${save.title}」\n\n${buildSavePreview(save.content)}`,
+              [
+                { text: '拒绝', style: 'cancel', onPress: () => resolve(false) },
+                { text: '保存', onPress: () => resolve(true) },
+              ],
+              { onDismiss: () => resolve(false) },
+            );
+          });
+          if (confirmed) {
+            try {
+              const action = await executeSave(save);
+              actions.push(action);
+            } catch (e) {
+              console.warn('[Chat] executeSave failed:', e);
+              actions.push(`保存笔记「${save.title}」失败`);
+            }
           }
         }
-      }
 
-      const finalContent = formatToolCallResult(cleaned, actions);
+        const finalContent = formatToolCallResult(cleaned, actions);
 
-      if (finalContent !== full) {
-        full = finalContent;
-        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full } : m));
-      }
+        if (finalContent !== full) {
+          full = finalContent;
+          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full } : m));
+        }
 
-      // Persist streamed content — separate try-catch so UI content is preserved on failure
-      try {
-        await updateMessage(aiId, full);
-      } catch (e) {
-        console.warn('[Chat] Failed to persist streamed message:', e);
-        Alert.alert(
-          '保存失败',
-          'AI 回复未能保存到本地，切换会话后将丢失。请检查存储空间后重试。',
-          [{
-            text: '重试', onPress: async () => {
-              try {
-                await updateMessage(aiId, full);
-                setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: false } : m));
-              } catch (retryErr) {
-                console.warn('[Chat] Retry persist failed:', retryErr);
-                Alert.alert('重试失败', '请检查存储空间后再次重试。');
+        // Persist streamed content — separate try-catch so UI content is preserved on failure
+        try {
+          await updateMessage(aiId, full);
+        } catch (e) {
+          console.warn('[Chat] Failed to persist streamed message:', e);
+          Alert.alert(
+            '保存失败',
+            'AI 回复未能保存到本地，切换会话后将丢失。请检查存储空间后重试。',
+            [{
+              text: '重试', onPress: async () => {
+                try {
+                  await updateMessage(aiId, full);
+                  setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: false } : m));
+                } catch (retryErr) {
+                  console.warn('[Chat] Retry persist failed:', retryErr);
+                  Alert.alert('重试失败', '请检查存储空间后再次重试。');
+                }
               }
-            }
-          }],
-        );
-        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: true } : m));
-      }
-      setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
-    } catch (err: unknown) {
-      const partial = full || msgsRef.current.find(m => m.id === aiId)?.content || '';
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const errName = err instanceof Error ? err.name : '';
+            }],
+          );
+          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, isError: true } : m));
+        }
+        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
+      } catch (err: unknown) {
+        const partial = full || msgsRef.current.find(m => m.id === aiId)?.content || '';
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const errName = err instanceof Error ? err.name : '';
 
-      if (errName === 'AbortError') {
-        if (partial) {
-          const abortedContent = partial + '\n\n_[响应被中止]_';
-          try { await updateMessage(aiId, abortedContent); } catch (e) { console.warn('[Chat] Failed to save aborted message:', e); }
-          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: abortedContent, streaming: false } : m));
+        if (errName === 'AbortError') {
+          if (partial) {
+            const abortedContent = partial + '\n\n_[响应被中止]_';
+            try { await updateMessage(aiId, abortedContent); } catch (e) { console.warn('[Chat] Failed to save aborted message:', e); }
+            setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: abortedContent, streaming: false } : m));
+          } else {
+            try { await deleteMessage(aiId); } catch (e) { console.warn('[Chat] Failed to delete empty aborted message:', e); }
+            setMsgs(prev => prev.filter(m => m.id !== aiId));
+          }
         } else {
-          try { await deleteMessage(aiId); } catch (e) { console.warn('[Chat] Failed to delete empty aborted message:', e); }
-          setMsgs(prev => prev.filter(m => m.id !== aiId));
+          if (partial) {
+            try { await updateMessage(aiId, partial); } catch (e) { console.warn('[Chat] Failed to save partial content:', e); }
+          }
+          setMsgs(prev => prev.map(m => m.id === aiId
+            ? { ...m, content: m.content ? `${m.content}\n\n❌ ${errMsg}` : `❌ ${errMsg}`, streaming: false, isError: true }
+            : m));
         }
-      } else {
-        if (partial) {
-          try { await updateMessage(aiId, partial); } catch (e) { console.warn('[Chat] Failed to save partial content:', e); }
-        }
-        setMsgs(prev => prev.map(m => m.id === aiId
-          ? { ...m, content: m.content ? `${m.content}\n\n❌ ${errMsg}` : `❌ ${errMsg}`, streaming: false, isError: true }
-          : m));
+      } finally {
+        setStreaming(false);
+        abortRef.current = null;
       }
     } finally {
-      setStreaming(false);
-      abortRef.current = null;
+      sendingRef.current = false;
     }
-  }, [input, streaming, sessionId, attachments]);
+  }, [input, sessionId, attachments]);
 
   // Create a new conversation
   const newChat = useCallback(async () => {

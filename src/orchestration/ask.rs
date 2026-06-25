@@ -676,7 +676,12 @@ fn list_directory_result(path: &str, vault_root: &Path) -> Result<String, anyhow
             let metadata = entry.metadata().ok();
             let kind = if path.is_dir() { "dir" } else { "file" };
             let size = metadata.map(|item| item.len()).unwrap_or(0);
-            format!("- [{}] {} ({} bytes)", kind, path.display(), size)
+            format!(
+                "- [{}] {} ({} bytes)",
+                kind,
+                entry.file_name().to_string_lossy(),
+                size
+            )
         })
         .collect::<Vec<_>>();
 

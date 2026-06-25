@@ -8,6 +8,7 @@ use tokio::runtime::Runtime;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
+use axum::response::IntoResponse;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
@@ -400,7 +401,7 @@ async fn mcp_http_handler(
     State(state): State<Arc<McpHttpState>>,
     headers: HeaderMap,
     body: String,
-) -> Json<McpResponse> {
+) -> axum::response::Response {
     // Token auth: require bearer token if configured
     if let Some(ref expected) = state.token {
         let Some(token) = crate::http_bridge::bridge_token_from_headers(&headers) else {
@@ -409,7 +410,7 @@ async fn mcp_http_handler(
                 -32600,
                 "unauthorized".to_string(),
                 None,
-            ));
+            )).into_response();
         };
         if !crate::http_bridge::constant_time_eq(token.as_bytes(), expected.as_bytes()) {
             return Json(McpResponse::error(
@@ -417,7 +418,7 @@ async fn mcp_http_handler(
                 -32600,
                 "unauthorized".to_string(),
                 None,
-            ));
+            )).into_response();
         }
     }
 
@@ -430,7 +431,7 @@ async fn mcp_http_handler(
                 -32700,
                 format!("failed to parse JSON-RPC request: {e}"),
                 None,
-            ));
+            )).into_response();
         }
     };
 
@@ -465,7 +466,7 @@ async fn mcp_http_handler(
                 },
                 "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
             }),
-        ));
+        )).into_response();
     }
 
     let state_snapshot = {
@@ -477,8 +478,8 @@ async fn mcp_http_handler(
     };
 
     match handle_mcp_request(&state.context, &state_snapshot, request).await {
-        Some(resp) => Json(resp),
-        None => Json(McpResponse::ok(Value::Null, Value::Null)),
+        Some(resp) => Json(resp).into_response(),
+        None => (axum::http::StatusCode::ACCEPTED,).into_response(),
     }
 }
 

@@ -56,6 +56,21 @@ export function useVoiceInput() {
     });
   }, []);
 
+  // Shared auto-restart helper — prevents duplicate timers (#1737),
+  // clears stale transcript (#1738), and resets state on failure (#1736).
+  const scheduleRestart = useCallback(() => {
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    setTranscript('');
+    restartTimerRef.current = setTimeout(() => {
+      try {
+        doStart(localeRef.current);
+      } catch {
+        setIsListening(false);
+        setVolumeLevel(0);
+      }
+    }, 200);
+  }, [doStart]);
+
   // ── Events ──
 
   useSpeechRecognitionEvent('start', () => {
@@ -75,9 +90,7 @@ export function useVoiceInput() {
       setVolumeLevel(0);
     } else {
       // Cloud API dropped — restart transparently after short delay
-      restartTimerRef.current = setTimeout(() => {
-        try { doStart(localeRef.current); } catch {}
-      }, 200);
+      scheduleRestart();
     }
   });
 
@@ -92,9 +105,7 @@ export function useVoiceInput() {
     }
     // Transient errors (network, no-speech, timeout, etc.): auto-restart
     if (!shouldStopRef.current) {
-      restartTimerRef.current = setTimeout(() => {
-        try { doStart(localeRef.current); } catch {}
-      }, 300);
+      scheduleRestart();
     }
   });
 

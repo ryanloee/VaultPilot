@@ -680,9 +680,13 @@ pub async fn run_agent(
             tool_call => {
                 let tool_name = tool_display_name(&tool_call);
                 let args_summary = tool_args_summary(&tool_call);
+                // Build proper JSON args for sandbox checks (#1604).
+                // `check_tool_call` / `extract_path_arg` expect valid JSON
+                // but `tool_args_summary` returns human-readable "key=value".
+                let args_json = tool_args_json(&tool_call);
 
                 // ToolProxy sandbox check
-                let check = proxy.check_tool_call(tool_name, &args_summary)?;
+                let check = proxy.check_tool_call(tool_name, &args_json)?;
                 if !check.allowed {
                     tool_transcripts.push(format!(
                         "TOOL: {}\nSTATUS: denied\nINPUT:\n{}\nOUTPUT:\ntool error: {}",
@@ -942,6 +946,31 @@ fn tool_args_summary(tool: &ai::AssistantToolCall) -> String {
         ai::AssistantToolCall::ReadFile { path } => format!("path={}", path),
         ai::AssistantToolCall::SaveNote { draft } => {
             format!("title={}", draft.title)
+        }
+    }
+}
+
+/// Build a proper JSON args string for a tool call, suitable for
+/// `check_tool_call` / `extract_path_arg` which expect valid JSON (#1604).
+fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
+    match tool {
+        ai::AssistantToolCall::None => "{}".into(),
+        ai::AssistantToolCall::SearchNotes { query, limit } => {
+            serde_json::json!({"query": query, "limit": limit}).to_string()
+        }
+        ai::AssistantToolCall::ListNotes { limit } => {
+            serde_json::json!({"limit": limit}).to_string()
+        }
+        ai::AssistantToolCall::ListDirectory { path } => {
+            serde_json::json!({"path": path}).to_string()
+        }
+        ai::AssistantToolCall::ReadFile { path } => {
+            serde_json::json!({"path": path}).to_string()
+        }
+        ai::AssistantToolCall::SaveNote { draft } => {
+            serde_json::json!({"path": format!("{}.md", slugify(&draft.title)),
+                              "title": draft.title})
+                .to_string()
         }
     }
 }

@@ -66,7 +66,7 @@ export default function SettingsScreen() {
       setProviderName(active.name);
     }
     return () => { cancelled = true; };
-  }, [activeIdx, active?.apiKey]);
+  }, [activeIdx, active?.apiKey, active?.apiBase, active?.model, active?.apiFormat, active?.name]);
 
   // Load saved settings on mount
   useEffect(() => {

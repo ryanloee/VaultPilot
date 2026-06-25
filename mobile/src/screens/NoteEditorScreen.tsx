@@ -29,6 +29,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
   const [folder, setFolder] = useState('');
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
+  const tagsRef = useRef<string[]>([]);
   const [newTag, setNewTag] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -57,7 +58,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
           currentFolderRef.current = note.folder || '';
           originalFolderRef.current = note.folder || '';
           const noteTags = await getNoteTags(noteId);
-          if (!cancelled) setTags(noteTags);
+          if (!cancelled) { setTags(noteTags); tagsRef.current = noteTags; }
         } else {
           Alert.alert('笔记不存在', '该笔记可能已被删除', [
             { text: '返回', onPress: () => navigation.goBack() },
@@ -76,22 +77,23 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     return () => { cancelled = true; };
   }, [noteId]);
 
-  const save = async (t?: string, ct?: string) => {
+  const save = async (t?: string, ct?: string, currentTags?: string[]) => {
     if (!mountedRef.current) return;
     setSaving(true);
     try {
       await updateNote(noteId, t ?? title, ct ?? content);
       // Auto-tag if note has no tags yet
-      if (shouldAutoTag(tags, t ?? title)) {
+      const tagsToCheck = currentTags ?? tagsRef.current;
+      if (shouldAutoTag(tagsToCheck, t ?? title)) {
         const suggestions = extractAutoTags(t ?? title, ct ?? content);
         for (const tag of suggestions) {
-          if (!tags.includes(tag)) {
+          if (!tagsToCheck.includes(tag)) {
             await addTag(noteId, tag);
           }
         }
         if (suggestions.length > 0 && mountedRef.current) {
           const freshTags = await getNoteTags(noteId);
-          if (mountedRef.current) setTags(freshTags);
+          if (mountedRef.current) { setTags(freshTags); tagsRef.current = freshTags; }
         }
       }
       // Queue for backend sync if offline
@@ -111,7 +113,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     pendingRef.current = { title: newTitle, content: newContent };
     timerRef.current = setTimeout(async () => {
       pendingRef.current = null;
-      await save(newTitle, newContent);
+      await save(newTitle, newContent, tagsRef.current);
     }, 1000);
   };
 
@@ -122,7 +124,8 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
       clearTimeout(timerRef.current);
       if (pendingRef.current) {
         // Fire-and-forget save on unmount — component state is already gone
-        updateNote(noteId, pendingRef.current.title, pendingRef.current.content);
+        updateNote(noteId, pendingRef.current.title, pendingRef.current.content)
+          .catch(e => console.warn('[NoteEditor] updateNote on unmount failed:', e));
         pendingRef.current = null;
       }
       // Save folder on unmount only if actually changed
@@ -263,7 +266,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               style={[s.tagChip, { backgroundColor: accentColor + '20', borderColor: accentColor }]}
               onLongPress={async () => {
                 await removeTag(noteId, t);
-                setTags(prev => prev.filter(x => x !== t));
+                setTags(prev => { tagsRef.current = prev.filter(x => x !== t); return tagsRef.current; });
               }}
             >
               <Text style={[s.tagText, { color: accentColor }]}>#{t}</Text>
@@ -281,7 +284,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
                 if (tag) {
                   try {
                     await addTag(noteId, tag);
-                    setTags(prev => [...prev, tag]);
+                    setTags(prev => { const next = [...prev, tag]; tagsRef.current = next; return next; });
                     setNewTag('');
                   } catch (e) {
                     console.warn('[NoteEditor] addTag failed:', e);

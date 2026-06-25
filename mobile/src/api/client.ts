@@ -239,6 +239,7 @@ async function chatOpenAI(
     sig.addEventListener('abort', onSignalAbort, { once: true });
   }
 
+  let streamingReturned = false;
   try {
     let res: Response | null = null;
     let lastError: Error | null = null;
@@ -306,6 +307,7 @@ async function chatOpenAI(
     // Wrap body so the timeout still applies during stream reading
     const body = res.body;
     const timeoutController = controller;
+    streamingReturned = true;
     return new ReadableStream<Uint8Array>({
       start(ctrl) {
         const reader = body.getReader();
@@ -334,8 +336,10 @@ async function chatOpenAI(
     }
     throw e;
   } finally {
-    clearTimeout(timeout);
-    if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
+    if (!streamingReturned) {
+      clearTimeout(timeout);
+      if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
+    }
   }
 }
 

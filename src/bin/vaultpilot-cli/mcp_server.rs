@@ -422,7 +422,7 @@ async fn mcp_http_handler(
     }
 
     // Handle initialize with write lock; all other requests with read lock
-    if request.method == "initialize" {
+    if request.method == "initialize" && request.jsonrpc == "2.0" {
         let mut server_state = state.server_state.write().await;
         let requested_version = request
             .params

@@ -7,8 +7,8 @@ use tokio::runtime::Runtime;
 
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::Json;
 use axum::response::IntoResponse;
+use axum::Json;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
@@ -410,7 +410,8 @@ async fn mcp_http_handler(
                 -32600,
                 "unauthorized".to_string(),
                 None,
-            )).into_response();
+            ))
+            .into_response();
         };
         if !crate::http_bridge::constant_time_eq(token.as_bytes(), expected.as_bytes()) {
             return Json(McpResponse::error(
@@ -418,7 +419,8 @@ async fn mcp_http_handler(
                 -32600,
                 "unauthorized".to_string(),
                 None,
-            )).into_response();
+            ))
+            .into_response();
         }
     }
 
@@ -431,7 +433,8 @@ async fn mcp_http_handler(
                 -32700,
                 format!("failed to parse JSON-RPC request: {e}"),
                 None,
-            )).into_response();
+            ))
+            .into_response();
         }
     };
 

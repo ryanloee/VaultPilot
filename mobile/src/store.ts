@@ -191,61 +191,77 @@ export const useAppStore = create<AppState>()(
       apiKey: '',
       model: 'deepseek-v4-flash-free',
       apiFormat: 'openai' as ApiFormat,
-      setApiSettings: (s) => set((state) => {
-        const newState = mergeApiSettings(state, s);
-        // Also sync to active provider
-        const providers = [...state.providers];
-        if (providers.length > 0) {
-          const idx = clampProviderIndex(state.activeProviderIndex, providers.length);
-          providers[idx] = { ...providers[idx], ...newState };
-          saveProviderKeysSecure(providers);
-        }
-        return { ...newState, providers };
-      }),
+      setApiSettings: (s) => {
+        let updatedProviders: ProviderConfig[] | undefined;
+        set((state) => {
+          const newState = mergeApiSettings(state, s);
+          // Also sync to active provider
+          const providers = [...state.providers];
+          if (providers.length > 0) {
+            const idx = clampProviderIndex(state.activeProviderIndex, providers.length);
+            providers[idx] = { ...providers[idx], ...newState };
+            updatedProviders = providers;
+          }
+          return { ...newState, providers };
+        });
+        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+      },
 
       providers: [],
       activeProviderIndex: 0,
 
-      addProvider: (p) => set((state) => {
-        const providers = [...state.providers, p];
-        const activeProviderIndex = providers.length - 1;
-        saveProviderKeysSecure(providers);
-        const active = providers[activeProviderIndex];
-        return {
-          providers, activeProviderIndex,
-          apiBase: active.apiBase, apiKey: active.apiKey,
-          model: active.model, apiFormat: active.apiFormat,
-        };
-      }),
-
-      removeProvider: (index) => set((state) => {
-        const providers = removeProviderFromList(state.providers, index);
-        const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, providers.length);
-        saveProviderKeysSecure(providers);
-        const update: Partial<AppState> = { providers, activeProviderIndex };
-        if (providers.length > 0) {
+      addProvider: (p) => {
+        let updatedProviders: ProviderConfig[] | undefined;
+        set((state) => {
+          const providers = [...state.providers, p];
+          const activeProviderIndex = providers.length - 1;
+          updatedProviders = providers;
           const active = providers[activeProviderIndex];
-          update.apiBase = active.apiBase;
-          update.apiKey = active.apiKey;
-          update.model = active.model;
-          update.apiFormat = active.apiFormat;
-        }
-        return update;
-      }),
+          return {
+            providers, activeProviderIndex,
+            apiBase: active.apiBase, apiKey: active.apiKey,
+            model: active.model, apiFormat: active.apiFormat,
+          };
+        });
+        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+      },
 
-      updateProvider: (index, p) => set((state) => {
-        const providers = updateProviderInList(state.providers, index, p);
-        saveProviderKeysSecure(providers);
-        const update: Partial<AppState> = { providers };
-        if (index === clampProviderIndex(state.activeProviderIndex, providers.length)) {
-          const active = providers[index];
-          update.apiBase = active.apiBase;
-          update.apiKey = active.apiKey;
-          update.model = active.model;
-          update.apiFormat = active.apiFormat;
-        }
-        return update;
-      }),
+      removeProvider: (index) => {
+        let updatedProviders: ProviderConfig[] | undefined;
+        set((state) => {
+          const providers = removeProviderFromList(state.providers, index);
+          const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, providers.length);
+          updatedProviders = providers;
+          const update: Partial<AppState> = { providers, activeProviderIndex };
+          if (providers.length > 0) {
+            const active = providers[activeProviderIndex];
+            update.apiBase = active.apiBase;
+            update.apiKey = active.apiKey;
+            update.model = active.model;
+            update.apiFormat = active.apiFormat;
+          }
+          return update;
+        });
+        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+      },
+
+      updateProvider: (index, p) => {
+        let updatedProviders: ProviderConfig[] | undefined;
+        set((state) => {
+          const providers = updateProviderInList(state.providers, index, p);
+          updatedProviders = providers;
+          const update: Partial<AppState> = { providers };
+          if (index === clampProviderIndex(state.activeProviderIndex, providers.length)) {
+            const active = providers[index];
+            update.apiBase = active.apiBase;
+            update.apiKey = active.apiKey;
+            update.model = active.model;
+            update.apiFormat = active.apiFormat;
+          }
+          return update;
+        });
+        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+      },
 
       setActiveProvider: (index) => set((state) => {
         if (state.providers.length === 0) return {}; // Guard against empty providers (#1578)

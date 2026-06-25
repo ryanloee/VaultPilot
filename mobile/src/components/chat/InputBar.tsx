@@ -55,7 +55,9 @@ function AudioWaveform({ volume, color }: { volume: number; color: string }) {
         useNativeDriver: false,
       });
     });
-    Animated.parallel(animations).start();
+    const group = Animated.parallel(animations);
+    group.start();
+    return () => group.stop();
   }, [volume]);
 
   return (

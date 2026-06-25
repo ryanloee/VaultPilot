@@ -1751,6 +1751,29 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
         },
         None => return mcp_tool_error("notes.import requires 'paths' parameter".to_string()),
     };
+    // #1826: Validate that all import paths are confined within the vault
+    // directory to prevent path traversal attacks via MCP.
+    let vault_dir = context.vault_dir();
+    let vault_canonical = match vault_dir.canonicalize() {
+        Ok(v) => v,
+        Err(e) => return mcp_tool_error(sanitize_error(&format!("cannot resolve vault directory: {e}"))),
+    };
+    for raw_path in &paths {
+        let candidate = std::path::Path::new(raw_path);
+        let resolved = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            vault_dir.join(candidate)
+        };
+        if let Ok(canonical) = resolved.canonicalize() {
+            if !canonical.starts_with(&vault_canonical) {
+                return mcp_tool_error(format!(
+                    "import path '{}' is outside the vault directory",
+                    raw_path
+                ));
+            }
+        }
+    }
     match import_markdown_with_context(context, &paths) {
         Ok(result) => mcp_tool_success(
             "Import completed.".to_string(),

@@ -16,6 +16,9 @@ use crate::ai;
 
 use super::chat::build_effective_question;
 
+/// Per-AI-call timeout to prevent indefinite hangs in the orchestration layer.
+const AI_CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
 #[derive(Debug, Clone)]
 pub struct ToolExecution {
     name: String,

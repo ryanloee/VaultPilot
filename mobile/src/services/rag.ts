@@ -179,7 +179,6 @@ export function isNoteRelatedQuery(text: string): boolean {
  * - Fallback to recent notes when FTS returns nothing
  */
 export async function buildNoteContext(userMessage: string, recentMessages?: string[]): Promise<string | null> {
-  try {
     // Skip empty messages and trivial messages
     if (!userMessage.trim() || looksLikeSmallTalk(userMessage)) {
       console.warn('[RAG] Skipping:', userMessage.trim() ? 'small talk' : 'empty message');
@@ -256,10 +255,6 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
     return isChinese()
       ? `以下是用户保存的可能相关的笔记：\n\n${blocks.join('\n\n---\n\n')}`
       : `Here are the user's potentially relevant saved notes:\n\n${blocks.join('\n\n---\n\n')}`;
-  } catch (e) {
-    console.warn('[RAG] Note search failed:', e);
-    return null;
-  }
 }
 
 /** A pending note save waiting for user confirmation. */

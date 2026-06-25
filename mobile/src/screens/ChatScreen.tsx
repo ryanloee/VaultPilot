@@ -118,6 +118,7 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
   // Init session — from route params or latest active session
   useEffect(() => {
     (async () => {
+      const seq = ++loadSeqRef.current; // Race condition protection for direct path (#1630)
       try {
         // If navigated from SessionsScreen with specific session
         if (route.params?.sessionId) {
@@ -125,16 +126,19 @@ export default function ChatScreen({ navigation, route }: ChatScreenProps) {
           return;
         }
         const existing = await getLatestSession();
+        if (seq !== loadSeqRef.current) return; // Stale init, discard result (#1630)
         if (existing) {
           setSessionId(existing.id);
           setTitle(existing.title);
           const history = await getMessages(existing.id);
+          if (seq !== loadSeqRef.current) return; // Stale after second await (#1630)
           setMsgs(history.map(m => ({
             id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
             attachments: safeParseAttachments(m.attachments),
           })));
         } else {
           const id = await createSession('新对话');
+          if (seq !== loadSeqRef.current) return; // Stale after createSession (#1630)
           setSessionId(id);
         }
       } catch (e) {

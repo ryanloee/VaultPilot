@@ -179,11 +179,15 @@ export async function parseSSEStreamWithReconnect(
         const delay = baseDelay * Math.pow(2, attempt);
         console.warn(`[SSE] Connection lost (attempt ${attempt + 1}/${maxRetries}), retrying in ${delay}ms:`, err instanceof Error ? err.message : String(err));
         await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, delay);
-          options?.signal?.addEventListener('abort', () => {
+          const onAbort = () => {
             clearTimeout(timer);
             reject(new DOMException('Aborted', 'AbortError'));
-          }, { once: true });
+          };
+          const timer = setTimeout(() => {
+            options?.signal?.removeEventListener('abort', onAbort);
+            resolve();
+          }, delay);
+          options?.signal?.addEventListener('abort', onAbort, { once: true });
         });
       } else {
         throw err;

@@ -183,25 +183,24 @@ impl ToolProxy {
                 return Ok(entry);
             }
             // Check write pattern whitelist
-            match Self::extract_path_arg(tool, args_json) {
-                Some(path_value) => {
-                    if !self.is_path_writable(&path_value) {
-                        let entry = self.deny(
-                            tool,
-                            args_json,
-                            &format!(
-                                "write denied: path '{}' does not match write patterns",
-                                sanitize_error(&path_value)
-                            ),
-                        );
-                        return Ok(entry);
-                    }
-                }
-                None => {
+            let paths = Self::extract_path_args(tool, args_json);
+            if paths.is_empty() {
+                let entry = self.deny(
+                    tool,
+                    args_json,
+                    "write denied: missing required 'path' argument",
+                );
+                return Ok(entry);
+            }
+            for path_value in &paths {
+                if !self.is_path_writable(path_value) {
                     let entry = self.deny(
                         tool,
                         args_json,
-                        "write denied: missing required 'path' argument",
+                        &format!(
+                            "write denied: path '{}' does not match write patterns",
+                            sanitize_error(path_value)
+                        ),
                     );
                     return Ok(entry);
                 }
@@ -209,20 +208,20 @@ impl ToolProxy {
         }
 
         // 5. Path confinement for file-path tools
-        match Self::extract_path_arg(tool, args_json) {
-            Some(path_value) => {
-                if let Err(e) = self.confine_path(&path_value) {
-                    let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
-                    return Ok(entry);
-                }
+        let paths = Self::extract_path_args(tool, args_json);
+        if paths.is_empty() {
+            // Write tools already denied above. For read tools that
+            // take a path (read_file, list_directory), missing path
+            // is also a problem — deny it. Tools that don't take a
+            // path at all (e.g. search_notes) are unaffected.
+            if Self::takes_path(tool) && !Self::is_write_tool(tool) {
+                let entry = self.deny(tool, args_json, "missing required 'path' argument");
+                return Ok(entry);
             }
-            None => {
-                // Write tools already denied above. For read tools that
-                // take a path (read_file, list_directory), missing path
-                // is also a problem — deny it. Tools that don't take a
-                // path at all (e.g. search_notes) are unaffected.
-                if Self::takes_path(tool) && !Self::is_write_tool(tool) {
-                    let entry = self.deny(tool, args_json, "missing required 'path' argument");
+        } else {
+            for path_value in &paths {
+                if let Err(e) = self.confine_path(path_value) {
+                    let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
                     return Ok(entry);
                 }
             }
@@ -300,16 +299,36 @@ impl ToolProxy {
         )
     }
 
-    /// Extract a file-path argument from the tool's JSON args.
-    /// Returns `None` for tools that don't take a path.
-    fn extract_path_arg(tool: &str, args_json: &str) -> Option<String> {
+    /// Extract file-path arguments from the tool's JSON args.
+    /// Returns an empty vector for tools that don't take a path.
+    /// For `rename_note`, both the source `path` and destination `newPath`
+    /// are returned so that both are checked against confine_path and
+    /// is_path_writable.
+    fn extract_path_args(tool: &str, args_json: &str) -> Vec<String> {
         match tool {
-            "read_file" | "list_directory" | "write_note" | "save_note" | "delete_note"
-            | "rename_note" => {
-                let v: serde_json::Value = serde_json::from_str(args_json).ok()?;
-                v.get("path").and_then(|p| p.as_str()).map(String::from)
+            "read_file" | "list_directory" | "write_note" | "save_note" | "delete_note" => {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(args_json) else {
+                    return vec![];
+                };
+                match v.get("path").and_then(|p| p.as_str()) {
+                    Some(p) => vec![p.to_string()],
+                    None => vec![],
+                }
             }
-            _ => None,
+            "rename_note" => {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(args_json) else {
+                    return vec![];
+                };
+                let mut paths = Vec::new();
+                if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
+                    paths.push(p.to_string());
+                }
+                if let Some(p) = v.get("newPath").and_then(|p| p.as_str()) {
+                    paths.push(p.to_string());
+                }
+                paths
+            }
+            _ => vec![],
         }
     }
 

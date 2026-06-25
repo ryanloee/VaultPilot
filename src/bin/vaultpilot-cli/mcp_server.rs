@@ -582,8 +582,8 @@ async fn handle_mcp_request(
                 "chat.send" => mcp_call_chat_send(context, arguments).await,
                 "chat.list_sessions" => mcp_call_chat_list_sessions(context),
                 "chat.get_state" => mcp_call_chat_get_state(context),
-                "chat.new" => mcp_call_chat_new(context, arguments),
-                "chat.delete" => mcp_call_chat_delete(context, arguments),
+                "chat.new" => mcp_call_chat_new(context, arguments).await,
+                "chat.delete" => mcp_call_chat_delete(context, arguments).await,
                 "notes.list" => mcp_call_notes_list(context, arguments),
                 "notes.get" => mcp_call_notes_get(context, arguments),
                 "notes.create" => mcp_call_notes_create(context, arguments),
@@ -1370,6 +1370,7 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
         }
     };
 
+    let _guard = context.chat_state_lock.lock().await;
     match tokio::time::timeout(
         AI_CALL_TIMEOUT,
         chat_with_ai_with_context(
@@ -1439,7 +1440,7 @@ fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
     }
 }
 
-fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
     #[derive(Deserialize)]
     struct Args {
         #[serde(default)]
@@ -1451,6 +1452,7 @@ fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
             return mcp_tool_error(sanitize_error(&format!("invalid chat.new arguments: {e}")))
         }
     };
+    let _guard = context.chat_state_lock.lock().await;
     match load_chat_state_with_context(context) {
         Ok(mut state) => {
             let session = new_cli_chat_session(args.title.as_deref());
@@ -1468,7 +1470,7 @@ fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Args {
@@ -1482,6 +1484,7 @@ fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
             )))
         }
     };
+    let _guard = context.chat_state_lock.lock().await;
     match load_chat_state_with_context(context) {
         Ok(mut state) => {
             let original_len = state.sessions.len();

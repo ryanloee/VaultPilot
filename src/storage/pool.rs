@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::models::AppSettings;
 
@@ -33,6 +34,9 @@ pub struct StorageContext {
     pub(super) pool: Pool<SqliteConnectionManager>,
     /// Cached parsed AppSettings, shared across clones of the same context.
     pub(super) cached_settings: Arc<Mutex<Option<AppSettings>>>,
+    /// Lock to serialize chat-state load-modify-save operations and prevent
+    /// lost updates when concurrent MCP HTTP requests mutate chat state.
+    pub chat_state_lock: Arc<TokioMutex<()>>,
 }
 
 impl StorageContext {
@@ -60,6 +64,7 @@ impl StorageContext {
             paths,
             pool,
             cached_settings: Arc::new(Mutex::new(None)),
+            chat_state_lock: Arc::new(TokioMutex::new(())),
         })
     }
 

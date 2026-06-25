@@ -618,6 +618,17 @@ pub(super) fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
             return Ok((frontmatter, ""));
         }
     }
+    // #1651: Edge case — empty frontmatter with adjacent delimiters (no blank line).
+    // e.g. "---\n---\nBody" where inner is "---\nBody" after stripping the first "---\n".
+    if inner.starts_with("---\n")
+        || inner.starts_with("---\r\n")
+        || inner == "---"
+        || inner == "---\r"
+    {
+        let body_start = inner.find('\n').map(|i| i + 1).unwrap_or(inner.len());
+        let body = &inner[body_start..];
+        return Ok((Frontmatter::default(), body));
+    }
     Err(anyhow!("invalid frontmatter"))
 }
 

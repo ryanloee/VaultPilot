@@ -30,6 +30,17 @@ export function useVoiceInput() {
     }
   }, []);
 
+  // Stop voice recognition on unmount to release microphone (#1667)
+  useEffect(() => {
+    return () => {
+      try {
+        ExpoSpeechRecognitionModule.abort();
+      } catch {
+        // ignore cleanup errors
+      }
+    };
+  }, []);
+
   useSpeechRecognitionEvent('start', () => setIsListening(true));
   useSpeechRecognitionEvent('end', () => setIsListening(false));
   useSpeechRecognitionEvent('result', (event) => {

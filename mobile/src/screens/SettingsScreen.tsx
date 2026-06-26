@@ -53,8 +53,12 @@ export default function SettingsScreen() {
           AsyncStorage.getItem(THEME_KEY),
           AsyncStorage.getItem(ACCENT_KEY),
         ]);
+        // Use getState() to avoid stale closure snapshot (#1896)
+        // zustand-persist hydrates asynchronously, so store.providers at
+        // first render may be [] even when persisted data exists.
+        const currentState = useAppStore.getState();
         // If no providers yet, migrate from legacy flat fields
-        if (store.providers.length === 0 && api.apiBase) {
+        if (currentState.providers.length === 0 && api.apiBase) {
           const migrated: ProviderConfig = {
             name: '默认',
             apiBase: api.apiBase,
@@ -62,10 +66,10 @@ export default function SettingsScreen() {
             model: api.model || 'deepseek-v4-flash-free',
             apiFormat: api.apiFormat || 'openai',
           };
-          store.addProvider(migrated);
-        } else if (store.providers.length === 0) {
+          currentState.addProvider(migrated);
+        } else if (currentState.providers.length === 0) {
           // Add default OpenCode Zen
-          store.addProvider({
+          currentState.addProvider({
             name: 'OpenCode Zen',
             apiBase: 'https://opencode.ai/zen/v1',
             apiKey: '',
@@ -73,8 +77,8 @@ export default function SettingsScreen() {
             apiFormat: 'openai',
           });
         }
-        if (themeMode && isValidThemeMode(themeMode)) store.setThemeMode(themeMode);
-        if (accentColor) store.setAccentColor(accentColor);
+        if (themeMode && isValidThemeMode(themeMode)) currentState.setThemeMode(themeMode);
+        if (accentColor) currentState.setAccentColor(accentColor);
       } catch (e) {
         console.warn('[Settings] Failed to load:', e);
       }

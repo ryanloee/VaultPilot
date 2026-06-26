@@ -20,7 +20,7 @@ const MAX_HISTORY_MESSAGES = 50;
 
 const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, onDelete, onResend }: {
   item: Msg; isDark: boolean; accentColor: string;
-  onDelete?: () => void; onResend?: () => void;
+  onDelete?: (id: string) => void; onResend?: (id: string) => void;
 }) {
   const c = getColors(isDark, accentColor);
   const handleLongPress = () => {
@@ -29,8 +29,8 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
     const actions: any[] = [
       { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
     ];
-    if (onResend) actions.push({ text: '重新发送', onPress: onResend });
-    if (onDelete) actions.push({ text: '删除', style: 'destructive', onPress: onDelete });
+    if (onResend) actions.push({ text: '重新发送', onPress: () => onResend(item.id) });
+    if (onDelete) actions.push({ text: '删除', style: 'destructive', onPress: () => onDelete(item.id) });
     actions.push({ text: '取消', style: 'cancel' });
     Alert.alert('消息操作', '', actions);
   };
@@ -59,6 +59,7 @@ export default function ChatScreen({ navigation, route }: any) {
   const [title, setTitle] = useState('新对话');
   const [loading, setLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listRef = useRef<FlatList>(null);
   const msgsRef = useRef<Msg[]>([]);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,6 +134,7 @@ export default function ChatScreen({ navigation, route }: any) {
     return () => {
       abortRef.current?.abort();
       if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, []);
 
@@ -209,6 +211,11 @@ export default function ChatScreen({ navigation, route }: any) {
       ];
 
       abortRef.current = new AbortController();
+      // #1900: 60s timeout to prevent UI freeze
+      const TIMEOUT_MS = 60_000;
+      timeoutRef.current = setTimeout(() => {
+        abortRef.current?.abort();
+      }, TIMEOUT_MS);
 
       await chatWithReconnect(history, (chunk) => {
         if (chunk.done) return;
@@ -256,6 +263,7 @@ export default function ChatScreen({ navigation, route }: any) {
     } finally {
       setStreaming(false);
       abortRef.current = null;
+      if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     }
   }, [input, streaming, sessionId]);
 
@@ -349,8 +357,8 @@ export default function ChatScreen({ navigation, route }: any) {
             item={item}
             isDark={isDark}
             accentColor={accentColor}
-            onDelete={() => handleDeleteMsg(item.id)}
-            onResend={item.role === 'user' ? () => handleResend(item.id) : undefined}
+            onDelete={handleDeleteMsg}
+            onResend={item.role === 'user' ? handleResend : undefined}
           />
         )}
         keyExtractor={item => item.id}

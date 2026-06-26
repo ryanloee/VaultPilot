@@ -323,6 +323,7 @@ async function chatOpenAI(
           finally {
             clearTimeout(timeout);
             timeoutController.signal.removeEventListener('abort', onTimeout);
+            sig?.removeEventListener('abort', onSignalAbort!);
           }
         })();
       },

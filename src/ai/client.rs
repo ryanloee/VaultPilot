@@ -622,6 +622,17 @@ pub async fn send_request_streaming(
                                         return Err(anyhow!("API returned an empty response"));
                                     }
                                     return Ok(accumulated);
+                                } else if event_type == "error" {
+                                    let error_type =
+                                        parsed["error"]["type"].as_str().unwrap_or("unknown");
+                                    let error_message = parsed["error"]["message"]
+                                        .as_str()
+                                        .unwrap_or("unknown error");
+                                    return Err(anyhow!(
+                                        "Anthropic API error ({}): {}",
+                                        error_type,
+                                        error_message
+                                    ));
                                 }
                             }
                         }
@@ -672,6 +683,17 @@ pub async fn send_request_streaming(
                                                 on_chunk(text);
                                             }
                                         }
+                                    } else if event_type == "error" {
+                                        let error_type =
+                                            parsed["error"]["type"].as_str().unwrap_or("unknown");
+                                        let error_message = parsed["error"]["message"]
+                                            .as_str()
+                                            .unwrap_or("unknown error");
+                                        return Err(anyhow!(
+                                            "Anthropic API error ({}): {}",
+                                            error_type,
+                                            error_message
+                                        ));
                                     }
                                 }
                             }

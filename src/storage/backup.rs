@@ -79,7 +79,13 @@ pub(crate) fn auto_backup_database(db_path: &Path) -> Result<()> {
     // and won't be included in a plain file copy.
     // Hold the checkpoint connection alive through fs::copy to prevent
     // new WAL transactions from starting between checkpoint and copy.
-    let _checkpoint_guard = Connection::open(db_path).ok();
+    let _checkpoint_guard = match Connection::open(db_path) {
+        Ok(conn) => Some(conn),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to open checkpoint connection, skipping WAL checkpoint");
+            None
+        }
+    };
     if let Some(ref conn) = _checkpoint_guard {
         // Set busy_timeout so the checkpoint retries on SQLITE_BUSY instead of
         // failing immediately when another connection has an active transaction.

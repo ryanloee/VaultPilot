@@ -123,9 +123,9 @@ pub fn search_notes_with_context(
     let total = if query.text.trim().is_empty() {
         total
     } else if has_filters {
-        // Use filtered count as lower bound — avoids inflated FTS total that
-        // causes clients to paginate into empty pages.
-        total.max(notes.len())
+        // Use filtered count — avoids inflated FTS total that causes clients
+        // to paginate into empty pages.
+        notes.len()
     } else {
         // total was set to fts_total (FTS COUNT(*)) above; use it directly.
         // If the FTS count underestimates due to LIKE fallback, use max.

@@ -352,6 +352,7 @@ export async function executeToolCalls(response: string): Promise<{ cleaned: str
       const result = await executeSave(save);
       actions.push(result);
     } catch (e) {
+      console.error('[RAG] Failed to save note:', save.title, e);
       actions.push(`保存失败「${save.title}」`);
     }
   }

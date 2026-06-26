@@ -15,6 +15,10 @@ export interface ParseSSEOptions {
   signal?: AbortSignal;
   /** Transform the raw response body before SSE parsing (e.g. Anthropic→OpenAI wrapper) */
   transformBody?: (body: ReadableStream<Uint8Array>) => ReadableStream<Uint8Array>;
+  /** Called when a chunk fails JSON parse. Allows callers to detect data loss. */
+  onParseError?: (data: string, error: unknown) => void;
+  /** Reject the stream after this many consecutive parse errors (default: 3) */
+  maxParseErrors?: number;
 }
 
 /**
@@ -32,6 +36,8 @@ export function parseSSEStream(
     let buffer = '';
     let doneReceived = false;
     const dataParts: string[] = [];
+    let parseErrorCount = 0;
+    const maxParseErrors = options?.maxParseErrors ?? 3;
 
     // Propagate AbortSignal to reader so reader.read() unblocks on abort
     const onAbort = () => { reader.cancel('abort'); };
@@ -65,8 +71,16 @@ export function parseSSEStream(
                 done: false,
               });
             }
+            parseErrorCount = 0; // Reset on successful parse
           } catch (e) {
+            parseErrorCount++;
             console.warn('[SSE] Failed to parse chunk:', data.slice(0, 100), e);
+            options?.onParseError?.(data, e);
+            if (parseErrorCount >= maxParseErrors) {
+              reader.cancel('max parse errors').catch(() => {});
+              reject(new Error(`[SSE] ${parseErrorCount} consecutive parse errors — aborting stream`));
+              return;
+            }
           }
         }
       }

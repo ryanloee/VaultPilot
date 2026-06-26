@@ -335,6 +335,24 @@ export async function executeSave(save: PendingSave): Promise<string> {
 }
 
 /**
+ * Parse and execute all tool calls in an AI response.
+ * Returns cleaned text and action descriptions.
+ */
+export async function executeToolCalls(response: string): Promise<{ cleaned: string; actions: string[] }> {
+  const { cleaned, pendingSaves } = parseToolCalls(response);
+  const actions: string[] = [];
+  for (const save of pendingSaves) {
+    try {
+      const result = await executeSave(save);
+      actions.push(result);
+    } catch (e) {
+      actions.push(`保存失败「${save.title}」`);
+    }
+  }
+  return { cleaned, actions };
+}
+
+/**
  * Build the system prompt with note-awareness instructions.
  * Aligned with Win端 answer_system_prompt and tool_result_system_prompt.
  * Respects device locale.

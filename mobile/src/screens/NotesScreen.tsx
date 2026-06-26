@@ -55,8 +55,11 @@ export default function NotesScreen({ navigation }: any) {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await load(search, activeFolder);
-    setRefreshing(false);
+    try {
+      await load(search, activeFolder);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleLongPress = (item: DbNote) => {

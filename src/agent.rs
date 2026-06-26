@@ -527,6 +527,7 @@ impl AgentSession {
         use tokio::process::Command;
 
         let mut cmd = Command::new(command);
+        cmd.kill_on_drop(true);
         cmd.args(args);
         cmd.current_dir(vault_dir);
         cmd.stdout(std::process::Stdio::piped());

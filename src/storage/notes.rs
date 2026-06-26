@@ -1170,7 +1170,19 @@ fn sync_note_attachments_with_connection(
     for relative in image_refs {
         let absolute = note_dir.join(relative);
         // Path traversal guard: resolved path must stay within the vault directory.
-        let canonical_absolute = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
+        // If canonicalize fails (e.g. file does not exist), the path cannot be
+        // resolved safely — skip it rather than falling back to the raw path
+        // which could bypass the starts_with check.
+        let canonical_absolute = match absolute.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                warn!(
+                    "skipping attachment that cannot be resolved (file missing): '{}'",
+                    relative
+                );
+                continue;
+            }
+        };
         if !canonical_absolute.starts_with(&vault_canonical) {
             warn!(
                 "skipping attachment with path traversal attempt: '{}' resolves to '{}' which is outside vault",

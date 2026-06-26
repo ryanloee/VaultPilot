@@ -198,12 +198,10 @@ export default function SessionsScreen({ navigation }: any) {
               activeOpacity={0.7}
             >
               <View style={s.cardHeader}>
-                <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                 {item.pinned && <Ionicons name="pin" size={14} color={accentColor} style={{ marginRight: 4 }} />}
                 <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>{item.title}</Text>
               </View>
-                </Text>
                 <Text style={[s.cardTime, { color: c.textSecondary }]}>{fmtTime(item.updated_at)}</Text>
               </View>
             </TouchableOpacity>

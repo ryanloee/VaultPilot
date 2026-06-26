@@ -1069,7 +1069,11 @@ fn ensure_summary_section(body: &str, summary: &str) -> String {
     format!("## 摘要\n\n{}\n\n{}", summary.trim(), trimmed)
 }
 
-fn index_note_file_with_connection(connection: &Connection, path: &Path, vault_dir: &Path) -> Result<()> {
+fn index_note_file_with_connection(
+    connection: &Connection,
+    path: &Path,
+    vault_dir: &Path,
+) -> Result<()> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let document = parse_markdown_note(&canonical, "manual")?;
     let body_hash = hash_content(&document.body);
@@ -1166,9 +1170,7 @@ fn sync_note_attachments_with_connection(
     for relative in image_refs {
         let absolute = note_dir.join(relative);
         // Path traversal guard: resolved path must stay within the vault directory.
-        let canonical_absolute = absolute
-            .canonicalize()
-            .unwrap_or_else(|_| absolute.clone());
+        let canonical_absolute = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
         if !canonical_absolute.starts_with(&vault_canonical) {
             warn!(
                 "skipping attachment with path traversal attempt: '{}' resolves to '{}' which is outside vault",

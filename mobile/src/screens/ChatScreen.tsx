@@ -260,15 +260,16 @@ export default function ChatScreen({ navigation, route }: any) {
     } catch (err: any) {
       // Save whatever partial content was received before the error
       const partial = full || (msgsRef.current.find(m => m.id === aiId)?.content ?? '');
-      if (partial) {
-        try { await updateMessage(aiId, partial); } catch { /* best-effort */ }
-      }
       if (err.name === 'AbortError') {
         if (partial) {
           try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch {}
+          setMsgs(prev => prev.map(m => m.id === aiId
+            ? { ...m, content: partial + '\n\n_[响应被中止]_', streaming: false } : m));
+        } else {
+          // No content received — remove the empty placeholder
+          try { await deleteMessage(aiId); } catch {}
+          setMsgs(prev => prev.filter(m => m.id !== aiId));
         }
-        const abortContent = partial ? partial + '\n\n_[响应被中止]_' : undefined;
-        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: abortContent || m.content, streaming: false } : m));
       } else {
         // Append error marker without discarding streamed content; mark as error to filter from API history
         setMsgs(prev => prev.map(m => m.id === aiId

@@ -833,6 +833,18 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
         }
     }
 
+    // Enforce character limit on the assembled output. The head+tail
+    // truncation above reduces *line count* but can still exceed the
+    // character budget when individual lines are long. (#1932)
+    if output.len() > READ_FILE_MAX_CHARS {
+        let mut limit = READ_FILE_MAX_CHARS;
+        while limit > 0 && !output.is_char_boundary(limit) {
+            limit -= 1;
+        }
+        output.truncate(limit);
+        output.push_str("\n\n... [output truncated to character limit] ...");
+    }
+
     Ok(output)
 }
 

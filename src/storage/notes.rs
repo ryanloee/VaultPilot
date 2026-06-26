@@ -56,7 +56,20 @@ pub fn save_note_with_images_with_context(
     let id = if is_new {
         Uuid::new_v4().to_string()
     } else {
-        note.meta.id.clone()
+        // Sanitize the id: only allow alphanumeric, '-' and '_' to prevent
+        // path traversal via sequences like "../" (#1966).  If after
+        // filtering the id is empty, fall back to a fresh UUID.
+        let sanitized: String = note
+            .meta
+            .id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if sanitized.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            sanitized
+        }
     };
     let created_at = if note.meta.created_at.trim().is_empty() {
         now.clone()

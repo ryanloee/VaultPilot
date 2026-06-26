@@ -111,7 +111,13 @@ export default function ProviderEditor({
           autoCapitalize="none"
           autoCorrect={false}
         />
-        <TouchableOpacity onPress={onShowKeyToggle} style={styles.eyeBtn}>
+        <TouchableOpacity
+          onPress={onShowKeyToggle}
+          style={styles.eyeBtn}
+          accessibilityRole="button"
+          accessibilityLabel={showKey ? '隐藏 API Key' : '显示 API Key'}
+          accessibilityState={{ checked: showKey }}
+        >
           <Icon name={showKey ? 'eye-off' : 'eye'} size={18} color={textColorSecondary} />
         </TouchableOpacity>
       </View>

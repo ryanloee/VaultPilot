@@ -1421,19 +1421,25 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
     // Phase 3: Persist assistant turn – under lock.
     let _guard = context.chat_state_lock.lock().await;
     match answer {
-        Ok(Ok(answer)) => match finalize_chat_with_ai_answer(context, prepared, answer).await {
-            Ok(result) => {
-                let summary = format!(
-                    "Assistant reply from session \"{}\":\n{}",
-                    escape_xml_content(&result.session_title),
-                    escape_xml_content(&result.answer.answer)
-                );
-                let structured =
-                    serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
-                mcp_tool_success(summary, structured)
+        Ok(Ok(answer)) => {
+            let session_id = prepared.active_session_id.clone();
+            match finalize_chat_with_ai_answer(context, prepared, answer).await {
+                Ok(result) => {
+                    let summary = format!(
+                        "Assistant reply from session \"{}\":\n{}",
+                        escape_xml_content(&result.session_title),
+                        escape_xml_content(&result.answer.answer)
+                    );
+                    let structured =
+                        serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
+                    mcp_tool_success(summary, structured)
+                }
+                Err(error) => {
+                    let _ = rollback_last_user_turn(context, &session_id).await;
+                    mcp_tool_error(sanitize_error(&error.to_string()))
+                }
             }
-            Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
-        },
+        }
         Ok(Err(error)) => {
             // Rollback the orphaned user message before returning the error
             let _ = rollback_last_user_turn(context, &prepared.active_session_id).await;

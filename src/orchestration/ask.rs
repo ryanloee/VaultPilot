@@ -950,6 +950,8 @@ fn context_status_from_usage(
 
 fn looks_like_small_talk(input: &str) -> bool {
     let normalized = input.trim().to_lowercase();
+    // Strip trailing punctuation (e.g. "你好！" -> "你好", "hi!" -> "hi")
+    let stripped = normalized.trim_end_matches(|c: char| c.is_ascii_punctuation() || "！？。、，…~·".contains(c));
     [
         "你好",
         "hi",
@@ -962,7 +964,7 @@ fn looks_like_small_talk(input: &str) -> bool {
         "在吗",
     ]
     .iter()
-    .any(|needle| normalized == *needle || normalized.starts_with(&format!("{} ", needle)))
+    .any(|needle| stripped == *needle || stripped.starts_with(&format!("{} ", needle)))
 }
 
 fn looks_like_record_request(input: &str) -> bool {
@@ -1141,6 +1143,16 @@ mod tests {
     fn small_talk_rejects_question() {
         assert!(!looks_like_small_talk("你好吗？"));
         assert!(!looks_like_small_talk("What is Rust?"));
+    }
+
+    #[test]
+    fn small_talk_detects_punctuated_greetings() {
+        assert!(looks_like_small_talk("你好！"));
+        assert!(looks_like_small_talk("hi!"));
+        assert!(looks_like_small_talk("hello."));
+        assert!(looks_like_small_talk("thanks!"));
+        assert!(looks_like_small_talk("谢谢！"));
+        assert!(looks_like_small_talk("hey~"));
     }
 
     // ── looks_like_a_question ──────────────────────────────────────

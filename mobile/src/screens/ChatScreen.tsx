@@ -326,13 +326,14 @@ export default function ChatScreen({ navigation, route }: any) {
   const onContentSizeChange = useCallback(() => { scrollToEndDebounced(); }, [scrollToEndDebounced]);
 
   // Track whether user is near the bottom
+  // Use msgsRef to avoid stale closure — ref always has latest messages
   const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
     const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
     const near = distanceFromBottom < 120;
     nearBottomRef.current = near;
-    setShowScrollBtn(!near && msgs.length > 0);
-  }, [msgs.length]);
+    setShowScrollBtn(!near && msgsRef.current.length > 0);
+  }, []);
 
   // Scroll when new messages arrive (user sends → force scroll)
   useEffect(() => { scrollToEndDebounced(true); }, [msgs.length]);

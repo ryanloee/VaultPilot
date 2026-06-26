@@ -235,7 +235,13 @@ export default function SettingsScreen() {
               autoCapitalize="none"
               autoCorrect={false}
             />
-            <TouchableOpacity onPress={() => setShowKey(!showKey)} style={s.eyeBtn}>
+            <TouchableOpacity
+              onPress={() => setShowKey(!showKey)}
+              style={s.eyeBtn}
+              accessibilityRole="button"
+              accessibilityLabel={showKey ? '隐藏 API Key' : '显示 API Key'}
+              accessibilityState={{ checked: showKey }}
+            >
               <Ionicons name={showKey ? 'eye-off-outline' : 'eye-outline'} size={20} color={c.textSecondary} />
             </TouchableOpacity>
           </View>

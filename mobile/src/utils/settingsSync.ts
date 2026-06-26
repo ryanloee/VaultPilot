@@ -8,6 +8,8 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import { saveSettings } from '../api/client';
+import { ApiFormat } from '../store';
 
 const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
 
@@ -119,6 +121,21 @@ export async function importSettings(json: string): Promise<{ providersImported:
     await AsyncStorage.setItem('vaultpilot-store', JSON.stringify(stored));
   } else {
     await AsyncStorage.setItem('vaultpilot-store', JSON.stringify({ state }));
+  }
+
+  // Sync active provider config to cfg_* keys so API client reads the new config
+  const activeIndex = state.activeProviderIndex ?? 0;
+  const active = data.providers[activeIndex];
+  if (active) {
+    const settings: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat } = {
+      apiBase: active.apiBase,
+      model: active.model,
+      apiFormat: active.apiFormat as ApiFormat,
+    };
+    if (active.apiKey) {
+      settings.apiKey = active.apiKey;
+    }
+    await saveSettings(settings);
   }
 
   return { providersImported: data.providers.length };

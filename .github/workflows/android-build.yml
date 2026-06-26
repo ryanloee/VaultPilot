@@ -52,7 +52,7 @@ jobs:
       - name: Expo export (bundle check)
         run: npx expo export --platform android
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17

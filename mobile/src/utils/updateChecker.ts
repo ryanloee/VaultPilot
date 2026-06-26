@@ -118,6 +118,19 @@ export async function downloadAndInstall(
   // Check if already aborted before starting
   if (signal?.aborted) return false;
 
+  let downloadAborted = false;
+
+  // Build a promise that rejects when the download should be cancelled
+  let abortReject: ((reason: Error) => void) | null = null;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    abortReject = reject;
+  });
+
+  const abortDownload = (reason: string) => {
+    downloadAborted = true;
+    abortReject?.(new Error(reason));
+  };
+
   try {
     console.warn('[UpdateChecker] Downloading APK from:', apkUrl);
 
@@ -127,7 +140,6 @@ export async function downloadAndInstall(
 
     // Track progress for stall timeout
     let lastProgressTime = Date.now();
-    let downloadAborted = false;
 
     // Start download without awaiting — so watchdog can monitor progress during download
     const result = File.downloadFileAsync(apkUrl, downloadDir, {
@@ -138,6 +150,10 @@ export async function downloadAndInstall(
           onProgress(Math.round((bytesWritten / totalBytes) * 100));
         }
       },
+    }).catch((err) => {
+      // Suppress unhandled rejection if abortPromise already won the race
+      if (!downloadAborted) throw err;
+      return undefined as never;
     });
 
     // Stall timeout watchdog — if no progress for STALL_TIMEOUT_MS, abort
@@ -145,18 +161,20 @@ export async function downloadAndInstall(
       if (signal?.aborted || downloadAborted) return;
       if (Date.now() - lastProgressTime > STALL_TIMEOUT_MS) {
         console.warn('[UpdateChecker] Download stalled for too long, aborting');
-        downloadAborted = true;
+        abortDownload('Download stalled');
       }
     }, 10_000);
 
-    // Listen for abort — if signal fires, clear watchdog
+    // Listen for abort — if signal fires, reject the race so we can return immediately
     const onAbort = () => {
       clearInterval(stallWatch);
+      abortDownload('Download aborted by signal');
     };
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-      const awaited = await result;
+      // Race the download against the abort/stall promise
+      const awaited = await Promise.race([result, abortPromise]);
       clearInterval(stallWatch);
 
       if (signal?.aborted || downloadAborted) return false;
@@ -184,7 +202,7 @@ export async function downloadAndInstall(
       signal?.removeEventListener('abort', onAbort);
     }
   } catch (e) {
-    if (signal?.aborted) return false;
+    if (signal?.aborted || downloadAborted) return false;
     console.warn('[UpdateChecker] Download/install failed:', e);
     return false;
   }

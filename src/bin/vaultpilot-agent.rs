@@ -480,7 +480,17 @@ async fn handle_request(
                     .build()
                     .expect("failed to create agent runtime");
                 rt.block_on(async move {
-                    run_agent_task(&settings, &ctx, &prompt, &images, &history, max_steps, auto_approve, writer).await;
+                    run_agent_task(
+                        &settings,
+                        &ctx,
+                        &prompt,
+                        &images,
+                        &history,
+                        max_steps,
+                        auto_approve,
+                        writer,
+                    )
+                    .await;
                 });
             });
 
@@ -560,127 +570,135 @@ async fn run_agent_task(
         ..AgentConfig::default()
     };
 
-    let result = vaultpilot_lib::agent::run_agent(settings, context, prompt, images, history, config, |event| {
-        match event {
-            LibAgentEvent::Thinking { step } => {
-                emit_event(
-                    &writer,
-                    "thinking",
-                    &format!("Step {step}"),
-                    Some(*step),
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                true
-            }
-            LibAgentEvent::ToolCall { step, tool, args } => {
-                emit_event(
-                    &writer,
-                    "toolCall",
-                    &format!("Calling {tool}"),
-                    Some(*step),
-                    Some(tool),
-                    Some(args),
-                    None,
-                    None,
-                );
-                true
-            }
-            LibAgentEvent::ToolResult {
-                step,
-                tool,
-                result_preview,
-                is_error,
-            } => {
-                emit_event(
-                    &writer,
-                    "toolResult",
-                    result_preview,
-                    Some(*step),
-                    Some(tool),
-                    None,
-                    Some(result_preview),
-                    Some(*is_error),
-                );
-                true
-            }
-            LibAgentEvent::FinalAnswer { text } => {
-                emit_event(&writer, "finalAnswer", text, None, None, None, None, None);
-                true
-            }
-            LibAgentEvent::StepLimitReached { steps } => {
-                emit_event(
-                    &writer,
-                    "stepLimitReached",
-                    &format!("{steps} steps reached"),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                true
-            }
-            LibAgentEvent::TokenBudgetExceeded {
-                tokens_used,
-                budget,
-            } => {
-                emit_event(
-                    &writer,
-                    "tokenBudgetExceeded",
-                    &format!("{tokens_used}/{budget}"),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                true
-            }
-            LibAgentEvent::Timeout => {
-                emit_event(
-                    &writer,
-                    "timeout",
-                    "Agent timed out",
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                );
-                true
-            }
-            LibAgentEvent::Error { message } => {
-                emit_event(&writer, "error", message, None, None, None, None, None);
-                true
-            }
-            LibAgentEvent::WriteApprovalNeeded { tool, args } => {
-                emit_event(
-                    &writer,
-                    "writeApprovalNeeded",
-                    &format!("Write approval needed for {tool}"),
-                    None,
-                    Some(tool),
-                    Some(args),
-                    None,
-                    None,
-                );
-
-                if auto_approve {
-                    return true;
+    let result = vaultpilot_lib::agent::run_agent(
+        settings,
+        context,
+        prompt,
+        images,
+        history,
+        config,
+        |event| {
+            match event {
+                LibAgentEvent::Thinking { step } => {
+                    emit_event(
+                        &writer,
+                        "thinking",
+                        &format!("Step {step}"),
+                        Some(*step),
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    true
                 }
+                LibAgentEvent::ToolCall { step, tool, args } => {
+                    emit_event(
+                        &writer,
+                        "toolCall",
+                        &format!("Calling {tool}"),
+                        Some(*step),
+                        Some(tool),
+                        Some(args),
+                        None,
+                        None,
+                    );
+                    true
+                }
+                LibAgentEvent::ToolResult {
+                    step,
+                    tool,
+                    result_preview,
+                    is_error,
+                } => {
+                    emit_event(
+                        &writer,
+                        "toolResult",
+                        result_preview,
+                        Some(*step),
+                        Some(tool),
+                        None,
+                        Some(result_preview),
+                        Some(*is_error),
+                    );
+                    true
+                }
+                LibAgentEvent::FinalAnswer { text } => {
+                    emit_event(&writer, "finalAnswer", text, None, None, None, None, None);
+                    true
+                }
+                LibAgentEvent::StepLimitReached { steps } => {
+                    emit_event(
+                        &writer,
+                        "stepLimitReached",
+                        &format!("{steps} steps reached"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    true
+                }
+                LibAgentEvent::TokenBudgetExceeded {
+                    tokens_used,
+                    budget,
+                } => {
+                    emit_event(
+                        &writer,
+                        "tokenBudgetExceeded",
+                        &format!("{tokens_used}/{budget}"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    true
+                }
+                LibAgentEvent::Timeout => {
+                    emit_event(
+                        &writer,
+                        "timeout",
+                        "Agent timed out",
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    true
+                }
+                LibAgentEvent::Error { message } => {
+                    emit_event(&writer, "error", message, None, None, None, None, None);
+                    true
+                }
+                LibAgentEvent::WriteApprovalNeeded { tool, args } => {
+                    emit_event(
+                        &writer,
+                        "writeApprovalNeeded",
+                        &format!("Write approval needed for {tool}"),
+                        None,
+                        Some(tool),
+                        Some(args),
+                        None,
+                        None,
+                    );
 
-                // Wait for approval from the UI via respondToWriteApproval
-                let (tx, rx) = std::sync::mpsc::channel();
-                *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
-                // Block until approval received (this runs in a background thread,
-                // not on the main stdin loop, so blocking is fine).
-                rx.recv().unwrap_or(false)
+                    if auto_approve {
+                        return true;
+                    }
+
+                    // Wait for approval from the UI via respondToWriteApproval
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+                    // Block until approval received (this runs in a background thread,
+                    // not on the main stdin loop, so blocking is fine).
+                    rx.recv().unwrap_or(false)
+                }
             }
-        }
-    })
+        },
+    )
     .await;
 
     match result {

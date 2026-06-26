@@ -982,7 +982,7 @@ async fn execute_tool(
                     if summary.is_empty() {
                         ("No matching notes found.".into(), false)
                     } else {
-                        (format!("Found {} notes:\n{}", docs.len(), summary), false)
+                        (format!("Found {} notes:\n{}", docs.len().min(*limit), summary), false)
                     }
                 }
                 Err(e) => (format!("tool error: {}", e), true),

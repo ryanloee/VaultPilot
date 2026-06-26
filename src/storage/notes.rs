@@ -106,7 +106,7 @@ pub fn save_note_with_images_with_context(
     let serialized = compose_markdown(&meta, &body_with_images)?;
     atomic_write(&path, serialized.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
-    index_note_file_with_connection(&connection, &path)?;
+    index_note_file_with_connection(&connection, &path, Path::new(&settings.vault_dir))?;
     load_note_with_context(context, &meta.id)
 }
 
@@ -338,7 +338,7 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<super::Ind
                 .canonicalize()
                 .unwrap_or_else(|_| entry.path().to_path_buf());
             indexed_paths.insert(canonical.to_string_lossy().to_string());
-            if index_note_file_with_connection(&tx, entry.path()).is_ok() {
+            if index_note_file_with_connection(&tx, entry.path(), &vault_dir).is_ok() {
                 stats.indexed += 1;
             }
         }
@@ -831,7 +831,7 @@ fn import_single_markdown(
         .unwrap_or_else(|_| PathBuf::from(&settings.vault_dir));
     let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     if canonical.starts_with(&vault_dir) {
-        index_note_file_with_connection(connection, &canonical)?;
+        index_note_file_with_connection(connection, &canonical, &vault_dir)?;
         return Ok(true);
     }
 
@@ -1069,7 +1069,11 @@ fn ensure_summary_section(body: &str, summary: &str) -> String {
     format!("## 摘要\n\n{}\n\n{}", summary.trim(), trimmed)
 }
 
-fn index_note_file_with_connection(connection: &Connection, path: &Path) -> Result<()> {
+fn index_note_file_with_connection(
+    connection: &Connection,
+    path: &Path,
+    vault_dir: &Path,
+) -> Result<()> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let document = parse_markdown_note(&canonical, "manual")?;
     let body_hash = hash_content(&document.body);
@@ -1127,6 +1131,7 @@ fn index_note_file_with_connection(connection: &Connection, path: &Path) -> Resu
             &document.meta.id,
             &canonical.to_string_lossy(),
             &extract_note_image_refs(&document.body),
+            vault_dir,
         )?;
         Ok(())
     })();
@@ -1145,6 +1150,7 @@ fn sync_note_attachments_with_connection(
     note_id: &str,
     note_path: &str,
     image_refs: &[String],
+    vault_dir: &Path,
 ) -> Result<()> {
     connection.execute("DELETE FROM attachment_fts WHERE note_id = ?1", [note_id])?;
     connection.execute("DELETE FROM attachments WHERE note_id = ?1", [note_id])?;
@@ -1156,10 +1162,23 @@ fn sync_note_attachments_with_connection(
     let note_dir = Path::new(note_path)
         .parent()
         .ok_or_else(|| anyhow!("note path has no parent: {note_path}"))?;
+    let vault_canonical = vault_dir
+        .canonicalize()
+        .unwrap_or_else(|_| vault_dir.to_path_buf());
     let now = Utc::now().to_rfc3339();
 
     for relative in image_refs {
         let absolute = note_dir.join(relative);
+        // Path traversal guard: resolved path must stay within the vault directory.
+        let canonical_absolute = absolute.canonicalize().unwrap_or_else(|_| absolute.clone());
+        if !canonical_absolute.starts_with(&vault_canonical) {
+            warn!(
+                "skipping attachment with path traversal attempt: '{}' resolves to '{}' which is outside vault",
+                relative,
+                canonical_absolute.display()
+            );
+            continue;
+        }
         let absolute_string = absolute.to_string_lossy().to_string();
         let file_name = absolute
             .file_name()

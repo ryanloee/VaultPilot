@@ -303,7 +303,9 @@ pub async fn ask_with_ai_with_context(
                 )
                 .await
                 {
-                    Ok(inner) => inner.unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e))),
+                    Ok(inner) => {
+                        inner.unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e)))
+                    }
                     Err(_) => Err(anyhow::anyhow!("storage I/O timed out (list_directory)")),
                 };
                 let is_error = result.is_err();
@@ -333,7 +335,9 @@ pub async fn ask_with_ai_with_context(
                 )
                 .await
                 {
-                    Ok(inner) => inner.unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e))),
+                    Ok(inner) => {
+                        inner.unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e)))
+                    }
                     Err(_) => Err(anyhow::anyhow!("storage I/O timed out (read_file)")),
                 };
                 let is_error = result.is_err();

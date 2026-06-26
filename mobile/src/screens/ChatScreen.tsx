@@ -147,6 +147,8 @@ export default function ChatScreen({ navigation, route }: any) {
         try {
           const newId = await createSession('新对话');
           setSessionId(newId);
+          setTitle('新对话');
+          setMsgs([]);
           activeSessionId = newId;
           userId = await addMessage(newId, 'user', userText);
         } catch (e2) {
@@ -174,6 +176,9 @@ export default function ChatScreen({ navigation, route }: any) {
       aiId = await addMessage(activeSessionId, 'assistant', '');
     } catch (e) {
       console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
+      // Roll back UI: restore user input and remove the user message bubble
+      setInput(userText);
+      setMsgs(prev => prev.filter(m => m.id !== userId));
       Alert.alert('发送失败', '无法创建 AI 回复记录');
       return;
     }

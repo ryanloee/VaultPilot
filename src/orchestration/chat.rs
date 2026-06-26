@@ -106,6 +106,10 @@ pub struct PreparedChatContext {
     pub prompt: String,
     pub history: Vec<ConversationTurn>,
     pub images: Vec<String>,
+    /// The unique ID of the user turn added during prepare.
+    /// Used by rollback to delete the exact turn, avoiding race conditions
+    /// when concurrent requests target the same session.
+    pub user_turn_id: String,
 }
 
 /// Phase 1 of a chat exchange: load state, resolve/create session, append the
@@ -150,6 +154,7 @@ pub async fn prepare_chat_for_ai(
 
     let history = current_session_history(&state, &active_session_id)?;
     let user_turn = build_chat_turn("user", &user_display, None, &attachments);
+    let user_turn_id = user_turn.id.clone();
     append_turn_to_session(&mut state, &active_session_id, user_turn)?;
     save_chat_state_async(context, &state).await?;
 
@@ -159,6 +164,7 @@ pub async fn prepare_chat_for_ai(
         prompt,
         history,
         images,
+        user_turn_id,
     })
 }
 
@@ -196,6 +202,7 @@ pub async fn finalize_chat_with_ai_answer(
 pub async fn rollback_last_user_turn(
     context: &StorageContext,
     session_id: &str,
+    turn_id: &str,
 ) -> Result<(), anyhow::Error> {
     let mut state = load_chat_state_async(context).await?;
     let session = state
@@ -204,19 +211,19 @@ pub async fn rollback_last_user_turn(
         .find(|s| s.id == session_id)
         .ok_or_else(|| anyhow::anyhow!("chat session not found: {}", session_id))?;
 
-    // Remove the last turn if it's a user message (the one we just added)
-    if let Some(last) = session.turns.last() {
-        if last.role == "user" {
-            session.turns.pop();
-        }
-    }
+    // Remove the specific user turn by ID (safe under concurrency)
+    let before = session.turns.len();
+    session.turns.retain(|t| t.id != turn_id);
+    let removed = before != session.turns.len();
 
     // If session was newly created and now has no turns, delete it
     if session.turns.is_empty() {
         state.sessions.retain(|s| s.id != session_id);
     }
 
-    save_chat_state_async(context, &state).await?;
+    if removed {
+        save_chat_state_async(context, &state).await?;
+    }
     Ok(())
 }
 

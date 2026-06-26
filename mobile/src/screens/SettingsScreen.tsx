@@ -87,9 +87,9 @@ export default function SettingsScreen() {
 
   const saveActiveProvider = async () => {
     if (activeIdx < 0) return;
-    store.updateProvider(activeIdx, { name: providerName, apiBase, apiKey, model, apiFormat });
     try {
       await saveSettings({ apiBase, apiKey, model, apiFormat });
+      store.updateProvider(activeIdx, { name: providerName, apiBase, apiKey, model, apiFormat });
       Alert.alert('已保存', '设置已保存');
     } catch (e: any) {
       Alert.alert('保存失败', e.message || '请重试');
@@ -162,7 +162,7 @@ export default function SettingsScreen() {
 
       {store.providers.map((p, i) => (
         <TouchableOpacity
-          key={i}
+          key={`${p.name}-${p.apiBase}`}
           style={[s.providerCard, {
             backgroundColor: i === activeIdx ? store.accentColor + '15' : c.inputBg,
             borderColor: i === activeIdx ? store.accentColor : c.border,

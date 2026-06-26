@@ -8,7 +8,7 @@
  * 4. Deleted note locally → clears pending, counts as synced
  * 5. Server returns non-ok → increments failed
  * 6. Network error mid-flush → stops and returns partial counts
- * 7. 4xx error → clears entry from queue
+ * 7. 4xx error → clears entry from queue, counts as failed
  * 8. 5xx error → increments retry count
  * 9. 5xx error max retries → clears entry from queue
  */
@@ -227,7 +227,7 @@ describe('flushPendingSyncs', () => {
     mockFetch.mockResolvedValue({ ok: false, status: 404 });
 
     const result = await flushPendingSyncs();
-    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(result).toEqual({ synced: 0, failed: 1 });
     expect(mockClearPendingSync).toHaveBeenCalledWith('n1');
     expect(mockIncrementPendingSyncRetry).not.toHaveBeenCalled();
   });
@@ -238,7 +238,7 @@ describe('flushPendingSyncs', () => {
     mockFetch.mockResolvedValue({ ok: false, status: 400 });
 
     const result = await flushPendingSyncs();
-    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(result).toEqual({ synced: 0, failed: 1 });
     expect(mockClearPendingSync).toHaveBeenCalledWith('n1');
   });
 
@@ -284,8 +284,18 @@ describe('flushPendingSyncs', () => {
       .mockResolvedValueOnce(1); // n3 after first retry
 
     const result = await flushPendingSyncs();
-    expect(result).toEqual({ synced: 1, failed: 2 });
-    expect(mockClearPendingSync).toHaveBeenCalledTimes(1); // Only n1 cleared
+    expect(result).toEqual({ synced: 0, failed: 3 });
+    expect(mockClearPendingSync).toHaveBeenCalledTimes(1); // Only n1 cleared (4xx)
     expect(mockIncrementPendingSyncRetry).toHaveBeenCalledTimes(2); // n2 and n3
+  });
+
+  it('counts 429 rate limit as failed without clearing entry', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 429 });
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 0, failed: 1 });
+    expect(mockClearPendingSync).not.toHaveBeenCalled();
   });
 });

@@ -150,23 +150,50 @@ async function chatAnthropic(
   };
   if (systemText) body.system = systemText;
 
-  let res: Response;
-  try {
-    res = await fetch(`${base}/v1/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (e: unknown) {
+  let res: Response | null = null;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+      await new Promise(r => setTimeout(r, delay));
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    }
+
+    try {
+      res = await fetch(`${base}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (fetchErr: unknown) {
+      lastError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
+      if (lastError.name === 'AbortError') {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', onSignalAbort!);
+        throw fetchErr;
+      }
+      continue; // network error → retry
+    }
+
+    // Retry on transient server errors
+    if (isRetryable(res.status)) {
+      lastError = new Error(sanitizeApiError(res.status, ''));
+      res = null;
+      continue;
+    }
+    break;
+  }
+
+  if (!res) {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', onSignalAbort!);
-    if (e instanceof Error && e.name === 'AbortError') throw e;
-    throw new Error('网络请求失败，请检查连接');
+    throw new Error('请求失败，已重试多次');
   }
 
   if (!res.ok) {

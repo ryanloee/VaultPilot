@@ -238,7 +238,7 @@ export default function ChatScreen({ navigation, route }: any) {
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
     } catch (err: any) {
       // Save whatever partial content was received before the error
-      const partial = full || msgsRef.current.find(m => m.id === aiId)?.content ?? '';
+      const partial = full || (msgsRef.current.find(m => m.id === aiId)?.content ?? '');
       if (partial) {
         try { await updateMessage(aiId, partial); } catch { /* best-effort */ }
       }

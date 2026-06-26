@@ -34,7 +34,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "test": "jest --passWithNoTests"
+    "test": "jest --passWithNoTests",
+    "check-react": "node -e \"const p=require('./package.json');const d={...p.dependencies,...p.devDependencies};const r=d.react;const t=d['@types/react'];if(!r){console.error('react not found');process.exit(1);}if(t){const rv=r.replace(/^[^0-9]*/,'');const tv=t.replace(/^[^0-9]*/,'');const rm=rv.split('.')[0];const tm=tv.split('.')[0];if(rm!==tm){console.error('React major version mismatch: react@'+r+' vs @types/react@'+t);process.exit(1);}}console.log('React version check passed: react@'+r+(t?' @types/react@'+t:''));\""
   },
   "private": true,
   "overrides": {

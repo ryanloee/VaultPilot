@@ -229,7 +229,13 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       for (const kw of keywords.slice(0, 8)) {
         const safeKw = kw.replace(/"/g, '');
         if (!safeKw) continue;
-        const notes = await searchNotes(safeKw);
+        let notes: DbNote[];
+        try {
+          notes = await searchNotes(safeKw);
+        } catch (searchErr) {
+          console.warn('[RAG] searchNotes failed for keyword:', safeKw, searchErr);
+          continue;
+        }
         for (const n of notes) {
           if (!seen.has(n.id) && results.length < MAX_CONTEXT_NOTES) {
             seen.add(n.id);

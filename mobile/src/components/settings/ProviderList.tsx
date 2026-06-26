@@ -38,7 +38,7 @@ export default function ProviderList({
 
       {providers.map((p, i) => (
         <TouchableOpacity
-          key={i}
+          key={`${p.name}-${p.apiBase}`}
           style={[
             styles.providerCard,
             {

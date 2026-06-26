@@ -221,7 +221,7 @@ export default function InputBar({
               <Text style={[styles.attachName, { color: textColorSecondary }]} numberOfLines={1}>
                 <Icon name={att.type === 'image' ? 'image' : 'document'} size={12} color={textColorSecondary} /> {att.name}
               </Text>
-              <TouchableOpacity onPress={() => onRemoveAttachment(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <TouchableOpacity onPress={() => onRemoveAttachment(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityRole="button" accessibilityLabel="删除附件">
                 <Text style={[styles.attachRemove, { color: textColorSecondary }]}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -244,6 +244,8 @@ export default function InputBar({
                 key={i}
                 style={[styles.expandedBtn, { borderColor: accentColor + '40', backgroundColor: accentColor + '10' }]}
                 onPress={action.onPress}
+                accessibilityRole="button"
+                accessibilityLabel={action.label}
               >
                 <Icon name={action.iconName} size={22} color={textColorSecondary} />
                 <Text style={[styles.expandedLabel, { color: textColorSecondary }]}>{action.label}</Text>
@@ -262,6 +264,9 @@ export default function InputBar({
                 key={i}
                 style={[styles.emojiTab, activeEmojiCategory === i && { borderBottomColor: accentColor, borderBottomWidth: 2 }]}
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setActiveEmojiCategory(i); }}
+                accessibilityRole="tab"
+                accessibilityLabel={cat.name}
+                accessibilityState={{ selected: activeEmojiCategory === i }}
               >
                 <Text style={[styles.emojiTabText, { color: activeEmojiCategory === i ? accentColor : textColorSecondary }]}>
                   {cat.name}
@@ -272,6 +277,8 @@ export default function InputBar({
             <TouchableOpacity
               style={styles.emojiTab}
               onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowEmojiPicker(false); }}
+              accessibilityRole="button"
+              accessibilityLabel="关闭表情"
             >
               <Text style={[styles.emojiTabText, { color: textColorSecondary }]}>✕</Text>
             </TouchableOpacity>
@@ -286,6 +293,8 @@ export default function InputBar({
               <TouchableOpacity
                 style={styles.emojiItem}
                 onPress={() => handleEmojiSelect(item)}
+                accessibilityRole="button"
+                accessibilityLabel={item}
               >
                 <Text style={styles.emojiText}>{item}</Text>
               </TouchableOpacity>
@@ -300,6 +309,8 @@ export default function InputBar({
         <TouchableOpacity
           style={[styles.plusBtn, plusExpanded && { backgroundColor: accentColor + '20' }]}
           onPress={togglePlus}
+          accessibilityRole="button"
+          accessibilityLabel={plusExpanded ? '收起菜单' : '展开更多操作'}
         >
           <Icon name={plusExpanded ? 'close' : 'plus'} size={20} color={plusExpanded ? accentColor : textColorSecondary} />
         </TouchableOpacity>
@@ -341,6 +352,8 @@ export default function InputBar({
           <TouchableOpacity
             style={[styles.emojiBtn, showEmojiPicker && { backgroundColor: accentColor + '20' }]}
             onPress={toggleEmojiPicker}
+            accessibilityRole="button"
+            accessibilityLabel="表情"
           >
             <Icon name="smile" size={20} color={showEmojiPicker ? accentColor : textColorSecondary} />
           </TouchableOpacity>
@@ -351,6 +364,8 @@ export default function InputBar({
           <TouchableOpacity
             style={[styles.voiceBtn, voiceListening && { backgroundColor: '#FF3B3020' }]}
             onPress={onVoiceToggle}
+            accessibilityRole="button"
+            accessibilityLabel={voiceListening ? '停止录音' : '语音输入'}
           >
             <Icon name={voiceListening ? 'stop' : 'mic'} size={18} color={voiceListening ? '#FF3B30' : textColorSecondary} />
           </TouchableOpacity>
@@ -358,7 +373,7 @@ export default function InputBar({
 
         {/* Send / Stop button */}
         {streaming ? (
-          <TouchableOpacity style={[styles.sendBtn, { backgroundColor: '#FF3B30' }]} onPress={onStop}>
+          <TouchableOpacity style={[styles.sendBtn, { backgroundColor: '#FF3B30' }]} onPress={onStop} accessibilityRole="button" accessibilityLabel="停止生成">
             <Icon name="stop" size={16} color="#fff" />
           </TouchableOpacity>
         ) : (
@@ -366,6 +381,8 @@ export default function InputBar({
             style={[styles.sendBtn, { backgroundColor: (input.trim() || attachments.length > 0) ? accentColor : borderColor }]}
             onPress={onSend}
             disabled={!input.trim() && attachments.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="发送消息"
           >
             <Icon name="send" size={16} color={(input.trim() || attachments.length > 0) ? '#fff' : textColorSecondary} />
           </TouchableOpacity>

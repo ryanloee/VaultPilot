@@ -238,6 +238,7 @@ export const useAppStore = create<AppState>()(
       removeProvider: (index) => {
         let updatedProviders: ProviderConfig[] | undefined;
         set((state) => {
+          if (state.providers.length === 0) return {}; // Guard: nothing to remove
           const providers = removeProviderFromList(state.providers, index);
           const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, index, providers.length);
           updatedProviders = providers;

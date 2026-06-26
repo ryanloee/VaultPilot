@@ -79,6 +79,7 @@ export default function ChatScreen({ navigation, route }: any) {
       })));
     } catch (e) {
       console.warn('[Chat] loadSession failed:', e);
+      Alert.alert('加载失败', '无法加载对话记录，请重试');
     }
   }, []);
 
@@ -120,7 +121,7 @@ export default function ChatScreen({ navigation, route }: any) {
     if (route.params?.sessionId && route.params.sessionId !== sessionId) {
       loadSession(route.params.sessionId, route.params.title || '对话');
     }
-  }, [route.params?.sessionId]);
+  }, [route.params?.sessionId, sessionId, loadSession]);
 
   // Abort any in-flight stream on unmount
   useEffect(() => {
@@ -182,7 +183,12 @@ export default function ChatScreen({ navigation, route }: any) {
 
     try {
       // RAG: search notes for relevant context before sending
-      const noteContext = await buildNoteContext(userText);
+      let noteContext: string | null = null;
+      try {
+        noteContext = await buildNoteContext(userText);
+      } catch (ragErr) {
+        console.warn('[Chat] buildNoteContext failed, continuing without RAG:', ragErr);
+      }
       const systemPrompt = buildSystemPrompt(noteContext);
 
       const history: ChatMessage[] = [
@@ -254,6 +260,7 @@ export default function ChatScreen({ navigation, route }: any) {
       setMsgs([]);
     } catch (e) {
       console.warn('[Chat] newChat failed:', e);
+      Alert.alert('新建对话失败', '无法创建新对话，请重试');
     }
   }, []);
 

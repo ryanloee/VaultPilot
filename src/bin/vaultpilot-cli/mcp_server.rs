@@ -1776,6 +1776,35 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
                     raw_path
                 ));
             }
+        } else {
+            // File does not exist — walk up ancestors to find the nearest
+            // existing directory and verify it is inside the vault (#1844).
+            let mut probe = resolved.as_path();
+            let mut confined = false;
+            while let Some(parent) = probe.parent() {
+                if parent.as_os_str().is_empty() {
+                    break;
+                }
+                if parent.exists() {
+                    if let Ok(pc) = parent.canonicalize() {
+                        if !pc.starts_with(&vault_canonical) {
+                            return mcp_tool_error(format!(
+                                "import path '{}' is outside the vault directory",
+                                raw_path
+                            ));
+                        }
+                        confined = true;
+                    }
+                    break;
+                }
+                probe = parent;
+            }
+            if !confined {
+                return mcp_tool_error(format!(
+                    "cannot verify import path '{}' is inside the vault directory",
+                    raw_path
+                ));
+            }
         }
     }
     match import_markdown_with_context(context, &paths) {

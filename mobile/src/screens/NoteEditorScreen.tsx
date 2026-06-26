@@ -219,8 +219,12 @@ export default function NoteEditorScreen({ route, navigation }: any) {
               key={t}
               style={[s.tagChip, { backgroundColor: accentColor + '20', borderColor: accentColor }]}
               onLongPress={async () => {
-                await removeTag(noteId, t);
-                setTags(prev => prev.filter(x => x !== t));
+                try {
+                  await removeTag(noteId, t);
+                  setTags(prev => prev.filter(x => x !== t));
+                } catch (e) {
+                  Alert.alert('删除标签失败', String(e));
+                }
               }}
             >
               <Text style={[s.tagText, { color: accentColor }]}>#{t}</Text>
@@ -236,9 +240,13 @@ export default function NoteEditorScreen({ route, navigation }: any) {
               onSubmitEditing={async () => {
                 const tag = newTag.trim();
                 if (tag && !tags.includes(tag)) {
-                  await addTag(noteId, tag);
-                  setTags(prev => [...prev, tag]);
-                  setNewTag('');
+                  try {
+                    await addTag(noteId, tag);
+                    setTags(prev => [...prev, tag]);
+                    setNewTag('');
+                  } catch (e) {
+                    Alert.alert('添加标签失败', String(e));
+                  }
                 }
               }}
               returnKeyType="done"

@@ -106,11 +106,18 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
 
     fs::create_dir_all(&settings.vault_dir)?;
     // Cache the parsed settings for future calls.
+    // Double-check: another thread may have populated the cache while we
+    // were reading the settings file from disk (TOCTOU race).  If so, prefer
+    // the value already in the cache — it is at least as fresh as ours.
     {
         let mut cache = context
             .cached_settings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        if cache.is_some() {
+            // Another writer beat us — return its value.
+            return Ok(cache.as_ref().unwrap().clone());
+        }
         *cache = Some(settings.clone());
     }
     Ok(settings)

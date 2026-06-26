@@ -184,6 +184,7 @@ async function chatAnthropic(
     // Retry on transient server errors
     if (isRetryable(res.status)) {
       lastError = new Error(sanitizeApiError(res.status, ''));
+      await res.body?.cancel().catch(() => {});
       res = null;
       continue;
     }
@@ -294,6 +295,7 @@ async function chatOpenAI(
       // Retry on transient server errors
       if (isRetryable(res.status)) {
         lastError = new Error(sanitizeApiError(res.status, ''));
+        await res.body?.cancel().catch(() => {});
         res = null;
         continue;
       }
@@ -412,7 +414,7 @@ function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uin
             if (result) ctrl.enqueue(encoder.encode(result));
           }
         }
-      } catch (e) { ctrl.error(e); }
+      } catch (e) { reader.cancel().catch(() => {}); ctrl.error(e); }
     },
     cancel() { reader.cancel(); },
   });

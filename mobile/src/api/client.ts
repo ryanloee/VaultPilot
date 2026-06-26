@@ -212,6 +212,7 @@ async function chatAnthropic(
       const reader = anthropicBody.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let currentEvent = '';
       const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
       controller.signal.addEventListener('abort', onTimeout, { once: true });
 
@@ -224,7 +225,7 @@ async function chatAnthropic(
             const lines = buffer.split(/\r\n|\r|\n/);
             buffer = lines.pop() || '';
 
-            let currentEvent = '';
+
             for (const line of lines) {
               if (line.startsWith('event:')) {
                 currentEvent = line.slice(6).trim();
@@ -385,6 +386,7 @@ function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uin
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = '';
+  let currentEvent = '';
 
   return new ReadableStream<Uint8Array>({
     async pull(ctrl) {
@@ -396,7 +398,7 @@ function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uin
           const lines = buffer.split(/\r\n|\r|\n/);
           buffer = lines.pop() || '';
 
-          let currentEvent = '';
+
           for (const line of lines) {
             if (line.startsWith('event:')) { currentEvent = line.slice(6).trim(); continue; }
             if (!line.startsWith('data:')) continue;

@@ -66,6 +66,7 @@ export default function ChatScreen({ navigation, route }: any) {
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const activeLoadRef = useRef<string | null>(null);
+  const isSendingRef = useRef(false);
 
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
@@ -91,6 +92,7 @@ export default function ChatScreen({ navigation, route }: any) {
 
   // Init session — from route params or latest active session
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         // If navigated from SessionsScreen with specific session
@@ -99,24 +101,29 @@ export default function ChatScreen({ navigation, route }: any) {
           return;
         }
         const existing = await getLatestSession();
+        if (cancelled) return;
         if (existing) {
           setSessionId(existing.id);
           setTitle(existing.title);
           const history = await getMessages(existing.id);
+          if (cancelled) return;
           setMsgs(history.map(m => ({
             id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
           })));
         } else {
           const id = await createSession('新对话');
+          if (cancelled) return;
           setSessionId(id);
         }
       } catch (e) {
+        if (cancelled) return;
         console.warn('[Chat] session init failed:', e);
         Alert.alert('初始化失败', String(e));
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   // Keep ref in sync with state so send() reads latest messages
@@ -139,7 +146,8 @@ export default function ChatScreen({ navigation, route }: any) {
   }, []);
 
   const send = useCallback(async () => {
-    if (!input.trim() || streaming || !sessionId) return;
+    if (!input.trim() || streaming || !sessionId || isSendingRef.current) return;
+    isSendingRef.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const userText = input.trim();
 
@@ -262,6 +270,7 @@ export default function ChatScreen({ navigation, route }: any) {
       }
     } finally {
       setStreaming(false);
+      isSendingRef.current = false;
       abortRef.current = null;
       if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     }

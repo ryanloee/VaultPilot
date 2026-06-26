@@ -21,6 +21,15 @@ function SwipeableRow({ children, onDelete, onArchive }: {
   const translateX = useRef(new Animated.Value(0)).current;
   const lastOffset = useRef(0);
 
+  // Clear stale closeRow callback when this SwipeableRow unmounts
+  useEffect(() => {
+    return () => {
+      if (openRowCloseRef.current === closeRow) {
+        openRowCloseRef.current = null;
+      }
+    };
+  }, []);
+
   const closeRow = () => {
     Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start();
     lastOffset.current = 0;

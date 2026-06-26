@@ -42,7 +42,7 @@ export default function SettingsScreen() {
       setApiFormat(active.apiFormat);
       setProviderName(active.name);
     }
-  }, [activeIdx]);
+  }, [activeIdx, active?.apiBase, active?.apiKey, active?.model, active?.apiFormat, active?.name]);
 
   // Load saved settings on mount
   useEffect(() => {

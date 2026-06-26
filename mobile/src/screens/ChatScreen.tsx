@@ -218,6 +218,7 @@ export default function ChatScreen({ navigation, route }: any) {
         { role: 'user', content: userText },
       ];
 
+      abortRef.current?.abort();
       abortRef.current = new AbortController();
       // #1900: 60s timeout to prevent UI freeze
       const TIMEOUT_MS = 60_000;

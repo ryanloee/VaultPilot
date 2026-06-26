@@ -1053,6 +1053,17 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
     if !file_path.exists() {
         return Err(anyhow!("file does not exist: {}", path));
     }
+    // Check file size before reading to prevent OOM on large files
+    const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1 MB
+    let metadata = std::fs::metadata(&file_path)?;
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err(anyhow!(
+            "file too large ({} bytes, max {} bytes): {}",
+            metadata.len(),
+            MAX_FILE_SIZE,
+            path
+        ));
+    }
     let content = std::fs::read_to_string(&file_path)?;
     // Cap at 50KB to prevent token explosion
     const MAX_READ: usize = 50 * 1024;

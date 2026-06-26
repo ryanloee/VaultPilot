@@ -247,8 +247,9 @@ export default function ChatScreen({ navigation, route }: any) {
       // Persist streamed content — separate try-catch so UI content is preserved on failure
       try {
         await updateMessage(aiId, full);
-      } catch {
-        // DB save failed; content stays in UI, user still sees the response
+      } catch (persistErr) {
+        console.warn('[Chat] updateMessage persist failed:', persistErr);
+        Alert.alert('保存失败', 'AI 回复未能保存到数据库，内容仍在当前会话中显示。');
       }
       setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
     } catch (err: any) {

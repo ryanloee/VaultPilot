@@ -261,7 +261,8 @@ export default function ChatScreen({ navigation, route }: any) {
         if (partial) {
           try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch {}
         }
-        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
+        const abortContent = partial ? partial + '\n\n_[响应被中止]_' : undefined;
+        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: abortContent || m.content, streaming: false } : m));
       } else {
         // Append error marker without discarding streamed content; mark as error to filter from API history
         setMsgs(prev => prev.map(m => m.id === aiId

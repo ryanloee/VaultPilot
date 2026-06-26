@@ -851,16 +851,52 @@ pub async fn run_agent(
     // Only emit StepLimitReached and make a final LLM call if the loop actually
     // exhausted all steps. For timeout / token-budget exits the correct event
     // was already emitted above and an extra LLM call would waste tokens (#1689).
-    match exit_reason {
-        ExitReason::Timeout | ExitReason::TokenBudget => {
-            return Ok(AgentResult {
-                answer: String::new(),
-                steps_used: actual_steps,
-                tokens_used: total_tokens,
-                audit_log: proxy.audit_log(),
-            });
+    if matches!(exit_reason, ExitReason::Timeout | ExitReason::TokenBudget) {
+        let is_timeout = matches!(exit_reason, ExitReason::Timeout);
+        // Try to generate a final answer from accumulated tool transcripts
+        // even when we hit a limit, so the user gets a useful response (#1845).
+        if !tool_transcripts.is_empty() {
+            let remaining = config
+                .limits
+                .max_duration
+                .saturating_sub(proxy.elapsed())
+                .min(std::time::Duration::from_secs(10));
+            if remaining > std::time::Duration::from_secs(1) {
+                let answer_result = tokio::time::timeout(
+                    remaining,
+                    crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
+                )
+                .await;
+                if let Ok(Ok(answer)) = answer_result {
+                    total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
+                        + answer.usage.output_tokens.unwrap_or(0) as u64;
+                    return Ok(AgentResult {
+                        answer: answer.answer,
+                        steps_used: actual_steps,
+                        tokens_used: total_tokens,
+                        audit_log: proxy.audit_log(),
+                    });
+                }
+            }
         }
-        ExitReason::StepLimit => {}
+        // Fallback: return a descriptive message instead of empty string
+        let reason = if is_timeout {
+            "Agent session timed out"
+        } else {
+            "Agent token budget exceeded"
+        };
+        let fallback = if tool_transcripts.is_empty() {
+            format!("[{reason} before any tool results were available]")
+        } else {
+            format!("[{reason}; {} tool result(s) were collected but a final answer could not be generated]",
+                tool_transcripts.len())
+        };
+        return Ok(AgentResult {
+            answer: fallback,
+            steps_used: actual_steps,
+            tokens_used: total_tokens,
+            audit_log: proxy.audit_log(),
+        });
     }
 
     on_event(&AgentEvent::StepLimitReached { steps: max_steps });

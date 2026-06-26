@@ -3,6 +3,14 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        diagnostics: { ignoreDiagnostics: [2307] },
+      },
+    ],
+  },
   moduleNameMapper: {
     '^expo-sqlite$': '<rootDir>/src/__mocks__/expo-sqlite.ts',
     '^@react-native-async-storage/async-storage$': '<rootDir>/src/__mocks__/async-storage.ts',

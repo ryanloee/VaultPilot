@@ -80,16 +80,18 @@ export default function SessionsScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (query?: string) => {
     try {
+      setError(null);
       const data = query?.trim()
         ? await searchSessions(query.trim())
         : await getSessions(showArchived);
       setSessions(data);
     } catch (e: any) {
       console.warn('[Sessions] load failed:', e);
-      Alert.alert('加载失败', e.message || '请重试');
+      setError(e.message || '请重试');
     } finally {
       setLoading(false);
     }
@@ -208,11 +210,26 @@ export default function SessionsScreen({ navigation }: any) {
           </SwipeableRow>
         )}
         ListEmptyComponent={
-          <View style={s.empty}>
-            <Text style={[s.emptyText, { color: c.textSecondary }]}>
-              {showArchived ? '没有归档对话' : search ? '没有找到对话' : '暂无对话'}
-            </Text>
-          </View>
+          error ? (
+            <View style={s.empty}>
+              <Ionicons name="cloud-offline-outline" size={40} color={c.textSecondary} style={{ marginBottom: 12 }} />
+              <Text style={[s.emptyText, { color: c.textSecondary, marginBottom: 16 }]}>
+                加载失败：{error}
+              </Text>
+              <TouchableOpacity
+                onPress={() => { setLoading(true); load(search); }}
+                style={{ paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8, backgroundColor: accentColor }}
+              >
+                <Text style={{ color: '#FFF', fontSize: 15, fontWeight: '600' }}>重试</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={s.empty}>
+              <Text style={[s.emptyText, { color: c.textSecondary }]}>
+                {showArchived ? '没有归档对话' : search ? '没有找到对话' : '暂无对话'}
+              </Text>
+            </View>
+          )
         }
       />
     </SafeAreaView>

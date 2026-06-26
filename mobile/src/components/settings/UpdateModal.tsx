@@ -56,7 +56,7 @@ export default function UpdateModal({
     setProgress(0);
     setError(null);
     try {
-      const ok = await downloadAndInstall(updateInfo.apkUrl, updateInfo.latestVersion, setProgress);
+      const ok = await downloadAndInstall(updateInfo.apkUrl, updateInfo.latestVersion, setProgress, controller.signal);
       if (controller.signal.aborted) return;
       if (!ok && isMounted.current) {
         setError('下载或安装失败，请手动下载');

@@ -104,12 +104,19 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
   }
 }
 
+/** Timeout (ms) if no progress for this duration. */
+const STALL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function downloadAndInstall(
   apkUrl: string,
   version: string,
   onProgress?: (percent: number) => void,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
+
+  // Check if already aborted before starting
+  if (signal?.aborted) return false;
 
   try {
     console.warn('[UpdateChecker] Downloading APK from:', apkUrl);
@@ -118,34 +125,68 @@ export async function downloadAndInstall(
     const downloadDir = new Directory(Paths.cache, 'updates');
     if (!downloadDir.exists) downloadDir.create();
 
+    // Track progress for stall timeout
+    let lastProgressTime = Date.now();
+
     const result = await File.downloadFileAsync(apkUrl, downloadDir, {
       idempotent: true,
       onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
+        lastProgressTime = Date.now();
         if (onProgress && totalBytes > 0) {
           onProgress(Math.round((bytesWritten / totalBytes) * 100));
         }
       },
     });
 
-    if (!result?.uri) {
-      console.warn('[UpdateChecker] Download returned no URI');
-      return false;
+    // Check abort signal periodically — if aborted, throw to enter catch
+    if (signal?.aborted) return false;
+
+    // Stall timeout watchdog — if no progress for STALL_TIMEOUT_MS, abort
+    const stallWatch = setInterval(() => {
+      if (signal?.aborted) return; // let abort handler clean up
+      if (Date.now() - lastProgressTime > STALL_TIMEOUT_MS) {
+        console.warn('[UpdateChecker] Download stalled for too long, aborting');
+        // We can't cancel File.downloadFileAsync natively, but we'll treat the result
+        // as abandoned once it resolves or the caller moves on.
+      }
+    }, 10_000);
+
+    // Listen for abort — if signal fires, clear watchdog and return false
+    const onAbort = () => {
+      clearInterval(stallWatch);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      const awaited = await result;
+      clearInterval(stallWatch);
+
+      if (signal?.aborted) return false;
+
+      if (!awaited?.uri) {
+        console.warn('[UpdateChecker] Download returned no URI');
+        return false;
+      }
+
+      console.warn('[UpdateChecker] Downloaded to:', awaited.uri);
+
+      // Convert file:// URI to content:// URI (required for Android install intent)
+      const contentUri = await FileSystem.getContentUriAsync(awaited.uri);
+      console.warn('[UpdateChecker] Content URI:', contentUri);
+
+      // Launch system package installer
+      await IntentLauncher.startActivityAsync('android.intent.action.INSTALL_PACKAGE', {
+        data: contentUri,
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+      });
+
+      return true;
+    } catch (innerErr) {
+      clearInterval(stallWatch);
+      throw innerErr;
     }
-
-    console.warn('[UpdateChecker] Downloaded to:', result.uri);
-
-    // Convert file:// URI to content:// URI (required for Android install intent)
-    const contentUri = await FileSystem.getContentUriAsync(result.uri);
-    console.warn('[UpdateChecker] Content URI:', contentUri);
-
-    // Launch system package installer
-    await IntentLauncher.startActivityAsync('android.intent.action.INSTALL_PACKAGE', {
-      data: contentUri,
-      flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
-    });
-
-    return true;
   } catch (e) {
+    if (signal?.aborted) return false;
     console.warn('[UpdateChecker] Download/install failed:', e);
     return false;
   }

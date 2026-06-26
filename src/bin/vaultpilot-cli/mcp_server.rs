@@ -18,7 +18,8 @@ use vaultpilot_lib::storage::{
     search_notes_async, search_notes_with_context, StorageContext,
 };
 use vaultpilot_lib::{
-    ask_with_ai_with_context, finalize_chat_with_ai_answer, prepare_chat_for_ai, sanitize_error,
+    ask_with_ai_with_context, finalize_chat_with_ai_answer, prepare_chat_for_ai,
+    rollback_last_user_turn, sanitize_error,
 };
 
 use super::{chat_session_overview, new_cli_chat_session};
@@ -1433,8 +1434,16 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
             }
             Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
         },
-        Ok(Err(error)) => mcp_tool_error(sanitize_error(&error.to_string())),
-        Err(_elapsed) => mcp_tool_error("AI call timed out after 120 seconds".to_string()),
+        Ok(Err(error)) => {
+            // Rollback the orphaned user message before returning the error
+            let _ = rollback_last_user_turn(context, &prepared.active_session_id).await;
+            mcp_tool_error(sanitize_error(&error.to_string()))
+        }
+        Err(_elapsed) => {
+            // Rollback the orphaned user message before returning the timeout error
+            let _ = rollback_last_user_turn(context, &prepared.active_session_id).await;
+            mcp_tool_error("AI call timed out after 120 seconds".to_string())
+        }
     }
 }
 

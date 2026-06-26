@@ -1032,9 +1032,21 @@ async fn execute_tool(
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
             use crate::storage::save_note_with_images_async;
             let short_id: String = note_id.chars().take(8).collect();
-            let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(5); // "-" + ".md"
+            let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(4); // "-" + ".md"
             let slug = slugify(&draft.title);
-            let slug: String = slug.chars().take(max_slug_len).collect();
+            let mut byte_count = 0usize;
+            let slug: String = slug
+                .chars()
+                .take_while(|c| {
+                    let n = c.len_utf8();
+                    if byte_count + n <= max_slug_len {
+                        byte_count += n;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect();
             let note = crate::models::NoteDocument {
                 meta: crate::models::NoteMeta {
                     id: note_id.clone(),

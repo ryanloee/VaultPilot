@@ -237,9 +237,12 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
   // FTS5 on message content + LIKE on session title (titles are short, LIKE is fine)
   return db.getAllAsync<DbSession>(
     `SELECT DISTINCT s.* FROM sessions s
-     LEFT JOIN messages m ON s.id = m.session_id
-     LEFT JOIN messages_fts fts ON m.rowid = fts.rowid
-     WHERE messages_fts MATCH ? OR s.title LIKE ? ESCAPE '\'
+     WHERE s.id IN (
+       SELECT m.session_id FROM messages m
+       INNER JOIN messages_fts fts ON m.rowid = fts.rowid
+       WHERE messages_fts MATCH ?
+     )
+     OR s.title LIKE ? ESCAPE '\\'
      ORDER BY s.updated_at DESC LIMIT 50`,
     [ftsQuery, `%${escaped}%`]
   );

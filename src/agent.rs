@@ -332,8 +332,23 @@ impl ToolProxy {
         }
     }
 
+    /// Normalize a path by eliminating `.` and `..` components.
+    fn normalize_path_components(path: &str) -> String {
+        let mut components: Vec<&str> = Vec::new();
+        for component in path.split('/') {
+            match component {
+                "." | "" => {}
+                ".." => {
+                    components.pop();
+                }
+                _ => components.push(component),
+            }
+        }
+        components.join("/")
+    }
+
     /// Check if a path matches the write pattern whitelist.
-    /// Patterns are glob-style: "*.md", "daily-notes/*", "inbox/*".
+    /// Patterns are glob-style: "inbox/*", "daily-notes/*", "inbox/*".
     fn is_path_writable(&self, path: &str) -> bool {
         if self.config.write_patterns.is_empty() {
             return false;
@@ -345,10 +360,11 @@ impl ToolProxy {
             } else {
                 trimmed.to_string()
             };
+        let normalized = Self::normalize_path_components(&relative);
         self.config
             .write_patterns
             .iter()
-            .any(|pattern| glob_match(pattern, &relative))
+            .any(|pattern| glob_match(pattern, &normalized))
     }
 
     /// Confine a path to the vault directory. Relative paths are resolved
@@ -1717,6 +1733,34 @@ mod pure_function_tests {
             .check_tool_call("save_note", r#"{"path":"any/path/file.md"}"#)
             .unwrap();
         assert!(r.allowed, "** should match any path: {:?}", r.reason);
+    }
+
+    #[test]
+    fn normalize_path_components_removes_dots() {
+        assert_eq!(
+            ToolProxy::normalize_path_components("inbox/../inbox/test.md"),
+            "inbox/test.md"
+        );
+        assert_eq!(ToolProxy::normalize_path_components("./foo/bar"), "foo/bar");
+        assert_eq!(ToolProxy::normalize_path_components("a/b/../c"), "a/c");
+        assert_eq!(ToolProxy::normalize_path_components("a/./b"), "a/b");
+    }
+
+    #[test]
+    fn write_pattern_allows_normalized_path() {
+        let (tmp, mut config) = setup();
+        let _guard = TestGuard(tmp.clone());
+        config.permission = AgentPermission::ReadWrite;
+        config.write_patterns = vec!["inbox/*".into()];
+        let proxy = ToolProxy::new(config, &tmp);
+        let r = proxy
+            .check_tool_call("save_note", r#"{"path":"inbox/../inbox/test.md"}"#)
+            .unwrap();
+        assert!(
+            r.allowed,
+            "inbox/* should match inbox/../inbox/test.md after normalization: {:?}",
+            r.reason
+        );
     }
 
     // ── extract_path_args ─────────────────────────────────────────

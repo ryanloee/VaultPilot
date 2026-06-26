@@ -1420,6 +1420,7 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
 
     // Phase 3: Persist assistant turn – under lock.
     let _guard = context.chat_state_lock.lock().await;
+    let user_turn_id = prepared.user_turn_id.clone();
     match answer {
         Ok(Ok(answer)) => {
             let session_id = prepared.active_session_id.clone();
@@ -1435,19 +1436,21 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
                     mcp_tool_success(summary, structured)
                 }
                 Err(error) => {
-                    let _ = rollback_last_user_turn(context, &session_id).await;
+                    let _ = rollback_last_user_turn(context, &session_id, &user_turn_id).await;
                     mcp_tool_error(sanitize_error(&error.to_string()))
                 }
             }
         }
         Ok(Err(error)) => {
             // Rollback the orphaned user message before returning the error
-            let _ = rollback_last_user_turn(context, &prepared.active_session_id).await;
+            let _ =
+                rollback_last_user_turn(context, &prepared.active_session_id, &user_turn_id).await;
             mcp_tool_error(sanitize_error(&error.to_string()))
         }
         Err(_elapsed) => {
             // Rollback the orphaned user message before returning the timeout error
-            let _ = rollback_last_user_turn(context, &prepared.active_session_id).await;
+            let _ =
+                rollback_last_user_turn(context, &prepared.active_session_id, &user_turn_id).await;
             mcp_tool_error("AI call timed out after 120 seconds".to_string())
         }
     }

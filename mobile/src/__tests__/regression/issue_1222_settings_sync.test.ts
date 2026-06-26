@@ -168,7 +168,7 @@ describe('Settings Import (#1222)', () => {
     expect(mockAsyncStorage.setItem).toHaveBeenCalled();
   });
 
-  it('should not save keys to SecureStore when all keys are empty', async () => {
+  it('should still save keys to SecureStore even when all keys are empty to keep index in sync', async () => {
     const exportNoKeys = JSON.stringify({
       version: 1,
       exportedAt: new Date().toISOString(),
@@ -183,7 +183,10 @@ describe('Settings Import (#1222)', () => {
     mockAsyncStorage.setItem.mockResolvedValue(undefined);
     await importSettings(exportNoKeys);
 
-    // Should NOT call SecureStore when no keys are present
-    expect(mockSecureStore.setItemAsync).not.toHaveBeenCalled();
+    // Should always update SecureStore to keep key-provider index in sync (fix #1909)
+    expect(mockSecureStore.setItemAsync).toHaveBeenCalledWith(
+      'vaultpilot_provider_keys',
+      JSON.stringify([''])
+    );
   });
 });

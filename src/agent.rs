@@ -1741,18 +1741,9 @@ mod pure_function_tests {
             ToolProxy::normalize_path_components("inbox/../inbox/test.md"),
             "inbox/test.md"
         );
-        assert_eq!(
-            ToolProxy::normalize_path_components("./foo/bar"),
-            "foo/bar"
-        );
-        assert_eq!(
-            ToolProxy::normalize_path_components("a/b/../c"),
-            "a/c"
-        );
-        assert_eq!(
-            ToolProxy::normalize_path_components("a/./b"),
-            "a/b"
-        );
+        assert_eq!(ToolProxy::normalize_path_components("./foo/bar"), "foo/bar");
+        assert_eq!(ToolProxy::normalize_path_components("a/b/../c"), "a/c");
+        assert_eq!(ToolProxy::normalize_path_components("a/./b"), "a/b");
     }
 
     #[test]
@@ -1765,7 +1756,11 @@ mod pure_function_tests {
         let r = proxy
             .check_tool_call("save_note", r#"{"path":"inbox/../inbox/test.md"}"#)
             .unwrap();
-        assert!(r.allowed, "inbox/* should match inbox/../inbox/test.md after normalization: {:?}", r.reason);
+        assert!(
+            r.allowed,
+            "inbox/* should match inbox/../inbox/test.md after normalization: {:?}",
+            r.reason
+        );
     }
 
     // ── extract_path_args ─────────────────────────────────────────

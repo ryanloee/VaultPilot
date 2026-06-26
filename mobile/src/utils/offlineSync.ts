@@ -32,6 +32,11 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
     setPendingCount(count);
   }, []);
 
+  // Keep a ref to the latest refresh callback so the online-transition
+  // effect never captures a stale closure (fixes #2010).
+  const refreshRef = useRef(refresh);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+
   // Initial load
   useEffect(() => {
     refresh().catch(e => console.warn('[OfflineSync] refresh failed:', e));
@@ -42,12 +47,12 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
     let cancelled = false;
     if (isOnline && !prevOnline.current) {
       flushPendingSyncs()
-        .then(() => { if (!cancelled) refresh(); })
+        .then(() => { if (!cancelled) refreshRef.current(); })
         .catch(e => console.warn('[OfflineSync] flush failed:', e));
     }
     prevOnline.current = isOnline;
     return () => { cancelled = true; };
-  }, [isOnline, refresh]);
+  }, [isOnline]);
 
   return { pendingCount, refresh };
 }

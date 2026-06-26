@@ -128,7 +128,8 @@ export async function downloadAndInstall(
     // Track progress for stall timeout
     let lastProgressTime = Date.now();
 
-    const result = await File.downloadFileAsync(apkUrl, downloadDir, {
+    // Start download without awaiting — so watchdog can monitor progress during download
+    const result = File.downloadFileAsync(apkUrl, downloadDir, {
       idempotent: true,
       onProgress: ({ bytesWritten, totalBytes }: { bytesWritten: number; totalBytes: number }) => {
         lastProgressTime = Date.now();
@@ -137,9 +138,6 @@ export async function downloadAndInstall(
         }
       },
     });
-
-    // Check abort signal periodically — if aborted, throw to enter catch
-    if (signal?.aborted) return false;
 
     // Stall timeout watchdog — if no progress for STALL_TIMEOUT_MS, abort
     const stallWatch = setInterval(() => {
@@ -151,7 +149,7 @@ export async function downloadAndInstall(
       }
     }, 10_000);
 
-    // Listen for abort — if signal fires, clear watchdog and return false
+    // Listen for abort — if signal fires, clear watchdog
     const onAbort = () => {
       clearInterval(stallWatch);
     };
@@ -181,9 +179,9 @@ export async function downloadAndInstall(
       });
 
       return true;
-    } catch (innerErr) {
+    } finally {
       clearInterval(stallWatch);
-      throw innerErr;
+      signal?.removeEventListener('abort', onAbort);
     }
   } catch (e) {
     if (signal?.aborted) return false;

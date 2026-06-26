@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert,
-  ActivityIndicator, PanResponder, Animated, Dimensions, Modal,
+  ActivityIndicator, PanResponder, Animated, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { getSessions, deleteSession, toggleArchive, togglePin, renameSession, searchSessions, DbSession } from '../db';
-import Icon from '../components/Icon';
-import type { SessionsScreenProps } from '../navigation/types';
-import { fmtTime } from '../utils/timeFormat';
 
 const SWIPE_THRESHOLD = -80;
 const ACTION_WIDTH = 160;
@@ -57,12 +55,10 @@ function SwipeableRow({ children, onDelete, onArchive }: {
   return (
     <View style={swipeStyles.rowContainer}>
       <View style={swipeStyles.actions}>
-        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#F59E0B' }]} onPress={() => { openRowCloseRef.current = null; onArchive(); }}
-          accessibilityRole="button" accessibilityLabel="归档对话">
+        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#F59E0B' }]} onPress={() => { openRowCloseRef.current = null; onArchive(); }}>
           <Text style={swipeStyles.actionText}>归档</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#EF4444' }]} onPress={() => { openRowCloseRef.current = null; onDelete(); }}
-          accessibilityRole="button" accessibilityLabel="删除对话">
+        <TouchableOpacity style={[swipeStyles.actionBtn, { backgroundColor: '#EF4444' }]} onPress={() => { openRowCloseRef.current = null; onDelete(); }}>
           <Text style={swipeStyles.actionText}>删除</Text>
         </TouchableOpacity>
       </View>
@@ -76,7 +72,7 @@ function SwipeableRow({ children, onDelete, onArchive }: {
   );
 }
 
-export default function SessionsScreen({ navigation }: SessionsScreenProps) {
+export default function SessionsScreen({ navigation }: any) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [sessions, setSessions] = useState<DbSession[]>([]);
@@ -84,24 +80,18 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [renameTarget, setRenameTarget] = useState<DbSession | null>(null);
-  const [renameText, setRenameText] = useState('');
-  const requestIdRef = useRef(0);
 
   const load = useCallback(async (query?: string) => {
-    const currentId = ++requestIdRef.current;
     try {
       const data = query?.trim()
         ? await searchSessions(query.trim())
         : await getSessions(showArchived);
-      if (requestIdRef.current !== currentId) return;
       setSessions(data);
-    } catch (e: unknown) {
-      if (requestIdRef.current !== currentId) return;
+    } catch (e: any) {
       console.warn('[Sessions] load failed:', e);
-      Alert.alert('加载失败', e instanceof Error ? e.message : '请重试');
+      Alert.alert('加载失败', e.message || '请重试');
     } finally {
-      if (requestIdRef.current === currentId) setLoading(false);
+      setLoading(false);
     }
   }, [showArchived]);
 
@@ -120,47 +110,40 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
   };
 
   const handleSelect = (session: DbSession) => {
-    // Navigate to the ChatMain screen within the ChatStack (not the tab)
-    navigation.navigate('ChatMain', { sessionId: session.id, title: session.title });
+    navigation.navigate('Chat', { sessionId: session.id, title: session.title });
   };
 
   const handleDelete = (id: string) => {
     Alert.alert('删除对话', '确定要删除吗？此操作不可撤销。', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteSession(id); await load(); } catch (e: unknown) { Alert.alert('删除失败', e instanceof Error ? e.message : '操作失败'); }
+        try { await deleteSession(id); await load(); } catch (e: any) { Alert.alert('删除失败', e.message); }
       }},
     ]);
   };
 
   const handleArchive = async (id: string) => {
-    try { await toggleArchive(id); await load(search); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
+    try { await toggleArchive(id); await load(); } catch (e: any) { Alert.alert('操作失败', e.message); }
   };
 
   const handlePin = async (id: string) => {
-    try { await togglePin(id); await load(search); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '操作失败'); }
-  };
-
-  const handleRename = async () => {
-    if (!renameTarget || !renameText.trim()) return;
-    try {
-      await renameSession(renameTarget.id, renameText.trim());
-      setRenameTarget(null);
-      setRenameText('');
-      await load(search);
-    } catch (e: unknown) {
-      Alert.alert('重命名失败', e instanceof Error ? e.message : '操作失败');
-    }
+    try { await togglePin(id); await load(); } catch (e: any) { Alert.alert('操作失败', e.message); }
   };
 
   const handleLongPress = (item: DbSession) => {
     Alert.alert(item.title || '对话操作', '', [
-      { text: '重命名', onPress: () => { setRenameTarget(item); setRenameText(item.title); } },
       { text: item.pinned ? '取消置顶' : '置顶', onPress: () => handlePin(item.id) },
       { text: showArchived ? '取消归档' : '归档', onPress: () => handleArchive(item.id) },
       { text: '删除', style: 'destructive', onPress: () => handleDelete(item.id) },
       { text: '取消', style: 'cancel' },
     ]);
+  };
+
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
   };
 
   if (loading) {
@@ -174,26 +157,26 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
       <View style={s.topBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()}
-          accessibilityRole="button" accessibilityLabel="返回">
-          <Text style={{ color: accentColor, fontSize: 16 }}>← 返回</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Ionicons name="arrow-back-outline" size={18} color={accentColor} />
+          <Text style={{ color: accentColor, fontSize: 16 }}>返回</Text>
+        </View>
         </TouchableOpacity>
-        <Text style={[s.screenTitle, { color: c.text }]} accessibilityRole="header">对话列表</Text>
-        <TouchableOpacity onPress={() => setShowArchived(v => !v)}
-          accessibilityRole="button" accessibilityLabel={showArchived ? '显示活跃对话' : '显示归档对话'}>
+        <Text style={[s.screenTitle, { color: c.text }]}>对话列表</Text>
+        <TouchableOpacity onPress={() => setShowArchived(v => !v)}>
           <Text style={{ color: accentColor, fontSize: 14 }}>{showArchived ? '活跃' : '归档'}</Text>
         </TouchableOpacity>
       </View>
 
       <View style={[s.searchBar, { borderColor: c.border }]}>
-        <Icon name="search" size={16} color={c.textSecondary} />
+        <Ionicons name="search-outline" size={18} color={c.textSecondary} style={{ marginRight: 6 }} />
         <TextInput
           style={[s.searchInput, { color: c.text }]}
           placeholder="搜索对话..."
           placeholderTextColor={c.textSecondary}
           value={search}
           onChangeText={setSearch}
-          accessibilityLabel="搜索对话"
         />
       </View>
 
@@ -213,13 +196,13 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
               onPress={() => handleSelect(item)}
               onLongPress={() => handleLongPress(item)}
               activeOpacity={0.7}
-              accessibilityRole="button"
-              accessibilityLabel={`${item.pinned ? '已置顶 ' : ''}${item.title}，${fmtTime(item.updated_at)}`}
-              accessibilityHint="点击打开对话，长按查看操作"
             >
               <View style={s.cardHeader}>
                 <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>
-                  {item.pinned ? <Icon name="pin" size={14} color={c.textSecondary} style={{ marginRight: 4 }} /> : null}{item.title}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                {item.pinned && <Ionicons name="pin" size={14} color={accentColor} style={{ marginRight: 4 }} />}
+                <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>{item.title}</Text>
+              </View>
                 </Text>
                 <Text style={[s.cardTime, { color: c.textSecondary }]}>{fmtTime(item.updated_at)}</Text>
               </View>
@@ -234,31 +217,6 @@ export default function SessionsScreen({ navigation }: SessionsScreenProps) {
           </View>
         }
       />
-      {/* Rename Modal */}
-      <Modal visible={!!renameTarget} transparent animationType="fade">
-        <View style={renameStyles.overlay}>
-          <View style={[renameStyles.content, { backgroundColor: c.card }]}>
-            <Text style={[renameStyles.title, { color: c.text }]}>重命名对话</Text>
-            <TextInput
-              style={[renameStyles.input, { color: c.text, borderColor: c.border }]}
-              value={renameText}
-              onChangeText={setRenameText}
-              placeholder="输入新标题"
-              placeholderTextColor={c.textSecondary}
-              autoFocus
-              selectTextOnFocus
-            />
-            <View style={renameStyles.buttons}>
-              <TouchableOpacity onPress={() => { setRenameTarget(null); setRenameText(''); }} style={renameStyles.btn}>
-                <Text style={{ color: c.textSecondary, fontSize: 16 }}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleRename} style={renameStyles.btn}>
-                <Text style={{ color: accentColor, fontSize: 16, fontWeight: '600' }}>确定</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -296,13 +254,4 @@ const s = StyleSheet.create({
   cardTime: { fontSize: 12 },
   empty: { alignItems: 'center', marginTop: 60 },
   emptyText: { fontSize: 15 },
-});
-
-const renameStyles = StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
-  content: { width: '80%', borderRadius: 16, padding: 20 },
-  title: { fontSize: 18, fontWeight: '700', marginBottom: 16, textAlign: 'center' },
-  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 16, marginBottom: 16 },
-  buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 16 },
-  btn: { paddingVertical: 8, paddingHorizontal: 16 },
 });

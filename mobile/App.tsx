@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet, Linking } from 'react-native';
+import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer, LinkingOptions } from '@react-navigation/native';
+import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
@@ -10,64 +11,33 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './src/db';
 import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
-import { autoSyncOnStartup } from './src/services/sync';
-import appJson from './app.json';
-import { checkForUpdate, downloadAndInstall, type UpdateInfo } from './src/utils/updateChecker';
 
 import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
 import NotesScreen from './src/screens/NotesScreen';
 import NoteEditorScreen from './src/screens/NoteEditorScreen';
-import SearchScreen from './src/screens/SearchScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
-import OnboardingScreen from './src/screens/OnboardingScreen';
 
-import type { ChatStackParamList, NotesStackParamList, RootTabParamList } from './src/navigation/types';
-
-const ONBOARDING_KEY = 'cfg_onboarding_done';
-
-const Tab = createBottomTabNavigator<RootTabParamList>();
-const ChatNativeStack = createNativeStackNavigator<ChatStackParamList>();
-const NotesNativeStack = createNativeStackNavigator<NotesStackParamList>();
+const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator();
 
 SplashScreen.preventAutoHideAsync();
 
-/** Deep link config for Quick Settings Tile (#893) and Desktop Widget (#892) */
-const linking: LinkingOptions<RootTabParamList> = {
-  prefixes: ['vaultpilot://'],
-  config: {
-    screens: {
-      Chat: {
-        screens: {
-          ChatMain: 'chat',
-          Sessions: 'chat/sessions',
-        },
-      },
-      Notes: {
-        screens: {
-          NotesList: 'note',
-          NoteEdit: 'note/:noteId',
-        },
-      },
-    },
-  },
-};
-
 function NotesStack() {
   return (
-    <NotesNativeStack.Navigator screenOptions={{ headerShown: false }}>
-      <NotesNativeStack.Screen name="NotesList" component={NotesScreen} />
-      <NotesNativeStack.Screen name="NoteEdit" component={NoteEditorScreen} />
-    </NotesNativeStack.Navigator>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="NotesList" component={NotesScreen} />
+      <Stack.Screen name="NoteEdit" component={NoteEditorScreen} />
+    </Stack.Navigator>
   );
 }
 
 function ChatStack() {
   return (
-    <ChatNativeStack.Navigator screenOptions={{ headerShown: false }}>
-      <ChatNativeStack.Screen name="ChatMain" component={ChatScreen} />
-      <ChatNativeStack.Screen name="Sessions" component={SessionsScreen} />
-    </ChatNativeStack.Navigator>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="ChatMain" component={ChatScreen} />
+      <Stack.Screen name="Sessions" component={SessionsScreen} />
+    </Stack.Navigator>
   );
 }
 
@@ -87,26 +57,22 @@ function MainTabs() {
     >
       <Tab.Screen name="Chat" component={ChatStack} options={{
         tabBarLabel: '对话',
-        tabBarIcon: ({ color }) => <TabIcon label="💬" color={color} />,
-      }} />
-      <Tab.Screen name="Search" component={SearchScreen} options={{
-        tabBarLabel: '搜索',
-        tabBarIcon: ({ color }) => <TabIcon label="🔍" color={color} />,
+        tabBarIcon: ({ color }) => <TabIcon name="chatbubble-outline" color={color} />,
       }} />
       <Tab.Screen name="Notes" component={NotesStack} options={{
         tabBarLabel: '笔记',
-        tabBarIcon: ({ color }) => <TabIcon label="📝" color={color} />,
+        tabBarIcon: ({ color }) => <TabIcon name="document-text-outline" color={color} />,
       }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{
         tabBarLabel: '设置',
-        tabBarIcon: ({ color }) => <TabIcon label="⚙️" color={color} />,
+        tabBarIcon: ({ color }) => <TabIcon name="settings-outline" color={color} />,
       }} />
     </Tab.Navigator>
   );
 }
 
-function TabIcon({ label, color }: { label: string; color: string }) {
-  return <Text style={{ fontSize: 20, color }}>{label}</Text>;
+function TabIcon({ name, color }: { name: React.ComponentProps<typeof Ionicons>['name']; color: string }) {
+  return <Ionicons name={name} size={22} color={color} />;
 }
 
 export default function App() {
@@ -114,19 +80,13 @@ export default function App() {
   const systemScheme = useColorScheme();
   const [initState, setInitState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
-  const [onboardingDone, setOnboardingDone] = useState(true);
   const loadedRef = useRef(false);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [downloadPct, setDownloadPct] = useState<number | null>(null);
-  const [dismissed, setDismissed] = useState(false);
 
   // Load saved settings on startup
   useEffect(() => {
     (async () => {
       try {
         await getDb(); // Initialize database
-        // Auto-sync with backend if configured (non-blocking)
-        autoSyncOnStartup();
       } catch (e) {
         console.error('[App] DB init failed:', e);
         setErrorMsg(String(e));
@@ -153,26 +113,12 @@ export default function App() {
           }
         }
         if (savedColor) useAppStore.getState().setAccentColor(savedColor);
-
-        // Check onboarding status
-        const onboardingStatus = await AsyncStorage.getItem(ONBOARDING_KEY);
-        setOnboardingDone(onboardingStatus === 'true');
       } catch (e) {
         console.warn('[App] Failed to load settings:', e);
       }
       loadedRef.current = true;
       setInitState('ready');
       await SplashScreen.hideAsync();
-
-      // Auto-check for update after app ready (non-blocking)
-      try {
-        const currentVer = appJson.expo.version;
-        const skipVer = await AsyncStorage.getItem('cfg_skip_update');
-        const info = await checkForUpdate(currentVer);
-        if (info && info.latestVersion !== skipVer) {
-          setUpdateInfo(info);
-        }
-      } catch {}
     })();
   }, []);
 
@@ -182,25 +128,6 @@ export default function App() {
       setIsDark(systemScheme === 'dark');
     }
   }, [systemScheme, themeMode]);
-
-  const handleUpdate = async () => {
-    if (!updateInfo?.apkUrl) {
-      if (updateInfo?.releaseUrl) {
-        Linking.openURL(updateInfo.releaseUrl);
-      }
-      return;
-    }
-    setDownloadPct(0);
-    const ok = await downloadAndInstall(updateInfo.apkUrl, updateInfo.latestVersion, setDownloadPct);
-    if (!ok) setDownloadPct(null);
-  };
-
-  const handleSkipUpdate = async () => {
-    if (updateInfo) {
-      await AsyncStorage.setItem('cfg_skip_update', updateInfo.latestVersion);
-    }
-    setDismissed(true);
-  };
 
   if (initState === 'error') {
     return (
@@ -221,68 +148,10 @@ export default function App() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        {initState === 'ready' && !onboardingDone ? (
-          <OnboardingScreen onComplete={() => setOnboardingDone(true)} />
-        ) : (
-          <NavigationContainer linking={linking}>
-            {updateInfo && !dismissed && (
-              <View style={[styles.updateBanner, { backgroundColor: isDark ? '#1E3A5F' : '#EFF6FF' }]}>
-                <Text style={[styles.updateText, { color: isDark ? '#93C5FD' : '#1D4ED8' }]}>
-                  📦 v{updateInfo.latestVersion} 可用
-                </Text>
-                {downloadPct !== null ? (
-                  <Text style={[styles.updateText, { color: isDark ? '#86EFAC' : '#15803D' }]}>
-                    下载中 {downloadPct}%
-                  </Text>
-                ) : (
-                  <View style={styles.updateButtons}>
-                    <TouchableOpacity onPress={handleUpdate} style={styles.updateBtn}>
-                      <Text style={styles.updateBtnText}>更新</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={handleSkipUpdate} style={[styles.updateBtn, { backgroundColor: 'transparent' }]}>
-                      <Text style={[styles.updateBtnText, { color: isDark ? '#9CA3AF' : '#6B7280' }]}>跳过</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </View>
-            )}
-            <MainTabs />
-          </NavigationContainer>
-        )}
+        <NavigationContainer>
+          <MainTabs />
+        </NavigationContainer>
       </ErrorBoundary>
     </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  updateBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginHorizontal: 8,
-    marginTop: 4,
-    borderRadius: 8,
-  },
-  updateText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  updateButtons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  updateBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    backgroundColor: '#3B82F6',
-    borderRadius: 6,
-  },
-  updateBtnText: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-});

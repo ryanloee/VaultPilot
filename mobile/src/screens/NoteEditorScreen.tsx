@@ -6,42 +6,29 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import Icon, { IconName } from '../components/Icon';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
-import { extractAutoTags } from '../utils/autoTag';
-import { queuePendingSync } from '../db';
-import { useNetworkState } from '../utils/networkState';
-import { applyFormat, buildClipboardText, buildAiPrefill, shouldAutoTag, parseNewTag } from '../utils/noteEditorPure';
-import type { NoteEditorScreenProps, RootTabParamList } from '../navigation/types';
-import { useNavigation } from '@react-navigation/native';
-import type { NavigationProp } from '@react-navigation/native';
 
-export default function NoteEditorScreen({ route, navigation }: NoteEditorScreenProps) {
+export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
-  const rootNav = useNavigation<NavigationProp<RootTabParamList>>();
   const { isDark, accentColor } = useAppStore();
-  const { isOnline } = useNetworkState();
-  const isOnlineRef = useRef(isOnline);
   const c = getColors(isDark, accentColor);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [folder, setFolder] = useState('');
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
-  const tagsRef = useRef<string[]>([]);
   const [newTag, setNewTag] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [previewMode, setPreviewMode] = useState(false);
   const titleRef = useRef('');
   const contentRef = useRef('');
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerRef = useRef<any>(null);
   const mountedRef = useRef(true);
-  useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
   const currentFolderRef = useRef('');
-  const originalFolderRef = useRef('');
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
@@ -58,17 +45,16 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
           setContent(note.content);
           setFolder(note.folder || '');
           currentFolderRef.current = note.folder || '';
-          originalFolderRef.current = note.folder || '';
           const noteTags = await getNoteTags(noteId);
-          if (!cancelled) { setTags(noteTags); tagsRef.current = noteTags; }
+          if (!cancelled) setTags(noteTags);
         } else {
           Alert.alert('笔记不存在', '该笔记可能已被删除', [
             { text: '返回', onPress: () => navigation.goBack() },
           ]);
         }
-      } catch (e: unknown) {
+      } catch (e: any) {
         if (cancelled) return;
-        Alert.alert('加载失败', e instanceof Error ? e.message : '请重试', [
+        Alert.alert('加载失败', e.message || '请重试', [
           { text: '返回', onPress: () => navigation.goBack() },
         ]);
         return;
@@ -79,29 +65,11 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     return () => { cancelled = true; };
   }, [noteId]);
 
-  const save = async (t?: string, ct?: string, currentTags?: string[]) => {
+  const save = async (t?: string, ct?: string) => {
     if (!mountedRef.current) return;
     setSaving(true);
     try {
       await updateNote(noteId, t ?? title, ct ?? content);
-      // Auto-tag if note has no tags yet
-      const tagsToCheck = currentTags ?? tagsRef.current;
-      if (shouldAutoTag(tagsToCheck, t ?? title)) {
-        const suggestions = extractAutoTags(t ?? title, ct ?? content);
-        for (const tag of suggestions) {
-          if (!tagsToCheck.includes(tag)) {
-            await addTag(noteId, tag);
-          }
-        }
-        if (suggestions.length > 0 && mountedRef.current) {
-          const freshTags = await getNoteTags(noteId);
-          if (mountedRef.current) { setTags(freshTags); tagsRef.current = freshTags; }
-        }
-      }
-      // Queue for backend sync if offline
-      if (!isOnlineRef.current) {
-        queuePendingSync(noteId).catch(e => console.warn('[NoteEditor] queuePendingSync failed:', e));
-      }
     } catch (e) {
       console.warn('[NoteEditor] Save failed:', e);
       if (mountedRef.current) Alert.alert('保存失败', String(e));
@@ -115,7 +83,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     pendingRef.current = { title: newTitle, content: newContent };
     timerRef.current = setTimeout(async () => {
       pendingRef.current = null;
-      await save(newTitle, newContent, tagsRef.current);
+      await save(newTitle, newContent);
     }, 1000);
   };
 
@@ -126,13 +94,12 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
       clearTimeout(timerRef.current);
       if (pendingRef.current) {
         // Fire-and-forget save on unmount — component state is already gone
-        updateNote(noteId, pendingRef.current.title, pendingRef.current.content)
-          .catch(e => console.warn('[NoteEditor] updateNote on unmount failed:', e));
+        updateNote(noteId, pendingRef.current.title, pendingRef.current.content);
         pendingRef.current = null;
       }
-      // Save folder on unmount only if actually changed
-      if (currentFolderRef.current !== originalFolderRef.current) {
-        moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder on unmount failed:', e));
+      // Save folder on unmount if it was changed
+      if (currentFolderRef.current) {
+        moveToFolder(noteId, currentFolderRef.current).catch(() => {});
       }
     };
   }, [noteId]);
@@ -157,43 +124,24 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
     { label: '`', insert: '`', desc: '代码' },
     { label: '#', insert: '# ', desc: '标题' },
     { label: '-', insert: '- ', desc: '列表' },
-    { label: '🔗', insert: '[]()', desc: '链接', icon: 'link' as const },
+    { label: 'link', insert: '[]()', desc: '链接', icon: 'link-outline' },
   ];
-
-  const AI_ACTIONS = [
-    { key: 'polish', label: '✨ 润色', prompt: '请帮我润色以下笔记内容，改善措辞和表达：' },
-    { key: 'summarize', label: '📋 总结', prompt: '请用简洁的语言总结以下笔记的要点：' },
-    { key: 'translate', label: '🌐 翻译成英文', prompt: '请将以下笔记翻译成英文：' },
-    { key: 'continue', label: '✍️ 续写', prompt: '请根据以下笔记内容，帮我继续写下去：' },
-  ];
-
-  const handleAiAction = (action: typeof AI_ACTIONS[0]) => {
-    const prefill = buildAiPrefill(action.prompt, content, title);
-    if (!prefill) {
-      Alert.alert('提示', '笔记内容为空，无法使用 AI 助手');
-      return;
-    }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    // Navigate to Chat tab with pre-filled text
-    rootNav.navigate('Chat', { screen: 'ChatMain', params: { prefillText: prefill } });
-  };
-
-  const showAiActions = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert('AI 笔记助手', '选择操作', [
-      ...AI_ACTIONS.map(a => ({ text: a.label, onPress: () => handleAiAction(a) })),
-      { text: '取消', style: 'cancel' as const },
-    ]);
-  };
 
   const insertFormat = (syntax: string) => {
     const { start, end } = selectionRef.current;
+    const isPrefix = syntax.endsWith(' ');
     setContent(prev => {
-      const result = applyFormat(prev, start, end, syntax);
-      selectionRef.current = { start: result.cursorPos, end: result.cursorPos };
-      contentRef.current = result.content;
-      autoSave(titleRef.current, result.content);
-      return result.content;
+      const before = prev.slice(0, start);
+      const selected = prev.slice(start, end);
+      const after = prev.slice(end);
+      const next = isPrefix
+        ? before + syntax + selected + after
+        : before + syntax + selected + syntax + after;
+      const newPos = isPrefix ? start + syntax.length + selected.length : start + syntax.length + selected.length + syntax.length;
+      selectionRef.current = { start: newPos, end: newPos };
+      contentRef.current = next;
+      autoSave(titleRef.current, next);
+      return next;
     });
   };
 
@@ -215,14 +163,17 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
       {/* Header */}
       <View style={[s.header, { borderBottomColor: c.border }]}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={[s.headerBtn, { color: accentColor }]}>← 返回</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Ionicons name="arrow-back-outline" size={18} color={accentColor} />
+          <Text style={[s.headerBtn, { color: accentColor }]}>返回</Text>
+        </View>
         </TouchableOpacity>
         <Text style={[s.headerTitle, { color: c.textSecondary }]}>
           {saving ? '保存中...' : '已保存'}
         </Text>
         <View style={s.headerActions}>
           <TouchableOpacity onPress={() => {
-            const text = buildClipboardText(title, content);
+            const text = content ? (title ? `${title}\n\n${content}` : content) : '';
             if (text) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); Clipboard.setStringAsync(text); }
           }}>
             <Text style={[s.headerBtn, { color: accentColor }]}>复制</Text>
@@ -239,7 +190,10 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
         onPress={() => setShowFolderPicker(!showFolderPicker)}
       >
         <Text style={[s.folderLabel, { color: c.textSecondary }]}>
-          📁 {folder || '未分类'}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Ionicons name="folder-outline" size={16} color={c.textSecondary} />
+          <Text style={[s.folderLabel, { color: c.textSecondary }]}>{folder || '未分类'}</Text>
+        </View>
         </Text>
         <Text style={[s.folderLabel, { color: accentColor }]}>
           {showFolderPicker ? '收起' : '编辑'}
@@ -251,26 +205,8 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
             style={[s.folderInput, { color: c.text, borderColor: c.border }]}
             value={folder}
             onChangeText={(f) => { setFolder(f); currentFolderRef.current = f; }}
-            onBlur={async () => {
-              try {
-                await moveToFolder(noteId, currentFolderRef.current);
-              } catch (e) {
-                console.warn('[NoteEditor] moveToFolder failed:', e);
-                setFolder(originalFolderRef.current);
-                currentFolderRef.current = originalFolderRef.current;
-                Alert.alert('移动失败', '文件夹修改未保存，请重试');
-              }
-            }}
-            onSubmitEditing={async () => {
-              try {
-                await moveToFolder(noteId, currentFolderRef.current);
-              } catch (e) {
-                console.warn('[NoteEditor] moveToFolder failed:', e);
-                setFolder(originalFolderRef.current);
-                currentFolderRef.current = originalFolderRef.current;
-                Alert.alert('移动失败', '文件夹修改未保存，请重试');
-              }
-            }}
+            onBlur={() => { moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder failed:', e)); }}
+            onSubmitEditing={() => { moveToFolder(noteId, currentFolderRef.current).catch(e => console.warn('[NoteEditor] moveToFolder failed:', e)); }}
             placeholder="输入文件夹名称"
             placeholderTextColor={c.textSecondary}
           />
@@ -285,12 +221,8 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               key={t}
               style={[s.tagChip, { backgroundColor: accentColor + '20', borderColor: accentColor }]}
               onLongPress={async () => {
-                try {
-                  await removeTag(noteId, t);
-                  setTags(prev => { tagsRef.current = prev.filter(x => x !== t); return tagsRef.current; });
-                } catch (e) {
-                  Alert.alert('删除标签失败', String(e));
-                }
+                await removeTag(noteId, t);
+                setTags(prev => prev.filter(x => x !== t));
               }}
             >
               <Text style={[s.tagText, { color: accentColor }]}>#{t}</Text>
@@ -304,15 +236,11 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               placeholder="+ 标签"
               placeholderTextColor={c.textSecondary}
               onSubmitEditing={async () => {
-                const tag = parseNewTag(newTag, tags);
-                if (tag) {
-                  try {
-                    await addTag(noteId, tag);
-                    setTags(prev => { const next = [...prev, tag]; tagsRef.current = next; return next; });
-                    setNewTag('');
-                  } catch (e) {
-                    console.warn('[NoteEditor] addTag failed:', e);
-                  }
+                const tag = newTag.trim();
+                if (tag && !tags.includes(tag)) {
+                  await addTag(noteId, tag);
+                  setTags(prev => [...prev, tag]);
+                  setNewTag('');
                 }
               }}
               returnKeyType="done"
@@ -355,7 +283,7 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
             style={[s.toolBtn, { borderColor: previewMode ? accentColor : c.border, backgroundColor: previewMode ? accentColor + '20' : 'transparent' }]}
             onPress={() => setPreviewMode(v => !v)}
           >
-            <Icon name={previewMode ? 'edit' : 'eye'} size={16} color={previewMode ? accentColor : c.text} />
+            <Text style={[s.toolLabel, { color: previewMode ? accentColor : c.text }]}></Text>
           </TouchableOpacity>
           {!previewMode && TOOLBAR.map((t) => (
             <TouchableOpacity
@@ -363,19 +291,12 @@ export default function NoteEditorScreen({ route, navigation }: NoteEditorScreen
               style={[s.toolBtn, { borderColor: c.border }]}
               onPress={() => insertFormat(t.insert)}
             >
-              {'icon' in t ? (
-                <Icon name={t.icon as IconName} size={16} color={c.text} />
-              ) : (
-                <Text style={[s.toolLabel, { color: c.text }]}>{t.label}</Text>
-              )}
+              {(t as any).icon
+                ? <Ionicons name={(t as any).icon} size={16} color={c.text} />
+                : <Text style={[s.toolLabel, { color: c.text }]}>{t.label}</Text>
+              }
             </TouchableOpacity>
           ))}
-          <TouchableOpacity
-            style={[s.toolBtn, { borderColor: accentColor, backgroundColor: accentColor + '15' }]}
-            onPress={showAiActions}
-          >
-            <Icon name="chatbubble" size={16} color={accentColor} />
-          </TouchableOpacity>
         </ScrollView>
       </View>
     </KeyboardAvoidingView>

@@ -5,15 +5,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
-import Icon from '../components/Icon';
-import type { NotesScreenProps } from '../navigation/types';
-import { fmtTime } from '../utils/timeFormat';
-import { useNetworkState } from '../utils/networkState';
-import { usePendingSync } from '../utils/offlineSync';
 
-export default function NotesScreen({ navigation }: NotesScreenProps) {
+export default function NotesScreen({ navigation }: any) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [notes, setNotes] = useState<DbNote[]>([]);
@@ -23,21 +19,19 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
-  const { isOnline } = useNetworkState();
-  const { pendingCount } = usePendingSync();
 
   const load = useCallback(async (query: string, folder?: string) => {
     const currentId = ++requestIdRef.current;
     try {
-      const data = query ? await searchNotes(query, folder) : await getNotes(folder);
+      const data = query ? await searchNotes(query) : await getNotes(folder);
       const folderList = await getFolders();
       if (requestIdRef.current !== currentId) return;
       setNotes(data);
       setFolders(folderList);
-    } catch (e: unknown) {
+    } catch (e: any) {
       if (requestIdRef.current !== currentId) return;
       console.warn('[Notes] load failed:', e);
-      Alert.alert('加载失败', e instanceof Error ? e.message : '请重试');
+      Alert.alert('加载失败', e.message || '请重试');
     } finally {
       if (requestIdRef.current === currentId) setLoading(false);
     }
@@ -54,8 +48,8 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const id = await createNote();
       navigation.navigate('NoteEdit', { noteId: id });
-    } catch (e: unknown) {
-      Alert.alert('创建失败', e instanceof Error ? e.message : '请重试');
+    } catch (e: any) {
+      Alert.alert('创建失败', e.message || '请重试');
     }
   };
 
@@ -69,7 +63,7 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Alert.alert(item.title || '笔记操作', '', [
       { text: item.starred ? '取消收藏' : '收藏', onPress: async () => {
-        try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: unknown) { Alert.alert('操作失败', e instanceof Error ? e.message : '请重试'); }
+        try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
       }},
       { text: '复制内容', onPress: () => {
         const text = item.content ? (item.title ? `${item.title}\n\n${item.content}` : item.content) : '';
@@ -84,9 +78,16 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteNote(id); await load(search, activeFolder); } catch (e: unknown) { Alert.alert('删除失败', e instanceof Error ? e.message : '请重试'); }
+        try { await deleteNote(id); await load(search, activeFolder); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
       }},
     ]);
+  };
+
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
   };
 
   const renderItem = ({ item }: { item: DbNote }) => (
@@ -94,14 +95,12 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
       style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}
       onPress={() => navigation.navigate('NoteEdit', { noteId: item.id })}
       onLongPress={() => handleLongPress(item)}
-      accessibilityRole="button"
-      accessibilityLabel={`${item.starred ? '已收藏 ' : ''}${item.title || '无标题'}${item.folder ? `，文件夹: ${item.folder}` : ''}`}
-      accessibilityHint="点击编辑，长按查看操作"
     >
       <View style={s.cardHeader}>
-        <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>
-          {item.starred ? '⭐ ' : ''}{item.title}
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+          {item.starred && <Ionicons name="star" size={14} color="#F59E0B" style={{ marginRight: 4 }} />}
+          <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>{item.title}</Text>
+        </View>
         <Text style={[s.cardTime, { color: c.textSecondary }]}>{fmtTime(item.updated_at)}</Text>
       </View>
       <Text style={[s.cardPreview, { color: c.textSecondary }]} numberOfLines={2}>
@@ -120,27 +119,17 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
 
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
-
       {/* Search bar */}
       <View style={[s.searchBar, { borderColor: c.border }]}>
-        <Icon name="search" size={16} color={c.textSecondary} />
+        <Ionicons name="search-outline" size={18} color={c.textSecondary} style={{ marginRight: 6 }} />
         <TextInput
           style={[s.searchInput, { color: c.text }]}
           placeholder="搜索笔记..."
           placeholderTextColor={c.textSecondary}
           value={search}
           onChangeText={setSearch}
-          accessibilityLabel="搜索笔记"
         />
       </View>
-
-      {/* Offline banner */}
-      {!isOnline && (
-        <View style={{ backgroundColor: '#FEF3C7', paddingVertical: 6, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' }}>
-          <Icon name="wifi-off" size={13} color="#92400E" />
-          <Text style={{ color: '#92400E', fontSize: 13, flex: 1 }}> 离线模式 — 本地笔记可查看编辑{pendingCount > 0 ? ` · ${pendingCount} 条待同步` : ''}</Text>
-        </View>
-      )}
 
       {/* Folder chips */}
       {folders.length > 0 && (
@@ -148,7 +137,6 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
           <TouchableOpacity
             style={[s.chip, { backgroundColor: activeFolder === undefined ? accentColor : c.card, borderColor: c.border }]}
             onPress={() => setActiveFolder(undefined)}
-            accessibilityRole="button" accessibilityLabel="显示全部笔记"
           >
             <Text style={[s.chipText, { color: activeFolder === undefined ? '#FFF' : c.text }]}>全部</Text>
           </TouchableOpacity>
@@ -157,7 +145,6 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
               key={f}
               style={[s.chip, { backgroundColor: activeFolder === f ? accentColor : c.card, borderColor: c.border }]}
               onPress={() => setActiveFolder(activeFolder === f ? undefined : f)}
-              accessibilityRole="button" accessibilityLabel={`文件夹: ${f}`}
             >
               <Text style={[s.chipText, { color: activeFolder === f ? '#FFF' : c.text }]}>{f}</Text>
             </TouchableOpacity>
@@ -186,8 +173,6 @@ export default function NotesScreen({ navigation }: NotesScreenProps) {
       <TouchableOpacity
         style={[s.fab, { backgroundColor: accentColor }]}
         onPress={handleNew}
-        accessibilityRole="button"
-        accessibilityLabel="新建笔记"
       >
         <Text style={s.fabText}>+</Text>
       </TouchableOpacity>

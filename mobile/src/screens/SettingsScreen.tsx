@@ -1,21 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert } from 'react-native';
+import {
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useAppStore, getColors, isValidThemeMode, ApiFormat, ProviderConfig, PROVIDERS } from '../store';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, ApiFormat, ProviderConfig } from '../store';
 import { checkApi, getSettings, saveSettings } from '../api/client';
-import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
-import { checkForUpdate, type UpdateInfo } from '../utils/updateChecker';
-import { exportSettings, importSettings } from '../utils/settingsSync';
-import * as Clipboard from 'expo-clipboard';
-import { getServerConfig, setServerConfig, syncNotesFromServer, getLastSyncTime } from '../services/sync';
-import { ProviderList, ProviderEditor, ThemeSection, UpdateModal, AddProviderModal } from '../components/settings';
-import Icon from '../components/Icon';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
-const SKIP_UPDATE_KEY = 'cfg_skip_update_version';
 
 export default function SettingsScreen() {
   const store = useAppStore();
@@ -24,13 +19,7 @@ export default function SettingsScreen() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [showUpdateModal, setShowUpdateModal] = useState(false);
-  const [serverUrl, setServerUrl] = useState('');
-  const [serverToken, setServerToken] = useState('');
-  const [syncing, setSyncing] = useState(false);
-  const [lastSync, setLastSync] = useState<string | null>(null);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   // Active provider values for editing
   const activeIdx = store.providers.length > 0
@@ -44,33 +33,19 @@ export default function SettingsScreen() {
   const [apiFormat, setApiFormat] = useState<ApiFormat>(active?.apiFormat ?? store.apiFormat);
   const [providerName, setProviderName] = useState(active?.name ?? '');
 
-  // Sync local state when active provider changes or key is restored from SecureStore
+  // Sync local state when active provider changes
   useEffect(() => {
-    let cancelled = false;
     if (active) {
       setApiBase(active.apiBase);
-      if (active.apiKey) {
-        setApiKey(active.apiKey);
-      } else {
-        SecureStore.getItemAsync('vaultpilot_provider_keys').then(raw => {
-          if (cancelled || !raw) return;
-          try {
-            const keys: string[] = JSON.parse(raw);
-            const key = keys[activeIdx] ?? '';
-            if (key) setApiKey(key);
-          } catch (e) { console.warn('[Settings] Failed to restore provider key:', e); }
-        });
-      }
+      setApiKey(active.apiKey);
       setModel(active.model);
       setApiFormat(active.apiFormat);
       setProviderName(active.name);
     }
-    return () => { cancelled = true; };
-  }, [activeIdx, active?.apiKey, active?.apiBase, active?.model, active?.apiFormat, active?.name]);
+  }, [activeIdx]);
 
   // Load saved settings on mount
   useEffect(() => {
-    let cancelled = false;
     (async () => {
       try {
         const [api, themeMode, accentColor] = await Promise.all([
@@ -78,7 +53,7 @@ export default function SettingsScreen() {
           AsyncStorage.getItem(THEME_KEY),
           AsyncStorage.getItem(ACCENT_KEY),
         ]);
-        if (cancelled) return;
+        // If no providers yet, migrate from legacy flat fields
         if (store.providers.length === 0 && api.apiBase) {
           const migrated: ProviderConfig = {
             name: '默认',
@@ -89,6 +64,7 @@ export default function SettingsScreen() {
           };
           store.addProvider(migrated);
         } else if (store.providers.length === 0) {
+          // Add default OpenCode Zen
           store.addProvider({
             name: 'OpenCode Zen',
             apiBase: 'https://opencode.ai/zen/v1',
@@ -100,59 +76,19 @@ export default function SettingsScreen() {
         if (themeMode && isValidThemeMode(themeMode)) store.setThemeMode(themeMode);
         if (accentColor) store.setAccentColor(accentColor);
       } catch (e) {
-        if (!cancelled) console.warn('[Settings] Failed to load:', e);
+        console.warn('[Settings] Failed to load:', e);
       }
-      if (cancelled) return;
-      try {
-        const cfg = await getServerConfig();
-        if (cancelled) return;
-        setServerUrl(cfg.url);
-        setServerToken(cfg.token);
-        const ls = await getLastSyncTime();
-        if (!cancelled) setLastSync(ls);
-      } catch (e) { if (!cancelled) console.warn('[Settings] Failed to load server config:', e); }
-
-      // Auto-check for updates
-      if (cancelled) return;
-      try {
-        const skipVersion = await AsyncStorage.getItem(SKIP_UPDATE_KEY);
-        const info = await checkForUpdate(appJson.expo.version);
-        if (cancelled) return;
-        if (info && info.latestVersion !== skipVersion) {
-          setUpdateInfo(info);
-          setShowUpdateModal(true);
-        }
-      } catch (e) { if (!cancelled) console.warn('[Settings] Auto-update check failed:', e); }
     })();
-    return () => { cancelled = true; };
   }, []);
-
-  const handleCheckUpdate = async () => {
-    setCheckingUpdate(true);
-    try {
-      const info = await checkForUpdate(appJson.expo.version);
-      if (info) {
-        setUpdateInfo(info);
-        setShowUpdateModal(true);
-      } else {
-        Alert.alert('已是最新', `当前版本 v${appJson.expo.version} 已是最新`);
-      }
-    } catch (e) {
-      console.warn('[Settings] Check update failed:', e);
-      Alert.alert('检查失败', '无法连接到更新服务器');
-    } finally {
-      setCheckingUpdate(false);
-    }
-  };
 
   const saveActiveProvider = async () => {
     if (activeIdx < 0) return;
+    store.updateProvider(activeIdx, { name: providerName, apiBase, apiKey, model, apiFormat });
     try {
       await saveSettings({ apiBase, apiKey, model, apiFormat });
-      store.updateProvider(activeIdx, { name: providerName, apiBase, apiKey, model, apiFormat });
       Alert.alert('已保存', '设置已保存');
-    } catch (e: unknown) {
-      Alert.alert('保存失败', e instanceof Error ? e.message : '请重试');
+    } catch (e: any) {
+      Alert.alert('保存失败', e.message || '请重试');
     }
   };
 
@@ -160,16 +96,16 @@ export default function SettingsScreen() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await checkApi({ apiBase, apiKey, model, apiFormat });
-      setTestResult(res.ok ? '✅ 连接成功' : `❌ ${res.error}`);
-    } catch (e: unknown) {
-      setTestResult(`❌ ${e instanceof Error ? e.message : '连接失败'}`);
+      const res = await checkApi({ apiBase, apiKey, apiFormat });
+      setTestResult(res.ok ? '连接成功' : `连接失败: ${res.error}`);
+    } catch (e: any) {
+      setTestResult(`连接失败: ${e.message || '连接失败'}`);
     } finally {
       setTesting(false);
     }
   };
 
-  const addFromPreset = (preset: typeof PROVIDERS[number]) => {
+  const addFromPreset = (preset: typeof PROVIDERS[0]) => {
     store.addProvider({
       name: preset.name,
       apiBase: preset.base,
@@ -202,251 +138,279 @@ export default function SettingsScreen() {
     ]);
   };
 
-  const selectPresetUrl = (preset: typeof PROVIDERS[number]) => {
+  const selectPresetUrl = (preset: typeof PROVIDERS[0]) => {
     setApiBase(preset.base);
     setApiFormat(preset.format);
     if (preset.models.length && !model) setModel(preset.models[0]);
   };
 
-  const handleThemeChange = async (mode: 'light' | 'dark' | 'system') => {
-    store.setThemeMode(mode);
-    if (mode !== 'system') store.setIsDark(mode === 'dark');
-    try {
-      await AsyncStorage.setItem(THEME_KEY, mode);
-    } catch (e) {
-      console.warn('[Settings] Failed to persist theme mode:', e);
-    }
-  };
-
-  const handleAccentChange = async (color: string) => {
-    store.setAccentColor(color);
-    try {
-      await AsyncStorage.setItem(ACCENT_KEY, color);
-    } catch (e) {
-      console.warn('[Settings] Failed to persist accent color:', e);
-    }
-  };
-
-  const handleSkipUpdate = async () => {
-    if (updateInfo) {
-      try {
-        await AsyncStorage.setItem(SKIP_UPDATE_KEY, updateInfo.latestVersion);
-      } catch (e) {
-        console.warn('[Settings] Failed to persist skip version:', e);
-      }
-    }
-    setShowUpdateModal(false);
-  };
-
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: c.bg }]}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
-        <ProviderList
-          providers={store.providers}
-          activeIndex={activeIdx}
-          accentColor={store.accentColor}
-          textColor={c.text}
-          textColorSecondary={c.textSecondary}
-          inputBgColor={c.inputBg}
-          borderColor={c.border}
-          onSelect={store.setActiveProvider}
-          onDelete={deleteProvider}
-          onAdd={() => setShowAddModal(true)}
-        />
+    <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
 
-        {active && (
-          <ProviderEditor
-            provider={active}
-            providerName={providerName}
-            apiBase={apiBase}
-            apiKey={apiKey}
-            model={model}
-            apiFormat={apiFormat}
-            showKey={showKey}
-            testing={testing}
-            testResult={testResult}
-            accentColor={store.accentColor}
-            textColor={c.text}
-            textColorSecondary={c.textSecondary}
-            inputBgColor={c.inputBg}
-            borderColor={c.border}
-            onProviderNameChange={setProviderName}
-            onApiBaseChange={setApiBase}
-            onApiKeyChange={setApiKey}
-            onModelChange={setModel}
-            onApiFormatChange={setApiFormat}
-            onShowKeyToggle={() => setShowKey(prev => !prev)}
-            onTestConnection={testConnection}
-            onSave={saveActiveProvider}
-            onSelectPreset={selectPresetUrl}
-          />
-        )}
+      {/* ── Provider List ── */}
+      <View style={s.sectionHeader}>
+        <Text style={[s.sectionTitle, { color: c.text }]}>API 提供商</Text>
+        <TouchableOpacity onPress={() => setShowAddModal(true)} style={[s.addBtn, { borderColor: store.accentColor }]}>
+          <Text style={{ color: store.accentColor, fontWeight: '600' }}>+ 添加</Text>
+        </TouchableOpacity>
+      </View>
 
-        <ThemeSection
-          themeMode={store.themeMode}
-          accentColor={store.accentColor}
-          textColor={c.text}
-          textColorSecondary={c.textSecondary}
-          borderColor={c.border}
-          onThemeChange={handleThemeChange}
-          onAccentChange={handleAccentChange}
-        />
-
-        {/* ── Backend Server Section ── */}
-        <Text style={[styles.sectionTitle, { color: c.text, marginTop: 24 }]}>后端服务器</Text>
-        <Text style={[styles.label, { color: c.textSecondary }]}>连接电脑端同步知识库笔记</Text>
-        <TextInput
-          style={[styles.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
-          value={serverUrl}
-          onChangeText={setServerUrl}
-          placeholder="http://192.168.1.100:3000"
-          placeholderTextColor={c.textSecondary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        <TextInput
-          style={[styles.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
-          value={serverToken}
-          onChangeText={setServerToken}
-          placeholder="Token（可选）"
-          placeholderTextColor={c.textSecondary}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
-          <TouchableOpacity
-            style={[styles.saveBtn, { backgroundColor: store.accentColor, flex: 1 }]}
-            onPress={async () => {
-              try {
-                await setServerConfig(serverUrl, serverToken);
-                Alert.alert('已保存', '后端服务器配置已保存');
-              } catch (e) {
-                Alert.alert('保存失败', e instanceof Error ? e.message : '请重试');
-              }
-            }}
-          >
-            <Text style={styles.saveBtnText}>保存</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.saveBtn, { backgroundColor: '#10B981', flex: 1 }]}
-            onPress={async () => {
-              setSyncing(true);
-              try {
-                await setServerConfig(serverUrl, serverToken);
-                const result = await syncNotesFromServer();
-                const last = await getLastSyncTime();
-                setLastSync(last);
-                Alert.alert('同步完成', `新增 ${result.imported} 更新 ${result.updated} 跳过 ${result.skipped} 耗时 ${(result.duration_ms / 1000).toFixed(1)}s`);
-              } catch (e) {
-                Alert.alert('同步失败', e instanceof Error ? e.message : String(e));
-              } finally {
-                setSyncing(false);
-              }
-            }}
-            disabled={syncing}
-          >
-            <Text style={styles.saveBtnText}>{syncing ? '同步中...' : '立即同步'}</Text>
-          </TouchableOpacity>
-        </View>
-        {lastSync && (
-          <Text style={[styles.label, { color: c.textSecondary, marginTop: 4 }]}>
-            上次同步: {new Date(lastSync).toLocaleString()}
-          </Text>
-        )}
-
-        {/* ── Settings Export/Import (#1222) ── */}
-        <View style={{ marginTop: 20, gap: 8 }}>
-          <Text style={[styles.sectionTitle, { color: c.text, marginBottom: 8 }]}>设置同步</Text>
-          <TouchableOpacity
-            style={[styles.btn, { backgroundColor: store.accentColor + '15', borderColor: store.accentColor }]}
-            onPress={async () => {
-              try {
-                const json = await exportSettings(false);
-                await Clipboard.setStringAsync(json);
-                Alert.alert('已复制', '设置已复制到剪贴板（不含 API Key）\n在其他设备粘贴导入即可');
-              } catch (e) {
-                Alert.alert('导出失败', String(e));
-              }
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Icon name="export" size={16} color={store.accentColor} style={{ marginRight: 6 }} />
-              <Text style={[styles.btnText, { color: store.accentColor }]}>导出设置</Text>
+      {store.providers.map((p, i) => (
+        <TouchableOpacity
+          key={i}
+          style={[s.providerCard, {
+            backgroundColor: i === activeIdx ? store.accentColor + '15' : c.inputBg,
+            borderColor: i === activeIdx ? store.accentColor : c.border,
+          }]}
+          onPress={() => store.setActiveProvider(i)}
+        >
+          <View style={{ flex: 1 }}>
+            <View style={s.providerCardHeader}>
+              <Text style={[s.providerCardName, { color: c.text }]}>
+                {i === activeIdx ? '• ' : ''}{p.name}
+              </Text>
+              {store.providers.length > 1 && (
+                <TouchableOpacity onPress={() => deleteProvider(i)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Text style={{ color: '#EF4444', fontSize: 14 }}>删除</Text>
+                </TouchableOpacity>
+              )}
             </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, { borderColor: c.border }]}
-            onPress={async () => {
-              try {
-                const json = await Clipboard.getStringAsync();
-                if (!json.trim()) { Alert.alert('剪贴板为空'); return; }
-                const result = await importSettings(json);
-                Alert.alert('导入成功', `已导入 ${result.providersImported} 个 Provider 配置\n请重启应用生效`);
-              } catch (e) {
-                Alert.alert('导入失败', '剪贴板内容不是有效的设置 JSON');
-              }
-            }}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Icon name="import" size={16} color={c.text} style={{ marginRight: 6 }} />
-              <Text style={[styles.btnText, { color: c.text }]}>从剪贴板导入</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.versionRow}>
-          <Text style={[styles.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
-          <TouchableOpacity onPress={handleCheckUpdate} disabled={checkingUpdate}>
-            <Text style={{ color: store.accentColor, fontSize: 12 }}>
-              {checkingUpdate ? '检查中...' : '检查更新'}
+            <Text style={[s.providerCardDetail, { color: c.textSecondary }]} numberOfLines={1}>
+              {p.model} · {p.apiFormat.toUpperCase()}
             </Text>
+          </View>
+        </TouchableOpacity>
+      ))}
+
+      {/* ── Edit Active Provider ── */}
+      {active && (
+        <View style={[s.editSection, { borderColor: c.border }]}>
+          <Text style={[s.label, { color: c.textSecondary }]}>名称</Text>
+          <TextInput
+            style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+            value={providerName}
+            onChangeText={setProviderName}
+            autoCapitalize="none"
+          />
+
+          <Text style={[s.label, { color: c.textSecondary }]}>快速选择</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+            {PROVIDERS.map(p => (
+              <TouchableOpacity
+                key={p.name}
+                style={[s.presetBtn, {
+                  borderColor: (apiBase === p.base) ? store.accentColor : c.border,
+                  backgroundColor: (apiBase === p.base) ? store.accentColor + '20' : 'transparent',
+                }]}
+                onPress={() => selectPresetUrl(p)}
+              >
+                <Text style={{ color: (apiBase === p.base) ? store.accentColor : c.text, fontWeight: '500', fontSize: 13 }}>
+                  {p.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          <Text style={[s.label, { color: c.textSecondary }]}>API Base URL</Text>
+          <TextInput
+            style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+            value={apiBase}
+            onChangeText={setApiBase}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <Text style={[s.label, { color: c.textSecondary }]}>API Key</Text>
+          <View style={s.keyRow}>
+            <TextInput
+              style={[s.input, { flex: 1, backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+              value={apiKey}
+              onChangeText={setApiKey}
+              secureTextEntry={!showKey}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity onPress={() => setShowKey(!showKey)} style={s.eyeBtn}>
+              <Ionicons name={showKey ? 'eye-off-outline' : 'eye-outline'} size={20} color={c.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <Text style={[s.label, { color: c.textSecondary }]}>格式</Text>
+          <View style={s.formatRow}>
+            {(['openai', 'anthropic'] as const).map(fmt => (
+              <TouchableOpacity
+                key={fmt}
+                style={[s.formatBtn, {
+                  borderColor: apiFormat === fmt ? store.accentColor : c.border,
+                  backgroundColor: apiFormat === fmt ? store.accentColor + '20' : 'transparent',
+                }]}
+                onPress={() => setApiFormat(fmt)}
+              >
+                <Text style={{ color: apiFormat === fmt ? store.accentColor : c.text }}>
+                  {fmt === 'openai' ? 'OpenAI' : 'Anthropic'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={[s.label, { color: c.textSecondary }]}>模型</Text>
+          <TextInput
+            style={[s.input, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border }]}
+            value={model}
+            onChangeText={setModel}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          {/* Test & Save */}
+          <View style={s.btnRow}>
+            <TouchableOpacity style={[s.btn, { backgroundColor: c.inputBg, borderColor: c.border }]} onPress={testConnection} disabled={testing}>
+              {testing ? <ActivityIndicator color={store.accentColor} /> : <Text style={[s.btnText, { color: c.text }]}>测试连接</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.btn, { backgroundColor: store.accentColor }]} onPress={saveActiveProvider}>
+              <Text style={[s.btnText, { color: '#FFF' }]}>保存</Text>
+            </TouchableOpacity>
+          </View>
+          {testResult && <Text style={[s.testResult, { color: testResult.includes('连接成功') ? '#10B981' : '#EF4444' }]}>{testResult}</Text>}
+        </View>
+      )}
+
+      {/* ── Theme Section ── */}
+      <Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>外观</Text>
+
+      <Text style={[s.label, { color: c.textSecondary }]}>主题</Text>
+      <View style={s.themeRow}>
+        {(['light', 'dark', 'system'] as const).map(mode => (
+          <TouchableOpacity
+            key={mode}
+            style={[s.themeBtn, {
+              borderColor: store.themeMode === mode ? store.accentColor : c.border,
+              backgroundColor: store.themeMode === mode ? store.accentColor + '20' : 'transparent',
+            }]}
+            onPress={() => {
+              store.setThemeMode(mode);
+              if (mode !== 'system') store.setIsDark(mode === 'dark');
+              AsyncStorage.setItem(THEME_KEY, mode);
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Ionicons
+                name={mode === 'light' ? 'sunny-outline' : mode === 'dark' ? 'moon-outline' : 'phone-portrait-outline'}
+                size={16}
+                color={store.themeMode === mode ? store.accentColor : c.text}
+              />
+              <Text style={{ color: store.themeMode === mode ? store.accentColor : c.text }}>
+                {mode === 'light' ? '亮色' : mode === 'dark' ? '暗色' : '跟随系统'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={[s.label, { color: c.textSecondary }]}>主色调</Text>
+      <View style={s.colorRow}>
+        {ACCENT_COLORS.map(ac => (
+          <TouchableOpacity
+            key={ac.value}
+            style={[s.colorDot, {
+              backgroundColor: ac.value,
+              borderWidth: store.accentColor === ac.value ? 3 : 0,
+              borderColor: '#FFF',
+            }]}
+            onPress={() => {
+              store.setAccentColor(ac.value);
+              AsyncStorage.setItem(ACCENT_KEY, ac.value);
+            }}
+          />
+        ))}
+      </View>
+
+      <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
+    </ScrollView>
+
+    {/* ── Add Provider Modal ── */}
+    <Modal visible={showAddModal} transparent animationType="slide">
+      <View style={s.modalOverlay}>
+        <View style={[s.modalContent, { backgroundColor: c.card }]}>
+          <Text style={[s.sectionTitle, { color: c.text }]}>添加提供商</Text>
+          <ScrollView>
+            {PROVIDERS.map(p => (
+              <TouchableOpacity
+                key={p.name}
+                style={[s.modalItem, { borderColor: c.border }]}
+                onPress={() => addFromPreset(p)}
+              >
+                <Text style={[s.modalItemName, { color: c.text }]}>{p.name}</Text>
+                <Text style={[s.modalItemDetail, { color: c.textSecondary }]}>
+                  {p.models.slice(0, 2).join(', ')}{p.models.length > 2 ? '...' : ''}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={[s.modalItem, { borderColor: c.border }]}
+              onPress={addCustom}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="create-outline" size={18} color={store.accentColor} />
+                <Text style={[s.modalItemName, { color: store.accentColor }]}>自定义提供商</Text>
+              </View>
+            </TouchableOpacity>
+          </ScrollView>
+          <TouchableOpacity
+            style={[s.modalClose, { borderColor: c.border }]}
+            onPress={() => setShowAddModal(false)}
+          >
+            <Text style={{ color: c.textSecondary }}>取消</Text>
           </TouchableOpacity>
         </View>
-      </ScrollView>
-
-      <UpdateModal
-        visible={showUpdateModal}
-        updateInfo={updateInfo}
-        accentColor={store.accentColor}
-        textColor={c.text}
-        textColorSecondary={c.textSecondary}
-        borderColor={c.border}
-        cardBgColor={c.card}
-        onClose={() => setShowUpdateModal(false)}
-        onSkip={handleSkipUpdate}
-      />
-
-      <AddProviderModal
-        visible={showAddModal}
-        accentColor={store.accentColor}
-        textColor={c.text}
-        textColorSecondary={c.textSecondary}
-        borderColor={c.border}
-        cardBgColor={c.card}
-        onClose={() => setShowAddModal(false)}
-        onSelectPreset={addFromPreset}
-        onAddCustom={addCustom}
-      />
+      </View>
+    </Modal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+const s = StyleSheet.create({
   container: { flex: 1 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sectionTitle: { fontSize: 20, fontWeight: '700' },
+  addBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
   label: { fontSize: 13, fontWeight: '500', marginBottom: 6 },
   input: {
     borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10,
     fontSize: 15, marginBottom: 12,
   },
+  keyRow: { flexDirection: 'row', alignItems: 'center' },
+  eyeBtn: { paddingHorizontal: 12, paddingVertical: 10 },
+  btnRow: { flexDirection: 'row', gap: 12, marginTop: 4 },
   btn: {
     flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center',
     borderWidth: 1, borderColor: 'transparent',
   },
   btnText: { fontSize: 16, fontWeight: '600' },
-  version: { textAlign: 'center', fontSize: 12, marginBottom: 0 },
-  versionRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 20, marginBottom: 40 },
-  saveBtn: { paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
-  saveBtnText: { color: '#FFF', fontWeight: '600', fontSize: 14 },
+  testResult: { textAlign: 'center', marginTop: 10, fontSize: 14 },
+  providerCard: {
+    borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 8,
+  },
+  providerCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  providerCardName: { fontSize: 16, fontWeight: '600' },
+  providerCardDetail: { fontSize: 13, marginTop: 4 },
+  editSection: { marginTop: 16, paddingTop: 16, borderTopWidth: 1 },
+  presetBtn: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18,
+    borderWidth: 1, marginRight: 8,
+  },
+  formatRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  formatBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
+  themeRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  themeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
+  colorRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
+  colorDot: { width: 36, height: 36, borderRadius: 18 },
+  version: { textAlign: 'center', fontSize: 12, marginTop: 20, marginBottom: 40 },
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
+  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '70%' },
+  modalItem: { borderBottomWidth: 1, paddingVertical: 14 },
+  modalItemName: { fontSize: 16, fontWeight: '600' },
+  modalItemDetail: { fontSize: 13, marginTop: 2 },
+  modalClose: { paddingVertical: 14, alignItems: 'center', marginTop: 8, borderTopWidth: 1 },
 });

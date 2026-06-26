@@ -129,25 +129,31 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
       // Fetch full note (with retry on transient failures, matching client.ts pattern)
       let noteRes: Response | null = null;
       let lastFetchError: Error | null = null;
+      const noteTimeoutMs = 10000;
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (attempt > 0) {
           const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
           await new Promise(r => setTimeout(r, delay));
         }
+        const noteController = new AbortController();
+        const timer = setTimeout(() => noteController.abort('timeout'), noteTimeoutMs);
         try {
           noteRes = await fetch(`${url}/api/notes/${encodeURIComponent(meta.id)}`, {
             headers,
-            signal: AbortSignal.timeout(10000),
+            signal: noteController.signal,
           });
+          clearTimeout(timer);
           if (noteRes.ok) break; // success
           // Retry on 5xx (transient server errors)
           if (noteRes.status >= 500) continue;
           // 4xx — non-retryable, break immediately
           break;
         } catch (fetchErr: unknown) {
+          clearTimeout(timer);
           lastFetchError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
-          if (lastFetchError.name === 'AbortError') break; // don't retry timeouts that user aborted
-          // network error → retry
+          // Only break on user-initiated abort; timeout aborts should be retried
+          if (lastFetchError.name === 'AbortError' && noteController.signal.reason !== 'timeout') break;
+          // network error or timeout → retry
         }
       }
       if (!noteRes || !noteRes.ok) {

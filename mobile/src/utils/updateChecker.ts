@@ -127,6 +127,7 @@ export async function downloadAndInstall(
 
     // Track progress for stall timeout
     let lastProgressTime = Date.now();
+    let downloadAborted = false;
 
     // Start download without awaiting — so watchdog can monitor progress during download
     const result = File.downloadFileAsync(apkUrl, downloadDir, {
@@ -141,11 +142,10 @@ export async function downloadAndInstall(
 
     // Stall timeout watchdog — if no progress for STALL_TIMEOUT_MS, abort
     const stallWatch = setInterval(() => {
-      if (signal?.aborted) return; // let abort handler clean up
+      if (signal?.aborted || downloadAborted) return;
       if (Date.now() - lastProgressTime > STALL_TIMEOUT_MS) {
         console.warn('[UpdateChecker] Download stalled for too long, aborting');
-        // We can't cancel File.downloadFileAsync natively, but we'll treat the result
-        // as abandoned once it resolves or the caller moves on.
+        downloadAborted = true;
       }
     }, 10_000);
 
@@ -159,7 +159,7 @@ export async function downloadAndInstall(
       const awaited = await result;
       clearInterval(stallWatch);
 
-      if (signal?.aborted) return false;
+      if (signal?.aborted || downloadAborted) return false;
 
       if (!awaited?.uri) {
         console.warn('[UpdateChecker] Download returned no URI');

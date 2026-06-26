@@ -189,12 +189,10 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         style={[s.folderBar, { borderBottomColor: c.border }]}
         onPress={() => setShowFolderPicker(!showFolderPicker)}
       >
-        <Text style={[s.folderLabel, { color: c.textSecondary }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           <Ionicons name="folder-outline" size={16} color={c.textSecondary} />
           <Text style={[s.folderLabel, { color: c.textSecondary }]}>{folder || '未分类'}</Text>
         </View>
-        </Text>
         <Text style={[s.folderLabel, { color: accentColor }]}>
           {showFolderPicker ? '收起' : '编辑'}
         </Text>

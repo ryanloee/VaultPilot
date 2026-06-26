@@ -1076,6 +1076,9 @@ async fn execute_tool(
 }
 
 fn list_directory_for_agent(path: &str, vault_root: &Path) -> Result<String> {
+    // Issue #2023: Cap entries to avoid wasting tokens on huge directories.
+    const MAX_AGENT_DIR_ENTRIES: usize = 100;
+
     let directory = crate::normalize_tool_path(path, vault_root)?;
     if !directory.exists() {
         return Err(anyhow!("path does not exist: {}", path));
@@ -1084,14 +1087,44 @@ fn list_directory_for_agent(path: &str, vault_root: &Path) -> Result<String> {
         return Err(anyhow!("path is not a directory: {}", path));
     }
     let mut entries = Vec::new();
+    let mut errors = Vec::new();
+    // Issue #2022: Collect per-entry errors instead of failing the whole listing.
     for entry in std::fs::read_dir(&directory)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        entries.push(format!("{}{}", name, if is_dir { "/" } else { "" }));
+        match entry {
+            Ok(e) => {
+                let name = e.file_name().to_string_lossy().to_string();
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                entries.push(format!("{}{}", name, if is_dir { "/" } else { "" }));
+            }
+            Err(e) => errors.push(e.to_string()),
+        }
     }
     entries.sort();
-    Ok(entries.join("\n"))
+
+    let total = entries.len();
+    let truncated = total > MAX_AGENT_DIR_ENTRIES;
+    entries.truncate(MAX_AGENT_DIR_ENTRIES);
+
+    let mut output = entries.join("\n");
+    if truncated {
+        output.push_str(&format!(
+            "\n\n(Showing first {} of {} entries. Use a subdirectory path to see more.)",
+            MAX_AGENT_DIR_ENTRIES, total
+        ));
+    }
+    if !errors.is_empty() {
+        output.push_str(&format!(
+            "\n\n⚠ {} entries could not be read due to permission or I/O errors:\n{}",
+            errors.len(),
+            errors
+                .iter()
+                .take(10)
+                .map(|e| format!("- {}", e))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Ok(output)
 }
 
 fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {

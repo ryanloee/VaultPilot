@@ -79,6 +79,11 @@ export async function syncNotesFromServer(): Promise<SyncResult> {
           signal: AbortSignal.timeout(30000),
         });
         if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
+        if (listRes.status >= 500) {
+          lastNetworkErr = new Error(`获取笔记列表失败: ${listRes.status}`);
+          if (attempt >= MAX_RETRIES) break;
+          continue;
+        }
         break; // got a response (even if not ok), stop retrying
       } catch (fetchErr: unknown) {
         lastNetworkErr = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));

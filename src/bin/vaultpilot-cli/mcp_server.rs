@@ -1443,12 +1443,14 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
         }
         Ok(Err(error)) => {
             // Rollback the orphaned user message before returning the error
-            let _ = rollback_last_user_turn(context, &prepared.active_session_id, &user_turn_id).await;
+            let _ =
+                rollback_last_user_turn(context, &prepared.active_session_id, &user_turn_id).await;
             mcp_tool_error(sanitize_error(&error.to_string()))
         }
         Err(_elapsed) => {
             // Rollback the orphaned user message before returning the timeout error
-            let _ = rollback_last_user_turn(context, &prepared.active_session_id, &user_turn_id).await;
+            let _ =
+                rollback_last_user_turn(context, &prepared.active_session_id, &user_turn_id).await;
             mcp_tool_error("AI call timed out after 120 seconds".to_string())
         }
     }

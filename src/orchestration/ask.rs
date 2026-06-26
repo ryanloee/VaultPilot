@@ -951,7 +951,8 @@ fn context_status_from_usage(
 fn looks_like_small_talk(input: &str) -> bool {
     let normalized = input.trim().to_lowercase();
     // Strip trailing punctuation (e.g. "你好！" -> "你好", "hi!" -> "hi")
-    let stripped = normalized.trim_end_matches(|c: char| c.is_ascii_punctuation() || "！？。、，…~·".contains(c));
+    let stripped = normalized
+        .trim_end_matches(|c: char| c.is_ascii_punctuation() || "！？。、，…~·".contains(c));
     [
         "你好",
         "hi",

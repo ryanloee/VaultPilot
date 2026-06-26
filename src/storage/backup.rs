@@ -23,8 +23,9 @@ fn windows_remove_if_exists(path: &Path) {
     }
 }
 
-/// Auto-backup the SQLite database, keeping the last 3 backups.
-/// Creates rotating backups: db.bak, db.bak.1, db.bak.2
+/// Auto-backup the SQLite database, keeping the last 3 historical backups.
+/// Creates rotating backups: db.bak, db.bak.1, db.bak.2, db.bak.3
+/// where .bak is the most recent copy and .bak.3 is the oldest kept.
 pub(crate) fn auto_backup_database(db_path: &Path) -> Result<()> {
     if !db_path.exists() {
         debug!("no existing database to backup");
@@ -38,17 +39,17 @@ pub(crate) fn auto_backup_database(db_path: &Path) -> Result<()> {
     let file_name_str = file_name.to_string_lossy();
     let max_backups = 3;
 
-    // Rotate existing backups: .bak.2 -> delete, .bak.1 -> .bak.2, .bak -> .bak.1
-    // First delete any backup that would overflow, then rotate in reverse order.
-    // This prevents data loss when intermediate backups are missing.
-    for i in (1..max_backups).rev() {
-        let path = backup_dir.join(format!("{file_name_str}.bak.{i}"));
-        if path.exists() && i + 1 >= max_backups {
-            if let Err(e) = fs::remove_file(&path) {
-                tracing::warn!(path = %path.display(), error = %e, "Failed to remove old backup");
-            }
+    // 1. Delete the oldest backup that would overflow the limit (if it exists).
+    //    We keep `max_backups` historical backups (.bak.1 .. .bak.{max_backups}),
+    //    so .bak.{max_backups} is the one to remove before rotating.
+    let overflow = backup_dir.join(format!("{file_name_str}.bak.{max_backups}"));
+    if overflow.exists() {
+        if let Err(e) = fs::remove_file(&overflow) {
+            tracing::warn!(path = %overflow.display(), error = %e, "Failed to remove old backup");
         }
     }
+
+    // 2. Rotate: .bak.{max_backups-1} → .bak.{max_backups}, ..., .bak.1 → .bak.2
     for i in (1..max_backups).rev() {
         let older = backup_dir.join(format!("{file_name_str}.bak.{i}"));
         let newer = backup_dir.join(format!("{file_name_str}.bak.{}", i + 1));
@@ -176,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn regression_1212_backup_fourth_run_deletes_oldest() {
+    fn regression_1893_backup_fourth_run_keeps_three_historical() {
         let dir = unique_temp_dir("fourth");
         let db_path = dir.join("test.db");
 
@@ -185,7 +186,7 @@ mod tests {
             auto_backup_database(&db_path).unwrap();
         }
 
-        // Should only keep 3 backups
+        // Should keep 3 historical backups (.bak.1, .bak.2, .bak.3) + current (.bak)
         let bak = dir.join("test.db.bak");
         let bak1 = dir.join("test.db.bak.1");
         let bak2 = dir.join("test.db.bak.2");
@@ -194,7 +195,32 @@ mod tests {
         assert_eq!(fs::read(&bak).unwrap(), b"version 4");
         assert_eq!(fs::read(&bak1).unwrap(), b"version 3");
         assert_eq!(fs::read(&bak2).unwrap(), b"version 2");
-        assert!(!bak3.exists()); // oldest should be deleted
+        assert_eq!(fs::read(&bak3).unwrap(), b"version 1");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn regression_1893_backup_fifth_run_rotates_oldest_out() {
+        let dir = unique_temp_dir("fifth");
+        let db_path = dir.join("test.db");
+
+        for i in 1..=5 {
+            fs::write(&db_path, format!("version {i}")).unwrap();
+            auto_backup_database(&db_path).unwrap();
+        }
+
+        // After 5 runs, the oldest (version 1) should have been rotated out
+        let bak = dir.join("test.db.bak");
+        let bak1 = dir.join("test.db.bak.1");
+        let bak2 = dir.join("test.db.bak.2");
+        let bak3 = dir.join("test.db.bak.3");
+        let bak4 = dir.join("test.db.bak.4");
+
+        assert_eq!(fs::read(&bak).unwrap(), b"version 5");
+        assert_eq!(fs::read(&bak1).unwrap(), b"version 4");
+        assert_eq!(fs::read(&bak2).unwrap(), b"version 3");
+        assert_eq!(fs::read(&bak3).unwrap(), b"version 2");
+        assert!(!bak4.exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }

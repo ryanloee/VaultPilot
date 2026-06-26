@@ -178,9 +178,6 @@ async function chatAnthropic(
 
   if (!res.body) { clearTimeout(timeout); signal?.removeEventListener('abort', onSignalAbort!); throw new Error('No response body'); }
 
-  // #1332: Remove signal listener — stream has its own timeout via controller.signal
-  signal?.removeEventListener('abort', onSignalAbort!);
-
   // Wrap Anthropic SSE into OpenAI-compatible format so parseSSEStream works
   const anthropicBody = res.body;
   return new ReadableStream<Uint8Array>({
@@ -217,6 +214,7 @@ async function chatAnthropic(
         finally {
           clearTimeout(timeout);
           controller.signal.removeEventListener('abort', onTimeout);
+          signal?.removeEventListener('abort', onSignalAbort!);
         }
       })();
     },
@@ -336,8 +334,11 @@ async function chatOpenAI(
     }
     throw e;
   } finally {
-    clearTimeout(timeout);
-    if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
+    // Only clean up here if no stream was returned — stream's finally handles its own lifecycle
+    if (!streamingReturned) {
+      clearTimeout(timeout);
+      if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
+    }
   }
 }
 

@@ -68,6 +68,9 @@ export default function ThemeSection({
               },
             ]}
             onPress={() => onAccentChange(ac.value)}
+            accessibilityRole="radio"
+            accessibilityLabel={`主色调: ${ac.name}`}
+            accessibilityState={{ selected: accentColor === ac.value }}
           />
         ))}
       </View>

@@ -745,8 +745,8 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
         ));
     }
 
-    /// Maximum number of characters to return from read_file (~50 KB).
-    const READ_FILE_MAX_CHARS: usize = 50_000;
+    /// Maximum number of bytes to return from read_file (~50 KB).
+    const READ_FILE_MAX_BYTES: usize = 50_000;
     /// Maximum number of lines to return from read_file.
     const READ_FILE_MAX_LINES: usize = 200;
     /// Number of lines from the beginning of the file to keep when truncating.
@@ -760,7 +760,7 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
     let total_lines = content.lines().count();
 
     // If content fits within both limits, return as-is (no truncation needed).
-    if total_chars <= READ_FILE_MAX_CHARS && total_lines <= READ_FILE_MAX_LINES {
+    if total_bytes <= READ_FILE_MAX_BYTES && total_lines <= READ_FILE_MAX_LINES {
         return Ok(format!(
             "read_file returned content for {}:\n{}",
             display, content
@@ -787,12 +787,12 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
             )
         } else {
             // File has fewer lines than head+tail budget — show head only,
-            // but still respect the character limit.
+            // but still respect the byte limit.
             let mut keep = 1usize;
-            let mut chars = 0usize;
+            let mut byte_count = 0usize;
             for (i, line) in lines[..head_count].iter().enumerate() {
-                chars += line.chars().count();
-                if chars > READ_FILE_MAX_CHARS {
+                byte_count += line.len();
+                if byte_count > READ_FILE_MAX_BYTES {
                     break;
                 }
                 keep = i + 1;
@@ -833,16 +833,16 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
         }
     }
 
-    // Enforce character limit on the assembled output. The head+tail
+    // Enforce byte limit on the assembled output. The head+tail
     // truncation above reduces *line count* but can still exceed the
-    // character budget when individual lines are long. (#1932)
-    if output.len() > READ_FILE_MAX_CHARS {
-        let mut limit = READ_FILE_MAX_CHARS;
+    // byte budget when individual lines are long. (#1932)
+    if output.len() > READ_FILE_MAX_BYTES {
+        let mut limit = READ_FILE_MAX_BYTES;
         while limit > 0 && !output.is_char_boundary(limit) {
             limit -= 1;
         }
         output.truncate(limit);
-        output.push_str("\n\n... [output truncated to character limit] ...");
+        output.push_str("\n\n... [output truncated to byte limit] ...");
     }
 
     Ok(output)

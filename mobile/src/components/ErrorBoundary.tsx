@@ -32,7 +32,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
         <View style={[styles.container, { backgroundColor: isDark ? '#1a1a1a' : '#fff' }]}>
           <Text style={[styles.title, { color: isDark ? '#e0e0e0' : '#1a1a1a' }]}>应用出错了</Text>
           <Text style={[styles.message, { color: isDark ? '#aaa' : '#666' }]}>{this.state.error?.message}</Text>
-          <TouchableOpacity style={[styles.button, { backgroundColor: isDark ? '#4a8ac7' : '#1E3A5F' }]} onPress={this.handleRetry}>
+          <TouchableOpacity style={[styles.button, { backgroundColor: isDark ? '#4a8ac7' : '#1E3A5F' }]} onPress={this.handleRetry} accessibilityRole="button" accessibilityLabel="重试">
             <Text style={styles.buttonText}>重试</Text>
           </TouchableOpacity>
         </View>

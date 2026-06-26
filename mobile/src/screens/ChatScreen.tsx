@@ -67,6 +67,7 @@ export default function ChatScreen({ navigation, route }: any) {
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const activeLoadRef = useRef<string | null>(null);
   const isSendingRef = useRef(false);
+  const routeHandledRef = useRef(false);
 
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
@@ -97,6 +98,7 @@ export default function ChatScreen({ navigation, route }: any) {
       try {
         // If navigated from SessionsScreen with specific session
         if (route.params?.sessionId) {
+          routeHandledRef.current = true;
           await loadSession(route.params.sessionId, route.params.title || '对话');
           return;
         }
@@ -131,9 +133,10 @@ export default function ChatScreen({ navigation, route }: any) {
 
   // Handle navigation params when returning from SessionsScreen
   useEffect(() => {
-    if (route.params?.sessionId && route.params.sessionId !== sessionId) {
+    if (route.params?.sessionId && route.params.sessionId !== sessionId && !routeHandledRef.current) {
       loadSession(route.params.sessionId, route.params.title || '对话');
     }
+    routeHandledRef.current = false;
   }, [route.params?.sessionId, sessionId, loadSession]);
 
   // Abort any in-flight stream on unmount

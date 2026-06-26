@@ -148,6 +148,7 @@ export default function ChatScreen({ navigation, route }: any) {
   const send = useCallback(async () => {
     if (!input.trim() || streaming || !sessionId || isSendingRef.current) return;
     isSendingRef.current = true;
+    try {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const userText = input.trim();
 
@@ -271,6 +272,7 @@ export default function ChatScreen({ navigation, route }: any) {
           ? { ...m, content: m.content ? `${m.content}\n\n[错误] ${err.message}` : `[错误] ${err.message}`, streaming: false, isError: true }
           : m));
       }
+    }
     } finally {
       setStreaming(false);
       isSendingRef.current = false;

@@ -6,6 +6,6 @@ pub mod compress;
 pub use ask::{ask_with_ai_with_context, normalize_tool_path};
 pub use chat::{
     build_effective_question, chat_with_ai_with_context, finalize_chat_with_ai_answer,
-    prepare_chat_for_ai, PreparedChatContext,
+    prepare_chat_for_ai, rollback_last_user_turn, PreparedChatContext,
 };
 pub use compress::compress_chat_history_with_context;

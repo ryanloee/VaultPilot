@@ -190,6 +190,36 @@ pub async fn finalize_chat_with_ai_answer(
     })
 }
 
+/// Rollback the last user turn from a chat session when the AI call fails.
+/// This prevents orphaned user messages that confuse subsequent AI responses.
+/// Must be called under `chat_state_lock`.
+pub async fn rollback_last_user_turn(
+    context: &StorageContext,
+    session_id: &str,
+) -> Result<(), anyhow::Error> {
+    let mut state = load_chat_state_async(context).await?;
+    let session = state
+        .sessions
+        .iter_mut()
+        .find(|s| s.id == session_id)
+        .ok_or_else(|| anyhow::anyhow!("chat session not found: {}", session_id))?;
+
+    // Remove the last turn if it's a user message (the one we just added)
+    if let Some(last) = session.turns.last() {
+        if last.role == "user" {
+            session.turns.pop();
+        }
+    }
+
+    // If session was newly created and now has no turns, delete it
+    if session.turns.is_empty() {
+        state.sessions.retain(|s| s.id != session_id);
+    }
+
+    save_chat_state_async(context, &state).await?;
+    Ok(())
+}
+
 pub async fn build_effective_question(question: &str, image_paths: &[String]) -> String {
     let mut prompt = if question.trim().is_empty() {
         IMAGE_ONLY_PROMPT.to_string()

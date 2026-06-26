@@ -19,6 +19,8 @@ use super::chat::build_effective_question;
 
 /// Per-AI-call timeout to prevent indefinite hangs in the orchestration layer.
 const AI_CALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// Timeout for storage-layer I/O calls (NFS, slow disk, etc.).
+const STORAGE_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct ToolExecution {
@@ -177,13 +179,18 @@ pub async fn ask_with_ai_with_context(
                 }
 
                 emit_status("retrieving", format!("Searching notes: {}", query));
-                let mut new_docs = match load_context_notes_async(
-                    context,
-                    &query,
-                    &images,
-                    limit.saturating_mul(3).max(8),
+                let mut new_docs = match tokio::time::timeout(
+                    STORAGE_IO_TIMEOUT,
+                    load_context_notes_async(
+                        context,
+                        &query,
+                        &images,
+                        limit.saturating_mul(3).max(8),
+                    ),
                 )
                 .await
+                .map_err(|_| anyhow::anyhow!("storage I/O timed out (search_notes)"))
+                .and_then(|r| r)
                 {
                     Ok(docs) => docs,
                     Err(error) => {
@@ -201,7 +208,14 @@ pub async fn ask_with_ai_with_context(
                         "retrieving",
                         "No direct match; listing recent notes".to_string(),
                     );
-                    match load_recent_notes_for_overview_async(context, limit.min(12)).await {
+                    match tokio::time::timeout(
+                        STORAGE_IO_TIMEOUT,
+                        load_recent_notes_for_overview_async(context, limit.min(12)),
+                    )
+                    .await
+                    .map_err(|_| anyhow::anyhow!("storage I/O timed out (search_notes fallback)"))
+                    .and_then(|r| r)
+                    {
                         Ok(fallback_docs) => new_docs = fallback_docs,
                         Err(error) => {
                             tool_results.push(ToolExecution::new(
@@ -240,7 +254,14 @@ pub async fn ask_with_ai_with_context(
             AssistantToolCall::ListNotes { limit } => {
                 emit_status("retrieving", "Loading recent notes".to_string());
                 // Issue #763: Accumulate docs across tool rounds instead of overwriting.
-                let new_docs = match load_recent_notes_for_overview_async(context, limit).await {
+                let new_docs = match tokio::time::timeout(
+                    STORAGE_IO_TIMEOUT,
+                    load_recent_notes_for_overview_async(context, limit),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("storage I/O timed out (list_notes)"))
+                .and_then(|r| r)
+                {
                     Ok(docs) => docs,
                     Err(error) => {
                         tool_results.push(ToolExecution::new(
@@ -274,11 +295,17 @@ pub async fn ask_with_ai_with_context(
                 );
                 let path_owned = path.clone();
                 let vault_owned = settings.vault_dir.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    list_directory_result(&path_owned, Path::new(&vault_owned))
-                })
+                let result = match tokio::time::timeout(
+                    STORAGE_IO_TIMEOUT,
+                    tokio::task::spawn_blocking(move || {
+                        list_directory_result(&path_owned, Path::new(&vault_owned))
+                    }),
+                )
                 .await
-                .unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e)));
+                {
+                    Ok(inner) => inner.unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e))),
+                    Err(_) => Err(anyhow::anyhow!("storage I/O timed out (list_directory)")),
+                };
                 let is_error = result.is_err();
                 let output = match result {
                     Ok(output) => output,
@@ -298,11 +325,17 @@ pub async fn ask_with_ai_with_context(
                 );
                 let path_owned = path.clone();
                 let vault_owned = settings.vault_dir.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    read_file_result(&path_owned, Path::new(&vault_owned))
-                })
+                let result = match tokio::time::timeout(
+                    STORAGE_IO_TIMEOUT,
+                    tokio::task::spawn_blocking(move || {
+                        read_file_result(&path_owned, Path::new(&vault_owned))
+                    }),
+                )
                 .await
-                .unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e)));
+                {
+                    Ok(inner) => inner.unwrap_or_else(|e| Err(anyhow::anyhow!("task join error: {}", e))),
+                    Err(_) => Err(anyhow::anyhow!("storage I/O timed out (read_file)")),
+                };
                 let is_error = result.is_err();
                 let output = match result {
                     Ok(output) => output,
@@ -318,8 +351,13 @@ pub async fn ask_with_ai_with_context(
             AssistantToolCall::SaveNote { draft, .. } => {
                 let note_identity = format!("save_note:{}", draft.title);
                 emit_status("saving", "Saving generated note".to_string());
-                match save_note_with_images_async(context, draft_to_note_document(*draft), &images)
-                    .await
+                match tokio::time::timeout(
+                    STORAGE_IO_TIMEOUT,
+                    save_note_with_images_async(context, draft_to_note_document(*draft), &images),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("storage I/O timed out (save_note)"))
+                .and_then(|r| r)
                 {
                     Ok(saved) => {
                         let result = format!(

@@ -39,7 +39,7 @@ jobs:
 
       - name: Comment if missing
         if: steps.check.outputs.has_regression == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             github.rest.issues.createComment({

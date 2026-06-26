@@ -903,28 +903,54 @@ pub async fn run_agent(
 
     on_event(&AgentEvent::StepLimitReached { steps: max_steps });
     // Final LLM call with per-step timeout (#1574)
-    let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
-    let answer = if tool_transcripts.is_empty() {
-        tokio::time::timeout(
-            remaining,
-            crate::ai::answer_question(settings, prompt, &[], &[], &[]),
-        )
-        .await
-        .map_err(|_| anyhow!("final answer LLM call timed out"))?
-        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+    // Graceful fallback on timeout/error, consistent with timeout/token-budget paths (#1902).
+    let remaining = config
+        .limits
+        .max_duration
+        .saturating_sub(proxy.elapsed())
+        .min(std::time::Duration::from_secs(10));
+    let answer_result = if remaining > std::time::Duration::from_secs(1) {
+        if tool_transcripts.is_empty() {
+            tokio::time::timeout(
+                remaining,
+                crate::ai::answer_question(settings, prompt, &[], &[], &[]),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+        } else {
+            tokio::time::timeout(
+                remaining,
+                crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+        }
     } else {
-        tokio::time::timeout(
-            remaining,
-            crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
-        )
-        .await
-        .map_err(|_| anyhow!("final answer LLM call timed out"))?
-        .map_err(|e| anyhow!("final answer failed: {}", sanitize_error(&e.to_string())))?
+        None
     };
-    total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
-        + answer.usage.output_tokens.unwrap_or(0) as u64;
+    if let Some(answer) = answer_result {
+        total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
+            + answer.usage.output_tokens.unwrap_or(0) as u64;
+        return Ok(AgentResult {
+            answer: answer.answer,
+            steps_used: max_steps,
+            tokens_used: total_tokens,
+            audit_log: proxy.audit_log(),
+        });
+    }
+    // Fallback: return a descriptive message instead of propagating an error (#1902).
+    let fallback = if tool_transcripts.is_empty() {
+        "[Step limit reached before any tool results were available]".to_string()
+    } else {
+        format!(
+            "[Step limit reached; {} tool result(s) were collected but a final answer could not be generated]",
+            tool_transcripts.len()
+        )
+    };
     Ok(AgentResult {
-        answer: answer.answer,
+        answer: fallback,
         steps_used: max_steps,
         tokens_used: total_tokens,
         audit_log: proxy.audit_log(),

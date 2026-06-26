@@ -864,13 +864,7 @@ pub async fn run_agent(
             if remaining > std::time::Duration::from_secs(1) {
                 let answer_result = tokio::time::timeout(
                     remaining,
-                    crate::ai::answer_after_tools(
-                        settings,
-                        prompt,
-                        &tool_transcripts,
-                        &[],
-                        &[],
-                    ),
+                    crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
                 )
                 .await;
                 if let Ok(Ok(answer)) = answer_result {

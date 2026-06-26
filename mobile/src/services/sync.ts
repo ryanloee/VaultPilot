@@ -169,7 +169,7 @@ async function doSync(
   const notesToFetch: typeof allServerNotes = [];
   for (const meta of allServerNotes) {
     const serverUpdated = meta.updatedAt ?? meta.updated_at ?? '';
-    const serverTs = serverUpdated ? new Date(serverUpdated).getTime() : 0;
+    const serverTs = serverUpdated ? new Date(serverUpdated).getTime() : Infinity;
     const localNote = localMap.get(meta.id);
     if (localNote && localNote.updated_at * 1000 >= serverTs) {
       skipped++;

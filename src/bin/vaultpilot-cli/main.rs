@@ -484,7 +484,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             prompt,
             max_steps,
             auto_approve,
-        } => handle_agent(context, prompt, *max_steps, *auto_approve).await,
+        } => handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve).await,
     }
 }
 
@@ -725,6 +725,8 @@ fn chat_session_overview(session: &ChatSession) -> ChatSessionOverview {
 async fn handle_agent(
     context: &StorageContext,
     prompt: &str,
+    images: &[String],
+    history: &[vaultpilot_lib::models::ConversationTurn],
     max_steps: usize,
     auto_approve: bool,
 ) -> Result<Value> {
@@ -755,7 +757,7 @@ async fn handle_agent(
         }
     );
 
-    let result = vaultpilot_lib::agent::run_agent(&settings, context, prompt, config, |event| {
+    let result = vaultpilot_lib::agent::run_agent(&settings, context, prompt, images, history, config, |event| {
         match event {
             vaultpilot_lib::agent::AgentEvent::Thinking { step } => {
                 eprintln!("\n🧠 Step {step}: thinking...");

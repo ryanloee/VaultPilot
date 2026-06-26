@@ -467,6 +467,8 @@ async fn handle_request(
             let ctx = context.clone();
             let writer: Arc<SharedWriter> = Arc::clone(writer);
             let prompt = params.prompt.clone();
+            let images = params.images.clone();
+            let history = params.history.clone();
             let max_steps = params.max_steps.unwrap_or(20);
             let auto_approve = params.auto_approve.unwrap_or(false);
 
@@ -478,7 +480,7 @@ async fn handle_request(
                     .build()
                     .expect("failed to create agent runtime");
                 rt.block_on(async move {
-                    run_agent_task(&settings, &ctx, &prompt, max_steps, auto_approve, writer).await;
+                    run_agent_task(&settings, &ctx, &prompt, &images, &history, max_steps, auto_approve, writer).await;
                 });
             });
 
@@ -536,10 +538,13 @@ where
 
 /// Run an agent session in the background. Emits events via `writer` and
 /// handles write-approval through the global `AGENT_APPROVAL` channel.
+#[allow(clippy::too_many_arguments)]
 async fn run_agent_task(
     settings: &AppSettings,
     context: &StorageContext,
     prompt: &str,
+    images: &[String],
+    history: &[vaultpilot_lib::models::ConversationTurn],
     max_steps: usize,
     auto_approve: bool,
     writer: Arc<SharedWriter>,
@@ -555,7 +560,7 @@ async fn run_agent_task(
         ..AgentConfig::default()
     };
 
-    let result = vaultpilot_lib::agent::run_agent(settings, context, prompt, config, |event| {
+    let result = vaultpilot_lib::agent::run_agent(settings, context, prompt, images, history, config, |event| {
         match event {
             LibAgentEvent::Thinking { step } => {
                 emit_event(
@@ -869,6 +874,10 @@ struct RunAgentParams {
     max_steps: Option<usize>,
     #[serde(default)]
     auto_approve: Option<bool>,
+    #[serde(default)]
+    images: Vec<String>,
+    #[serde(default)]
+    history: Vec<vaultpilot_lib::models::ConversationTurn>,
 }
 
 #[derive(Debug, Deserialize)]

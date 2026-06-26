@@ -64,20 +64,25 @@ export default function ChatScreen({ navigation, route }: any) {
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const activeLoadRef = useRef<string | null>(null);
 
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
     abortRef.current?.abort();
+    activeLoadRef.current = sid;
     setSessionId(sid);
     setTitle(sessionTitle);
     setMsgs([]);
     setInput('');
     try {
       const history = await getMessages(sid);
+      // Guard: if a newer loadSession call has started, discard stale result
+      if (activeLoadRef.current !== sid) return;
       setMsgs(history.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
       })));
     } catch (e) {
+      if (activeLoadRef.current !== sid) return;
       console.warn('[Chat] loadSession failed:', e);
       Alert.alert('加载失败', '无法加载对话记录，请重试');
     }

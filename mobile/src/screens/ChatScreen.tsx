@@ -167,11 +167,12 @@ export default function ChatScreen({ navigation, route }: any) {
       if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
         try {
           const newId = await createSession('新对话');
+          activeSessionId = newId;
+          userId = await addMessage(newId, 'user', userText);
+          // Only update UI state after message persistence succeeds (#2053)
           setSessionId(newId);
           setTitle('新对话');
           setMsgs([]);
-          activeSessionId = newId;
-          userId = await addMessage(newId, 'user', userText);
         } catch (e2) {
           console.warn('[Chat] addMessage retry failed:', e2);
           Alert.alert('发送失败', '无法创建对话，请重试');

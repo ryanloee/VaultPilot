@@ -809,27 +809,41 @@ fn query_visual_candidate_scores(
 
     let mut scores = HashMap::new();
     let batch_size: i64 = 500;
-    let mut offset: i64 = 0;
 
-    // Only SELECT the two columns we need (note_id, perceptual_hash) to
+    // Keyset pagination keyed on the attachment id keeps the scanned row set
+    // stable across pages. A bare LIMIT/OFFSET without ORDER BY has an
+    // undefined row order, and even with ORDER BY the OFFSET window drifts
+    // when rows are inserted/deleted concurrently, which can cause
+    // attachments to be skipped or double-counted and drop their visual
+    // similarity scores from the ranking (#2147). Anchoring on `id > last_id`
+    // is robust to both problems.
+    let mut last_id = String::new();
+
+    // Only SELECT the columns we need (id, note_id, perceptual_hash) to
     // reduce I/O and memory allocation for large vaults (#504).
     loop {
         let mut count: usize = 0;
         {
             let mut statement = connection.prepare(
-                "SELECT note_id, perceptual_hash
+                "SELECT id, note_id, perceptual_hash
                  FROM attachments
-                 WHERE perceptual_hash <> ''
-                 LIMIT ?1 OFFSET ?2",
+                 WHERE perceptual_hash <> '' AND id > ?1
+                 ORDER BY id
+                 LIMIT ?2",
             )?;
-            let rows = statement.query_map(params![batch_size, offset], |row| {
-                let hash_str: String = row.get(1)?;
+            let rows = statement.query_map(params![last_id, batch_size], |row| {
+                let id: String = row.get(0)?;
+                let hash_str: String = row.get(2)?;
                 let hash = u64::from_str_radix(hash_str.trim(), 16).ok();
-                Ok((row.get::<_, String>(0)?, hash))
+                Ok((id, row.get::<_, String>(1)?, hash))
             })?;
+            let mut batch_last_id = String::new();
             for row in rows {
-                let (note_id, hash_opt) = row?;
+                let (id, note_id, hash_opt) = row?;
                 count += 1;
+                // Track the cursor for *every* row (even ones whose hash fails
+                // to parse) so the next page never re-scans them.
+                batch_last_id = id;
                 let Some(attachment_hash) = hash_opt else {
                     continue;
                 };
@@ -848,12 +862,14 @@ fn query_visual_candidate_scores(
                     .and_modify(|current: &mut i64| *current = (*current).max(best))
                     .or_insert(best);
             }
+            // Advance the cursor once the whole batch is consumed, so a
+            // partially-failing iteration restarts at the same position.
+            last_id = batch_last_id;
         }
 
         if count < batch_size as usize {
             break;
         }
-        offset += batch_size;
     }
 
     Ok(scores)
@@ -869,27 +885,37 @@ fn query_attachment_semantic_scores(
 
     let mut scores = HashMap::new();
     let batch_size: i64 = 500;
-    let mut offset: i64 = 0;
 
-    // Only SELECT the two columns we need (note_id, semantic_vector) to
+    // Keyset pagination keyed on the attachment id keeps the scanned row set
+    // stable across pages; see query_visual_candidate_scores for the full
+    // rationale (#2147).
+    let mut last_id = String::new();
+
+    // Only SELECT the columns we need (id, note_id, semantic_vector) to
     // reduce I/O and memory allocation for large vaults (#504).
     loop {
         let mut count: usize = 0;
         {
             let mut statement = connection.prepare(
-                "SELECT note_id, semantic_vector
+                "SELECT id, note_id, semantic_vector
                  FROM attachments
-                 WHERE semantic_vector <> ''
-                 LIMIT ?1 OFFSET ?2",
+                 WHERE semantic_vector <> '' AND id > ?1
+                 ORDER BY id
+                 LIMIT ?2",
             )?;
-            let rows = statement.query_map(params![batch_size, offset], |row| {
-                let sv: String = row.get(1)?;
+            let rows = statement.query_map(params![last_id, batch_size], |row| {
+                let id: String = row.get(0)?;
+                let sv: String = row.get(2)?;
                 let vector = deserialize_semantic_vector(&sv);
-                Ok((row.get::<_, String>(0)?, vector))
+                Ok((id, row.get::<_, String>(1)?, vector))
             })?;
+            let mut batch_last_id = String::new();
             for row in rows {
-                let (note_id, candidate_vector_opt) = row?;
+                let (id, note_id, candidate_vector_opt) = row?;
                 count += 1;
+                // Track the cursor for *every* row so the next page never
+                // re-scans it.
+                batch_last_id = id;
                 let Some(candidate_vector) = candidate_vector_opt else {
                     continue;
                 };
@@ -904,12 +930,14 @@ fn query_attachment_semantic_scores(
                     .and_modify(|current: &mut i64| *current = (*current).max(score))
                     .or_insert(score);
             }
+            // Advance the cursor once the whole batch is consumed, so a
+            // partially-failing iteration restarts at the same position.
+            last_id = batch_last_id;
         }
 
         if count < batch_size as usize {
             break;
         }
-        offset += batch_size;
     }
 
     Ok(scores)
@@ -1571,6 +1599,111 @@ mod tests {
         std::fs::create_dir_all(&temp).expect("temp dir");
         let ctx = crate::storage::StorageContext::for_test(&temp);
         (temp, ctx)
+    }
+
+    /// Insert `total` note + attachment pairs where every attachment shares the
+    /// supplied perceptual hash and semantic vector, forcing multi-page
+    /// pagination (batch_size is 500). Each pair gets a distinct note_id so the
+    /// caller can count scored notes. #2147.
+    fn insert_many_scored_attachments(
+        conn: &Connection,
+        total: usize,
+        perceptual_hash: &str,
+        semantic_vector: &str,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        for i in 0..total {
+            let note_id = format!("note-{i}");
+            conn.execute(
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
+                 VALUES (?1, ?2, '', '', '', '', '', '', ?3, ?3, '', ?4, '', '')",
+                params![&note_id, format!("Note {i}"), &now, format!("/p/{i}.md")],
+            )
+            .expect("insert note");
+            conn.execute(
+                "INSERT INTO attachments (id, note_id, path, file_name, stem, ocr_text, semantic_vector, perceptual_hash, created_at)
+                 VALUES (?1, ?2, ?3, '', '', '', ?4, ?5, ?6)",
+                params![
+                    format!("att-{i}"),
+                    &note_id,
+                    format!("/a/{i}.png"),
+                    semantic_vector,
+                    perceptual_hash,
+                    &now
+                ],
+            )
+            .expect("insert attachment");
+        }
+    }
+
+    /// #2147: keyset pagination must visit every matching attachment even when
+    /// the result set spans more than one batch_size page (500). All 550
+    /// attachments share the query image's perceptual hash, so every one must
+    /// receive a score — none may be dropped by unstable LIMIT/OFFSET ordering.
+    #[test]
+    fn visual_candidate_scores_visit_all_attachments_across_pages() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        super::super::pool::ensure_schema(&conn).expect("schema");
+
+        // A small image whose perceptual hash every attachment will share.
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-visual-keyset-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&tmp).expect("temp dir");
+        let query_image = tmp.join("query.png");
+        let mut img = image::GrayImage::new(9, 8);
+        for y in 0..8 {
+            for x in 0..9 {
+                img.put_pixel(x, y, image::Luma([if x < 4 { 255 } else { 0 }]));
+            }
+        }
+        img.save(&query_image).expect("save query image");
+        let query_hash =
+            compute_image_perceptual_hash(&query_image).expect("query perceptual hash");
+        let hash_hex = format!("{query_hash:016x}");
+
+        let total = 550usize;
+        insert_many_scored_attachments(&conn, total, &hash_hex, "");
+
+        let scores =
+            query_visual_candidate_scores(&conn, &[query_image.to_string_lossy().into_owned()])
+                .expect("scores");
+
+        assert_eq!(
+            scores.len(),
+            total,
+            "all {} matching attachments must be scored across pagination pages; got {}",
+            total,
+            scores.len()
+        );
+    }
+
+    /// #2147: the semantic-score query shares the same pagination mechanism and
+    /// must likewise visit every matching attachment across pages. All 550
+    /// attachments store the query's own semantic vector (cosine similarity 1.0),
+    /// so every one must be scored.
+    #[test]
+    fn attachment_semantic_scores_visit_all_attachments_across_pages() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+        super::super::pool::ensure_schema(&conn).expect("schema");
+
+        let query_text = "vaultpilot attachment semantic regression";
+        let query_vector = build_text_semantic_vector(query_text).expect("query semantic vector");
+        let semantic_vector = serialize_semantic_vector(&query_vector);
+
+        let total = 550usize;
+        insert_many_scored_attachments(&conn, total, "", &semantic_vector);
+
+        let scores = query_attachment_semantic_scores(&conn, query_text).expect("scores");
+
+        assert_eq!(
+            scores.len(),
+            total,
+            "all {} matching attachments must be scored across pagination pages; got {}",
+            total,
+            scores.len()
+        );
     }
 
     #[test]

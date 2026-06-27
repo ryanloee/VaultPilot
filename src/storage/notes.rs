@@ -1151,7 +1151,11 @@ fn index_note_file_with_connection(
     match result {
         Ok(()) => connection.execute_batch("RELEASE SAVEPOINT sp_index_note")?,
         Err(e) => {
-            let _ = connection.execute_batch("ROLLBACK TO SAVEPOINT sp_index_note");
+            // ROLLBACK TO 仅回滚变更但不从保存点栈移除保存点，必须再 RELEASE
+            // 才能结束事务；否则池化连接被归还后会"中毒"，后续写入静默丢失。
+            let _ = connection.execute_batch(
+                "ROLLBACK TO SAVEPOINT sp_index_note; RELEASE SAVEPOINT sp_index_note;",
+            );
             return Err(e);
         }
     }

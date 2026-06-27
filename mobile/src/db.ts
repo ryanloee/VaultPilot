@@ -520,9 +520,12 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
 /** Queue a note for sync when back online. */
 export async function queuePendingSync(noteId: string, action = 'update'): Promise<void> {
   const db = await getDb();
-  // Deduplicate: only one pending entry per note
+  // Deduplicate: only one pending entry per note.
+  // #2123: reset retry_count so a fresh edit doesn't inherit past failure counts
+  // (otherwise accumulated retries from earlier 5xx failures could push it to
+  // MAX_RETRY_ATTEMPTS and silently drop the new edit).
   await db.runAsync(
-    'INSERT INTO pending_syncs (note_id, action) VALUES (?, ?) ON CONFLICT(note_id) DO UPDATE SET action = excluded.action, created_at = strftime(\'%s\',\'now\')',
+    'INSERT INTO pending_syncs (note_id, action) VALUES (?, ?) ON CONFLICT(note_id) DO UPDATE SET action = excluded.action, created_at = strftime(\'%s\',\'now\'), retry_count = 0',
     [noteId, action]
   );
 }

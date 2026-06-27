@@ -113,10 +113,16 @@ pub(super) fn escape_xml_content(content: &str) -> String {
                     out.push_str("<//");
                     chars.next();
                 }
-                // Escape the specific wrapper tag name to prevent nested breakout
+                // Escape the specific wrapper tag name to prevent nested breakout.
+                // Cover all legal XML tag variants: <user_content>, <user_content attr...>,
+                // <user_content\n...>, <user_content/>, etc.
                 else {
                     let rest: String = chars.clone().take(13).collect();
-                    if rest.starts_with("user_content>") || rest.starts_with("user_content ") {
+                    if rest.starts_with("user_content")
+                        && rest.chars().nth(12).is_some_and(|ch| {
+                            matches!(ch, '>' | ' ' | '\n' | '\r' | '\t' | '/')
+                        })
+                    {
                         out.push_str("< ");
                     } else {
                         out.push('<');

@@ -232,10 +232,17 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
     const keywords = extractKeywords(allText);
     console.warn('[RAG] Extracted keywords:', keywords);
 
-    // If user explicitly asks about notes, skip keyword search and inject all recent
+    // If user explicitly asks about notes, skip keyword search and inject the most
+    // recent/starred notes (capped at MAX_CONTEXT_NOTES). Wording must reflect that
+    // only a limited slice is shown — NOT all notes — so the LLM doesn't treat it as
+    // an exhaustive list and fabricate "no such note" answers. Fixes #2157.
     if (isNoteRelatedQuery(userMessage)) {
-      console.warn('[RAG] Note-related query detected, injecting all recent notes');
+      console.warn('[RAG] Note-related query detected, injecting recent notes (capped)');
       const results = await getNotes(undefined, MAX_CONTEXT_NOTES);
+      if (results.length === 0) {
+        console.warn('[RAG] No notes returned despite noteCount > 0');
+        return null;
+      }
       const blocks = results.map(n => {
         const title = n.title || (isChinese() ? '无标题' : 'Untitled');
         const content = n.content.length > MAX_NOTE_CONTENT_CHARS
@@ -244,8 +251,8 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
         return `【${title}】\n${content}`;
       });
       return isChinese()
-        ? `以下是用户保存的所有笔记（共${noteCount}条）：\n\n${blocks.join('\n\n---\n\n')}`
-        : `Here are all the user's saved notes (${noteCount} total):\n\n${blocks.join('\n\n---\n\n')}`;
+        ? `以下是用户最近保存的 ${results.length} 条笔记（数据库共 ${noteCount} 条，此处仅展示最近/收藏的 ${results.length} 条，若用户询问的内容未在其中请如实说明）\n\n${blocks.join('\n\n---\n\n')}`
+        : `Here are the ${results.length} most recent notes from the user's database (database has ${noteCount} notes in total; only the ${results.length} most recent/starred are shown — if the user asks about something not listed here, say so honestly)\n\n${blocks.join('\n\n---\n\n')}`;
     }
 
     // Search with keywords

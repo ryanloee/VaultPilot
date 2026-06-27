@@ -93,7 +93,7 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
     if (listMatch) {
       elements.push(
         <Text key={`li-${i}`} style={[styles.paragraph, { color: textColor, paddingLeft: 8 + listMatch[1].length * 4 }]}>
-          {'• '}{renderInline(listMatch[2], textColor, accentColor)}
+          {'• '}{renderInline(listMatch[2], textColor, accentColor, isDark)}
         </Text>
       );
       continue;
@@ -105,7 +105,7 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
       const num = line.match(/^\s*(\d+)\./)?.[1] ?? '1';
       elements.push(
         <Text key={`ol-${i}`} style={[styles.paragraph, { color: textColor, paddingLeft: 8 + olMatch[1].length * 4 }]}>
-          {num}. {renderInline(olMatch[2], textColor, accentColor)}
+          {num}. {renderInline(olMatch[2], textColor, accentColor, isDark)}
         </Text>
       );
       continue;
@@ -128,7 +128,7 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
     } else {
       elements.push(
         <Text key={`p-${i}`} style={[styles.paragraph, { color: textColor }]}>
-          {renderInline(line, textColor, accentColor)}
+          {renderInline(line, textColor, accentColor, isDark)}
         </Text>
       );
     }
@@ -149,7 +149,7 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
 }
 
 /** Parse inline markdown: **bold**, *italic*, `code`, [link](url) */
-function renderInline(text: string, textColor: string, accentColor: string): React.ReactNode {
+function renderInline(text: string, textColor: string, accentColor: string, isDark: boolean): React.ReactNode {
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let key = 0;
@@ -160,7 +160,7 @@ function renderInline(text: string, textColor: string, accentColor: string): Rea
     if (codeMatch) {
       if (codeMatch[1]) parts.push(<Text key={`t${key++}`}>{codeMatch[1]}</Text>);
       parts.push(
-        <Text key={`c${key++}`} style={[styles.codeInline, { backgroundColor: '#f3f4f6', color: textColor }]}>
+        <Text key={`c${key++}`} style={[styles.codeInline, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6', color: textColor }]}>
           {codeMatch[2]}
         </Text>
       );

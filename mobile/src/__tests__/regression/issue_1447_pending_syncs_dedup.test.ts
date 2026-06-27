@@ -52,11 +52,11 @@ describe('issue #1447 — pending_syncs deduplication', () => {
     expect(createsIndex).toBe(true);
   });
 
-  it('queuePendingSync should use INSERT OR REPLACE (works with UNIQUE index)', async () => {
+  it('queuePendingSync should use UPSERT (works with UNIQUE index)', async () => {
     jest.clearAllMocks();
     await queuePendingSync('note-abc', 'update');
     expect(mockRunAsync).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT OR REPLACE INTO pending_syncs'),
+      expect.stringContaining('INSERT INTO pending_syncs'),
       ['note-abc', 'update']
     );
   });
@@ -65,7 +65,7 @@ describe('issue #1447 — pending_syncs deduplication', () => {
     jest.clearAllMocks();
     await queuePendingSync('note-xyz');
     expect(mockRunAsync).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT OR REPLACE INTO pending_syncs'),
+      expect.stringContaining('INSERT INTO pending_syncs'),
       ['note-xyz', 'update']
     );
   });

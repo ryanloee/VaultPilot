@@ -516,7 +516,7 @@ export async function queuePendingSync(noteId: string, action = 'update'): Promi
   const db = await getDb();
   // Deduplicate: only one pending entry per note
   await db.runAsync(
-    'INSERT OR REPLACE INTO pending_syncs (note_id, action) VALUES (?, ?)',
+    'INSERT INTO pending_syncs (note_id, action) VALUES (?, ?) ON CONFLICT(note_id) DO UPDATE SET action = excluded.action, created_at = strftime(\'%s\',\'now\')',
     [noteId, action]
   );
 }

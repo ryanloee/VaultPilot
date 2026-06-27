@@ -37,10 +37,10 @@ beforeEach(() => {
 });
 
 describe('Offline Sync Queue (#1220)', () => {
-  it('queuePendingSync should INSERT OR REPLACE with note_id and action', async () => {
+  it('queuePendingSync should UPSERT with note_id and action', async () => {
     await queuePendingSync('note-1', 'update');
     expect(mockRunAsync).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT OR REPLACE INTO pending_syncs'),
+      expect.stringContaining('INSERT INTO pending_syncs'),
       ['note-1', 'update']
     );
   });
@@ -48,7 +48,7 @@ describe('Offline Sync Queue (#1220)', () => {
   it('queuePendingSync should default action to update', async () => {
     await queuePendingSync('note-2');
     expect(mockRunAsync).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT OR REPLACE INTO pending_syncs'),
+      expect.stringContaining('INSERT INTO pending_syncs'),
       ['note-2', 'update']
     );
   });

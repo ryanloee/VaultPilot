@@ -1,0 +1,3 @@
+# Rotation state for VaultPilot Issue Producer cron job
+# Increment after each run
+round=2

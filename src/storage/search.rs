@@ -580,10 +580,7 @@ fn count_fts_matches(connection: &Connection, text: &str) -> Result<usize> {
 /// the SQL level. This gives an **accurate** total for FTS + filter hybrid
 /// queries, avoiding the lower-bound problem of post-filtering only the
 /// over-fetched candidate set.
-fn count_fts_matches_with_filters(
-    connection: &Connection,
-    query: &SearchQuery,
-) -> Result<usize> {
+fn count_fts_matches_with_filters(connection: &Connection, query: &SearchQuery) -> Result<usize> {
     let fts_query = make_fts_query(&query.text);
     if fts_query.trim().is_empty() {
         return Ok(0);

@@ -330,16 +330,51 @@ async fn http_get_note(
     AxumPath(note_id): AxumPath<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let note = load_note_async(&state.context, &note_id)
-        .await
-        .map_err(|e| openai_error(StatusCode::NOT_FOUND, &format!("Note not found: {e}")))?;
-    let value = serde_json::to_value(note).map_err(|e| {
-        openai_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Failed to serialize note: {e}"),
-        )
-    })?;
-    Ok(Json(value))
+    match load_note_async(&state.context, &note_id).await {
+        Ok(note) => {
+            let value = serde_json::to_value(note).map_err(|e| {
+                openai_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to serialize note: {e}"),
+                )
+            })?;
+            Ok(Json(value))
+        }
+        Err(e) => {
+            // Distinguish "not found" from real load failures. Only the
+            // not-found case is a legitimate 404; DB/IO/parse errors are
+            // server-side problems that must be 500 and must NOT leak
+            // internal details (absolute paths, SQLite text, etc.) to the
+            // client. (#2129)
+            if classify_note_load_error(&e) == StatusCode::NOT_FOUND {
+                Err(openai_error(StatusCode::NOT_FOUND, "Note not found"))
+            } else {
+                tracing::warn!("http_get_note: failed to load note {note_id}: {e}");
+                Err(openai_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to load note",
+                ))
+            }
+        }
+    }
+}
+
+/// Classify a note-load error into the appropriate HTTP status code.
+///
+/// Only the explicit "note not found" condition yields `NOT_FOUND` (404). All
+/// other failures (DB errors, file IO errors, parse errors) are server-side
+/// problems that must surface as `INTERNAL_SERVER_ERROR` (500), so callers can
+/// distinguish "permanently absent" from "temporarily unreadable" and avoid
+/// accidentally deleting a local copy on a transient failure. (#2129)
+fn classify_note_load_error(e: &anyhow::Error) -> StatusCode {
+    let is_not_found = e
+        .chain()
+        .any(|cause| cause.to_string().contains("note not found"));
+    if is_not_found {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
 }
 
 async fn http_search_notes(
@@ -829,6 +864,7 @@ fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
 
     // ── constant_time_eq ──────────────────────────────────────────
 
@@ -1280,5 +1316,47 @@ mod tests {
             "whitespace-only history should be empty, got {}",
             history.len()
         );
+    }
+
+    // ── #2129: note-load error status classification ──────────────
+
+    #[test]
+    fn classify_note_load_error_not_found_is_404() {
+        // The storage layer emits `anyhow!("note not found: {id}")` for a
+        // genuinely absent note. This must classify as 404.
+        let e = anyhow::Error::msg("note not found: some-note-id");
+        assert_eq!(classify_note_load_error(&e), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn classify_note_load_error_db_failure_is_500() {
+        // A DB / IO failure is NOT a 404 — it must be 500 so callers don't
+        // mistake a transient storage failure for a permanently absent note.
+        let e = anyhow::Error::msg("database is locked");
+        assert_eq!(
+            classify_note_load_error(&e),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn classify_note_load_error_io_failure_is_500() {
+        // File IO errors (permission denied, missing file on disk) must be 500
+        // and must not be misclassified as 404.
+        let e = anyhow::Error::msg("Permission denied (os error 13): /vault/note.md");
+        assert_eq!(
+            classify_note_load_error(&e),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn classify_note_load_error_chained_not_found_is_404() {
+        // When "note not found" appears in the error CHAIN (wrapped by another
+        // error), it should still be recognized as 404.
+        let result: Result<(), anyhow::Error> =
+            Err(anyhow::Error::msg("note not found: wrapped-id"));
+        let outer = result.context("failed during sync").unwrap_err();
+        assert_eq!(classify_note_load_error(&outer), StatusCode::NOT_FOUND);
     }
 }

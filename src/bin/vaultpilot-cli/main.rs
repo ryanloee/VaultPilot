@@ -17,10 +17,10 @@ use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     delete_note_with_context, export_all_notes_with_context, export_note_markdown_with_context,
     find_related_notes_with_context, import_markdown_with_context, initialize_storage_with_context,
-    load_chat_state_async, load_note_with_context, load_settings_with_context,
-    rebuild_index_with_context, save_chat_state_async, save_note_with_context,
-    save_settings_with_context, search_notes_with_context, vault_export_with_context,
-    StorageContext,
+    list_tasks_with_context, load_chat_state_async, load_note_with_context,
+    load_settings_with_context, rebuild_index_with_context, save_chat_state_async,
+    save_note_with_context, save_settings_with_context, search_notes_with_context,
+    vault_export_with_context, StorageContext, TaskFilter,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
@@ -148,6 +148,12 @@ enum Commands {
     Vault {
         #[command(subcommand)]
         action: VaultActions,
+    },
+
+    /// Aggregate and view Markdown task list items across the vault (#2106)
+    Tasks {
+        #[command(subcommand)]
+        action: TasksActions,
     },
 
     /// Start an MCP stdio server for VaultPilot's built-in model chat interface
@@ -315,6 +321,28 @@ enum VaultActions {
     },
 }
 
+#[derive(Subcommand)]
+enum TasksActions {
+    /// List aggregated tasks from all notes (default: open tasks only)
+    List {
+        /// Show only unchecked tasks (`- [ ]`). Default.
+        #[arg(long, conflicts_with = "done", conflicts_with = "all")]
+        open: bool,
+
+        /// Show only checked tasks (`- [x]`)
+        #[arg(long, conflicts_with = "open", conflicts_with = "all")]
+        done: bool,
+
+        /// Show all tasks regardless of completion state
+        #[arg(long, conflicts_with = "open", conflicts_with = "done")]
+        all: bool,
+
+        /// Maximum tasks to return
+        #[arg(long, default_value = "200")]
+        limit: usize,
+    },
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -465,6 +493,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             "message": "The MCP HTTP server is started by running `vaultpilot-cli mcp-http` directly."
         })),
         Commands::Vault { action } => handle_vault(context, action),
+        Commands::Tasks { action } => tokio::task::block_in_place(|| handle_tasks(context, action)),
         Commands::Plugins => {
             let mgr = vaultpilot_lib::plugin::PluginManager::new();
             let plugins: Vec<_> = mgr
@@ -662,6 +691,29 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
     match action {
         VaultActions::Export { output } => {
             let result = vault_export_with_context(context, output)?;
+            to_json(&result)
+        }
+    }
+}
+
+fn handle_tasks(context: &StorageContext, action: &TasksActions) -> Result<Value> {
+    match action {
+        TasksActions::List {
+            open: _open,
+            done,
+            all,
+            limit,
+        } => {
+            // `--open` is the default; `_open` is accepted for explicitness
+            // but not read. `--all` and `--done` override the default.
+            let filter = if *all {
+                TaskFilter::All
+            } else if *done {
+                TaskFilter::Done
+            } else {
+                TaskFilter::Open
+            };
+            let result = list_tasks_with_context(context, filter, *limit)?;
             to_json(&result)
         }
     }

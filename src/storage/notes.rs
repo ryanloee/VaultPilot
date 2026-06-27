@@ -22,7 +22,7 @@ use walkdir::WalkDir;
 
 use crate::models::{ExportResult, ImportResult, NoteDocument, NoteMeta, VaultExportResult};
 
-use super::pool::open_connection;
+use super::pool::{ensure_tasks_table, open_connection};
 use super::search::{
     build_attachment_semantic_text, build_text_semantic_vector, derived_note_id, fallback_source,
     fallback_title, hash_content, is_markdown_file, list_all_note_metas, load_note_meta_by_id,
@@ -161,6 +161,10 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     )?;
     tx.execute(
         "DELETE FROM attachments WHERE note_id = ?1",
+        [resolved_note_id.as_str()],
+    )?;
+    tx.execute(
+        "DELETE FROM tasks WHERE note_id = ?1",
         [resolved_note_id.as_str()],
     )?;
     tx.execute(
@@ -321,6 +325,9 @@ pub fn vault_export_with_context(
 #[instrument(skip(context))]
 pub fn rebuild_index_with_context(context: &StorageContext) -> Result<super::IndexStats> {
     let (mut connection, settings) = open_connection(context)?;
+    // Defensive: make sure the `tasks` table exists on databases created before
+    // #2106 (mirrors the additive-migration approach used for attachments).
+    ensure_tasks_table(&connection)?;
     let vault_dir = PathBuf::from(&settings.vault_dir);
     fs::create_dir_all(&vault_dir)?;
 
@@ -376,6 +383,13 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<super::Ind
                     "DELETE FROM attachment_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
                     [&existing],
                 )?;
+                // Cascade-style cleanup of aggregated task rows for the removed
+                // note (#2106). Done explicitly rather than relying on FK ON
+                // DELETE CASCADE, which is connection-pragma dependent.
+                tx.execute(
+                    "DELETE FROM tasks WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
+                    [&existing],
+                )?;
                 stats.removed += tx.execute("DELETE FROM notes WHERE path = ?1", [&existing])?;
             }
         }
@@ -383,6 +397,73 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<super::Ind
     }
 
     Ok(stats)
+}
+
+// ────────────────────────────────────────────────────────
+// Task aggregation (#2106)
+// ────────────────────────────────────────────────────────
+
+/// Filter for [`list_tasks_with_context`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskFilter {
+    /// Unchecked tasks only (`- [ ]`). The default.
+    #[default]
+    Open,
+    /// Checked tasks only (`- [x]`).
+    Done,
+    /// All tasks regardless of completion state.
+    All,
+}
+
+/// Aggregate Markdown task list items across the whole vault (#2106).
+///
+/// Joins the `tasks` table with `notes` so each [`TaskItem`] carries the
+/// source note's title and path for display. Tasks are ordered by note then by
+/// line number so items from the same note stay grouped.
+pub fn list_tasks_with_context(
+    context: &StorageContext,
+    filter: TaskFilter,
+    limit: usize,
+) -> Result<super::TaskListResult> {
+    let (connection, _settings) = open_connection(context)?;
+    ensure_tasks_table(&connection)?;
+
+    let base_query = "\
+        SELECT t.id, t.note_id, n.path, n.title, t.line, t.text, t.completed \
+        FROM tasks t \
+        JOIN notes n ON n.id = t.note_id";
+
+    let where_clause: &str = match filter {
+        TaskFilter::Open => " WHERE t.completed = 0",
+        TaskFilter::Done => " WHERE t.completed = 1",
+        TaskFilter::All => "",
+    };
+
+    // Count first (ignoring the LIMIT) so the caller knows the true total.
+    let count_sql =
+        format!("SELECT COUNT(*) FROM tasks t JOIN notes n ON n.id = t.note_id{where_clause}");
+    let total: i64 = connection.query_row(&count_sql, [], |row| row.get(0))?;
+
+    let list_sql = format!("{base_query}{where_clause} ORDER BY n.title ASC, t.line ASC LIMIT ?1");
+    let mut statement = connection.prepare(&list_sql)?;
+    let tasks = statement
+        .query_map(params![limit as i64], |row| {
+            Ok(super::TaskItem {
+                id: row.get(0)?,
+                note_id: row.get(1)?,
+                note_path: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                note_title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                line: row.get::<_, i64>(4).map(|v| v.max(0) as usize)?,
+                text: row.get(5)?,
+                completed: row.get::<_, i64>(6)? != 0,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(super::TaskListResult {
+        tasks,
+        total: total as usize,
+    })
 }
 
 // ────────────────────────────────────────────────────────
@@ -1139,6 +1220,12 @@ fn index_note_file_with_connection(
                 document.body
             ],
         )?;
+        sync_note_tasks_with_connection(
+            connection,
+            &document.meta.id,
+            &document.meta.updated_at,
+            &document.body,
+        )?;
         sync_note_attachments_with_connection(
             connection,
             &document.meta.id,
@@ -1154,6 +1241,124 @@ fn index_note_file_with_connection(
             let _ = connection.execute_batch("ROLLBACK TO SAVEPOINT sp_index_note");
             return Err(e);
         }
+    }
+    Ok(())
+}
+
+/// Extract GFM task list items from a Markdown body (#2106).
+///
+/// Recognizes the GitHub-flavored task list syntax:
+/// ```text
+/// - [ ] unchecked
+/// - [x] checked (lower or upper case x)
+/// * [ ] also works with *, +, and 1. ordered markers
+/// ```
+///
+/// Returns `(line_number_1based, text, completed)` tuples, preserving the
+/// original order of appearance. Indented (nested) tasks are included.
+///
+/// Lines inside the auto-injected `## 摘要` summary section are skipped: the
+/// storage layer prepends a one-paragraph summary to the body on save, and if
+/// the first content line is itself a task the flattened summary text would
+/// otherwise produce a false-positive task entry.
+pub fn extract_tasks(body: &str) -> Vec<(usize, String, bool)> {
+    let mut tasks = Vec::new();
+    // When true, the next non-blank line is the summary paragraph and should be
+    // skipped rather than scanned for task markers.
+    let mut skip_summary_paragraph = false;
+    for (idx, raw_line) in body.lines().enumerate() {
+        let trimmed = raw_line.trim_start();
+
+        // Detect the auto-injected summary heading and arm the skip flag.
+        // The heading is followed by a blank line, then the single-line summary.
+        if trimmed.starts_with("## ") && trimmed.contains("摘要") {
+            skip_summary_paragraph = true;
+            continue;
+        }
+        if skip_summary_paragraph {
+            if trimmed.is_empty() {
+                // Keep skipping through blank lines until we reach the summary text.
+                continue;
+            }
+            // This non-blank line is the summary paragraph — skip it and disarm.
+            skip_summary_paragraph = false;
+            continue;
+        }
+
+        // A task list item is: list-marker + space + "[ ]"/"[x]"/"[X]" + space + text
+        // List markers: -, *, +  (also handle ordered "1." markers)
+        let after_marker = if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+        {
+            Some(rest)
+        } else {
+            // Ordered list marker like "1. " — consume digits + '.' + space.
+            let bytes = trimmed.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i > 0 && i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1] == b' ' {
+                Some(&trimmed[i + 2..])
+            } else {
+                None
+            }
+        };
+
+        let Some(rest) = after_marker else {
+            continue;
+        };
+
+        // rest should begin with "[" + single char + "]" + space.
+        let rest_bytes = rest.as_bytes();
+        if rest_bytes.len() < 4
+            || rest_bytes[0] != b'['
+            || rest_bytes[2] != b']'
+            || rest_bytes[3] != b' '
+        {
+            continue;
+        }
+        let mark = rest_bytes[1];
+        let completed = match mark {
+            b' ' => false,
+            b'x' | b'X' => true,
+            _ => continue,
+        };
+        let text = rest[3..].trim();
+        // Skip empty task text (e.g. a bare "- [ ] " with nothing after it).
+        if text.is_empty() {
+            continue;
+        }
+        tasks.push((idx + 1, text.to_string(), completed));
+    }
+    tasks
+}
+
+/// Re-sync the `tasks` table rows for a single note within the current
+/// transaction/savepoint. Mirrors the FTS delete-then-insert pattern: clear all
+/// existing rows for the note, then re-insert the freshly extracted tasks.
+fn sync_note_tasks_with_connection(
+    connection: &Connection,
+    note_id: &str,
+    updated_at: &str,
+    body: &str,
+) -> Result<()> {
+    connection.execute("DELETE FROM tasks WHERE note_id = ?1", [note_id])?;
+    let tasks = extract_tasks(body);
+    for (line, text, completed) in tasks {
+        connection.execute(
+            "INSERT INTO tasks (note_id, line, text, completed, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                note_id,
+                line as i64,
+                text,
+                if completed { 1 } else { 0 },
+                updated_at
+            ],
+        )?;
     }
     Ok(())
 }
@@ -1382,6 +1587,18 @@ pub async fn export_all_notes_async(
 pub async fn rebuild_index_async(ctx: &StorageContext) -> Result<super::IndexStats> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || rebuild_index_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`list_tasks_with_context`] (#2106).
+pub async fn list_tasks_async(
+    ctx: &StorageContext,
+    filter: TaskFilter,
+    limit: usize,
+) -> Result<super::TaskListResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || list_tasks_with_context(&ctx, filter, limit))
         .await
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }

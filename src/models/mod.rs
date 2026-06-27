@@ -364,6 +364,44 @@ pub struct IndexStats {
     pub removed: usize,
 }
 
+/// A single Markdown task list item (`- [ ]` / `- [x]`) aggregated from a note.
+///
+/// Backs the cross-note task aggregation view (#2106). `line` is the 1-based
+/// line number of the task within its source `.md` file so callers can jump to
+/// the exact location.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskItem {
+    /// Stable id of the task row in the `tasks` table.
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub note_id: String,
+    /// Absolute path of the source note file.
+    #[serde(default)]
+    pub note_path: String,
+    /// Title of the source note (denormalized via JOIN for display).
+    #[serde(default)]
+    pub note_title: String,
+    /// 1-based line number of the task within the source `.md` file.
+    #[serde(default)]
+    pub line: usize,
+    /// Task text after the `- [ ] ` marker.
+    #[serde(default)]
+    pub text: String,
+    /// Whether the checkbox is checked (`- [x]`).
+    #[serde(default)]
+    pub completed: bool,
+}
+
+/// Result of listing aggregated tasks across the vault (#2106).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskListResult {
+    pub tasks: Vec<TaskItem>,
+    pub total: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSkill {

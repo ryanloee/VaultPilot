@@ -162,6 +162,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
         ensure_attachment_columns(connection)?;
+        ensure_tasks_table(connection)?;
         return Ok(());
     }
 
@@ -223,10 +224,48 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             path,
             tokenize = 'unicode61'
         );
+
+        -- Cross-note task aggregation (#2106): one row per `- [ ]` / `- [x]`
+        -- Markdown task list item extracted from a note body. Rows are kept in
+        -- sync during note indexing (DELETE WHERE note_id + re-insert).
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            note_id TEXT NOT NULL,
+            line INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_note_id ON tasks(note_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_completed ON tasks(completed);
         "#,
     )?;
     ensure_attachment_columns(connection)?;
+    ensure_tasks_table(connection)?;
     connection.execute_batch("PRAGMA user_version = 1;")?;
+    Ok(())
+}
+
+/// Idempotently create the `tasks` table if it is missing (additive migration
+/// for databases created before #2106). Safe to call on the version>=1 fast
+/// path and on fresh databases.
+pub(super) fn ensure_tasks_table(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            note_id TEXT NOT NULL,
+            line INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_note_id ON tasks(note_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_completed ON tasks(completed);
+        "#,
+    )?;
     Ok(())
 }
 

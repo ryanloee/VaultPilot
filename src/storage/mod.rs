@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::models::{
     AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery, SearchResult,
+    TaskItem, TaskListResult,
 };
 
 mod backup;
@@ -32,12 +33,13 @@ pub use notes::{
     delete_note_async, delete_note_with_context, export_all_notes_async,
     export_all_notes_with_context, export_note_markdown_async, export_note_markdown_with_context,
     find_related_notes_async, find_related_notes_with_context, import_markdown_async,
-    import_markdown_with_context, load_context_notes_async, load_context_notes_with_context,
-    load_note_with_context, load_recent_notes_for_overview, load_recent_notes_for_overview_async,
-    ocr_image_text, ocr_image_text_async, rebuild_index_async, rebuild_index_with_context,
-    save_note_async, save_note_with_context, save_note_with_images_async,
-    save_note_with_images_with_context, search_candidate_notes_async,
-    search_candidate_notes_with_context, vault_export_async, vault_export_with_context,
+    import_markdown_with_context, list_tasks_async, list_tasks_with_context,
+    load_context_notes_async, load_context_notes_with_context, load_note_with_context,
+    load_recent_notes_for_overview, load_recent_notes_for_overview_async, ocr_image_text,
+    ocr_image_text_async, rebuild_index_async, rebuild_index_with_context, save_note_async,
+    save_note_with_context, save_note_with_images_async, save_note_with_images_with_context,
+    search_candidate_notes_async, search_candidate_notes_with_context, vault_export_async,
+    vault_export_with_context, TaskFilter,
 };
 
 // Internal imports from search module (used by remaining functions in this file)

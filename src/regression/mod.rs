@@ -25,6 +25,7 @@ mod issue_1342_agent_loop;
 mod issue_1354_agent_expect;
 mod issue_1358_write_approval;
 mod issue_1359_agent_integration;
+mod issue_2106_task_aggregation;
 mod issue_914_related_notes;
 
 // Example — reference only, delete once you have real regression tests

@@ -12,17 +12,26 @@ import { useAppStore, getColors } from '../store';
 import { chatWithReconnect, ChatMessage } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
+import { useIsTablet } from '../hooks/useIsTablet';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
 /** Max messages sent to API to avoid exceeding model context window */
 const MAX_HISTORY_MESSAGES = 50;
 
+/**
+ * On large screens the bubble's percentage maxWidth ('80%') would stretch to an
+ * unreadable line length. Cap it to an absolute dp value so text wraps at a
+ * comfortable measure while staying pinned to its side via alignSelf.
+ */
+const TABLET_BUBBLE_MAX_WIDTH = 560;
+
 const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, onDelete, onResend }: {
   item: Msg; isDark: boolean; accentColor: string;
   onDelete?: (id: string) => void; onResend?: (id: string) => void;
 }) {
   const c = getColors(isDark, accentColor);
+  const isTablet = useIsTablet();
   const handleLongPress = () => {
     if (!item.content) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
@@ -36,9 +45,13 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
   };
   return (
     <TouchableOpacity onLongPress={handleLongPress} activeOpacity={0.8}>
-      <View style={[s.bubble, item.role === 'user'
-        ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
-        : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
+      <View style={[
+        s.bubble,
+        isTablet && { maxWidth: TABLET_BUBBLE_MAX_WIDTH },
+        item.role === 'user'
+          ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
+          : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' },
+      ]}>
         <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
           {item.content || (item.streaming ? '思考中...' : '')}
           {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}

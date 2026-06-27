@@ -8,10 +8,16 @@ import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
+import { useGridColumns } from '../hooks/useIsTablet';
+
+/** Horizontal gap (dp) between note cards in tablet grid mode. */
+const CARD_GUTTER = 10;
 
 export default function NotesScreen({ navigation }: any) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
+  const numColumns = useGridColumns();
+  const isGrid = numColumns > 1;
   const [notes, setNotes] = useState<DbNote[]>([]);
   const [search, setSearch] = useState('');
   const [folders, setFolders] = useState<string[]>([]);
@@ -95,7 +101,7 @@ export default function NotesScreen({ navigation }: any) {
 
   const renderItem = ({ item }: { item: DbNote }) => (
     <TouchableOpacity
-      style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}
+      style={[s.card, { backgroundColor: c.card, borderColor: c.border }, isGrid && s.cardGrid]}
       onPress={() => navigation.navigate('NoteEdit', { noteId: item.id })}
       onLongPress={() => handleLongPress(item)}
     >
@@ -160,6 +166,9 @@ export default function NotesScreen({ navigation }: any) {
         data={notes}
         renderItem={renderItem}
         keyExtractor={item => item.id}
+        key={`grid-${numColumns}`}
+        numColumns={numColumns}
+        columnWrapperStyle={isGrid ? { gap: CARD_GUTTER, justifyContent: 'center' } : undefined}
         contentContainerStyle={{ padding: 16 }}
         refreshing={refreshing}
         onRefresh={handleRefresh}
@@ -195,6 +204,9 @@ const s = StyleSheet.create({
   chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
   chipText: { fontSize: 13 },
   card: { borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10 },
+  // In tablet grid mode each card shares its row equally (flex:1). The row's
+  // `gap` (CARD_GUTTER) supplies the horizontal gutter between cards.
+  cardGrid: { flex: 1, maxWidth: 480 },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   cardTitle: { fontSize: 16, fontWeight: '600', flex: 1 },
   cardTime: { fontSize: 12 },

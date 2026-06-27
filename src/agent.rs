@@ -11,6 +11,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1145,18 +1146,24 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
     if !file_path.exists() {
         return Err(anyhow!("file does not exist: {}", path));
     }
-    // Check file size before reading to prevent OOM on large files
+    // Read file with size limit to prevent OOM (TOCTOU-safe: no pre-check of metadata)
     const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1 MB
-    let metadata = std::fs::metadata(&file_path)?;
-    if metadata.len() > MAX_FILE_SIZE {
+    let mut file = std::fs::File::open(&file_path)?;
+    let mut content = String::new();
+    file.by_ref()
+        .take(MAX_FILE_SIZE)
+        .read_to_string(&mut content)?;
+    // If the file was larger than MAX_FILE_SIZE, we may have read a partial file.
+    // Check by trying to read one more byte.
+    let mut probe = [0u8; 1];
+    let remaining = file.read(&mut probe)?;
+    if remaining > 0 || content.len() > MAX_FILE_SIZE as usize {
         return Err(anyhow!(
-            "file too large ({} bytes, max {} bytes): {}",
-            metadata.len(),
+            "file too large (>{} bytes): {}",
             MAX_FILE_SIZE,
             path
         ));
     }
-    let content = std::fs::read_to_string(&file_path)?;
     // Cap at 50KB to prevent token explosion
     const MAX_READ: usize = 50 * 1024;
     if content.len() > MAX_READ {

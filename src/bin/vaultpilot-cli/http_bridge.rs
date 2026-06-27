@@ -442,11 +442,17 @@ async fn http_chat_completions(
     };
 
     if is_stream {
-        // Streaming mode: use channel-based SSE approach with cancellation support
-        // #1521: Use unbounded channel for the sync callback to avoid blocking_send,
-        // and CancellationToken to stop the upstream request when the client disconnects.
+        // Streaming mode: use channel-based SSE approach with cancellation support.
+        // CancellationToken stops the upstream request when the client disconnects.
         let (sse_tx, sse_rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
-        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        // #2104: Bounded buffer between the upstream AI task and the SSE forwarder.
+        // Previously this was an unbounded channel, which broke backpressure: a slow
+        // client filled the downstream sse_tx(16) and stalled the forwarder, while the
+        // upstream task kept pushing at full speed and the buffer grew without bound.
+        // A bounded channel caps per-connection memory; the sync on_chunk callback uses
+        // try_send (never blocking the executor thread) and drops the incoming chunk
+        // when full instead of growing unboundedly.
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<String>(64);
         let settings_arc = Arc::new(settings);
         let system_owned = vaultpilot_lib::prompting::general_chat_system_prompt();
         let user_prompt_owned =
@@ -454,8 +460,9 @@ async fn http_chat_completions(
         let model_for_task = model_id;
         let cancel = CancellationToken::new();
 
-        // Upstream request task: runs the AI streaming request, sends chunks
-        // via unbounded channel (non-blocking for the sync callback).
+        // Upstream request task: runs the AI streaming request, sends chunks via the
+        // bounded channel. The sync on_chunk callback uses try_send so it never blocks
+        // the executor thread.
         let cancel_upstream = cancel.clone();
         tokio::spawn(async move {
             let chunk_tx_ref = &chunk_tx;
@@ -484,8 +491,17 @@ async fn http_chat_completions(
                                 "finish_reason": null
                             }]
                         });
-                        // unbounded send never blocks the executor thread
-                        let _ = chunk_tx_ref.send(chunk_data.to_string());
+                        // #2104: try_send never blocks the executor thread. If the
+                        // bounded buffer is full (slow client), drop this chunk to keep
+                        // memory bounded instead of growing without limit. Logged at
+                        // debug level to avoid spam under sustained backpressure.
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
+                            chunk_tx_ref.try_send(chunk_data.to_string())
+                        {
+                            tracing::debug!(
+                                "streaming chunk buffer full (slow client); dropping chunk to bound memory"
+                            );
+                        }
                     },
                 ) => result,
             };
@@ -503,8 +519,8 @@ async fn http_chat_completions(
                             "finish_reason": "stop"
                         }]
                     });
-                    let _ = chunk_tx.send(finish_data.to_string());
-                    let _ = chunk_tx.send("[DONE]".to_string());
+                    let _ = chunk_tx.send(finish_data.to_string()).await;
+                    let _ = chunk_tx.send("[DONE]".to_string()).await;
                 }
                 Err(error) => {
                     tracing::warn!("http_chat_completions streaming error: {error}");
@@ -515,14 +531,14 @@ async fn http_chat_completions(
                             "code": "upstream_error"
                         }
                     });
-                    let _ = chunk_tx.send(error_data.to_string());
-                    let _ = chunk_tx.send("[DONE]".to_string());
+                    let _ = chunk_tx.send(error_data.to_string()).await;
+                    let _ = chunk_tx.send("[DONE]".to_string()).await;
                 }
             }
             // chunk_tx is dropped here, causing chunk_rx to return None
         });
 
-        // Forwarding task: reads from the unbounded channel and sends to the
+        // Forwarding task: reads from the bounded chunk channel and sends to the
         // bounded SSE channel. Detects client disconnect via send failure and
         // triggers cancellation of the upstream task.
         let cancel_forwarder = cancel.clone();

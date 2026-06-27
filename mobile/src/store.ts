@@ -321,6 +321,17 @@ export const useAppStore = create<AppState>()(
           const restored = restoreProviderKeys(fresh.providers, safeKeys);
           useAppStore.setState({ providers: restored });
           syncLegacyFields(useAppStore.setState, restored, fresh.activeProviderIndex);
+          // Invalidate the getSettings module-level cache after hydration so that
+          // subsequent getSettings calls read fresh store values instead of a value
+          // cached from AsyncStorage during the pre-hydration window (#2102).
+          try {
+            // Lazy require to avoid a circular import at module load time
+            // (client.ts imports from store.ts).
+            const { invalidateSettingsCache } = require('../api/client');
+            invalidateSettingsCache();
+          } catch (e) {
+            console.warn('[Store] failed to invalidate settings cache after rehydration:', e);
+          }
         }).catch(e => console.warn('[Store] rehydration error:', e));
       },
     }

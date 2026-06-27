@@ -645,7 +645,9 @@ async fn handle_mcp_request(
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let limit: usize = 50;
-            let offset = cursor.parse::<usize>().unwrap_or(0);
+            // Parse cursor offset with a safety cap to prevent integer overflow
+            // in subsequent arithmetic (usize::MAX → panic in debug, wrap in release).
+            let offset = cursor.parse::<usize>().unwrap_or(0).min(usize::MAX / 2);
             match search_notes_async(
                 context,
                 SearchQuery {
@@ -672,7 +674,7 @@ async fn handle_mcp_request(
                             })
                         })
                         .collect();
-                    let next_offset = offset + resources.len();
+                    let next_offset = offset.saturating_add(resources.len());
                     let has_more = resources.len() == limit;
                     let next_cursor = if has_more {
                         Some(next_offset.to_string())

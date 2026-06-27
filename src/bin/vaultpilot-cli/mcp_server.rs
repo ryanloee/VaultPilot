@@ -119,9 +119,10 @@ pub(super) fn escape_xml_content(content: &str) -> String {
                 else {
                     let rest: String = chars.clone().take(13).collect();
                     if rest.starts_with("user_content")
-                        && rest.chars().nth(12).is_some_and(|ch| {
-                            matches!(ch, '>' | ' ' | '\n' | '\r' | '\t' | '/')
-                        })
+                        && rest
+                            .chars()
+                            .nth(12)
+                            .is_some_and(|ch| matches!(ch, '>' | ' ' | '\n' | '\r' | '\t' | '/'))
                     {
                         out.push_str("< ");
                     } else {

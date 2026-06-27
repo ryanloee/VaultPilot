@@ -25,7 +25,7 @@ const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, o
   const c = getColors(isDark, accentColor);
   const handleLongPress = () => {
     if (!item.content) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
     const actions: any[] = [
       { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
     ];
@@ -154,7 +154,7 @@ export default function ChatScreen({ navigation, route }: any) {
     if (!input.trim() || streaming || !sessionId || isSendingRef.current) return;
     isSendingRef.current = true;
     try {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
     const userText = input.trim();
 
     // Add user message — only clear input after persistence succeeds
@@ -291,7 +291,7 @@ export default function ChatScreen({ navigation, route }: any) {
   // Create a new conversation
   const newChat = useCallback(async () => {
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
       abortRef.current?.abort();
       const id = await createSession('新对话');
       setSessionId(id);
@@ -306,7 +306,7 @@ export default function ChatScreen({ navigation, route }: any) {
   }, []);
 
   const stop = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(e => console.warn('[Haptics] error:', e));
     abortRef.current?.abort();
   };
 

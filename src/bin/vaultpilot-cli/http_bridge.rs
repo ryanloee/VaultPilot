@@ -1353,25 +1353,19 @@ mod tests {
             };
         });
 
-        let error_chunk = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            chunk_rx.recv(),
-        )
-        .await
-        .expect("timed out waiting for error chunk")
-        .expect("channel closed before error chunk");
+        let error_chunk = tokio::time::timeout(std::time::Duration::from_secs(2), chunk_rx.recv())
+            .await
+            .expect("timed out waiting for error chunk")
+            .expect("channel closed before error chunk");
         assert!(
             error_chunk.contains("upstream_timeout"),
             "expected upstream_timeout error chunk, got: {error_chunk}"
         );
 
-        let done = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            chunk_rx.recv(),
-        )
-        .await
-        .expect("timed out waiting for [DONE]")
-        .expect("channel closed before [DONE]");
+        let done = tokio::time::timeout(std::time::Duration::from_secs(2), chunk_rx.recv())
+            .await
+            .expect("timed out waiting for [DONE]")
+            .expect("channel closed before [DONE]");
         assert_eq!(done, "[DONE]");
     }
 

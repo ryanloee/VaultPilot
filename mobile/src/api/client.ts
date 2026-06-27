@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 
-import { ApiFormat } from '../store';
+import { ApiFormat, useAppStore } from '../store';
 import { isRetryable, sanitizeApiError, normalizeApiBase, DEFAULTS } from './clientUtils';
 
 // Re-export unified SSE types from sse.ts (single implementation)
@@ -66,6 +66,23 @@ export function invalidateSettingsCache() {
 }
 
 export async function getSettings() {
+  // Use Zustand store as the primary source of truth — this ensures that
+  // any changes made via the UI (setApiSettings, setActiveProvider, etc.)
+  // are immediately reflected in API calls.
+  try {
+    const storeState = useAppStore.getState();
+    if (storeState.apiBase && storeState.providers.length > 0) {
+      return {
+        apiBase: storeState.apiBase,
+        apiKey: storeState.apiKey || '',
+        model: storeState.model,
+        apiFormat: storeState.apiFormat || 'openai',
+      };
+    }
+  } catch {
+    // Store not available — fall through to legacy keys
+  }
+
   if (_settingsCache) return _settingsCache;
   const [base, key, model, fmt] = await Promise.all([
     AsyncStorage.getItem(KEYS.apiBase),

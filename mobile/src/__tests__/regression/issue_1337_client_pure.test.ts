@@ -210,7 +210,9 @@ describe('normalizeAnthropicBase', () => {
     expect(normalizeAnthropicBase('https://proxy.example.com/anthropic/v1')).toBe('https://proxy.example.com/anthropic');
   });
 
-  it('strips trailing path after version', () => {
-    expect(normalizeAnthropicBase('https://api.anthropic.com/v1/messages')).toBe('https://api.anthropic.com');
+  it('does not mangle an already-formed endpoint path (#2131)', () => {
+    // Only a trailing /vN suffix is stripped; an endpoint path such as
+    // /v1/messages is left intact rather than being truncated back to the host.
+    expect(normalizeAnthropicBase('https://api.anthropic.com/v1/messages')).toBe('https://api.anthropic.com/v1/messages');
   });
 });

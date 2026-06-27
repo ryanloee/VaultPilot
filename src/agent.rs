@@ -1998,6 +1998,32 @@ mod pure_function_tests {
         }
     }
 
+    /// Resolve an absolute path to the `sleep` binary so the timeout/kill
+    /// regression test does not depend on PATH lookup. Some CI runners
+    /// intermittently fail to resolve the bare `sleep` command, which turns
+    /// the expected timeout into a spurious "failed to spawn ... No such file
+    /// or directory" error and breaks the assertion. Returns None if no
+    /// `sleep` can be found anywhere on the system.
+    fn resolve_sleep_binary() -> Option<String> {
+        if let Ok(out) = std::process::Command::new("which")
+            .arg("sleep")
+            .output()
+        {
+            if let Ok(s) = String::from_utf8(out.stdout) {
+                let p = s.trim();
+                if !p.is_empty() && Path::new(p).exists() {
+                    return Some(p.to_string());
+                }
+            }
+        }
+        for candidate in ["/usr/bin/sleep", "/bin/sleep"] {
+            if Path::new(candidate).exists() {
+                return Some(candidate.to_string());
+            }
+        }
+        None
+    }
+
     // Regression: #1507 — run_command timeout must kill child process
     #[tokio::test]
     async fn run_command_timeout_kills_child() {
@@ -2006,8 +2032,20 @@ mod pure_function_tests {
         config.limits.max_duration = Duration::from_millis(200);
         let session = AgentSession::new(config, &tmp);
 
+        // Use an absolute path to `sleep` to avoid intermittent PATH resolution
+        // failures on some CI runners (which otherwise make spawn fail before
+        // the timeout can fire). If no `sleep` exists on this platform we
+        // cannot exercise the timeout/kill path, so skip rather than fail.
+        let sleep = match resolve_sleep_binary() {
+            Some(p) => p,
+            None => {
+                eprintln!("skipping run_command_timeout_kills_child: no `sleep` binary found");
+                return;
+            }
+        };
+
         let result = session
-            .run_command("sleep", &["60".into()], &tmp, |_| {}, |_| {})
+            .run_command(&sleep, &["60".into()], &tmp, |_| {}, |_| {})
             .await;
 
         assert!(result.is_err(), "should return timeout error");

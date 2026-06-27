@@ -118,14 +118,16 @@ pub fn search_notes_with_context(
     }
 
     // For SQL paths, total was computed via COUNT(*) above.
-    // For FTS path with filters: total = post-filtering count (upper bound approximation).
+    // For FTS path with filters: use a combined FTS+filter COUNT(*) for accuracy.
     // For FTS path without filters: total = FTS COUNT(*) (accurate).
     let total = if query.text.trim().is_empty() {
         total
     } else if has_filters {
-        // Use filtered count — avoids inflated FTS total that causes clients
-        // to paginate into empty pages.
-        notes.len()
+        // Combined FTS + filter count gives the exact total (#2089).
+        match count_fts_matches_with_filters(&connection, &query) {
+            Ok(accurate_total) => accurate_total.max(notes.len()),
+            Err(_) => notes.len(), // fallback to lower bound on error
+        }
     } else {
         // total was set to fts_total (FTS COUNT(*)) above; use it directly.
         // If the FTS count underestimates due to LIKE fallback, use max.
@@ -571,6 +573,65 @@ fn count_fts_matches(connection: &Connection, text: &str) -> Result<usize> {
         params![fts_query],
         |row| row.get(0),
     )?;
+    Ok(count as usize)
+}
+
+/// Count FTS matches with additional tag/keyword/date-range filters applied at
+/// the SQL level. This gives an **accurate** total for FTS + filter hybrid
+/// queries, avoiding the lower-bound problem of post-filtering only the
+/// over-fetched candidate set.
+fn count_fts_matches_with_filters(
+    connection: &Connection,
+    query: &SearchQuery,
+) -> Result<usize> {
+    let fts_query = make_fts_query(&query.text);
+    if fts_query.trim().is_empty() {
+        return Ok(0);
+    }
+
+    // Build the filter clause. Its param placeholders start at ?1, but we
+    // need them shifted by +1 because ?1 is reserved for the FTS MATCH.
+    let (mut filter_where, filter_params) = build_note_filter_clause(query);
+
+    if filter_where.is_empty() {
+        // No filters — plain FTS count is sufficient.
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM note_fts WHERE note_fts MATCH ?1",
+            params![fts_query],
+            |row| row.get(0),
+        )?;
+        return Ok(count as usize);
+    }
+
+    // Shift filter param placeholders from ?N → ?{N+1}, working backwards
+    // so that multi-digit indices (e.g. ?10) are handled correctly.
+    let num_filters = filter_params.len();
+    for i in (1..=num_filters).rev() {
+        let old = format!("?{i}");
+        let new = format!("?{}", i + 1);
+        filter_where = filter_where.replace(&old, &new);
+    }
+    // Strip the leading "WHERE " from the filter clause — we'll wrap it.
+    let filter_conditions = filter_where
+        .strip_prefix("WHERE ")
+        .unwrap_or(&filter_where)
+        .to_string();
+
+    let sql = format!(
+        "SELECT COUNT(*) FROM notes \
+         WHERE id IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?1) \
+         AND ({filter_conditions})"
+    );
+
+    // Prepend the FTS query param so ?1 → fts_query, ?2..?N+1 → filter params.
+    let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    all_params.push(Box::new(fts_query));
+    all_params.extend(filter_params);
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        all_params.iter().map(|p| p.as_ref()).collect();
+    let mut statement = connection.prepare(&sql)?;
+    let count: i64 = statement.query_row(param_refs.as_slice(), |row| row.get(0))?;
     Ok(count as usize)
 }
 

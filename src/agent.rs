@@ -1276,8 +1276,8 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     let mut star_pi = usize::MAX; // sentinel: no star matched yet
     let mut star_ti = 0;
     let mut star_resume_pi = 0; // where to resume pattern after * on backtrack
-    // Separate backtrack state for ** so it's not overwritten by a subsequent
-    // single * that later fails on a path separator (#2088).
+                                // Separate backtrack state for ** so it's not overwritten by a subsequent
+                                // single * that later fails on a path separator (#2088).
     let mut star_star_pi = usize::MAX;
     let mut star_star_ti = 0;
     let mut star_star_resume_pi = 0;

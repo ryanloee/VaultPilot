@@ -382,7 +382,7 @@ export default function ChatScreen({ navigation, route }: any) {
         )}
         keyExtractor={item => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
-        onContentSizeChange={() => scrollToEndDebounced()}
+        onContentSizeChange={onContentSizeChange}
         onScroll={onScroll}
         scrollEventThrottle={16}
         removeClippedSubviews={Platform.OS === 'android'}

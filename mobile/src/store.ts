@@ -321,7 +321,7 @@ export const useAppStore = create<AppState>()(
           const restored = restoreProviderKeys(fresh.providers, safeKeys);
           useAppStore.setState({ providers: restored });
           syncLegacyFields(useAppStore.setState, restored, fresh.activeProviderIndex);
-        });
+        }).catch(e => console.warn('[Store] rehydration error:', e));
       },
     }
   )

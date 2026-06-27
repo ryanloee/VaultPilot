@@ -72,6 +72,33 @@ export function extractCJKNgrams(text: string): string[] {
 }
 
 /**
+ * Split text into maximal runs of consecutive CJK or non-CJK characters.
+ * Reuses isCJK() so all CJK extension blocks (A/B/C-G, compatibility, etc.)
+ * are covered — the previous split regex only covered U+3000–U+9FFF and
+ * U+AC00–U+D7AF, missing the extension ranges that isCJK() handles (#2100).
+ */
+function splitCjkAndLatin(text: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let currentIsCJK: boolean | null = null;
+  for (const ch of text) {
+    const cjk = isCJK(ch);
+    if (currentIsCJK === null) {
+      currentIsCJK = cjk;
+      current = ch;
+    } else if (cjk === currentIsCJK) {
+      current += ch;
+    } else {
+      result.push(current);
+      current = ch;
+      currentIsCJK = cjk;
+    }
+  }
+  if (current) result.push(current);
+  return result;
+}
+
+/**
  * Extract keywords from user message for note search.
  * Strategy aligned with Win端 extract_search_terms:
  * - Split mixed CJK/Latin tokens
@@ -112,7 +139,7 @@ export function extractKeywords(text: string): string[] {
   // Step 1: Split on punctuation/whitespace
   const rawTokens = text
     .split(/[\s,，。.!！?？;；:：、\n\r]+/)
-    .flatMap(t => t.split(/(?<=[\u3000-\u9fff\uac00-\ud7af])(?=[^\u3000-\u9fff\uac00-\ud7af])|(?<=[^\u3000-\u9fff\uac00-\ud7af])(?=[\u3000-\u9fff\uac00-\ud7af])/))
+    .flatMap(t => splitCjkAndLatin(t))
     .map(t => t.trim().toLowerCase())
     .filter(t => t.length >= 2 && !stopWords.has(t));
 

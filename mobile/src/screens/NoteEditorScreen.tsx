@@ -9,7 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
+import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, getNoteCollections, addNoteToCollection, removeNoteFromCollection } from '../db';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
@@ -21,6 +21,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
+  // #2042: a note may belong to any number of collections (many-to-many).
+  const [noteCollections, setNoteCollections] = useState<string[]>([]);
+  const [newCollection, setNewCollection] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [previewMode, setPreviewMode] = useState(false);
@@ -49,6 +52,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           originalFolderRef.current = note.folder || '';
           const noteTags = await getNoteTags(noteId);
           if (!cancelled) setTags(noteTags);
+          const colls = await getNoteCollections(noteId);
+          if (!cancelled) setNoteCollections(colls);
         } else {
           Alert.alert('笔记不存在', '该笔记可能已被删除', [
             { text: '返回', onPress: () => navigation.goBack() },
@@ -260,6 +265,57 @@ export default function NoteEditorScreen({ route, navigation }: any) {
                     setNewTag('');
                   } catch (e) {
                     Alert.alert('添加标签失败', String(e));
+                  }
+                }
+              }}
+              returnKeyType="done"
+            />
+          </View>
+        </View>
+      </View>
+
+      {/* Collections bar — #2042 multi-collection membership (× long-press to remove, + to add) */}
+      <View style={[s.tagsBar, { borderBottomColor: c.border }]}>
+        <View style={s.tagsRow}>
+          {noteCollections.map(col => (
+            <TouchableOpacity
+              key={col}
+              style={[s.tagChip, { flexDirection: 'row', alignItems: 'center', backgroundColor: accentColor + '15', borderColor: accentColor + '40' }]}
+              onLongPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
+                Alert.alert('移除集合', `将「${col}」从该笔记的集合中移除？`, [
+                  { text: '取消', style: 'cancel' },
+                  { text: '移除', style: 'destructive', onPress: async () => {
+                    try {
+                      await removeNoteFromCollection(noteId, col);
+                      setNoteCollections(prev => prev.filter(x => x !== col));
+                    } catch (e: any) {
+                      Alert.alert('移除失败', e.message || '请重试');
+                    }
+                  }},
+                ]);
+              }}
+            >
+              <Ionicons name="pricetag-outline" size={11} color={accentColor} style={{ marginRight: 3 }} />
+              <Text style={[s.tagText, { color: accentColor }]}>{col}</Text>
+            </TouchableOpacity>
+          ))}
+          <View style={s.tagInputRow}>
+            <TextInput
+              style={[s.tagInput, { color: c.text, borderColor: c.border }]}
+              value={newCollection}
+              onChangeText={setNewCollection}
+              placeholder="+ 集合"
+              placeholderTextColor={c.textSecondary}
+              onSubmitEditing={async () => {
+                const col = newCollection.trim();
+                setNewCollection('');
+                if (col && !noteCollections.includes(col)) {
+                  try {
+                    await addNoteToCollection(noteId, col);
+                    setNoteCollections(prev => [...prev, col].sort());
+                  } catch (e: any) {
+                    Alert.alert('添加集合失败', e.message || '请重试');
                   }
                 }
               }}

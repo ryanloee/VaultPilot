@@ -33,6 +33,15 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureColumn('notes', 'folder', 'TEXT NOT NULL DEFAULT \'\'');
   await ensureColumn('messages', 'attachments', 'TEXT');
 
+  // #2042: one-time backfill — promote legacy single `folder` values into the
+  // new many-to-many `note_collections` table ("文件夹作为默认集合").
+  // Idempotent: INSERT OR IGNORE + PRIMARY KEY(note_id, collection) dedupes,
+  // so re-running on every init is safe and picks up notes foldered since last open.
+  await db.execAsync(
+    "INSERT OR IGNORE INTO note_collections (note_id, collection) " +
+    "SELECT id, folder FROM notes WHERE folder != ''"
+  );
+
   // #1447: Ensure UNIQUE constraint on pending_syncs.note_id for INSERT OR REPLACE dedup
   const indexes = await db.getAllAsync<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_pending_syncs_note_id'"
@@ -102,6 +111,14 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
           PRIMARY KEY (note_id, tag),
           FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
         );
+        -- #2042: many-to-many note <-> collection membership.
+        -- Mirrors note_tags. A note may belong to any number of collections.
+        CREATE TABLE IF NOT EXISTS note_collections (
+          note_id TEXT NOT NULL,
+          collection TEXT NOT NULL,
+          PRIMARY KEY (note_id, collection),
+          FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+        );
         CREATE TABLE IF NOT EXISTS pending_syncs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           note_id TEXT NOT NULL,
@@ -111,6 +128,9 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
         );
       `);
       await db.execAsync('CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);');
+      // #2042: indexes for collection filtering and note->collection lookups
+      await db.execAsync('CREATE INDEX IF NOT EXISTS idx_note_collections_collection ON note_collections(collection);');
+      await db.execAsync('CREATE INDEX IF NOT EXISTS idx_note_collections_note_id ON note_collections(note_id);');
       // FTS5 virtual tables — gracefully degrade if device SQLite lacks FTS5
       try {
         await db.execAsync(`
@@ -416,6 +436,167 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
     return db.getAllAsync<DbNote>(
       `SELECT * FROM notes WHERE (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`, `%${escaped}%`, ...folderParams]
+    );
+  }
+  return ftsResults;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #2042: Collections — many-to-many note membership.
+// A note may belong to any number of collections; the legacy single `folder`
+// column is backfilled into this table on init (see migrateSchema).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A note with its collections pre-joined as a comma-separated string. */
+export interface DbNoteWithCollections extends DbNote {
+  collections_csv?: string;
+}
+
+/** Parse a `collections_csv` (GROUP_CONCAT) value into a unique sorted array. */
+export function parseCollections(csv?: string): string[] {
+  if (!csv) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of csv.split(',')) {
+    const name = part.trim();
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+/** All distinct collection names, sorted. */
+export async function getCollections(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ collection: string }>(
+    "SELECT DISTINCT collection FROM note_collections WHERE collection != '' ORDER BY collection"
+  );
+  return rows.map(r => r.collection);
+}
+
+/** Distinct collection names with their note counts, sorted by name. */
+export async function getCollectionsWithCounts(): Promise<{ collection: string; count: number }[]> {
+  const db = await getDb();
+  return db.getAllAsync<{ collection: string; count: number }>(
+    "SELECT collection, COUNT(*) as count FROM note_collections " +
+    "WHERE collection != '' GROUP BY collection ORDER BY collection"
+  );
+}
+
+/** Collections a single note belongs to, sorted. */
+export async function getNoteCollections(noteId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ collection: string }>(
+    "SELECT collection FROM note_collections WHERE note_id = ? AND collection != '' ORDER BY collection",
+    [noteId]
+  );
+  return rows.map(r => r.collection);
+}
+
+/** Add a note to a collection. Empty/whitespace names are ignored. Idempotent. */
+export async function addNoteToCollection(noteId: string, collection: string): Promise<void> {
+  const name = collection.trim();
+  if (!name) return;
+  const db = await getDb();
+  await db.runAsync(
+    'INSERT OR IGNORE INTO note_collections (note_id, collection) VALUES (?, ?)',
+    [noteId, name]
+  );
+}
+
+/** Remove a note from a collection. No-op if the membership doesn't exist. */
+export async function removeNoteFromCollection(noteId: string, collection: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    'DELETE FROM note_collections WHERE note_id = ? AND collection = ?',
+    [noteId, collection]
+  );
+}
+
+/** Replace all collection memberships for a note (atomic). Empty array clears them. */
+export async function setNoteCollections(noteId: string, collections: string[]): Promise<void> {
+  const names = Array.from(new Set(collections.map(c => c.trim()).filter(Boolean))).sort();
+  const db = await getDb();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM note_collections WHERE note_id = ?', [noteId]);
+    for (const name of names) {
+      await db.runAsync(
+        'INSERT OR IGNORE INTO note_collections (note_id, collection) VALUES (?, ?)',
+        [noteId, name]
+      );
+    }
+  });
+}
+
+/**
+ * Load notes, optionally filtered by a collection. Each row carries a
+ * `collections_csv` field (all of the note's collections) for cheap badge rendering.
+ * Pass `collection === undefined` to list all notes.
+ */
+export async function getNotesInCollection(
+  collection?: string,
+  limit?: number
+): Promise<DbNoteWithCollections[]> {
+  const db = await getDb();
+  const colsSubquery =
+    '(SELECT GROUP_CONCAT(collection, ",") FROM note_collections WHERE note_id = n.id) AS collections_csv';
+  if (collection !== undefined) {
+    const sql =
+      `SELECT n.*, ${colsSubquery} FROM notes n ` +
+      'INNER JOIN note_collections c ON c.note_id = n.id ' +
+      'WHERE c.collection = ? ORDER BY n.starred DESC, n.updated_at DESC';
+    if (limit !== undefined) {
+      return db.getAllAsync<DbNoteWithCollections>(sql + ' LIMIT ?', [collection, limit]);
+    }
+    return db.getAllAsync<DbNoteWithCollections>(sql, [collection]);
+  }
+  const sql = `SELECT n.*, ${colsSubquery} FROM notes n ORDER BY n.starred DESC, n.updated_at DESC`;
+  if (limit !== undefined) {
+    return db.getAllAsync<DbNoteWithCollections>(sql + ' LIMIT ?', [limit]);
+  }
+  return db.getAllAsync<DbNoteWithCollections>(sql);
+}
+
+/** Full-text search for notes, optionally scoped to a single collection. */
+export async function searchNotesInCollection(
+  query: string,
+  collection?: string
+): Promise<DbNoteWithCollections[]> {
+  const db = await getDb();
+  const collJoin =
+    collection !== undefined ? ' INNER JOIN note_collections c ON c.note_id = n.id' : '';
+  const collFilter = collection !== undefined ? ' AND c.collection = ?' : '';
+  const collParams = collection !== undefined ? [collection] : [];
+  const colsSubquery =
+    '(SELECT GROUP_CONCAT(collection, ",") FROM note_collections WHERE note_id = n.id) AS collections_csv';
+
+  if (!ftsSupported) {
+    const escaped = escapeLikePattern(query);
+    return db.getAllAsync<DbNoteWithCollections>(
+      `SELECT n.*, ${colsSubquery} FROM notes n${collJoin} ` +
+        'WHERE (n.title LIKE ? ESCAPE \'\\\' OR n.content LIKE ? ESCAPE \'\\\')' +
+        `${collFilter} ORDER BY n.updated_at DESC LIMIT 50`,
+      [`%${escaped}%`, `%${escaped}%`, ...collParams]
+    );
+  }
+  const ftsQuery = buildFtsQuery(query);
+  if (!ftsQuery) return [];
+  const ftsResults = await db.getAllAsync<DbNoteWithCollections>(
+    `SELECT n.*, ${colsSubquery} FROM notes n ` +
+      'INNER JOIN notes_fts fts ON n.rowid = fts.rowid' +
+      `${collJoin} WHERE notes_fts MATCH ?${collFilter} ORDER BY n.updated_at DESC LIMIT 50`,
+    [ftsQuery, ...collParams]
+  );
+  // Fallback to LIKE search if FTS returns no results (common with CJK text)
+  if (ftsResults.length === 0) {
+    const escaped = escapeLikePattern(query);
+    return db.getAllAsync<DbNoteWithCollections>(
+      `SELECT n.*, ${colsSubquery} FROM notes n${collJoin} ` +
+        'WHERE (n.title LIKE ? ESCAPE \'\\\' OR n.content LIKE ? ESCAPE \'\\\')' +
+        `${collFilter} ORDER BY n.updated_at DESC LIMIT 50`,
+      [`%${escaped}%`, `%${escaped}%`, ...collParams]
     );
   }
   return ftsResults;

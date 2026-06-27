@@ -7,27 +7,40 @@ import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
-import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
+import {
+  getNotesInCollection,
+  searchNotesInCollection,
+  getCollections,
+  createNote,
+  deleteNote,
+  toggleStar,
+  DbNoteWithCollections,
+  parseCollections,
+} from '../db';
 
 export default function NotesScreen({ navigation }: any) {
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
-  const [notes, setNotes] = useState<DbNote[]>([]);
+  const [notes, setNotes] = useState<DbNoteWithCollections[]>([]);
   const [search, setSearch] = useState('');
-  const [folders, setFolders] = useState<string[]>([]);
-  const [activeFolder, setActiveFolder] = useState<string | undefined>(undefined);
+  const [collections, setCollections] = useState<string[]>([]);
+  const [activeCollection, setActiveCollection] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
 
-  const load = useCallback(async (query: string, folder?: string) => {
+  const load = useCallback(async (query: string, collection?: string) => {
     const currentId = ++requestIdRef.current;
     try {
-      const data = query ? await searchNotes(query, folder) : await getNotes(folder);
-      const folderList = await getFolders();
+      // #2042: a note may belong to multiple collections, so filtering by a
+      // collection returns notes from across all folders.
+      const data = query
+        ? await searchNotesInCollection(query, collection)
+        : await getNotesInCollection(collection);
+      const collectionList = await getCollections();
       if (requestIdRef.current !== currentId) return;
       setNotes(data);
-      setFolders(folderList);
+      setCollections(collectionList);
     } catch (e: any) {
       if (requestIdRef.current !== currentId) return;
       console.warn('[Notes] load failed:', e);
@@ -39,9 +52,9 @@ export default function NotesScreen({ navigation }: any) {
 
   // Debounce search: wait 300ms after last keystroke before querying
   useEffect(() => {
-    const timer = setTimeout(() => load(search, activeFolder), 300);
+    const timer = setTimeout(() => load(search, activeCollection), 300);
     return () => clearTimeout(timer);
-  }, [search, activeFolder, load]);
+  }, [search, activeCollection, load]);
 
   const handleNew = async () => {
     try {
@@ -56,17 +69,17 @@ export default function NotesScreen({ navigation }: any) {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await load(search, activeFolder);
+      await load(search, activeCollection);
     } finally {
       setRefreshing(false);
     }
   };
 
-  const handleLongPress = (item: DbNote) => {
+  const handleLongPress = (item: DbNoteWithCollections) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
     Alert.alert(item.title || '笔记操作', '', [
       { text: item.starred ? '取消收藏' : '收藏', onPress: async () => {
-        try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
+        try { await toggleStar(item.id); await load(search, activeCollection); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }
       }},
       { text: '复制内容', onPress: () => {
         const text = item.content ? (item.title ? `${item.title}\n\n${item.content}` : item.content) : '';
@@ -81,7 +94,7 @@ export default function NotesScreen({ navigation }: any) {
     Alert.alert('删除笔记', '确定要删除吗？', [
       { text: '取消', style: 'cancel' },
       { text: '删除', style: 'destructive', onPress: async () => {
-        try { await deleteNote(id); await load(search, activeFolder); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
+        try { await deleteNote(id); await load(search, activeCollection); } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
       }},
     ]);
   };
@@ -93,24 +106,43 @@ export default function NotesScreen({ navigation }: any) {
     return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
   };
 
-  const renderItem = ({ item }: { item: DbNote }) => (
-    <TouchableOpacity
-      style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}
-      onPress={() => navigation.navigate('NoteEdit', { noteId: item.id })}
-      onLongPress={() => handleLongPress(item)}
-    >
-      <View style={s.cardHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-          {item.starred && <Ionicons name="star" size={14} color="#F59E0B" style={{ marginRight: 4 }} />}
-          <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>{item.title}</Text>
+  const renderItem = ({ item }: { item: DbNoteWithCollections }) => {
+    const noteCollections = parseCollections(item.collections_csv);
+    return (
+      <TouchableOpacity
+        style={[s.card, { backgroundColor: c.card, borderColor: c.border }]}
+        onPress={() => navigation.navigate('NoteEdit', { noteId: item.id })}
+        onLongPress={() => handleLongPress(item)}
+      >
+        <View style={s.cardHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            {item.starred && <Ionicons name="star" size={14} color="#F59E0B" style={{ marginRight: 4 }} />}
+            <Text style={[s.cardTitle, { color: c.text }]} numberOfLines={1}>{item.title}</Text>
+          </View>
+          <Text style={[s.cardTime, { color: c.textSecondary }]}>{fmtTime(item.updated_at)}</Text>
         </View>
-        <Text style={[s.cardTime, { color: c.textSecondary }]}>{fmtTime(item.updated_at)}</Text>
-      </View>
-      <Text style={[s.cardPreview, { color: c.textSecondary }]} numberOfLines={2}>
-        {item.folder ? `[${item.folder}] ` : ''}{item.content || '空白笔记'}
-      </Text>
-    </TouchableOpacity>
-  );
+        {noteCollections.length > 0 && (
+          <View style={s.cardCollections}>
+            {noteCollections.slice(0, 2).map(col => (
+              <View
+                key={col}
+                style={[s.collBadge, { backgroundColor: accentColor + '15', borderColor: accentColor + '40' }]}
+              >
+                <Ionicons name="pricetag-outline" size={10} color={accentColor} />
+                <Text style={[s.collBadgeText, { color: accentColor }]} numberOfLines={1}>{col}</Text>
+              </View>
+            ))}
+            {noteCollections.length > 2 && (
+              <Text style={[s.collMore, { color: c.textSecondary }]}>+{noteCollections.length - 2}</Text>
+            )}
+          </View>
+        )}
+        <Text style={[s.cardPreview, { color: c.textSecondary }]} numberOfLines={2}>
+          {item.content || '空白笔记'}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
 
   if (loading) {
     return (
@@ -134,22 +166,24 @@ export default function NotesScreen({ navigation }: any) {
         />
       </View>
 
-      {/* Folder chips */}
-      {folders.length > 0 && (
+      {/* Collection chips — a note can appear under several collections (#2042) */}
+      {collections.length > 0 && (
         <View style={s.chipRow}>
           <TouchableOpacity
-            style={[s.chip, { backgroundColor: activeFolder === undefined ? accentColor : c.card, borderColor: c.border }]}
-            onPress={() => setActiveFolder(undefined)}
+            style={[s.chip, { backgroundColor: activeCollection === undefined ? accentColor : c.card, borderColor: c.border }]}
+            onPress={() => setActiveCollection(undefined)}
           >
-            <Text style={[s.chipText, { color: activeFolder === undefined ? '#FFF' : c.text }]}>全部</Text>
+            <Ionicons name="layers-outline" size={13} color={activeCollection === undefined ? '#FFF' : c.text} style={{ marginRight: 4 }} />
+            <Text style={[s.chipText, { color: activeCollection === undefined ? '#FFF' : c.text }]}>全部</Text>
           </TouchableOpacity>
-          {folders.map(f => (
+          {collections.map(col => (
             <TouchableOpacity
-              key={f}
-              style={[s.chip, { backgroundColor: activeFolder === f ? accentColor : c.card, borderColor: c.border }]}
-              onPress={() => setActiveFolder(activeFolder === f ? undefined : f)}
+              key={col}
+              style={[s.chip, { backgroundColor: activeCollection === col ? accentColor : c.card, borderColor: c.border }]}
+              onPress={() => setActiveCollection(activeCollection === col ? undefined : col)}
             >
-              <Text style={[s.chipText, { color: activeFolder === f ? '#FFF' : c.text }]}>{f}</Text>
+              <Ionicons name="pricetag-outline" size={13} color={activeCollection === col ? '#FFF' : c.text} style={{ marginRight: 4 }} />
+              <Text style={[s.chipText, { color: activeCollection === col ? '#FFF' : c.text }]}>{col}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -192,12 +226,19 @@ const s = StyleSheet.create({
   },
   searchInput: { flex: 1, fontSize: 15, padding: 0 },
   chipRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, gap: 8 },
-  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
+  chip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },
   chipText: { fontSize: 13 },
   card: { borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10 },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   cardTitle: { fontSize: 16, fontWeight: '600', flex: 1 },
   cardTime: { fontSize: 12 },
+  cardCollections: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 6 },
+  collBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8, borderWidth: 1, maxWidth: 120,
+  },
+  collBadgeText: { fontSize: 11, flexShrink: 1 },
+  collMore: { fontSize: 11 },
   cardPreview: { fontSize: 14, lineHeight: 20 },
   empty: { alignItems: 'center', marginTop: 60 },
   emptyText: { fontSize: 15 },

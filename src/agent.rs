@@ -663,6 +663,8 @@ pub async fn run_agent(
     settings: &crate::models::AppSettings,
     context: &StorageContext,
     prompt: &str,
+    images: &[String],
+    history: &[crate::models::ConversationTurn],
     config: AgentConfig,
     mut on_event: impl FnMut(&AgentEvent) -> bool,
 ) -> Result<AgentResult> {
@@ -703,7 +705,7 @@ pub async fn run_agent(
         let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
         let selection = tokio::time::timeout(
             remaining,
-            ai::select_tool_call(settings, prompt, &[], &[], &tool_transcripts),
+            ai::select_tool_call(settings, prompt, images, history, &tool_transcripts),
         )
         .await
         .map_err(|_| anyhow!("LLM call timed out at step {}", step + 1))?
@@ -735,7 +737,7 @@ pub async fn run_agent(
                 let answer = if tool_transcripts.is_empty() {
                     tokio::time::timeout(
                         remaining,
-                        crate::ai::answer_question(settings, prompt, &[], &[], &[]),
+                        crate::ai::answer_question(settings, prompt, &[], images, history),
                     )
                     .await
                     .map_err(|_| anyhow!("final answer LLM call timed out"))?
@@ -750,7 +752,7 @@ pub async fn run_agent(
                             prompt,
                             &tool_transcripts,
                             &[],
-                            &[],
+                            history,
                         ),
                     )
                     .await
@@ -866,7 +868,13 @@ pub async fn run_agent(
             if remaining > std::time::Duration::from_secs(1) {
                 let answer_result = tokio::time::timeout(
                     remaining,
-                    crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
+                    crate::ai::answer_after_tools(
+                        settings,
+                        prompt,
+                        &tool_transcripts,
+                        &[],
+                        history,
+                    ),
                 )
                 .await;
                 if let Ok(Ok(answer)) = answer_result {
@@ -913,7 +921,7 @@ pub async fn run_agent(
         if tool_transcripts.is_empty() {
             tokio::time::timeout(
                 remaining,
-                crate::ai::answer_question(settings, prompt, &[], &[], &[]),
+                crate::ai::answer_question(settings, prompt, &[], images, history),
             )
             .await
             .ok()
@@ -921,7 +929,7 @@ pub async fn run_agent(
         } else {
             tokio::time::timeout(
                 remaining,
-                crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], &[]),
+                crate::ai::answer_after_tools(settings, prompt, &tool_transcripts, &[], history),
             )
             .await
             .ok()

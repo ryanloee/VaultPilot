@@ -640,10 +640,7 @@ async fn handle_mcp_request(
             let limit: usize = 50;
             // Parse cursor offset with a safety cap to prevent integer overflow
             // in subsequent arithmetic (usize::MAX → panic in debug, wrap in release).
-            let offset = cursor
-                .parse::<usize>()
-                .unwrap_or(0)
-                .min(usize::MAX / 2);
+            let offset = cursor.parse::<usize>().unwrap_or(0).min(usize::MAX / 2);
             match search_notes_async(
                 context,
                 SearchQuery {

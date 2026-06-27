@@ -298,4 +298,24 @@ describe('flushPendingSyncs', () => {
     expect(result).toEqual({ synced: 0, failed: 1 });
     expect(mockClearPendingSync).not.toHaveBeenCalled();
   });
+
+  // #2126: 429 must stop the entire flush, not continue to next pending entry
+  it('stops flush on first 429 instead of sending remaining requests', async () => {
+    mockGetPendingSyncs.mockResolvedValue([
+      { note_id: 'n1' },
+      { note_id: 'n2' },
+      { note_id: 'n3' },
+      { note_id: 'n4' },
+      { note_id: 'n5' },
+    ]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 429 });
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 0, failed: 1 });
+    // Only the first entry should have been attempted
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    // No entries should be cleared (they remain for next flush)
+    expect(mockClearPendingSync).not.toHaveBeenCalled();
+  });
 });

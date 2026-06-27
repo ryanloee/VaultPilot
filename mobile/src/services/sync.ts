@@ -4,6 +4,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createNote, updateNote, getNoteTimestamps } from '../db';
+import { isRetryable } from '../api/clientUtils';
 
 const SERVER_URL_KEY = 'cfg_backend_url';
 const SERVER_TOKEN_KEY = 'cfg_backend_token';
@@ -11,6 +12,7 @@ const LAST_SYNC_KEY = 'cfg_last_sync_at';
 
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 1000;
+const RETRY_AFTER_MAX_MS = 60_000; // Retry-After 上限，避免服务端返回过大值导致长时间卡死 (#2132)
 const SYNC_OVERALL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DETAIL_CONCURRENCY = 5;
 
@@ -107,10 +109,13 @@ async function doSync(
 
     let listRes: Response | undefined;
     let lastNetworkErr: Error | undefined;
+    let retryAfterMs: number | null = null;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (signal.aborted) throw new Error('同步超时');
       if (attempt > 0) {
-        const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+        // 优先尊重服务端 Retry-After 头，否则走指数退避 (#2132)
+        const delay = retryAfterMs ?? RETRY_BASE_MS * Math.pow(2, attempt - 1);
+        retryAfterMs = null;
         await new Promise(r => setTimeout(r, delay));
       }
       // 声明在 try 外部，确保 cleanup 在 catch/所有路径都可调用 (#2122)
@@ -121,7 +126,9 @@ async function doSync(
           signal: fetchSignal,
         });
         if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
-        if (listRes.status >= 500) {
+        if (isRetryable(listRes.status)) {
+          // 429/502/503/504 等可重试状态：尊重 Retry-After 头后重试 (#2132)
+          retryAfterMs = parseRetryAfter(listRes);
           lastNetworkErr = new Error(`获取笔记列表失败: ${listRes.status}`);
           if (attempt >= MAX_RETRIES) break;
           continue;
@@ -192,11 +199,14 @@ async function doSync(
       // Fetch full note (with retry on transient failures)
       let noteRes: Response | null = null;
       let lastFetchError: Error | null = null;
+      let noteRetryAfterMs: number | null = null;
       const noteTimeoutMs = 10000;
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         if (signal.aborted) return;
         if (attempt > 0) {
-          const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+          // 优先尊重服务端 Retry-After 头，否则走指数退避 (#2132)
+          const delay = noteRetryAfterMs ?? RETRY_BASE_MS * Math.pow(2, attempt - 1);
+          noteRetryAfterMs = null;
           await new Promise(r => setTimeout(r, delay));
         }
         const noteController = new AbortController();
@@ -210,9 +220,12 @@ async function doSync(
           });
           clearTimeout(timer);
           if (noteRes.ok) break; // success
-          // Retry on 5xx (transient server errors)
-          if (noteRes.status >= 500) continue;
-          // 4xx — non-retryable, break immediately
+          // 可重试状态（429/502/503/504）：尊重 Retry-After 头后重试 (#2132)
+          if (isRetryable(noteRes.status)) {
+            noteRetryAfterMs = parseRetryAfter(noteRes);
+            continue;
+          }
+          // 4xx 等不可重试状态 — 立即放弃
           break;
         } catch (fetchErr: unknown) {
           clearTimeout(timer);
@@ -276,6 +289,26 @@ async function runWithConcurrency<T>(
     }
   });
   await Promise.all(workers);
+}
+
+/**
+ * 解析 Retry-After 响应头（秒数或 HTTP 日期）为毫秒数，用于限流/重试退避。
+ * 头缺失或无法解析时返回 null。结果上限 RETRY_AFTER_MAX_MS。(#2132)
+ */
+export function parseRetryAfter(res: Response): number | null {
+  const header = res.headers?.get?.('retry-after');
+  if (header == null || header === '') return null;
+  // 数字形式：秒数
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, RETRY_AFTER_MAX_MS);
+  }
+  // HTTP-date 形式
+  const date = Date.parse(header);
+  if (!Number.isNaN(date)) {
+    return Math.min(Math.max(0, date - Date.now()), RETRY_AFTER_MAX_MS);
+  }
+  return null;
 }
 
 /** Combine multiple AbortSignals into one. Returns a merged signal that aborts when any source aborts. */

@@ -1275,7 +1275,12 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     let mut ti = 0;
     let mut star_pi = usize::MAX; // sentinel: no star matched yet
     let mut star_ti = 0;
-    let mut star_resume_pi = 0; // where to resume pattern after ** on backtrack
+    let mut star_resume_pi = 0; // where to resume pattern after * on backtrack
+    // Separate backtrack state for ** so it's not overwritten by a subsequent
+    // single * that later fails on a path separator (#2088).
+    let mut star_star_pi = usize::MAX;
+    let mut star_star_ti = 0;
+    let mut star_star_resume_pi = 0;
 
     while ti < text.len() {
         if pi < pattern.len()
@@ -1287,6 +1292,10 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
         } else if pi < pattern.len() && pattern[pi] == '*' {
             // Handle ** (matches everything including /)
             if pi + 1 < pattern.len() && pattern[pi + 1] == '*' {
+                star_star_pi = pi;
+                star_star_ti = ti;
+                // Save the original star position before advancing pi,
+                // so backtracking works correctly for bare ** patterns.
                 star_pi = pi;
                 star_ti = ti;
                 pi += 2;
@@ -1295,6 +1304,7 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
                 if pi < pattern.len() && pattern[pi] == '/' {
                     pi += 1;
                 }
+                star_star_resume_pi = pi;
                 star_resume_pi = pi;
             } else {
                 star_pi = pi;
@@ -1314,6 +1324,17 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
                 star_ti += 1;
                 ti = star_ti;
                 pi = star_pi + 1;
+            } else if star_star_pi != usize::MAX {
+                // * backtrack hit a path separator — fall back to **
+                // backtrack state instead of giving up (#2088).
+                star_star_ti += 1;
+                ti = star_star_ti;
+                pi = star_star_resume_pi;
+                // Carry the ** state forward as the current star state
+                // so further backtrack attempts continue from **.
+                star_pi = star_star_pi;
+                star_ti = star_star_ti;
+                star_resume_pi = star_star_resume_pi;
             } else {
                 return false;
             }

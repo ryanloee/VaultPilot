@@ -45,7 +45,7 @@ export default function NotesScreen({ navigation }: any) {
 
   const handleNew = async () => {
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
       const id = await createNote();
       navigation.navigate('NoteEdit', { noteId: id });
     } catch (e: any) {
@@ -63,7 +63,7 @@ export default function NotesScreen({ navigation }: any) {
   };
 
   const handleLongPress = (item: DbNote) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
     Alert.alert(item.title || '笔记操作', '', [
       { text: item.starred ? '取消收藏' : '收藏', onPress: async () => {
         try { await toggleStar(item.id); await load(search, activeFolder); } catch (e: any) { Alert.alert('操作失败', e.message || '请重试'); }

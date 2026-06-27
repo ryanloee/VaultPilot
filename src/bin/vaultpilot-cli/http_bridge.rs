@@ -385,9 +385,20 @@ async fn http_models(
     headers: HeaderMap,
 ) -> Result<Json<OpenAiModelsResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let settings = load_settings_async(&state.context)
-        .await
-        .unwrap_or_default();
+    // #2105: Surface settings load failures instead of silently degrading to the
+    // default config. This keeps /v1/models consistent with /v1/chat/completions,
+    // which returns 500 on the same failure — otherwise callers would receive a
+    // seemingly valid model id and then hit a 500 when they actually use it.
+    let settings = match load_settings_async(&state.context).await {
+        Ok(s) => s,
+        Err(error) => {
+            tracing::warn!("http_models: failed to load settings: {error}");
+            return Err(openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load settings",
+            ));
+        }
+    };
     let now = Utc::now().timestamp();
     Ok(Json(OpenAiModelsResponse {
         object: "list",

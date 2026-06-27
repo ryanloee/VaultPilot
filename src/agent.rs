@@ -576,6 +576,7 @@ impl AgentSession {
                     Ok(status) => status,
                     Err(e) => {
                         let _ = child.kill().await;
+                        let _ = child.wait().await;
                         stdout_task.abort();
                         stderr_task.abort();
                         let _ = tokio::join!(stdout_task, stderr_task);
@@ -585,6 +586,7 @@ impl AgentSession {
             }
             _ = tokio::time::sleep(self.config.limits.max_duration) => {
                 let _ = child.kill().await;
+                let _ = child.wait().await;
                 // Abort spawned I/O tasks to avoid leaking (#1573)
                 stdout_task.abort();
                 stderr_task.abort();

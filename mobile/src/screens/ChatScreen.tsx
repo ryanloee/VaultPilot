@@ -76,6 +76,7 @@ export default function ChatScreen({ navigation, route }: any) {
     setSessionId(sid);
     setTitle(sessionTitle);
     setMsgs([]);
+    setShowScrollBtn(false);
     setInput('');
     try {
       const history = await getMessages(sid);

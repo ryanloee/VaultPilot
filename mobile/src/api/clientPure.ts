@@ -96,9 +96,17 @@ export function extractTextContent(content: string | ContentPart[]): string {
 // ── Anthropic base URL normalization ─────────────────────────
 
 /**
- * Strip /v1 suffix from Anthropic base URL to avoid double /v1 path
- * when appending /v1/messages.
+ * Strip a trailing version segment (e.g. /v1, /v2, /v1-beta) from an Anthropic
+ * base URL so the caller can safely append /v1/messages without producing a
+ * doubled path (…/v1/v1/messages).
+ *
+ * The regex is anchored to the END of the string: it only removes a version
+ * segment that is the final path component. This prevents a host or an earlier
+ * path segment that merely *contains* a /vN-looking substring — e.g.
+ * `https://v2.proxy.com` or `https://proxy.com/v2/anthropic` — from being
+ * truncated, which previously produced a malformed URL and broke Anthropic
+ * requests. See #2131.
  */
 export function normalizeAnthropicBase(apiBase: string): string {
-  return apiBase.replace(/\/v\d+.*$/, '');
+  return apiBase.replace(/\/v\d+(?:[-\w]*)?\/?$/, '');
 }

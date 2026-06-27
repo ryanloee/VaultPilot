@@ -513,7 +513,23 @@ pub async fn send_request_streaming(
 
         let status = response.status();
         if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
+            // Read the error body with the same size cap as the success path to
+            // avoid OOM when a misconfigured endpoint returns a huge non-2xx body.
+            // (Issue #2145: previously `response.text()` read to EOF with no limit.)
+            let mut err_buf = BytesMut::new();
+            let mut err_stream = response.bytes_stream();
+            while let Some(chunk) = err_stream.next().await {
+                let chunk =
+                    chunk.map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
+                if err_buf.len() + chunk.len() > MAX_RESPONSE_SIZE {
+                    return Err(anyhow!(
+                        "Streaming API error response body exceeds {}MB size limit, possible misconfigured endpoint",
+                        MAX_RESPONSE_SIZE / (1024 * 1024)
+                    ));
+                }
+                err_buf.extend_from_slice(&chunk);
+            }
+            let text = String::from_utf8_lossy(&err_buf).to_string();
 
             if is_retryable_provider_error(status.as_u16(), &text) && attempt < 2 {
                 warn!(

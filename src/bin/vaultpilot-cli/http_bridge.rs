@@ -333,8 +333,12 @@ async fn http_get_note(
     let note = load_note_async(&state.context, &note_id)
         .await
         .map_err(|e| openai_error(StatusCode::NOT_FOUND, &format!("Note not found: {e}")))?;
-    let value = serde_json::to_value(note)
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to serialize note: {e}")))?;
+    let value = serde_json::to_value(note).map_err(|e| {
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Failed to serialize note: {e}"),
+        )
+    })?;
     Ok(Json(value))
 }
 

@@ -687,7 +687,7 @@ async fn handle_mcp_request(
                         })
                         .collect();
                     let next_offset = offset.saturating_add(resources.len());
-                    let has_more = resources.len() == limit;
+                    let has_more = offset + resources.len() < result.total;
                     let next_cursor = if has_more {
                         Some(next_offset.to_string())
                     } else {

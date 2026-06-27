@@ -9,7 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag } from '../db';
+import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
@@ -120,6 +120,21 @@ export default function NoteEditorScreen({ route, navigation }: any) {
     ]);
   };
 
+  // #2154 — save current note's title+content as a reusable template (non-destructive copy)
+  const handleSaveAsTemplate = async () => {
+    try {
+      const tplId = await saveAsTemplate(noteId);
+      if (tplId) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
+        Alert.alert('已存为模板', `「${title || '无标题'}」已保存为模板，可在新建笔记时套用。`);
+      } else {
+        Alert.alert('操作失败', '笔记不存在');
+      }
+    } catch (e) {
+      Alert.alert('存为模板失败', String(e));
+    }
+  };
+
   const TOOLBAR = [
     { label: 'B', insert: '**', desc: '加粗' },
     { label: 'I', insert: '*', desc: '斜体' },
@@ -174,11 +189,14 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           {saving ? '保存中...' : '已保存'}
         </Text>
         <View style={s.headerActions}>
+          <TouchableOpacity onPress={handleSaveAsTemplate}>
+            <Text style={[s.headerBtn, { color: accentColor }]}>存为模板</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => {
             const text = content ? (title ? `${title}\n\n${content}` : content) : '';
             if (text) { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); Clipboard.setStringAsync(text); }
           }}>
-            <Text style={[s.headerBtn, { color: accentColor }]}>复制</Text>
+            <Text style={[s.headerBtn, { color: accentColor, marginLeft: 16 }]}>复制</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={handleDelete}>
             <Text style={[s.headerBtn, { color: '#EF4444', marginLeft: 16 }]}>删除</Text>

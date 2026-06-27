@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let ftsSupported = true;
@@ -31,6 +32,9 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureColumn('sessions', 'archived', 'INTEGER DEFAULT 0');
   await ensureColumn('notes', 'starred', 'INTEGER DEFAULT 0');
   await ensureColumn('notes', 'folder', 'TEXT NOT NULL DEFAULT \'\'');
+  // #2154: Template Snippets — notes flagged as templates (is_template=1) are excluded
+  // from regular note listings and only surface in the template picker.
+  await ensureColumn('notes', 'is_template', 'INTEGER DEFAULT 0');
   await ensureColumn('messages', 'attachments', 'TEXT');
 
   // #1447: Ensure UNIQUE constraint on pending_syncs.note_id for INSERT OR REPLACE dedup
@@ -293,6 +297,7 @@ export async function deleteMessage(id: string): Promise<void> {
 export interface DbNote {
   id: string; title: string; content: string;
   starred: number; folder: string; created_at: number; updated_at: number;
+  is_template?: number; // #2154 — 0 (regular note) or 1 (template). Optional for legacy rows pre-migration.
 }
 
 export async function createNote(title = '无标题', content = '', id?: string): Promise<string> {
@@ -327,7 +332,7 @@ export async function toggleStar(id: string): Promise<void> {
 
 export async function getNoteCount(): Promise<number> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM notes');
+  const row = await db.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM notes WHERE is_template = 0');
   return row?.count ?? 0;
 }
 
@@ -336,17 +341,17 @@ export async function getNotes(folder?: string, limit?: number): Promise<DbNote[
   if (folder !== undefined) {
     if (limit !== undefined) {
       return db.getAllAsync<DbNote>(
-        'SELECT * FROM notes WHERE folder = ? ORDER BY starred DESC, updated_at DESC LIMIT ?', [folder, limit]
+        'SELECT * FROM notes WHERE folder = ? AND is_template = 0 ORDER BY starred DESC, updated_at DESC LIMIT ?', [folder, limit]
       );
     }
     return db.getAllAsync<DbNote>(
-      'SELECT * FROM notes WHERE folder = ? ORDER BY starred DESC, updated_at DESC', [folder]
+      'SELECT * FROM notes WHERE folder = ? AND is_template = 0 ORDER BY starred DESC, updated_at DESC', [folder]
     );
   }
   if (limit !== undefined) {
-    return db.getAllAsync<DbNote>('SELECT * FROM notes ORDER BY starred DESC, updated_at DESC LIMIT ?', [limit]);
+    return db.getAllAsync<DbNote>('SELECT * FROM notes WHERE is_template = 0 ORDER BY starred DESC, updated_at DESC LIMIT ?', [limit]);
   }
-  return db.getAllAsync<DbNote>('SELECT * FROM notes ORDER BY starred DESC, updated_at DESC');
+  return db.getAllAsync<DbNote>('SELECT * FROM notes WHERE is_template = 0 ORDER BY starred DESC, updated_at DESC');
 }
 
 /** 只加载 id 和 updated_at，用于同步比较，避免全量 content 导致 OOM (#1668) */
@@ -390,6 +395,211 @@ export async function getAllTags(): Promise<string[]> {
   return rows.map(r => r.tag);
 }
 
+// ── Template Snippets (#2154) ─────────────────────────────
+// Templates are regular notes flagged with is_template=1. They are excluded from
+// the normal note list/search and only surface in the template picker. Instantiating
+// a template clones its body into a fresh note with placeholder variables substituted.
+
+function pad2(n: number): string {
+  return n < 10 ? '0' + n : String(n);
+}
+
+const WEEKDAYS_ZH = ['日', '一', '二', '三', '四', '五', '六'];
+
+export interface TemplateVars {
+  title?: string;
+  date?: string;
+  time?: string;
+  week?: string;
+  vault_name?: string;
+}
+
+/**
+ * Substitute template placeholder variables in content.
+ * Supported built-ins: {{title}} {{date}} {{time}} {{week}} {{vault_name}}.
+ * Custom fields use {{field:label}} — each unique label maps to a value in `fields`.
+ * Unknown / unfilled placeholders are replaced with an empty string so the new note
+ * never contains raw {{...}} markers.
+ */
+export function applyTemplateVariables(
+  content: string,
+  vars: TemplateVars = {},
+  fields: Record<string, string> = {},
+): string {
+  return content
+    .replace(/\{\{title\}\}/g, vars.title ?? '')
+    .replace(/\{\{date\}\}/g, vars.date ?? '')
+    .replace(/\{\{time\}\}/g, vars.time ?? '')
+    .replace(/\{\{week\}\}/g, vars.week ?? '')
+    .replace(/\{\{vault_name\}\}/g, vars.vault_name ?? 'VaultPilot')
+    .replace(/\{\{field:([^}]+)\}\}/g, (_m, label) => fields[String(label).trim()] ?? '');
+}
+
+/** Extract unique custom field labels ({{field:label}}) from template content, in order of appearance. */
+export function extractTemplateFields(content: string): string[] {
+  const re = /\{\{field:([^}]+)\}\}/g;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    const label = m[1].trim();
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      out.push(label);
+    }
+  }
+  return out;
+}
+
+/** Build default built-in variable values for "now". */
+export function buildTemplateVars(title: string): Required<TemplateVars> {
+  const now = new Date();
+  return {
+    title,
+    date: `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`,
+    time: `${pad2(now.getHours())}:${pad2(now.getMinutes())}`,
+    week: WEEKDAYS_ZH[now.getDay()],
+    vault_name: 'VaultPilot',
+  };
+}
+
+/** Return all templates, newest first. */
+export async function getTemplates(): Promise<DbNote[]> {
+  const db = await getDb();
+  return db.getAllAsync<DbNote>('SELECT * FROM notes WHERE is_template = 1 ORDER BY updated_at DESC');
+}
+
+/** Create a brand-new template note. */
+export async function createTemplate(title = '无标题模板', content = ''): Promise<string> {
+  const db = await getDb();
+  const id = uuid();
+  await db.runAsync(
+    'INSERT INTO notes (id, title, content, is_template) VALUES (?, ?, ?, 1)',
+    [id, title, content],
+  );
+  return id;
+}
+
+/** Copy an existing note's title+content into a new template (non-destructive to the original). */
+export async function saveAsTemplate(noteId: string): Promise<string | null> {
+  const db = await getDb();
+  const src = await db.getFirstAsync<DbNote>('SELECT title, content FROM notes WHERE id = ?', [noteId]);
+  if (!src) return null;
+  return createTemplate(src.title || '无标题模板', src.content);
+}
+
+/** Toggle a note's template flag. */
+export async function setTemplateFlag(noteId: string, isTemplate: boolean): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('UPDATE notes SET is_template = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [
+    isTemplate ? 1 : 0,
+    noteId,
+  ]);
+}
+
+/**
+ * Instantiate a template into a fresh regular note with variables substituted.
+ * `fieldValues` fills custom {{field:label}} placeholders.
+ * Returns the new note's id.
+ */
+export async function instantiateTemplate(
+  templateId: string,
+  fieldValues: Record<string, string> = {},
+  titleOverride?: string,
+): Promise<string> {
+  const db = await getDb();
+  const tpl = await db.getFirstAsync<DbNote>('SELECT * FROM notes WHERE id = ?', [templateId]);
+  if (!tpl) throw new Error('模板不存在');
+  const title = (titleOverride ?? tpl.title) || '无标题';
+  const vars = buildTemplateVars(title);
+  const content = applyTemplateVariables(tpl.content, vars, fieldValues);
+  return createNote(title, content);
+}
+
+const DEFAULT_TEMPLATES_SEEDED_KEY = 'templates_seeded_v1';
+
+/** Built-in starter templates (会议纪要 / 读书笔记 / 周报). */
+export const DEFAULT_TEMPLATES: Array<{ title: string; content: string }> = [
+  {
+    title: '会议纪要',
+    content: [
+      '# {{title}}',
+      '',
+      '- 日期：{{date}} {{week}}',
+      '',
+      '## 参会人',
+      '- ',
+      '',
+      '## 议题',
+      '- ',
+      '',
+      '## 决议',
+      '- ',
+      '',
+      '## 行动项',
+      '- {{field:负责人}}：',
+      '',
+    ].join('\n'),
+  },
+  {
+    title: '读书笔记',
+    content: [
+      '# {{title}}',
+      '',
+      '- 书名：{{field:书名}}',
+      '- 作者：{{field:作者}}',
+      '- 日期：{{date}}',
+      '',
+      '## 摘要',
+      '',
+      '## 核心观点',
+      '- ',
+      '',
+      '## 我的思考',
+      '- ',
+      '',
+    ].join('\n'),
+  },
+  {
+    title: '周报',
+    content: [
+      '# {{title}} · {{date}}',
+      '',
+      '## 本周完成',
+      '- ',
+      '',
+      '## 进行中',
+      '- ',
+      '',
+      '## 下周计划',
+      '- ',
+      '',
+      '## 问题与风险',
+      '- ',
+      '',
+    ].join('\n'),
+  },
+];
+
+/** Idempotently seed built-in templates on first launch. */
+export async function ensureDefaultTemplates(): Promise<void> {
+  try {
+    const flagged = await AsyncStorage.getItem(DEFAULT_TEMPLATES_SEEDED_KEY);
+    if (flagged === '1') return;
+    const existing = await getTemplates();
+    if (existing.length > 0) {
+      await AsyncStorage.setItem(DEFAULT_TEMPLATES_SEEDED_KEY, '1');
+      return;
+    }
+    for (const t of DEFAULT_TEMPLATES) {
+      await createTemplate(t.title, t.content);
+    }
+    await AsyncStorage.setItem(DEFAULT_TEMPLATES_SEEDED_KEY, '1');
+  } catch (e) {
+    console.warn('[DB] ensureDefaultTemplates failed:', e);
+  }
+}
+
 export async function searchNotes(query: string, folder?: string): Promise<DbNote[]> {
   const db = await getDb();
   const folderFilter = folder !== undefined ? ' AND folder = ?' : '';
@@ -397,7 +607,7 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
   if (!ftsSupported) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbNote>(
-      `SELECT * FROM notes WHERE (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
+      `SELECT * FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`, `%${escaped}%`, ...folderParams]
     );
   }
@@ -406,7 +616,7 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
   const ftsResults = await db.getAllAsync<DbNote>(
     `SELECT n.* FROM notes n
      INNER JOIN notes_fts fts ON n.rowid = fts.rowid
-     WHERE notes_fts MATCH ?${folderFilter.replace('folder', 'n.folder')}
+     WHERE n.is_template = 0 AND notes_fts MATCH ?${folderFilter.replace('folder', 'n.folder')}
      ORDER BY n.updated_at DESC LIMIT 50`,
     [ftsQuery, ...folderParams]
   );
@@ -414,7 +624,7 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
   if (ftsResults.length === 0) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbNote>(
-      `SELECT * FROM notes WHERE (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
+      `SELECT * FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`, `%${escaped}%`, ...folderParams]
     );
   }
@@ -447,7 +657,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
               SUBSTR(n.content, 1, 120) as snippet, n.updated_at
        FROM notes n
        INNER JOIN notes_fts fts ON n.rowid = fts.rowid
-       WHERE notes_fts MATCH ?
+       WHERE n.is_template = 0 AND notes_fts MATCH ?
        ORDER BY n.updated_at DESC LIMIT ?`,
       [ftsQuery, limit]
     );
@@ -455,7 +665,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
       noteResults = await db.getAllAsync<GlobalSearchResult>(
         `SELECT 'note' as type, id, title,
                 SUBSTR(content, 1, 120) as snippet, updated_at
-         FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\'
+         FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')
          ORDER BY updated_at DESC LIMIT ?`,
         [`%${escaped}%`, `%${escaped}%`, limit]
       );
@@ -464,7 +674,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
     noteResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'note' as type, id, title,
               SUBSTR(content, 1, 120) as snippet, updated_at
-       FROM notes WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\'
+       FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')
        ORDER BY updated_at DESC LIMIT ?`,
       [`%${escaped}%`, `%${escaped}%`, limit]
     );

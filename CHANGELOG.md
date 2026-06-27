@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Mobile: Template Snippets (Phase 1, #2154) — reusable note templates with variable substitution.
+  - Templates are notes flagged `is_template=1`; excluded from regular list/search.
+  - Built-in variables: `{{title}}` `{{date}}` `{{time}}` `{{week}}` `{{vault_name}}`; custom `{{field:label}}`.
+  - Expandable "+" FAB on NotesScreen → blank note / from template; field-fill bottom sheet.
+  - "存为模板" action in NoteEditorScreen; 3 default templates (会议纪要 / 读书笔记 / 周报) seeded on first launch.
+
 ## [0.3.54] - 2026-06-24
 
 ### Fixed

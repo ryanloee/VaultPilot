@@ -406,18 +406,21 @@ impl ToolProxy {
                 if parent.as_os_str().is_empty() {
                     break;
                 }
-                if parent.exists() {
-                    if let Ok(pc) = parent.canonicalize() {
-                        if !pc.starts_with(&vault_canonical) {
-                            return Err(anyhow!(
-                                "access denied: '{}' is outside the vault",
-                                sanitize_error(trimmed)
-                            ));
-                        }
-                        confined = true;
+                // Directly canonicalize without a prior exists() check to avoid
+                // TOCTOU race (#2090): the path could be replaced with a symlink
+                // between the exists() check and the canonicalize() call.
+                if let Ok(pc) = parent.canonicalize() {
+                    if !pc.starts_with(&vault_canonical) {
+                        return Err(anyhow!(
+                            "access denied: '{}' is outside the vault",
+                            sanitize_error(trimmed)
+                        ));
                     }
+                    confined = true;
                     break;
                 }
+                // canonicalize() failed — parent doesn't exist yet, continue
+                // walking up to find a real ancestor.
                 probe = parent;
             }
             if !confined {

@@ -93,9 +93,11 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
         await clearPendingSync(entry.note_id);
         synced++;
       } else if (res.status === 429) {
-        // Rate limited: don't clear, will retry later
-        console.warn(`[OfflineSync] rate limited for note ${entry.note_id}: ${res.status}`);
+        // Rate limited: stop the entire flush to avoid hammering an already-limited server.
+        // Remaining entries will be retried on the next flush.
+        console.warn(`[OfflineSync] rate limited for note ${entry.note_id}: ${res.status}, pausing flush`);
         failed++;
+        break;
       } else if (res.status >= 400 && res.status < 500) {
         // Client error (4xx): clear entry, won't succeed on retry
         console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: client error ${res.status}`);

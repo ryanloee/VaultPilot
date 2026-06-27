@@ -40,7 +40,7 @@ export function parseSSEStream(
     const maxParseErrors = options?.maxParseErrors ?? 3;
 
     // Propagate AbortSignal to reader so reader.read() unblocks on abort
-    const onAbort = () => { reader.cancel('abort'); };
+    const onAbort = () => { reader.cancel('abort').catch(() => {}); };
     options?.signal?.addEventListener('abort', onAbort, { once: true });
 
     function processBuffer() {

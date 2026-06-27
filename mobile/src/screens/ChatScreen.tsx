@@ -133,13 +133,20 @@ export default function ChatScreen({ navigation, route }: any) {
   // Keep ref in sync with state so send() reads latest messages
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
+  // Keep a ref of the latest sessionId to avoid stale closure in effect
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
   // Handle navigation params when returning from SessionsScreen
+  // NOTE: sessionId intentionally NOT in dependency array — its change would
+  // cause the effect to re-fire with stale route.params, re-loading the old session.
+  // Instead we use sessionIdRef for comparison inside the effect.
   useEffect(() => {
-    if (route.params?.sessionId && route.params.sessionId !== sessionId && !routeHandledRef.current) {
+    if (route.params?.sessionId && route.params.sessionId !== sessionIdRef.current && !routeHandledRef.current) {
       loadSession(route.params.sessionId, route.params.title || '对话');
     }
     routeHandledRef.current = false;
-  }, [route.params?.sessionId, sessionId, loadSession]);
+  }, [route.params?.sessionId, loadSession]);
 
   // Abort any in-flight stream on unmount
   useEffect(() => {
@@ -274,9 +281,13 @@ export default function ChatScreen({ navigation, route }: any) {
           setMsgs(prev => prev.filter(m => m.id !== aiId));
         }
       } else {
-        // Append error marker without discarding streamed content; mark as error to filter from API history
+        // Persist partial content + error marker to database before updating UI
+        const errorContent = partial
+          ? `${partial}\n\n[错误] ${err.message}`
+          : `[错误] ${err.message}`;
+        try { await updateMessage(aiId, errorContent); } catch {}
         setMsgs(prev => prev.map(m => m.id === aiId
-          ? { ...m, content: m.content ? `${m.content}\n\n[错误] ${err.message}` : `[错误] ${err.message}`, streaming: false, isError: true }
+          ? { ...m, content: errorContent, streaming: false, isError: true }
           : m));
       }
     }

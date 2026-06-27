@@ -1354,7 +1354,8 @@ mod tests {
     fn classify_note_load_error_chained_not_found_is_404() {
         // When "note not found" appears in the error CHAIN (wrapped by another
         // error), it should still be recognized as 404.
-        let result: Result<(), anyhow::Error> = Err(anyhow::Error::msg("note not found: wrapped-id"));
+        let result: Result<(), anyhow::Error> =
+            Err(anyhow::Error::msg("note not found: wrapped-id"));
         let outer = result.context("failed during sync").unwrap_err();
         assert_eq!(classify_note_load_error(&outer), StatusCode::NOT_FOUND);
     }

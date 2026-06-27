@@ -78,6 +78,7 @@ export default function ChatScreen({ navigation, route }: any) {
     setMsgs([]);
     setShowScrollBtn(false);
     setInput('');
+    setInputHeight(0);
     try {
       const history = await getMessages(sid);
       // Guard: if a newer loadSession call has started, discard stale result
@@ -295,6 +296,8 @@ export default function ChatScreen({ navigation, route }: any) {
       setSessionId(id);
       setTitle('新对话');
       setMsgs([]);
+      setInput('');
+      setInputHeight(0);
     } catch (e) {
       console.warn('[Chat] newChat failed:', e);
       Alert.alert('新建对话失败', '无法创建新对话，请重试');

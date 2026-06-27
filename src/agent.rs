@@ -1147,7 +1147,9 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
     const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1 MB
     let mut file = std::fs::File::open(&file_path)?;
     let mut content = String::new();
-    file.by_ref().take(MAX_FILE_SIZE).read_to_string(&mut content)?;
+    file.by_ref()
+        .take(MAX_FILE_SIZE)
+        .read_to_string(&mut content)?;
     // If the file was larger than MAX_FILE_SIZE, we may have read a partial file.
     // Check by trying to read one more byte.
     let mut probe = [0u8; 1];

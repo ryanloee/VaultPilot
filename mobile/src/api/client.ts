@@ -533,13 +533,17 @@ export async function chatWithReconnect(
 }
 
 // ── Health Check ──────────────────────────────────────────
-export async function checkApi(params?: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }): Promise<{ ok: boolean; error?: string }> {
+export async function checkApi(params?: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal }): Promise<{ ok: boolean; error?: string }> {
   try {
-    const settings = params ?? await getSettings();
-    const { apiKey } = settings;
+    const settings = (params ?? await getSettings()) as { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal };
+    const apiKey = settings.apiKey ?? '';
+    const signal = settings.signal;
     const apiBase = settings.apiBase ?? '';
     const format = settings.apiFormat ?? 'openai';
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
+
+    // Use external signal if provided, otherwise fall back to built-in 8s timeout
+    const effectiveSignal = signal ?? AbortSignal.timeout(8000);
 
     if (format === 'anthropic') {
       // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
@@ -552,7 +556,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({ model: settings.model ?? 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
-        signal: AbortSignal.timeout(8000),
+        signal: effectiveSignal,
       });
       // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error
       return { ok: res.ok || res.status === 400, error: res.ok || res.status === 400 ? undefined : `HTTP ${res.status}` };
@@ -560,7 +564,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
 
     const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(8000),
+      signal: effectiveSignal,
     });
     return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
   } catch (e: unknown) {

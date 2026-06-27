@@ -83,9 +83,18 @@ export default function ChatScreen({ navigation, route }: any) {
       const history = await getMessages(sid);
       // Guard: if a newer loadSession call has started, discard stale result
       if (activeLoadRef.current !== sid) return;
-      setMsgs(history.map(m => ({
+      // Merge DB history with any messages send() may have added during the
+      // await window. Using an updater (instead of overwriting) preserves
+      // in-flight user/AI messages that are not yet in the DB (#2101).
+      const dbMsgs = history.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
-      })));
+      }));
+      const dbIds = new Set(dbMsgs.map(m => m.id));
+      setMsgs(prev => {
+        // Messages present in state but absent from DB = pending (sending) msgs
+        const pending = prev.filter(m => !dbIds.has(m.id));
+        return [...dbMsgs, ...pending];
+      });
     } catch (e) {
       if (activeLoadRef.current !== sid) return;
       console.warn('[Chat] loadSession failed:', e);

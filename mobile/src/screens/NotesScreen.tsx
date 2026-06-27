@@ -23,7 +23,7 @@ export default function NotesScreen({ navigation }: any) {
   const load = useCallback(async (query: string, folder?: string) => {
     const currentId = ++requestIdRef.current;
     try {
-      const data = query ? await searchNotes(query) : await getNotes(folder);
+      const data = query ? await searchNotes(query, folder) : await getNotes(folder);
       const folderList = await getFolders();
       if (requestIdRef.current !== currentId) return;
       setNotes(data);

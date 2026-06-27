@@ -54,6 +54,9 @@ async function setApiKey(value: string): Promise<void> {
 /** Chat request timeout in ms (2 minutes) */
 const CHAT_TIMEOUT_MS = 120_000;
 
+/** Health-check (checkApi) timeout in ms (8 seconds) */
+const CHECK_API_TIMEOUT_MS = 8_000;
+
 /** Max retries for transient network/server errors */
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 1000;
@@ -542,8 +545,13 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
     const format = settings.apiFormat ?? 'openai';
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
 
-    // Use external signal if provided, otherwise fall back to built-in 8s timeout
-    const effectiveSignal = signal ?? AbortSignal.timeout(8000);
+    // Merge the built-in 8s timeout with any externally-provided signal so a
+    // slow / non-responsive host always aborts, even when the caller supplies
+    // its own AbortSignal (e.g. SettingsScreen.testConnection). Previously
+    // `signal ?? AbortSignal.timeout(...)` dropped the timeout entirely once an
+    // external signal was passed, leaving the request hanging forever (#2115).
+    const timeoutSignal = AbortSignal.timeout(CHECK_API_TIMEOUT_MS);
+    const effectiveSignal = signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal;
 
     if (format === 'anthropic') {
       // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable

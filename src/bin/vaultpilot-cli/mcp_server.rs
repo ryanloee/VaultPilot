@@ -450,6 +450,19 @@ async fn mcp_http_handler(
 
     // Handle initialize with write lock; all other requests with read lock
     if request.method == "initialize" && request.jsonrpc == "2.0" {
+        // Reject re-initialization per MCP protocol spec (#2067)
+        {
+            let server_state = state.server_state.read().await;
+            if server_state.initialized {
+                return Json(McpResponse::error(
+                    request.id.unwrap_or(Value::Null),
+                    -32600,
+                    "Server already initialized".to_string(),
+                    None,
+                ))
+                .into_response();
+            }
+        }
         let mut server_state = state.server_state.write().await;
         let requested_version = request
             .params

@@ -272,12 +272,18 @@ export default function ChatScreen({ navigation, route }: any) {
       const partial = full || (msgsRef.current.find(m => m.id === aiId)?.content ?? '');
       if (err.name === 'AbortError') {
         if (partial) {
-          try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch {}
+          try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch (dbErr) {
+            console.error('[Chat] Failed to persist aborted response to DB:', dbErr);
+            Alert.alert('保存警告', '中止后的内容未能保存到数据库，重新加载后可能消失。');
+          }
           setMsgs(prev => prev.map(m => m.id === aiId
             ? { ...m, content: partial + '\n\n_[响应被中止]_', streaming: false } : m));
         } else {
           // No content received — remove the empty placeholder
-          try { await deleteMessage(aiId); } catch {}
+          try { await deleteMessage(aiId); } catch (dbErr) {
+            console.error('[Chat] Failed to delete empty placeholder:', dbErr);
+            Alert.alert('清理警告', '空白回复占位未能从数据库删除，重新加载后可能出现空消息。');
+          }
           setMsgs(prev => prev.filter(m => m.id !== aiId));
         }
       } else {
@@ -285,7 +291,10 @@ export default function ChatScreen({ navigation, route }: any) {
         const errorContent = partial
           ? `${partial}\n\n[错误] ${err.message}`
           : `[错误] ${err.message}`;
-        try { await updateMessage(aiId, errorContent); } catch {}
+        try { await updateMessage(aiId, errorContent); } catch (dbErr) {
+          console.error('[Chat] Failed to persist error content to DB:', dbErr);
+          Alert.alert('保存警告', '错误信息未能保存到数据库，重新加载后可能消失。');
+        }
         setMsgs(prev => prev.map(m => m.id === aiId
           ? { ...m, content: errorContent, streaming: false, isError: true }
           : m));

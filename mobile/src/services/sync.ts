@@ -114,10 +114,12 @@ async function doSync(
         await new Promise(r => setTimeout(r, delay));
       }
       try {
+        const { signal: fetchSignal, cleanup } = combineSignals(signal, AbortSignal.timeout(30000));
         listRes = await fetch(`${url}/api/notes?limit=${PAGE_SIZE}&offset=${offset}`, {
           headers,
-          signal: combineSignals(signal, AbortSignal.timeout(30000)),
+          signal: fetchSignal,
         });
+        cleanup();
         if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
         if (listRes.status >= 500) {
           lastNetworkErr = new Error(`获取笔记列表失败: ${listRes.status}`);
@@ -198,10 +200,12 @@ async function doSync(
         const noteController = new AbortController();
         const timer = setTimeout(() => noteController.abort('timeout'), noteTimeoutMs);
         try {
+          const { signal: noteSignal, cleanup: noteCleanup } = combineSignals(signal, noteController.signal);
           noteRes = await fetch(`${url}/api/notes/${encodeURIComponent(meta.id)}`, {
             headers,
-            signal: combineSignals(signal, noteController.signal),
+            signal: noteSignal,
           });
+          noteCleanup();
           clearTimeout(timer);
           if (noteRes.ok) break; // success
           // Retry on 5xx (transient server errors)
@@ -271,16 +275,26 @@ async function runWithConcurrency<T>(
 }
 
 /** Combine multiple AbortSignals into one. Returns a merged signal that aborts when any source aborts. */
-function combineSignals(...signals: AbortSignal[]): AbortSignal {
+function combineSignals(...signals: AbortSignal[]): { signal: AbortSignal; cleanup: () => void } {
   const combined = new AbortController();
+  const handlers: Array<[AbortSignal, () => void]> = [];
   for (const s of signals) {
     if (s.aborted) {
       combined.abort(s.reason);
-      return combined.signal;
+      return { signal: combined.signal, cleanup: () => {} };
     }
-    s.addEventListener('abort', () => combined.abort(s.reason), { once: true });
+    const handler = () => combined.abort(s.reason);
+    s.addEventListener('abort', handler, { once: true });
+    handlers.push([s, handler]);
   }
-  return combined.signal;
+  return {
+    signal: combined.signal,
+    cleanup: () => {
+      for (const [s, h] of handlers) {
+        s.removeEventListener('abort', h);
+      }
+    },
+  };
 }
 
 export async function getLastSyncTime(): Promise<string | null> {

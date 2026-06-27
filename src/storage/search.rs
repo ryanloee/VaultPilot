@@ -310,10 +310,13 @@ fn query_recent_note_metas(
 /// that pagination operates on the correctly filtered result set.
 /// Build the shared WHERE clause and params for note filtering (tags, keywords, date ranges).
 /// Returns (where_clause, params) — where_clause is empty string when no filters apply.
-fn build_note_filter_clause(query: &SearchQuery) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+fn build_note_filter_clause(
+    query: &SearchQuery,
+    start_index: usize,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
     let mut conditions = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    let mut param_idx = 1usize;
+    let mut param_idx = start_index;
 
     for tag in &query.tags {
         let trimmed = tag.trim();
@@ -368,7 +371,7 @@ fn query_filtered_note_metas(
     limit: usize,
     offset: usize,
 ) -> Result<Vec<NoteMeta>> {
-    let (where_clause, mut params) = build_note_filter_clause(query);
+    let (where_clause, mut params) = build_note_filter_clause(query, 1);
     let mut param_idx = params.len() + 1;
 
     params.push(Box::new(limit as i64));
@@ -397,7 +400,7 @@ fn query_filtered_note_metas(
 /// without LIMIT/OFFSET. Used alongside `query_filtered_note_metas` to report
 /// the true total for pagination.
 fn count_filtered_notes(connection: &Connection, query: &SearchQuery) -> Result<usize> {
-    let (where_clause, params) = build_note_filter_clause(query);
+    let (where_clause, params) = build_note_filter_clause(query, 1);
 
     let sql = format!("SELECT COUNT(*) FROM notes {where_clause}");
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
@@ -586,9 +589,11 @@ fn count_fts_matches_with_filters(connection: &Connection, query: &SearchQuery) 
         return Ok(0);
     }
 
-    // Build the filter clause. Its param placeholders start at ?1, but we
-    // need them shifted by +1 because ?1 is reserved for the FTS MATCH.
-    let (mut filter_where, filter_params) = build_note_filter_clause(query);
+    // Build the filter clause with placeholders starting at ?2 — ?1 is
+    // reserved for the FTS MATCH param. Generating the correct indices
+    // directly avoids the fragile (and buggy for >=9 filters) String::replace
+    // shifting that used to live here (#2130).
+    let (filter_where, filter_params) = build_note_filter_clause(query, 2);
 
     if filter_where.is_empty() {
         // No filters — plain FTS count is sufficient.
@@ -600,14 +605,6 @@ fn count_fts_matches_with_filters(connection: &Connection, query: &SearchQuery) 
         return Ok(count as usize);
     }
 
-    // Shift filter param placeholders from ?N → ?{N+1}, working backwards
-    // so that multi-digit indices (e.g. ?10) are handled correctly.
-    let num_filters = filter_params.len();
-    for i in (1..=num_filters).rev() {
-        let old = format!("?{i}");
-        let new = format!("?{}", i + 1);
-        filter_where = filter_where.replace(&old, &new);
-    }
     // Strip the leading "WHERE " from the filter clause — we'll wrap it.
     let filter_conditions = filter_where
         .strip_prefix("WHERE ")
@@ -616,7 +613,7 @@ fn count_fts_matches_with_filters(connection: &Connection, query: &SearchQuery) 
 
     let sql = format!(
         "SELECT COUNT(*) FROM notes \
-         WHERE id IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?1) \
+         WHERE id IN (SELECT note_id FROM note_fts WHERE note_fts MATCH ?1) \
          AND ({filter_conditions})"
     );
 
@@ -2272,6 +2269,120 @@ mod tests {
         .expect("search filtered");
         assert_eq!(results.notes.len(), 1, "page should contain 1 note");
         assert_eq!(results.total, 1, "total should reflect the 1 matching note");
+    }
+
+    // ── #2130: placeholder shift corrupts ?10+ ─────────────────────
+
+    #[test]
+    fn count_fts_matches_with_nine_filters_no_placeholder_corruption() {
+        // Regression (#2130): count_fts_matches_with_filters used String::replace
+        // to shift placeholders ?N → ?{N+1}. With >=9 filters, replace("?1","?2")
+        // corrupted ?10 into ?20, producing invalid SQL and making the count
+        // fall back to a (wrong) lower bound. With the start_index fix, the
+        // placeholders are generated correctly and the count succeeds.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        // 3 notes whose body FTS-matches "alpha", each carrying 5 tags + 4 keywords
+        // so the filter clause has exactly 9 params (placeholders ?2..?10).
+        for i in 0..3 {
+            save_note_with_context(
+                &ctx,
+                NoteDocument {
+                    meta: NoteMeta {
+                        title: format!("Alpha {i}"),
+                        tags: vec![
+                            "t1".into(),
+                            "t2".into(),
+                            "t3".into(),
+                            "t4".into(),
+                            "t5".into(),
+                        ],
+                        keywords: vec!["k1".into(), "k2".into(), "k3".into(), "k4".into()],
+                        ..Default::default()
+                    },
+                    body: "alpha content".into(),
+                    search_snippet: None,
+                },
+            )
+            .expect("save");
+        }
+
+        let (connection, _) = open_connection(&ctx).expect("connect");
+        let query = SearchQuery {
+            text: "alpha".into(),
+            tags: vec![
+                "t1".into(),
+                "t2".into(),
+                "t3".into(),
+                "t4".into(),
+                "t5".into(),
+            ],
+            keywords: vec!["k1".into(), "k2".into(), "k3".into(), "k4".into()],
+            limit: Some(50),
+            ..Default::default()
+        };
+
+        let count = count_fts_matches_with_filters(&connection, &query)
+            .expect("count must not error with 9 filters");
+        assert_eq!(count, 3, "all 3 notes match the FTS term + 9 filters");
+    }
+
+    #[test]
+    fn search_total_accurate_with_many_filters_and_many_notes() {
+        // Regression (#2130): with >50 matching notes and >=9 filters, the
+        // over-fetched candidate set (fetch_limit capped) is smaller than the
+        // true total. A corrupted count would fall back to notes.len() (the
+        // candidate page size), under-reporting the total.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let total_notes = 60;
+        for i in 0..total_notes {
+            save_note_with_context(
+                &ctx,
+                NoteDocument {
+                    meta: NoteMeta {
+                        title: format!("Beta {i}"),
+                        tags: vec![
+                            "t1".into(),
+                            "t2".into(),
+                            "t3".into(),
+                            "t4".into(),
+                            "t5".into(),
+                        ],
+                        keywords: vec!["k1".into(), "k2".into(), "k3".into(), "k4".into()],
+                        ..Default::default()
+                    },
+                    body: "beta keyword".into(),
+                    search_snippet: None,
+                },
+            )
+            .expect("save");
+        }
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: "beta".into(),
+                tags: vec![
+                    "t1".into(),
+                    "t2".into(),
+                    "t3".into(),
+                    "t4".into(),
+                    "t5".into(),
+                ],
+                keywords: vec!["k1".into(), "k2".into(), "k3".into(), "k4".into()],
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        assert_eq!(results.notes.len(), 2, "page should contain 2 notes");
+        assert_eq!(
+            results.total, total_notes,
+            "total must reflect all {total_notes} matching notes, not the over-fetched page bound"
+        );
     }
 
     // ── stable_term_hash ──────────────────────────────────────────

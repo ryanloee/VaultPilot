@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal,
 } from 'react-native';
@@ -20,6 +20,14 @@ export default function SettingsScreen() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const testControllerRef = useRef<AbortController | null>(null);
+
+  // Abort in-flight test connection on unmount
+  useEffect(() => {
+    return () => {
+      testControllerRef.current?.abort();
+    };
+  }, []);
 
   // Active provider values for editing
   const activeIdx = store.providers.length > 0
@@ -50,8 +58,8 @@ export default function SettingsScreen() {
       try {
         const [api, themeMode, accentColor] = await Promise.all([
           getSettings(),
-          AsyncStorage.getItem(THEME_KEY),
-          AsyncStorage.getItem(ACCENT_KEY),
+          AsyncStorage.getItem(THEME_KEY).catch(() => null),
+          AsyncStorage.getItem(ACCENT_KEY).catch(() => null),
         ]);
         // Use getState() to avoid stale closure snapshot (#1896)
         // zustand-persist hydrates asynchronously, so store.providers at
@@ -97,14 +105,20 @@ export default function SettingsScreen() {
   };
 
   const testConnection = async () => {
+    testControllerRef.current?.abort();
+    const controller = new AbortController();
+    testControllerRef.current = controller;
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await checkApi({ apiBase, apiKey, apiFormat });
+      const res = await checkApi({ apiBase, apiKey, apiFormat, signal: controller.signal });
+      if (controller.signal.aborted) return;
       setTestResult(res.ok ? '连接成功' : `连接失败: ${res.error}`);
     } catch (e: any) {
+      if (controller.signal.aborted) return;
       setTestResult(`连接失败: ${e.message || '连接失败'}`);
     } finally {
+      if (testControllerRef.current === controller) testControllerRef.current = null;
       setTesting(false);
     }
   };

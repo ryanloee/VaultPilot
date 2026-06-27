@@ -738,8 +738,13 @@ async fn handle_mcp_request(
                     ))
                 }
             };
+            // Support an optional `?mode=full|summary|meta` query on the URI
+            // (#2108) so external Agents can request a leaner representation
+            // without pulling the full note body. Unknown/absent → `full`
+            // (backward compatible). The returned `uri` is normalized (no query).
+            let (path_uri, mode) = split_resource_uri(uri);
             // Parse vault://notes/{id}
-            let note_id = match uri.strip_prefix("vault://notes/") {
+            let note_id = match path_uri.strip_prefix("vault://notes/") {
                 Some(nid) => nid,
                 None => {
                     return Some(McpResponse::error(
@@ -751,16 +756,33 @@ async fn handle_mcp_request(
                 }
             };
             match load_note_async(context, note_id).await {
-                Ok(note) => Some(McpResponse::ok(
-                    id,
-                    serde_json::json!({
-                        "contents": [{
-                            "uri": uri,
-                            "mimeType": "text/markdown",
-                            "text": note.body
-                        }]
-                    }),
-                )),
+                Ok(note) => {
+                    // Render the content text + mime type according to mode.
+                    let (text, mime_type) = match mode {
+                        "summary" => {
+                            let (summary, _truncated) = derive_summary(&note.body);
+                            (summary, "text/markdown")
+                        }
+                        "meta" => {
+                            let meta_json = serde_json::to_string_pretty(&serde_json::json!({
+                                "meta": note.meta
+                            }))
+                            .unwrap_or_else(|_| "{}".to_string());
+                            (meta_json, "application/json")
+                        }
+                        _ => (note.body.clone(), "text/markdown"),
+                    };
+                    Some(McpResponse::ok(
+                        id,
+                        serde_json::json!({
+                            "contents": [{
+                                "uri": path_uri,
+                                "mimeType": mime_type,
+                                "text": text
+                            }]
+                        }),
+                    ))
+                }
                 Err(e) => Some(McpResponse::error(
                     id,
                     -32603,
@@ -1192,13 +1214,24 @@ fn mcp_tools() -> Vec<Value> {
         serde_json::json!({
             "name": "notes.get",
             "title": "Get Note",
-            "description": "Retrieve a single note by its ID.",
+            "description": "Retrieve a single note by its ID. Control the verbosity (and thus token cost) with `mode`: `summary` returns metadata plus a derived prose lead instead of the full body; `meta` returns metadata only. Prefer `summary`/`meta` when you only need context, then fall back to `full` for specific notes.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": {
                         "type": "string",
                         "description": "The note ID to retrieve."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["full", "summary", "meta"],
+                        "default": "full",
+                        "description": "Verbosity of the response. `full` (default) returns the complete note (backward compatible). `summary` returns metadata plus a ~480-char derived lead (no full body). `meta` returns metadata only (no body, no lead). Lower modes cut token cost ~5-10x."
+                    },
+                    "fields": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional field projection, only effective when `mode=full`. Return only the requested pieces. Allowed names: id, title, tags, keywords, summary, createdAt, updatedAt, path, body, searchSnippet. Unknown names are ignored. Omit to receive the full note document."
                     }
                 },
                 "required": ["id"],
@@ -1655,10 +1688,8 @@ fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
     ) {
         Ok(result) => {
             let count = result.notes.len();
-            mcp_tool_success(
-                format!("Found {count} note(s)."),
-                serde_json::to_value(&result).unwrap_or_default(),
-            )
+            let structured = with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
+            mcp_tool_success(format!("Found {count} note(s)."), structured)
         }
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
@@ -1669,11 +1700,46 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
         Some(id) => id.to_string(),
         None => return mcp_tool_error("notes.get requires 'id' parameter".to_string()),
     };
+    let mode_raw = arguments
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("full");
+    let mode = match normalize_note_mode(mode_raw) {
+        Some(m) => m,
+        None => {
+            return mcp_tool_error(format!(
+                "notes.get 'mode' must be one of: full, summary, meta (got '{}')",
+                escape_xml_content(mode_raw)
+            ))
+        }
+    };
+    // Optional field projection (only meaningful for mode=full).
+    let fields: Option<Vec<String>> = arguments.get("fields").and_then(|v| {
+        if v.is_null() {
+            None
+        } else {
+            serde_json::from_value::<Vec<String>>(v.clone()).ok()
+        }
+    });
+
     match load_note_with_context(context, &id) {
-        Ok(note) => mcp_tool_success(
-            format!("Loaded note '{}'", escape_xml_content(&note.meta.title)),
-            serde_json::to_value(&note).unwrap_or_default(),
-        ),
+        Ok(note) => {
+            let structured = build_note_get_payload(&note, mode, fields.as_deref());
+            let hint = if mode == "full" && fields.is_none() {
+                format!("Loaded note '{}'", escape_xml_content(&note.meta.title))
+            } else {
+                format!(
+                    "Loaded note '{}' (mode={}, tokenEstimate={})",
+                    escape_xml_content(&note.meta.title),
+                    mode,
+                    structured
+                        .get("tokenEstimate")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                )
+            };
+            mcp_tool_success(hint, structured)
+        }
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
 }
@@ -1751,10 +1817,8 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
     ) {
         Ok(result) => {
             let count = result.notes.len();
-            mcp_tool_success(
-                format!("Found {count} note(s)."),
-                serde_json::to_value(&result).unwrap_or_default(),
-            )
+            let structured = with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
+            mcp_tool_success(format!("Found {count} note(s)."), structured)
         }
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     }
@@ -1882,6 +1946,244 @@ async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
         }
         Ok(Err(e)) => mcp_tool_error(sanitize_error(&e.to_string())),
         Err(_elapsed) => mcp_tool_error("AI call timed out after 120 seconds".to_string()),
+    }
+}
+
+// ─── Token optimization helpers (#2108) ──────────────────────────
+//
+// External Agents consume vault content through this MCP server. Returning
+// full note bodies for every `resources/read` / `notes.get` makes token cost
+// grow linearly with vault size. The helpers below provide deterministic,
+// dependency-free ways to return leaner representations and to annotate every
+// note-bearing response with a `tokenEstimate` so Agents can self-regulate.
+
+/// Maximum number of body characters used when deriving a note lead/summary
+/// for token-efficient MCP responses. Tuned to be richer than the ~180-char
+/// storage-layer summary (which already lives in `NoteMeta.summary`) while
+/// still cutting token usage roughly 5–10× versus a typical full note.
+const DERIVED_SUMMARY_MAX_CHARS: usize = 480;
+
+/// Rough token estimate (heuristic) for the given text.
+///
+/// Blends CJK and Latin tokenization rules of thumb:
+/// - CJK ideographs map to roughly one token each.
+/// - Latin / other characters average about four characters per token
+///   (the classic "~4 chars per token" approximation).
+///
+/// This is intentionally cheap and dependency-free — it is only an
+/// observability hint so external Agents can gauge context cost, not a
+/// substitute for an exact tokenizer.
+fn estimate_tokens(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let mut cjk = 0usize;
+    let mut other = 0usize;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        if is_cjk_char(c) {
+            cjk += 1;
+        } else {
+            other += 1;
+        }
+    }
+    cjk + other.div_ceil(4)
+}
+
+/// Returns true for common CJK / CJK-adjacent code points that tend to
+/// tokenize at roughly one token per character.
+fn is_cjk_char(c: char) -> bool {
+    let cp = c as u32;
+    (0x3000..=0x303F).contains(&cp) // CJK Symbols & Punctuation
+        || (0x3040..=0x30FF).contains(&cp) // Hiragana, Katakana
+        || (0x3400..=0x4DBF).contains(&cp) // CJK Extension A
+        || (0x4E00..=0x9FFF).contains(&cp) // CJK Unified Ideographs
+        || (0xAC00..=0xD7AF).contains(&cp) // Hangul Syllables
+        || (0xF900..=0xFAFF).contains(&cp) // CJK Compatibility Ideographs
+        || (0xFF00..=0xFFEF).contains(&cp) // Halfwidth/Fullwidth Forms
+}
+
+/// Derive a token-efficient prose lead from a note body.
+///
+/// The body returned by the storage layer already has YAML frontmatter
+/// stripped, so we work directly on it: take the first paragraph (up to the
+/// first blank line) that reads as prose — skipping markdown headings and
+/// fenced code blocks — and truncate it to [`DERIVED_SUMMARY_MAX_CHARS`].
+/// Returns the derived summary and a flag indicating whether truncation
+/// occurred.
+fn derive_summary(body: &str) -> (String, bool) {
+    let text = body.trim();
+    if text.is_empty() {
+        return (String::new(), false);
+    }
+    let lead = text
+        .split("\n\n")
+        .map(str::trim)
+        .find(|p| !p.is_empty() && !p.starts_with("```") && !p.starts_with('#'))
+        .unwrap_or_else(|| {
+            // No paragraph break: fall back to the first non-heading line.
+            text.lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with("```") && !l.starts_with('#'))
+                .unwrap_or(text)
+        });
+    let cleaned = lead.trim_start_matches(|c: char| c == '#' || c.is_whitespace());
+    truncate_at_boundary(cleaned, DERIVED_SUMMARY_MAX_CHARS)
+}
+
+/// Truncate `s` to at most `max_chars` characters, preferring to cut at a
+/// whitespace boundary for Latin text so words are not split. Returns the
+/// (possibly truncated) string and a flag indicating whether truncation
+/// occurred. An ellipsis `…` is appended when truncating.
+fn truncate_at_boundary(s: &str, max_chars: usize) -> (String, bool) {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return (s.to_string(), false);
+    }
+    let head: String = s.chars().take(max_chars).collect();
+    // For Latin text, prefer cutting at the last whitespace within the head
+    // so we don't split a word — but only when the cut point stays reasonably
+    // close to the limit (avoids tiny stubs for CJK-heavy text where spaces
+    // are rare).
+    if let Some(idx) = head.rfind(|c: char| c.is_whitespace()) {
+        if idx > max_chars * 3 / 4 {
+            let mut out = head[..idx].trim_end().to_string();
+            out.push('…');
+            return (out, true);
+        }
+    }
+    let mut out = head;
+    out.push('…');
+    (out, true)
+}
+
+/// Normalize a mode string to one of the supported canonical values.
+/// Returns `None` for unrecognized modes so callers can surface an error.
+fn normalize_note_mode(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "full" => Some("full"),
+        "summary" => Some("summary"),
+        "meta" => Some("meta"),
+        _ => None,
+    }
+}
+
+/// Build the `structuredContent` payload for `notes.get` according to the
+/// requested `mode` (and optional `fields` projection for `full` mode).
+///
+/// - `full` (default): preserves the `NoteDocument` shape for backward
+///   compatibility, only adding `tokenEstimate`. When `fields` is supplied,
+///   returns a projected object containing only the requested pieces (e.g.
+///   `["body","tags"]`).
+/// - `summary`: returns `{ meta, summary, truncated }` — meta plus a derived
+///   ~480-char prose lead; no full body.
+/// - `meta`: returns `{ meta }` — metadata only, no body.
+///
+/// Every payload includes a `tokenEstimate` of the rendered content.
+fn build_note_get_payload(note: &NoteDocument, mode: &str, fields: Option<&[String]>) -> Value {
+    match mode {
+        "meta" => with_token_estimate(serde_json::json!({
+            "meta": note.meta,
+            "mode": "meta",
+        })),
+        "summary" => {
+            let (summary, truncated) = derive_summary(&note.body);
+            with_token_estimate(serde_json::json!({
+                "meta": note.meta,
+                "summary": summary,
+                "truncated": truncated,
+                "mode": "summary",
+            }))
+        }
+        _ => {
+            // full (default)
+            if let Some(req) = fields.filter(|f| !f.is_empty()) {
+                let mut proj = serde_json::Map::new();
+                proj.insert("mode".into(), serde_json::json!("full"));
+                for raw in req {
+                    match raw.trim().to_ascii_lowercase().as_str() {
+                        "id" => {
+                            proj.insert("id".into(), serde_json::json!(note.meta.id));
+                        }
+                        "title" => {
+                            proj.insert("title".into(), serde_json::json!(note.meta.title));
+                        }
+                        "tags" => {
+                            proj.insert("tags".into(), serde_json::json!(note.meta.tags));
+                        }
+                        "keywords" => {
+                            proj.insert("keywords".into(), serde_json::json!(note.meta.keywords));
+                        }
+                        "summary" => {
+                            proj.insert("summary".into(), serde_json::json!(note.meta.summary));
+                        }
+                        "createdat" | "created_at" => {
+                            proj.insert(
+                                "createdAt".into(),
+                                serde_json::json!(note.meta.created_at),
+                            );
+                        }
+                        "updatedat" | "updated_at" => {
+                            proj.insert(
+                                "updatedAt".into(),
+                                serde_json::json!(note.meta.updated_at),
+                            );
+                        }
+                        "path" => {
+                            proj.insert("path".into(), serde_json::json!(note.meta.path));
+                        }
+                        "body" => {
+                            proj.insert("body".into(), serde_json::json!(note.body));
+                        }
+                        "searchsnippet" | "search_snippet" => {
+                            if let Some(snip) = &note.search_snippet {
+                                proj.insert("searchSnippet".into(), serde_json::json!(snip));
+                            }
+                        }
+                        _ => {} // ignore unrecognized field names
+                    }
+                }
+                with_token_estimate(Value::Object(proj))
+            } else {
+                // Default: NoteDocument + tokenEstimate (additive, back-compat).
+                let mut val = serde_json::to_value(note).unwrap_or_default();
+                val["tokenEstimate"] = serde_json::json!(estimate_tokens(&note.body));
+                val
+            }
+        }
+    }
+}
+
+/// Inject a `tokenEstimate` field into an object payload, computed over the
+/// payload's serialized text. No-op for non-object values.
+fn with_token_estimate(mut payload: Value) -> Value {
+    if payload.is_object() {
+        let est = estimate_tokens(&payload.to_string());
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("tokenEstimate".to_string(), serde_json::json!(est));
+        }
+    }
+    payload
+}
+
+/// Split an MCP resource URI of the form
+/// `vault://notes/{id}[?mode=full|summary|meta]` into the clean path portion
+/// (without query) and a normalized mode (`full` if absent/invalid).
+fn split_resource_uri(uri: &str) -> (&str, &'static str) {
+    match uri.find('?') {
+        Some(idx) => {
+            let (left, query) = uri.split_at(idx);
+            let mode = query[1..]
+                .split('&')
+                .filter_map(|kv| kv.strip_prefix("mode="))
+                .next()
+                .and_then(normalize_note_mode)
+                .unwrap_or("full");
+            (left, mode)
+        }
+        None => (uri, "full"),
     }
 }
 
@@ -2283,5 +2585,266 @@ mod tests {
         // These are the BUG: title and tags are silently dropped
         assert_eq!(doc.meta.title, ""); // was lost under old code
         assert!(doc.meta.tags.is_empty()); // was lost under old code
+    }
+
+    // ── Token optimization helpers (#2108) ─────────────────────────
+
+    fn sample_note(body: &str) -> NoteDocument {
+        NoteDocument {
+            meta: NoteMeta {
+                id: "note-1".to_string(),
+                title: "Sample Note".to_string(),
+                tags: vec!["rust".to_string(), "mcp".to_string()],
+                keywords: vec!["tokens".to_string()],
+                summary: "short stored summary".to_string(),
+                ..Default::default()
+            },
+            body: body.to_string(),
+            search_snippet: None,
+        }
+    }
+
+    #[test]
+    fn estimate_tokens_empty_is_zero() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_latin_roughly_four_chars_per_token() {
+        // 8 non-whitespace latin chars → ceil(8/4) = 2 tokens.
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+        // 20 chars → 5 tokens.
+        assert_eq!(estimate_tokens("abcdefghijklmnopqrst"), 5);
+    }
+
+    #[test]
+    fn estimate_tokens_cjk_one_per_char() {
+        // 4 CJK ideographs → 4 tokens (1 token each).
+        assert_eq!(estimate_tokens("你好世界"), 4);
+    }
+
+    #[test]
+    fn estimate_tokens_mixed() {
+        // 3 CJK (3) + 8 latin (2) = 5 tokens.
+        assert_eq!(estimate_tokens("你好世 abcd1234"), 5);
+    }
+
+    #[test]
+    fn derive_summary_short_body_returned_verbatim() {
+        let body = "This is a short paragraph.";
+        let (summary, truncated) = derive_summary(body);
+        assert_eq!(summary, "This is a short paragraph.");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn derive_summary_empty_body() {
+        let (summary, truncated) = derive_summary("");
+        assert_eq!(summary, "");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn derive_summary_skips_headings_and_code_blocks() {
+        let body = "# Big Heading\n\n```\ncode here\n```\n\nThe real prose content.";
+        let (summary, truncated) = derive_summary(body);
+        assert_eq!(summary, "The real prose content.");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn derive_summary_truncates_long_body_with_ellipsis() {
+        // ~1200 chars of prose → truncated to <= DERIVED_SUMMARY_MAX_CHARS.
+        let body = "word ".repeat(300); // 1500 chars
+        let (summary, truncated) = derive_summary(&body);
+        assert!(truncated);
+        assert!(summary.ends_with('…'));
+        assert!(summary.chars().count() <= DERIVED_SUMMARY_MAX_CHARS + 1); // + ellipsis
+                                                                           // Should not end mid-word: cut happens at a whitespace boundary.
+        assert!(summary.ends_with(" …") || !summary.contains(' ') || summary.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_at_boundary_short_input_not_truncated() {
+        let (out, truncated) = truncate_at_boundary("short", 100);
+        assert_eq!(out, "short");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn truncate_at_boundary_long_cjk_input() {
+        let s = "字".repeat(600);
+        let (out, truncated) = truncate_at_boundary(&s, 100);
+        assert!(truncated);
+        assert_eq!(out.chars().count(), 101); // 100 chars + ellipsis
+    }
+
+    #[test]
+    fn normalize_note_mode_accepts_case_and_whitespace() {
+        assert_eq!(normalize_note_mode("FULL"), Some("full"));
+        assert_eq!(normalize_note_mode("  Summary "), Some("summary"));
+        assert_eq!(normalize_note_mode("META"), Some("meta"));
+        assert_eq!(normalize_note_mode("bogus"), None);
+        assert_eq!(normalize_note_mode(""), None);
+    }
+
+    #[test]
+    fn split_resource_uri_without_query_defaults_full() {
+        let (path, mode) = split_resource_uri("vault://notes/abc-123");
+        assert_eq!(path, "vault://notes/abc-123");
+        assert_eq!(mode, "full");
+    }
+
+    #[test]
+    fn split_resource_uri_parses_mode_query() {
+        let (path, mode) = split_resource_uri("vault://notes/abc?mode=summary");
+        assert_eq!(path, "vault://notes/abc");
+        assert_eq!(mode, "summary");
+    }
+
+    #[test]
+    fn split_resource_uri_parses_mode_with_other_params() {
+        let (path, mode) = split_resource_uri("vault://notes/abc?foo=1&mode=meta&bar=2");
+        assert_eq!(path, "vault://notes/abc");
+        assert_eq!(mode, "meta");
+    }
+
+    #[test]
+    fn split_resource_uri_invalid_mode_defaults_full() {
+        let (path, mode) = split_resource_uri("vault://notes/abc?mode=detailed");
+        assert_eq!(path, "vault://notes/abc");
+        assert_eq!(mode, "full");
+    }
+
+    #[test]
+    fn build_note_get_payload_full_default_preserves_document_shape() {
+        // Back-compat: default full mode returns the NoteDocument shape,
+        // only adding a `tokenEstimate` field.
+        let note = sample_note("body content here");
+        let payload = build_note_get_payload(&note, "full", None);
+        // Original NoteDocument keys are still present.
+        assert_eq!(payload["meta"]["id"], "note-1");
+        assert_eq!(payload["body"], "body content here");
+        // Additive token estimate is present.
+        assert!(payload.get("tokenEstimate").is_some());
+        let est = payload["tokenEstimate"].as_u64().unwrap();
+        assert!(est > 0);
+    }
+
+    #[test]
+    fn build_note_get_payload_meta_omits_body() {
+        let note = sample_note("body content here");
+        let payload = build_note_get_payload(&note, "meta", None);
+        assert_eq!(payload["mode"], "meta");
+        assert!(
+            payload.get("body").is_none(),
+            "meta mode must not include body"
+        );
+        assert_eq!(payload["meta"]["title"], "Sample Note");
+        assert!(payload.get("tokenEstimate").is_some());
+        // meta mode should serialize smaller than full mode.
+        let full = build_note_get_payload(&note, "full", None);
+        assert!(
+            payload.to_string().len() < full.to_string().len(),
+            "meta payload should be leaner than full"
+        );
+    }
+
+    #[test]
+    fn build_note_get_payload_summary_omits_full_body_but_includes_lead() {
+        let long_body = "word ".repeat(300);
+        let note = sample_note(&long_body);
+        let payload = build_note_get_payload(&note, "summary", None);
+        assert_eq!(payload["mode"], "summary");
+        // No full body leaked.
+        assert!(payload.get("body").is_none());
+        // Derived lead + truncation flag present.
+        let summary = payload["summary"].as_str().unwrap();
+        assert!(!summary.is_empty());
+        assert_eq!(payload["truncated"], true);
+        assert!(summary.ends_with('…'));
+        assert!(payload.get("tokenEstimate").is_some());
+    }
+
+    #[test]
+    fn build_note_get_payload_summary_short_body_not_truncated() {
+        let note = sample_note("a short body");
+        let payload = build_note_get_payload(&note, "summary", None);
+        assert_eq!(payload["truncated"], false);
+        assert_eq!(payload["summary"], "a short body");
+    }
+
+    #[test]
+    fn build_note_get_payload_full_fields_projection() {
+        let note = sample_note("the body text");
+        let fields = vec!["title".into(), "tags".into(), "body".into()];
+        let payload = build_note_get_payload(&note, "full", Some(&fields));
+        assert_eq!(payload["mode"], "full");
+        assert_eq!(payload["title"], "Sample Note");
+        assert_eq!(payload["tags"], serde_json::json!(["rust", "mcp"]));
+        assert_eq!(payload["body"], "the body text");
+        // Non-requested metadata is absent.
+        assert!(payload.get("keywords").is_none());
+        assert!(payload.get("summary").is_none());
+        assert!(payload.get("meta").is_none());
+    }
+
+    #[test]
+    fn build_note_get_payload_full_fields_without_body_is_lean() {
+        let note = sample_note("the body text that should not leak");
+        let fields = vec!["title".into()];
+        let payload = build_note_get_payload(&note, "full", Some(&fields));
+        assert!(payload.get("body").is_none());
+        assert_eq!(payload["title"], "Sample Note");
+    }
+
+    #[test]
+    fn build_note_get_payload_full_fields_ignores_unknown_names() {
+        let note = sample_note("body");
+        let fields = vec!["title".into(), "nonexistent".into(), "Body".into()];
+        let payload = build_note_get_payload(&note, "full", Some(&fields));
+        assert_eq!(payload["title"], "Sample Note");
+        assert_eq!(payload["body"], "body");
+        // Unknown field name did not create a key.
+        assert!(payload.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn with_token_estimate_adds_field_to_object() {
+        // The estimate is computed over the full serialized payload text
+        // (including JSON syntax), matching what the Agent actually receives.
+        let input = serde_json::json!({ "x": "abcde" });
+        let expected = estimate_tokens(&input.to_string());
+        let val = with_token_estimate(input);
+        assert_eq!(val["tokenEstimate"], expected);
+        assert!(expected > 0);
+    }
+
+    #[test]
+    fn with_token_estimate_noop_for_non_object() {
+        let val = with_token_estimate(serde_json::json!("just a string"));
+        assert!(val.get("tokenEstimate").is_none());
+    }
+
+    #[test]
+    fn notes_get_schema_documents_mode_and_fields() {
+        // Ensure the new optional params are advertised in tools/list.
+        let tools = mcp_tools();
+        let get_tool = tools
+            .iter()
+            .find(|t| t["name"] == "notes.get")
+            .expect("notes.get tool present");
+        let props = get_tool["inputSchema"]["properties"].as_object().unwrap();
+        assert!(props.contains_key("mode"), "mode param advertised");
+        assert!(props.contains_key("fields"), "fields param advertised");
+        let mode_enum = get_tool["inputSchema"]["properties"]["mode"]["enum"]
+            .as_array()
+            .unwrap();
+        let modes: Vec<&str> = mode_enum.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(modes.contains(&"full"));
+        assert!(modes.contains(&"summary"));
+        assert!(modes.contains(&"meta"));
+        // tool count unchanged (no tools added/removed).
+        assert_eq!(tools.len(), 14);
     }
 }

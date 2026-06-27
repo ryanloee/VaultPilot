@@ -27,6 +27,14 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path};
 
+/// Maximum total wall-clock time an upstream AI streaming request may run in
+/// the HTTP bridge's `stream: true` path. The `TimeoutLayer(180s)` on the
+/// router does NOT cover the SSE body stream (its Response future resolves
+/// immediately for SSE), so the streaming task needs its own cap. Without it, a
+/// stalled upstream + a non-disconnecting client holds a tokio task, two bounded
+/// channels, and an upstream HTTP connection indefinitely. (#2128)
+const STREAM_UPSTREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
 // ─── Public entry point ────────────────────────────────────────────
 
 pub(super) async fn run_http_bridge(
@@ -467,10 +475,33 @@ async fn http_chat_completions(
         tokio::spawn(async move {
             let chunk_tx_ref = &chunk_tx;
             let model_ref = &model_for_task;
+            // #2128: Cap the total upstream streaming time. The HTTP
+            // TimeoutLayer(180s) does NOT cover the SSE body stream (it only
+            // times the Response future, which for SSE resolves immediately),
+            // so without this an upstream that stalls (accepts connection,
+            // sends partial data, then hangs) with a non-disconnecting client
+            // would hold a tokio task + channels + upstream HTTP connection
+            // indefinitely. Consistent with the non-streaming 180s cap.
             let result = tokio::select! {
                 biased;
                 _ = cancel_upstream.cancelled() => {
                     tracing::info!("client disconnected, cancelling upstream AI request");
+                    return;
+                }
+                _ = tokio::time::sleep(STREAM_UPSTREAM_TIMEOUT) => {
+                    tracing::warn!(
+                        "streaming upstream timed out after {}s, aborting stream",
+                        STREAM_UPSTREAM_TIMEOUT.as_secs()
+                    );
+                    let error_data = serde_json::json!({
+                        "error": {
+                            "message": "Upstream service timed out",
+                            "type": "upstream_timeout",
+                            "code": "upstream_timeout"
+                        }
+                    });
+                    let _ = chunk_tx.send(error_data.to_string()).await;
+                    let _ = chunk_tx.send("[DONE]".to_string()).await;
                     return;
                 }
                 result = vaultpilot_lib::ai::send_request_streaming(
@@ -1279,6 +1310,81 @@ mod tests {
             history.is_empty(),
             "whitespace-only history should be empty, got {}",
             history.len()
+        );
+    }
+
+    // ── #2128: streaming upstream timeout safety net ──────────────
+
+    #[tokio::test]
+    async fn streaming_upstream_timeout_aborts_on_stall() {
+        // Mirrors the production select! in http_chat_completions' streaming
+        // task: a non-cancelled CancellationToken, a bounded timeout, and a
+        // stalled upstream (never resolves). The timeout branch must win and
+        // emit an upstream_timeout error chunk followed by [DONE]. A short
+        // test timeout is used instead of the 180s STREAM_UPSTREAM_TIMEOUT so
+        // the test runs fast, but the structure is identical.
+        use tokio::sync::mpsc;
+
+        let (chunk_tx, mut chunk_rx) = mpsc::channel::<String>(64);
+        let cancel = CancellationToken::new();
+        let timeout = std::time::Duration::from_millis(50);
+
+        tokio::spawn(async move {
+            let chunk_tx = chunk_tx;
+            let _result: () = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    return;
+                }
+                _ = tokio::time::sleep(timeout) => {
+                    let error_data = serde_json::json!({
+                        "error": {
+                            "message": "Upstream service timed out",
+                            "type": "upstream_timeout",
+                            "code": "upstream_timeout"
+                        }
+                    });
+                    let _ = chunk_tx.send(error_data.to_string()).await;
+                    let _ = chunk_tx.send("[DONE]".to_string()).await;
+                }
+                // Stalled upstream: never resolves (simulates a provider that
+                // accepted the connection but never sends a chunk).
+                _ = std::future::pending::<()>() => {}
+            };
+        });
+
+        let error_chunk = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            chunk_rx.recv(),
+        )
+        .await
+        .expect("timed out waiting for error chunk")
+        .expect("channel closed before error chunk");
+        assert!(
+            error_chunk.contains("upstream_timeout"),
+            "expected upstream_timeout error chunk, got: {error_chunk}"
+        );
+
+        let done = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            chunk_rx.recv(),
+        )
+        .await
+        .expect("timed out waiting for [DONE]")
+        .expect("channel closed before [DONE]");
+        assert_eq!(done, "[DONE]");
+    }
+
+    #[test]
+    fn stream_upstream_timeout_is_finite_and_bounded() {
+        // Guard: the safety-net timeout must be a finite, sane value. If someone
+        // accidentally sets it to an effectively-infinite duration, the #2128
+        // stall protection would be defeated.
+        assert!(STREAM_UPSTREAM_TIMEOUT.as_secs() > 0);
+        assert!(
+            STREAM_UPSTREAM_TIMEOUT.as_secs() <= 600,
+            "streaming upstream timeout should stay reasonable (<=600s), got {}s",
+            STREAM_UPSTREAM_TIMEOUT.as_secs()
         );
     }
 }

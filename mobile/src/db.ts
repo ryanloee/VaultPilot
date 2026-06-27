@@ -276,7 +276,13 @@ export async function addMessage(sessionId: string, role: string, content: strin
 
 export async function updateMessage(id: string, content: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE messages SET content = ? WHERE id = ?', [content, id]);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('UPDATE messages SET content = ? WHERE id = ?', [content, id]);
+    await db.runAsync(
+      'UPDATE sessions SET updated_at = strftime(\'%s\',\'now\') WHERE id = (SELECT session_id FROM messages WHERE id = ?)',
+      [id]
+    );
+  });
 }
 
 export async function deleteMessage(id: string): Promise<void> {

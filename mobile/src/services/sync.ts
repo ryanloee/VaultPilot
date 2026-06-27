@@ -113,13 +113,13 @@ async function doSync(
         const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
         await new Promise(r => setTimeout(r, delay));
       }
+      // 声明在 try 外部，确保 cleanup 在 catch/所有路径都可调用 (#2122)
+      const { signal: fetchSignal, cleanup } = combineSignals(signal, AbortSignal.timeout(30000));
       try {
-        const { signal: fetchSignal, cleanup } = combineSignals(signal, AbortSignal.timeout(30000));
         listRes = await fetch(`${url}/api/notes?limit=${PAGE_SIZE}&offset=${offset}`, {
           headers,
           signal: fetchSignal,
         });
-        cleanup();
         if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
         if (listRes.status >= 500) {
           lastNetworkErr = new Error(`获取笔记列表失败: ${listRes.status}`);
@@ -132,6 +132,8 @@ async function doSync(
         lastNetworkErr = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
         if (attempt >= MAX_RETRIES) throw lastNetworkErr;
         // network error → retry
+      } finally {
+        cleanup();
       }
     }
     if (!listRes) {
@@ -199,13 +201,13 @@ async function doSync(
         }
         const noteController = new AbortController();
         const timer = setTimeout(() => noteController.abort('timeout'), noteTimeoutMs);
+        // 声明在 try 外部，确保 cleanup 在 catch/所有路径都可调用 (#2122)
+        const { signal: noteSignal, cleanup: noteCleanup } = combineSignals(signal, noteController.signal);
         try {
-          const { signal: noteSignal, cleanup: noteCleanup } = combineSignals(signal, noteController.signal);
           noteRes = await fetch(`${url}/api/notes/${encodeURIComponent(meta.id)}`, {
             headers,
             signal: noteSignal,
           });
-          noteCleanup();
           clearTimeout(timer);
           if (noteRes.ok) break; // success
           // Retry on 5xx (transient server errors)
@@ -219,6 +221,8 @@ async function doSync(
           // Only break on user-initiated abort; timeout aborts should be retried
           if (lastFetchError.name === 'AbortError' && noteController.signal.reason !== 'timeout') break;
           // network error or timeout → retry
+        } finally {
+          noteCleanup();
         }
       }
       if (!noteRes || !noteRes.ok) {

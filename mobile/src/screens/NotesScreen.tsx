@@ -11,7 +11,9 @@ import { useAppStore, getColors } from '../store';
 import {
   getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote,
   getTemplates, instantiateTemplate, extractTemplateFields,
+  searchNotesByIds, buildStudioContext, StudioSourceNote,
 } from '../db';
+import { chat, ChatMessage, parseSSEStream } from '../api/client';
 
 export default function NotesScreen({ navigation }: any) {
   const { isDark, accentColor } = useAppStore();
@@ -29,10 +31,24 @@ export default function NotesScreen({ navigation }: any) {
   const spinRef = useRef(new Animated.Value(0));
   const blankRef = useRef(new Animated.Value(0));
   const tplRef = useRef(new Animated.Value(0));
+  const studioRef = useRef(new Animated.Value(0));
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [templates, setTemplates] = useState<DbNote[]>([]);
   const [fieldTemplate, setFieldTemplate] = useState<DbNote | null>(null);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+
+  // #2166 — Studio delivery types
+  const [showStudio, setShowStudio] = useState(false);
+  const [studioGenerating, setStudioGenerating] = useState(false);
+  const [studioProgress, setStudioProgress] = useState('');
+
+  const STUDIO_TYPES = [
+    { key: 'study-guide', label: '学习指南', icon: 'school-outline' as const, desc: '核心概念 + 关键术语 + 自测问题' },
+    { key: 'faq', label: 'FAQ', icon: 'help-circle-outline' as const, desc: '5-10 个高频问题与解答' },
+    { key: 'quiz', label: '测验', icon: 'checkbox-outline' as const, desc: '选择题 + 答案与解析，可导入闪卡' },
+    { key: 'timeline', label: '时间线', icon: 'time-outline' as const, desc: '按时间顺序排列的事件表' },
+    { key: 'briefing', label: '简报', icon: 'document-text-outline' as const, desc: '结构化摘要 + 关键要点 + 源笔记引用' },
+  ] as const;
 
   const load = useCallback(async (query: string, folder?: string) => {
     const currentId = ++requestIdRef.current;
@@ -64,6 +80,7 @@ export default function NotesScreen({ navigation }: any) {
       Animated.timing(spinRef.current, { toValue: to, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
       Animated.timing(blankRef.current, { toValue: to, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
       Animated.timing(tplRef.current, { toValue: to, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(studioRef.current, { toValue: to, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
     ]).start();
   };
 
@@ -142,6 +159,91 @@ export default function NotesScreen({ navigation }: any) {
     ]);
   };
 
+  // #2166 — Studio: open panel
+  const openStudio = () => {
+    closeFab();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
+    setShowStudio(true);
+  };
+
+  // #2166 — Studio: generate a delivery type from the current note list
+  const handleStudioGenerate = async (type: typeof STUDIO_TYPES[number]) => {
+    if (studioGenerating) return;
+    setStudioGenerating(true);
+    setStudioProgress(`正在生成${type.label}...`);
+
+    try {
+      // Collect the current visible notes (or current folder if filtered)
+      const sourceIds = notes.map(n => n.id);
+      if (sourceIds.length === 0) {
+        Alert.alert('没有源笔记', '当前视图没有笔记可供生成。请先创建一些笔记。');
+        setStudioGenerating(false);
+        setStudioProgress('');
+        return;
+      }
+
+      const sources = await searchNotesByIds(sourceIds);
+      const context = buildStudioContext(sources);
+
+      // System prompt per delivery type
+      const SYSTEM_PROMPTS: Record<string, string> = {
+        'study-guide': 'You are a study guide creator. Based on the source notes below, create a comprehensive study guide including:\n- Core concepts explained\n- Key terminology glossary\n- Self-assessment questions\n\nWrite the output in Chinese as a structured markdown note. Use [[wikilinks]] to reference source notes by their title when citing specific content. Start with an appropriate title as a level-1 heading, then the study guide content.',
+        'faq': 'You are an FAQ generator. Based on the source notes below, create 5-10 frequently asked questions with detailed answers extracted from the source material.\n\nWrite the output in Chinese as a structured markdown note. Use [[wikilinks]] to reference source notes by their title. Start with an appropriate title as a level-1 heading.',
+        'quiz': 'You are a quiz creator. Based on the source notes below, create multiple-choice quiz questions (with 4 options each) covering the key concepts. Include the correct answer and a brief explanation for each question.\n\nWrite the output in Chinese as a structured markdown note. Use [[wikilinks]] to reference source notes. Start with an appropriate title as a level-1 heading. Use markdown format:\n\n## Question 1\n\nA) ...\nB) ...\nC) ...\nD) ...\n\n**正确答案:** ...\n**解析:** ...',
+        'timeline': 'You are a timeline creator. Based on the source notes below, extract all events, dates, and chronological information and organize them into a structured timeline.\n\nWrite the output in Chinese as a structured markdown note. For each event, include: date/time period, event description, and [[wikilinks]] to source notes. Order chronologically. Start with an appropriate title as a level-1 heading.',
+        'briefing': 'You are a briefing document creator. Based on the source notes below, create a concise executive briefing including:\n- Executive summary (3-5 sentences)\n- Key takeaways (bullet points)\n- Supporting evidence with [[wikilinks]] to source notes\n- Next steps or recommendations\n\nWrite the output in Chinese as structured markdown. Start with an appropriate title as a level-1 heading.',
+      };
+      const tags: Record<string, string> = {
+        'study-guide': 'studio/study-guide',
+        'faq': 'studio/faq',
+        'quiz': 'studio/quiz',
+        'timeline': 'studio/timeline',
+        'briefing': 'studio/briefing',
+      };
+
+      const systemPrompt = SYSTEM_PROMPTS[type.key] || SYSTEM_PROMPTS['briefing'];
+
+      const messages: ChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Generate a ${type.label} from the following source notes:\n\n${context}` },
+      ];
+
+      const stream = await chat(messages);
+      let full = '';
+      await parseSSEStream(stream, (chunk) => {
+        if (chunk.done) return;
+        if (chunk.content) full += chunk.content;
+      });
+
+      if (!full) {
+        Alert.alert('生成失败', 'AI 返回结果为空，请重试。');
+        setStudioGenerating(false);
+        setStudioProgress('');
+        return;
+      }
+
+      // Save as a new note
+      // Extract title from first heading or use default
+      const titleMatch = full.match(/^#\s+(.+)/m);
+      const noteTitle = titleMatch ? titleMatch[1].trim() : `${type.label} — ${new Date().toLocaleDateString('zh-CN')}`;
+      const tagValue = tags[type.key] || 'studio';
+      const noteId = await createNote(noteTitle, full);
+      // Import addTag dynamically (already imported via db.ts, but addTag isn't imported in this file yet)
+      const { addTag } = await import('../db');
+      await addTag(noteId, tagValue);
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      setShowStudio(false);
+      setStudioGenerating(false);
+      setStudioProgress('');
+      navigation.navigate('NoteEdit', { noteId });
+    } catch (e: any) {
+      Alert.alert('生成失败', e.message || '请检查 API 设置后重试。');
+      setStudioGenerating(false);
+      setStudioProgress('');
+    }
+  };
+
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
@@ -215,6 +317,8 @@ export default function NotesScreen({ navigation }: any) {
   const blankY = blankRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, -64] });
   const tplScale = tplRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
   const tplY = tplRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, -124] });
+  const studioScale = studioRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const studioY = studioRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, -184] });
 
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
@@ -268,7 +372,17 @@ export default function NotesScreen({ navigation }: any) {
         }
       />
 
-      {/* Expandable FAB (#2154) — single "+" expands into two actions */}
+      {/* Expandable FAB (#2154) — single "+" expands into three actions */}
+      {/* Action: Studio (#2166) */}
+      <Animated.View
+        pointerEvents={fabOpen ? 'auto' : 'none'}
+        style={[s.fabAction, { backgroundColor: c.card, borderColor: c.border, right: 28, transform: [{ translateY: studioY }, { scale: studioScale }], opacity: studioRef.current }]}
+      >
+        <TouchableOpacity style={s.fabActionBtn} onPress={openStudio}>
+          <Ionicons name="flask-outline" size={22} color={accentColor} />
+          <Text style={[s.fabActionLabel, { color: c.text }]}>Studio</Text>
+        </TouchableOpacity>
+      </Animated.View>
       {/* Action: from template */}
       <Animated.View
         pointerEvents={fabOpen ? 'auto' : 'none'}
@@ -373,6 +487,64 @@ export default function NotesScreen({ navigation }: any) {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* #2166 — Studio panel bottom sheet */}
+      <Modal
+        visible={showStudio}
+        transparent
+        animationType="slide"
+        onRequestClose={() => { if (!studioGenerating) setShowStudio(false); }}
+      >
+        <TouchableOpacity
+          style={s.sheetBackdrop}
+          activeOpacity={1}
+          onPress={() => { if (!studioGenerating) setShowStudio(false); }}
+        >
+          <TouchableOpacity style={[s.sheet, { backgroundColor: c.bg }]} activeOpacity={1} onPress={() => {}}>
+            <View style={[s.sheetHandle, { backgroundColor: c.border }]} />
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <Text style={[s.sheetTitle, { color: c.text, marginBottom: 0 }]}>Studio — 一键生成</Text>
+              <Text style={[s.sheetSubtitle, { color: c.textSecondary }]}>
+                来源：{notes.length} 条笔记
+              </Text>
+            </View>
+
+            {studioGenerating ? (
+              <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                <ActivityIndicator color={accentColor} size="large" />
+                <Text style={{ color: c.textSecondary, marginTop: 12, fontSize: 14 }}>{studioProgress}</Text>
+              </View>
+            ) : (
+              <>
+                <ScrollView style={{ maxHeight: 380 }}>
+                  {STUDIO_TYPES.map(t => (
+                    <TouchableOpacity
+                      key={t.key}
+                      style={[s.studioItem, { borderColor: c.border, backgroundColor: c.card }]}
+                      onPress={() => handleStudioGenerate(t)}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <View style={[s.studioIcon, { backgroundColor: accentColor + '18' }]}>
+                          <Ionicons name={t.icon} size={20} color={accentColor} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[s.studioItemTitle, { color: c.text }]}>{t.label}</Text>
+                          <Text style={[s.studioItemDesc, { color: c.textSecondary }]}>{t.desc}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward-outline" size={16} color={c.textSecondary} />
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <Text style={[s.sheetHint, { color: c.textSecondary }]}>
+                  将使用当前筛选视图中的 {notes.length} 条笔记作为源材料生成{'\n'}生成后自动保存为新笔记
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -433,4 +605,10 @@ const s = StyleSheet.create({
   fieldInput: { fontSize: 15, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10 },
   fieldConfirm: { borderRadius: 10, paddingVertical: 13, alignItems: 'center', marginTop: 8 },
   fieldConfirmText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  // #2166 Studio
+  studioItem: { borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10 },
+  studioIcon: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  studioItemTitle: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  studioItemDesc: { fontSize: 12, lineHeight: 16 },
+  sheetSubtitle: { fontSize: 12 },
 });

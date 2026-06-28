@@ -785,3 +785,34 @@ export async function clearAllPendingSyncs(): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM pending_syncs');
 }
+
+// ── Studio (#2166) — 一键生成 vault 交付物 ─────────────────
+
+/** Source context item: a note's title and content for AI consumption. */
+export interface StudioSourceNote {
+  id: string;
+  title: string;
+  content: string;
+}
+
+/** Fetch multiple notes by ID for use as Studio source context. */
+export async function searchNotesByIds(ids: string[]): Promise<StudioSourceNote[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  const placeholders = ids.map(() => '?').join(',');
+  return db.getAllAsync<StudioSourceNote>(
+    `SELECT id, title, content FROM notes WHERE id IN (${placeholders}) AND is_template = 0`,
+    ids,
+  );
+}
+
+/**
+ * Build a flat text representation of source notes for AI prompt context.
+ * Each note is prefixed with its title and a wikilink anchor for citation.
+ */
+export function buildStudioContext(sources: StudioSourceNote[]): string {
+  return sources.map((n, i) => {
+    const title = n.title || '无标题';
+    return `[Source ${i + 1}]: [[${title}]]\n${n.content || '(空)'}`;
+  }).join('\n\n---\n\n');
+}

@@ -1150,6 +1150,12 @@ fn index_note_file_with_connection(
             &extract_note_image_refs(&document.body),
             vault_dir,
         )?;
+        // Update block anchors for the note
+        crate::storage::block_anchors::update_block_anchors(
+            connection,
+            &document.meta.id,
+            &document.body,
+        )?;
         Ok(())
     })();
     match result {

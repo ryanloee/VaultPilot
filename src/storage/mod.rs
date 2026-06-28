@@ -14,6 +14,7 @@ use crate::models::{
 mod backup;
 mod chat;
 pub(crate) mod collections;
+pub(crate) mod block_anchors;
 pub(crate) mod notes;
 mod pool;
 mod search;

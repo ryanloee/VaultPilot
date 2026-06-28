@@ -163,4 +163,53 @@ describe('parseInline', () => {
       'text', 'code', 'text', 'bold', 'text', 'italic', 'text', 'link',
     ]);
   });
+
+  // ── Wikilinks and Block References ───────────────────────
+
+  it('parses simple wikilink [[Note Name]]', () => {
+    const result = parseInline('See [[My Note]] for details');
+    expect(result).toEqual([
+      { type: 'text', text: 'See ' },
+      { type: 'wikilink', text: 'My Note', url: 'My Note' },
+      { type: 'text', text: ' for details' },
+    ]);
+  });
+
+  it('parses wikilink with display text [[Note|display]]', () => {
+    const result = parseInline('[[My Note|click here]]');
+    expect(result).toEqual([
+      { type: 'wikilink', text: 'click here', url: 'My Note' },
+    ]);
+  });
+
+  it('parses block reference [[Note#^blockid]]', () => {
+    const result = parseInline('[[Tasks#^abc123]]');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('blockref');
+    expect(result[0].noteName).toBe('Tasks');
+    expect(result[0].blockId).toBe('abc123');
+  });
+
+  it('parses block reference with display text', () => {
+    const result = parseInline('[[Tasks#^abc123|see task]]');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('blockref');
+    expect(result[0].text).toBe('see task');
+    expect(result[0].blockId).toBe('abc123');
+  });
+
+  it('parses heading anchor [[Note#Heading]]', () => {
+    const result = parseInline('[[Guide#Installation]]');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('blockref');
+    expect(result[0].noteName).toBe('Guide');
+    expect(result[0].blockId).toBe('Installation');
+  });
+
+  it('parses wikilink alongside other formatting', () => {
+    const result = parseInline('**bold** and [[note]] text');
+    // Wikilink has higher priority than bold — text before wikilink is literal
+    // (same behavior as code: text before code is not re-parsed)
+    expect(result.map(e => e.type)).toEqual(['text', 'wikilink', 'text']);
+  });
 });

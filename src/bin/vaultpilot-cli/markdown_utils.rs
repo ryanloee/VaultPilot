@@ -122,6 +122,34 @@ fn strip_inline_markdown(line: &str) -> String {
                     }
                 }
             }
+            // Wikilink / Block reference [[note#^blockid|display]]
+            '[' if chars.peek() == Some(&'[') => {
+                chars.next(); // consume second [
+                let mut inner = String::new();
+                let mut expect_close = false;
+                for ch in chars.by_ref() {
+                    if expect_close {
+                        if ch == ']' {
+                            break; // ]] found
+                        } else {
+                            inner.push(']');
+                            inner.push(ch);
+                            expect_close = false;
+                        }
+                    } else if ch == ']' {
+                        expect_close = true; // could be start of ]]
+                    } else {
+                        inner.push(ch);
+                    }
+                }
+                // Extract display text: [[note|display]] → display; [[note]] → note
+                let display = if let Some(pipe) = inner.rfind('|') {
+                    inner[pipe + 1..].to_string()
+                } else {
+                    inner.trim().to_string()
+                };
+                result.push_str(&display);
+            }
             // Bold marker **: skip the ** but keep the content
             '*' if chars.peek() == Some(&'*') => {
                 chars.next(); // consume second *
@@ -329,5 +357,36 @@ mod tests {
     fn simplify_trims_trailing_whitespace() {
         let input = "content\n\n";
         assert_eq!(simplify_cli_text(input), "content");
+    }
+
+    // ── wikilink / block reference stripping ──────────────────────
+
+    #[test]
+    fn strip_wikilink_simple() {
+        assert_eq!(strip_inline_markdown("[[My Note]]"), "My Note");
+    }
+
+    #[test]
+    fn strip_wikilink_with_display() {
+        assert_eq!(
+            strip_inline_markdown("[[My Note|click here]]"),
+            "click here",
+        );
+    }
+
+    #[test]
+    fn strip_block_reference() {
+        assert_eq!(
+            strip_inline_markdown("[[My Note#^abc123]]"),
+            "My Note#^abc123",
+        );
+    }
+
+    #[test]
+    fn strip_wikilink_with_surrounding_text() {
+        assert_eq!(
+            strip_inline_markdown("See [[note]] for details"),
+            "See note for details",
+        );
     }
 }

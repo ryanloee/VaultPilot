@@ -14,6 +14,7 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::models::AppSettings;
 
 use super::backup;
+use super::block_anchors::ensure_block_anchors_table;
 
 /// Type alias for a pooled SQLite connection.
 pub(super) type PooledConnection = r2d2::PooledConnection<SqliteConnectionManager>;
@@ -162,6 +163,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
         ensure_attachment_columns(connection)?;
+        ensure_block_anchors_table(connection)?;
         return Ok(());
     }
 
@@ -247,6 +249,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         "#,
     )?;
     ensure_attachment_columns(connection)?;
+    ensure_block_anchors_table(connection)?;
     connection.execute_batch("PRAGMA user_version = 1;")?;
     Ok(())
 }

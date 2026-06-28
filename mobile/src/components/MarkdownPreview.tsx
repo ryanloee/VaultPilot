@@ -1,8 +1,15 @@
 import React from 'react';
-import { Text, View, StyleSheet, ScrollView } from 'react-native';
+import { Text, View, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { renderLatex, parseLatexSegments } from '../utils/latex';
 
-interface Props { content: string; textColor: string; accentColor: string; isDark: boolean; }
+interface Props {
+  content: string;
+  textColor: string;
+  accentColor: string;
+  isDark: boolean;
+  /** Called when a [[wikilink]] or [[note#^blockid]] is tapped */
+  onNoteLinkPress?: (noteName: string, blockId?: string) => void;
+}
 
 /**
  * Process text to find and render LaTeX expressions.
@@ -39,8 +46,8 @@ function processLatexSegments(text: string, textColor: string, accentColor: stri
   return nodes.length > 0 ? nodes : [<Text key="empty">{text}</Text>];
 }
 
-/** Lightweight markdown renderer — handles headers, bold, italic, code, lists, links, LaTeX. */
-export default function MarkdownPreview({ content, textColor, accentColor, isDark }: Props) {
+/** Lightweight markdown renderer — handles headers, bold, italic, code, lists, links, LaTeX, wikilinks, blockrefs. */
+export default function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress }: Props) {
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let inCodeBlock = false;
@@ -93,7 +100,7 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
     if (listMatch) {
       elements.push(
         <Text key={`li-${i}`} style={[styles.paragraph, { color: textColor, paddingLeft: 8 + listMatch[1].length * 4 }]}>
-          {'• '}{renderInline(listMatch[2], textColor, accentColor, isDark)}
+          {'• '}{renderInline(listMatch[2], textColor, accentColor, isDark, onNoteLinkPress)}
         </Text>
       );
       continue;
@@ -105,7 +112,7 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
       const num = line.match(/^\s*(\d+)\./)?.[1] ?? '1';
       elements.push(
         <Text key={`ol-${i}`} style={[styles.paragraph, { color: textColor, paddingLeft: 8 + olMatch[1].length * 4 }]}>
-          {num}. {renderInline(olMatch[2], textColor, accentColor, isDark)}
+          {num}. {renderInline(olMatch[2], textColor, accentColor, isDark, onNoteLinkPress)}
         </Text>
       );
       continue;
@@ -128,7 +135,7 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
     } else {
       elements.push(
         <Text key={`p-${i}`} style={[styles.paragraph, { color: textColor }]}>
-          {renderInline(line, textColor, accentColor, isDark)}
+          {renderInline(line, textColor, accentColor, isDark, onNoteLinkPress)}
         </Text>
       );
     }
@@ -148,8 +155,17 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
   return <>{elements}</>;
 }
 
-/** Parse inline markdown: **bold**, *italic*, `code`, [link](url) */
-function renderInline(text: string, textColor: string, accentColor: string, isDark: boolean): React.ReactNode {
+/**
+ * Parse inline markdown: **bold**, *italic*, `code`, [link](url),
+ * [[wikilink]], [[note#^blockid|display]].
+ */
+function renderInline(
+  text: string,
+  textColor: string,
+  accentColor: string,
+  isDark: boolean,
+  onNoteLinkPress?: (noteName: string, blockId?: string) => void,
+): React.ReactNode {
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let key = 0;
@@ -158,13 +174,70 @@ function renderInline(text: string, textColor: string, accentColor: string, isDa
     // Inline code
     const codeMatch = remaining.match(/^(.*?)`([^`]+)`(.*)$/);
     if (codeMatch) {
-      if (codeMatch[1]) parts.push(<Text key={`t${key++}`}>{codeMatch[1]}</Text>);
+      if (codeMatch[1]) parts.push(...[<Text key={`t${key++}`}>{codeMatch[1]}</Text>]);
       parts.push(
         <Text key={`c${key++}`} style={[styles.codeInline, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6', color: textColor }]}>
           {codeMatch[2]}
         </Text>
       );
       remaining = codeMatch[3];
+      continue;
+    }
+
+    // Wikilink / Block reference [[note#^blockid]] or [[Note Name]] or [[Note Name|Display]]
+    const wikilinkMatch = remaining.match(
+      /^(.*?)\[\[([^\[\]]+?)(?:\|([^\[\]]*?))?\]\](.*)$/,
+    );
+    if (wikilinkMatch) {
+      if (wikilinkMatch[1]) parts.push(<Text key={`t${key++}`}>{wikilinkMatch[1]}</Text>);
+      const raw = wikilinkMatch[2];
+      const display = wikilinkMatch[3] || raw;
+      const caretPos = raw.indexOf('#^');
+      const hashPos = raw.indexOf('#');
+      const isBlockRef = caretPos >= 0 || (hashPos >= 0 && raw.includes('#^', 0)) || (hashPos >= 0 && !raw.includes('[['));
+      const linkStyle = { color: accentColor, textDecorationLine: 'underline' as const };
+      if (caretPos >= 0) {
+        // Block reference: [[Note Name#^blockid]]
+        const noteName = caretPos === 0 ? undefined : raw.slice(0, caretPos).trim();
+        const blockId = raw.slice(caretPos + 2).trim();
+        parts.push(
+          <Pressable
+            key={`wl${key++}`}
+            onPress={() => {
+              onNoteLinkPress?.(noteName || '', `^${blockId}`);
+            }}
+          >
+            <Text style={linkStyle}>{display}</Text>
+          </Pressable>
+        );
+      } else if (hashPos >= 0) {
+        // Heading anchor: [[Note Name#Heading]]
+        const noteName = hashPos === 0 ? undefined : raw.slice(0, hashPos).trim();
+        const heading = raw.slice(hashPos + 1).trim();
+        parts.push(
+          <Pressable
+            key={`wl${key++}`}
+            onPress={() => {
+              onNoteLinkPress?.(noteName || '', heading);
+            }}
+          >
+            <Text style={linkStyle}>{display}</Text>
+          </Pressable>
+        );
+      } else {
+        // Simple wikilink: [[Note Name]]
+        parts.push(
+          <Pressable
+            key={`wl${key++}`}
+            onPress={() => {
+              onNoteLinkPress?.(raw.trim());
+            }}
+          >
+            <Text style={linkStyle}>{display}</Text>
+          </Pressable>
+        );
+      }
+      remaining = wikilinkMatch[4];
       continue;
     }
 

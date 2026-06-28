@@ -15,11 +15,15 @@ use uuid::Uuid;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    delete_note_with_context, export_all_notes_with_context, export_note_markdown_with_context,
+    add_note_to_collection_with_context, create_collection_with_context,
+    delete_note_with_context, delete_collection_with_context,
+    export_all_notes_with_context, export_note_markdown_with_context,
     find_related_notes_with_context, import_markdown_with_context, initialize_storage_with_context,
+    list_collections_with_context, list_notes_in_collection_with_context,
     load_chat_state_async, load_note_with_context, load_settings_with_context,
-    rebuild_index_with_context, save_chat_state_async, save_note_with_context,
-    save_settings_with_context, search_notes_with_context, vault_export_with_context,
+    rebuild_index_with_context, remove_note_from_collection_with_context,
+    save_chat_state_async, save_note_with_context, save_settings_with_context,
+    search_notes_with_context, vault_export_with_context,
     StorageContext,
 };
 use vaultpilot_lib::{
@@ -89,6 +93,12 @@ enum Commands {
     Notes {
         #[command(subcommand)]
         action: NotesActions,
+    },
+
+    /// Manage collections for multi-grouping notes (#2042)
+    Collections {
+        #[command(subcommand)]
+        action: CollectionActions,
     },
 
     /// Manage the search index
@@ -342,6 +352,52 @@ enum VaultActions {
     },
 }
 
+#[derive(Subcommand)]
+enum CollectionActions {
+    /// List all collections with note counts
+    List,
+
+    /// Create a new collection
+    Create {
+        /// Collection name
+        name: String,
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+    },
+
+    /// Delete a collection (does NOT delete its notes)
+    Delete {
+        /// Collection ID
+        id: String,
+    },
+
+    /// Add a note to a collection
+    AddNote {
+        /// Collection ID
+        collection_id: String,
+        /// Note ID
+        note_id: String,
+    },
+
+    /// Remove a note from a collection
+    RemoveNote {
+        /// Collection ID
+        collection_id: String,
+        /// Note ID
+        note_id: String,
+    },
+
+    /// List all notes in a collection
+    Notes {
+        /// Collection ID
+        id: String,
+        /// Maximum notes to return
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -492,6 +548,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             "message": "The MCP HTTP server is started by running `vaultpilot-cli mcp-http` directly."
         })),
         Commands::Vault { action } => handle_vault(context, action),
+        Commands::Collections { action } => {
+            tokio::task::block_in_place(|| handle_collections(context, action))
+        }
         Commands::Plugins => {
             let mgr = vaultpilot_lib::plugin::PluginManager::new();
             let plugins: Vec<_> = mgr
@@ -730,6 +789,65 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
         VaultActions::Export { output } => {
             let result = vault_export_with_context(context, output)?;
             to_json(&result)
+        }
+    }
+}
+
+fn handle_collections(context: &StorageContext, action: &CollectionActions) -> Result<Value> {
+    match action {
+        CollectionActions::List => {
+            let collections = list_collections_with_context(context)?;
+            let count = collections.len();
+            Ok(serde_json::json!({
+                "collections": collections,
+                "count": count
+            }))
+        }
+        CollectionActions::Create { name, description } => {
+            let desc = description.as_deref().unwrap_or("");
+            let col = create_collection_with_context(context, name, desc)?;
+            Ok(serde_json::json!({
+                "created": true,
+                "collection": col
+            }))
+        }
+        CollectionActions::Delete { id } => {
+            let deleted = delete_collection_with_context(context, id)?;
+            Ok(serde_json::json!({
+                "deleted": deleted,
+                "id": id
+            }))
+        }
+        CollectionActions::AddNote {
+            collection_id,
+            note_id,
+        } => {
+            let added = add_note_to_collection_with_context(context, note_id, collection_id)?;
+            Ok(serde_json::json!({
+                "added": added,
+                "collectionId": collection_id,
+                "noteId": note_id
+            }))
+        }
+        CollectionActions::RemoveNote {
+            collection_id,
+            note_id,
+        } => {
+            let removed = remove_note_from_collection_with_context(context, note_id, collection_id)?;
+            Ok(serde_json::json!({
+                "removed": removed,
+                "collectionId": collection_id,
+                "noteId": note_id
+            }))
+        }
+        CollectionActions::Notes { id, limit } => {
+            let notes = list_notes_in_collection_with_context(context, id, *limit, 0)?;
+            let count = notes.len();
+            Ok(serde_json::json!({
+                "notes": notes,
+                "count": count,
+                "collectionId": id
+            }))
         }
     }
 }

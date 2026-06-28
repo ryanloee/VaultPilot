@@ -39,6 +39,7 @@ mod tests {
                 source: "test".to_string(),
                 path: String::new(),
                 summary: String::new(),
+                collections: Vec::new(),
             },
             body: body.to_string(),
             search_snippet: None,

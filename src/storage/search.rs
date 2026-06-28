@@ -285,6 +285,7 @@ fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteMeta> {
         source: row.get(10)?,
         path: row.get(11)?,
         summary: row.get(12)?,
+        collections: Vec::new(),
     })
 }
 
@@ -1866,6 +1867,7 @@ mod tests {
                 source: "manual".to_string(),
                 path: "vault/2026/04/rk3566-sd.md".to_string(),
                 summary: "记录 RK3566 平台下 SD 卡引脚复用的电路与对照信息".to_string(),
+                collections: Vec::new(),
             },
             body:
                 "## 概述\nSD 卡接口引脚连接定义。\n## 备注\n软件层可参考 Device Tree pinctrl 配置。"
@@ -1896,6 +1898,7 @@ mod tests {
                 source: "manual".to_string(),
                 path: "vault/2026/04/flash.md".to_string(),
                 summary: "之前刷机时使用过的命令记录".to_string(),
+                collections: Vec::new(),
             },
             body: "相关命令: wboot -w update zboot.img".to_string(),
             search_snippet: None,

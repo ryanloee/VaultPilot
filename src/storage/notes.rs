@@ -114,6 +114,7 @@ pub fn save_note_with_images_with_context(
         } else {
             note.meta.summary.trim().to_string()
         },
+        collections: note.meta.collections.clone(),
     };
 
     let serialized = compose_markdown(&meta, &body_with_images)?;
@@ -864,6 +865,7 @@ fn import_single_markdown(
             source: "imported".to_string(),
             path: String::new(),
             summary: parsed.meta.summary,
+            collections: parsed.meta.collections,
         },
         body: parsed.body,
         search_snippet: None,
@@ -936,6 +938,7 @@ pub(super) fn parse_markdown_note(path: &Path, default_source: &str) -> Result<N
             } else {
                 frontmatter.summary.trim().to_string()
             },
+            collections: frontmatter.collections,
         },
         body: body.trim().to_string(),
         search_snippet: None,
@@ -956,6 +959,7 @@ fn compose_markdown(meta: &NoteMeta, body: &str) -> Result<String> {
         created_at: meta.created_at.clone(),
         updated_at: meta.updated_at.clone(),
         source: meta.source.clone(),
+        collections: meta.collections.clone(),
     };
     let yaml = serde_yaml_ng::to_string(&frontmatter)?;
     Ok(format!(
@@ -1618,6 +1622,7 @@ mod tests {
             source: "manual".to_string(),
             path: String::new(),
             summary: String::new(),
+            collections: Vec::new(),
         };
         let body = "## 问题现象\n\n启动超时";
         let serialized = compose_markdown(&meta, body).expect("serialize markdown");

@@ -16,6 +16,18 @@ const MAX_CONTEXT_NOTES = 5;
 /** Max chars per note content in context */
 const MAX_NOTE_CONTENT_CHARS = 800;
 
+/** Format a Unix timestamp (seconds) as a human-readable date string.
+ *  Returns empty string for invalid/zero timestamps. */
+function formatNoteTimestamp(ts: number): string {
+  if (!ts || ts <= 0) return '';
+  try {
+    const d = new Date(ts * 1000);
+    return d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+  } catch {
+    return '';
+  }
+}
+
 /** Detect device language (e.g. "zh", "en", "ja"). */
 export function getDeviceLocale(): string {
   try {
@@ -238,10 +250,12 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       const results = await getNotes(undefined, MAX_CONTEXT_NOTES);
       const blocks = results.map(n => {
         const title = n.title || (isChinese() ? '无标题' : 'Untitled');
+        const created = formatNoteTimestamp(n.created_at);
+        const updated = formatNoteTimestamp(n.updated_at);
         const content = n.content.length > MAX_NOTE_CONTENT_CHARS
           ? n.content.slice(0, MAX_NOTE_CONTENT_CHARS) + '...'
           : n.content;
-        return `【${title}】\n${content}`;
+        return `【${title}】\nCREATED_AT: ${created}\nUPDATED_AT: ${updated}\n${content}`;
       });
       return isChinese()
         ? `以下是用户保存的所有笔记（共${noteCount}条）：\n\n${blocks.join('\n\n---\n\n')}`
@@ -285,10 +299,12 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
 
     const blocks = results.map(n => {
       const title = n.title || (isChinese() ? '无标题' : 'Untitled');
+      const created = formatNoteTimestamp(n.created_at);
+      const updated = formatNoteTimestamp(n.updated_at);
       const content = n.content.length > MAX_NOTE_CONTENT_CHARS
         ? n.content.slice(0, MAX_NOTE_CONTENT_CHARS) + '...'
         : n.content;
-      return `【${title}】\n${content}`;
+      return `【${title}】\nCREATED_AT: ${created}\nUPDATED_AT: ${updated}\n${content}`;
     });
 
     return isChinese()

@@ -169,11 +169,12 @@ pub fn answer_system_prompt() -> String {
         "You are a local knowledge assistant.\n\
          Date: {}\n\
          {}\n\
-         Rules:\n\
-         - Use retrieved local notes when they help answer the question.\n\
-         - Cite only notes that were actually provided.\n\
-         - Answer naturally in the user's language.\n\
-         - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\n\
+         Rules:\
+         - Use retrieved local notes when they help answer the question.\
+         - Cite only notes that were actually provided.\
+         - Answer naturally in the user's language.\
+         - Notes include CREATED_AT and UPDATED_AT timestamps (ISO 8601). Use them when the user refers to time (\"yesterday\", \"上周\", \"last month\", \"3 days ago\"). Today's date is shown above.\
+         - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\
          - Structured answer means any response with steps, lists, multiple sections, headings, comparisons, examples, or code.\n\
          - If the answer is longer than 3 short sentences, default to <vp-markdown>...</vp-markdown>.\n\
          - Use standard Markdown with fenced code blocks when code is present.\n\
@@ -420,6 +421,7 @@ pub fn note_selection_system_prompt() -> String {
          Date: {}\n\
          {}\n\
          Your job is to choose which candidate notes should actually be read in full.\n\
+         Notes include CREATED_AT and UPDATED_AT timestamps. If the user asks about notes from a specific time (\"yesterday\", \"上周\", last month), factor those timestamps into your selection.\n\
          Return strict JSON only, with no markdown fence.\n\
          {}",
         Utc::now().format("%Y-%m-%d"),
@@ -549,9 +551,11 @@ fn render_notes(docs: &[NoteDocument]) -> String {
                 _ => String::new(),
             };
             format!(
-                "NOTE_ID: {}\nTITLE: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\n{}CONTENT:\n{}\n",
+                "NOTE_ID: {}\nTITLE: {}\nCREATED_AT: {}\nUPDATED_AT: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\n{}CONTENT:\n{}\n",
                 doc.meta.id,
                 doc.meta.title,
+                doc.meta.created_at,
+                doc.meta.updated_at,
                 doc.meta.path,
                 doc.meta.tags.join(", "),
                 doc.meta.keywords.join(", "),
@@ -572,9 +576,11 @@ fn render_candidate_notes(candidates: &[NoteMeta]) -> String {
         .iter()
         .map(|note| {
             format!(
-                "NOTE_ID: {}\nTITLE: {}\nSUMMARY: {}\nKEYWORDS: {}\nPATH: {}\n",
+                "NOTE_ID: {}\nTITLE: {}\nCREATED_AT: {}\nUPDATED_AT: {}\nSUMMARY: {}\nKEYWORDS: {}\nPATH: {}\n",
                 note.id,
                 note.title,
+                note.created_at,
+                note.updated_at,
                 note.summary,
                 note.keywords.join(", "),
                 note.path
@@ -701,6 +707,8 @@ mod tests {
                 path: "/vault/test.md".to_string(),
                 tags: vec!["tag1".to_string()],
                 keywords: vec!["kw1".to_string()],
+                created_at: "2025-06-01T10:00:00+00:00".to_string(),
+                updated_at: "2025-06-15T14:30:00+00:00".to_string(),
                 ..Default::default()
             },
             body: "body text".to_string(),
@@ -709,6 +717,8 @@ mod tests {
         let rendered = render_notes(&docs);
         assert!(rendered.contains("NOTE_ID: n1"));
         assert!(rendered.contains("TITLE: Test"));
+        assert!(rendered.contains("CREATED_AT: 2025-06-01T10:00:00+00:00"));
+        assert!(rendered.contains("UPDATED_AT: 2025-06-15T14:30:00+00:00"));
         assert!(rendered.contains("PATH: /vault/test.md"));
         assert!(rendered.contains("TAGS: tag1"));
         assert!(rendered.contains("KEYWORDS: kw1"));
@@ -728,11 +738,15 @@ mod tests {
             summary: "A summary".to_string(),
             keywords: vec!["kw".to_string()],
             path: "/vault/c2.md".to_string(),
+            created_at: "2025-06-10T08:00:00+00:00".to_string(),
+            updated_at: "2025-06-20T12:00:00+00:00".to_string(),
             ..Default::default()
         }];
         let rendered = render_candidate_notes(&candidates);
         assert!(rendered.contains("NOTE_ID: n2"));
         assert!(rendered.contains("TITLE: Candidate"));
+        assert!(rendered.contains("CREATED_AT: 2025-06-10T08:00:00+00:00"));
+        assert!(rendered.contains("UPDATED_AT: 2025-06-20T12:00:00+00:00"));
         assert!(rendered.contains("SUMMARY: A summary"));
         assert!(rendered.contains("KEYWORDS: kw"));
     }
@@ -769,6 +783,15 @@ mod tests {
         let prompt = compression_system_prompt();
         assert!(!prompt.contains("ai_workflow_manual"));
         assert!(prompt.contains("compactor"));
+    }
+
+    #[test]
+    fn answer_system_prompt_has_time_awareness_rule() {
+        let prompt = answer_system_prompt();
+        assert!(prompt.contains("CREATED_AT"));
+        assert!(prompt.contains("UPDATED_AT"));
+        assert!(prompt.contains("yesterday"));
+        assert!(prompt.contains("Today's date"));
     }
 
     #[test]

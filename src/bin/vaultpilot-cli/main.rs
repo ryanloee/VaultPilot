@@ -24,7 +24,7 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
-    sanitize_error,
+    sanitize_error, write_with_ai_with_context,
 };
 
 use chrono::Utc;
@@ -170,6 +170,33 @@ enum Commands {
 
     /// List registered plugins
     Plugins,
+
+    /// Generate markdown content with AI-powered writing assistance
+    ///
+    /// Searches the vault for relevant context, then uses the AI to write,
+    /// edit, expand, or summarize content as markdown.
+    ///
+    /// Examples:
+    ///   vaultpilot write "Write a summary of Rust error handling"
+    ///   vaultpilot write "Expand the section about async" --mode expand
+    ///   vaultpilot write "Edit this for clarity" --mode edit --context-note note_123
+    ///   vaultpilot write "Create a design doc" --mode write --save
+    Write {
+        /// The writing prompt / instruction
+        prompt: String,
+
+        /// Writing mode: write, edit, expand, summarize (default: write)
+        #[arg(long, default_value = "write")]
+        mode: String,
+
+        /// Note ID to use as primary context (optional)
+        #[arg(long)]
+        context_note: Option<String>,
+
+        /// Save the generated content as a new vault note
+        #[arg(long)]
+        save: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -485,6 +512,43 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             max_steps,
             auto_approve,
         } => handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve).await,
+        Commands::Write {
+            prompt,
+            mode,
+            context_note,
+            save,
+        } => {
+            let result = write_with_ai_with_context(
+                context,
+                prompt.clone(),
+                context_note.clone(),
+                mode.clone(),
+            )
+            .await?;
+            if *save {
+                // Save the generated content as a new vault note
+                let note = vaultpilot_lib::models::NoteDocument {
+                    meta: vaultpilot_lib::models::NoteMeta {
+                        title: format!("AI Generated: {}", prompt.chars().take(60).collect::<String>()),
+                        summary: result.chars().take(200).collect::<String>(),
+                        ..Default::default()
+                    },
+                    body: result.clone(),
+                    search_snippet: None,
+                };
+                let saved = vaultpilot_lib::storage::save_note_with_context(context, note)?;
+                to_json(&serde_json::json!({
+                    "content": result,
+                    "saved": true,
+                    "note": saved,
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "content": result,
+                    "saved": false,
+                }))
+            }
+        }
     }
 }
 

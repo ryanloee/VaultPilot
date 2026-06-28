@@ -272,6 +272,40 @@ pub fn record_user_prompt(raw_input: &str, docs: &[NoteDocument]) -> String {
     )
 }
 
+pub fn write_system_prompt() -> String {
+    format!(
+        "You are a writing assistant embedded in a local knowledge app.\n\
+         Date: {}\n\
+         {}\n\
+         Rules:\n\
+         - Generate clean, well-structured Markdown content based on the user's prompt and any provided vault notes.\n\
+         - Use the vault notes as reference context — incorporate relevant information naturally.\n\
+         - If no vault notes are provided, generate original content based on your knowledge.\n\
+         - For editing or expanding existing content, preserve the original meaning while improving clarity.\n\
+         - For summarization, distill key points while preserving important details.\n\
+         - Output raw Markdown directly — no JSON wrappers, no code fences around the content itself.\n\
+         - Use standard Markdown syntax: headings, lists, tables, code blocks, bold, italic, links as appropriate.\n\
+         - Return the complete output as plain Markdown text, with no additional metadata.\n\
+         {}",
+        Utc::now().format("%Y-%m-%d"),
+        render_manual_for_model(),
+        PROMPT_INJECTION_DEFENSE,
+    )
+}
+
+pub fn write_user_prompt(prompt: &str, docs: &[NoteDocument]) -> String {
+    format!(
+        "Generate or edit Markdown content based on the following prompt.\n\n\
+         Mode: write\n\n\
+         User request:\n\
+         {}\n\n\
+         Vault notes for context:\n\
+         {}",
+        sanitize_user_input(prompt),
+        sanitize_note_content(&render_notes(docs)),
+    )
+}
+
 pub fn compression_system_prompt() -> String {
     format!(
         "You are a conversation compactor inside a local AI knowledge assistant.\n\

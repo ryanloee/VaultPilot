@@ -559,14 +559,14 @@ impl AgentSession {
             .take()
             .ok_or_else(|| anyhow!("stderr was not piped"))?;
 
-        let stdout_task = tokio::spawn(async move {
+        let mut stdout_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 on_stdout(&line);
             }
         });
 
-        let stderr_task = tokio::spawn(async move {
+        let mut stderr_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 on_stderr(&line);
@@ -599,8 +599,19 @@ impl AgentSession {
             }
         };
 
-        // Wait for output tasks to finish
-        let _ = tokio::join!(stdout_task, stderr_task);
+        // Wait for output tasks to finish with timeout.
+        // If the child spawned grandchildren that inherited our pipes, the pipes
+        // never close and the I/O tasks would hang forever. (#2177)
+        let io_timeout = Duration::from_secs(5);
+        tokio::select! {
+            _ = &mut stdout_task => {},
+            _ = &mut stderr_task => {},
+            _ = tokio::time::sleep(io_timeout) => {
+                stdout_task.abort();
+                stderr_task.abort();
+                let _ = tokio::join!(stdout_task, stderr_task);
+            }
+        }
 
         Ok(status.code().unwrap_or(-1))
     }

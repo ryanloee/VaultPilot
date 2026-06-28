@@ -178,6 +178,19 @@ pub async fn record_note_interaction(
     parse_record_response(&response.text, raw_input, response.usage)
 }
 
+#[instrument(skip(settings, prompt, docs))]
+pub async fn generate_with_context(
+    settings: &AppSettings,
+    prompt: &str,
+    docs: &[NoteDocument],
+    _mode: &str,
+) -> Result<String> {
+    let system = prompting::write_system_prompt();
+    let user_prompt = prompting::write_user_prompt(prompt, docs);
+    let response = send_request(settings, &system, &user_prompt, &[]).await?;
+    Ok(response.text.trim().to_string())
+}
+
 #[instrument(skip(settings, existing_summary, history))]
 pub async fn compress_conversation(
     settings: &AppSettings,

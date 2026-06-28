@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    load_note_async, load_settings_async, search_notes_async, StorageContext,
+    load_note_async, load_settings_async, save_note_async, search_notes_async, StorageContext,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path};
 
@@ -59,6 +59,7 @@ pub(super) async fn run_http_bridge(
         .route("/v1/chat/completions", post(http_chat_completions))
         .route("/api/notes", get(http_list_notes))
         .route("/api/notes/search", get(http_search_notes))
+        .route("/api/notes", post(http_create_note))
         .route("/api/notes/{note_id}", get(http_get_note))
         // #790: Rate limiter placed before body limit and timeout so
         // rate-limited requests are rejected immediately without reading
@@ -414,6 +415,67 @@ async fn http_search_notes(
     Ok(Json(serde_json::json!({
         "notes": result.notes,
         "total": result.total
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateNoteRequest {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    source_url: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    collection_id: String,
+}
+
+async fn http_create_note(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateNoteRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let note = NoteDocument {
+        meta: NoteMeta {
+            title: payload.title,
+            tags: payload.tags,
+            source: payload.source,
+            path: String::new(),
+            created_at: now.clone(),
+            updated_at: now,
+            collections: if payload.collection_id.is_empty() {
+                vec![]
+            } else {
+                vec![payload.collection_id]
+            },
+            ..Default::default()
+        },
+        body: if payload.source_url.is_empty() {
+            payload.body
+        } else {
+            format!(
+                "---\nsource: {}\n---\n\n{}",
+                payload.source_url, payload.body
+            )
+        },
+        ..Default::default()
+    };
+
+    let saved = save_note_async(&state.context, note)
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "note": saved,
+        "status": "created"
     })))
 }
 

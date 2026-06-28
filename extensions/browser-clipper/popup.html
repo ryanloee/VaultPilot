@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f8f9fa;
+      color: #1a1a2e;
+    }
+    .header {
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      color: white;
+      padding: 16px;
+      text-align: center;
+    }
+    .header h1 { font-size: 16px; font-weight: 600; }
+    .header p { font-size: 11px; opacity: 0.85; margin-top: 4px; }
+    .content { padding: 12px; }
+    .status-card {
+      background: white;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+      border: 1px solid #e5e7eb;
+    }
+    .status-card .label { font-size: 11px; color: #6b7280; margin-bottom: 4px; }
+    .status-card .value { font-size: 13px; color: #1a1a2e; word-break: break-all; }
+    .status-card .value.ok { color: #10b981; }
+    .status-card .value.error { color: #ef4444; }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      color: white;
+    }
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-secondary {
+      background: white;
+      color: #3b82f6;
+      border: 1px solid #3b82f6;
+      margin-top: 8px;
+    }
+    .btn-secondary:hover { background: #eff6ff; }
+    .success-message {
+      text-align: center;
+      padding: 12px;
+      color: #10b981;
+      font-size: 13px;
+      display: none;
+    }
+    .error-message {
+      text-align: center;
+      padding: 12px;
+      color: #ef4444;
+      font-size: 13px;
+      display: none;
+    }
+    .spinner {
+      display: none;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #e5e7eb;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin: 8px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .footer {
+      padding: 8px 12px;
+      text-align: center;
+      font-size: 11px;
+      color: #9ca3af;
+      border-top: 1px solid #e5e7eb;
+    }
+    .footer a { color: #3b82f6; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>VaultPilot Clipper</h1>
+    <p>一键保存网页到知识库</p>
+  </div>
+
+  <div class="content">
+    <div class="status-card">
+      <div class="label">API 状态</div>
+      <div class="value" id="apiStatus">检查中...</div>
+    </div>
+
+    <button class="btn btn-primary" id="saveBtn" disabled>
+      保存当前页面
+    </button>
+
+    <div class="spinner" id="spinner"></div>
+    <div class="success-message" id="successMsg">✓ 已保存到 VaultPilot</div>
+    <div class="error-message" id="errorMsg">保存失败</div>
+
+    <button class="btn btn-secondary" id="optionsBtn">设置</button>
+  </div>
+
+  <div class="footer">
+    <a href="#" id="openOptions">配置连接</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

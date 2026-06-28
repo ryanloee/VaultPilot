@@ -529,7 +529,10 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 // Save the generated content as a new vault note
                 let note = vaultpilot_lib::models::NoteDocument {
                     meta: vaultpilot_lib::models::NoteMeta {
-                        title: format!("AI Generated: {}", prompt.chars().take(60).collect::<String>()),
+                        title: format!(
+                            "AI Generated: {}",
+                            prompt.chars().take(60).collect::<String>()
+                        ),
                         summary: result.chars().take(200).collect::<String>(),
                         ..Default::default()
                     },

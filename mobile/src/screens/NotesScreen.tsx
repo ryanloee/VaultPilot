@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator,
+  Animated, Easing, Modal, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
-import { getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote } from '../db';
+import {
+  getNotes, createNote, deleteNote, toggleStar, searchNotes, getFolders, DbNote,
+  getTemplates, instantiateTemplate, extractTemplateFields,
+} from '../db';
 
 export default function NotesScreen({ navigation }: any) {
   const { isDark, accentColor } = useAppStore();
@@ -19,6 +23,16 @@ export default function NotesScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
+
+  // #2154 — expandable FAB + template picker
+  const [fabOpen, setFabOpen] = useState(false);
+  const spinRef = useRef(new Animated.Value(0));
+  const blankRef = useRef(new Animated.Value(0));
+  const tplRef = useRef(new Animated.Value(0));
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [templates, setTemplates] = useState<DbNote[]>([]);
+  const [fieldTemplate, setFieldTemplate] = useState<DbNote | null>(null);
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
 
   const load = useCallback(async (query: string, folder?: string) => {
     const currentId = ++requestIdRef.current;
@@ -43,7 +57,29 @@ export default function NotesScreen({ navigation }: any) {
     return () => clearTimeout(timer);
   }, [search, activeFolder, load]);
 
-  const handleNew = async () => {
+  // FAB expand/collapse animation (#2154)
+  const animateFab = (open: boolean) => {
+    const to = open ? 1 : 0;
+    Animated.parallel([
+      Animated.timing(spinRef.current, { toValue: to, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(blankRef.current, { toValue: to, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(tplRef.current, { toValue: to, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+    ]).start();
+  };
+
+  const toggleFab = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
+    const next = !fabOpen;
+    setFabOpen(next);
+    animateFab(next);
+  };
+
+  const closeFab = () => {
+    if (fabOpen) { setFabOpen(false); animateFab(false); }
+  };
+
+  const handleNewBlank = async () => {
+    closeFab();
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
       const id = await createNote();
@@ -51,6 +87,59 @@ export default function NotesScreen({ navigation }: any) {
     } catch (e: any) {
       Alert.alert('创建失败', e.message || '请重试');
     }
+  };
+
+  const openTemplatePicker = async () => {
+    closeFab();
+    try {
+      const tpls = await getTemplates();
+      setTemplates(tpls);
+      setShowTemplatePicker(true);
+    } catch (e: any) {
+      Alert.alert('加载模板失败', e.message || '请重试');
+    }
+  };
+
+  const selectTemplate = async (tpl: DbNote) => {
+    const fields = extractTemplateFields(tpl.content);
+    if (fields.length > 0) {
+      // Has custom fields — show the field-fill sheet first.
+      setFieldValues({});
+      setFieldTemplate(tpl);
+      setShowTemplatePicker(false);
+    } else {
+      // No custom fields — instantiate directly.
+      try {
+        const id = await instantiateTemplate(tpl.id);
+        setShowTemplatePicker(false);
+        navigation.navigate('NoteEdit', { noteId: id });
+      } catch (e: any) {
+        Alert.alert('创建失败', e.message || '请重试');
+      }
+    }
+  };
+
+  const confirmFieldTemplate = async () => {
+    if (!fieldTemplate) return;
+    try {
+      const id = await instantiateTemplate(fieldTemplate.id, fieldValues);
+      setFieldTemplate(null);
+      navigation.navigate('NoteEdit', { noteId: id });
+    } catch (e: any) {
+      Alert.alert('创建失败', e.message || '请重试');
+    }
+  };
+
+  const handleDeleteTemplate = (tpl: DbNote) => {
+    Alert.alert('删除模板', `确定删除「${tpl.title}」？此操作不影响已用该模板创建的笔记。`, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: async () => {
+        try {
+          await deleteNote(tpl.id);
+          setTemplates(prev => prev.filter(t => t.id !== tpl.id));
+        } catch (e: any) { Alert.alert('删除失败', e.message || '请重试'); }
+      } },
+    ]);
   };
 
   const handleRefresh = async () => {
@@ -120,6 +209,13 @@ export default function NotesScreen({ navigation }: any) {
     );
   }
 
+  // Interpolations for the expandable FAB actions
+  const spin = spinRef.current.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] });
+  const blankScale = blankRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const blankY = blankRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, -64] });
+  const tplScale = tplRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const tplY = tplRef.current.interpolate({ inputRange: [0, 1], outputRange: [0, -124] });
+
   return (
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
       {/* Search bar */}
@@ -172,13 +268,111 @@ export default function NotesScreen({ navigation }: any) {
         }
       />
 
-      {/* FAB */}
+      {/* Expandable FAB (#2154) — single "+" expands into two actions */}
+      {/* Action: from template */}
+      <Animated.View
+        pointerEvents={fabOpen ? 'auto' : 'none'}
+        style={[s.fabAction, { backgroundColor: c.card, borderColor: c.border, right: 28, transform: [{ translateY: tplY }, { scale: tplScale }], opacity: tplRef.current }]}
+      >
+        <TouchableOpacity style={s.fabActionBtn} onPress={openTemplatePicker}>
+          <Ionicons name="layers-outline" size={22} color={accentColor} />
+          <Text style={[s.fabActionLabel, { color: c.text }]}>模板</Text>
+        </TouchableOpacity>
+      </Animated.View>
+      {/* Action: blank note */}
+      <Animated.View
+        pointerEvents={fabOpen ? 'auto' : 'none'}
+        style={[s.fabAction, { backgroundColor: c.card, borderColor: c.border, right: 28, transform: [{ translateY: blankY }, { scale: blankScale }], opacity: blankRef.current }]}
+      >
+        <TouchableOpacity style={s.fabActionBtn} onPress={handleNewBlank}>
+          <Ionicons name="document-text-outline" size={22} color={accentColor} />
+          <Text style={[s.fabActionLabel, { color: c.text }]}>空白</Text>
+        </TouchableOpacity>
+      </Animated.View>
+      {/* Main toggle button */}
       <TouchableOpacity
         style={[s.fab, { backgroundColor: accentColor }]}
-        onPress={handleNew}
+        onPress={toggleFab}
       >
-        <Text style={s.fabText}>+</Text>
+        <Animated.View style={{ transform: [{ rotate: spin }] }}>
+          <Text style={s.fabText}>+</Text>
+        </Animated.View>
       </TouchableOpacity>
+
+      {/* Template picker — bottom sheet (not a full-screen mask) */}
+      <Modal
+        visible={showTemplatePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowTemplatePicker(false)}
+      >
+        <TouchableOpacity style={s.sheetBackdrop} activeOpacity={1} onPress={() => setShowTemplatePicker(false)}>
+          <TouchableOpacity style={[s.sheet, { backgroundColor: c.bg }]} activeOpacity={1} onPress={() => {}}>
+            <View style={[s.sheetHandle, { backgroundColor: c.border }]} />
+            <Text style={[s.sheetTitle, { color: c.text }]}>从模板新建</Text>
+            <ScrollView style={{ maxHeight: 420 }}>
+              {templates.length === 0 ? (
+                <Text style={[s.sheetEmpty, { color: c.textSecondary }]}>
+                  暂无模板。可在笔记编辑页用「存为模板」创建。
+                </Text>
+              ) : (
+                templates.map(tpl => (
+                  <TouchableOpacity
+                    key={tpl.id}
+                    style={[s.tplItem, { borderColor: c.border, backgroundColor: c.card }]}
+                    onPress={() => selectTemplate(tpl)}
+                    onLongPress={() => handleDeleteTemplate(tpl)}
+                  >
+                    <View style={s.tplItemHeader}>
+                      <Ionicons name="document-text-outline" size={16} color={accentColor} />
+                      <Text style={[s.tplTitle, { color: c.text }]} numberOfLines={1}>{tpl.title}</Text>
+                    </View>
+                    <Text style={[s.tplPreview, { color: c.textSecondary }]} numberOfLines={2}>
+                      {tpl.content || '空白模板'}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              )}
+            </ScrollView>
+            <Text style={[s.sheetHint, { color: c.textSecondary }]}>长按模板可删除</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Field-fill sheet — for templates with custom {{field:...}} placeholders */}
+      <Modal
+        visible={!!fieldTemplate}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setFieldTemplate(null)}
+      >
+        <TouchableOpacity style={s.sheetBackdrop} activeOpacity={1} onPress={() => setFieldTemplate(null)}>
+          <TouchableOpacity style={[s.sheet, { backgroundColor: c.bg }]} activeOpacity={1} onPress={() => {}}>
+            <View style={[s.sheetHandle, { backgroundColor: c.border }]} />
+            <Text style={[s.sheetTitle, { color: c.text }]}>填充：{fieldTemplate?.title}</Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {fieldTemplate && extractTemplateFields(fieldTemplate.content).map(label => (
+                <View key={label} style={s.fieldRow}>
+                  <Text style={[s.fieldLabel, { color: c.textSecondary }]}>{label}</Text>
+                  <TextInput
+                    style={[s.fieldInput, { color: c.text, borderColor: c.border, backgroundColor: c.card }]}
+                    value={fieldValues[label] ?? ''}
+                    onChangeText={(v) => setFieldValues(prev => ({ ...prev, [label]: v }))}
+                    placeholder={`输入${label}（可留空）`}
+                    placeholderTextColor={c.textSecondary}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={[s.fieldConfirm, { backgroundColor: accentColor }]}
+              onPress={confirmFieldTemplate}
+            >
+              <Text style={s.fieldConfirmText}>创建笔记</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -209,4 +403,34 @@ const s = StyleSheet.create({
     shadowOpacity: 0.25, shadowRadius: 4,
   },
   fabText: { color: '#FFF', fontSize: 28, lineHeight: 30 },
+  // #2154 expandable FAB actions
+  fabAction: {
+    position: 'absolute', bottom: 20,
+    width: 110, height: 46, borderRadius: 23, borderWidth: 1,
+    justifyContent: 'center',
+    elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2, shadowRadius: 3,
+  },
+  fabActionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  fabActionLabel: { fontSize: 14, fontWeight: '500' },
+  // Bottom sheet
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' },
+  sheet: {
+    borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    paddingHorizontal: 16, paddingBottom: 28, paddingTop: 8,
+  },
+  sheetHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 12 },
+  sheetTitle: { fontSize: 17, fontWeight: '600', marginBottom: 12 },
+  sheetEmpty: { fontSize: 14, paddingVertical: 24, textAlign: 'center' },
+  sheetHint: { fontSize: 12, textAlign: 'center', marginTop: 12 },
+  tplItem: { borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 10 },
+  tplItemHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  tplTitle: { fontSize: 15, fontWeight: '600', flex: 1 },
+  tplPreview: { fontSize: 13, lineHeight: 18 },
+  // Field fill
+  fieldRow: { marginBottom: 12 },
+  fieldLabel: { fontSize: 13, marginBottom: 6 },
+  fieldInput: { fontSize: 15, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10 },
+  fieldConfirm: { borderRadius: 10, paddingVertical: 13, alignItems: 'center', marginTop: 8 },
+  fieldConfirmText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
 });

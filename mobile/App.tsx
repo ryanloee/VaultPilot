@@ -8,7 +8,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getDb } from './src/db';
+import { getDb, ensureDefaultTemplates } from './src/db';
 import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
 
@@ -87,6 +87,7 @@ export default function App() {
     (async () => {
       try {
         await getDb(); // Initialize database
+        await ensureDefaultTemplates(); // #2154 — seed built-in note templates on first launch
       } catch (e) {
         console.error('[App] DB init failed:', e);
         setErrorMsg(String(e));

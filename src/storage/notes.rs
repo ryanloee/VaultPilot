@@ -3,7 +3,7 @@
 //! Extracted from `mod.rs` to keep the storage module focused (#1280).
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
@@ -114,6 +114,7 @@ pub fn save_note_with_images_with_context(
         } else {
             note.meta.summary.trim().to_string()
         },
+        properties: note.meta.properties.clone(),
     };
 
     let serialized = compose_markdown(&meta, &body_with_images)?;
@@ -603,17 +604,45 @@ pub(super) fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
         return Ok((Frontmatter::default(), content));
     }
     let inner = &content[4..];
-    // First try: delimiter followed by newline (normal case).
-    if let Some(end_index) = inner.find("\n---\n") {
-        let yaml = &inner[..end_index];
-        let body = &inner[end_index + 5..];
-        let frontmatter = match serde_yaml_ng::from_str::<Frontmatter>(yaml) {
+    // Helper: parse YAML and capture unknown fields as properties.
+    let parse_yaml_with_properties = |yaml: &str| -> Frontmatter {
+        // First pass: try typed deserialization to get known fields.
+        let mut fm = match serde_yaml_ng::from_str::<Frontmatter>(yaml) {
             Ok(fm) => fm,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to parse frontmatter YAML, using defaults");
                 Frontmatter::default()
             }
         };
+        // Second pass: parse as generic Value to capture unknown scalar fields.
+        if let Ok(serde_yaml_ng::Value::Mapping(map)) =
+            serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml)
+        {
+            // Known field names that should NOT go into properties.
+            let known: std::collections::HashSet<&str> = [
+                "id", "title", "summary", "tags", "keywords", "platform",
+                "board", "kernel", "status", "created_at", "updated_at",
+                "source", "properties",
+            ]
+            .into_iter()
+            .collect();
+            for (key, value) in &map {
+                if let (serde_yaml_ng::Value::String(k), serde_yaml_ng::Value::String(v)) =
+                    (key, value)
+                {
+                    if !known.contains(k.as_str()) {
+                        fm.properties.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        fm
+    };
+    // First try: delimiter followed by newline (normal case).
+    if let Some(end_index) = inner.find("\n---\n") {
+        let yaml = &inner[..end_index];
+        let body = &inner[end_index + 5..];
+        let frontmatter = parse_yaml_with_properties(yaml);
         return Ok((frontmatter, body));
     }
     // #848: Fallback — file ends with "\n---" and no trailing newline.
@@ -621,13 +650,7 @@ pub(super) fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     if let Some(end_index) = inner.find("\n---") {
         if end_index + 4 == inner.len() {
             let yaml = &inner[..end_index];
-            let frontmatter = match serde_yaml_ng::from_str::<Frontmatter>(yaml) {
-                Ok(fm) => fm,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to parse frontmatter YAML, using defaults");
-                    Frontmatter::default()
-                }
-            };
+            let frontmatter = parse_yaml_with_properties(yaml);
             return Ok((frontmatter, ""));
         }
     }
@@ -864,6 +887,7 @@ fn import_single_markdown(
             source: "imported".to_string(),
             path: String::new(),
             summary: parsed.meta.summary,
+            properties: parsed.meta.properties,
         },
         body: parsed.body,
         search_snippet: None,
@@ -936,6 +960,7 @@ pub(super) fn parse_markdown_note(path: &Path, default_source: &str) -> Result<N
             } else {
                 frontmatter.summary.trim().to_string()
             },
+            properties: frontmatter.properties,
         },
         body: body.trim().to_string(),
         search_snippet: None,
@@ -956,8 +981,13 @@ fn compose_markdown(meta: &NoteMeta, body: &str) -> Result<String> {
         created_at: meta.created_at.clone(),
         updated_at: meta.updated_at.clone(),
         source: meta.source.clone(),
+        properties: HashMap::new(), // properties are written separately below
     };
-    let yaml = serde_yaml_ng::to_string(&frontmatter)?;
+    let mut yaml = serde_yaml_ng::to_string(&frontmatter)?;
+    // Append custom properties as individual YAML key-value lines.
+    for (key, value) in &meta.properties {
+        yaml.push_str(&format!("{key}: {value}\n"));
+    }
     Ok(format!(
         "---\n{}---\n\n{}\n",
         yaml,
@@ -1093,8 +1123,8 @@ fn index_note_file_with_connection(
     connection.execute_batch("SAVEPOINT sp_index_note")?;
     let result: Result<()> = (|| {
         connection.execute(
-            "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash, properties)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(id) DO UPDATE SET
                title = excluded.title,
                tags = excluded.tags,
@@ -1108,7 +1138,8 @@ fn index_note_file_with_connection(
                source = excluded.source,
                path = excluded.path,
                summary = excluded.summary,
-               body_hash = excluded.body_hash",
+               body_hash = excluded.body_hash,
+               properties = excluded.properties",
             params![
                 document.meta.id,
                 document.meta.title,
@@ -1123,7 +1154,8 @@ fn index_note_file_with_connection(
                 document.meta.source,
                 canonical.to_string_lossy().to_string(),
                 document.meta.summary,
-                body_hash
+                body_hash,
+                serde_json::to_string(&document.meta.properties)?
             ],
         )?;
         connection.execute(
@@ -1618,6 +1650,7 @@ mod tests {
             source: "manual".to_string(),
             path: String::new(),
             summary: String::new(),
+            properties: Default::default(),
         };
         let body = "## 问题现象\n\n启动超时";
         let serialized = compose_markdown(&meta, body).expect("serialize markdown");

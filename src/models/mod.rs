@@ -11,6 +11,8 @@ pub use settings::{
     default_auto_wake_start_time, AppSettings,
 };
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -42,6 +44,11 @@ pub struct NoteMeta {
     pub path: String,
     #[serde(default)]
     pub summary: String,
+    /// Custom note properties stored as JSON in the database.
+    /// These capture unknown YAML frontmatter keys and support
+    /// property-based filtering in searches.
+    #[serde(default)]
+    pub properties: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -216,6 +223,10 @@ pub struct SearchQuery {
     pub modified_after: Option<String>,
     /// Filter notes modified on or before this ISO-8601 timestamp.
     pub modified_before: Option<String>,
+    /// Property-based filters: only return notes where the property key
+    /// matches the given string value (exact match).
+    #[serde(default)]
+    pub property_filters: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -547,6 +558,7 @@ mod tests {
                 source: "manual".to_string(),
                 path: "/vault/note.md".to_string(),
                 summary: "A test note".to_string(),
+                properties: Default::default(),
             },
             body: "Some content".to_string(),
             search_snippet: None,

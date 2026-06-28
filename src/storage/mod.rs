@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::{fs, path::Path};
 
 use anyhow::{anyhow, Context, Result};
@@ -119,6 +120,9 @@ struct Frontmatter {
     updated_at: String,
     #[serde(default)]
     source: String,
+    /// Custom properties captured from unknown YAML frontmatter keys.
+    #[serde(default)]
+    properties: HashMap<String, String>,
 }
 
 #[instrument(skip(context))]
@@ -730,6 +734,7 @@ mod tests {
                 source: String::new(),
                 path: String::new(),
                 summary: String::new(),
+                properties: Default::default(),
             },
             body: "## Test\n\nRound trip body content".to_string(),
             search_snippet: None,

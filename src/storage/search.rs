@@ -269,6 +269,10 @@ pub(super) fn image_similarity_score(query_hash: u64, candidate_hash: u64) -> i6
     }
 }
 fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteMeta> {
+    // #2153: Use the 14-column SELECT (including properties column at index 13).
+    let properties_str: String = row.get::<_, String>(13).unwrap_or_default();
+    let properties: HashMap<String, String> =
+        serde_json::from_str(&properties_str).unwrap_or_default();
     let tags: String = row.get(2)?;
     let keywords: String = row.get(3)?;
     Ok(NoteMeta {
@@ -285,6 +289,7 @@ fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteMeta> {
         source: row.get(10)?,
         path: row.get(11)?,
         summary: row.get(12)?,
+        properties,
     })
 }
 
@@ -294,7 +299,7 @@ fn query_recent_note_metas(
     offset: usize,
 ) -> Result<Vec<NoteMeta>> {
     let mut statement = connection.prepare(
-        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, properties
          FROM notes
          ORDER BY updated_at DESC
          LIMIT ?1 OFFSET ?2",
@@ -356,6 +361,17 @@ fn build_note_filter_clause(
         }
     }
 
+    // Property filters: json_extract(properties, '$.key') = 'value'
+    for (key, value) in &query.property_filters {
+        if !key.is_empty() && !value.is_empty() {
+            conditions.push(format!(
+                "json_extract(properties, '$.{key}') = ?{param_idx}"
+            ));
+            params.push(Box::new(value.clone()));
+            param_idx += 1;
+        }
+    }
+
     let where_clause = if conditions.is_empty() {
         String::new()
     } else {
@@ -381,7 +397,7 @@ fn query_filtered_note_metas(
     let offset_idx = param_idx;
 
     let sql = format!(
-        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, properties
          FROM notes
          {where_clause}
          ORDER BY updated_at DESC
@@ -420,7 +436,7 @@ fn count_all_notes(connection: &Connection) -> Result<usize> {
 /// that need to process every note in the vault.
 pub(super) fn list_all_note_metas(connection: &Connection) -> Result<Vec<NoteMeta>> {
     let mut statement = connection.prepare(
-        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, properties
          FROM notes
          ORDER BY updated_at DESC",
     )?;
@@ -477,7 +493,7 @@ fn query_like_note_metas(
 
     let sql = format!(
         "SELECT id, title, tags, keywords, platform, board, kernel, status, \
-         created_at, updated_at, source, path, summary \
+         created_at, updated_at, source, path, summary, properties \
          FROM notes WHERE {} ORDER BY updated_at DESC LIMIT ?",
         where_clause
     );
@@ -720,7 +736,7 @@ pub(super) fn load_note_meta_by_id(
 ) -> Result<Option<NoteMeta>> {
     connection
         .query_row(
-            "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
+            "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, properties
              FROM notes
              WHERE id = ?1
              LIMIT 1",
@@ -1615,8 +1631,8 @@ mod tests {
         for i in 0..total {
             let note_id = format!("note-{i}");
             conn.execute(
-                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
-                 VALUES (?1, ?2, '', '', '', '', '', '', ?3, ?3, '', ?4, '', '')",
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, properties, body_hash)
+                 VALUES (?1, ?2, '', '', '', '', '', '', ?3, ?3, '', ?4, '', '{}', '')",
                 params![&note_id, format!("Note {i}"), &now, format!("/p/{i}.md")],
             )
             .expect("insert note");
@@ -1866,6 +1882,7 @@ mod tests {
                 source: "manual".to_string(),
                 path: "vault/2026/04/rk3566-sd.md".to_string(),
                 summary: "记录 RK3566 平台下 SD 卡引脚复用的电路与对照信息".to_string(),
+                properties: Default::default(),
             },
             body:
                 "## 概述\nSD 卡接口引脚连接定义。\n## 备注\n软件层可参考 Device Tree pinctrl 配置。"
@@ -1896,6 +1913,7 @@ mod tests {
                 source: "manual".to_string(),
                 path: "vault/2026/04/flash.md".to_string(),
                 summary: "之前刷机时使用过的命令记录".to_string(),
+                properties: Default::default(),
             },
             body: "相关命令: wboot -w update zboot.img".to_string(),
             search_snippet: None,

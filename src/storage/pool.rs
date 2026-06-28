@@ -162,6 +162,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
         ensure_attachment_columns(connection)?;
+        ensure_note_columns(connection)?;
         return Ok(());
     }
 
@@ -185,7 +186,8 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             source TEXT NOT NULL,
             path TEXT NOT NULL UNIQUE,
             summary TEXT NOT NULL,
-            body_hash TEXT NOT NULL
+            body_hash TEXT NOT NULL,
+            properties TEXT NOT NULL DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS attachments (
@@ -271,6 +273,32 @@ fn ensure_attachment_columns(connection: &Connection) -> Result<()> {
         if !columns.contains(column) {
             connection.execute(ddl, [])?;
         }
+    }
+
+    Ok(())
+}
+
+/// Add missing columns to the `notes` table (idempotent schema evolution).
+fn ensure_note_columns(connection: &Connection) -> Result<()> {
+    let table_exists: bool = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='notes'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table_exists {
+        return Ok(());
+    }
+
+    let mut statement = connection.prepare("PRAGMA table_info(notes)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+
+    if !columns.contains("properties") {
+        connection.execute(
+            "ALTER TABLE notes ADD COLUMN properties TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )?;
     }
 
     Ok(())

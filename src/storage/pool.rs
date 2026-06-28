@@ -162,6 +162,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
         ensure_attachment_columns(connection)?;
+        ensure_note_collections_table(connection)?;
         return Ok(());
     }
 
@@ -223,10 +224,21 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             path,
             tokenize = 'unicode61'
         );
+
+        CREATE TABLE IF NOT EXISTS note_collections (
+            note_id TEXT NOT NULL,
+            collection_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (note_id, collection_id),
+            FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_note_collections_collection_id ON note_collections(collection_id);
         "#,
     )?;
     ensure_attachment_columns(connection)?;
-    connection.execute_batch("PRAGMA user_version = 1;")?;
+    ensure_note_collections_table(connection)?;
+    connection.execute_batch("PRAGMA user_version = 2;")?;
     Ok(())
 }
 
@@ -276,6 +288,30 @@ fn ensure_attachment_columns(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn ensure_note_collections_table(connection: &Connection) -> Result<()> {
+    // Check if note_collections table exists; skip if already present.
+    let table_exists: bool = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='note_collections'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists {
+        return Ok(());
+    }
+
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS note_collections (
+            note_id TEXT NOT NULL,
+            collection_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (note_id, collection_id),
+            FOREIGN KEY(note_id) REFERENCES notes(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_note_collections_collection_id ON note_collections(collection_id);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +339,10 @@ mod tests {
             tables.contains(&"attachments".to_string()),
             "attachments table missing"
         );
+        assert!(
+            tables.contains(&"note_collections".to_string()),
+            "note_collections table missing"
+        );
 
         let vtables: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_fts%' ORDER BY name")
@@ -324,7 +364,7 @@ mod tests {
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]

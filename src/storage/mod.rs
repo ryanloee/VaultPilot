@@ -13,6 +13,7 @@ use crate::models::{
 
 mod backup;
 mod chat;
+pub(crate) mod collections;
 pub(crate) mod notes;
 mod pool;
 mod search;
@@ -39,6 +40,8 @@ pub use notes::{
     save_note_with_images_with_context, search_candidate_notes_async,
     search_candidate_notes_with_context, vault_export_async, vault_export_with_context,
 };
+// Re-export collections public API so callers see no difference.
+pub use collections::add_note_to_collection_with_context;
 
 // Internal imports from search module (used by remaining functions in this file)
 

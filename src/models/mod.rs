@@ -237,6 +237,30 @@ pub struct AnswerCitation {
     pub path: String,
     #[serde(default)]
     pub snippet: String,
+    /// Optional block anchor ID (e.g. "^abc123") for block-level citations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
+}
+
+/// A block anchor within a note — a stable reference point for block-level
+/// transclusion and citations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockAnchor {
+    /// Globally unique anchor ID (e.g. "^abc123").
+    pub block_id: String,
+    /// The note this block belongs to.
+    pub note_id: String,
+    /// Block type: "heading", "paragraph", "list_item", "code_block", "blockquote".
+    pub block_type: String,
+    /// 1-indexed start line in the note body.
+    pub line_start: i32,
+    /// 1-indexed end line (inclusive).
+    pub line_end: i32,
+    /// Full text content of the block.
+    pub content: String,
+    /// Short summary / preview (first ~80 chars).
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

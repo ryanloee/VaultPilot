@@ -314,3 +314,47 @@ describe('globalSearch', () => {
     expect(results[0].id).toBe('n2');
   });
 });
+
+// ── Studio (#2166) ─────────────────────────────────────────
+
+describe('Studio — searchNotesByIds', () => {
+  it('returns empty array for empty ids', async () => {
+    const db = await freshDb();
+    const results = await db.searchNotesByIds([]);
+    expect(results).toEqual([]);
+  });
+
+  it('queries by id list, excludes templates', async () => {
+    const db = await freshDb();
+    mockDb.getAllAsync.mockResolvedValueOnce([
+      { id: 'n1', title: 'Note 1', content: 'Content 1' },
+    ]);
+    const results = await db.searchNotesByIds(['n1', 'n2']);
+    expect(results).toHaveLength(1);
+    const [sql, params] = mockDb.getAllAsync.mock.calls[0];
+    expect(sql).toContain('WHERE id IN (?,?)');
+    expect(sql).toContain('is_template = 0');
+    expect(params).toEqual(['n1', 'n2']);
+  });
+});
+
+describe('Studio — buildStudioContext', () => {
+  it('builds flat text with wikilinks for multiple sources', () => {
+    // Import the pure function directly
+    const { buildStudioContext: bsc } = require('../db');
+    const sources = [
+      { id: 'a', title: '笔记A', content: '内容A' },
+      { id: 'b', title: '笔记B', content: '内容B' },
+    ];
+    const ctx = bsc(sources);
+    expect(ctx).toContain('[[笔记A]]');
+    expect(ctx).toContain('内容A');
+    expect(ctx).toContain('[[笔记B]]');
+    expect(ctx).toContain('---'); // separator between sources
+  });
+
+  it('handles empty sources', () => {
+    const { buildStudioContext: bsc } = require('../db');
+    expect(bsc([])).toBe('');
+  });
+});

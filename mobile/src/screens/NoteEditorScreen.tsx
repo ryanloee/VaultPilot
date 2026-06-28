@@ -10,6 +10,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
+import { chat, ChatMessage, parseSSEStream } from '../api/client';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
@@ -24,6 +25,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [previewMode, setPreviewMode] = useState(false);
+  const [showAiWrite, setShowAiWrite] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiGenerating, setAiGenerating] = useState(false);
   const titleRef = useRef('');
   const contentRef = useRef('');
   const timerRef = useRef<any>(null);
@@ -142,6 +146,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
     { label: '#', insert: '# ', desc: '标题' },
     { label: '-', insert: '- ', desc: '列表' },
     { label: 'link', insert: '[]()', desc: '链接', icon: 'link-outline' },
+    { label: 'AI', insert: '', desc: 'AI 写作', icon: 'color-wand-outline', action: 'aiWrite' },
   ];
 
   const insertFormat = (syntax: string) => {
@@ -160,6 +165,43 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       autoSave(titleRef.current, next);
       return next;
     });
+  };
+
+  const handleAiWrite = async () => {
+    if (!aiPrompt.trim() || aiGenerating) return;
+    setAiGenerating(true);
+    try {
+      const messages: ChatMessage[] = [
+        { role: 'system', content: 'You are a professional writing assistant integrated into a note-taking app. Help the user write, improve, expand, or polish their notes. Respond with only the generated content, no extra commentary or formatting instructions.' },
+        { role: 'user', content: `Writing instruction: ${aiPrompt}\n\nCurrent note content:\n${content}` },
+      ];
+      const stream = await chat(messages);
+      let full = '';
+      await parseSSEStream(stream, (chunk) => {
+        if (chunk.done) return;
+        if (chunk.content) full += chunk.content;
+      });
+      if (full) {
+        const { start, end } = selectionRef.current;
+        setContent(prev => {
+          const before = prev.slice(0, start);
+          const selected = prev.slice(start, end);
+          const after = prev.slice(end);
+          const next = before + full + after;
+          const newPos = start + full.length;
+          selectionRef.current = { start: newPos, end: newPos };
+          contentRef.current = next;
+          autoSave(titleRef.current, next);
+          return next;
+        });
+      }
+    } catch (e: any) {
+      Alert.alert('AI 写作失败', e.message || '请重试');
+    } finally {
+      setAiGenerating(false);
+      setShowAiWrite(false);
+      setAiPrompt('');
+    }
   };
 
   if (loading) {
@@ -314,6 +356,32 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         />
       )}
 
+      {/* AI Write panel */}
+      {showAiWrite && (
+        <View style={[s.aiWritePanel, { borderTopColor: c.border, backgroundColor: c.bgSecondary }]}>
+          <TextInput
+            style={[s.aiWriteInput, { color: c.text, borderColor: c.border }]}
+            value={aiPrompt}
+            onChangeText={setAiPrompt}
+            placeholder="写什么？让 AI 帮你写..."
+            placeholderTextColor={c.textSecondary}
+            multiline
+            textAlignVertical="top"
+          />
+          <View style={s.aiWriteActions}>
+            <TouchableOpacity
+              style={[s.aiWriteBtn, { backgroundColor: accentColor }]}
+              onPress={handleAiWrite}
+              disabled={aiGenerating || !aiPrompt.trim()}
+            >
+              <Ionicons name="sparkles-outline" size={16} color="#FFF" />
+              <Text style={s.aiWriteBtnText}>生成</Text>
+            </TouchableOpacity>
+            {aiGenerating && <ActivityIndicator color={accentColor} size="small" style={{ marginLeft: 8 }} />}
+          </View>
+        </View>
+      )}
+
       {/* Toolbar */}
       <View style={[s.toolbar, { borderTopColor: c.border, backgroundColor: c.bgSecondary }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -327,7 +395,13 @@ export default function NoteEditorScreen({ route, navigation }: any) {
             <TouchableOpacity
               key={t.label}
               style={[s.toolBtn, { borderColor: c.border }]}
-              onPress={() => insertFormat(t.insert)}
+              onPress={() => {
+                if ((t as any).action === 'aiWrite') {
+                  setShowAiWrite(true);
+                } else {
+                  insertFormat(t.insert);
+                }
+              }}
             >
               {(t as any).icon
                 ? <Ionicons name={(t as any).icon} size={16} color={c.text} />
@@ -382,4 +456,21 @@ const s = StyleSheet.create({
     borderWidth: 1, borderRadius: 8,
   },
   toolLabel: { fontSize: 16, fontWeight: '600' },
+  aiWritePanel: {
+    paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1,
+  },
+  aiWriteInput: {
+    fontSize: 14, borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 8, maxHeight: 80,
+  },
+  aiWriteActions: {
+    flexDirection: 'row', alignItems: 'center', marginTop: 8,
+  },
+  aiWriteBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8,
+  },
+  aiWriteBtnText: {
+    color: '#FFF', fontSize: 14, fontWeight: '600',
+  },
 });

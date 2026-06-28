@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Mobile: AI Command Palette (Phase 1, #2188) — searchable one-tap AI actions in the note editor.
+  - Editor toolbar AI button expands into an inline, animated command palette (no full-screen overlay).
+  - Fuzzy-searchable action list (label + keyword): 总结要点 / 改写润色 / 翻译为英文 / 翻译为中文 / 续写 / 解释说明 / 提取待办 / 自定义写作.
+  - Context-aware: acts on the text selection when present, otherwise the whole note; result streams in at the cursor.
+  - Reuses existing `chat()` + `parseSSEStream` infrastructure; no backend changes. WinUI desktop variant deferred to Phase 2.
 - Mobile: Template Snippets (Phase 1, #2154) — reusable note templates with variable substitution.
   - Templates are notes flagged `is_template=1`; excluded from regular list/search.
   - Built-in variables: `{{title}}` `{{date}}` `{{time}}` `{{week}}` `{{vault_name}}`; custom `{{field:label}}`.

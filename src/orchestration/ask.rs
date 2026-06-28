@@ -1114,6 +1114,7 @@ fn draft_to_note_document(draft: StructuredNoteDraft) -> NoteDocument {
             },
             path: String::new(),
             summary: draft.summary,
+            collections: Vec::new(),
         },
         body: draft.body,
         search_snippet: None,

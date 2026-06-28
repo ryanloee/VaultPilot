@@ -13,6 +13,7 @@ use crate::models::{
 
 mod backup;
 mod chat;
+pub(crate) mod collections;
 pub(crate) mod notes;
 mod pool;
 mod search;
@@ -38,6 +39,14 @@ pub use notes::{
     save_note_async, save_note_with_context, save_note_with_images_async,
     save_note_with_images_with_context, search_candidate_notes_async,
     search_candidate_notes_with_context, vault_export_async, vault_export_with_context,
+};
+// Re-export collections public API so callers see no difference.
+pub use collections::{
+    add_note_to_collection_with_context, create_collection_with_context,
+    delete_collection_with_context, list_collections_with_context,
+    list_notes_in_collection_with_context, remove_note_from_collection_with_context,
+    get_collection_with_context, count_notes_in_collection_with_context,
+    get_collections_for_note_with_context, get_collection_ids_for_note,
 };
 
 // Internal imports from search module (used by remaining functions in this file)
@@ -119,6 +128,8 @@ struct Frontmatter {
     updated_at: String,
     #[serde(default)]
     source: String,
+    #[serde(default)]
+    collections: Vec<String>,
 }
 
 #[instrument(skip(context))]
@@ -730,6 +741,7 @@ mod tests {
                 source: String::new(),
                 path: String::new(),
                 summary: String::new(),
+                collections: Vec::new(),
             },
             body: "## Test\n\nRound trip body content".to_string(),
             search_snippet: None,

@@ -223,6 +223,27 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             path,
             tokenize = 'unicode61'
         );
+
+        -- Collections for many-to-many note grouping (#2042)
+        CREATE TABLE IF NOT EXISTS collections (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS note_collections (
+            note_id TEXT NOT NULL,
+            collection_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (note_id, collection_id),
+            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+            FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_note_collections_note_id ON note_collections(note_id);
+        CREATE INDEX IF NOT EXISTS idx_note_collections_collection_id ON note_collections(collection_id);
         "#,
     )?;
     ensure_attachment_columns(connection)?;

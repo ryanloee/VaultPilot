@@ -42,6 +42,23 @@ pub struct NoteMeta {
     pub path: String,
     #[serde(default)]
     pub summary: String,
+    #[serde(default)]
+    pub collections: Vec<String>,
+}
+
+/// A named group of notes — a flat, many-to-many organizational layer
+/// separate from the filesystem folder hierarchy (#2042).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Collection {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Number of notes belonging to this collection (populated by list queries).
+    #[serde(default)]
+    pub note_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -547,6 +564,7 @@ mod tests {
                 source: "manual".to_string(),
                 path: "/vault/note.md".to_string(),
                 summary: "A test note".to_string(),
+                collections: Vec::new(),
             },
             body: "Some content".to_string(),
             search_snippet: None,

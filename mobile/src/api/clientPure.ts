@@ -33,16 +33,29 @@ export interface AnthropicSSEEvent {
  * Returns '[DONE]' sentinel for message_stop.
  */
 export function convertAnthropicEvent(event: string, data: string): string | null {
+  let parsed: Record<string, any>;
   try {
-    const parsed = JSON.parse(data);
-    if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-      const openai = JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] });
-      return `data: ${openai}\n\n`;
-    }
-    if (parsed.type === 'message_stop') {
-      return 'data: [DONE]\n\n';
-    }
-  } catch { /* skip unparseable SSE line — expected for binary/data frames */ }
+    parsed = JSON.parse(data);
+  } catch {
+    /* skip unparseable SSE line — expected for binary/data frames */
+    return null;
+  }
+
+  // Handle Anthropic error events (overloaded_error, rate_limit_error, etc.)
+  // Match Rust client behavior at src/ai/client.rs:625-636
+  if (parsed.type === 'error') {
+    const errorType = parsed.error?.type || 'unknown';
+    const errorMessage = parsed.error?.message || 'Anthropic API error';
+    throw new Error(`Anthropic API error (${errorType}): ${errorMessage}`);
+  }
+
+  if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+    const openai = JSON.stringify({ choices: [{ delta: { content: parsed.delta.text } }] });
+    return `data: ${openai}\n\n`;
+  }
+  if (parsed.type === 'message_stop') {
+    return 'data: [DONE]\n\n';
+  }
   return null;
 }
 

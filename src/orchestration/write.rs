@@ -103,13 +103,10 @@ async fn load_note_by_id_async(
     note_id: &str,
 ) -> Result<Option<NoteDocument>, anyhow::Error> {
     use crate::storage::load_note_async;
-    match tokio::time::timeout(
-        STORAGE_IO_TIMEOUT,
-        load_note_async(ctx, note_id),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("storage I/O timed out (load_note)"))
-    .and_then(|r| r)
+    match tokio::time::timeout(STORAGE_IO_TIMEOUT, load_note_async(ctx, note_id))
+        .await
+        .map_err(|_| anyhow::anyhow!("storage I/O timed out (load_note)"))
+        .and_then(|r| r)
     {
         Ok(doc) => Ok(Some(doc)),
         Err(e) if e.to_string().contains("not found") => Ok(None),

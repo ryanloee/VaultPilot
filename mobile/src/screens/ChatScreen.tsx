@@ -11,42 +11,14 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { chatWithReconnect, ChatMessage } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
-import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
+import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession, getNoteTitleMap } from '../db';
+import { loadNoteTitleMap, clearNoteTitleCache } from '../utils/noteRefs';
+import { MessageBubble } from '../components/chat';
 
-interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
+interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; streamStatus?: string; attachments?: { name: string; type: 'image' | 'file' }[]; }
 
 /** Max messages sent to API to avoid exceeding model context window */
 const MAX_HISTORY_MESSAGES = 50;
-
-const MessageBubble = memo(function MessageBubble({ item, isDark, accentColor, onDelete, onResend }: {
-  item: Msg; isDark: boolean; accentColor: string;
-  onDelete?: (id: string) => void; onResend?: (id: string) => void;
-}) {
-  const c = getColors(isDark, accentColor);
-  const handleLongPress = () => {
-    if (!item.content) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
-    const actions: any[] = [
-      { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
-    ];
-    if (onResend) actions.push({ text: '重新发送', onPress: () => onResend(item.id) });
-    if (onDelete) actions.push({ text: '删除', style: 'destructive', onPress: () => onDelete(item.id) });
-    actions.push({ text: '取消', style: 'cancel' });
-    Alert.alert('消息操作', '', actions);
-  };
-  return (
-    <TouchableOpacity onLongPress={handleLongPress} activeOpacity={0.8}>
-      <View style={[s.bubble, item.role === 'user'
-        ? { backgroundColor: c.userBubble, alignSelf: 'flex-end' }
-        : { backgroundColor: c.aiBubble, alignSelf: 'flex-start' }]}>
-        <Text style={{ color: item.role === 'user' ? c.userText : c.aiText, fontSize: 15, lineHeight: 22 }}>
-          {item.content || (item.streaming ? '思考中...' : '')}
-          {item.streaming && <Text style={{ color: accentColor }}> ▌</Text>}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
-});
 
 export default function ChatScreen({ navigation, route }: any) {
   const { isDark, accentColor } = useAppStore();
@@ -58,6 +30,8 @@ export default function ChatScreen({ navigation, route }: any) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [title, setTitle] = useState('新对话');
   const [loading, setLoading] = useState(true);
+  const [noteTitleMap, setNoteTitleMap] = useState<Map<string, string> | undefined>(undefined);
+  const noteTitleMapRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listRef = useRef<FlatList>(null);
@@ -102,6 +76,22 @@ export default function ChatScreen({ navigation, route }: any) {
     }
   }, []);
 
+  // #2035: Resolve [[wikilink]] note title → navigate to NoteEditor
+  const handleNoteLinkPress = useCallback(async (title: string) => {
+    try {
+      const titleMap = await getNoteTitleMap();
+      const noteId = titleMap.get(title.toLowerCase());
+      if (noteId) {
+        navigation.navigate('Notes', { screen: 'NoteEdit', params: { noteId } });
+      } else {
+        // Note not found — show a brief alert so user knows the link isn't broken
+        Alert.alert('未找到笔记', `"${title}" 在 vault 中不存在。`);
+      }
+    } catch (e) {
+      console.warn('[Chat] handleNoteLinkPress failed:', e);
+    }
+  }, [navigation]);
+
   // Init session — from route params or latest active session
   useEffect(() => {
     let cancelled = false;
@@ -134,6 +124,23 @@ export default function ChatScreen({ navigation, route }: any) {
         Alert.alert('初始化失败', String(e));
       } finally {
         if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // #2035: Load note title map for auto-detection of note references
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const map = await loadNoteTitleMap();
+        if (!cancelled) {
+          setNoteTitleMap(map);
+          noteTitleMapRef.current = true;
+        }
+      } catch (e) {
+        console.warn('[Chat] loadNoteTitleMap failed:', e);
       }
     })();
     return () => { cancelled = true; };
@@ -412,6 +419,8 @@ export default function ChatScreen({ navigation, route }: any) {
             accentColor={accentColor}
             onDelete={handleDeleteMsg}
             onResend={item.role === 'user' ? handleResend : undefined}
+            onNoteLinkPress={handleNoteLinkPress}
+            noteTitleMap={noteTitleMap}
           />
         )}
         keyExtractor={item => item.id}

@@ -25,6 +25,7 @@ export default function NotesScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
+  const studioAbortRef = useRef<AbortController | null>(null);
 
   // #2154 — expandable FAB + template picker
   const [fabOpen, setFabOpen] = useState(false);
@@ -72,6 +73,13 @@ export default function NotesScreen({ navigation }: any) {
     const timer = setTimeout(() => load(search, activeFolder), 300);
     return () => clearTimeout(timer);
   }, [search, activeFolder, load]);
+
+  // #2200 — abort studio generation on component unmount
+  useEffect(() => {
+    return () => {
+      studioAbortRef.current?.abort();
+    };
+  }, []);
 
   // FAB expand/collapse animation (#2154)
   const animateFab = (open: boolean) => {
@@ -169,6 +177,12 @@ export default function NotesScreen({ navigation }: any) {
   // #2166 — Studio: generate a delivery type from the current note list
   const handleStudioGenerate = async (type: typeof STUDIO_TYPES[number]) => {
     if (studioGenerating) return;
+
+    // #2200 — abort previous generation if any, create new controller
+    studioAbortRef.current?.abort();
+    const controller = new AbortController();
+    studioAbortRef.current = controller;
+
     setStudioGenerating(true);
     setStudioProgress(`正在生成${type.label}...`);
 
@@ -208,12 +222,13 @@ export default function NotesScreen({ navigation }: any) {
         { role: 'user', content: `Generate a ${type.label} from the following source notes:\n\n${context}` },
       ];
 
-      const stream = await chat(messages);
+      // #2200 — pass abort signal to both chat() and parseSSEStream
+      const stream = await chat(messages, controller.signal);
       let full = '';
       await parseSSEStream(stream, (chunk) => {
         if (chunk.done) return;
         if (chunk.content) full += chunk.content;
-      });
+      }, { signal: controller.signal });
 
       if (!full) {
         Alert.alert('生成失败', 'AI 返回结果为空，请重试。');
@@ -232,12 +247,21 @@ export default function NotesScreen({ navigation }: any) {
       const { addTag } = await import('../db');
       await addTag(noteId, tagValue);
 
+      // #2200 — guard: only navigate/succeed if panel is still open (not aborted/closed)
+      if (controller.signal.aborted) return;
+
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setShowStudio(false);
       setStudioGenerating(false);
       setStudioProgress('');
       navigation.navigate('NoteEdit', { noteId });
     } catch (e: any) {
+      // #2200 — silent return on AbortError (user cancelled or modal closed)
+      if (e?.name === 'AbortError') {
+        setStudioGenerating(false);
+        setStudioProgress('');
+        return;
+      }
       Alert.alert('生成失败', e.message || '请检查 API 设置后重试。');
       setStudioGenerating(false);
       setStudioProgress('');
@@ -493,12 +517,12 @@ export default function NotesScreen({ navigation }: any) {
         visible={showStudio}
         transparent
         animationType="slide"
-        onRequestClose={() => { if (!studioGenerating) setShowStudio(false); }}
+        onRequestClose={() => { studioAbortRef.current?.abort(); setShowStudio(false); }}
       >
         <TouchableOpacity
           style={s.sheetBackdrop}
           activeOpacity={1}
-          onPress={() => { if (!studioGenerating) setShowStudio(false); }}
+          onPress={() => { if (studioGenerating) { studioAbortRef.current?.abort(); } else { setShowStudio(false); } }}
         >
           <TouchableOpacity style={[s.sheet, { backgroundColor: c.bg }]} activeOpacity={1} onPress={() => {}}>
             <View style={[s.sheetHandle, { backgroundColor: c.border }]} />
@@ -514,6 +538,13 @@ export default function NotesScreen({ navigation }: any) {
               <View style={{ paddingVertical: 24, alignItems: 'center' }}>
                 <ActivityIndicator color={accentColor} size="large" />
                 <Text style={{ color: c.textSecondary, marginTop: 12, fontSize: 14 }}>{studioProgress}</Text>
+                {/* #2200 — cancel button */}
+                <TouchableOpacity
+                  style={[s.cancelBtn, { borderColor: c.border }]}
+                  onPress={() => { studioAbortRef.current?.abort(); }}
+                >
+                  <Text style={{ color: c.textSecondary, fontSize: 14 }}>取消</Text>
+                </TouchableOpacity>
               </View>
             ) : (
               <>
@@ -611,4 +642,6 @@ const s = StyleSheet.create({
   studioItemTitle: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
   studioItemDesc: { fontSize: 12, lineHeight: 16 },
   sheetSubtitle: { fontSize: 12 },
+  // #2200 cancel button
+  cancelBtn: { marginTop: 16, borderWidth: 1, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8 },
 });

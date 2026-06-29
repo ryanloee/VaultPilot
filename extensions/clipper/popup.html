@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaultPilot Clipper</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 340px;
+      min-height: 200px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+    .container {
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .status-dot.connected { background: #4ade80; }
+    .status-dot.disconnected { background: #f87171; }
+    .status-dot.loading { background: #facc15; animation: pulse 1s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .page-info {
+      margin-bottom: 16px;
+      padding: 10px;
+      background: #16213e;
+      border-radius: 8px;
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .page-info .label {
+      color: #8888aa;
+      margin-bottom: 2px;
+    }
+    .page-info .value {
+      color: #c0c0e0;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    button {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: #4361ee;
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #3a56d4;
+    }
+    .btn-primary:active:not(:disabled) {
+      background: #2f4bbf;
+    }
+    .btn-secondary {
+      background: #2a2a4a;
+      color: #c0c0e0;
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: #333366;
+    }
+    .result {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+    }
+    .result.success {
+      display: block;
+      background: #064e3b;
+      color: #6ee7b7;
+      border: 1px solid #065f46;
+    }
+    .result.error {
+      display: block;
+      background: #450a0a;
+      color: #fca5a5;
+      border: 1px solid #7f1d1d;
+    }
+    .result .note-link {
+      color: #93c5fd;
+      text-decoration: none;
+    }
+    .settings-toggle {
+      margin-top: 12px;
+      text-align: center;
+    }
+    .settings-toggle a {
+      color: #6366f1;
+      font-size: 12px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .settings-toggle a:hover {
+      text-decoration: underline;
+    }
+    .settings-panel {
+      display: none;
+      margin-top: 12px;
+      padding: 12px;
+      background: #16213e;
+      border-radius: 8px;
+    }
+    .settings-panel.open {
+      display: block;
+    }
+    .settings-panel label {
+      display: block;
+      font-size: 12px;
+      color: #8888aa;
+      margin-bottom: 4px;
+      margin-top: 8px;
+    }
+    .settings-panel label:first-child {
+      margin-top: 0;
+    }
+    .settings-panel input {
+      width: 100%;
+      padding: 6px 8px;
+      background: #1a1a2e;
+      border: 1px solid #333366;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 13px;
+    }
+    .settings-panel input:focus {
+      outline: none;
+      border-color: #4361ee;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <span class="status-dot loading" id="statusDot"></span>
+      <h1>VaultPilot 剪藏</h1>
+    </div>
+
+    <div class="page-info" id="pageInfo">
+      <div class="label">当前页面</div>
+      <div class="value" id="pageTitle">—</div>
+      <div class="label" style="margin-top:6px;">连接状态</div>
+      <div class="value" id="connectionStatus">检查中…</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" id="clipBtn">📎 剪藏到 VaultPilot</button>
+    </div>
+
+    <div class="result" id="result"></div>
+
+    <div class="settings-toggle">
+      <a id="settingsToggle">⚙️ 设置</a>
+    </div>
+
+    <div class="settings-panel" id="settingsPanel">
+      <label for="vpHost">主机地址</label>
+      <input type="text" id="vpHost" placeholder="127.0.0.1" />
+
+      <label for="vpPort">端口</label>
+      <input type="number" id="vpPort" placeholder="8765" />
+
+      <label for="vpToken">API Token（可选）</label>
+      <input type="password" id="vpToken" placeholder="留空表示无认证" />
+
+      <button class="btn-secondary" id="saveConfigBtn" style="margin-top:10px;">保存设置</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

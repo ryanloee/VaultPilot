@@ -8,6 +8,13 @@ license = "MIT"
 repository = "https://github.com/ryanloee/VaultPilot"
 homepage = "https://github.com/ryanloee/VaultPilot"
 
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/mcp-connector",
+]
+
 [lib]
 name = "vaultpilot_lib"
 crate-type = ["rlib"]

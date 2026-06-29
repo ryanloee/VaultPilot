@@ -33,8 +33,15 @@ pub async fn compress_chat_history_with_context(
     .await
     .map_err(|_| anyhow::anyhow!("AI call timed out (compress_conversation)"))??;
 
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow::anyhow!(
+            "compress_conversation returned empty summary; refusing to discard turns"
+        ));
+    }
+
     Ok(ConversationSummary {
-        text,
+        text: trimmed.to_string(),
         generated_at: Utc::now().to_rfc3339(),
         covered_turn_count: history.len(),
         compression_count: summary.map(|item| item.compression_count + 1).unwrap_or(1),

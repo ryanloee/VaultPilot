@@ -304,6 +304,7 @@ export async function createNote(title = '无标题', content = '', id?: string)
   const db = await getDb();
   const noteId = id ?? uuid();
   await db.runAsync('INSERT INTO notes (id, title, content) VALUES (?, ?, ?)', [noteId, title, content]);
+  invalidateNoteTitleCache();
   return noteId;
 }
 
@@ -318,11 +319,56 @@ export async function updateNote(id: string, title: string, content: string): Pr
     'UPDATE notes SET title = ?, content = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?',
     [title, content, id]
   );
+  invalidateNoteTitleCache();
 }
 
 export async function deleteNote(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
+  invalidateNoteTitleCache();
+}
+
+/**
+ * Find a note by exact title match (case-insensitive).
+ * Used by Chat-Note bidirectional referencing (#2035).
+ */
+export async function getNoteByTitle(title: string): Promise<DbNote | null> {
+  const db = await getDb();
+  return db.getFirstAsync<DbNote>(
+    'SELECT * FROM notes WHERE is_template = 0 AND title = ? COLLATE NOCASE LIMIT 1',
+    [title]
+  );
+}
+
+/** Cache of note title → id mappings, built lazily for wikilink resolution. */
+let noteTitleCache: Map<string, string> | null = null;
+
+/**
+ * Invalidate the note title cache. Call whenever notes are created, updated, or deleted.
+ * The cache is rebuilt on the next call to getNoteTitleMap().
+ */
+export function invalidateNoteTitleCache(): void {
+  noteTitleCache = null;
+}
+
+/**
+ * Build or return the cached note title → id map.
+ * Used by MarkdownPreview to resolve [[wikilinks]] without repeated DB queries.
+ */
+export async function getNoteTitleMap(): Promise<Map<string, string>> {
+  if (noteTitleCache) return noteTitleCache;
+  const db = await getDb();
+  const notes = await db.getAllAsync<{ id: string; title: string }>(
+    'SELECT id, title FROM notes WHERE is_template = 0'
+  );
+  noteTitleCache = new Map<string, string>();
+  for (const n of notes) {
+    if (n.title.trim()) {
+      // Lowercase key for case-insensitive matching
+      noteTitleCache.set(n.title.trim().toLowerCase(), n.id);
+    }
+  }
+  return noteTitleCache;
 }
 
 export async function toggleStar(id: string): Promise<void> {

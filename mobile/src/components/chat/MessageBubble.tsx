@@ -20,8 +20,11 @@ interface MessageBubbleProps {
   item: Message;
   isDark: boolean;
   accentColor: string;
-  onDelete?: () => void;
-  onResend?: () => void;
+  onDelete?: (id: string) => void;
+  onResend?: (id: string) => void;
+  onNoteLinkPress?: (title: string) => void;
+  /** Map of note title (lowercase) → noteId for auto-detection of note refs (#2035). */
+  noteTitleMap?: Map<string, string>;
 }
 
 const MessageBubble = memo(function MessageBubble({
@@ -30,6 +33,8 @@ const MessageBubble = memo(function MessageBubble({
   accentColor,
   onDelete,
   onResend,
+  onNoteLinkPress,
+  noteTitleMap,
 }: MessageBubbleProps) {
   const c = getColors(isDark, accentColor);
   const isAssistant = item.role === 'assistant';
@@ -44,9 +49,9 @@ const MessageBubble = memo(function MessageBubble({
     }[] = [
       { text: '复制', onPress: () => Clipboard.setStringAsync(item.content) },
     ];
-    if (onResend) actions.push({ text: '重新发送', onPress: onResend });
+    if (onResend) actions.push({ text: '重新发送', onPress: () => onResend(item.id) });
     if (onDelete)
-      actions.push({ text: '删除', style: 'destructive', onPress: onDelete });
+      actions.push({ text: '删除', style: 'destructive', onPress: () => onDelete(item.id) });
     actions.push({ text: '取消', style: 'cancel' });
     Alert.alert('消息操作', '', actions);
   };
@@ -90,6 +95,8 @@ const MessageBubble = memo(function MessageBubble({
               textColor={c.aiText}
               accentColor={accentColor}
               isDark={isDark}
+              onNoteLinkPress={onNoteLinkPress}
+              noteTitleMap={noteTitleMap}
             />
             {item.streaming && (
               <Text style={{ color: accentColor, fontSize: 15 }}> ▌</Text>

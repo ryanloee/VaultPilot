@@ -208,6 +208,7 @@ export default function ChatScreen({ navigation, route }: any) {
           setSessionId(newId);
           setTitle('新对话');
           setMsgs([]);
+          msgsRef.current = [];
         } catch (e2) {
           console.warn('[Chat] addMessage retry failed:', e2);
           Alert.alert('发送失败', '无法创建对话，请重试');

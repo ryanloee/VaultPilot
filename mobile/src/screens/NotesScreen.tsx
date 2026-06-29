@@ -41,6 +41,7 @@ export default function NotesScreen({ navigation }: any) {
   const [showStudio, setShowStudio] = useState(false);
   const [studioGenerating, setStudioGenerating] = useState(false);
   const [studioProgress, setStudioProgress] = useState('');
+  const studioAbortRef = useRef<AbortController | null>(null);
 
   const STUDIO_TYPES = [
     { key: 'study-guide', label: '学习指南', icon: 'school-outline' as const, desc: '核心概念 + 关键术语 + 自测问题' },
@@ -169,6 +170,9 @@ export default function NotesScreen({ navigation }: any) {
   // #2166 — Studio: generate a delivery type from the current note list
   const handleStudioGenerate = async (type: typeof STUDIO_TYPES[number]) => {
     if (studioGenerating) return;
+    // Create AbortController for cancellation
+    const ac = new AbortController();
+    studioAbortRef.current = ac;
     setStudioGenerating(true);
     setStudioProgress(`正在生成${type.label}...`);
 
@@ -208,12 +212,12 @@ export default function NotesScreen({ navigation }: any) {
         { role: 'user', content: `Generate a ${type.label} from the following source notes:\n\n${context}` },
       ];
 
-      const stream = await chat(messages);
+      const stream = await chat(messages, ac.signal);
       let full = '';
       await parseSSEStream(stream, (chunk) => {
         if (chunk.done) return;
         if (chunk.content) full += chunk.content;
-      });
+      }, { signal: ac.signal });
 
       if (!full) {
         Alert.alert('生成失败', 'AI 返回结果为空，请重试。');
@@ -238,6 +242,8 @@ export default function NotesScreen({ navigation }: any) {
       setStudioProgress('');
       navigation.navigate('NoteEdit', { noteId });
     } catch (e: any) {
+      // AbortError: user cancelled → silent return
+      if (e instanceof DOMException && e.name === 'AbortError') return;
       Alert.alert('生成失败', e.message || '请检查 API 设置后重试。');
       setStudioGenerating(false);
       setStudioProgress('');
@@ -493,12 +499,12 @@ export default function NotesScreen({ navigation }: any) {
         visible={showStudio}
         transparent
         animationType="slide"
-        onRequestClose={() => { if (!studioGenerating) setShowStudio(false); }}
+        onRequestClose={() => { studioAbortRef.current?.abort(); setShowStudio(false); }}
       >
         <TouchableOpacity
           style={s.sheetBackdrop}
           activeOpacity={1}
-          onPress={() => { if (!studioGenerating) setShowStudio(false); }}
+          onPress={() => { studioAbortRef.current?.abort(); setShowStudio(false); }}
         >
           <TouchableOpacity style={[s.sheet, { backgroundColor: c.bg }]} activeOpacity={1} onPress={() => {}}>
             <View style={[s.sheetHandle, { backgroundColor: c.border }]} />

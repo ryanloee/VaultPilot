@@ -292,6 +292,18 @@ pub async fn get_subscription_async(
         .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
 
+/// Async wrapper for `set_subscription_enabled_with_context`.
+pub async fn set_subscription_enabled_async(
+    ctx: &StorageContext,
+    id: String,
+    enabled: bool,
+) -> Result<bool> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || set_subscription_enabled_with_context(&ctx, &id, enabled))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

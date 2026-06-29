@@ -33,7 +33,7 @@ use vaultpilot_lib::ai::actions::{
 };
 use vaultpilot_lib::storage::{
     list_subscriptions_async, get_subscription_async, delete_subscription_async,
-    create_subscription_async, set_subscription_enabled_with_context,
+    create_subscription_async, set_subscription_enabled_async,
 };
 
 /// Maximum total wall-clock time an upstream AI streaming request may run in
@@ -667,7 +667,8 @@ async fn http_toggle_subscription(
     Json(req): Json<ToggleSubscriptionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let updated = set_subscription_enabled_with_context(&state.context, &sub_id, req.enabled)
+    let updated = set_subscription_enabled_async(&state.context, sub_id.clone(), req.enabled)
+        .await
         .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     if updated {
         Ok(Json(serde_json::json!({

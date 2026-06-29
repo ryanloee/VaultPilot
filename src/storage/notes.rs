@@ -96,6 +96,25 @@ pub fn save_note_with_images_with_context(
     let image_refs = import_note_images(&path, image_paths)?;
     let body_with_images = append_image_markdown(&note.body, &image_refs);
 
+    // 优先从 DB 获取当前 note_collections 关联，确保 frontmatter 与 DB 一致 (Issue #2191)
+    let collections = {
+        let mut stmt = connection.prepare(
+            "SELECT c.name FROM collections c \
+             INNER JOIN note_collections nc ON nc.collection_id = c.id \
+             WHERE nc.note_id = ?1 \
+             ORDER BY c.name",
+        )?;
+        let names: Vec<String> = stmt
+            .query_map(params![id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if names.is_empty() {
+            note.meta.collections.clone()
+        } else {
+            names
+        }
+    };
+
     let meta = NoteMeta {
         id,
         title,
@@ -114,7 +133,7 @@ pub fn save_note_with_images_with_context(
         } else {
             note.meta.summary.trim().to_string()
         },
-        collections: note.meta.collections.clone(),
+        collections,
     };
 
     let serialized = compose_markdown(&meta, &body_with_images)?;
@@ -1150,6 +1169,29 @@ fn index_note_file_with_connection(
             &extract_note_image_refs(&document.body),
             vault_dir,
         )?;
+        // 同步 note_collections：基于 frontmatter 中的集合名称维护 note-collection 关联 (Issue #2191)
+        connection.execute(
+            "DELETE FROM note_collections WHERE note_id = ?1",
+            [document.meta.id.clone()],
+        )?;
+        if !document.meta.collections.is_empty() {
+            let collection_names = document.meta.collections.clone();
+            let mut lookup = connection.prepare(
+                "SELECT id FROM collections WHERE name = ?1",
+            )?;
+            let now = Utc::now().to_rfc3339();
+            for name in &collection_names {
+                let cid: Option<String> = lookup
+                    .query_row(params![name], |row| row.get(0))
+                    .optional()?;
+                if let Some(cid) = cid {
+                    connection.execute(
+                        "INSERT OR IGNORE INTO note_collections (note_id, collection_id, created_at) VALUES (?1, ?2, ?3)",
+                        params![document.meta.id, cid, now],
+                    )?;
+                }
+            }
+        }
         Ok(())
     })();
     match result {

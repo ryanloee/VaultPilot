@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>VaultPilot Clipper 设置</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f8f9fa;
+      color: #1a1a2e;
+      padding: 24px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 20px;
+      margin-bottom: 24px;
+      color: #3b82f6;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      border: 1px solid #e5e7eb;
+    }
+    .card h2 {
+      font-size: 14px;
+      color: #374151;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .field {
+      margin-bottom: 16px;
+    }
+    .field:last-child { margin-bottom: 0; }
+    .field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+    .field input, .field select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 13px;
+      background: #fff;
+      transition: border-color 0.2s;
+    }
+    .field input:focus, .field select:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+    }
+    .field .hint {
+      font-size: 11px;
+      color: #9ca3af;
+      margin-top: 4px;
+    }
+    .btn {
+      padding: 10px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      color: white;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary {
+      background: white;
+      color: #6b7280;
+      border: 1px solid #d1d5db;
+      margin-left: 8px;
+    }
+    .btn-secondary:hover { background: #f3f4f6; }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .status-badge {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 20px;
+    }
+    .status-badge.ok { background: #d1fae5; color: #065f46; }
+    .status-badge.error { background: #fee2e2; color: #991b1b; }
+    .status-badge.pending { background: #fef3c7; color: #92400e; }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 13px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <h1>⚡ VaultPilot Clipper 设置</h1>
+
+  <div class="card">
+    <h2>连接配置</h2>
+    <div class="field">
+      <label for="apiUrl">VaultPilot API 地址</label>
+      <input type="text" id="apiUrl" placeholder="http://127.0.0.1:10101" />
+      <div class="hint">VaultPilot HTTP Bridge 地址，默认 http://127.0.0.1:10101</div>
+    </div>
+    <div class="field">
+      <label for="apiToken">API Token（可选）</label>
+      <input type="password" id="apiToken" placeholder="留空则不使用认证" />
+      <div class="hint">如果启动 HTTP Bridge 时使用了 --token 参数，需填写对应 token</div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="testBtn">测试连接</button>
+      <span id="testResult" class="status-badge"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>保存选项</h2>
+    <div class="field">
+      <label for="defaultTags">默认标签（逗号分隔）</label>
+      <input type="text" id="defaultTags" placeholder="clipper, web" />
+    </div>
+    <div class="field">
+      <label for="defaultCollection">目标集合 ID（可选）</label>
+      <input type="text" id="defaultCollection" placeholder="留空则保存到默认位置" />
+      <div class="hint">将剪藏的笔记自动归入指定集合</div>
+    </div>
+    <div class="field">
+      <label for="saveFormat">保存格式</label>
+      <select id="saveFormat">
+        <option value="clean">简洁（仅正文）</option>
+        <option value="full">完整（含元数据）</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>快捷操作</h2>
+    <div class="field">
+      <label>
+        <input type="checkbox" id="autoSaveOnClick" />
+        点击扩展图标时直接保存（跳过弹窗）
+      </label>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-primary" id="saveBtn">保存设置</button>
+    <button class="btn btn-secondary" id="resetBtn">恢复默认</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

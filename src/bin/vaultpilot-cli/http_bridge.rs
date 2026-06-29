@@ -59,6 +59,7 @@ pub(super) async fn run_http_bridge(
         .route("/v1/chat/completions", post(http_chat_completions))
         .route("/api/notes", get(http_list_notes).post(http_create_note))
         .route("/api/notes/search", get(http_search_notes))
+        .route("/api/notes", post(http_create_note))
         .route("/api/notes/{note_id}", get(http_get_note))
         // #790: Rate limiter placed before body limit and timeout so
         // rate-limited requests are rejected immediately without reading

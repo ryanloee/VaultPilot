@@ -236,7 +236,7 @@ pub fn list_notes_in_collection_with_context(
         FROM notes n
         INNER JOIN note_collections nc ON nc.note_id = n.id
         WHERE nc.collection_id = ?1
-        ORDER BY n.updated_at DESC
+        ORDER BY n.updated_at DESC, n.id ASC
         LIMIT ?2 OFFSET ?3
         "#,
     )?;

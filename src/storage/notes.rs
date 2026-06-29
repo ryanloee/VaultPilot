@@ -170,6 +170,50 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     )?;
     tx.commit()?;
 
+    // ── Delete attachment physical files ────────────────────────────────
+    // Query all attachment file paths for this note and remove them from
+    // disk after the DB transaction has been committed. We delete each file
+    // individually and then clean up the assets directory if empty.
+    // For shared files (attachments referenced by multiple notes), we skip
+    // deletion by checking if any other note references the same path.
+    let attachment_paths: Vec<String> = connection
+        .prepare(
+            "SELECT path FROM attachments WHERE note_id = ?1",
+        )?
+        .query_map([resolved_note_id.as_str()], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Get the parent directory of the .md file — the assets dir is
+    // `{stem}-assets/` in the same directory.
+    let note_stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let parent_dir = file.parent().unwrap_or(Path::new(""));
+    let assets_dir = parent_dir.join(format!("{note_stem}-assets"));
+
+    for path_str in &attachment_paths {
+        let apath = PathBuf::from(path_str);
+        if apath.exists() {
+            // Only delete if no other note references the same file
+            let other_refs: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM attachments WHERE path = ?1 AND note_id != ?2",
+                    [path_str, &resolved_note_id],
+                    |row| row.get(0),
+                )?;
+            if other_refs == 0 {
+                if let Err(e) = fs::remove_file(&apath) {
+                    warn!(path = %apath.display(), error = %e, "failed to delete attachment file");
+                }
+            }
+        }
+    }
+
+    // Remove the assets directory if it exists and is now empty
+    // `fs::remove_dir` only succeeds if the directory is empty, so this
+    // is a no-op if shared attachment files or non-attachment files remain.
+    if assets_dir.exists() {
+        let _ = fs::remove_dir(&assets_dir);
+    }
+
     // Delete the physical file only after the DB transaction has been committed.
     // If file deletion fails, the DB is already clean so we log a warning rather
     // than propagating the error.
@@ -237,8 +281,8 @@ pub fn export_all_notes_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let id_prefix = sanitize_id_prefix(&meta.id);
-                let path = output_dir.join(format!("{}-{}.md", filename, id_prefix));
+                let safe_id = sanitize_id_for_filename(&meta.id);
+                let path = output_dir.join(format!("{}-{}.md", filename, safe_id));
                 match fs::write(&path, &markdown) {
                     Ok(()) => result.exported += 1,
                     Err(e) => result
@@ -289,8 +333,8 @@ pub fn vault_export_with_context(
     for meta in &all_note_metas {
         match export_note_markdown_with_context(context, &meta.id) {
             Ok((markdown, filename)) => {
-                let id_prefix = sanitize_id_prefix(&meta.id);
-                let entry_name = format!("notes/{}-{}.md", filename, id_prefix);
+                let safe_id = sanitize_id_for_filename(&meta.id);
+                let entry_name = format!("notes/{}-{}.md", filename, safe_id);
                 zip.start_file(entry_name, options)?;
                 std::io::Write::write_all(&mut zip, markdown.as_bytes())?;
                 result.notes_exported += 1;
@@ -738,11 +782,11 @@ fn sanitize_filename(title: &str) -> String {
     }
 }
 
-/// Sanitize a note ID prefix for safe use in file/ZIP entry names (#901).
+/// Sanitize a note ID for safe use in file/ZIP entry names (#901, #2149).
 /// Strips path traversal characters (`.`, `/`, `\`) to prevent Zip Slip attacks.
-fn sanitize_id_prefix(id: &str) -> String {
+/// Uses the full ID (not truncated) to guarantee uniqueness across export files.
+fn sanitize_id_for_filename(id: &str) -> String {
     id.chars()
-        .take(8)
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect()
 }
@@ -1756,36 +1800,33 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_id_prefix_strips_path_traversal() {
-        // sanitize_id_prefix takes 8 chars first, then filters
-        // "../../../etc/passwd" → take(8) = "../../../" → filter = ""
-        assert_eq!(sanitize_id_prefix("../../../etc/passwd"), "");
-        // "..\\..\\windows" → take(8) = "..\\..\\wi" → filter = "wi"
-        assert_eq!(sanitize_id_prefix("..\\..\\windows"), "wi");
-        // "a/b/c" → take(8) = "a/b/c" → filter = "abc"
-        assert_eq!(sanitize_id_prefix("a/b/c"), "abc");
+    fn sanitize_id_for_filename_strips_path_traversal() {
+        // sanitize_id_for_filename filters path traversal chars
+        assert_eq!(sanitize_id_for_filename("../../../etc/passwd"), "etcpasswd");
+        assert_eq!(sanitize_id_for_filename("..\\\\..\\\\windows"), "windows");
+        assert_eq!(sanitize_id_for_filename("a/b/c"), "abc");
     }
 
     #[test]
-    fn sanitize_id_prefix_only_ascii_alphanumeric_and_dash() {
-        assert_eq!(sanitize_id_prefix("abc-123"), "abc-123");
-        assert_eq!(sanitize_id_prefix("日本語テスト"), "");
-        assert_eq!(sanitize_id_prefix("a b c"), "abc");
-        assert_eq!(sanitize_id_prefix("test@#$%"), "test");
+    fn sanitize_id_for_filename_only_ascii_alphanumeric_and_dash() {
+        assert_eq!(sanitize_id_for_filename("abc-123"), "abc-123");
+        assert_eq!(sanitize_id_for_filename("日本語テスト"), "");
+        assert_eq!(sanitize_id_for_filename("a b c"), "abc");
+        assert_eq!(sanitize_id_for_filename("test@#$%"), "test");
     }
 
     #[test]
-    fn sanitize_id_prefix_limits_to_8_chars() {
-        assert_eq!(sanitize_id_prefix("1234567890"), "12345678");
-        assert_eq!(sanitize_id_prefix("a"), "a");
-        assert_eq!(sanitize_id_prefix(""), "");
+    fn sanitize_id_for_filename_uses_full_id() {
+        assert_eq!(sanitize_id_for_filename("1234567890"), "1234567890");
+        assert_eq!(sanitize_id_for_filename("a"), "a");
+        assert_eq!(sanitize_id_for_filename(""), "");
     }
 
     #[test]
-    fn sanitize_id_prefix_empty_after_filtering() {
-        assert_eq!(sanitize_id_prefix("..."), "");
-        assert_eq!(sanitize_id_prefix("/\\./"), "");
-        assert_eq!(sanitize_id_prefix("日本語"), "");
+    fn sanitize_id_for_filename_empty_after_filtering() {
+        assert_eq!(sanitize_id_for_filename("..."), "");
+        assert_eq!(sanitize_id_for_filename("/\\\\./"), "");
+        assert_eq!(sanitize_id_for_filename("日本語"), "");
     }
 
     #[test]

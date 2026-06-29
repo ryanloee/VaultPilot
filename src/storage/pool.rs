@@ -244,6 +244,24 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_note_collections_note_id ON note_collections(note_id);
         CREATE INDEX IF NOT EXISTS idx_note_collections_collection_id ON note_collections(collection_id);
+
+        -- Subscriptions for AI Scheduled Research (#2167)
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            schedule TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            tools TEXT NOT NULL DEFAULT '',
+            target_collection TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_run_at TEXT NOT NULL DEFAULT '',
+            next_run_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            run_count INTEGER NOT NULL DEFAULT 0,
+            last_status TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT ''
+        );
         "#,
     )?;
     ensure_attachment_columns(connection)?;

@@ -514,15 +514,10 @@ async fn http_create_note(
         search_snippet: None,
     };
 
-    let saved = save_note_async(&state.context, note)
-        .await
-        .map_err(|e| {
-            tracing::warn!("http_create_note: failed to save note: {e}");
-            openai_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to save note",
-            )
-        })?;
+    let saved = save_note_async(&state.context, note).await.map_err(|e| {
+        tracing::warn!("http_create_note: failed to save note: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to save note")
+    })?;
 
     Ok(Json(CreateNoteResponse {
         id: saved.meta.id,

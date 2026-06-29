@@ -172,6 +172,7 @@ pub fn answer_system_prompt() -> String {
          Rules:\n\
          - Use retrieved local notes when they help answer the question.\n\
          - Cite only notes that were actually provided.\n\
+         - Notes have CREATED_AT and UPDATED_AT timestamps. Users may refer to notes by relative time (e.g. \"yesterday\", \"last week\", \"刚才写的\"). Use these timestamps to help answer time-based queries.\n\
          - Answer naturally in the user's language.\n\
          - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\n\
          - Structured answer means any response with steps, lists, multiple sections, headings, comparisons, examples, or code.\n\
@@ -352,6 +353,7 @@ pub fn tool_call_system_prompt() -> String {
          - list_directory: inspect a local directory on the machine.\n\
          - read_file: read a local file on the machine.\n\
          - save_note: store the user's content as a normalized note draft.\n\
+         - Notes have CREATED_AT and UPDATED_AT timestamps. Users may refer to notes by relative time (e.g. \"yesterday\", \"last week\", \"刚才写的\"). Use search_notes to help retrieve time-referenced notes.\n\
          You may be called repeatedly after prior tool executions, so use the tool history to decide the next step.\n\
          Return strict JSON only, with no markdown fence.\n\
          {}",
@@ -436,6 +438,7 @@ pub fn tool_result_system_prompt() -> String {
          {}\n\
          You have already received the result of a tool execution.\n\
          Use that result to answer the user naturally.\n\
+         - Notes have CREATED_AT and UPDATED_AT timestamps. Users may refer to notes by relative time (e.g. \"yesterday\", \"last week\", \"刚才写的\"). Use these timestamps to help answer time-based queries.\n\
          - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\n\
          - Structured answer means any response with steps, lists, multiple sections, headings, comparisons, examples, or code.\n\
          - If the answer is longer than 3 short sentences, default to <vp-markdown>...</vp-markdown>.\n\
@@ -454,6 +457,7 @@ pub fn note_selection_system_prompt() -> String {
          Date: {}\n\
          {}\n\
          Your job is to choose which candidate notes should actually be read in full.\n\
+         Notes have CREATED_AT and UPDATED_AT timestamps. Users may refer to notes by relative time (e.g. \"yesterday\", \"last week\", \"刚才写的\"). Use these timestamps to prioritize recent or time-relevant notes.\n\
          Return strict JSON only, with no markdown fence.\n\
          {}",
         Utc::now().format("%Y-%m-%d"),
@@ -583,12 +587,14 @@ fn render_notes(docs: &[NoteDocument]) -> String {
                 _ => String::new(),
             };
             format!(
-                "NOTE_ID: {}\nTITLE: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\n{}CONTENT:\n{}\n",
+                "NOTE_ID: {}\nTITLE: {}\nPATH: {}\nTAGS: {}\nKEYWORDS: {}\nCREATED_AT: {}\nUPDATED_AT: {}\n{}CONTENT:\n{}\n",
                 doc.meta.id,
                 doc.meta.title,
                 doc.meta.path,
                 doc.meta.tags.join(", "),
                 doc.meta.keywords.join(", "),
+                doc.meta.created_at,
+                doc.meta.updated_at,
                 snippet_section,
                 doc.body
             )
@@ -606,12 +612,14 @@ fn render_candidate_notes(candidates: &[NoteMeta]) -> String {
         .iter()
         .map(|note| {
             format!(
-                "NOTE_ID: {}\nTITLE: {}\nSUMMARY: {}\nKEYWORDS: {}\nPATH: {}\n",
+                "NOTE_ID: {}\nTITLE: {}\nSUMMARY: {}\nKEYWORDS: {}\nPATH: {}\nCREATED_AT: {}\nUPDATED_AT: {}\n",
                 note.id,
                 note.title,
                 note.summary,
                 note.keywords.join(", "),
-                note.path
+                note.path,
+                note.created_at,
+                note.updated_at
             )
         })
         .collect::<Vec<_>>()
@@ -746,6 +754,8 @@ mod tests {
         assert!(rendered.contains("PATH: /vault/test.md"));
         assert!(rendered.contains("TAGS: tag1"));
         assert!(rendered.contains("KEYWORDS: kw1"));
+        assert!(rendered.contains("CREATED_AT:"));
+        assert!(rendered.contains("UPDATED_AT:"));
         assert!(rendered.contains("CONTENT:\nbody text"));
     }
 
@@ -769,6 +779,8 @@ mod tests {
         assert!(rendered.contains("TITLE: Candidate"));
         assert!(rendered.contains("SUMMARY: A summary"));
         assert!(rendered.contains("KEYWORDS: kw"));
+        assert!(rendered.contains("CREATED_AT:"));
+        assert!(rendered.contains("UPDATED_AT:"));
     }
 
     #[test]
@@ -796,6 +808,13 @@ mod tests {
         assert!(ingest_system_prompt().contains("ai_workflow_manual"));
         assert!(answer_system_prompt().contains("ai_workflow_manual"));
         assert!(record_system_prompt().contains("ai_workflow_manual"));
+
+        // Time-awareness rule present in relevant prompts
+        let time_rule = "CREATED_AT and UPDATED_AT timestamps";
+        assert!(answer_system_prompt().contains(time_rule));
+        assert!(tool_result_system_prompt().contains(time_rule));
+        assert!(note_selection_system_prompt().contains(time_rule));
+        assert!(tool_call_system_prompt().contains(time_rule));
     }
 
     #[test]

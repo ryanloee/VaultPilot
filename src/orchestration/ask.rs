@@ -967,8 +967,8 @@ fn summarize_docs_for_tool_result(tool_name: &str, docs: &[NoteDocument]) -> Str
         .iter()
         .map(|doc| {
             format!(
-                "- {} | {} | {}",
-                doc.meta.title, doc.meta.path, doc.meta.summary
+                "- {} | {} | {} | created:{}",
+                doc.meta.title, doc.meta.path, doc.meta.summary, doc.meta.created_at
             )
         })
         .collect::<Vec<_>>()
@@ -1396,6 +1396,7 @@ mod tests {
         assert!(result.contains("1 notes"));
         assert!(result.contains("My Note"));
         assert!(result.contains("A summary"));
+        assert!(result.contains("created:"));
     }
 
     #[test]
@@ -1408,6 +1409,7 @@ mod tests {
         assert!(result.contains("2 notes"));
         assert!(result.contains("Note A"));
         assert!(result.contains("Note B"));
+        assert!(result.contains("created:"));
     }
 
     // ── planned_tool_identity ──────────────────────────────────────

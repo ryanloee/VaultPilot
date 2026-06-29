@@ -18,6 +18,7 @@ pub(crate) mod notes;
 mod pool;
 mod search;
 mod settings;
+pub(crate) mod subscriptions;
 
 // Re-export StorageContext so callers see no difference.
 pub use pool::StorageContext;
@@ -42,11 +43,11 @@ pub use notes::{
 };
 // Re-export collections public API so callers see no difference.
 pub use collections::{
-    add_note_to_collection_with_context, create_collection_with_context,
-    delete_collection_with_context, list_collections_with_context,
-    list_notes_in_collection_with_context, remove_note_from_collection_with_context,
-    get_collection_with_context, count_notes_in_collection_with_context,
-    get_collections_for_note_with_context, get_collection_ids_for_note,
+    add_note_to_collection_with_context, count_notes_in_collection_with_context,
+    create_collection_with_context, delete_collection_with_context, get_collection_ids_for_note,
+    get_collection_with_context, get_collections_for_note_with_context,
+    list_collections_with_context, list_notes_in_collection_with_context,
+    remove_note_from_collection_with_context,
 };
 
 // Internal imports from search module (used by remaining functions in this file)

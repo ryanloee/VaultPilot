@@ -4,6 +4,8 @@
 //! folder hierarchy. A note can belong to zero or more collections, and
 //! deleting a collection never deletes its member notes.
 
+#![allow(dead_code)]
+
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
@@ -49,10 +51,16 @@ pub fn create_collection_with_context(
 
 /// Delete a collection and all its note associations (cascade).
 #[instrument(skip(context))]
-pub fn delete_collection_with_context(context: &StorageContext, collection_id: &str) -> Result<bool> {
+pub fn delete_collection_with_context(
+    context: &StorageContext,
+    collection_id: &str,
+) -> Result<bool> {
     let (connection, _) = open_connection(context)?;
     let rows = connection
-        .execute("DELETE FROM collections WHERE id = ?1", params![collection_id])
+        .execute(
+            "DELETE FROM collections WHERE id = ?1",
+            params![collection_id],
+        )
         .with_context(|| format!("failed to delete collection '{collection_id}'"))?;
     Ok(rows > 0)
 }
@@ -97,7 +105,10 @@ pub fn list_collections_with_context(context: &StorageContext) -> Result<Vec<Col
 
 /// Get a single collection by ID.
 #[instrument(skip(context))]
-pub fn get_collection_with_context(context: &StorageContext, collection_id: &str) -> Result<Option<Collection>> {
+pub fn get_collection_with_context(
+    context: &StorageContext,
+    collection_id: &str,
+) -> Result<Option<Collection>> {
     let (connection, _) = open_connection(context)?;
 
     let result = connection
@@ -161,10 +172,14 @@ pub fn add_note_to_collection_with_context(
         return Ok(false);
     }
 
-    connection.execute(
-        "INSERT INTO note_collections (note_id, collection_id, created_at) VALUES (?1, ?2, ?3)",
-        params![note_id, collection_id, now],
-    ).with_context(|| format!("failed to add note '{note_id}' to collection '{collection_id}'"))?;
+    connection
+        .execute(
+            "INSERT INTO note_collections (note_id, collection_id, created_at) VALUES (?1, ?2, ?3)",
+            params![note_id, collection_id, now],
+        )
+        .with_context(|| {
+            format!("failed to add note '{note_id}' to collection '{collection_id}'")
+        })?;
 
     // Update the collection's updated_at timestamp
     connection.execute(
@@ -188,7 +203,9 @@ pub fn remove_note_from_collection_with_context(
             "DELETE FROM note_collections WHERE note_id = ?1 AND collection_id = ?2",
             params![note_id, collection_id],
         )
-        .with_context(|| format!("failed to remove note '{note_id}' from collection '{collection_id}'"))?;
+        .with_context(|| {
+            format!("failed to remove note '{note_id}' from collection '{collection_id}'")
+        })?;
 
     if rows > 0 {
         let now = Utc::now().to_rfc3339();
@@ -292,9 +309,8 @@ pub fn get_collection_ids_for_note(
     connection: &rusqlite::Connection,
     note_id: &str,
 ) -> Result<HashSet<String>> {
-    let mut stmt = connection.prepare(
-        "SELECT collection_id FROM note_collections WHERE note_id = ?1",
-    )?;
+    let mut stmt =
+        connection.prepare("SELECT collection_id FROM note_collections WHERE note_id = ?1")?;
 
     let ids = stmt
         .query_map(params![note_id], |row| row.get::<_, String>(0))
@@ -326,7 +342,11 @@ pub fn count_notes_in_collection_with_context(
 // Async wrappers
 // ────────────────────────────────────────────────────────
 
-pub async fn create_collection_async(ctx: &StorageContext, name: String, description: String) -> Result<Collection> {
+pub async fn create_collection_async(
+    ctx: &StorageContext,
+    name: String,
+    description: String,
+) -> Result<Collection> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || create_collection_with_context(&ctx, &name, &description))
         .await
@@ -353,9 +373,11 @@ pub async fn add_note_to_collection_async(
     collection_id: String,
 ) -> Result<bool> {
     let ctx = ctx.clone();
-    tokio::task::spawn_blocking(move || add_note_to_collection_with_context(&ctx, &note_id, &collection_id))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        add_note_to_collection_with_context(&ctx, &note_id, &collection_id)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
 
 pub async fn remove_note_from_collection_async(
@@ -364,9 +386,11 @@ pub async fn remove_note_from_collection_async(
     collection_id: String,
 ) -> Result<bool> {
     let ctx = ctx.clone();
-    tokio::task::spawn_blocking(move || remove_note_from_collection_with_context(&ctx, &note_id, &collection_id))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        remove_note_from_collection_with_context(&ctx, &note_id, &collection_id)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
 
 pub async fn list_notes_in_collection_async(
@@ -551,7 +575,9 @@ mod tests {
         crate::storage::initialize_storage_with_context(&ctx).unwrap();
 
         let col = create_collection_with_context(&ctx, "Find Me", "found").unwrap();
-        let found = get_collection_with_context(&ctx, &col.id).unwrap().expect("should exist");
+        let found = get_collection_with_context(&ctx, &col.id)
+            .unwrap()
+            .expect("should exist");
         assert_eq!(found.name, "Find Me");
         assert_eq!(found.description, "found");
 
@@ -565,7 +591,10 @@ mod tests {
         crate::storage::initialize_storage_with_context(&ctx).unwrap();
 
         let col = create_collection_with_context(&ctx, "Count Test", "").unwrap();
-        assert_eq!(count_notes_in_collection_with_context(&ctx, &col.id).unwrap(), 0);
+        assert_eq!(
+            count_notes_in_collection_with_context(&ctx, &col.id).unwrap(),
+            0
+        );
 
         let note = crate::models::NoteDocument {
             meta: crate::models::NoteMeta {
@@ -577,6 +606,9 @@ mod tests {
         };
         let saved = save_note_with_context(&ctx, note).unwrap();
         add_note_to_collection_with_context(&ctx, &saved.meta.id, &col.id).unwrap();
-        assert_eq!(count_notes_in_collection_with_context(&ctx, &col.id).unwrap(), 1);
+        assert_eq!(
+            count_notes_in_collection_with_context(&ctx, &col.id).unwrap(),
+            1
+        );
     }
 }

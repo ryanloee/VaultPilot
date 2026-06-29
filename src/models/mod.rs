@@ -11,6 +11,65 @@ pub use settings::{
     default_auto_wake_start_time, AppSettings,
 };
 
+// ---------------------------------------------------------------------------
+// AiSubscription — AI Scheduled Research subscription model (#2167)
+// ---------------------------------------------------------------------------
+
+/// A subscription represents a recurring AI-powered research task.
+/// Stored as a row in the `subscriptions` SQLite table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSubscription {
+    pub id: String,
+    /// Human-readable name (auto-generated from prompt).
+    pub name: String,
+    /// Cron expression for schedule (e.g. "0 9 * * 1").
+    pub schedule: String,
+    /// The AI prompt template (may contain {{placeholders}}).
+    pub prompt: String,
+    /// Comma-separated tool names allowed (e.g. "web_search,read_note").
+    pub tools: String,
+    /// Target collection name for result notes.
+    pub target_collection: String,
+    /// Whether this subscription is active.
+    pub enabled: bool,
+    /// ISO-8601 timestamp of the last successful run.
+    pub last_run_at: String,
+    /// ISO-8601 timestamp of the next scheduled run.
+    pub next_run_at: String,
+    /// ISO-8601 creation timestamp.
+    pub created_at: String,
+    /// ISO-8601 last-update timestamp.
+    pub updated_at: String,
+    /// Number of times this subscription has been executed.
+    pub run_count: i64,
+    /// Status of the last run: "success", "failed", "running", or "".
+    pub last_status: String,
+    /// Error message from last failed run (empty if last was successful).
+    pub last_error: String,
+}
+
+impl Default for AiSubscription {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            schedule: String::new(),
+            prompt: String::new(),
+            tools: String::new(),
+            target_collection: String::new(),
+            enabled: true,
+            last_run_at: String::new(),
+            next_run_at: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            run_count: 0,
+            last_status: String::new(),
+            last_error: String::new(),
+        }
+    }
+}
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

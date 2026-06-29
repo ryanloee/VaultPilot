@@ -33,10 +33,21 @@ pub async fn compress_chat_history_with_context(
     .await
     .map_err(|_| anyhow::anyhow!("AI call timed out (compress_conversation)"))??;
 
+    // Fix #2133: reject empty/whitespace-only summaries to prevent silent context loss
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow::anyhow!(
+            "compress_conversation returned empty summary; refusing to discard turns"
+        ));
+    }
+
+    // Fix #2134: accumulate covered_turn_count across multiple compression rounds
+    let prev_covered = summary.as_ref().map(|s| s.covered_turn_count).unwrap_or(0);
+
     Ok(ConversationSummary {
-        text,
+        text: trimmed.to_string(),
         generated_at: Utc::now().to_rfc3339(),
-        covered_turn_count: history.len(),
+        covered_turn_count: prev_covered + history.len(),
         compression_count: summary.map(|item| item.compression_count + 1).unwrap_or(1),
     })
 }

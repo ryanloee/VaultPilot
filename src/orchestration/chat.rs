@@ -488,13 +488,24 @@ async fn compress_chat_session_if_needed(
         return Ok(());
     }
 
-    let summary = compress_chat_history_with_context(
+    let summary = match compress_chat_history_with_context(
         context,
         session.summary.clone(),
         compressible_turns,
         |stage, detail| emit_status(stage, detail),
     )
-    .await?;
+    .await
+    {
+        Ok(s) if !s.text.trim().is_empty() => s,
+        Ok(_) => {
+            tracing::warn!("compression returned empty summary; skipping compression");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::warn!("compression failed ({}); skipping compression", e);
+            return Ok(());
+        }
+    };
 
     let mut updated_session = session;
     updated_session.summary = Some(summary);

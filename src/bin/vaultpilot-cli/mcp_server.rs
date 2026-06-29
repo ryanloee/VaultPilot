@@ -2175,12 +2175,18 @@ fn split_resource_uri(uri: &str) -> (&str, &'static str) {
     match uri.find('?') {
         Some(idx) => {
             let (left, query) = uri.split_at(idx);
-            let mode = query[1..]
-                .split('&')
-                .filter_map(|kv| kv.strip_prefix("mode="))
-                .next()
-                .and_then(normalize_note_mode)
-                .unwrap_or("full");
+            // query includes the '?' itself; if it's just "?" then query.len() == 1
+            // and query[1..] would panic. Default to "full" in that case.
+            let mode = if query.len() > 1 {
+                query[1..]
+                    .split('&')
+                    .filter_map(|kv| kv.strip_prefix("mode="))
+                    .next()
+                    .and_then(normalize_note_mode)
+                    .unwrap_or("full")
+            } else {
+                "full"
+            };
             (left, mode)
         }
         None => (uri, "full"),
@@ -2713,6 +2719,14 @@ mod tests {
     fn split_resource_uri_invalid_mode_defaults_full() {
         let (path, mode) = split_resource_uri("vault://notes/abc?mode=detailed");
         assert_eq!(path, "vault://notes/abc");
+        assert_eq!(mode, "full");
+    }
+
+    #[test]
+    fn split_resource_uri_empty_query_defaults_full() {
+        // Regression: URI ending with "?" must not panic.
+        let (path, mode) = split_resource_uri("vault://notes/some-id?");
+        assert_eq!(path, "vault://notes/some-id");
         assert_eq!(mode, "full");
     }
 

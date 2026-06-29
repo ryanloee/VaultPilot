@@ -10,7 +10,7 @@ import * as Haptics from 'expo-haptics';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { chatWithReconnect, ChatMessage } from '../api/client';
-import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
+import { buildNoteContext, buildSystemPrompt, executeToolCalls, ResponseStyle, RESPONSE_STYLE_LABELS } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession, getNoteTitleMap } from '../db';
 import { loadNoteTitleMap, clearNoteTitleCache } from '../utils/noteRefs';
 import { MessageBubble } from '../components/chat';
@@ -39,6 +39,7 @@ export default function ChatScreen({ navigation, route }: any) {
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [responseStyle, setResponseStyle] = useState<ResponseStyle>('standard');
   const activeLoadRef = useRef<string | null>(null);
   const isSendingRef = useRef(false);
   const routeHandledRef = useRef(false);
@@ -240,7 +241,7 @@ export default function ChatScreen({ navigation, route }: any) {
       } catch (ragErr) {
         console.warn('[Chat] buildNoteContext failed, continuing without RAG:', ragErr);
       }
-      const systemPrompt = buildSystemPrompt(noteContext);
+      const systemPrompt = buildSystemPrompt(noteContext, responseStyle);
 
       const history: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
@@ -455,8 +456,33 @@ export default function ChatScreen({ navigation, route }: any) {
         </TouchableOpacity>
       )}
 
+      {/* Response style quick-switch */}
+      <View style={[s.styleRow, { borderTopColor: c.border, backgroundColor: c.bg }]}>
+        {(Object.keys(RESPONSE_STYLE_LABELS) as ResponseStyle[]).map((key) => (
+          <TouchableOpacity
+            key={key}
+            style={[
+              s.stylePill,
+              {
+                borderColor: responseStyle === key ? accentColor : c.border,
+                backgroundColor: responseStyle === key ? accentColor + '15' : 'transparent',
+              },
+            ]}
+            onPress={() => { setResponseStyle(key); }}
+            disabled={streaming}
+            accessibilityRole="button"
+            accessibilityLabel={RESPONSE_STYLE_LABELS[key]}
+            accessibilityState={{ selected: responseStyle === key }}
+          >
+            <Text style={[s.styleText, { color: responseStyle === key ? accentColor : c.textSecondary }]}>
+              {RESPONSE_STYLE_LABELS[key]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* Input bar */}
-      <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
+      <View style={[s.inputBar, { backgroundColor: c.bg }]}>
         <TextInput
           style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
           value={input}
@@ -495,9 +521,26 @@ const s = StyleSheet.create({
     maxWidth: '80%', paddingHorizontal: 14, paddingVertical: 10,
     borderRadius: 16, marginBottom: 8,
   },
+  styleRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 8,
+    borderTopWidth: 1,
+  },
+  stylePill: {
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  styleText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',
-    padding: 8, borderTopWidth: 1,
+    padding: 8,
   },
   textInput: {
     flex: 1, borderWidth: 1, borderRadius: 20,

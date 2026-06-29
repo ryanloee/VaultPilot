@@ -391,7 +391,33 @@ export async function executeToolCalls(response: string): Promise<{ cleaned: str
  * Aligned with Win端 answer_system_prompt and tool_result_system_prompt.
  * Respects device locale.
  */
-export function buildSystemPrompt(noteContext: string | null): string {
+/** Response style for quick-switching answer length/depth. */
+export type ResponseStyle = 'brief' | 'standard' | 'detailed';
+
+/** Localised labels for each response style. */
+export const RESPONSE_STYLE_LABELS: Record<ResponseStyle, string> = {
+  brief: isChinese() ? '简洁' : 'Brief',
+  standard: isChinese() ? '标准' : 'Standard',
+  detailed: isChinese() ? '详细' : 'Detailed',
+};
+
+/** Extra prompt instructions for each response style (bilingual). */
+const RESPONSE_STYLE_INSTRUCTIONS: Record<ResponseStyle, { zh: string; en: string }> = {
+  brief: {
+    zh: '\n\n【回答风格 — 简洁】\n请尽量简短回答，直接给出要点，不要展开过多解释。',
+    en: '\n\n[Response Style — Brief]\nKeep your answer concise. State the key points directly without lengthy explanation.',
+  },
+  standard: {
+    zh: '',
+    en: '',
+  },
+  detailed: {
+    zh: '\n\n【回答风格 — 详细】\n请提供详细、结构化的回答。使用分点列表或分段说明，给出充分的解释和示例。',
+    en: '\n\n[Response Style — Detailed]\nProvide a thorough, structured answer. Use bullet points or sections with full explanations and examples.',
+  },
+};
+
+export function buildSystemPrompt(noteContext: string | null, style: ResponseStyle = 'standard'): string {
   const zh = isChinese();
 
   const base = zh
@@ -451,6 +477,11 @@ You have received notes retrieved from the user's local knowledge base. Follow t
   }
 
   prompt += noteInstructions;
+
+  const styleInstr = RESPONSE_STYLE_INSTRUCTIONS[style];
+  if (styleInstr) {
+    prompt += isChinese() ? styleInstr.zh : styleInstr.en;
+  }
 
   return prompt;
 }

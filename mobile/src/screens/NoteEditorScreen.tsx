@@ -9,11 +9,12 @@ import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
+import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate, getNoteByTitle } from '../db';
 import { chat, ChatMessage, parseSSEStream } from '../api/client';
+import { insertAnchorAt, generateBlockId } from '../utils/blockRef';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
-  const { noteId } = route.params;
+  const { noteId, blockId } = route.params;
   const { isDark, accentColor } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [title, setTitle] = useState('');
@@ -146,6 +147,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
     { label: '#', insert: '# ', desc: '标题' },
     { label: '-', insert: '- ', desc: '列表' },
     { label: 'link', insert: '[]()', desc: '链接', icon: 'link-outline' },
+    { label: 'anchor', insert: '', desc: '插入块锚点', icon: 'bookmark-outline', action: 'insertAnchor' },
     { label: 'AI', insert: '', desc: 'AI 写作', icon: 'color-wand-outline', action: 'aiWrite' },
   ];
 
@@ -201,6 +203,41 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       setAiGenerating(false);
       setShowAiWrite(false);
       setAiPrompt('');
+    }
+  };
+
+  /** #2152: Insert a block anchor at the current caret position. */
+  const handleInsertAnchor = () => {
+    const idx = selectionRef.current.start;
+    const id = generateBlockId();
+    const result = insertAnchorAt(contentRef.current, idx, id);
+    if (result) {
+      setContent(result.content);
+      contentRef.current = result.content;
+      autoSave(titleRef.current, result.content);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
+    } else {
+      // If insertion failed (already has anchor or caret in odd position), fallback: append at end
+      const fallback = ` ^${id}`;
+      const next = contentRef.current + fallback;
+      setContent(next);
+      contentRef.current = next;
+      autoSave(titleRef.current, next);
+    }
+  };
+
+  /** #2152: Navigate to a note when a wikilink or block reference is tapped. */
+  const handleNoteLinkPress = async (noteName: string, blockId?: string) => {
+    try {
+      const note = await getNoteByTitle(noteName);
+      if (note) {
+        navigation.navigate('NoteEdit', {
+          noteId: note.id,
+          blockId: blockId ?? null,
+        });
+      }
+    } catch (e) {
+      console.warn('[NoteEditor] Note link navigation failed:', e);
     }
   };
 
@@ -341,7 +378,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       {/* Content — edit or preview */}
       {previewMode ? (
         <ScrollView style={s.previewContainer} contentContainerStyle={{ padding: 16 }}>
-          <MarkdownPreview content={content || '*空白笔记*'} textColor={c.text} accentColor={accentColor} isDark={isDark} />
+          <MarkdownPreview content={content || '*空白笔记*'} textColor={c.text} accentColor={accentColor} isDark={isDark} onNoteLinkPress={handleNoteLinkPress} />
         </ScrollView>
       ) : (
         <TextInput
@@ -398,6 +435,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
               onPress={() => {
                 if ((t as any).action === 'aiWrite') {
                   setShowAiWrite(true);
+                } else if ((t as any).action === 'insertAnchor') {
+                  handleInsertAnchor();
                 } else {
                   insertFormat(t.insert);
                 }

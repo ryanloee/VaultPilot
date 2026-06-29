@@ -9,7 +9,7 @@ export type ChatStackParamList = {
 
 export type NotesStackParamList = {
   NotesList: undefined;
-  NoteEdit: { noteId: string };
+  NoteEdit: { noteId: string; blockId?: string | null };
 };
 
 export type RootTabParamList = {

@@ -312,6 +312,15 @@ export async function getNote(id: string): Promise<DbNote | null> {
   return db.getFirstAsync<DbNote>('SELECT * FROM notes WHERE id = ?', [id]);
 }
 
+/** #2152: resolve a note by its exact title for wikilink / block-reference navigation. */
+export async function getNoteByTitle(title: string): Promise<DbNote | null> {
+  const db = await getDb();
+  return db.getFirstAsync<DbNote>(
+    'SELECT * FROM notes WHERE title = ? AND is_template = 0 LIMIT 1',
+    [title],
+  );
+}
+
 export async function updateNote(id: string, title: string, content: string): Promise<void> {
   const db = await getDb();
   await db.runAsync(

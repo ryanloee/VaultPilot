@@ -25,7 +25,13 @@ use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     load_note_async, load_settings_async, save_note_async, search_notes_async, StorageContext,
 };
-use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path};
+use vaultpilot_lib::{
+    ask_with_ai_with_context, normalize_tool_path, run_single_subscription,
+};
+use vaultpilot_lib::storage::{
+    list_subscriptions_async, get_subscription_async, delete_subscription_async,
+    create_subscription_async, set_subscription_enabled_with_context,
+};
 
 /// Maximum total wall-clock time an upstream AI streaming request may run in
 /// the HTTP bridge's `stream: true` path. The `TimeoutLayer(180s)` on the
@@ -61,6 +67,11 @@ pub(super) async fn run_http_bridge(
         .route("/api/notes/search", get(http_search_notes))
         .route("/api/notes", post(http_create_note))
         .route("/api/notes/{note_id}", get(http_get_note))
+        // Subscriptions API (#2167)
+        .route("/api/subscriptions", get(http_list_subscriptions).post(http_create_subscription))
+        .route("/api/subscriptions/{sub_id}", get(http_get_subscription).delete(http_delete_subscription))
+        .route("/api/subscriptions/{sub_id}/run", post(http_run_subscription))
+        .route("/api/subscriptions/{sub_id}/toggle", post(http_toggle_subscription))
         // #790: Rate limiter placed before body limit and timeout so
         // rate-limited requests are rejected immediately without reading
         // the body or consuming timeout budget. In Axum .layer() ordering,
@@ -523,6 +534,144 @@ async fn http_create_note(
         id: saved.meta.id,
         title: saved.meta.title,
     }))
+}
+
+// ─── Subscription API handlers (#2167) ──────────────────────────
+
+/// GET /api/subscriptions — List all subscriptions.
+async fn http_list_subscriptions(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let subs = list_subscriptions_async(&state.context)
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let count = subs.len();
+    Ok(Json(serde_json::json!({
+        "subscriptions": subs,
+        "count": count
+    })))
+}
+
+/// POST /api/subscriptions — Create a new subscription.
+#[derive(Debug, Deserialize)]
+struct CreateSubscriptionRequest {
+    name: String,
+    #[serde(default = "default_schedule")]
+    schedule: String,
+    prompt: String,
+    #[serde(default = "default_tools")]
+    tools: String,
+    #[serde(default = "default_target_collection")]
+    target_collection: String,
+}
+
+fn default_schedule() -> String { "0 0 * * *".to_string() }
+fn default_tools() -> String { "web_search".to_string() }
+fn default_target_collection() -> String { "Scheduled Research".to_string() }
+
+async fn http_create_subscription(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateSubscriptionRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let sub = create_subscription_async(
+        &state.context,
+        req.name,
+        req.schedule,
+        req.prompt,
+        req.tools,
+        req.target_collection,
+    )
+    .await
+    .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "created": true,
+        "subscription": sub
+    })))
+}
+
+/// GET /api/subscriptions/{sub_id} — Get a subscription by ID.
+async fn http_get_subscription(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(sub_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let sub = get_subscription_async(&state.context, sub_id.clone())
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    match sub {
+        Some(s) => Ok(Json(serde_json::json!({ "subscription": s }))),
+        None => Err(openai_error(StatusCode::NOT_FOUND, "Subscription not found")),
+    }
+}
+
+/// DELETE /api/subscriptions/{sub_id} — Delete a subscription.
+async fn http_delete_subscription(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(sub_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let deleted = delete_subscription_async(&state.context, sub_id.clone())
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if deleted {
+        Ok(Json(serde_json::json!({
+            "deleted": true,
+            "id": sub_id
+        })))
+    } else {
+        Err(openai_error(StatusCode::NOT_FOUND, "Subscription not found"))
+    }
+}
+
+/// POST /api/subscriptions/{sub_id}/run — Run a specific subscription.
+async fn http_run_subscription(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(sub_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let sub = get_subscription_async(&state.context, sub_id.clone())
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .ok_or_else(|| openai_error(StatusCode::NOT_FOUND, "Subscription not found"))?;
+
+    let result = run_single_subscription(&state.context, &sub).await;
+    Ok(Json(serde_json::json!({
+        "ran": true,
+        "result": result
+    })))
+}
+
+/// POST /api/subscriptions/{sub_id}/toggle — Enable or disable a subscription.
+#[derive(Debug, Deserialize)]
+struct ToggleSubscriptionRequest {
+    enabled: bool,
+}
+
+async fn http_toggle_subscription(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(sub_id): AxumPath<String>,
+    Json(req): Json<ToggleSubscriptionRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let updated = set_subscription_enabled_with_context(&state.context, &sub_id, req.enabled)
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if updated {
+        Ok(Json(serde_json::json!({
+            "updated": true,
+            "id": sub_id,
+            "enabled": req.enabled
+        })))
+    } else {
+        Err(openai_error(StatusCode::NOT_FOUND, "Subscription not found"))
+    }
 }
 
 async fn http_health() -> Json<Value> {

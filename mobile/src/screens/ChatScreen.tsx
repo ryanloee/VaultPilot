@@ -43,6 +43,7 @@ export default function ChatScreen({ navigation, route }: any) {
   const activeLoadRef = useRef<string | null>(null);
   const isSendingRef = useRef(false);
   const routeHandledRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
 
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
@@ -208,6 +209,14 @@ export default function ChatScreen({ navigation, route }: any) {
         return;
       }
     }
+
+    // --- GUARD: session was switched while user message was being persisted? ---
+    if (sessionIdRef.current !== activeSessionId) {
+      // User navigated to another session mid-send; delete orphaned user message and bail
+      try { await deleteMessage(userId); } catch (_) { /* best-effort cleanup */ }
+      return;
+    }
+
     setInput('');
     setInputHeight(0);
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
@@ -228,6 +237,15 @@ export default function ChatScreen({ navigation, route }: any) {
       Alert.alert('发送失败', '无法创建 AI 回复记录');
       return;
     }
+
+    // --- GUARD: session was switched while AI placeholder was being created? ---
+    if (sessionIdRef.current !== activeSessionId) {
+      // Session switched; clean up both orphaned messages
+      try { await deleteMessage(userId); } catch (_) { /* best-effort cleanup */ }
+      try { await deleteMessage(aiId); } catch (_) { /* best-effort cleanup */ }
+      return;
+    }
+
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);

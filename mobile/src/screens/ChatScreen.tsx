@@ -250,6 +250,11 @@ export default function ChatScreen({ navigation, route }: any) {
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
+    // Create AbortController early so the stop button works even during
+    // the async RAG context building (buildNoteContext) — otherwise
+    // abortRef.current would still be null (cleared in finally of previous send).
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
 
     let full = '';
     try {
@@ -268,8 +273,6 @@ export default function ChatScreen({ navigation, route }: any) {
         { role: 'user', content: userText },
       ];
 
-      abortRef.current?.abort();
-      abortRef.current = new AbortController();
       // #1900: 60s timeout to prevent UI freeze
       const TIMEOUT_MS = 60_000;
       timeoutRef.current = setTimeout(() => {

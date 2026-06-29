@@ -41,7 +41,7 @@ const MessageBubble = memo(function MessageBubble({
 
   const handleLongPress = () => {
     if (!item.content) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
     const actions: {
       text: string;
       onPress?: () => void;

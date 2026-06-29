@@ -678,6 +678,57 @@ public sealed class BackendClient : IAsyncDisposable
         return string.Join(Environment.NewLine, lines[start..]);
     }
 
+    // ─── AI Action methods (#2188) ──────────────────────────────────
+
+    /// <summary>
+    /// Execute an AI quick action (summarize, translate, explain, etc.) via the backend.
+    /// </summary>
+    public async Task<AiActionResult> ExecuteAiActionAsync(
+        AiActionType action,
+        string text,
+        string? targetLanguage = null,
+        string? tone = null,
+        string? noteId = null,
+        string? model = null,
+        CancellationToken token = default)
+    {
+        var parameters = new
+        {
+            action = action switch
+            {
+                AiActionType.Summarize => "summarize",
+                AiActionType.Rewrite => "rewrite",
+                AiActionType.Translate => "translate",
+                AiActionType.Explain => "explain",
+                AiActionType.ContinueWriting => "continueWriting",
+                AiActionType.ExtractTodos => "extractTodos",
+                AiActionType.FindRelatedNotes => "findRelatedNotes",
+                _ => throw new ArgumentOutOfRangeException(nameof(action))
+            },
+            text,
+            targetLanguage,
+            tone,
+            noteId,
+            modelOverride = model
+        };
+
+        var result = await SendAsync<AiActionResult>("executeAiAction", parameters, token)
+            ?? throw new InvalidOperationException("后端返回了空结果。");
+        return result;
+    }
+
+    /// <summary>
+    /// List all available AI action types with their labels.
+    /// </summary>
+    public async Task<IReadOnlyList<AiActionInfo>> ListAiActionsAsync(CancellationToken token = default)
+    {
+        var result = await SendAsync<JsonElement>("listAiActions", new { }, token);
+        if (result is null) return Array.Empty<AiActionInfo>();
+
+        var actions = result.Deserialize<List<AiActionInfo>>(_jsonOptions);
+        return actions?.AsReadOnly() ?? Array.Empty<AiActionInfo>();
+    }
+
     private async Task PumpStderrAsync(CancellationToken token)
     {
         var process = Volatile.Read(ref _process);

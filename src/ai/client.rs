@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, timeout};
 use tracing::{info, instrument, warn};
 use url::Url;
@@ -96,7 +96,7 @@ pub(super) fn get_or_build_client(
     Ok(client)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RequestUsage {
     pub input_tokens: Option<usize>,
     pub output_tokens: Option<usize>,

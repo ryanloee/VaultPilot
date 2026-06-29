@@ -28,6 +28,9 @@ use vaultpilot_lib::storage::{
 use vaultpilot_lib::{
     ask_with_ai_with_context, normalize_tool_path, run_single_subscription,
 };
+use vaultpilot_lib::ai::actions::{
+    execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
+};
 use vaultpilot_lib::storage::{
     list_subscriptions_async, get_subscription_async, delete_subscription_async,
     create_subscription_async, set_subscription_enabled_with_context,
@@ -72,6 +75,9 @@ pub(super) async fn run_http_bridge(
         .route("/api/subscriptions/{sub_id}", get(http_get_subscription).delete(http_delete_subscription))
         .route("/api/subscriptions/{sub_id}/run", post(http_run_subscription))
         .route("/api/subscriptions/{sub_id}/toggle", post(http_toggle_subscription))
+        // AI Action Palette (#2188)
+        .route("/api/ai/actions", get(http_list_ai_actions))
+        .route("/api/ai/action", post(http_ai_action))
         // #790: Rate limiter placed before body limit and timeout so
         // rate-limited requests are rejected immediately without reading
         // the body or consuming timeout budget. In Axum .layer() ordering,
@@ -672,6 +678,61 @@ async fn http_toggle_subscription(
     } else {
         Err(openai_error(StatusCode::NOT_FOUND, "Subscription not found"))
     }
+}
+
+// ─── AI Action Handlers (#2188) ─────────────────────────────────────
+
+/// Deserialize incoming request for the /api/ai/action endpoint.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiActionHttpRequest {
+    action: AiActionType,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    target_language: Option<String>,
+    #[serde(default)]
+    tone: Option<String>,
+    #[serde(default)]
+    note_id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// POST /api/ai/action — Execute an AI quick action (non-streaming).
+async fn http_ai_action(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(req): Json<AiActionHttpRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let ai_request = AiActionRequest {
+        action: req.action,
+        text: req.text,
+        target_language: req.target_language,
+        tone: req.tone,
+        note_id: req.note_id,
+        model: req.model,
+    };
+    let settings = load_settings_async(&state.context)
+        .await
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let result = execute_ai_action(&settings, &ai_request).await;
+    let value = serde_json::to_value(&result)
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(value))
+}
+
+/// GET /api/ai/actions — List all available AI action types.
+async fn http_list_ai_actions(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let actions = list_ai_actions();
+    let value = serde_json::to_value(&actions)
+        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(Json(value))
 }
 
 async fn http_health() -> Json<Value> {

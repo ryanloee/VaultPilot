@@ -22,6 +22,9 @@ use vaultpilot_lib::storage::{
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
 };
+use vaultpilot_lib::ai::actions::{
+    execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
+};
 
 // ── Agent session state ─────────────────────────────────────────────────
 // Allows runAgent (background task) and respondToWriteApproval (main loop)
@@ -510,8 +513,46 @@ async fn handle_request(
                 None => Err("no active agent session waiting for approval".to_string()),
             }
         }
+        "executeAiAction" => {
+            let params: ExecuteAiActionParams = parse_params(&request.params)?;
+            let request = AiActionRequest {
+                action: params.action,
+                text: params.text.unwrap_or_default(),
+                target_language: params.target_language,
+                tone: params.tone,
+                note_id: params.note_id,
+                model: params.model_override,
+            };
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let result = execute_ai_action(&settings, &request).await;
+            serde_json::to_value(&result)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "listAiActions" => {
+            let actions = list_ai_actions();
+            serde_json::to_value(&actions)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
         method => Err(format!("unknown method: {method}")),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecuteAiActionParams {
+    action: AiActionType,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    target_language: Option<String>,
+    #[serde(default)]
+    tone: Option<String>,
+    #[serde(default)]
+    note_id: Option<String>,
+    #[serde(default)]
+    model_override: Option<String>,
 }
 
 fn parse_params<T>(params: &Value) -> Result<T, String>

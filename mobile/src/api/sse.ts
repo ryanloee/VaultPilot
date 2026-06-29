@@ -37,6 +37,7 @@ export function parseSSEStream(
     let doneReceived = false;
     const dataParts: string[] = [];
     let parseErrorCount = 0;
+    let rejected = false;
     const maxParseErrors = options?.maxParseErrors ?? 3;
 
     // Propagate AbortSignal to reader so reader.read() unblocks on abort
@@ -77,6 +78,7 @@ export function parseSSEStream(
             console.warn('[SSE] Failed to parse chunk:', data.slice(0, 100), e);
             options?.onParseError?.(data, e);
             if (parseErrorCount >= maxParseErrors) {
+              rejected = true;
               reader.cancel('max parse errors').catch(() => {});
               reject(new Error(`[SSE] ${parseErrorCount} consecutive parse errors — aborting stream`));
               return;
@@ -102,7 +104,7 @@ export function parseSSEStream(
           buffer += '\n\n'; // Ensure last data line is processed even without trailing newline
           processBuffer();
         }
-        if (!doneReceived) {
+        if (!doneReceived && !rejected) {
           console.warn('[SSE] Stream ended without [DONE] signal');
           onChunk({ done: true });
         }

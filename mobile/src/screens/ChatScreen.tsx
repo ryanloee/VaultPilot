@@ -180,11 +180,22 @@ export default function ChatScreen({ navigation, route }: any) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
     const userText = input.trim();
 
+    // Check session consistency after await — if user navigated away, abort
+    const checkSessionAlive = (expectedSessionId: string): boolean => {
+      const current = sessionIdRef.current;
+      if (current !== expectedSessionId) {
+        console.warn('[Chat] session changed from', expectedSessionId, 'to', current, '— aborting send');
+        return false;
+      }
+      return true;
+    };
+
     // Add user message — only clear input after persistence succeeds
     let userId: string;
     let activeSessionId = sessionId;
     try {
       userId = await addMessage(activeSessionId, 'user', userText);
+      if (!checkSessionAlive(activeSessionId)) return;
     } catch (e: any) {
       // FOREIGN KEY = session was deleted/reset; recreate and retry
       if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
@@ -192,6 +203,7 @@ export default function ChatScreen({ navigation, route }: any) {
           const newId = await createSession('新对话');
           activeSessionId = newId;
           userId = await addMessage(newId, 'user', userText);
+          if (!checkSessionAlive(newId)) return;
           // Only update UI state after message persistence succeeds (#2053)
           setSessionId(newId);
           setTitle('新对话');
@@ -219,6 +231,14 @@ export default function ChatScreen({ navigation, route }: any) {
     let aiId: string;
     try {
       aiId = await addMessage(activeSessionId, 'assistant', '');
+      if (!checkSessionAlive(activeSessionId)) {
+        // Clean up: remove user message and AI placeholder from old session
+        try { await deleteMessage(aiId); } catch (_) {}
+        try { await deleteMessage(userId); } catch (_) {}
+        setInput(userText);
+        setMsgs(prev => prev.filter(m => m.id !== userId && m.id !== aiId));
+        return;
+      }
     } catch (e) {
       console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
       // Roll back UI: restore user input and remove the user message bubble
@@ -256,6 +276,15 @@ export default function ChatScreen({ navigation, route }: any) {
         abortRef.current?.abort();
       }, TIMEOUT_MS);
 
+      // Check session again before streaming — user may have navigated during the async gap
+      if (!checkSessionAlive(activeSessionId)) {
+        try { await deleteMessage(aiId); } catch (_) {}
+        try { await deleteMessage(userId); } catch (_) {}
+        setInput(userText);
+        setMsgs(prev => prev.filter(m => m.id !== userId && m.id !== aiId));
+        return;
+      }
+
       await chatWithReconnect(history, (chunk) => {
         if (chunk.done) return;
         if (chunk.content) {
@@ -277,6 +306,12 @@ export default function ChatScreen({ navigation, route }: any) {
 
       // Persist streamed content — separate try-catch so UI content is preserved on failure
       try {
+        // If session changed during streaming, skip DB write to avoid data leak
+        if (!checkSessionAlive(activeSessionId)) {
+          console.warn('[Chat] session changed during streaming — skipping updateMessage');
+          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
+          return;
+        }
         await updateMessage(aiId, full);
       } catch (persistErr) {
         console.warn('[Chat] updateMessage persist failed:', persistErr);
@@ -287,6 +322,11 @@ export default function ChatScreen({ navigation, route }: any) {
       // Save whatever partial content was received before the error
       const partial = full || (msgsRef.current.find(m => m.id === aiId)?.content ?? '');
       if (err.name === 'AbortError') {
+        // Check if session changed during abort — skip DB writes to avoid leaking data
+        if (!checkSessionAlive(activeSessionId)) {
+          console.warn('[Chat] session changed during abort — skipping DB writes');
+          return;
+        }
         if (partial) {
           try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch (dbErr) {
             console.error('[Chat] Failed to persist aborted response to DB:', dbErr);
@@ -303,6 +343,11 @@ export default function ChatScreen({ navigation, route }: any) {
           setMsgs(prev => prev.filter(m => m.id !== aiId));
         }
       } else {
+        // Check if session changed during error — skip DB writes to avoid leaking data
+        if (!checkSessionAlive(activeSessionId)) {
+          console.warn('[Chat] session changed during error — skipping DB writes');
+          return;
+        }
         // Persist partial content + error marker to database before updating UI
         const errorContent = partial
           ? `${partial}\n\n[错误] ${err.message}`

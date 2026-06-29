@@ -36,6 +36,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const originalFolderRef = useRef('');
   const pendingRef = useRef<{ title: string; content: string } | null>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const aiAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +98,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   useEffect(() => {
     return () => {
       mountedRef.current = false;
+      aiAbortRef.current?.abort();
       clearTimeout(timerRef.current);
       if (pendingRef.current) {
         // Fire-and-forget save on unmount — component state is already gone
@@ -169,19 +171,22 @@ export default function NoteEditorScreen({ route, navigation }: any) {
 
   const handleAiWrite = async () => {
     if (!aiPrompt.trim() || aiGenerating) return;
+    // Create AbortController for cancellation on unmount
+    const ac = new AbortController();
+    aiAbortRef.current = ac;
     setAiGenerating(true);
     try {
       const messages: ChatMessage[] = [
         { role: 'system', content: 'You are a professional writing assistant integrated into a note-taking app. Help the user write, improve, expand, or polish their notes. Respond with only the generated content, no extra commentary or formatting instructions.' },
         { role: 'user', content: `Writing instruction: ${aiPrompt}\n\nCurrent note content:\n${content}` },
       ];
-      const stream = await chat(messages);
+      const stream = await chat(messages, ac.signal);
       let full = '';
       await parseSSEStream(stream, (chunk) => {
         if (chunk.done) return;
         if (chunk.content) full += chunk.content;
-      });
-      if (full) {
+      }, { signal: ac.signal });
+      if (full && mountedRef.current) {
         const { start, end } = selectionRef.current;
         setContent(prev => {
           const before = prev.slice(0, start);
@@ -196,11 +201,18 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         });
       }
     } catch (e: any) {
-      Alert.alert('AI 写作失败', e.message || '请重试');
+      // AbortError: user left the screen → silent return
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+      if (mountedRef.current) {
+        Alert.alert('AI 写作失败', e.message || '请重试');
+      }
     } finally {
-      setAiGenerating(false);
-      setShowAiWrite(false);
-      setAiPrompt('');
+      aiAbortRef.current = null;
+      if (mountedRef.current) {
+        setAiGenerating(false);
+        setShowAiWrite(false);
+        setAiPrompt('');
+      }
     }
   };
 

@@ -16,6 +16,18 @@ const MAX_CONTEXT_NOTES = 5;
 /** Max chars per note content in context */
 const MAX_NOTE_CONTENT_CHARS = 800;
 
+/** Format a Unix timestamp (seconds) as a human-readable date string.
+ *  Returns empty string for invalid/zero timestamps. */
+function formatNoteTimestamp(ts: number): string {
+  if (!ts || ts <= 0) return '';
+  try {
+    const d = new Date(ts * 1000);
+    return d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+  } catch {
+    return '';
+  }
+}
+
 /** Detect device language (e.g. "zh", "en", "ja"). */
 export function getDeviceLocale(): string {
   try {
@@ -238,10 +250,12 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
       const results = await getNotes(undefined, MAX_CONTEXT_NOTES);
       const blocks = results.map(n => {
         const title = n.title || (isChinese() ? '无标题' : 'Untitled');
+        const created = formatNoteTimestamp(n.created_at);
+        const updated = formatNoteTimestamp(n.updated_at);
         const content = n.content.length > MAX_NOTE_CONTENT_CHARS
           ? n.content.slice(0, MAX_NOTE_CONTENT_CHARS) + '...'
           : n.content;
-        return `【${title}】\n${content}`;
+        return `【${title}】\nCREATED_AT: ${created}\nUPDATED_AT: ${updated}\n${content}`;
       });
       return isChinese()
         ? `以下是用户保存的所有笔记（共${noteCount}条）：\n\n${blocks.join('\n\n---\n\n')}`
@@ -285,10 +299,12 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
 
     const blocks = results.map(n => {
       const title = n.title || (isChinese() ? '无标题' : 'Untitled');
+      const created = formatNoteTimestamp(n.created_at);
+      const updated = formatNoteTimestamp(n.updated_at);
       const content = n.content.length > MAX_NOTE_CONTENT_CHARS
         ? n.content.slice(0, MAX_NOTE_CONTENT_CHARS) + '...'
         : n.content;
-      return `【${title}】\n${content}`;
+      return `【${title}】\nCREATED_AT: ${created}\nUPDATED_AT: ${updated}\n${content}`;
     });
 
     return isChinese()
@@ -438,6 +454,7 @@ The complete note content, structured and complete.
 - 如果笔记中包含具体命令、步骤或操作，即使只是部分相关，也要优先展示
 - 只有当笔记确实与问题无关时，才使用你自己的知识补充
 - 回答时提及"根据你的笔记..."或"你的记录显示..."以表明信息来源
+- 笔记带有 CREATED_AT 和 UPDATED_AT 时间戳（ISO 8601），用户可能用时间描述（"昨天"、"上周"、"刚才写的"）指代笔记，根据时间戳定位
 `
       : `\n[Knowledge Base Results — Important Rules]
 You have received notes retrieved from the user's local knowledge base. Follow these rules:
@@ -446,6 +463,7 @@ You have received notes retrieved from the user's local knowledge base. Follow t
 - If a note contains a concrete command or step that partially answers the question, surface it first
 - Only supplement with your own knowledge when notes are truly insufficient
 - Mention "Based on your notes..." or "Your records show..." to indicate the source
+- Notes include CREATED_AT and UPDATED_AT timestamps (ISO 8601). The user may refer to notes by time ("yesterday", "last week", "刚才写的"). Use these timestamps to identify which note they mean.
 `;
     prompt += `\n\n${contextInstructions}${noteContext}`;
   }

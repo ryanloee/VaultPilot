@@ -12,6 +12,8 @@ import { useAppStore, getColors } from '../store';
 import { chatWithReconnect, ChatMessage } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession } from '../db';
+import ToolPanel, { ToolDef } from '../components/chat/ToolPanel';
+import { parseToolCommand, executeTool, isToolCommand, ToolResult } from '../services/tools';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; }
 
@@ -58,6 +60,9 @@ export default function ChatScreen({ navigation, route }: any) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [title, setTitle] = useState('新对话');
   const [loading, setLoading] = useState(true);
+  // @Tool panel state
+  const [showToolPanel, setShowToolPanel] = useState(false);
+  const [toolFilter, setToolFilter] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listRef = useRef<FlatList>(null);
@@ -169,6 +174,9 @@ export default function ChatScreen({ navigation, route }: any) {
   const send = useCallback(async () => {
     if (!input.trim() || streaming || !sessionId || isSendingRef.current) return;
     isSendingRef.current = true;
+    // Dismiss @ tool panel if visible
+    setShowToolPanel(false);
+    setToolFilter('');
     try {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
     const userText = input.trim();
@@ -208,6 +216,45 @@ export default function ChatScreen({ navigation, route }: any) {
     const prevMsgs = [...msgsRef.current];
     setMsgs(prev => [...prev, userMsg]);
 
+    // ── Check for @tool commands ─────────────────────────────────
+    const toolCmd = parseToolCommand(userText);
+    if (toolCmd) {
+      // Execute tool directly (no AI call)
+      let aiId: string;
+      try {
+        aiId = await addMessage(activeSessionId, 'assistant', '');
+      } catch (e) {
+        console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
+        setInput(userText);
+        setMsgs(prev => prev.filter(m => m.id !== userId));
+        Alert.alert('发送失败', '无法创建回复记录');
+        return;
+      }
+      const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
+      setMsgs(prev => [...prev, aiMsg]);
+      setStreaming(true);
+
+      try {
+        const result = await executeTool(toolCmd.toolId, toolCmd.query);
+        const full = result.content;
+        setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, content: full, streaming: false } : m));
+        try {
+          await updateMessage(aiId, full);
+        } catch (persistErr) {
+          console.warn('[Chat] tool result persist failed:', persistErr);
+        }
+      } catch (err: any) {
+        const errorContent = `[错误] ${err.message}`;
+        setMsgs(prev => prev.map(m => m.id === aiId
+          ? { ...m, content: errorContent, streaming: false, isError: true } : m));
+        try { await updateMessage(aiId, errorContent); } catch {}
+      } finally {
+        setStreaming(false);
+      }
+      return;
+    }
+
+    // ── Normal AI chat ───────────────────────────────────────────
     // Save AI placeholder to DB upfront — stable id, no key change later
     let aiId: string;
     try {
@@ -339,6 +386,40 @@ export default function ChatScreen({ navigation, route }: any) {
     abortRef.current?.abort();
   };
 
+  // Handle @ tool panel
+  const handleInputChange = useCallback((text: string) => {
+    setInput(text);
+
+    // Detect "@" at word boundary — show tool panel
+    // Check if the current word (text after last space) starts with @
+    const lastSpace = text.lastIndexOf(' ');
+    const currentWord = text.slice(lastSpace + 1);
+
+    if (currentWord.startsWith('@')) {
+      const afterAt = currentWord.slice(1);
+      // Show panel only for @ at start of word, hide for @@
+      if (afterAt.length > 0 && afterAt[0] === '@') {
+        setShowToolPanel(false);
+      } else {
+        setShowToolPanel(true);
+        setToolFilter(afterAt);
+      }
+    } else {
+      setShowToolPanel(false);
+      setToolFilter('');
+    }
+  }, []);
+
+  // Tool selected from the @ panel
+  const handleToolSelect = useCallback((tool: ToolDef) => {
+    // Replace the @xxx text with the command prefix
+    const lastSpace = input.lastIndexOf(' ');
+    const before = lastSpace >= 0 ? input.slice(0, lastSpace + 1) : '';
+    setInput(before + tool.commandPrefix);
+    setShowToolPanel(false);
+    setToolFilter('');
+  }, [input]);
+
   const handleDeleteMsg = useCallback(async (msgId: string) => {
     try {
       await deleteMessage(msgId);
@@ -446,12 +527,26 @@ export default function ChatScreen({ navigation, route }: any) {
         </TouchableOpacity>
       )}
 
+      {/* @Tool panel */}
+      <ToolPanel
+        visible={showToolPanel}
+        filter={toolFilter}
+        onSelect={handleToolSelect}
+        onDismiss={() => { setShowToolPanel(false); setToolFilter(''); }}
+        accentColor={accentColor}
+        bgColor={c.bg}
+        textColor={c.text}
+        textSecondaryColor={c.textSecondary}
+        borderColor={c.border}
+        inputBgColor={c.inputBg}
+      />
+
       {/* Input bar */}
       <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
         <TextInput
           style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
           value={input}
-          onChangeText={setInput}
+          onChangeText={handleInputChange}
           onContentSizeChange={e => setInputHeight(e.nativeEvent.contentSize.height)}
           placeholder="输入消息..."
           placeholderTextColor={c.textSecondary}

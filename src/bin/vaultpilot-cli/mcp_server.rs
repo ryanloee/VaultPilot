@@ -1893,16 +1893,14 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
                 if parent.as_os_str().is_empty() {
                     break;
                 }
-                if parent.exists() {
-                    if let Ok(pc) = parent.canonicalize() {
-                        if !pc.starts_with(&vault_canonical) {
-                            return mcp_tool_error(format!(
-                                "import path '{}' is outside the vault directory",
-                                raw_path
-                            ));
-                        }
-                        confined = true;
+                if let Ok(pc) = parent.canonicalize() {
+                    if !pc.starts_with(&vault_canonical) {
+                        return mcp_tool_error(format!(
+                            "import path '{}' is outside the vault directory",
+                            raw_path
+                        ));
                     }
+                    confined = true;
                     break;
                 }
                 probe = parent;

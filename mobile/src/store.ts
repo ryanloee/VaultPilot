@@ -327,7 +327,7 @@ export const useAppStore = create<AppState>()(
           try {
             // Lazy require to avoid a circular import at module load time
             // (client.ts imports from store.ts).
-            const { invalidateSettingsCache } = require('../api/client');
+            const { invalidateSettingsCache } = require('./api/client');
             invalidateSettingsCache();
           } catch (e) {
             console.warn('[Store] failed to invalidate settings cache after rehydration:', e);

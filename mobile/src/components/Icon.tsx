@@ -8,7 +8,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 export type IconName =
   | 'menu' | 'plus' | 'close' | 'search' | 'send' | 'stop'
-  | 'camera' | 'image' | 'document' | 'mic' | 'mic-off'
+  | 'camera' | 'image' | 'document' | 'document-text-outline' | 'mic' | 'mic-off'
   | 'smile' | 'eye' | 'eye-off' | 'edit' | 'pin' | 'link'
   | 'rocket' | 'wifi-off' | 'trash' | 'copy' | 'check'
   | 'error' | 'star' | 'clipboard' | 'globe' | 'pencil'
@@ -26,6 +26,7 @@ const ICON_MAP: Record<IconName, keyof typeof Ionicons.glyphMap> = {
   'camera': 'camera',
   'image': 'image',
   'document': 'document-text',
+  'document-text-outline': 'document-text-outline',
   'mic': 'mic',
   'mic-off': 'mic-off',
   'smile': 'happy-outline',

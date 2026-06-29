@@ -57,7 +57,7 @@ pub(super) async fn run_http_bridge(
         .route("/health", get(http_health))
         .route("/v1/models", get(http_models))
         .route("/v1/chat/completions", post(http_chat_completions))
-        .route("/api/notes", get(http_list_notes))
+        .route("/api/notes", get(http_list_notes).post(http_create_note))
         .route("/api/notes/search", get(http_search_notes))
         .route("/api/notes", post(http_create_note))
         .route("/api/notes/{note_id}", get(http_get_note))
@@ -306,6 +306,35 @@ async fn rate_limit_middleware(
     next.run(request).await
 }
 
+// ─── Request / Response types ────────────────────────────────────
+
+/// Request body for POST /api/notes (browser clipper / external API users).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateNoteRequest {
+    /// Note title (required).
+    title: String,
+    /// Note body in Markdown format (required).
+    content: String,
+    /// Source URL (e.g. the web page the content was clipped from).
+    #[serde(default)]
+    source_url: String,
+    /// Optional comma-separated tags.
+    #[serde(default)]
+    tags: String,
+    /// Optional target collection name.
+    #[serde(default)]
+    collection: String,
+}
+
+/// Response body for POST /api/notes.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateNoteResponse {
+    id: String,
+    title: String,
+}
+
 // ─── Route handlers ───────────────────────────────────────────────
 
 async fn http_list_notes(
@@ -418,65 +447,87 @@ async fn http_search_notes(
     })))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateNoteRequest {
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    source_url: String,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    collection_id: String,
-}
-
+/// POST /api/notes — Create a new vault note from clipped content (browser clipper MVP).
+///
+/// Accepts markdown content with metadata (title, source URL, tags, collection).
+/// Returns the new note's ID and title.
 async fn http_create_note(
     State(state): State<Arc<HttpBridgeState>>,
     headers: HeaderMap,
-    Json(payload): Json<CreateNoteRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    Json(request): Json<CreateNoteRequest>,
+) -> Result<Json<CreateNoteResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
 
-    let now = chrono::Utc::now().to_rfc3339();
+    let title = request.title.trim().to_string();
+    if title.is_empty() {
+        return Err(openai_error(StatusCode::BAD_REQUEST, "title is required"));
+    }
+    let content = request.content.trim().to_string();
+    if content.is_empty() {
+        return Err(openai_error(StatusCode::BAD_REQUEST, "content is required"));
+    }
+
+    // Build frontmatter metadata
+    let now = Utc::now().to_rfc3339();
+    let tags: Vec<String> = if request.tags.trim().is_empty() {
+        vec!["clipped".to_string()]
+    } else {
+        let mut t: Vec<String> = request
+            .tags
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !t.contains(&"clipped".to_string()) {
+            t.push("clipped".to_string());
+        }
+        t
+    };
+
+    let source = if request.source_url.trim().is_empty() {
+        "web".to_string()
+    } else {
+        request.source_url.clone()
+    };
+
+    let mut body = content;
+    // Prepend source URL as a reference line if provided
+    if !request.source_url.trim().is_empty() {
+        body = format!("> Source: {}\n\n{}", request.source_url.trim(), body);
+    }
+
     let note = NoteDocument {
         meta: NoteMeta {
-            title: payload.title,
-            tags: payload.tags,
-            source: payload.source,
-            path: String::new(),
+            title,
+            tags,
+            source,
             created_at: now.clone(),
             updated_at: now,
-            collections: if payload.collection_id.is_empty() {
+            collections: if request.collection.trim().is_empty() {
                 vec![]
             } else {
-                vec![payload.collection_id]
+                vec![request.collection.trim().to_string()]
             },
             ..Default::default()
         },
-        body: if payload.source_url.is_empty() {
-            payload.body
-        } else {
-            format!(
-                "---\nsource: {}\n---\n\n{}",
-                payload.source_url, payload.body
-            )
-        },
-        ..Default::default()
+        body,
+        search_snippet: None,
     };
 
     let saved = save_note_async(&state.context, note)
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_create_note: failed to save note: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to save note",
+            )
+        })?;
 
-    Ok(Json(serde_json::json!({
-        "note": saved,
-        "status": "created"
-    })))
+    Ok(Json(CreateNoteResponse {
+        id: saved.meta.id,
+        title: saved.meta.title,
+    }))
 }
 
 async fn http_health() -> Json<Value> {

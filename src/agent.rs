@@ -230,10 +230,17 @@ impl ToolProxy {
 
         // All checks passed — atomically check the limit and increment.
         // Using a CAS loop to avoid TOCTOU race (#1572).
+        //
+        // When max_tool_calls == 0 the limit is unlimited: skip the CAS loop
+        // entirely so we never overflow the counter (#2205).
+        if self.config.limits.max_tool_calls == 0 {
+            let entry = self.allow(tool, args_json);
+            return Ok(entry);
+        }
+
         loop {
             let current = self.tool_call_count.load(Ordering::Acquire);
-            if self.config.limits.max_tool_calls > 0 && current >= self.config.limits.max_tool_calls
-            {
+            if current >= self.config.limits.max_tool_calls {
                 let entry = self.deny(tool, args_json, "tool call limit exceeded");
                 return Ok(entry);
             }

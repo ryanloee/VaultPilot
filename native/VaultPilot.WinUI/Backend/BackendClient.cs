@@ -723,10 +723,11 @@ public sealed class BackendClient : IAsyncDisposable
     public async Task<IReadOnlyList<AiActionInfo>> ListAiActionsAsync(CancellationToken token = default)
     {
         var result = await SendAsync<JsonElement>("listAiActions", new { }, token);
-        if (result is null) return Array.Empty<AiActionInfo>();
+        if (result.ValueKind == JsonValueKind.Null || result.ValueKind == JsonValueKind.Undefined)
+            return Array.Empty<AiActionInfo>();
 
         var actions = result.Deserialize<List<AiActionInfo>>(_jsonOptions);
-        return actions?.AsReadOnly() ?? Array.Empty<AiActionInfo>();
+        return actions is not null ? actions.AsReadOnly() : Array.Empty<AiActionInfo>();
     }
 
     private async Task PumpStderrAsync(CancellationToken token)

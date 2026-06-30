@@ -11,6 +11,7 @@ import { useAppStore, getColors } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
 import { chat, ChatMessage, parseSSEStream } from '../api/client';
+import AiActionPalette from '../components/ai/AiActionPalette';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
@@ -28,6 +29,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [showAiWrite, setShowAiWrite] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [showAiPalette, setShowAiPalette] = useState(false);
   const titleRef = useRef('');
   const contentRef = useRef('');
   const timerRef = useRef<any>(null);
@@ -149,6 +151,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
     { label: '-', insert: '- ', desc: '列表' },
     { label: 'link', insert: '[]()', desc: '链接', icon: 'link-outline' },
     { label: 'AI', insert: '', desc: 'AI 写作', icon: 'color-wand-outline', action: 'aiWrite' },
+    { label: 'Cmd', insert: '', desc: 'AI 命令面板', icon: 'terminal-outline', action: 'aiCmd' },
   ];
 
   const insertFormat = (syntax: string) => {
@@ -410,6 +413,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
               onPress={() => {
                 if ((t as any).action === 'aiWrite') {
                   setShowAiWrite(true);
+                } else if ((t as any).action === 'aiCmd') {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  setShowAiPalette(true);
                 } else {
                   insertFormat(t.insert);
                 }
@@ -423,6 +429,29 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           ))}
         </ScrollView>
       </View>
+
+      {/* AI Command Palette */}
+      <AiActionPalette
+        visible={showAiPalette}
+        onClose={() => setShowAiPalette(false)}
+        sourceText={content}
+        noteId={noteId}
+        onInsertResult={(text) => {
+          if (!text) return;
+          const { start, end } = selectionRef.current;
+          setContent(prev => {
+            const before = prev.slice(0, start);
+            const selected = prev.slice(start, end);
+            const after = prev.slice(end);
+            const next = before + text + after;
+            const newPos = start + text.length;
+            selectionRef.current = { start: newPos, end: newPos };
+            contentRef.current = next;
+            autoSave(titleRef.current, next);
+            return next;
+          });
+        }}
+      />
     </KeyboardAvoidingView>
     </SafeAreaView>
   );

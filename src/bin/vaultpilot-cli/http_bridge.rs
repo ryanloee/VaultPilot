@@ -788,7 +788,9 @@ async fn http_update_subscription(
     let new_schedule = req.schedule.unwrap_or(existing.schedule.clone());
     let new_prompt = req.prompt.unwrap_or(existing.prompt.clone());
     let new_tools = req.tools.unwrap_or(existing.tools.clone());
-    let new_target = req.target_collection.unwrap_or(existing.target_collection.clone());
+    let new_target = req
+        .target_collection
+        .unwrap_or(existing.target_collection.clone());
 
     let updated = update_subscription_async(
         &state.context,

@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::{debug, instrument, warn};
 
-use chrono::{DateTime, NaiveDate, Utc};
 use crate::models::{NoteDocument, NoteMeta, SearchQuery, SearchResult};
+use chrono::{DateTime, NaiveDate, Utc};
 
 use super::pool::open_connection;
 use super::StorageContext;

@@ -376,7 +376,8 @@ impl ToolProxy {
     }
 
     /// Confine a path to the vault directory. Relative paths are resolved
-    /// against `vault_dir`. Reuses `normalize_tool_path` logic (canonicalize + prefix check).
+    /// against `vault_dir`. Delegates to `normalize_tool_path` which
+    /// handles canonicalization and TOCTOU prevention. (#2258)
     fn confine_path(&self, path: &str) -> Result<()> {
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
         if trimmed.is_empty() {
@@ -388,58 +389,17 @@ impl ToolProxy {
         let candidate = if raw.is_absolute() {
             raw
         } else {
-            self.vault_dir.join(raw)
+            self.vault_dir.join(trimmed)
         };
-        let vault_canonical = self.vault_dir.canonicalize().map_err(|e| {
-            anyhow!(
-                "cannot resolve vault dir '{}': {}",
-                self.vault_dir.display(),
-                e
-            )
-        })?;
 
-        // Try canonicalize (resolves symlinks). If the path exists, check
-        // directly. Otherwise walk up to the nearest existing ancestor.
-        if let Ok(canonical) = candidate.canonicalize() {
-            if !canonical.starts_with(&vault_canonical) {
-                return Err(anyhow!(
-                    "access denied: '{}' is outside the vault",
-                    sanitize_error(trimmed)
-                ));
-            }
-        } else {
-            let mut probe = candidate.as_path();
-            let mut confined = false;
-            while let Some(parent) = probe.parent() {
-                if parent.as_os_str().is_empty() {
-                    break;
-                }
-                // Directly canonicalize without a prior exists() check to avoid
-                // TOCTOU race (#2090): the path could be replaced with a symlink
-                // between the exists() check and the canonicalize() call.
-                if let Ok(pc) = parent.canonicalize() {
-                    if !pc.starts_with(&vault_canonical) {
-                        return Err(anyhow!(
-                            "access denied: '{}' is outside the vault",
-                            sanitize_error(trimmed)
-                        ));
-                    }
-                    confined = true;
-                    break;
-                }
-                // canonicalize() failed — parent doesn't exist yet, continue
-                // walking up to find a real ancestor.
-                probe = parent;
-            }
-            if !confined {
-                return Err(anyhow!(
-                    "access denied: cannot verify '{}' is inside the vault",
-                    sanitize_error(trimmed)
-                ));
-            }
+        // Delegate to the canonical implementation that correctly returns
+        // the canonicalized (symlink-resolved) path, preventing TOCTOU
+        // between the security check and subsequent I/O. (#2258)
+        let candidate_str = candidate.to_string_lossy().to_string();
+        match crate::normalize_tool_path(&candidate_str, &self.vault_dir) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("{}", sanitize_error(&e.to_string()))),
         }
-
-        Ok(())
     }
 
     fn allow(&self, tool: &str, args_json: &str) -> ToolProxyResult {

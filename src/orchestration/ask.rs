@@ -925,6 +925,13 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, any
                 trimmed
             ));
         }
+        // ✅ Return the canonical (fully resolved) path instead of the raw
+        // candidate to prevent TOCTOU: if candidate was a symlink that
+        // points outside the vault, a concurrent attacker could swap the
+        // symlink target between our check here and the caller's subsequent
+        // I/O operation. By using canonical we resolve all symlinks now and
+        // the caller operates on the real resolved path. (#2258)
+        Ok(canonical)
     } else {
         // Path doesn't exist — verify nearest existing ancestor is in-vault.
         let mut probe = candidate.as_path();
@@ -941,6 +948,12 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, any
                             trimmed
                         ));
                     }
+                    // ✅ Return canonical ancestor path joined with the
+                    // remaining relative path components so the caller
+                    // operates on a symlink-free resolved base. (#2258)
+                    if let Ok(rest) = candidate.strip_prefix(parent) {
+                        return Ok(pc.join(rest));
+                    }
                     confined = true;
                 }
                 break;
@@ -953,9 +966,11 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, any
                 trimmed
             ));
         }
+        // Fallback: ancestor was verified but strip_prefix failed (should
+        // not happen since candidate starts with parent). Return candidate
+        // as-is; the non-existing tail is bounded by the verified ancestor.
+        Ok(candidate)
     }
-
-    Ok(candidate)
 }
 
 fn summarize_docs_for_tool_result(tool_name: &str, docs: &[NoteDocument]) -> String {

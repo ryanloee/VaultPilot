@@ -6,9 +6,9 @@
 //! saves the result as a vault note in the target collection, and updates run
 //! metadata.
 
-use std::time::Duration;
 use anyhow::Result;
 use chrono::Utc;
+use std::time::Duration;
 use tracing::instrument;
 
 use crate::models::{AiSubscription, NoteDocument, NoteMeta};
@@ -92,8 +92,14 @@ struct SubstitutionContext {
 fn substitute_placeholders(template: &str, ctx: &SubstitutionContext) -> String {
     template
         .replace("{{topic}}", &ctx.subscription_name)
-        .replace("{{date}}", &ctx.now_formatted[..10.min(ctx.now_formatted.len())])
-        .replace("{{datetime}}", &ctx.now_formatted[..16.min(ctx.now_formatted.len())])
+        .replace(
+            "{{date}}",
+            &ctx.now_formatted[..10.min(ctx.now_formatted.len())],
+        )
+        .replace(
+            "{{datetime}}",
+            &ctx.now_formatted[..16.min(ctx.now_formatted.len())],
+        )
         .replace("{{last_run_title}}", &ctx.last_run_title)
         .replace("{{last_run_body}}", &ctx.last_run_body_preview)
 }
@@ -124,6 +130,9 @@ fn compute_next_run_time_iso(cron_expr: &str) -> Option<String> {
 // ─── Subscription execution ────────────────────────────────────────
 
 /// Execute a single subscription: prompt AI, save result as note.
+///
+/// Synchronous storage I/O (SQLite) is wrapped in `tokio::task::spawn_blocking`
+/// to avoid blocking the tokio runtime thread pool (#2257).
 #[instrument(skip(context, subscription))]
 pub async fn run_single_subscription(
     context: &StorageContext,
@@ -131,13 +140,21 @@ pub async fn run_single_subscription(
 ) -> SubscriptionRunResult {
     let id = subscription.id.clone();
     let name = subscription.name.clone();
+    let ctx = context.clone();
+    let schedule = subscription.schedule.clone();
 
     // Build substitution context
     let now = Utc::now();
     let now_formatted = now.format("%Y-%m-%d %H:%M").to_string();
 
-    // Load last run note for cross-run context (if any)
-    let (last_title, last_body) = load_last_run_context(context, &id);
+    // Load last run note for cross-run context (if any) — spawn_blocking
+    let (last_title, last_body) = {
+        let ctx = ctx.clone();
+        let id = id.clone();
+        tokio::task::spawn_blocking(move || load_last_run_context(&ctx, &id))
+            .await
+            .unwrap_or_default()
+    };
 
     let sub_ctx = SubstitutionContext {
         subscription_name: name.clone(),
@@ -150,17 +167,13 @@ pub async fn run_single_subscription(
     let prompt = substitute_placeholders(&subscription.prompt, &sub_ctx);
     let tools = &subscription.tools;
 
-    // Step 1: Run the prompt via AI
-    let result = execute_subscription_prompt(context, &prompt, tools).await;
+    // Step 1: Run the prompt via AI (async, already non-blocking)
+    let result = execute_subscription_prompt(&ctx, &prompt, tools).await;
 
     let (status, note_id, note_title, error_msg) = match result {
         Ok(answer) => {
             // Step 2: Save the result as a vault note
-            let title = format!(
-                "[Scheduled] {} — {}",
-                name,
-                now.format("%Y-%m-%d %H:%M")
-            );
+            let title = format!("[Scheduled] {} — {}", name, now.format("%Y-%m-%d %H:%M"));
 
             let meta = NoteMeta {
                 title: title.clone(),
@@ -188,12 +201,24 @@ pub async fn run_single_subscription(
                 search_snippet: None,
             };
 
-            match save_note_with_context(context, note) {
-                Ok(saved_doc) => {
-                    // Step 3: Update subscription run metadata
-                    let _ = update_subscription_run_with_context(context, &id, "success", "");
-                    // Step 4: Compute and store next run time
-                    let _ = compute_and_update_next_run(context, &id, &subscription.schedule);
+            // Step 3+4: Synchronous storage I/O wrapped in spawn_blocking
+            let save_result = {
+                let ctx = ctx.clone();
+                let note = note;
+                tokio::task::spawn_blocking(move || save_note_with_context(&ctx, note)).await
+            };
+
+            match save_result {
+                Ok(Ok(saved_doc)) => {
+                    // Update subscription run metadata (spawn_blocking)
+                    let ctx = ctx.clone();
+                    let id = id.clone();
+                    let schedule = schedule.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ = update_subscription_run_with_context(&ctx, &id, "success", "");
+                        let _ = compute_and_update_next_run(&ctx, &id, &schedule);
+                    })
+                    .await;
                     (
                         "success".to_string(),
                         Some(saved_doc.meta.id.clone()),
@@ -201,10 +226,30 @@ pub async fn run_single_subscription(
                         None,
                     )
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     let err = format!("failed to save note: {e}");
                     tracing::error!(id = %id, error = %err, "subscription save failed");
-                    let _ = update_subscription_run_with_context(context, &id, "failed", &err);
+                    let ctx = ctx.clone();
+                    let id = id.clone();
+                    let err_clone = err.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ =
+                            update_subscription_run_with_context(&ctx, &id, "failed", &err_clone);
+                    })
+                    .await;
+                    ("failed".to_string(), None, None, Some(err))
+                }
+                Err(e) => {
+                    let err = format!("spawn_blocking join error: {e}");
+                    tracing::error!(id = %id, error = %err, "subscription spawn_blocking failed");
+                    let ctx = ctx.clone();
+                    let id = id.clone();
+                    let err_clone = err.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ =
+                            update_subscription_run_with_context(&ctx, &id, "failed", &err_clone);
+                    })
+                    .await;
                     ("failed".to_string(), None, None, Some(err))
                 }
             }
@@ -212,7 +257,13 @@ pub async fn run_single_subscription(
         Err(e) => {
             let err = format!("{e:#}");
             tracing::error!(id = %id, error = %err, "subscription execution failed");
-            let _ = update_subscription_run_with_context(context, &id, "failed", &err);
+            let ctx = ctx.clone();
+            let id = id.clone();
+            let err_clone = err.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = update_subscription_run_with_context(&ctx, &id, "failed", &err_clone);
+            })
+            .await;
             ("failed".to_string(), None, None, Some(err))
         }
     };
@@ -361,8 +412,14 @@ Last time we found: {{last_run_title}} — {{last_run_body}}";
         assert!(result.contains("AI News"), "topic not substituted");
         assert!(result.contains("2026-06-30"), "date not substituted");
         assert!(result.contains("14:30"), "datetime not substituted");
-        assert!(result.contains("Previous Results"), "last_run_title not substituted");
-        assert!(result.contains("Key insights from last week"), "last_run_body not substituted");
+        assert!(
+            result.contains("Previous Results"),
+            "last_run_title not substituted"
+        );
+        assert!(
+            result.contains("Key insights from last week"),
+            "last_run_body not substituted"
+        );
     }
 
     #[test]

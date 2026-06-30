@@ -410,15 +410,13 @@ pub fn compute_and_update_next_run(
     };
 
     let next_iso = match cron::Schedule::from_str(&full_expr) {
-        Ok(schedule) => {
-            match schedule.upcoming(Utc).next() {
-                Some(dt) => dt.to_rfc3339(),
-                None => {
-                    tracing::warn!(id = %id, expr = %cron_expr, "cron schedule produced no future times");
-                    String::new()
-                }
+        Ok(schedule) => match schedule.upcoming(Utc).next() {
+            Some(dt) => dt.to_rfc3339(),
+            None => {
+                tracing::warn!(id = %id, expr = %cron_expr, "cron schedule produced no future times");
+                String::new()
             }
-        }
+        },
         Err(e) => {
             tracing::warn!(id = %id, expr = %cron_expr, error = %e, "invalid cron expression");
             String::new()
@@ -471,8 +469,16 @@ pub fn get_last_successful_run_note(
                         source: row.get(4)?,
                         created_at: row.get(5)?,
                         updated_at: row.get(6)?,
-                        tags: tags_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-                        keywords: keywords_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+                        tags: tags_str
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
+                        keywords: keywords_str
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
                         ..Default::default()
                     },
                     body: row.get::<_, String>(7)?,

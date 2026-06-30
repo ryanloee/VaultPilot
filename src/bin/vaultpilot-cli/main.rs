@@ -17,13 +17,12 @@ use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
     create_collection_with_context, create_subscription_with_context,
-    delete_collection_with_context, delete_note_with_context,
-    delete_subscription_with_context, export_all_notes_with_context,
-    export_note_markdown_with_context, find_related_notes_with_context,
-    get_subscription_with_context, import_markdown_with_context, initialize_storage_with_context,
-    list_collections_with_context, list_notes_in_collection_with_context,
-    list_subscriptions_with_context, load_chat_state_async, load_note_with_context,
-    load_settings_with_context, rebuild_index_with_context,
+    delete_collection_with_context, delete_note_with_context, delete_subscription_with_context,
+    export_all_notes_with_context, export_note_markdown_with_context,
+    find_related_notes_with_context, get_subscription_with_context, import_markdown_with_context,
+    initialize_storage_with_context, list_collections_with_context,
+    list_notes_in_collection_with_context, list_subscriptions_with_context, load_chat_state_async,
+    load_note_with_context, load_settings_with_context, rebuild_index_with_context,
     remove_note_from_collection_with_context, save_chat_state_async, save_note_with_context,
     save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
     update_subscription_with_context, vault_export_with_context, StorageContext,
@@ -1038,7 +1037,9 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
             let new_schedule = schedule.clone().unwrap_or(existing.schedule);
             let new_prompt = prompt.clone().unwrap_or(existing.prompt);
             let new_tools = tools.clone().unwrap_or(existing.tools);
-            let new_target = target_collection.clone().unwrap_or(existing.target_collection);
+            let new_target = target_collection
+                .clone()
+                .unwrap_or(existing.target_collection);
 
             let updated = update_subscription_with_context(
                 context,

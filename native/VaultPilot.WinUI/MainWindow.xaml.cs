@@ -92,6 +92,10 @@ public sealed partial class MainWindow : Window
         AddKeyboardAccelerator((VirtualKey)188 /* OemComma */, VirtualKeyModifiers.Control, OnSettingsAccelerator);
         AddKeyboardAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, OnNavChatAccelerator);
         AddKeyboardAccelerator(VirtualKey.Number2, VirtualKeyModifiers.Control, OnNavNotesAccelerator);
+
+        // Initialize AI command palette (#2188)
+        AiCommandPaletteControl.Backend = _backendClient;
+        AiCommandPaletteControl.InsertToChatRequested += OnPaletteInsertToChat;
     }
 
     private void AddKeyboardAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs> handler)
@@ -544,6 +548,7 @@ public sealed partial class MainWindow : Window
         ChatScrollViewer.ViewChanged -= OnChatScrollViewerViewChanged;
         JumpLatestButton.Click -= OnJumpLatestClicked;
         RootGrid.SizeChanged -= OnRootGridSizeChanged;
+        AiCommandPaletteControl.InsertToChatRequested -= OnPaletteInsertToChat;
     }
 
     #region Keyboard Accelerator Handlers
@@ -569,7 +574,19 @@ public sealed partial class MainWindow : Window
     private void OnEscapeAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
+        // If the AI command palette is open, dismiss it first
+        if (AiCommandPaletteControl.Visibility == Visibility.Visible)
+        {
+            AiCommandPaletteControl.Dismiss();
+            return;
+        }
         CancelActiveRequest();
+    }
+
+    private void OnAiCommandPaletteAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowAiCommandPalette();
     }
 
     private void OnNavChatAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -1093,6 +1110,48 @@ public sealed partial class MainWindow : Window
 
     [DllImport("user32.dll", EntryPoint = "CallWindowProcW")]
     private static extern nint CallWindowProc(nint lpPrevWndFunc, nint hWnd, uint msg, nint wParam, nint lParam);
+
+    /// <summary>
+    /// Show the global AI command palette with context from the current view.
+    /// </summary>
+    private void ShowAiCommandPalette()
+    {
+        // Gather source text: prefer selected text from the composer box,
+        // then fall back to the current note content.
+        var sourceText = ComposerBox.SelectedText;
+        if (string.IsNullOrWhiteSpace(sourceText))
+        {
+            sourceText = ComposerBox.Text;
+        }
+
+        AiCommandPaletteControl.SourceText = sourceText?.Trim() ?? string.Empty;
+        AiCommandPaletteControl.ContextNoteId = null;
+        AiCommandPaletteControl.Show();
+    }
+
+    /// <summary>
+    /// Called when the user requests to insert an AI action result into the chat composer.
+    /// </summary>
+    private void OnPaletteInsertToChat(object? sender, string result)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!string.IsNullOrWhiteSpace(result))
+            {
+                // If the composer already has text, append the result
+                if (!string.IsNullOrWhiteSpace(ComposerBox.Text))
+                {
+                    ComposerBox.Text += "\n\n" + result;
+                }
+                else
+                {
+                    ComposerBox.Text = result;
+                }
+                ComposerBox.Focus(FocusState.Programmatic);
+                ComposerBox.SelectionStart = ComposerBox.Text.Length;
+            }
+        });
+    }
 
     private void ScrollToLatest()
     {

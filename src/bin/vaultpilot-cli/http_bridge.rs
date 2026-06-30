@@ -381,7 +381,10 @@ async fn http_list_notes(
     };
     let result = search_notes_async(&state.context, query)
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_list_notes: failed to list notes: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to list notes")
+        })?;
     Ok(Json(serde_json::json!({
         "notes": result.notes,
         "total": result.total
@@ -397,9 +400,10 @@ async fn http_get_note(
     match load_note_async(&state.context, &note_id).await {
         Ok(note) => {
             let value = serde_json::to_value(note).map_err(|e| {
+                tracing::warn!("http_get_note: failed to serialize note: {e}");
                 openai_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Failed to serialize note: {e}"),
+                    "Failed to serialize note",
                 )
             })?;
             Ok(Json(value))
@@ -466,7 +470,10 @@ async fn http_search_notes(
     };
     let result = search_notes_async(&state.context, query)
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_search_notes: failed to search notes: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to search notes")
+        })?;
     Ok(Json(serde_json::json!({
         "notes": result.notes,
         "total": result.total
@@ -561,7 +568,10 @@ async fn http_list_subscriptions(
     require_bridge_token(&state, &headers)?;
     let subs = list_subscriptions_async(&state.context)
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_list_subscriptions: failed to list subscriptions: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to list subscriptions")
+        })?;
     let count = subs.len();
     Ok(Json(serde_json::json!({
         "subscriptions": subs,
@@ -607,7 +617,10 @@ async fn http_create_subscription(
         req.target_collection,
     )
     .await
-    .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    .map_err(|e| {
+        tracing::warn!("http_create_subscription: failed to create subscription: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to create subscription")
+    })?;
     Ok(Json(serde_json::json!({
         "created": true,
         "subscription": sub
@@ -623,7 +636,10 @@ async fn http_get_subscription(
     require_bridge_token(&state, &headers)?;
     let sub = get_subscription_async(&state.context, sub_id.clone())
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_get_subscription: failed to load subscription: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load subscription")
+        })?;
     match sub {
         Some(s) => Ok(Json(serde_json::json!({ "subscription": s }))),
         None => Err(openai_error(
@@ -642,7 +658,10 @@ async fn http_delete_subscription(
     require_bridge_token(&state, &headers)?;
     let deleted = delete_subscription_async(&state.context, sub_id.clone())
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_delete_subscription: failed to delete subscription: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete subscription")
+        })?;
     if deleted {
         Ok(Json(serde_json::json!({
             "deleted": true,
@@ -665,7 +684,10 @@ async fn http_run_subscription(
     require_bridge_token(&state, &headers)?;
     let sub = get_subscription_async(&state.context, sub_id.clone())
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
+        .map_err(|e| {
+            tracing::warn!("http_run_subscription: failed to load subscription: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load subscription")
+        })?
         .ok_or_else(|| openai_error(StatusCode::NOT_FOUND, "Subscription not found"))?;
 
     let result = run_single_subscription(&state.context, &sub).await;
@@ -689,7 +711,10 @@ async fn http_toggle_subscription(
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
     let updated = set_subscription_enabled_with_context(&state.context, &sub_id, req.enabled)
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_toggle_subscription: failed to toggle subscription: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to toggle subscription")
+        })?;
     if updated {
         Ok(Json(serde_json::json!({
             "updated": true,
@@ -740,10 +765,16 @@ async fn http_ai_action(
     };
     let settings = load_settings_async(&state.context)
         .await
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_ai_action: failed to load settings: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load settings")
+        })?;
     let result = execute_ai_action(&settings, &ai_request).await;
     let value = serde_json::to_value(&result)
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_ai_action: failed to serialize result: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize result")
+        })?;
     Ok(Json(value))
 }
 
@@ -755,7 +786,10 @@ async fn http_list_ai_actions(
     require_bridge_token(&state, &headers)?;
     let actions = list_ai_actions();
     let value = serde_json::to_value(&actions)
-        .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!("http_list_ai_actions: failed to list actions: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to list actions")
+        })?;
     Ok(Json(value))
 }
 
@@ -1112,20 +1146,29 @@ fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, Strin
     if url.starts_with("file://") {
         // Parse as URL to properly decode percent-encoded characters (#773).
         // RFC 8089 file:// URLs encode spaces as %20, Unicode as %XX sequences, etc.
-        let parsed = url::Url::parse(url).map_err(|e| format!("invalid file URL: {}", e))?;
+        let parsed = url::Url::parse(url).map_err(|e| {
+            tracing::warn!("resolve_local_image_url: invalid file URL: {e}");
+            "invalid file URL".to_string()
+        })?;
         let path = parsed
             .to_file_path()
             .map_err(|_| "invalid file URL path".to_string())?;
         // Validate path is within the vault directory
         let resolved =
-            normalize_tool_path(&path.to_string_lossy(), vault_root).map_err(|e| e.to_string())?;
+            normalize_tool_path(&path.to_string_lossy(), vault_root).map_err(|e| {
+                tracing::warn!("resolve_local_image_url: path resolution failed: {e}");
+                "image path is invalid".to_string()
+            })?;
         return Ok(resolved.to_string_lossy().to_string());
     }
 
     // Validate path confinement BEFORE checking existence to prevent
     // file-existence probing via differing error messages (#768).
     let path_str = url;
-    let resolved = normalize_tool_path(path_str, vault_root).map_err(|e| e.to_string())?;
+    let resolved = normalize_tool_path(path_str, vault_root).map_err(|e| {
+        tracing::warn!("resolve_local_image_url: path resolution failed: {e}");
+        "image path is invalid".to_string()
+    })?;
     if resolved.exists() {
         return Ok(resolved.to_string_lossy().to_string());
     }

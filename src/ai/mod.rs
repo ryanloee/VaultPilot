@@ -1,7 +1,9 @@
 pub mod actions;
+pub mod audio_overview;
 pub mod client;
 pub mod context;
 pub mod parsing;
+pub mod tts;
 
 pub use context::{resolve_context_window, resolve_max_output_tokens};
 

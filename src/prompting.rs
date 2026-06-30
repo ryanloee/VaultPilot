@@ -13,16 +13,23 @@ fn escape_xml_close_tags(content: &str) -> String {
     content.replace("</", "<//")
 }
 
-/// Escape XML closing tags and opening wrapper tags in content to prevent
-/// XML delimiter breakout attacks.
+/// Escape XML delimiter tags in content to prevent breakout attacks.
 ///
-/// - Replaces `</` with `<//` to neutralise closing tag injection.
-/// - Replaces the specified opening wrapper tag (e.g., `<user_input>`) with
-///   a space-separated variant (e.g., `< user_input>`) to prevent nested
-///   delimiter injection from user-supplied content.
+/// Only escapes the specific closing tag that matches the given `open_tag`
+/// (e.g., for `<user_input>` only `</user_input>` is escaped to `<//user_input>`).
+/// All other closing tags (`</div>`, `</b>`, `</code>`, etc.) pass through
+/// unchanged so legitimate HTML/XML in user content is preserved.
+///
+/// Also replaces the opening wrapper tag (e.g., `<user_input>`) with a
+/// space-separated variant (`< user_input>`) to prevent nested delimiter
+/// injection from user-supplied content.
 fn escape_xml_tags(content: &str, open_tag: &str) -> String {
+    // Derive the closing tag from the opening tag (e.g., <user_input> → </user_input>)
+    // and escape only that specific closing tag to prevent breakout from the wrapper.
+    let close_tag = format!("</{}", &open_tag[1..]); // <user_input> → </user_input>
+    let escaped_close = format!("<//{}", &open_tag[1..]); // <user_input> → <//user_input>
     content
-        .replace("</", "<//")
+        .replace(&close_tag, &escaped_close)
         .replace(open_tag, &open_tag.replacen('<', "< ", 1))
 }
 
@@ -957,15 +964,15 @@ mod tests {
             "render_history should not escape"
         );
 
-        // sanitize_history should escape exactly once
+        // sanitize_history only escapes </conversation_history>, not </note>
         let sanitized = sanitize_history(&rendered);
         assert!(
-            sanitized.contains("<//note>"),
-            "sanitize_history should escape once"
+            sanitized.contains("</note>"),
+            "legitimate closing tags like </note> are preserved"
         );
         assert!(
-            !sanitized.contains("<////note>"),
-            "should not double-escape"
+            !sanitized.contains("<//note>"),
+            "</note> is not </conversation_history>, should not be escaped"
         );
     }
 
@@ -990,10 +997,11 @@ mod tests {
         );
 
         let sanitized = sanitize_note_content(&rendered);
-        assert!(sanitized.contains("<//content>"), "should escape once");
+        // </content> is not </note_content>, so it passes through unchanged
+        assert!(sanitized.contains("</content>"), "</content> preserved");
         assert!(
-            !sanitized.contains("<////content>"),
-            "should not double-escape"
+            !sanitized.contains("<//content>"),
+            "</content> is not </note_content>, should not be escaped"
         );
     }
 

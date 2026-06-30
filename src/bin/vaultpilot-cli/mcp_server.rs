@@ -12,10 +12,10 @@ use axum::Json;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    delete_note_with_context, find_related_notes_with_context, import_markdown_with_context,
-    load_chat_state_with_context, load_note_async, load_note_with_context,
-    rebuild_index_with_context, save_chat_state_with_context, save_note_with_context,
-    search_notes_async, search_notes_with_context, StorageContext,
+    delete_note_async, find_related_notes_async, import_markdown_async,
+    load_chat_state_async, load_note_async,
+    rebuild_index_async, save_chat_state_async, save_note_async,
+    search_notes_async, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, finalize_chat_with_ai_answer, prepare_chat_for_ai,
@@ -611,18 +611,18 @@ async fn handle_mcp_request(
 
             let result = match tool_name {
                 "chat.send" => mcp_call_chat_send(context, arguments).await,
-                "chat.list_sessions" => mcp_call_chat_list_sessions(context),
-                "chat.get_state" => mcp_call_chat_get_state(context),
+                "chat.list_sessions" => mcp_call_chat_list_sessions(context).await,
+                "chat.get_state" => mcp_call_chat_get_state(context).await,
                 "chat.new" => mcp_call_chat_new(context, arguments).await,
                 "chat.delete" => mcp_call_chat_delete(context, arguments).await,
-                "notes.list" => mcp_call_notes_list(context, arguments),
-                "notes.get" => mcp_call_notes_get(context, arguments),
-                "notes.create" => mcp_call_notes_create(context, arguments),
-                "notes.delete" => mcp_call_notes_delete(context, arguments),
-                "notes.search" => mcp_call_notes_search(context, arguments),
-                "notes.related" => mcp_call_notes_related(context, arguments),
-                "notes.import" => mcp_call_notes_import(context, arguments),
-                "index.rebuild" => mcp_call_index_rebuild(context),
+                "notes.list" => mcp_call_notes_list(context, arguments).await,
+                "notes.get" => mcp_call_notes_get(context, arguments).await,
+                "notes.create" => mcp_call_notes_create(context, arguments).await,
+                "notes.delete" => mcp_call_notes_delete(context, arguments).await,
+                "notes.search" => mcp_call_notes_search(context, arguments).await,
+                "notes.related" => mcp_call_notes_related(context, arguments).await,
+                "notes.import" => mcp_call_notes_import(context, arguments).await,
+                "index.rebuild" => mcp_call_index_rebuild(context).await,
                 "ask" => mcp_call_ask(context, arguments).await,
                 _ => {
                     return Some(McpResponse::error(
@@ -1515,8 +1515,8 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
     }
 }
 
-fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
-    match load_chat_state_with_context(context) {
+async fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
+    match load_chat_state_async(context).await {
         Ok(state) => {
             let sessions = state
                 .sessions
@@ -1540,8 +1540,8 @@ fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
     }
 }
 
-fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
-    match load_chat_state_with_context(context) {
+async fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
+    match load_chat_state_async(context).await {
         Ok(state) => {
             let structured = serde_json::to_value(state).unwrap_or_else(|_| serde_json::json!({}));
             mcp_tool_success(
@@ -1566,12 +1566,12 @@ async fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value 
         }
     };
     let _guard = context.chat_state_lock.lock().await;
-    match load_chat_state_with_context(context) {
+    match load_chat_state_async(context).await {
         Ok(mut state) => {
             let session = new_cli_chat_session(args.title.as_deref());
             state.current_session_id = session.id.clone();
             state.sessions.insert(0, session.clone());
-            match save_chat_state_with_context(context, &state) {
+            match save_chat_state_async(context, &state).await {
                 Ok(_) => mcp_tool_success(
                     format!("Created session '{}'", escape_xml_content(&session.title)),
                     serde_json::json!({ "session": session }),
@@ -1598,7 +1598,7 @@ async fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Val
         }
     };
     let _guard = context.chat_state_lock.lock().await;
-    match load_chat_state_with_context(context) {
+    match load_chat_state_async(context).await {
         Ok(mut state) => {
             let original_len = state.sessions.len();
             state.sessions.retain(|s| s.id != args.session_id);
@@ -1615,7 +1615,7 @@ async fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Val
                     .map(|s| s.id.clone())
                     .unwrap_or_default();
             }
-            match save_chat_state_with_context(context, &state) {
+            match save_chat_state_async(context, &state).await {
                 Ok(_) => mcp_tool_success(
                     format!(
                         "Deleted={deleted}, id={}",
@@ -1674,14 +1674,14 @@ impl FlatNoteInput {
     }
 }
 
-fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
     // Storage layer clamps to 200 (storage.rs:558), so align the MCP cap.
     let limit = arguments
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(20)
         .min(200) as usize;
-    match search_notes_with_context(
+    match search_notes_async(
         context,
         SearchQuery {
             text: String::new(),
@@ -1690,7 +1690,9 @@ fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
             limit: Some(limit),
             ..Default::default()
         },
-    ) {
+    )
+    .await
+    {
         Ok(result) => {
             let count = result.notes.len();
             let structured = with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
@@ -1700,7 +1702,7 @@ fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
     let id = match arguments.get("id").and_then(Value::as_str) {
         Some(id) => id.to_string(),
         None => return mcp_tool_error("notes.get requires 'id' parameter".to_string()),
@@ -1727,7 +1729,7 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
         }
     });
 
-    match load_note_with_context(context, &id) {
+    match load_note_async(context, &id).await {
         Ok(note) => {
             let structured = build_note_get_payload(&note, mode, fields.as_deref());
             let hint = if mode == "full" && fields.is_none() {
@@ -1749,7 +1751,7 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
     let flat: FlatNoteInput = match serde_json::from_value(arguments) {
         Ok(n) => n,
         Err(e) => {
@@ -1765,7 +1767,7 @@ fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
         return mcp_tool_error("notes.create requires a non-empty 'body'".to_string());
     }
     let note = flat.into_note_document();
-    match save_note_with_context(context, note) {
+    match save_note_async(context, note).await {
         Ok(saved) => mcp_tool_success(
             format!("Created note '{}'", escape_xml_content(&saved.meta.title)),
             serde_json::to_value(&saved).unwrap_or_default(),
@@ -1774,12 +1776,12 @@ fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
     let id = match arguments.get("id").and_then(Value::as_str) {
         Some(id) => id.to_string(),
         None => return mcp_tool_error("notes.delete requires 'id' parameter".to_string()),
     };
-    match delete_note_with_context(context, &id) {
+    match delete_note_async(context, &id).await {
         Ok(deleted) => mcp_tool_success(
             format!("Deleted={deleted}, id={}", escape_xml_content(&id)),
             serde_json::json!({ "deleted": deleted, "id": id }),
@@ -1788,7 +1790,7 @@ fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
     let query = arguments
         .get("query")
         .and_then(Value::as_str)
@@ -1810,7 +1812,7 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
             .filter(|t| !t.is_empty())
             .collect()
     };
-    match search_notes_with_context(
+    match search_notes_async(
         context,
         SearchQuery {
             text: query,
@@ -1819,7 +1821,9 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
             limit: Some(limit),
             ..Default::default()
         },
-    ) {
+    )
+    .await
+    {
         Ok(result) => {
             let count = result.notes.len();
             let structured = with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
@@ -1829,7 +1833,7 @@ fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_notes_related(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_related(context: &StorageContext, arguments: Value) -> Value {
     let note_id = match arguments.get("note_id").and_then(Value::as_str) {
         Some(id) => id.to_string(),
         None => return mcp_tool_error("notes.related requires 'note_id' parameter".to_string()),
@@ -1839,7 +1843,7 @@ fn mcp_call_notes_related(context: &StorageContext, arguments: Value) -> Value {
         .and_then(Value::as_u64)
         .unwrap_or(5)
         .min(20) as usize;
-    match find_related_notes_with_context(context, &note_id, limit) {
+    match find_related_notes_async(context, &note_id, limit).await {
         Ok(results) => {
             let count = results.len();
             mcp_tool_success(
@@ -1851,7 +1855,7 @@ fn mcp_call_notes_related(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
     let paths: Vec<String> = match arguments.get("paths") {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(p) => p,
@@ -1913,7 +1917,7 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
             }
         }
     }
-    match import_markdown_with_context(context, &paths) {
+    match import_markdown_async(context, &paths).await {
         Ok(result) => mcp_tool_success(
             "Import completed.".to_string(),
             serde_json::to_value(&result).unwrap_or_default(),
@@ -1922,8 +1926,8 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
-fn mcp_call_index_rebuild(context: &StorageContext) -> Value {
-    match rebuild_index_with_context(context) {
+async fn mcp_call_index_rebuild(context: &StorageContext) -> Value {
+    match rebuild_index_async(context).await {
         Ok(stats) => mcp_tool_success(
             "Index rebuilt successfully.".to_string(),
             serde_json::to_value(&stats).unwrap_or_default(),

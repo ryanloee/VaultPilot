@@ -558,6 +558,64 @@ pub fn multi_tool_result_user_prompt(
     )
 }
 
+// ── Plan Mode (#2107) ──────────────────────────────────────────────────────
+
+/// System prompt for the Plan Mode generation stage.
+///
+/// The model has just finished a read-only analysis pass and must now emit a
+/// structured execution plan as strict JSON. It must NOT execute the task —
+/// only describe the steps it *would* take.
+pub fn plan_generation_system_prompt() -> String {
+    format!(
+        "You are the plan-generation stage of a local AI knowledge assistant.\n\
+         Date: {}\n\
+         {}\n\
+         You have just completed a read-only analysis of the user's vault.\n\
+         Your job now is to produce a structured execution plan that lists the\n\
+         concrete steps required to complete the user's task.\n\
+         - You are NOT executing the task. You are only describing the steps.\n\
+         - Each step must map to one of the available tools: search_notes,\n\
+           list_notes, list_directory, read_file, save_note.\n\
+         - Prefer the fewest steps that still fully accomplish the task.\n\
+         - The last step of any task that requires producing or storing output\n\
+           must use save_note (a Write step).\n\
+         - Search/Read steps that only gather context are Search/Read steps.\n\
+         Return strict JSON only, with no markdown fence.\n\
+         {}",
+        Utc::now().format("%Y-%m-%d"),
+        render_manual_for_model(),
+        PROMPT_INJECTION_DEFENSE,
+    )
+}
+
+/// User prompt for the Plan Mode generation stage.
+///
+/// `task` is the original user prompt; `tool_results` is the transcript of the
+/// read-only analysis pass (may be empty if the task needs no reconnaissance).
+pub fn plan_generation_user_prompt(task: &str, tool_results: &[String]) -> String {
+    format!(
+        "Return strict JSON in this exact shape:\n\
+         {{\"steps\":[{{\"kind\":\"search|read|generate|write\",\"tool\":\"search_notes|list_notes|list_directory|read_file|save_note\",\"description\":\"\",\"estimated_tool_calls\":1}}],\"estimated_tokens\":3000}}\n\
+         Field rules:\n\
+         - steps is a non-empty ordered array.\n\
+         - kind is one of: search, read, generate, write.\n\
+           * search = retrieve notes via search_notes / list_notes.\n\
+         - tool is the concrete vault tool this step will call.\n\
+         - description is a short human-readable sentence describing what this\n\
+           step does and why (e.g. \"Search vault notes about X (expect ~5 notes)\").\n\
+         - estimated_tool_calls is the number of tool invocations this step needs\n\
+           (usually 1; up to 3 for repeated reads).\n\
+         - estimated_tokens is a rough integer estimate of total tokens the full\n\
+           plan will consume (e.g. 3000).\n\
+         Do not include any other fields. Do not wrap the JSON in markdown fences.\n\
+         Do not explain the plan in prose outside the JSON.\n\n\
+         {}\n\n\
+         <recon_results>\n{}\n</recon_results>",
+        sanitize_user_input(task),
+        escape_xml_close_tags(&render_tool_results(tool_results)),
+    )
+}
+
 fn render_history(history: &[ConversationTurn]) -> String {
     if history.is_empty() {
         return "(none)".to_string();

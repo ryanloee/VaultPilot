@@ -171,6 +171,39 @@ pub async fn answer_after_tools(
     })
 }
 
+/// Result of the Plan Mode generation LLM call (#2107).
+///
+/// Returns the raw model text (expected to be a JSON object describing the
+/// plan) plus token usage. The caller parses the text into a structured
+/// [`crate::agent::ExecutionPlan`].
+pub struct PlanGenerationResult {
+    /// Raw model response text (JSON with possible surrounding prose/fences).
+    pub text: String,
+    pub usage: RequestUsage,
+}
+
+/// Ask the model to turn a task + read-only recon results into a structured
+/// execution plan (Plan Mode, #2107).
+///
+/// This stage performs **no** tool execution; it only converts the analysis
+/// pass into a plan description. Parsing of `text` into
+/// [`crate::agent::ExecutionPlan`] is done by the caller so that this module
+/// stays independent of the agent data model.
+#[instrument(skip(settings, task, tool_results))]
+pub async fn generate_plan(
+    settings: &AppSettings,
+    task: &str,
+    tool_results: &[String],
+) -> Result<PlanGenerationResult> {
+    let system = prompting::plan_generation_system_prompt();
+    let prompt = prompting::plan_generation_user_prompt(task, tool_results);
+    let response = send_request_with_temperature(settings, &system, &prompt, &[], 0.2).await?;
+    Ok(PlanGenerationResult {
+        text: response.text,
+        usage: response.usage,
+    })
+}
+
 #[instrument(skip(settings, raw_input, docs, image_paths))]
 pub async fn record_note_interaction(
     settings: &AppSettings,

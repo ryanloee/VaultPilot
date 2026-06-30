@@ -636,6 +636,559 @@ pub struct AgentResult {
     pub audit_log: Vec<AgentAuditEntry>,
 }
 
+// ── Plan Mode (#2107) ──────────────────────────────────────────────────────
+//
+// Plan Mode lets the agent analyse a complex task with a read-only first pass,
+// then present a structured step list to the user for approval before any
+// mutation is allowed. This forms a two-tier approval system together with the
+// existing operation-level WriteApprovalDialog (#1453):
+//
+//   task-level (plan approve/reject/edit)  →  operation-level (per-write diff)
+//
+// All plan types are `Serialize + Deserialize` so they can cross the wire to
+// the WinUI (C#) and Android (React Native) clients via the HTTP bridge.
+
+/// Whether a task executes immediately or enters Plan Mode first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    /// Execute immediately — the normal autonomous agent loop (#1346).
+    #[default]
+    Direct,
+    /// Generate a plan first; the user must approve it before execution.
+    Plan,
+}
+
+/// High-level category of a plan step.
+///
+/// Matches the `[Search]` / `[Read]` / `[Generate]` / `[Write]` tags used in
+/// the plan card display on all three platforms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStepKind {
+    /// Retrieve notes via search_notes / list_notes.
+    Search,
+    /// Read a specific file or note for context.
+    Read,
+    /// Generate content (draft, summary, answer) — usually the step before Write.
+    Generate,
+    /// Persist content to the vault via save_note.
+    Write,
+    /// A step that does not fit the categories above.
+    #[default]
+    Custom,
+}
+
+impl PlanStepKind {
+    /// Render the bracketed display tag, e.g. `[Search]`.
+    pub fn display_tag(&self) -> &'static str {
+        match self {
+            Self::Search => "[Search]",
+            Self::Read => "[Read]",
+            Self::Generate => "[Generate]",
+            Self::Write => "[Write]",
+            Self::Custom => "[Custom]",
+        }
+    }
+
+    /// Normalize a free-form model-supplied string into a known kind.
+    /// Unknown values fall back to [`PlanStepKind::Custom`].
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "search" | "search_notes" | "list" | "list_notes" => Self::Search,
+            "read" | "read_file" | "list_directory" => Self::Read,
+            "generate" | "draft" | "summarize" => Self::Generate,
+            "write" | "save" | "save_note" => Self::Write,
+            _ => Self::Custom,
+        }
+    }
+}
+
+/// Execution status of a single plan step.
+///
+/// Used for cross-step state tracking so the UI can show live progress as the
+/// approved plan is executed by [`run_agent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStepStatus {
+    /// Not yet started.
+    #[default]
+    Pending,
+    /// Currently executing.
+    InProgress,
+    /// Finished successfully.
+    Done,
+    /// Skipped (e.g. user disabled it in a partial-approve, or an earlier
+    /// step failed and the plan was aborted).
+    Skipped,
+    /// Execution failed.
+    Failed,
+}
+
+fn default_step_estimated_tool_calls() -> u64 {
+    1
+}
+fn default_true() -> bool {
+    true
+}
+
+/// A single step in an execution plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStep {
+    /// 1-based display index (set when the plan is finalized).
+    #[serde(default)]
+    pub index: usize,
+    /// High-level category — drives the display tag.
+    #[serde(default)]
+    pub kind: PlanStepKind,
+    /// Human-readable description of what the step does and why.
+    pub description: String,
+    /// Underlying vault tool this step maps to (search_notes, read_file,
+    /// save_note, …). `None` for purely generative steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Estimated tool invocations this step contributes.
+    #[serde(default = "default_step_estimated_tool_calls")]
+    pub estimated_tool_calls: u64,
+    /// Whether the user has enabled this step (partial approve).
+    /// Disabled steps are skipped during execution.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Current execution status (cross-step state tracking).
+    #[serde(default)]
+    pub status: PlanStepStatus,
+}
+
+impl PlanStep {
+    /// Create a new pending, enabled step.
+    pub fn new(kind: PlanStepKind, description: impl Into<String>, tool: Option<&str>) -> Self {
+        Self {
+            index: 0,
+            kind,
+            description: description.into(),
+            tool: tool.map(str::to_string),
+            estimated_tool_calls: 1,
+            enabled: true,
+            status: PlanStepStatus::Pending,
+        }
+    }
+}
+
+/// A structured execution plan produced by Plan Mode.
+///
+/// Serialized form is consumed by the CLI, WinUI, and Android clients.
+/// All fields are plain serializable types so the struct can travel across the
+/// HTTP bridge unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionPlan {
+    /// The original task / prompt the plan addresses.
+    pub task: String,
+    /// Ordered list of steps.
+    pub steps: Vec<PlanStep>,
+    /// Aggregate estimated tool calls across all steps.
+    pub estimated_tool_calls: u64,
+    /// Aggregate estimated tokens (rough heuristic from the model).
+    pub estimated_tokens: u64,
+    /// RFC3339 timestamp of when the plan was generated.
+    pub generated_at: String,
+}
+
+impl ExecutionPlan {
+    /// Sum of `estimated_tool_calls` over all steps.
+    pub fn total_estimated_tool_calls(&self) -> u64 {
+        self.steps.iter().map(|s| s.estimated_tool_calls).sum()
+    }
+
+    /// Number of steps that are enabled (used by partial approve).
+    pub fn enabled_step_count(&self) -> usize {
+        self.steps.iter().filter(|s| s.enabled).count()
+    }
+
+    /// Render a human-readable plain-text summary of the plan.
+    ///
+    /// Reuses the same display format on every platform:
+    ///
+    /// ```text
+    /// ## Execution Plan
+    /// 1. [Search] Search vault notes about X (expected 5 notes)
+    /// 2. [Read] Read #note-A, #note-B as context
+    /// 3. [Write] Save as vault note /Mail/Draft-2026-06-27.md
+    /// Estimated tool calls: 4  Estimated tokens: ~3k
+    /// ```
+    pub fn render_markdown(&self) -> String {
+        let mut out = String::new();
+        out.push_str("## Execution Plan\n");
+        for step in &self.steps {
+            let check = if step.enabled { "[x]" } else { "[ ]" };
+            out.push_str(&format!(
+                "{}. {} {} {}\n",
+                step.index.max(1),
+                check,
+                step.kind.display_tag(),
+                step.description,
+            ));
+        }
+        let tokens_label = format_tokens(self.estimated_tokens);
+        out.push_str(&format!(
+            "Estimated tool calls: {}  Estimated tokens: {}\n",
+            self.estimated_tool_calls, tokens_label,
+        ));
+        out
+    }
+}
+
+/// Format a token estimate using the `~3k` shorthand from the issue example.
+fn format_tokens(n: u64) -> String {
+    if n >= 1000 {
+        let k = (n as f64) / 1000.0;
+        if (k.fract() - 0.0).abs() < f64::EPSILON {
+            format!("~{}k", k as u64)
+        } else {
+            format!("~{:.1}k", k)
+        }
+    } else {
+        format!("~{n}")
+    }
+}
+
+/// The user's decision on a generated plan.
+///
+/// Carries enough information to reconcile the plan into a final executable
+/// step list via [`ExecutionPlan::apply_decision`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum PlanDecision {
+    /// Approve the plan as-is and execute every enabled step.
+    Approve,
+    /// Reject the plan and cancel the task — no further token consumption.
+    Reject,
+    /// Execute only the subset of steps whose `enabled` flag is true
+    /// (partial approve). Disabled steps are marked `Skipped`.
+    PartialApprove,
+    /// The user edited the plan; `steps` holds the fully revised list.
+    /// The caller should adopt these steps verbatim.
+    Edit { steps: Vec<PlanStep> },
+}
+
+impl ExecutionPlan {
+    /// Reconcile `decision` into a final plan ready for execution.
+    ///
+    /// - `Approve` / `PartialApprove`: honours each step's `enabled` flag,
+    ///   marking disabled steps as `Skipped` and re-indexing the survivors.
+    /// - `Reject`: returns a plan whose every step is `Skipped` (the caller
+    ///   should treat this as cancellation and not execute).
+    /// - `Edit`: replaces `steps` with the user's revised list (disabled steps
+    ///   still honoured), then re-indexes.
+    ///
+    /// The returned plan always has contiguous 1-based `index` values over the
+    /// enabled steps so that progress events line up with what the user saw.
+    pub fn apply_decision(&self, decision: &PlanDecision) -> ExecutionPlan {
+        let (steps, rejected) = match decision {
+            PlanDecision::Edit { steps } => (steps.clone(), false),
+            PlanDecision::Reject => (self.steps.clone(), true),
+            PlanDecision::Approve | PlanDecision::PartialApprove => (self.steps.clone(), false),
+        };
+
+        let mut next_index = 1usize;
+        let finalized: Vec<PlanStep> = steps
+            .into_iter()
+            .map(|mut s| {
+                if rejected || !s.enabled {
+                    s.status = PlanStepStatus::Skipped;
+                    s.index = 0; // skipped steps are not numbered
+                } else {
+                    s.index = next_index;
+                    next_index += 1;
+                }
+                s
+            })
+            .collect();
+
+        ExecutionPlan {
+            task: self.task.clone(),
+            steps: finalized,
+            estimated_tool_calls: self.estimated_tool_calls,
+            estimated_tokens: self.estimated_tokens,
+            generated_at: self.generated_at.clone(),
+        }
+    }
+
+    /// Whether the (post-decision) plan has any executable steps.
+    pub fn has_executable_steps(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|s| s.enabled && s.status != PlanStepStatus::Skipped)
+    }
+}
+
+/// Maximum number of read-only recon steps the plan-generation pass may run.
+const PLAN_RECON_MAX_STEPS: usize = 3;
+
+/// Read-only tools the plan recon pass is constrained to.
+const PLAN_RECON_TOOLS: &[&str] = &["search_notes", "list_notes", "list_directory", "read_file"];
+
+/// Generate a structured execution plan for `prompt` using a read-only first
+/// pass (#2107).
+///
+/// Flow:
+/// 1. Run a **bounded, read-only** mini-agent loop (`PLAN_RECON_MAX_STEPS`)
+///    that may only call recon tools. This gathers context without mutating the
+///    vault. No write approval is requested because writes are impossible.
+/// 2. Ask the model to convert the task + recon transcript into a structured
+///    [`ExecutionPlan`] (JSON).
+///
+/// `on_event` receives the same [`AgentEvent`]s as [`run_agent`] so the UI can
+/// show live recon progress. It is ignored for write approvals (the recon pass
+/// cannot write), but kept for API symmetry.
+pub async fn generate_execution_plan(
+    settings: &crate::models::AppSettings,
+    context: &StorageContext,
+    prompt: &str,
+    images: &[String],
+    history: &[crate::models::ConversationTurn],
+    config: AgentConfig,
+    mut on_event: impl FnMut(&AgentEvent),
+) -> Result<ExecutionPlan> {
+    // Force the recon pass to be read-only and constrained to recon tools.
+    let recon_config = AgentConfig {
+        permission: AgentPermission::ReadOnly,
+        allowed_tools: PLAN_RECON_TOOLS.iter().map(|s| s.to_string()).collect(),
+        // Keep a tight budget — this is just reconnaissance.
+        limits: AgentResourceLimits {
+            max_tool_calls: PLAN_RECON_MAX_STEPS as u64,
+            max_duration: config
+                .limits
+                .max_duration
+                .min(std::time::Duration::from_secs(60)),
+            max_tokens: config.limits.max_tokens,
+        },
+        ..config.clone()
+    };
+
+    let recon_max_duration = recon_config.limits.max_duration;
+    let proxy = ToolProxy::new(recon_config, &settings.vault_dir);
+    let mut tool_transcripts: Vec<String> = Vec::new();
+
+    for step in 0..PLAN_RECON_MAX_STEPS {
+        if proxy.elapsed() > recon_max_duration {
+            break;
+        }
+        on_event(&AgentEvent::Thinking { step: step + 1 });
+        let remaining = recon_max_duration.saturating_sub(proxy.elapsed());
+        let selection = match tokio::time::timeout(
+            remaining,
+            ai::select_tool_call(settings, prompt, images, history, &tool_transcripts),
+        )
+        .await
+        {
+            Err(_) => break,
+            Ok(inner) => inner.map_err(|e| {
+                anyhow!(
+                    "plan recon LLM call failed at step {}: {}",
+                    step + 1,
+                    sanitize_error(&e.to_string())
+                )
+            })?,
+        };
+
+        match selection.tool_call {
+            ai::AssistantToolCall::None => break,
+            tool_call => {
+                let tool_name = tool_display_name(&tool_call);
+                let args_summary = tool_args_summary(&tool_call);
+                let args_json = tool_args_json(&tool_call);
+
+                let check = proxy.check_tool_call(tool_name, &args_json)?;
+                if !check.allowed {
+                    // Recon tool denied (e.g. path confinement) — record and stop.
+                    tool_transcripts.push(format!(
+                        "TOOL: {}\nSTATUS: denied\nINPUT:\n{}\nOUTPUT:\ntool error: {}",
+                        tool_name, args_summary, check.reason
+                    ));
+                    break;
+                }
+
+                on_event(&AgentEvent::ToolCall {
+                    step: step + 1,
+                    tool: tool_name.to_string(),
+                    args: args_summary.clone(),
+                });
+
+                let remaining = recon_max_duration.saturating_sub(proxy.elapsed());
+                let (result, is_error) = match tokio::time::timeout(
+                    remaining,
+                    execute_tool(context, settings, &tool_call),
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(_) => (format!("tool error: {tool_name} timed out"), true),
+                };
+                let preview = truncate_preview(&result, 200);
+                on_event(&AgentEvent::ToolResult {
+                    step: step + 1,
+                    tool: tool_name.to_string(),
+                    result_preview: preview,
+                    is_error,
+                });
+
+                tool_transcripts.push(format!(
+                    "TOOL: {}\nSTATUS: {}\nINPUT:\n{}\nOUTPUT:\n{}",
+                    tool_name,
+                    if is_error { "error" } else { "ok" },
+                    args_summary,
+                    result
+                ));
+            }
+        }
+    }
+
+    // Convert task + recon transcript into a structured plan.
+    let plan_response = ai::generate_plan(settings, prompt, &tool_transcripts).await?;
+    Ok(parse_execution_plan(&plan_response.text, prompt))
+}
+
+/// Parse a model plan response into an [`ExecutionPlan`].
+///
+/// Tolerant of markdown fences and surrounding prose. If the model output
+/// cannot be parsed at all, falls back to a single Custom step describing the
+/// task so the user still sees *something* to approve.
+pub fn parse_execution_plan(model_text: &str, task: &str) -> ExecutionPlan {
+    #[derive(serde::Deserialize)]
+    struct RawStep {
+        kind: Option<String>,
+        tool: Option<String>,
+        description: Option<String>,
+        #[serde(default = "default_step_estimated_tool_calls")]
+        estimated_tool_calls: u64,
+    }
+    #[derive(serde::Deserialize)]
+    struct RawPlan {
+        #[serde(default)]
+        steps: Vec<RawStep>,
+        #[serde(default)]
+        estimated_tokens: u64,
+    }
+
+    let json_text = extract_first_json_object(model_text);
+    let parsed = json_text
+        .as_deref()
+        .and_then(|j| serde_json::from_str::<RawPlan>(j).ok());
+
+    let (raw_steps, estimated_tokens) = match parsed {
+        Some(p) if !p.steps.is_empty() => (p.steps, p.estimated_tokens),
+        _ => {
+            // Fallback: single Custom step so the user still gets a plan card.
+            return fallback_plan(task);
+        }
+    };
+
+    let mut steps: Vec<PlanStep> = raw_steps
+        .into_iter()
+        .map(|raw| {
+            let kind = raw
+                .kind
+                .as_deref()
+                .map(PlanStepKind::from_str_lossy)
+                .unwrap_or_default();
+            let description = raw
+                .description
+                .filter(|d| !d.trim().is_empty())
+                .unwrap_or_else(|| task.to_string());
+            let tool = raw.tool.filter(|t| !t.trim().is_empty());
+            PlanStep {
+                index: 0,
+                kind,
+                description,
+                tool,
+                estimated_tool_calls: raw.estimated_tool_calls.max(1),
+                enabled: true,
+                status: PlanStepStatus::Pending,
+            }
+        })
+        .collect();
+
+    // Assign 1-based indices.
+    for (i, step) in steps.iter_mut().enumerate() {
+        step.index = i + 1;
+    }
+
+    let estimated_tool_calls = steps.iter().map(|s| s.estimated_tool_calls).sum();
+
+    ExecutionPlan {
+        task: task.to_string(),
+        steps,
+        estimated_tool_calls,
+        estimated_tokens,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+/// Build a minimal fallback plan when the model output is unparseable.
+fn fallback_plan(task: &str) -> ExecutionPlan {
+    ExecutionPlan {
+        task: task.to_string(),
+        steps: vec![PlanStep::new(
+            PlanStepKind::Custom,
+            format!("Complete the task: {task}"),
+            None,
+        )],
+        estimated_tool_calls: 1,
+        estimated_tokens: 0,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+/// Extract the first balanced top-level JSON object from `text`.
+///
+/// Tolerates markdown fences (```` ```json ... ``` ````) and surrounding prose.
+/// Returns `None` if no balanced object is found.
+fn extract_first_json_object(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    // Find the first '{'.
+    let mut start = bytes.iter().position(|&b| b == b'{')?;
+    // Walk, tracking string state and brace depth.
+    let mut depth: i64 = 0;
+    let mut in_string = false;
+    let mut backslash_run = 0usize;
+    let mut last_close = None;
+    let mut i = start;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            if c == b'\\' {
+                backslash_run += 1;
+            } else {
+                if c == b'"' && backslash_run.is_multiple_of(2) {
+                    in_string = false;
+                }
+                backslash_run = 0;
+            }
+        } else if c == b'"' {
+            in_string = true;
+            backslash_run = 0;
+        } else if c == b'{' {
+            if depth == 0 {
+                start = i;
+            }
+            depth += 1;
+        } else if c == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                last_close = Some(i);
+                break;
+            }
+        }
+        i += 1;
+    }
+    let end = last_close?;
+    let candidate = &text[start..=end];
+    // Validate that it round-trips.
+    serde_json::from_str::<serde_json::Value>(candidate)
+        .ok()
+        .map(|_| candidate.to_string())
+}
+
 /// Maximum tool-calling rounds in the agent loop.
 const DEFAULT_MAX_STEPS: usize = 20;
 
@@ -2100,6 +2653,167 @@ mod pure_function_tests {
             }
             Ok(code) => panic!("expected timeout error, but process exited with code {code}"),
             Err(e) => panic!("expected timeout error, got: {e}"),
+        }
+    }
+
+    // ---- Plan Mode unit tests (#2107) ----
+
+    #[test]
+    fn plan_kind_display_tags_match_spec() {
+        assert_eq!(PlanStepKind::Search.display_tag(), "[Search]");
+        assert_eq!(PlanStepKind::Read.display_tag(), "[Read]");
+        assert_eq!(PlanStepKind::Generate.display_tag(), "[Generate]");
+        assert_eq!(PlanStepKind::Write.display_tag(), "[Write]");
+        assert_eq!(PlanStepKind::Custom.display_tag(), "[Custom]");
+    }
+
+    #[test]
+    fn plan_kind_from_str_lossy_maps_known_and_unknown() {
+        assert_eq!(PlanStepKind::from_str_lossy("search"), PlanStepKind::Search);
+        assert_eq!(
+            PlanStepKind::from_str_lossy("LIST_NOTES"),
+            PlanStepKind::Search
+        );
+        assert_eq!(
+            PlanStepKind::from_str_lossy("read_file"),
+            PlanStepKind::Read
+        );
+        assert_eq!(
+            PlanStepKind::from_str_lossy("draft"),
+            PlanStepKind::Generate
+        );
+        assert_eq!(
+            PlanStepKind::from_str_lossy("save_note"),
+            PlanStepKind::Write
+        );
+        assert_eq!(
+            PlanStepKind::from_str_lossy("totally-unknown"),
+            PlanStepKind::Custom
+        );
+    }
+
+    #[test]
+    fn format_tokens_uses_k_shorthand() {
+        assert_eq!(format_tokens(0), "~0");
+        assert_eq!(format_tokens(500), "~500");
+        assert_eq!(format_tokens(1000), "~1k");
+        assert_eq!(format_tokens(3000), "~3k");
+        assert_eq!(format_tokens(3500), "~3.5k");
+    }
+
+    #[test]
+    fn parse_execution_plan_parses_fenced_json() {
+        let model_text = "Here is the plan:\n```json\n{\"steps\":[{\"kind\":\"search\",\"description\":\"find notes\",\"tool\":\"search_notes\",\"estimated_tool_calls\":2},{\"kind\":\"write\",\"description\":\"save draft\",\"tool\":\"save_note\",\"estimated_tool_calls\":1}],\"estimated_tokens\":3000}\n```\n";
+        let plan = parse_execution_plan(model_text, "draft a report");
+        assert_eq!(plan.steps.len(), 2);
+        assert_eq!(plan.steps[0].kind, PlanStepKind::Search);
+        assert_eq!(plan.steps[0].index, 1);
+        assert_eq!(plan.steps[0].tool.as_deref(), Some("search_notes"));
+        assert_eq!(plan.steps[1].kind, PlanStepKind::Write);
+        assert_eq!(plan.steps[1].index, 2);
+        assert_eq!(plan.estimated_tool_calls, 3);
+        assert_eq!(plan.estimated_tokens, 3000);
+    }
+
+    #[test]
+    fn parse_execution_plan_falls_back_on_garbage() {
+        let plan = parse_execution_plan("I cannot do that.", "do something");
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].kind, PlanStepKind::Custom);
+        assert!(plan.steps[0].description.contains("do something"));
+    }
+
+    #[test]
+    fn extract_first_json_object_handles_prose_and_fences() {
+        // Surrounding prose.
+        let j = extract_first_json_object("Here: {\"a\":1}");
+        assert_eq!(j.as_deref(), Some("{\"a\":1}"));
+        // Fenced.
+        let j = extract_first_json_object("```json\n{\"a\":2}\n```");
+        assert_eq!(j.as_deref(), Some("{\"a\":2}"));
+        // Nested braces inside strings must not confuse the walker.
+        let j = extract_first_json_object(r#"{"s":"{ not a close }"}"#);
+        assert_eq!(j.as_deref(), Some(r#"{"s":"{ not a close }"}"#));
+        // No object at all.
+        assert!(extract_first_json_object("plain text").is_none());
+    }
+
+    #[test]
+    fn render_markdown_matches_spec_format() {
+        let mut steps = vec![
+            PlanStep::new(PlanStepKind::Search, "find notes", Some("search_notes")),
+            PlanStep::new(PlanStepKind::Read, "read context", Some("read_file")),
+            PlanStep::new(PlanStepKind::Write, "save draft", Some("save_note")),
+        ];
+        // Disable the middle step to exercise the [ ] checkbox path.
+        steps[1].enabled = false;
+        for (i, s) in steps.iter_mut().enumerate() {
+            s.index = i + 1;
+        }
+        let plan = ExecutionPlan {
+            task: "t".into(),
+            steps,
+            estimated_tool_calls: 3,
+            estimated_tokens: 3000,
+            generated_at: "now".into(),
+        };
+        let md = plan.render_markdown();
+        assert!(md.starts_with("## Execution Plan\n"));
+        assert!(md.contains("1. [x] [Search] find notes"));
+        assert!(md.contains("2. [ ] [Read] read context"));
+        assert!(md.contains("3. [x] [Write] save draft"));
+        assert!(md.contains("Estimated tool calls: 3  Estimated tokens: ~3k"));
+    }
+
+    #[test]
+    fn apply_decision_reject_skips_all() {
+        let plan = sample_plan();
+        let finalized = plan.apply_decision(&PlanDecision::Reject);
+        assert!(finalized
+            .steps
+            .iter()
+            .all(|s| s.status == PlanStepStatus::Skipped));
+        assert!(!finalized.has_executable_steps());
+    }
+
+    #[test]
+    fn apply_decision_partial_approve_skips_disabled() {
+        let mut plan = sample_plan();
+        plan.steps[1].enabled = false; // disable the read step
+        let finalized = plan.apply_decision(&PlanDecision::PartialApprove);
+        assert_eq!(finalized.steps[1].status, PlanStepStatus::Skipped);
+        assert_eq!(finalized.steps[1].index, 0);
+        assert_eq!(finalized.steps[0].status, PlanStepStatus::Pending);
+        assert_eq!(finalized.steps[0].index, 1);
+        // Disabled step skipped; the write step re-indexes to 2.
+        assert_eq!(finalized.steps[2].status, PlanStepStatus::Pending);
+        assert_eq!(finalized.steps[2].index, 2);
+        assert!(finalized.has_executable_steps());
+    }
+
+    #[test]
+    fn apply_decision_edit_adopts_revised_steps() {
+        let plan = sample_plan();
+        let revised = vec![PlanStep::new(PlanStepKind::Generate, "new step", None)];
+        let finalized = plan.apply_decision(&PlanDecision::Edit { steps: revised });
+        assert_eq!(finalized.steps.len(), 1);
+        assert_eq!(finalized.steps[0].kind, PlanStepKind::Generate);
+        assert_eq!(finalized.steps[0].index, 1);
+    }
+
+    /// Helper: a 3-step plan (Search → Read → Write), all enabled.
+    fn sample_plan() -> ExecutionPlan {
+        let steps = vec![
+            PlanStep::new(PlanStepKind::Search, "s", Some("search_notes")),
+            PlanStep::new(PlanStepKind::Read, "r", Some("read_file")),
+            PlanStep::new(PlanStepKind::Write, "w", Some("save_note")),
+        ];
+        ExecutionPlan {
+            task: "t".into(),
+            steps,
+            estimated_tool_calls: 3,
+            estimated_tokens: 1000,
+            generated_at: "now".into(),
         }
     }
 }

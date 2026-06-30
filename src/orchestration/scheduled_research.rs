@@ -204,7 +204,6 @@ pub async fn run_single_subscription(
             // Step 3+4: Synchronous storage I/O wrapped in spawn_blocking
             let save_result = {
                 let ctx = ctx.clone();
-                let note = note;
                 tokio::task::spawn_blocking(move || save_note_with_context(&ctx, note)).await
             };
 

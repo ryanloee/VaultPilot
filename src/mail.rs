@@ -31,7 +31,7 @@ fn db_conn(
         .context("failed to get database connection")
 }
 
-/// ─── Data types ───────────────────────────────────────────────────
+// ─── Data types ───────────────────────────────────────────────────
 
 /// A configured mail account whose inbox we can sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +85,7 @@ pub struct SyncResult {
 // ─── Mail account management ──────────────────────────────────────
 
 /// Add a new mail account. Password is encrypted before storage.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip(context))]
 pub fn add_mail_account(
     context: &StorageContext,
@@ -257,6 +258,7 @@ pub fn update_account_sync_time(context: &StorageContext, id: &str) -> Result<()
 // ─── Email storage ────────────────────────────────────────────────
 
 /// Store an imported email in the database.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip(context))]
 pub fn store_email(
     context: &StorageContext,

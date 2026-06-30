@@ -634,6 +634,8 @@ async fn handle_mcp_request(
                 "notes.related" => mcp_call_notes_related(context, arguments).await,
                 "notes.import" => mcp_call_notes_import(context, arguments).await,
                 "index.rebuild" => mcp_call_index_rebuild(context).await,
+                "email.search" => mcp_call_email_search(context, arguments).await,
+                "email.get" => mcp_call_email_get(context, arguments).await,
                 "ask" => mcp_call_ask(context, arguments).await,
                 _ => {
                     return Some(McpResponse::error(

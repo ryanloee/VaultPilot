@@ -147,11 +147,12 @@ describe('tag operations', () => {
 });
 
 describe('toggleStar', () => {
-  it('flips starred between 0 and 1', async () => {
+  it('flips starred between 0 and 1 and bumps updated_at', async () => {
     const db = await freshDb();
     await db.toggleStar('note1');
     const [sql, params] = mockDb.runAsync.mock.calls[0];
     expect(sql).toContain('1 - starred');
+    expect(sql).toContain("updated_at = strftime('%s','now')");
     expect(params).toEqual(['note1']);
   });
 });

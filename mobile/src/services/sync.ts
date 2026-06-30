@@ -271,7 +271,10 @@ async function doSync(
     }
   });
 
-  await AsyncStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
+  // Only update LAST_SYNC_KEY if sync completed without abort
+  if (!signal.aborted) {
+    await AsyncStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
+  }
   return { imported, updated, skipped, errors, duration_ms: Date.now() - start };
 }
 

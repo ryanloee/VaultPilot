@@ -31,7 +31,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
@@ -50,6 +50,7 @@ futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = "8.6.0"
+cron = "0.15"
 
 [[bin]]
 name = "vaultpilot-cli"

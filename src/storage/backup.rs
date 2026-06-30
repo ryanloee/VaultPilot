@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, DatabaseName};
 use tracing::debug;
 
 /// On Windows, `fs::rename` fails if the destination file already exists.
@@ -74,37 +74,39 @@ pub(crate) fn auto_backup_database(db_path: &Path) -> Result<()> {
         }
     }
 
-    // Checkpoint WAL before copying to ensure backup is consistent.
-    // In WAL mode, committed transactions may reside in the -wal file
-    // and won't be included in a plain file copy.
-    // Hold the checkpoint connection alive through fs::copy to prevent
-    // new WAL transactions from starting between checkpoint and copy.
-    let _checkpoint_guard = match Connection::open(db_path) {
-        Ok(conn) => Some(conn),
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to open checkpoint connection, skipping WAL checkpoint");
-            None
+    // Checkpoint WAL then use SQLite Online Backup API for a consistent copy.
+    // In WAL mode, fs::copy between checkpoint and copy completion can miss
+    // concurrently committed transactions. The backup API properly serialises
+    // with concurrent writers via SQLite's internal locking (#2254).
+    let current_bak = backup_dir.join(format!("{file_name_str}.bak"));
+    match Connection::open(db_path) {
+        Ok(conn) => {
+            let _ = conn.execute_batch("PRAGMA busy_timeout = 5000;");
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+            conn.backup(DatabaseName::Main, &current_bak, None)
+                .with_context(|| {
+                    format!(
+                        "online backup failed from {} to {}",
+                        db_path.display(),
+                        current_bak.display()
+                    )
+                })?;
         }
-    };
-    if let Some(ref conn) = _checkpoint_guard {
-        // Set busy_timeout so the checkpoint retries on SQLITE_BUSY instead of
-        // failing immediately when another connection has an active transaction.
-        let _ = conn.execute_batch("PRAGMA busy_timeout = 5000;");
-        // TRUNCATE mode: flush WAL into main DB and truncate WAL file
-        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
-            tracing::warn!(error = %e, "WAL checkpoint before backup failed, proceeding with copy");
+        Err(e) => {
+            // Fallback: plain file copy when we cannot open the source.
+            tracing::warn!(
+                error = %e,
+                "Failed to open source DB for online backup, falling back to fs::copy"
+            );
+            fs::copy(db_path, &current_bak).with_context(|| {
+                format!(
+                    "failed to copy database from {} to {}",
+                    db_path.display(),
+                    current_bak.display()
+                )
+            })?;
         }
     }
-
-    // Copy current database to .bak
-    let current_bak = backup_dir.join(format!("{file_name_str}.bak"));
-    fs::copy(db_path, &current_bak).with_context(|| {
-        format!(
-            "failed to backup database from {} to {}",
-            db_path.display(),
-            current_bak.display()
-        )
-    })?;
 
     debug!(source = %db_path.display(), backup = %current_bak.display(), "database backed up");
     Ok(())

@@ -4,11 +4,13 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using System.Text.RegularExpressions;
+using VaultPilot.WinUI.Utils;
 
 namespace VaultPilot.WinUI;
 
 /// <summary>
 /// Markdown rendering methods extracted from MainWindow for SRP compliance.
+/// Also handles [[wikilink]] and auto-detected note references (#2035).
 /// </summary>
 public sealed partial class MainWindow : Window
 {
@@ -154,13 +156,13 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private static void ApplyInlineMarkdown(TextBlock textBlock, string text)
+    private void ApplyInlineMarkdown(TextBlock textBlock, string text)
     {
         textBlock.Inlines.Clear();
         AppendInlineMarkdown(textBlock.Inlines, text);
     }
 
-    private static void AppendInlineMarkdown(InlineCollection inlines, string text)
+    private void AppendInlineMarkdown(InlineCollection inlines, string text)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -170,6 +172,31 @@ public sealed partial class MainWindow : Window
         var index = 0;
         while (index < text.Length)
         {
+            // Check for [[wikilink]] — must be before [link] to avoid double-bracket confusion
+            if (text[index] == '[' && index + 1 < text.Length && text[index + 1] == '[')
+            {
+                var closeBracket = text.IndexOf("]]", index + 2, StringComparison.Ordinal);
+                if (closeBracket > index + 1)
+                {
+                    var wikiTitle = text[(index + 2)..closeBracket].Trim();
+                    if (!string.IsNullOrEmpty(wikiTitle))
+                    {
+                        var hyperlink = new Hyperlink
+                        {
+                            UnderlineStyle = UnderlineStyle.Single,
+                            Foreground = GetThemeBrush("AccentTextFillColorPrimaryBrush")
+                        };
+                        hyperlink.Inlines.Add(new Run { Text = $"📄 {wikiTitle}" });
+                        var capturedTitle = wikiTitle;
+                        hyperlink.Click += async (_, _) => await NavigateToNoteFromTitleAsync(capturedTitle);
+                        AutomationProperties.SetName(hyperlink, $"打开笔记: {wikiTitle}");
+                        inlines.Add(hyperlink);
+                        index = closeBracket + 2;
+                        continue;
+                    }
+                }
+            }
+
             // Check for markdown link [text](url)
             if (text[index] == '[')
             {
@@ -257,11 +284,55 @@ public sealed partial class MainWindow : Window
             {
                 nextIndex = index + 1; // forward-progress guarantee: emit the unmatched char as plain text
             }
-            inlines.Add(new Run
-            {
-                Text = text[index..nextIndex]
-            });
+            AppendNoteRefText(inlines, text[index..nextIndex]);
             index = nextIndex;
+        }
+    }
+
+    /// <summary>
+    /// Emits a plain text segment, splitting it into note reference hyperlinks
+    /// when the note title map is available and note titles are detected.
+    /// </summary>
+    private void AppendNoteRefText(InlineCollection inlines, string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        // Only check for note refs if the title map has been loaded
+        var titleMap = _noteTitleMap;
+        if (titleMap is null || titleMap.Count == 0)
+        {
+            inlines.Add(new Run { Text = text });
+            return;
+        }
+
+        var refs = NoteRefs.FindNoteReferences(text, titleMap);
+        if (refs.Count == 0)
+        {
+            inlines.Add(new Run { Text = text });
+            return;
+        }
+
+        var segments = NoteRefs.SplitLineByNoteRefs(text, refs);
+        foreach (var seg in segments)
+        {
+            if (seg.IsNoteRef && seg.Title is not null)
+            {
+                var hyperlink = new Hyperlink
+                {
+                    UnderlineStyle = UnderlineStyle.Single,
+                    Foreground = GetThemeBrush("AccentTextFillColorPrimaryBrush")
+                };
+                hyperlink.Inlines.Add(new Run { Text = $"📄 {seg.Title}" });
+                var capturedTitle = seg.Title;
+                hyperlink.Click += async (_, _) => await NavigateToNoteFromTitleAsync(capturedTitle);
+                AutomationProperties.SetName(hyperlink, $"打开笔记: {seg.Title}");
+                inlines.Add(hyperlink);
+            }
+            else
+            {
+                inlines.Add(new Run { Text = seg.Text });
+            }
         }
     }
 

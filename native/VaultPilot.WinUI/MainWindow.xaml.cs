@@ -51,6 +51,9 @@ public sealed partial class MainWindow : Window
 
     private AppSettings? _settings;
     private int _noteCount;
+    private Dictionary<string, string>? _noteTitleMap;
+    private DateTime _noteTitleMapTimestamp;
+    private const int NoteTitleMapTtlMs = 30_000;
     private bool _sidebarCollapsed = true;
     private bool _sidebarAutoCollapsed = true;
     private string _startupStep = "初始化";
@@ -279,6 +282,7 @@ public sealed partial class MainWindow : Window
             var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, listCts.Token);
             _noteCount = notes?.Count ?? 0;
             RefreshVaultSummary();
+            InvalidateNoteTitleCache();
 
             UpdateStatusBar("success", "索引已重建", $"扫描 {stats?.Scanned ?? 0}，索引 {stats?.Indexed ?? 0}，移除 {stats?.Removed ?? 0}。");
         }
@@ -320,6 +324,7 @@ public sealed partial class MainWindow : Window
             var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, listCts.Token);
             _noteCount = notes?.Count ?? 0;
             RefreshVaultSummary();
+            InvalidateNoteTitleCache();
 
             UpdateStatusBar(result?.Errors.Count > 0 ? "warning" : "success", "导入完成", $"导入 {result?.Imported ?? 0}，跳过 {result?.Skipped ?? 0}，错误 {result?.Errors.Count ?? 0}。");
         }
@@ -1224,5 +1229,101 @@ public sealed partial class MainWindow : Window
     private void RefreshVaultSummary()
     {
         NotesText.Text = $"笔记：{_noteCount}";
+    }
+
+    // ── Note title map management (#2035) ──
+
+    /// <summary>
+    /// Loads the note title map (title -> noteId) from the Rust backend via listNotes.
+    /// Results are cached with a 30-second TTL to avoid excessive backend calls.
+    /// Titles are stored as-is (preserving original casing) for rendering display.
+    /// </summary>
+    private async Task<Dictionary<string, string>> LoadNoteTitleMapAsync()
+    {
+        // Check cache TTL
+        var now = DateTime.UtcNow;
+        if (_noteTitleMap is not null && (now - _noteTitleMapTimestamp).TotalMilliseconds < NoteTitleMapTtlMs)
+        {
+            return _noteTitleMap;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
+            if (notes is null || notes.Count == 0)
+            {
+                _noteTitleMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                _noteTitleMapTimestamp = now;
+                return _noteTitleMap;
+            }
+
+            // Build map: title -> id (case-insensitive keys)
+            var map = new Dictionary<string, string>(notes.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var note in notes)
+            {
+                if (!string.IsNullOrWhiteSpace(note.Title) && !map.ContainsKey(note.Title))
+                {
+                    map[note.Title] = note.Id;
+                }
+            }
+
+            _noteTitleMap = map;
+            _noteTitleMapTimestamp = now;
+            return map;
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine($"[LoadNoteTitleMapAsync] Failed: {error.Message}");
+            // Return cached map (if any) on failure
+            return _noteTitleMap ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// Forces the note title cache to be refreshed on the next call to LoadNoteTitleMapAsync.
+    /// Called after tool actions that modify notes (create, delete, rename).
+    /// </summary>
+    private void InvalidateNoteTitleCache()
+    {
+        _noteTitleMapTimestamp = DateTime.MinValue;
+    }
+
+    /// <summary>
+    /// Navigates to a note by looking up its title in the note title map.
+    /// Falls back to treating the parameter as a noteId if no title match is found.
+    /// Called when a [[wikilink]] or auto-detected note reference is clicked.
+    /// </summary>
+    private async Task NavigateToNoteFromTitleAsync(string? noteTitleOrId)
+    {
+        if (string.IsNullOrWhiteSpace(noteTitleOrId))
+            return;
+
+        try
+        {
+            var titleMap = await LoadNoteTitleMapAsync();
+
+            // Try to resolve title -> id
+            var noteId = titleMap.TryGetValue(noteTitleOrId, out var id)
+                ? id
+                : noteTitleOrId; // fallback: treat as id directly
+
+            // Navigate to the Notes view
+            NavNotes.IsSelected = true;
+
+            // Give the UI a moment to load the NotesView, then select the note
+            await Task.Delay(100);
+
+            if (_notesView is not null)
+            {
+                await _notesView.RefreshNotesAsync();
+                _notesView.SelectNoteById(noteId);
+            }
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine($"[NavigateToNoteFromTitleAsync] Error: {error.Message}");
+            ShowError("打开笔记失败", error);
+        }
     }
 }

@@ -199,6 +199,7 @@ public sealed partial class MainWindow : Window
         var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
         _noteCount = notes?.Count ?? 0;
         RefreshVaultSummary();
+        InvalidateNoteTitleCache();
 
         RestoreIdleStatus("知识已记录", $"已保存为笔记：{savedNote.Title}");
     }

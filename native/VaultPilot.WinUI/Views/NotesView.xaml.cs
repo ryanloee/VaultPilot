@@ -287,6 +287,25 @@ public sealed partial class NotesView : UserControl
             : $"笔记 ({count}/{_allNotes.Count})";
     }
 
+    /// <summary>
+    /// Programmatically selects a note by its ID, scrolling it into view.
+    /// Used by MainWindow.NavigateToNoteFromTitleAsync (#2035).
+    /// </summary>
+    public void SelectNoteById(string noteId)
+    {
+        if (string.IsNullOrEmpty(noteId))
+            return;
+
+        var item = NotesList.Items
+            .OfType<NoteListItem>()
+            .FirstOrDefault(n => n.Meta.Id == noteId);
+        if (item is not null)
+        {
+            NotesList.SelectedItem = item;
+            NotesList.ScrollIntoView(item);
+        }
+    }
+
     private void ClearDetail()
     {
         DetailTitle.Text = "选择一篇笔记";

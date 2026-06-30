@@ -188,6 +188,12 @@ public sealed partial class MainWindow : Window
             stack.Children.Remove(label);
         }
 
+        // Invalidate note title cache when a tool action has saved a note (#2035)
+        if (author == "系统" && text.Contains("已保存笔记"))
+        {
+            InvalidateNoteTitleCache();
+        }
+
         MessagesPanel.Children.Add(stack);
     }
 

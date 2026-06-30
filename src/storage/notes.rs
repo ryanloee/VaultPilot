@@ -170,6 +170,30 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     };
     let file = PathBuf::from(&note_path);
 
+    // ── Query attachment paths BEFORE the transaction ─────────────────
+    // The attachment rows will be deleted inside the transaction, so we
+    // must fetch their paths first to know which physical files to clean
+    // up afterwards.  (#2241)
+    let attachment_paths: Vec<String> = connection
+        .prepare("SELECT path FROM attachments WHERE note_id = ?1")?
+        .query_map([resolved_note_id.as_str()], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // For each attachment, check whether it is referenced by other notes
+    // *before* we delete the rows, so we know which files are safe to
+    // remove from disk.
+    let mut shared_paths: Vec<String> = Vec::new();
+    for path_str in &attachment_paths {
+        let other_refs: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM attachments WHERE path = ?1 AND note_id != ?2",
+            [path_str, &resolved_note_id],
+            |row| row.get(0),
+        )?;
+        if other_refs > 0 {
+            shared_paths.push(path_str.clone());
+        }
+    }
+
     let tx = connection.transaction()?;
     tx.execute(
         "DELETE FROM note_fts WHERE note_id = ?1",
@@ -190,35 +214,19 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     tx.commit()?;
 
     // ── Delete attachment physical files ────────────────────────────────
-    // Query all attachment file paths for this note and remove them from
-    // disk after the DB transaction has been committed. We delete each file
-    // individually and then clean up the assets directory if empty.
+    // After the DB transaction has been committed, remove the physical
+    // files for attachments that are not shared with other notes.
     // For shared files (attachments referenced by multiple notes), we skip
-    // deletion by checking if any other note references the same path.
-    let attachment_paths: Vec<String> = connection
-        .prepare("SELECT path FROM attachments WHERE note_id = ?1")?
-        .query_map([resolved_note_id.as_str()], |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    // Get the parent directory of the .md file — the assets dir is
-    // `{stem}-assets/` in the same directory.
+    // deletion.
     let note_stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let parent_dir = file.parent().unwrap_or(Path::new(""));
     let assets_dir = parent_dir.join(format!("{note_stem}-assets"));
 
     for path_str in &attachment_paths {
         let apath = PathBuf::from(path_str);
-        if apath.exists() {
-            // Only delete if no other note references the same file
-            let other_refs: i64 = connection.query_row(
-                "SELECT COUNT(*) FROM attachments WHERE path = ?1 AND note_id != ?2",
-                [path_str, &resolved_note_id],
-                |row| row.get(0),
-            )?;
-            if other_refs == 0 {
-                if let Err(e) = fs::remove_file(&apath) {
-                    warn!(path = %apath.display(), error = %e, "failed to delete attachment file");
-                }
+        if apath.exists() && !shared_paths.contains(path_str) {
+            if let Err(e) = fs::remove_file(&apath) {
+                warn!(path = %apath.display(), error = %e, "failed to delete attachment file");
             }
         }
     }

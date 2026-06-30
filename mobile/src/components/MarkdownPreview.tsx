@@ -129,7 +129,7 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     }
 
     // Normal paragraph — with LaTeX processing
-    const hasLatex = /\$/.test(line) || /\\\( /.test(line) || /\\\[/.test(line);
+    const hasLatex = /\$/.test(line) || /\\\(/.test(line) || /\\\[/.test(line);
     if (hasLatex) {
       elements.push(
         <View key={`p-${i}`} style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 }}>

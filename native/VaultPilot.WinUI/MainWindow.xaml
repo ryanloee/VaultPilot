@@ -4,6 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:controls="using:VaultPilot.WinUI.Controls"
     mc:Ignorable="d"
     Title="VaultPilot">
 
@@ -11,6 +12,7 @@
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="N" Modifiers="Control" Invoked="OnNewSessionAccelerator" />
             <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="OnToggleSidebarAccelerator" />
+            <KeyboardAccelerator Key="P" Modifiers="Control,Shift" Invoked="OnAiCommandPaletteAccelerator" />
             <KeyboardAccelerator Key="Escape" Invoked="OnEscapeAccelerator" />
         </Grid.KeyboardAccelerators>
 
@@ -361,6 +363,12 @@
             </NavigationView.Content>
         </NavigationView>
 
+        <!-- Global AI Command Palette overlay (#2188) -->
+        <controls:AiCommandPalette
+            x:Name="AiCommandPaletteControl"
+            Visibility="Collapsed"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch" />
 
     </Grid>
 </Window>

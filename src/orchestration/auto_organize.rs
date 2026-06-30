@@ -1020,7 +1020,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires fix for #2278: confirm_weak_link/dismiss_weak_link do not update updated_at"]
     fn weak_links_confirm_updates_timestamps() {
         let (_tmp, ctx) = setup_test_context();
         let conn = ctx.get_connection().expect("connection");

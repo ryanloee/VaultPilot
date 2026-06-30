@@ -13,45 +13,6 @@
             <!-- Converters -->
             <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
 
-            <!-- AiActionInfo item template for the command palette (#2188) -->
-            <DataTemplate x:Key="AiActionItemTemplate" x:DataType="models:AiActionInfo">
-                <Grid Padding="12,10,12,10" ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-
-                    <!-- Action icon: use a standard search/magic wand glyph -->
-                    <FontIcon
-                        Grid.Column="0"
-                        Glyph="&#xE8A7;"
-                        FontSize="16"
-                        Foreground="{ThemeResource SystemAccentColor}"
-                        VerticalAlignment="Center" />
-
-                    <!-- Action label -->
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-                        <TextBlock Text="{x:Bind Label}" FontWeight="SemiBold" FontSize="14" />
-                    </StackPanel>
-
-                    <!-- Action ID badge -->
-                    <Border
-                        Grid.Column="2"
-                        Padding="8,2,8,2"
-                        CornerRadius="4"
-                        Background="{ThemeResource SystemAccentColor}"
-                        Opacity="0.15"
-                        VerticalAlignment="Center">
-                        <TextBlock
-                            Text="{x:Bind Id}"
-                            FontSize="11"
-                            Foreground="{ThemeResource SystemAccentColor}"
-                            Opacity="1.0" />
-                    </Border>
-                </Grid>
-            </DataTemplate>
-
             <!-- Theme-aware code block colors (#196) -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">

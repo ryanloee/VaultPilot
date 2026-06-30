@@ -429,16 +429,9 @@ public sealed partial class AiCommandPalette : UserControl
 
     private void OnBackdropPressed(object sender, PointerRoutedEventArgs e)
     {
-        // Only dismiss if the backdrop itself was clicked (not the palette card)
-        var position = e.GetCurrentPoint(BackdropGrid);
-        if (position.Position.X >= 0 && position.Position.Y >= 0)
-        {
-            var element = BackdropGrid.InputHitTest(position.Position);
-            if (element == BackdropGrid || element == this)
-            {
-                Dismiss();
-            }
-        }
+        // Dismiss when backdrop (overlay behind the palette card) is tapped
+        BackdropGrid.Visibility = Visibility.Collapsed;
+        Dismiss();
     }
 
     private void OnInsertToChatClicked(object sender, RoutedEventArgs e)

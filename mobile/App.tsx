@@ -122,7 +122,7 @@ export default function App() {
     loadedRef.current = true;
     setInitState('ready');
     await SplashScreen.hideAsync();
-  }, [systemScheme, setIsDark]);
+  }, [setIsDark]);
 
   // Load saved settings on startup
   useEffect(() => { initApp(); }, [initApp]);

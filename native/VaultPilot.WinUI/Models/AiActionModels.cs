@@ -39,15 +39,15 @@ public sealed record AiActionRequest
 
     /// <summary>Target language for translation.</summary>
     [JsonPropertyName("targetLanguage")]
-    public string? TargetLanguage { get; init; }
+    public string? TargetLanguage { get; set; }
 
     /// <summary>Target tone for rewrite (formal, concise, vivid).</summary>
     [JsonPropertyName("tone")]
-    public string? Tone { get; init; }
+    public string? Tone { get; set; }
 
     /// <summary>Note ID for context (e.g., findRelatedNotes).</summary>
     [JsonPropertyName("noteId")]
-    public string? NoteId { get; init; }
+    public string? NoteId { get; set; }
 
     /// <summary>Model override.</summary>
     [JsonPropertyName("model")]

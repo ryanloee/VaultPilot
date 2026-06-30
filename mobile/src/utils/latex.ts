@@ -113,7 +113,7 @@ export interface LatexSegment {
  */
 export function parseLatexSegments(text: string): LatexSegment[] {
   const segments: LatexSegment[] = [];
-  const pattern = /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\$[^$\n]+?\$|\\\([^)]*?\\\))/g;
+  const pattern = /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\$[^$\n]+?\\\$|\\\([\s\S]*?\\\))/g;
   let lastIndex = 0;
   let match;
 

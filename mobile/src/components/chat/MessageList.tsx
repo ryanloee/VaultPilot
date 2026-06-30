@@ -85,20 +85,25 @@ export default function MessageList({
     onScrollToEnd();
   }, [onScrollToEnd]);
 
+  const renderItem = useCallback(
+    ({ item }: { item: Message }) => (
+      <MessageBubble
+        item={item}
+        isDark={isDark}
+        accentColor={accentColor}
+        onDelete={onDeleteMessage}
+        onResend={item.role === 'user' ? onResendMessage : undefined}
+      />
+    ),
+    [isDark, accentColor, onDeleteMessage, onResendMessage]
+  );
+
   return (
     <>
       <FlatList
         ref={listRef}
         data={messages}
-        renderItem={({ item }) => (
-          <MessageBubble
-            item={item}
-            isDark={isDark}
-            accentColor={accentColor}
-            onDelete={onDeleteMessage}
-            onResend={item.role === 'user' ? onResendMessage : undefined}
-          />
-        )}
+        renderItem={renderItem}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
         onContentSizeChange={onContentSizeChange}

@@ -181,7 +181,7 @@ impl AutoOrganizer {
     pub fn spawn_event_listener(context: StorageContext) {
         tokio::spawn(async move {
             let mut rx = event_bus::subscribe();
-            let organizer = AutoOrganizer::default();
+            let organizer = std::sync::Arc::new(AutoOrganizer::default());
             loop {
                 match rx.recv().await {
                     Ok(arc_ev) => {
@@ -189,19 +189,25 @@ impl AutoOrganizer {
                         if nc.action == NoteAction::Deleted {
                             continue;
                         }
-                        // Load the note from DB and analyse it
-                        match crate::storage::load_note_with_context(&context, &nc.note_id) {
-                            Ok(doc) => {
-                                if let Err(e) = organizer
-                                    .process_new_note(&context, &doc.meta, &doc.body, nc.action)
-                                {
-                                    warn!(note_id = %nc.note_id, error = %e, "Layer 1 analysis failed");
+                        // Clone what each blocking task needs
+                        let context = context.clone();
+                        let nc = nc.clone();
+                        let organizer = std::sync::Arc::clone(&organizer);
+                        // Wrap blocking SQLite operations in spawn_blocking
+                        let _ = tokio::task::spawn_blocking(move || {
+                            match crate::storage::load_note_with_context(&context, &nc.note_id) {
+                                Ok(doc) => {
+                                    if let Err(e) = organizer
+                                        .process_new_note(&context, &doc.meta, &doc.body, nc.action)
+                                    {
+                                        warn!(note_id = %nc.note_id, error = %e, "Layer 1 analysis failed");
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(note_id = %nc.note_id, error = %e, "failed to load note for analysis");
                                 }
                             }
-                            Err(e) => {
-                                warn!(note_id = %nc.note_id, error = %e, "failed to load note for analysis");
-                            }
-                        }
+                        }).await;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!(lagged = n, "event bus subscriber lagged");
@@ -237,13 +243,21 @@ impl AutoOrganizer {
             .unwrap_or(DEFAULT_ANALYSIS_INTERVAL_MINUTES);
 
         tokio::spawn(async move {
-            let organizer = AutoOrganizer::new(interval_minutes, MAX_NOTES_PER_ROUND);
+            let organizer =
+                std::sync::Arc::new(AutoOrganizer::new(interval_minutes, MAX_NOTES_PER_ROUND));
             let interval = Duration::from_secs(interval_minutes * 60);
             loop {
                 tokio::time::sleep(interval).await;
-                if let Err(e) = organizer.run_analysis_round(&context) {
-                    warn!(error = %e, "Layer 2 analysis round failed");
-                }
+                // Clone what each blocking task needs
+                let context = context.clone();
+                let organizer = std::sync::Arc::clone(&organizer);
+                // Wrap blocking SQLite operations in spawn_blocking
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = organizer.run_analysis_round(&context) {
+                        warn!(error = %e, "Layer 2 analysis round failed");
+                    }
+                })
+                .await;
             }
         });
     }

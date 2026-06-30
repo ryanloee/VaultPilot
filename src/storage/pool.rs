@@ -166,6 +166,54 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
     // Fast path: skip schema creation if already initialized in this process.
     // PRAGMA user_version is a lightweight integer stored in the database header.
     let version: i32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+    // ── Self-Organizing Vault tables (Feature #2176) ──
+    connection.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS analysis_queue (
+            id TEXT PRIMARY KEY,
+            note_id TEXT NOT NULL,
+            action TEXT NOT NULL DEFAULT 'created',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_analysis_queue_status ON analysis_queue(status);
+        CREATE INDEX IF NOT EXISTS idx_analysis_queue_note_id ON analysis_queue(note_id);
+
+        CREATE TABLE IF NOT EXISTS weak_links (
+            id TEXT PRIMARY KEY,
+            source_note_id TEXT NOT NULL,
+            target_note_id TEXT NOT NULL,
+            link_type TEXT NOT NULL DEFAULT 'content_similarity',
+            score REAL NOT NULL DEFAULT 0.0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(source_note_id, target_note_id, link_type)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_weak_links_status ON weak_links(status);
+        CREATE INDEX IF NOT EXISTS idx_weak_links_source ON weak_links(source_note_id);
+        CREATE INDEX IF NOT EXISTS idx_weak_links_target ON weak_links(target_note_id);
+
+        CREATE TABLE IF NOT EXISTS collection_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_collection_rules_keyword ON collection_rules(keyword);
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        "#,
+    )?;
+
     if version >= 1 {
         // Schema already exists; enable foreign keys, WAL mode, and busy timeout.
         connection.execute_batch(
@@ -271,57 +319,6 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             run_count INTEGER NOT NULL DEFAULT 0,
             last_status TEXT NOT NULL DEFAULT '',
             last_error TEXT NOT NULL DEFAULT ''
-        );
-        "#,
-    )?;
-
-    // ── Self-Organizing Vault tables (Feature #2176) ──
-    connection.execute_batch(
-        r#"
-        -- Pending analysis queue for Layer 2 background processing
-        CREATE TABLE IF NOT EXISTS analysis_queue (
-            id TEXT PRIMARY KEY,
-            note_id TEXT NOT NULL,
-            action TEXT NOT NULL DEFAULT 'created',
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_analysis_queue_status ON analysis_queue(status);
-        CREATE INDEX IF NOT EXISTS idx_analysis_queue_note_id ON analysis_queue(note_id);
-
-        -- Weak links: pending associations between notes awaiting user confirmation
-        CREATE TABLE IF NOT EXISTS weak_links (
-            id TEXT PRIMARY KEY,
-            source_note_id TEXT NOT NULL,
-            target_note_id TEXT NOT NULL,
-            link_type TEXT NOT NULL DEFAULT 'content_similarity',
-            score REAL NOT NULL DEFAULT 0.0,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(source_note_id, target_note_id, link_type)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_weak_links_status ON weak_links(status);
-        CREATE INDEX IF NOT EXISTS idx_weak_links_source ON weak_links(source_note_id);
-        CREATE INDEX IF NOT EXISTS idx_weak_links_target ON weak_links(target_note_id);
-
-        -- Collection rules: map keywords to collection names for auto-suggestion
-        CREATE TABLE IF NOT EXISTS collection_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            keyword TEXT NOT NULL,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_collection_rules_keyword ON collection_rules(keyword);
-
-        -- Key-value settings for auto-organizer config
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
         );
         "#,
     )?;

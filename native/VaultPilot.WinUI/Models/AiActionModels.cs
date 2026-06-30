@@ -139,3 +139,24 @@ public sealed record AiActionInfo
     [JsonConstructor]
     public AiActionInfo() { }
 }
+
+/// <summary>
+/// Extension methods for <see cref="AiActionType"/>.
+/// </summary>
+public static class AiActionTypeExtensions
+{
+    /// <summary>
+    /// Returns the human-readable Chinese label for an AI action type.
+    /// </summary>
+    public static string Label(this AiActionType type) => type switch
+    {
+        AiActionType.Summarize => "总结要点",
+        AiActionType.Rewrite => "改写润色",
+        AiActionType.Translate => "翻译",
+        AiActionType.Explain => "解释说明",
+        AiActionType.ContinueWriting => "续写",
+        AiActionType.ExtractTodos => "提取待办",
+        AiActionType.FindRelatedNotes => "关联笔记",
+        _ => "未知操作"
+    };
+}

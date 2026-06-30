@@ -418,6 +418,16 @@ public sealed partial class NotesView : UserControl
     }
 
     /// <summary>
+    /// Returns the full body text of the currently selected note, or null if no note is selected.
+    /// Used by MainWindow.CommandPalette to provide note context for AI actions.
+    /// </summary>
+    public string? GetSelectedNoteBody()
+    {
+        var body = DetailBody.Text?.Trim();
+        return !string.IsNullOrWhiteSpace(body) ? body : null;
+    }
+
+    /// <summary>
     /// Format an ISO 8601 timestamp as a human-readable relative time string.
     /// Shared between <see cref="NotesView"/> and <see cref="NoteListItem"/>.
     /// </summary>

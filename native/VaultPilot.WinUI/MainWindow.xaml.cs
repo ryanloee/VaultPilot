@@ -83,6 +83,7 @@ public sealed partial class MainWindow : Window
         RebuildButton.Click += OnRebuildClicked;
         ImportButton.Click += OnImportClicked;
         ComposerBox.KeyDown += OnComposerKeyDown;
+        ComposerBox.ContextMenuOpening += OnComposerContextMenuOpening;
         SessionList.SelectionChanged += OnSessionSelectionChanged;
         DeleteSessionButton.Click += OnDeleteSessionClicked;
         NewSessionButton.Click += OnNewSessionClicked;

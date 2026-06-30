@@ -15,6 +15,7 @@
             <KeyboardAccelerator Key="P" Modifiers="Control,Shift" Invoked="OnAiCommandPaletteAccelerator" />
             <KeyboardAccelerator Key="Q" Modifiers="Control,Shift" Invoked="OnQuickAskAccelerator" />
             <KeyboardAccelerator Key="Escape" Invoked="OnEscapeAccelerator" />
+            <KeyboardAccelerator Key="P" Modifiers="Control,Shift" Invoked="OnCommandPaletteAccelerator" />
         </Grid.KeyboardAccelerators>
 
         <Grid.RowDefinitions>
@@ -365,6 +366,13 @@
             Visibility="Collapsed"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />
+        <!-- AI Command Palette overlay (Phase 2 of #2188) — hidden by default,
+             shown on Ctrl+Shift+P or right-click AI context menu -->
+        <Grid
+            x:Name="AiCommandPaletteHost"
+            Visibility="Collapsed"
+            IsHitTestVisible="False"
+            Grid.RowSpan="2" />
 
     </Grid>
 </Window>

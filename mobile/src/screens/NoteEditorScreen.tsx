@@ -403,8 +403,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           <TouchableOpacity
             style={[s.toolBtn, { borderColor: previewMode ? accentColor : c.border, backgroundColor: previewMode ? accentColor + '20' : 'transparent' }]}
             onPress={() => setPreviewMode(v => !v)}
+            accessibilityLabel={previewMode ? '切换到编辑模式' : '切换到预览模式'}
           >
-            <Text style={[s.toolLabel, { color: previewMode ? accentColor : c.text }]}></Text>
+            <Ionicons name={previewMode ? 'create-outline' : 'eye-outline'} size={16} color={previewMode ? accentColor : c.text} />
           </TouchableOpacity>
           {!previewMode && TOOLBAR.map((t) => (
             <TouchableOpacity

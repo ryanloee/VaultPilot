@@ -170,6 +170,15 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     };
     let file = PathBuf::from(&note_path);
 
+    // ── Query attachment paths BEFORE deleting records ────────────────
+    // We need the file paths to delete physical files on disk. Querying
+    // after the transaction would return 0 rows because the records were
+    // already deleted (#2241).
+    let attachment_paths: Vec<String> = connection
+        .prepare("SELECT path FROM attachments WHERE note_id = ?1")?
+        .query_map([resolved_note_id.as_str()], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
     let tx = connection.transaction()?;
     tx.execute(
         "DELETE FROM note_fts WHERE note_id = ?1",
@@ -190,16 +199,12 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     tx.commit()?;
 
     // ── Delete attachment physical files ────────────────────────────────
-    // Query all attachment file paths for this note and remove them from
-    // disk after the DB transaction has been committed. We delete each file
-    // individually and then clean up the assets directory if empty.
-    // For shared files (attachments referenced by multiple notes), we skip
-    // deletion by checking if any other note references the same path.
-    let attachment_paths: Vec<String> = connection
-        .prepare("SELECT path FROM attachments WHERE note_id = ?1")?
-        .query_map([resolved_note_id.as_str()], |row| row.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
+    // Attachment paths were queried before the transaction (see above),
+    // because querying after commit would return 0 rows (#2241).
+    // We delete each file individually and then clean up the assets
+    // directory if empty. For shared files (attachments referenced by
+    // multiple notes), we skip deletion by checking if any other note
+    // references the same path.
     // Get the parent directory of the .md file — the assets dir is
     // `{stem}-assets/` in the same directory.
     let note_stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");

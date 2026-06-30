@@ -310,31 +310,42 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
             Ok(request) => {
                 if request.method == "initialize" && request.jsonrpc == "2.0" {
                     let id = request.id.unwrap_or(Value::Null);
-                    let requested_version = request
-                        .params
-                        .get("protocolVersion")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    state.initialized = true;
-                    state.protocol_version =
-                        negotiate_mcp_protocol_version(requested_version).to_string();
-                    Some(McpResponse::ok(
-                        id,
-                        serde_json::json!({
-                            "protocolVersion": state.protocol_version,
-                            "capabilities": {
-                                "tools": { "listChanged": false },
-                                "resources": { "listChanged": false },
-                                "prompts": { "listChanged": false }
-                            },
-                            "serverInfo": {
-                                "name": "vaultpilot",
-                                "title": "VaultPilot MCP",
-                                "version": env!("CARGO_PKG_VERSION")
-                            },
-                            "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
-                        }),
-                    ))
+                    // Re-initialization guard: reject if already initialized,
+                    // matching the HTTP path behavior (line ~462).
+                    if state.initialized {
+                        Some(McpResponse::error(
+                            id,
+                            -32600,
+                            "Server already initialized".to_string(),
+                            None,
+                        ))
+                    } else {
+                        let requested_version = request
+                            .params
+                            .get("protocolVersion")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        state.initialized = true;
+                        state.protocol_version =
+                            negotiate_mcp_protocol_version(requested_version).to_string();
+                        Some(McpResponse::ok(
+                            id,
+                            serde_json::json!({
+                                "protocolVersion": state.protocol_version,
+                                "capabilities": {
+                                    "tools": { "listChanged": false },
+                                    "resources": { "listChanged": false },
+                                    "prompts": { "listChanged": false }
+                                },
+                                "serverInfo": {
+                                    "name": "vaultpilot",
+                                    "title": "VaultPilot MCP",
+                                    "version": env!("CARGO_PKG_VERSION")
+                                },
+                                "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
+                            }),
+                        ))
+                    }
                 } else {
                     handle_mcp_request(context, &state, request).await
                 }

@@ -43,25 +43,19 @@ export default function MessageList({
 }: MessageListProps) {
   const listRef = useRef<FlatList>(null);
   const nearBottomRef = useRef(true);
-  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
-    };
-  }, []);
-
-  const scrollToEndDebounced = useCallback((force = false) => {
+  const lastScrollRef = useRef(0);
+  const scrollToEndThrottled = useCallback((force = false) => {
     if (!force && !nearBottomRef.current) return;
-    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
-    scrollTimerRef.current = setTimeout(() => {
-      listRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+    const now = Date.now();
+    if (now - lastScrollRef.current < 100) return;
+    lastScrollRef.current = now;
+    listRef.current?.scrollToEnd({ animated: true });
   }, []);
 
   const onContentSizeChange = useCallback(() => {
-    scrollToEndDebounced();
-  }, [scrollToEndDebounced]);
+    scrollToEndThrottled();
+  }, [scrollToEndThrottled]);
 
   // When parent triggers scroll (button press), scroll to bottom
   useEffect(() => {
@@ -101,10 +95,8 @@ export default function MessageList({
             item={item}
             isDark={isDark}
             accentColor={accentColor}
-            onDelete={() => onDeleteMessage(item.id)}
-            onResend={
-              item.role === 'user' ? () => onResendMessage(item.id) : undefined
-            }
+            onDelete={onDeleteMessage}
+            onResend={item.role === 'user' ? onResendMessage : undefined}
           />
         )}
         keyExtractor={(item) => item.id}

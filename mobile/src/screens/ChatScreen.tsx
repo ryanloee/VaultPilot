@@ -152,7 +152,7 @@ export default function ChatScreen({ navigation, route }: any) {
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
 
   // Keep a ref of the latest sessionId to avoid stale closure in effect
-  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   // Handle navigation params when returning from SessionsScreen
@@ -430,17 +430,18 @@ export default function ChatScreen({ navigation, route }: any) {
     setInput(msg.content);
   }, [sessionId]);
 
-  // Debounced scroll-to-end — only when user is near bottom
-  const scrollToEndDebounced = useCallback((force = false) => {
+  // Throttled scroll-to-end — guarantee at least one scroll every 100ms
+  const lastScrollRef = useRef(0);
+  const scrollToEndThrottled = useCallback((force = false) => {
     if (!force && !nearBottomRef.current) return;
-    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
-    scrollTimerRef.current = setTimeout(() => {
-      listRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+    const now = Date.now();
+    if (now - lastScrollRef.current < 100) return;
+    lastScrollRef.current = now;
+    listRef.current?.scrollToEnd({ animated: true });
   }, []);
 
   // Wrapper for onContentSizeChange (ignores width/height params)
-  const onContentSizeChange = useCallback(() => { scrollToEndDebounced(); }, [scrollToEndDebounced]);
+  const onContentSizeChange = useCallback(() => { scrollToEndThrottled(); }, [scrollToEndThrottled]);
 
   // Track whether user is near the bottom
   // Use msgsRef to avoid stale closure — ref always has latest messages
@@ -453,7 +454,7 @@ export default function ChatScreen({ navigation, route }: any) {
   }, []);
 
   // Scroll when new messages arrive (user sends → force scroll)
-  useEffect(() => { scrollToEndDebounced(true); }, [msgs.length]);
+  useEffect(() => { scrollToEndThrottled(true); }, [msgs.length]);
 
   if (loading) {
     return (

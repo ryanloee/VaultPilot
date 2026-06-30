@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Text, View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { renderLatex, parseLatexSegments } from '../utils/latex';
 import Icon from './Icon';
@@ -51,7 +51,7 @@ function processLatexSegments(text: string, textColor: string, accentColor: stri
 }
 
 /** Lightweight markdown renderer — handles headers, bold, italic, code, lists, links, LaTeX, [[wikilinks]], auto-detected note refs. */
-export default function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap }: Props) {
+const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap }: Props) {
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let inCodeBlock = false;
@@ -157,7 +157,9 @@ export default function MarkdownPreview({ content, textColor, accentColor, isDar
   }
 
   return <>{elements}</>;
-}
+});
+
+export default MarkdownPreview;
 
 /**
  * Parse inline markdown: **bold**, *italic*, `code`, [link](url), [[wikilink]].

@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    add_note_to_collection_with_context, create_collection_with_context,
-    create_subscription_with_context, delete_collection_with_context, delete_note_with_context,
+    add_note_to_collection_with_context, compute_and_update_next_run,
+    create_collection_with_context, create_subscription_with_context,
+    delete_collection_with_context, delete_note_with_context,
     delete_subscription_with_context, export_all_notes_with_context,
     export_note_markdown_with_context, find_related_notes_with_context,
     get_subscription_with_context, import_markdown_with_context, initialize_storage_with_context,
@@ -25,7 +26,7 @@ use vaultpilot_lib::storage::{
     load_settings_with_context, rebuild_index_with_context,
     remove_note_from_collection_with_context, save_chat_state_async, save_note_with_context,
     save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
-    vault_export_with_context, StorageContext,
+    update_subscription_with_context, vault_export_with_context, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
@@ -410,6 +411,12 @@ enum SubscriptionActions {
     /// List all subscriptions
     List,
 
+    /// Get a single subscription by ID
+    Get {
+        /// Subscription ID
+        id: String,
+    },
+
     /// Create a new subscription
     Create {
         /// Human-readable name
@@ -449,6 +456,26 @@ enum SubscriptionActions {
         id: String,
         /// Enable (true) or disable (false)
         enabled: bool,
+    },
+
+    /// Update an existing subscription's editable fields
+    Update {
+        /// Subscription ID
+        id: String,
+        /// New human-readable name
+        name: String,
+        /// New cron schedule expression (e.g. "0 9 * * 1")
+        #[arg(long)]
+        schedule: Option<String>,
+        /// New AI prompt template (may contain {{placeholders}})
+        #[arg(long)]
+        prompt: Option<String>,
+        /// New comma-separated allowed tools (e.g. "web_search,read_note")
+        #[arg(long)]
+        tools: Option<String>,
+        /// New target collection name for result notes
+        #[arg(long)]
+        target_collection: Option<String>,
     },
 }
 
@@ -920,6 +947,13 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
                 "count": count
             }))
         }
+        SubscriptionActions::Get { id } => {
+            let sub = get_subscription_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("subscription not found: {id}"))?;
+            Ok(serde_json::json!({
+                "subscription": sub
+            }))
+        }
         SubscriptionActions::Create {
             name,
             schedule,
@@ -986,6 +1020,49 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
                 "updated": true,
                 "id": id,
                 "enabled": enabled
+            }))
+        }
+        SubscriptionActions::Update {
+            id,
+            name,
+            schedule,
+            prompt,
+            tools,
+            target_collection,
+        } => {
+            // Load existing subscription to merge partial updates
+            let existing = get_subscription_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("subscription not found: {id}"))?;
+
+            let new_name = name.clone();
+            let new_schedule = schedule.clone().unwrap_or(existing.schedule);
+            let new_prompt = prompt.clone().unwrap_or(existing.prompt);
+            let new_tools = tools.clone().unwrap_or(existing.tools);
+            let new_target = target_collection.clone().unwrap_or(existing.target_collection);
+
+            let updated = update_subscription_with_context(
+                context,
+                id,
+                &new_name,
+                &new_schedule,
+                &new_prompt,
+                &new_tools,
+                &new_target,
+            )?;
+            if !updated {
+                anyhow::bail!("subscription not found: {id}");
+            }
+
+            // Recompute next_run_at if schedule changed
+            if schedule.is_some() {
+                let _ = compute_and_update_next_run(context, id, &new_schedule);
+            }
+
+            let sub = get_subscription_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("subscription not found after update: {id}"))?;
+            Ok(serde_json::json!({
+                "updated": true,
+                "subscription": sub
             }))
         }
     }

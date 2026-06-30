@@ -1,16 +1,20 @@
 //! Scheduled Research — AI subscription execution engine (#2167).
 //!
-//! Runs AI subscription tasks: executes the prompt, saves the result
-//! as a vault note in the target collection, and updates run metadata.
+//! Runs AI subscription tasks: computes the next run time from cron expressions,
+//! substitutes placeholder variables ({{topic}}, {{date}}, etc.), optionally
+//! includes the previous run's result as cross-run context, executes the prompt,
+//! saves the result as a vault note in the target collection, and updates run
+//! metadata.
 
 use std::time::Duration;
-
 use anyhow::Result;
+use chrono::Utc;
 use tracing::instrument;
 
 use crate::models::{AiSubscription, NoteDocument, NoteMeta};
 use crate::storage::subscriptions::{
-    list_due_subscriptions_with_context, update_subscription_run_with_context,
+    compute_and_update_next_run, list_due_subscriptions_with_context,
+    update_subscription_run_with_context,
 };
 use crate::storage::{save_note_with_context, StorageContext};
 
@@ -19,12 +23,14 @@ const _SUBSCRIPTION_AI_TIMEOUT: Duration = Duration::from_secs(180);
 /// Timeout for storage-layer I/O.
 const _STORAGE_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Run all due subscriptions (enabled subscriptions).
+/// Run all due subscriptions (enabled + next_run_at <= now).
 ///
 /// For each subscription:
-/// 1. Execute the prompt via AI (ask_with_ai_with_context)
-/// 2. Save the AI response as a note in the target collection
-/// 3. Update subscription run metadata
+/// 1. Substitute placeholder variables in the prompt
+/// 2. Optionally include the previous run's result as context
+/// 3. Execute the prompt via AI
+/// 4. Save the AI response as a note in the target collection
+/// 5. Update subscription run metadata and compute next run time
 #[instrument(skip(context))]
 pub async fn run_all_due_subscriptions(context: &StorageContext) -> Vec<SubscriptionRunResult> {
     let subs = match list_due_subscriptions_with_context(context) {
@@ -61,6 +67,62 @@ pub struct SubscriptionRunResult {
     pub error: Option<String>,
 }
 
+// ─── Placeholder substitution ──────────────────────────────────────
+
+/// Context available for placeholder substitution in subscription prompts.
+struct SubstitutionContext {
+    /// The subscription's own name.
+    subscription_name: String,
+    /// The current date/time in a human-readable format.
+    now_formatted: String,
+    /// The previous run's result note title (empty string if first run).
+    last_run_title: String,
+    /// The previous run's result note body (truncated, empty if first run).
+    last_run_body_preview: String,
+}
+
+/// Substitute {{placeholders}} in the prompt template.
+///
+/// Supported placeholders:
+/// - `{{topic}}` — subscription name
+/// - `{{date}}` — current date (YYYY-MM-DD)
+/// - `{{datetime}}` — current date-time (YYYY-MM-DD HH:MM)
+/// - `{{last_run_title}}` — previous result note title (cross-run context)
+/// - `{{last_run_body}}` — previous result body preview (cross-run context)
+fn substitute_placeholders(template: &str, ctx: &SubstitutionContext) -> String {
+    template
+        .replace("{{topic}}", &ctx.subscription_name)
+        .replace("{{date}}", &ctx.now_formatted[..10.min(ctx.now_formatted.len())])
+        .replace("{{datetime}}", &ctx.now_formatted[..16.min(ctx.now_formatted.len())])
+        .replace("{{last_run_title}}", &ctx.last_run_title)
+        .replace("{{last_run_body}}", &ctx.last_run_body_preview)
+}
+
+/// Compute the next run time from a cron expression.
+/// Returns an ISO-8601 formatted string, or None if the expression is invalid.
+///
+/// The `cron` crate expects a 6 or 7-field expression:
+/// `sec min hour dayOfMonth month dayOfWeek [year]`
+/// VaultPilot stores standard 5-field cron `min hour dayOfMonth month dayOfWeek`,
+/// so we prepend "0 " (seconds=0) to form the 6-field equivalent.
+#[cfg(test)]
+fn compute_next_run_time_iso(cron_expr: &str) -> Option<String> {
+    use std::str::FromStr;
+
+    // Prepend "0 " to convert 5-field standard cron to 6-field cron crate format.
+    let full_expr = if cron_expr.split_whitespace().count() == 5 {
+        format!("0 {}", cron_expr)
+    } else {
+        cron_expr.to_string()
+    };
+
+    let schedule = cron::Schedule::from_str(&full_expr).ok()?;
+    let next = schedule.upcoming(Utc).next()?;
+    Some(next.to_rfc3339())
+}
+
+// ─── Subscription execution ────────────────────────────────────────
+
 /// Execute a single subscription: prompt AI, save result as note.
 #[instrument(skip(context, subscription))]
 pub async fn run_single_subscription(
@@ -70,11 +132,26 @@ pub async fn run_single_subscription(
     let id = subscription.id.clone();
     let name = subscription.name.clone();
 
-    // Step 1: Run the prompt via AI
-    let prompt = &subscription.prompt;
+    // Build substitution context
+    let now = Utc::now();
+    let now_formatted = now.format("%Y-%m-%d %H:%M").to_string();
+
+    // Load last run note for cross-run context (if any)
+    let (last_title, last_body) = load_last_run_context(context, &id);
+
+    let sub_ctx = SubstitutionContext {
+        subscription_name: name.clone(),
+        now_formatted,
+        last_run_title: last_title,
+        last_run_body_preview: last_body,
+    };
+
+    // Substitute placeholders in the prompt
+    let prompt = substitute_placeholders(&subscription.prompt, &sub_ctx);
     let tools = &subscription.tools;
 
-    let result = execute_subscription_prompt(context, prompt, tools).await;
+    // Step 1: Run the prompt via AI
+    let result = execute_subscription_prompt(context, &prompt, tools).await;
 
     let (status, note_id, note_title, error_msg) = match result {
         Ok(answer) => {
@@ -82,7 +159,7 @@ pub async fn run_single_subscription(
             let title = format!(
                 "[Scheduled] {} — {}",
                 name,
-                chrono::Utc::now().format("%Y-%m-%d %H:%M")
+                now.format("%Y-%m-%d %H:%M")
             );
 
             let meta = NoteMeta {
@@ -94,12 +171,20 @@ pub async fn run_single_subscription(
                 ..Default::default()
             };
 
+            let body = format!(
+                "# {}\n\n{}\n\n---\n*Generated by AI Scheduled Research — {}*\n*Subscription: {} — {}({})*\n*Prompt: {}*",
+                title,
+                answer,
+                now.to_rfc3339(),
+                name,
+                id,
+                crates_io_display_id(&id),
+                prompt
+            );
+
             let note = NoteDocument {
                 meta,
-                body: format!(
-                    "# {}\n\n{}\n\n---\n*Generated by AI Scheduled Research*\n*Subscription: {}*\n*Prompt: {}*",
-                    title, answer, name, prompt
-                ),
+                body,
                 search_snippet: None,
             };
 
@@ -107,6 +192,8 @@ pub async fn run_single_subscription(
                 Ok(saved_doc) => {
                     // Step 3: Update subscription run metadata
                     let _ = update_subscription_run_with_context(context, &id, "success", "");
+                    // Step 4: Compute and store next run time
+                    let _ = compute_and_update_next_run(context, &id, &subscription.schedule);
                     (
                         "success".to_string(),
                         Some(saved_doc.meta.id.clone()),
@@ -140,6 +227,17 @@ pub async fn run_single_subscription(
     }
 }
 
+/// Load the last successful run's note title and body preview for cross-run context.
+fn load_last_run_context(context: &StorageContext, sub_id: &str) -> (String, String) {
+    match crate::storage::subscriptions::get_last_successful_run_note(context, sub_id) {
+        Ok(Some(note)) => {
+            let preview: String = note.body.chars().take(500).collect();
+            (note.meta.title, preview)
+        }
+        _ => (String::new(), String::new()),
+    }
+}
+
 /// Execute the AI prompt for a subscription.
 ///
 /// Uses ask_with_ai_with_context for rich grounding with vault context.
@@ -147,10 +245,10 @@ pub async fn run_single_subscription(
 async fn execute_subscription_prompt(
     context: &StorageContext,
     prompt: &str,
-    _tools: &str,
+    tools: &str,
 ) -> Result<String, anyhow::Error> {
     // Build a system-like instruction that wraps the subscription prompt.
-    let effective_prompt = format!(
+    let mut effective_prompt = format!(
         r#"[Scheduled Research Task]
 You are running a recurring research subscription.
 Execute the following prompt thoroughly and provide a well-structured response.
@@ -161,10 +259,18 @@ RESEARCH PROMPT:
 Please provide a comprehensive response with:
 - Key findings
 - Sources/references where applicable
-- Timestamp of this research
-"#,
+- Timestamp of this research"#,
         prompt
     );
+
+    // If tools are allowed, add a note about available capabilities
+    if !tools.is_empty() {
+        effective_prompt.push_str(&format!(
+            "\n\nAvailable tools: {}
+(These tools will be used automatically if needed.)",
+            tools
+        ));
+    }
 
     // Use the existing ask API for grounded answers
     let answer = crate::ask_with_ai_with_context(
@@ -180,6 +286,15 @@ Please provide a comprehensive response with:
     Ok(answer.answer)
 }
 
+/// Helper: truncate a UUID to its first 8 chars for display.
+fn crates_io_display_id(id: &str) -> String {
+    if id.len() > 8 {
+        id[..8].to_string()
+    } else {
+        id.to_string()
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -189,7 +304,7 @@ mod tests {
         initialize_storage_with_context, subscriptions::create_subscription_with_context,
         StorageContext,
     };
-    use chrono::Utc;
+    use chrono::{DateTime, Timelike, Utc};
     use std::path::PathBuf;
 
     fn setup_temp_context() -> (PathBuf, StorageContext) {
@@ -200,6 +315,82 @@ mod tests {
         std::fs::create_dir_all(&temp).expect("temp dir");
         let ctx = StorageContext::for_test(&temp);
         (temp, ctx)
+    }
+
+    #[test]
+    fn test_compute_next_run_time_iso_valid() {
+        // "0 9 * * 1" = every Monday at 09:00 UTC
+        let result = compute_next_run_time_iso("0 9 * * 1").unwrap();
+        // Should be a valid RFC3339 timestamp
+        assert!(result.contains('T'), "expected RFC3339 date, got: {result}");
+        // Parse it
+        let parsed: DateTime<Utc> = result.parse().expect("valid RFC3339 timestamp");
+        assert_eq!(parsed.hour(), 9);
+        assert_eq!(parsed.minute(), 0);
+        // Should be in the future
+        assert!(parsed > Utc::now() - chrono::Duration::minutes(5));
+    }
+
+    #[test]
+    fn test_compute_next_run_time_iso_every_hour() {
+        let result = compute_next_run_time_iso("0 * * * *").unwrap();
+        let parsed: DateTime<Utc> = result.parse().unwrap();
+        assert_eq!(parsed.minute(), 0);
+        assert!(parsed > Utc::now() - chrono::Duration::minutes(5));
+    }
+
+    #[test]
+    fn test_compute_next_run_time_iso_invalid() {
+        assert!(compute_next_run_time_iso("invalid cron").is_none());
+        assert!(compute_next_run_time_iso("").is_none());
+    }
+
+    #[test]
+    fn test_substitute_placeholders_all() {
+        let template = "Research {{topic}} on {{date}} at {{datetime}}.
+Last time we found: {{last_run_title}} — {{last_run_body}}";
+
+        let ctx = SubstitutionContext {
+            subscription_name: "AI News".to_string(),
+            now_formatted: "2026-06-30 14:30".to_string(),
+            last_run_title: "Previous Results".to_string(),
+            last_run_body_preview: "Key insights from last week...".to_string(),
+        };
+
+        let result = substitute_placeholders(template, &ctx);
+        assert!(result.contains("AI News"), "topic not substituted");
+        assert!(result.contains("2026-06-30"), "date not substituted");
+        assert!(result.contains("14:30"), "datetime not substituted");
+        assert!(result.contains("Previous Results"), "last_run_title not substituted");
+        assert!(result.contains("Key insights from last week"), "last_run_body not substituted");
+    }
+
+    #[test]
+    fn test_substitute_placeholders_empty_context() {
+        let template = "Research {{topic}}";
+        let ctx = SubstitutionContext {
+            subscription_name: "Test".to_string(),
+            now_formatted: "2026-06-30 12:00".to_string(),
+            last_run_title: String::new(),
+            last_run_body_preview: String::new(),
+        };
+
+        let result = substitute_placeholders(template, &ctx);
+        assert_eq!(result, "Research Test");
+    }
+
+    #[test]
+    fn test_substitute_placeholders_no_placeholders() {
+        let template = "Just a plain prompt without variables";
+        let ctx = SubstitutionContext {
+            subscription_name: "Test".to_string(),
+            now_formatted: "2026-06-30 12:00".to_string(),
+            last_run_title: String::new(),
+            last_run_body_preview: String::new(),
+        };
+
+        let result = substitute_placeholders(template, &ctx);
+        assert_eq!(result, template);
     }
 
     #[test]

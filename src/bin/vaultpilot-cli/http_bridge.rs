@@ -27,7 +27,7 @@ use vaultpilot_lib::ai::actions::{
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     create_subscription_async, delete_subscription_async, get_subscription_async,
-    list_subscriptions_async, set_subscription_enabled_with_context,
+    list_subscriptions_async, set_subscription_enabled_with_context, update_subscription_async,
 };
 use vaultpilot_lib::storage::{
     load_note_async, load_settings_async, save_note_async, search_notes_async, StorageContext,
@@ -74,7 +74,9 @@ pub(super) async fn run_http_bridge(
         )
         .route(
             "/api/subscriptions/{sub_id}",
-            get(http_get_subscription).delete(http_delete_subscription),
+            get(http_get_subscription)
+                .delete(http_delete_subscription)
+                .put(http_update_subscription),
         )
         .route(
             "/api/subscriptions/{sub_id}/run",
@@ -745,6 +747,90 @@ async fn http_toggle_subscription(
             "Subscription not found",
         ))
     }
+}
+
+/// Request body for PUT /api/subscriptions/{sub_id} — Update a subscription.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateSubscriptionRequest {
+    name: String,
+    #[serde(default)]
+    schedule: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    tools: Option<String>,
+    #[serde(default)]
+    target_collection: Option<String>,
+}
+
+/// PUT /api/subscriptions/{sub_id} — Update an existing subscription.
+async fn http_update_subscription(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(sub_id): AxumPath<String>,
+    Json(req): Json<UpdateSubscriptionRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    // Load existing subscription for partial merge
+    let existing = get_subscription_async(&state.context, sub_id.clone())
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_update_subscription: failed to load subscription: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to load subscription",
+            )
+        })?
+        .ok_or_else(|| openai_error(StatusCode::NOT_FOUND, "Subscription not found"))?;
+
+    let new_schedule = req.schedule.unwrap_or(existing.schedule.clone());
+    let new_prompt = req.prompt.unwrap_or(existing.prompt.clone());
+    let new_tools = req.tools.unwrap_or(existing.tools.clone());
+    let new_target = req.target_collection.unwrap_or(existing.target_collection.clone());
+
+    let updated = update_subscription_async(
+        &state.context,
+        sub_id.clone(),
+        req.name,
+        new_schedule.clone(),
+        new_prompt,
+        new_tools,
+        new_target,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!("http_update_subscription: failed to update subscription: {e}");
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to update subscription",
+        )
+    })?;
+
+    if !updated {
+        return Err(openai_error(
+            StatusCode::NOT_FOUND,
+            "Subscription not found",
+        ));
+    }
+
+    // Reload and return the updated subscription
+    let sub = get_subscription_async(&state.context, sub_id.clone())
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_update_subscription: failed to reload subscription: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to reload subscription",
+            )
+        })?
+        .ok_or_else(|| openai_error(StatusCode::NOT_FOUND, "Subscription not found"))?;
+
+    Ok(Json(serde_json::json!({
+        "updated": true,
+        "subscription": sub
+    })))
 }
 
 // ─── AI Action Handlers (#2188) ─────────────────────────────────────

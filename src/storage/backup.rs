@@ -83,14 +83,21 @@ pub(crate) fn auto_backup_database(db_path: &Path) -> Result<()> {
         Ok(conn) => {
             let _ = conn.execute_batch("PRAGMA busy_timeout = 5000;");
             let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-            conn.backup(DatabaseName::Main, &current_bak, None)
-                .with_context(|| {
+            if let Err(e) = conn.backup(DatabaseName::Main, &current_bak, None) {
+                // Fallback: plain file copy when online backup is not possible
+                // (e.g. the source file is not a valid SQLite database).
+                tracing::warn!(
+                    error = %e,
+                    "Online backup failed, falling back to fs::copy"
+                );
+                fs::copy(db_path, &current_bak).with_context(|| {
                     format!(
-                        "online backup failed from {} to {}",
+                        "failed to copy database from {} to {}",
                         db_path.display(),
                         current_bak.display()
                     )
                 })?;
+            }
         }
         Err(e) => {
             // Fallback: plain file copy when we cannot open the source.

@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::{debug, instrument, warn};
 
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDate, Utc};
 use crate::models::{NoteDocument, NoteMeta, SearchQuery, SearchResult};
 
 use super::pool::open_connection;
@@ -500,6 +500,29 @@ fn query_like_note_metas(
     Ok(rows)
 }
 
+/// Attempt to parse a date/time string into a UTC DateTime.
+/// Supports full RFC 3339 (e.g. `2024-01-15T10:00:00Z`, `2024-01-15T10:00:00+08:00`)
+/// and plain date-only strings (`YYYY-MM-DD`, assumed midnight UTC).
+/// Returns `None` for empty or unparseable strings (filter is conservatively skipped).
+fn parse_dt(s: &str) -> Option<DateTime<Utc>> {
+    if s.is_empty() {
+        return None;
+    }
+    // Full RFC 3339 with timezone
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    // Date-only: YYYY-MM-DD (assume midnight UTC)
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Some(d.and_hms_opt(0, 0, 0)?.and_utc());
+    }
+    // Fallback: chrono's flexible parser, tries many ISO 8601 / RFC 3339 variants
+    if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+        return Some(dt);
+    }
+    None
+}
+
 /// Filter a list of NoteMetas by optional date range bounds.
 /// Parses RFC 3339 timestamps into `DateTime<FixedOffset>` for proper
 /// timezone-aware comparison, avoiding incorrect string-comparison results
@@ -512,16 +535,16 @@ fn filter_by_date_range(
     modified_before: Option<&str>,
 ) -> Vec<NoteMeta> {
     // Pre-parse filter boundaries once (cached for all notes).
-    let created_after_dt = created_after.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-    let created_before_dt = created_before.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-    let modified_after_dt = modified_after.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-    let modified_before_dt = modified_before.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+    let created_after_dt = created_after.and_then(parse_dt);
+    let created_before_dt = created_before.and_then(parse_dt);
+    let modified_after_dt = modified_after.and_then(parse_dt);
+    let modified_before_dt = modified_before.and_then(parse_dt);
 
     notes.retain(|note| {
         // Parse each note's timestamps; if unparseable (e.g. empty/invalid),
         // skip the corresponding filter checks (conservative: keep the note).
-        let created_dt = DateTime::parse_from_rfc3339(&note.created_at).ok();
-        let updated_dt = DateTime::parse_from_rfc3339(&note.updated_at).ok();
+        let created_dt = parse_dt(&note.created_at);
+        let updated_dt = parse_dt(&note.updated_at);
 
         if let Some(after_dt) = created_after_dt {
             if let Some(ref dt) = created_dt {

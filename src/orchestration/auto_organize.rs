@@ -374,7 +374,7 @@ impl AutoOrganizer {
             .map(|(word, frequency)| KeywordEntry { word, frequency })
             .filter(|e| e.frequency >= MIN_TF)
             .collect();
-        entries.sort_by(|a, b| b.frequency.cmp(&a.frequency));
+        entries.sort_by_key(|b| std::cmp::Reverse(b.frequency));
         entries.truncate(MAX_KEYWORDS);
 
         entries.into_iter().map(|e| e.word).collect()

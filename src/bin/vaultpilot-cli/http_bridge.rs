@@ -899,15 +899,21 @@ async fn http_chat_completions(
                                 "finish_reason": null
                             }]
                         });
-                        // #2104: try_send never blocks the executor thread. If the
-                        // bounded buffer is full (slow client), drop this chunk to keep
-                        // memory bounded instead of growing without limit. Logged at
-                        // debug level to avoid spam under sustained backpressure.
-                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
-                            chunk_tx_ref.try_send(chunk_data.to_string())
+                        // #2104, #2228: Use blocking_send instead of try_send so that
+                        // backpressure is properly applied to the upstream when the client
+                        // is slow. blocking_send will block the current tokio task (not
+                        // the entire runtime) until the bounded buffer has space, ensuring
+                        // no chunks are silently dropped. The comment about "never blocking
+                        // the executor thread" from the original try_send approach was
+                        // incorrect: blocking_send inside a spawned task only blocks that
+                        // task, not the executor threads — other tasks continue running.
+                        // If the channel is closed (client disconnected), log and abort.
+                        if let Err(tokio::sync::mpsc::error::SendError(dropped)) =
+                            chunk_tx_ref.blocking_send(chunk_data.to_string())
                         {
-                            tracing::debug!(
-                                "streaming chunk buffer full (slow client); dropping chunk to bound memory"
+                            tracing::warn!(
+                                "streaming chunk send failed (client disconnected?); dropped {} bytes",
+                                dropped.len()
                             );
                         }
                     },

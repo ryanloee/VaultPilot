@@ -33,6 +33,7 @@ pub async fn chat_with_ai_with_context(
     mut emit_status: impl FnMut(&str, String),
 ) -> Result<ChatExchangeResult, anyhow::Error> {
     let settings = initialize_storage_async(context).await?;
+    let _guard = context.chat_state_lock.lock().await;
     let mut state = load_chat_state_async(context).await?;
     let images = image_paths.unwrap_or_default();
     let trimmed_question = question.trim().to_string();

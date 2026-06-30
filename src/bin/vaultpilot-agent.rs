@@ -379,8 +379,12 @@ async fn handle_request(
             serde_json::to_value(&result)
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
-        "loadChatState" => serialize_result(load_chat_state_async(context).await),
+        "loadChatState" => {
+            let _guard = context.chat_state_lock.lock().await;
+            serialize_result(load_chat_state_async(context).await)
+        }
         "saveChatState" => {
+            let _guard = context.chat_state_lock.lock().await;
             let params: SaveChatStateParams = parse_params(&request.params)?;
             serialize_result(save_chat_state_async(context, &params.state).await)
         }

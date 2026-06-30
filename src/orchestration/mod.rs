@@ -11,5 +11,7 @@ pub use chat::{
     prepare_chat_for_ai, rollback_last_user_turn, PreparedChatContext,
 };
 pub use compress::compress_chat_history_with_context;
-pub use scheduled_research::{run_all_due_subscriptions, run_single_subscription, SubscriptionRunResult};
+pub use scheduled_research::{
+    run_all_due_subscriptions, run_single_subscription, SubscriptionRunResult,
+};
 pub use write::write_with_ai_with_context;

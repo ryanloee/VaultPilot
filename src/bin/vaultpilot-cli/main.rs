@@ -678,7 +678,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                     body: result.clone(),
                     search_snippet: None,
                 };
-                let saved = vaultpilot_lib::storage::save_note_with_context(context, note)?;
+                let saved = tokio::task::block_in_place(|| {
+                    vaultpilot_lib::storage::save_note_with_context(context, note)
+                })?;
                 to_json(&serde_json::json!({
                     "content": result,
                     "saved": true,

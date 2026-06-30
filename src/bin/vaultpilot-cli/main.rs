@@ -214,6 +214,12 @@ enum Commands {
         #[command(subcommand)]
         action: SubscriptionActions,
     },
+
+    /// Manage Email-to-Vault integration — sync IMAP emails into your vault (#2187)
+    Mail {
+        #[command(subcommand)]
+        action: MailActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -478,6 +484,48 @@ enum SubscriptionActions {
     },
 }
 
+#[derive(Subcommand)]
+enum MailActions {
+    /// Add a new mail account (IMAP)
+    Add {
+        /// Human-readable name for this account
+        name: String,
+        /// IMAP server hostname (e.g. imap.gmail.com)
+        #[arg(long)]
+        host: String,
+        /// IMAP server port (e.g. 993 for IMAPS)
+        #[arg(long, default_value_t = 993)]
+        port: u16,
+        /// IMAP username (email address)
+        #[arg(long)]
+        username: String,
+        /// IMAP password / app-specific password
+        #[arg(long)]
+        password: String,
+        /// Disable TLS (for plaintext testing only)
+        #[arg(long)]
+        no_tls: bool,
+        /// Sync frequency in minutes
+        #[arg(long, default_value_t = 30)]
+        sync_frequency: u64,
+    },
+
+    /// List all configured mail accounts
+    List,
+
+    /// Delete a mail account by ID
+    Delete {
+        /// Account ID
+        id: String,
+    },
+
+    /// Sync (fetch new emails) for a specific account
+    Sync {
+        /// Account ID
+        id: String,
+    },
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -696,6 +744,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Subscriptions { action } => {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
+        Commands::Mail { action } => handle_mail(context, action).await,
     }
 }
 
@@ -934,6 +983,86 @@ fn handle_collections(context: &StorageContext, action: &CollectionActions) -> R
                 "count": count,
                 "collectionId": id
             }))
+        }
+    }
+}
+
+async fn handle_mail(context: &StorageContext, action: &MailActions) -> Result<Value> {
+    match action {
+        MailActions::Add {
+            name,
+            host,
+            port,
+            username,
+            password,
+            no_tls,
+            sync_frequency,
+        } => {
+            let account = vaultpilot_lib::mail::add_mail_account(
+                context,
+                name,
+                host,
+                *port,
+                username,
+                password,
+                !*no_tls,
+                *sync_frequency,
+            )?;
+            Ok(serde_json::json!({
+                "created": true,
+                "account": {
+                    "id": account.id,
+                    "name": account.name,
+                    "host": account.host,
+                    "port": account.port,
+                    "username": account.username,
+                    "useTls": account.use_tls,
+                    "syncFrequencyMinutes": account.sync_frequency_minutes,
+                }
+            }))
+        }
+        MailActions::List => {
+            let accounts = vaultpilot_lib::mail::list_mail_accounts(context)?;
+            let count = accounts.len();
+            // Redact passwords in output
+            let accounts: Vec<_> = accounts
+                .into_iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "id": a.id,
+                        "name": a.name,
+                        "host": a.host,
+                        "port": a.port,
+                        "username": a.username,
+                        "useTls": a.use_tls,
+                        "syncEnabled": a.sync_enabled,
+                        "syncFrequencyMinutes": a.sync_frequency_minutes,
+                        "lastSyncAt": a.last_sync_at,
+                        "createdAt": a.created_at,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "accounts": accounts,
+                "count": count
+            }))
+        }
+        MailActions::Delete { id } => {
+            let deleted = vaultpilot_lib::mail::delete_mail_account(context, id)?;
+            Ok(serde_json::json!({
+                "deleted": deleted,
+                "id": id
+            }))
+        }
+        MailActions::Sync { id } => {
+            let result = tokio::task::spawn_blocking({
+                let ctx = context.clone();
+                let id = id.clone();
+                move || vaultpilot_lib::mail::sync_mail_account(&ctx, &id)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("sync task failed: {e}"))??;
+            to_json(&result)
         }
     }
 }

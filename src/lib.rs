@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod ai;
 pub mod crypto;
+pub mod mail;
 pub mod models;
 pub mod orchestration;
 pub mod plugin;

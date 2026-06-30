@@ -1419,6 +1419,70 @@ fn mcp_tools() -> Vec<Value> {
                 "openWorldHint": false
             }
         }),
+        serde_json::json!({
+            "name": "email.search",
+            "title": "Search Imported Emails",
+            "description": "Search emails imported via Email-to-Vault integration by subject, sender, or body text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query to match against subject, from address, or body text."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default: 20).",
+                        "default": 20
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "emails": { "type": "array" },
+                    "count": { "type": "integer" }
+                }
+            },
+            "annotations": {
+                "title": "Search Imported Emails",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "email.get",
+            "title": "Get Imported Email",
+            "description": "Get full details of a specific imported email by its ID, including the vault note ID it was linked to.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Email ID to retrieve."
+                    }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "email": { "type": "object" }
+                }
+            },
+            "annotations": {
+                "title": "Get Imported Email",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
     ]
 }
 
@@ -2006,6 +2070,56 @@ async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
+async fn mcp_call_email_search(context: &StorageContext, arguments: Value) -> Value {
+    let query = match arguments.get("query").and_then(Value::as_str) {
+        Some(q) if !q.is_empty() => q.to_string(),
+        _ => {
+            return mcp_tool_error("email.search requires non-empty 'query' parameter".to_string())
+        }
+    };
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(20)
+        .min(100);
+
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || {
+        match vaultpilot_lib::mail::search_emails(&ctx, &query, limit, 0) {
+            Ok(emails) => {
+                let count = emails.len();
+                mcp_tool_success(
+                    format!("Found {count} email(s) matching '{query}'."),
+                    serde_json::to_value(&emails).unwrap_or_default(),
+                )
+            }
+            Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
+async fn mcp_call_email_get(context: &StorageContext, arguments: Value) -> Value {
+    let id = match arguments.get("id").and_then(Value::as_str) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return mcp_tool_error("email.get requires non-empty 'id' parameter".to_string()),
+    };
+
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || match vaultpilot_lib::mail::get_email(&ctx, &id) {
+        Ok(Some(email)) => mcp_tool_success(
+            format!("Email: {}", email.subject),
+            serde_json::json!({ "email": email }),
+        ),
+        Ok(None) => mcp_tool_error(format!("email not found: {id}")),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
 // ─── Token optimization helpers (#2108) ──────────────────────────
 //
 // External Agents consume vault content through this MCP server. Returning
@@ -2399,7 +2513,7 @@ mod tests {
     #[test]
     fn mcp_tools_count() {
         let tools = mcp_tools();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 16);
     }
 
     #[test]
@@ -2915,7 +3029,7 @@ mod tests {
         assert!(modes.contains(&"full"));
         assert!(modes.contains(&"summary"));
         assert!(modes.contains(&"meta"));
-        // tool count unchanged (no tools added/removed).
-        assert_eq!(tools.len(), 14);
+        // tool count reflects all registered tools.
+        assert_eq!(tools.len(), 16);
     }
 }

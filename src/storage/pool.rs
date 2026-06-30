@@ -128,6 +128,16 @@ impl StorageContext {
         Ok(ctx)
     }
 
+    /// Get a pooled SQLite connection.
+    /// Public so that sibling modules (e.g. `mail`) can access the database.
+    pub fn get_connection(
+        &self,
+    ) -> anyhow::Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
+        self.pool
+            .get()
+            .map_err(|e| anyhow::anyhow!("failed to get connection from pool: {e}"))
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(temp: &std::path::Path) -> Self {
         Self::with_pool(AppPaths {
@@ -265,6 +275,8 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         "#,
     )?;
     ensure_attachment_columns(connection)?;
+    // Ensure mail tables for Email-to-Vault integration
+    connection.execute_batch(crate::mail::MAIL_SCHEMA_DDL)?;
     connection.execute_batch("PRAGMA user_version = 1;")?;
     Ok(())
 }

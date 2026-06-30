@@ -168,7 +168,7 @@ describe('Settings Import (#1222)', () => {
     expect(mockAsyncStorage.setItem).toHaveBeenCalled();
   });
 
-  it('should still save keys to SecureStore even when all keys are empty to keep index in sync', async () => {
+  it('should NOT overwrite SecureStore when all keys are empty to preserve existing keys (#2264)', async () => {
     const exportNoKeys = JSON.stringify({
       version: 1,
       exportedAt: new Date().toISOString(),
@@ -183,10 +183,33 @@ describe('Settings Import (#1222)', () => {
     mockAsyncStorage.setItem.mockResolvedValue(undefined);
     await importSettings(exportNoKeys);
 
-    // Should always update SecureStore to keep key-provider index in sync (fix #1909)
+    // Should NOT overwrite SecureStore when all keys are empty (fix #2264)
+    // Preserves existing keys that are already in SecureStore
+    expect(mockSecureStore.setItemAsync).not.toHaveBeenCalledWith(
+      'vaultpilot_provider_keys',
+      expect.any(String)
+    );
+  });
+
+  it('should write to SecureStore when keys are present', async () => {
+    const exportWithKeys = JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      themeMode: 'dark',
+      accentColor: '#3B82F6',
+      providers: [
+        { name: 'Provider1', apiBase: 'https://api1.com', apiKey: 'sk-real', model: 'm1', apiFormat: 'openai' },
+      ],
+      activeProviderIndex: 0,
+    });
+
+    mockAsyncStorage.setItem.mockResolvedValue(undefined);
+    mockSecureStore.setItemAsync.mockResolvedValue(undefined);
+    await importSettings(exportWithKeys);
+
     expect(mockSecureStore.setItemAsync).toHaveBeenCalledWith(
       'vaultpilot_provider_keys',
-      JSON.stringify([''])
+      JSON.stringify(['sk-real'])
     );
   });
 });

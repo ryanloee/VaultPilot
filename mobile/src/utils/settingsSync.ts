@@ -110,7 +110,10 @@ export async function importSettings(json: string): Promise<{ providersImported:
   // Save API keys to SecureStore FIRST — if this fails we must not overwrite
   // the existing provider list with empty keys, otherwise keys are lost.
   const keys = data.providers.map(p => p.apiKey ?? '');
-  await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+  if (keys.some(k => k !== '')) {
+    await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+  }
+  // If all keys are empty, preserve existing SecureStore content
 
   // Only after SecureStore succeeded, write providers with keys stripped to AsyncStorage
   state.providers = data.providers.map(p => ({ ...p, apiKey: '' })); // keys go to SecureStore

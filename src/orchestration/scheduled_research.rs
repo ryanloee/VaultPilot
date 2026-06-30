@@ -12,7 +12,7 @@ use crate::models::{AiSubscription, NoteDocument, NoteMeta};
 use crate::storage::subscriptions::{
     list_due_subscriptions_with_context, update_subscription_run_with_context,
 };
-use crate::storage::{save_note_with_context, StorageContext};
+use crate::storage::{save_note_async, StorageContext};
 
 /// Per-subscription AI call timeout (3 minutes).
 const _SUBSCRIPTION_AI_TIMEOUT: Duration = Duration::from_secs(180);
@@ -103,7 +103,7 @@ pub async fn run_single_subscription(
                 search_snippet: None,
             };
 
-            match save_note_with_context(context, note) {
+            match save_note_async(context, note).await {
                 Ok(saved_doc) => {
                     // Step 3: Update subscription run metadata
                     let _ = update_subscription_run_with_context(context, &id, "success", "");

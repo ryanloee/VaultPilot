@@ -343,9 +343,10 @@ impl AutoOrganizer {
     /// Confirm a weak link (promote to real association).
     pub fn confirm_weak_link(context: &StorageContext, link_id: &str) -> Result<bool> {
         let connection = context.get_connection()?;
+        let now = Utc::now().to_rfc3339();
         connection.execute(
-            "UPDATE weak_links SET status = 'confirmed' WHERE id = ?1",
-            params![link_id],
+            "UPDATE weak_links SET status = 'confirmed', updated_at = ?2 WHERE id = ?1",
+            params![link_id, &now],
         )?;
         Ok(connection.changes() > 0)
     }
@@ -353,9 +354,10 @@ impl AutoOrganizer {
     /// Dismiss a weak link.
     pub fn dismiss_weak_link(context: &StorageContext, link_id: &str) -> Result<bool> {
         let connection = context.get_connection()?;
+        let now = Utc::now().to_rfc3339();
         connection.execute(
-            "UPDATE weak_links SET status = 'dismissed' WHERE id = ?1",
-            params![link_id],
+            "UPDATE weak_links SET status = 'dismissed', updated_at = ?2 WHERE id = ?1",
+            params![link_id, &now],
         )?;
         Ok(connection.changes() > 0)
     }
@@ -1015,6 +1017,39 @@ mod tests {
         let pending =
             fetch_weak_links(&conn, Some(WeakLinkStatus::Pending)).expect("fetch pending");
         assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires fix for #2278: confirm_weak_link/dismiss_weak_link do not update updated_at"]
+    fn weak_links_confirm_updates_timestamps() {
+        let (_tmp, ctx) = setup_test_context();
+        let conn = ctx.get_connection().expect("connection");
+
+        let id = create_weak_link(&conn, "note-a", "note-b", "content_similarity", 0.85)
+            .expect("create weak link");
+
+        // Small delay so created_at and updated_at differ
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Confirm the link
+        AutoOrganizer::confirm_weak_link(&ctx, &id).expect("confirm");
+
+        let links = fetch_weak_links(&conn, Some(WeakLinkStatus::Confirmed)).expect("fetch");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].status.as_str(), "confirmed");
+        assert!(
+            links[0].updated_at > links[0].created_at,
+            "updated_at should be > created_at after confirm; got created_at={}, updated_at={}",
+            links[0].created_at,
+            links[0].updated_at
+        );
+
+        // Wait again and dismiss
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        AutoOrganizer::dismiss_weak_link(&ctx, &id).expect("dismiss");
+        let links = fetch_weak_links(&conn, Some(WeakLinkStatus::Dismissed)).expect("fetch");
+        assert_eq!(links.len(), 1);
+        assert!(links[0].updated_at > links[0].created_at);
     }
 
     #[test]

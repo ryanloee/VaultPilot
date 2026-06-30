@@ -27,7 +27,7 @@ use vaultpilot_lib::ai::actions::{
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     create_subscription_async, delete_subscription_async, get_subscription_async,
-    list_subscriptions_async, set_subscription_enabled_with_context,
+    list_subscriptions_async, set_subscription_enabled_async,
 };
 use vaultpilot_lib::storage::{
     load_note_async, load_settings_async, save_note_async, search_notes_async, StorageContext,
@@ -725,7 +725,8 @@ async fn http_toggle_subscription(
     Json(req): Json<ToggleSubscriptionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let updated = set_subscription_enabled_with_context(&state.context, &sub_id, req.enabled)
+    let updated = set_subscription_enabled_async(&state.context, sub_id.clone(), req.enabled)
+        .await
         .map_err(|e| {
             tracing::warn!("http_toggle_subscription: failed to toggle subscription: {e}");
             openai_error(

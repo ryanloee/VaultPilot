@@ -205,7 +205,8 @@ pub async fn run_single_subscription(
             let save_result = {
                 let ctx = ctx.clone();
                 let note_to_save = note;
-                tokio::task::spawn_blocking(move || save_note_with_context(&ctx, note_to_save)).await
+                tokio::task::spawn_blocking(move || save_note_with_context(&ctx, note_to_save))
+                    .await
             };
             match save_result {
                 Ok(Ok(saved_doc)) => {

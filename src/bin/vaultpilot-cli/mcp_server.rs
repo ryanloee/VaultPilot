@@ -1794,7 +1794,11 @@ async fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Va
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let tags_str = arguments.get("tags").and_then(Value::as_str).unwrap_or("").to_string();
+    let tags_str = arguments
+        .get("tags")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let keywords_str = arguments
         .get("keywords")
         .and_then(Value::as_str)
@@ -1825,7 +1829,8 @@ async fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Va
         ) {
             Ok(result) => {
                 let count = result.notes.len();
-                let structured = with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
+                let structured =
+                    with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
                 mcp_tool_success(format!("Found {count} note(s)."), structured)
             }
             Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
@@ -1926,14 +1931,12 @@ async fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Va
         }
     }
     let ctx = context.clone();
-    tokio::task::spawn_blocking(move || {
-        match import_markdown_with_context(&ctx, &paths) {
-            Ok(result) => mcp_tool_success(
-                "Import completed.".to_string(),
-                serde_json::to_value(&result).unwrap_or_default(),
-            ),
-            Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-        }
+    tokio::task::spawn_blocking(move || match import_markdown_with_context(&ctx, &paths) {
+        Ok(result) => mcp_tool_success(
+            "Import completed.".to_string(),
+            serde_json::to_value(&result).unwrap_or_default(),
+        ),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     })
     .await
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
@@ -1941,14 +1944,12 @@ async fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Va
 
 async fn mcp_call_index_rebuild(context: &StorageContext) -> Value {
     let ctx = context.clone();
-    tokio::task::spawn_blocking(move || {
-        match rebuild_index_with_context(&ctx) {
-            Ok(stats) => mcp_tool_success(
-                "Index rebuilt successfully.".to_string(),
-                serde_json::to_value(&stats).unwrap_or_default(),
-            ),
-            Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-        }
+    tokio::task::spawn_blocking(move || match rebuild_index_with_context(&ctx) {
+        Ok(stats) => mcp_tool_success(
+            "Index rebuilt successfully.".to_string(),
+            serde_json::to_value(&stats).unwrap_or_default(),
+        ),
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
     })
     .await
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))

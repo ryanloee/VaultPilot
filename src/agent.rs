@@ -1941,6 +1941,23 @@ mod pure_function_tests {
     }
 
     #[test]
+    fn normalize_path_components_preserves_absolute_paths() {
+        // Absolute paths must retain their leading slash (regression test for #2266)
+        assert_eq!(ToolProxy::normalize_path_components("/foo/bar"), "/foo/bar");
+        assert_eq!(ToolProxy::normalize_path_components("/foo/../bar"), "/bar");
+        assert_eq!(
+            ToolProxy::normalize_path_components("/foo/./bar"),
+            "/foo/bar"
+        );
+        assert_eq!(ToolProxy::normalize_path_components("/"), "/");
+        // Path traversal beyond root is safely clamped
+        assert_eq!(
+            ToolProxy::normalize_path_components("/../../../etc/passwd"),
+            "/etc/passwd"
+        );
+    }
+
+    #[test]
     fn write_pattern_allows_normalized_path() {
         let (tmp, mut config) = setup();
         let _guard = TestGuard(tmp.clone());

@@ -218,12 +218,12 @@ export async function deleteSession(id: string): Promise<void> {
 
 export async function togglePin(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE sessions SET pinned = 1 - pinned WHERE id = ?', [id]);
+  await db.runAsync("UPDATE sessions SET pinned = 1 - pinned, updated_at = strftime('%s','now') WHERE id = ?", [id]);
 }
 
 export async function toggleArchive(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE sessions SET archived = 1 - archived WHERE id = ?', [id]);
+  await db.runAsync("UPDATE sessions SET archived = 1 - archived, updated_at = strftime('%s','now') WHERE id = ?", [id]);
 }
 
 export async function searchSessions(query: string): Promise<DbSession[]> {

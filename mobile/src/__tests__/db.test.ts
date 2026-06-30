@@ -158,19 +158,21 @@ describe('toggleStar', () => {
 });
 
 describe('togglePin / toggleArchive', () => {
-  it('togglePin flips pinned', async () => {
+  it('togglePin flips pinned and bumps updated_at', async () => {
     const db = await freshDb();
     await db.togglePin('sess1');
     const [sql, params] = mockDb.runAsync.mock.calls[0];
     expect(sql).toContain('1 - pinned');
+    expect(sql).toContain("updated_at = strftime('%s','now')");
     expect(params).toEqual(['sess1']);
   });
 
-  it('toggleArchive flips archived', async () => {
+  it('toggleArchive flips archived and bumps updated_at', async () => {
     const db = await freshDb();
     await db.toggleArchive('sess1');
     const [sql, params] = mockDb.runAsync.mock.calls[0];
     expect(sql).toContain('1 - archived');
+    expect(sql).toContain("updated_at = strftime('%s','now')");
     expect(params).toEqual(['sess1']);
   });
 });

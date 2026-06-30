@@ -373,7 +373,7 @@ export async function getNoteTitleMap(): Promise<Map<string, string>> {
 
 export async function toggleStar(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('UPDATE notes SET starred = 1 - starred WHERE id = ?', [id]);
+  await db.runAsync("UPDATE notes SET starred = 1 - starred, updated_at = strftime('%s','now') WHERE id = ?", [id]);
 }
 
 export async function getNoteCount(): Promise<number> {

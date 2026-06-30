@@ -1,12 +1,19 @@
 [package]
 name = "vaultpilot"
-version = "0.4.52"
+version = "0.4.53"
 
 description = "Local-first knowledge-base assistant with Windows UI and cross-platform CLI"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ryanloee/VaultPilot"
 homepage = "https://github.com/ryanloee/VaultPilot"
+
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/mcp-connector",
+]
 
 [lib]
 name = "vaultpilot_lib"

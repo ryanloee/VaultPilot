@@ -230,10 +230,17 @@ impl ToolProxy {
 
         // All checks passed — atomically check the limit and increment.
         // Using a CAS loop to avoid TOCTOU race (#1572).
+        //
+        // When max_tool_calls == 0 the limit is unlimited: skip the CAS loop
+        // entirely so we never overflow the counter (#2205).
+        if self.config.limits.max_tool_calls == 0 {
+            let entry = self.allow(tool, args_json);
+            return Ok(entry);
+        }
+
         loop {
             let current = self.tool_call_count.load(Ordering::Acquire);
-            if self.config.limits.max_tool_calls > 0 && current >= self.config.limits.max_tool_calls
-            {
+            if current >= self.config.limits.max_tool_calls {
                 let entry = self.deny(tool, args_json, "tool call limit exceeded");
                 return Ok(entry);
             }
@@ -718,21 +725,31 @@ pub async fn run_agent(
 
         on_event(&AgentEvent::Thinking { step: step + 1 });
 
-        // Ask LLM what tool to call (with per-step timeout — #1574)
+        // Ask LLM what tool to call (with per-step timeout — #1574, #2142)
         let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
-        let selection = tokio::time::timeout(
+        let selection = match tokio::time::timeout(
             remaining,
             ai::select_tool_call(settings, prompt, images, history, &tool_transcripts),
         )
         .await
-        .map_err(|_| anyhow!("LLM call timed out at step {}", step + 1))?
-        .map_err(|e| {
-            anyhow!(
-                "LLM call failed at step {}: {}",
-                step + 1,
-                sanitize_error(&e.to_string())
-            )
-        })?;
+        {
+            Err(_) => {
+                if proxy.elapsed() >= config.limits.max_duration {
+                    // Session-level timeout — go through graceful path (#2142)
+                    on_event(&AgentEvent::Timeout);
+                    exit_reason = ExitReason::Timeout;
+                    break;
+                }
+                return Err(anyhow!("LLM call timed out at step {}", step + 1));
+            }
+            Ok(inner) => inner.map_err(|e| {
+                anyhow!(
+                    "LLM call failed at step {}: {}",
+                    step + 1,
+                    sanitize_error(&e.to_string())
+                )
+            })?,
+        };
 
         total_tokens += selection.usage.input_tokens.unwrap_or(0) as u64
             + selection.usage.output_tokens.unwrap_or(0) as u64;
@@ -749,20 +766,35 @@ pub async fn run_agent(
 
         match selection.tool_call {
             ai::AssistantToolCall::None => {
-                // LLM decided no more tools needed — generate final answer (with timeout — #1574)
+                // LLM decided no more tools needed — generate final answer (with timeout — #1574, #2142)
                 let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
                 let answer = if tool_transcripts.is_empty() {
-                    tokio::time::timeout(
+                    match tokio::time::timeout(
                         remaining,
                         crate::ai::answer_question(settings, prompt, &[], images, history),
                     )
                     .await
-                    .map_err(|_| anyhow!("final answer LLM call timed out"))?
-                    .map_err(|e| {
-                        anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
-                    })?
+                    {
+                        Err(_) if proxy.elapsed() >= config.limits.max_duration => {
+                            // Session-level timeout — graceful fallback (#2142)
+                            return Ok(AgentResult {
+                                answer:
+                                    "[Agent session timed out before generating a final answer]"
+                                        .to_string(),
+                                steps_used: step + 1,
+                                tokens_used: total_tokens,
+                                audit_log: proxy.audit_log(),
+                            });
+                        }
+                        Err(_) => {
+                            return Err(anyhow!("final answer LLM call timed out"));
+                        }
+                        Ok(inner) => inner.map_err(|e| {
+                            anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
+                        })?,
+                    }
                 } else {
-                    tokio::time::timeout(
+                    match tokio::time::timeout(
                         remaining,
                         crate::ai::answer_after_tools(
                             settings,
@@ -773,10 +805,27 @@ pub async fn run_agent(
                         ),
                     )
                     .await
-                    .map_err(|_| anyhow!("final answer LLM call timed out"))?
-                    .map_err(|e| {
-                        anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
-                    })?
+                    {
+                        Err(_) if proxy.elapsed() >= config.limits.max_duration => {
+                            // Session-level timeout — graceful fallback (#2142)
+                            let fallback = format!(
+                                "[Agent session timed out; {} tool result(s) were collected but a final answer could not be generated]",
+                                tool_transcripts.len()
+                            );
+                            return Ok(AgentResult {
+                                answer: fallback,
+                                steps_used: step + 1,
+                                tokens_used: total_tokens,
+                                audit_log: proxy.audit_log(),
+                            });
+                        }
+                        Err(_) => {
+                            return Err(anyhow!("final answer LLM call timed out"));
+                        }
+                        Ok(inner) => inner.map_err(|e| {
+                            anyhow!("final answer failed: {}", sanitize_error(&e.to_string()))
+                        })?,
+                    }
                 };
                 total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
                     + answer.usage.output_tokens.unwrap_or(0) as u64;
@@ -1160,21 +1209,23 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
     // Read file with size limit to prevent OOM (TOCTOU-safe: no pre-check of metadata)
     const MAX_FILE_SIZE: u64 = 1024 * 1024; // 1 MB
     let mut file = std::fs::File::open(&file_path)?;
-    let mut content = String::new();
-    file.by_ref()
-        .take(MAX_FILE_SIZE)
-        .read_to_string(&mut content)?;
-    // If the file was larger than MAX_FILE_SIZE, we may have read a partial file.
-    // Check by trying to read one more byte.
+    let mut buf = Vec::new();
+    file.by_ref().take(MAX_FILE_SIZE).read_to_end(&mut buf)?;
+    // Probe one extra byte to check if file exceeds the size limit.
     let mut probe = [0u8; 1];
     let remaining = file.read(&mut probe)?;
-    if remaining > 0 || content.len() > MAX_FILE_SIZE as usize {
+    if remaining > 0 {
         return Err(anyhow!(
             "file too large (>{} bytes): {}",
             MAX_FILE_SIZE,
             path
         ));
     }
+    // Convert bytes to UTF-8. Using read_to_end + from_utf8 instead of
+    // read_to_string + take avoids misleading "invalid UTF-8" errors
+    // when the 1 MB boundary splits a multi-byte character (#2141).
+    let content =
+        String::from_utf8(buf).map_err(|_| anyhow!("file is not valid UTF-8: {}", path))?;
     // Cap at 50KB to prevent token explosion
     const MAX_READ: usize = 50 * 1024;
     if content.len() > MAX_READ {

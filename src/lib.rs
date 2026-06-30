@@ -12,7 +12,8 @@ pub mod storage;
 pub use orchestration::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
     finalize_chat_with_ai_answer, normalize_tool_path, prepare_chat_for_ai,
-    rollback_last_user_turn, write_with_ai_with_context, PreparedChatContext,
+    rollback_last_user_turn, run_all_due_subscriptions, run_single_subscription,
+    write_with_ai_with_context, PreparedChatContext, SubscriptionRunResult,
 };
 #[cfg(test)]
 mod regression;

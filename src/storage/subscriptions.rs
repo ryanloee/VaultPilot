@@ -195,6 +195,39 @@ pub fn set_subscription_enabled_with_context(
     Ok(rows > 0)
 }
 
+/// Update subscription editable fields (name, schedule, prompt, tools, target_collection).
+#[instrument(skip(context))]
+pub fn update_subscription_with_context(
+    context: &StorageContext,
+    id: &str,
+    name: &str,
+    schedule: &str,
+    prompt: &str,
+    tools: &str,
+    target_collection: &str,
+) -> Result<bool> {
+    let (connection, _) = open_connection(context)?;
+    let rows = connection.execute(
+        r#"
+        UPDATE subscriptions
+        SET name = ?1, schedule = ?2, prompt = ?3,
+            tools = ?4, target_collection = ?5,
+            updated_at = ?6
+        WHERE id = ?7
+        "#,
+        params![
+            name,
+            schedule,
+            prompt,
+            tools,
+            target_collection,
+            Utc::now().to_rfc3339(),
+            id
+        ],
+    )?;
+    Ok(rows > 0)
+}
+
 /// List all enabled subscriptions that are due for execution.
 /// Currently returns all enabled subscriptions (simplified MVP — no cron-based
 /// scheduling yet, just manual `run` command).
@@ -288,6 +321,42 @@ pub async fn get_subscription_async(
 ) -> Result<Option<AiSubscription>> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || get_subscription_with_context(&ctx, &id))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+pub async fn update_subscription_async(
+    ctx: &StorageContext,
+    id: String,
+    name: String,
+    schedule: String,
+    prompt: String,
+    tools: String,
+    target_collection: String,
+) -> Result<bool> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || {
+        update_subscription_with_context(
+            &ctx,
+            &id,
+            &name,
+            &schedule,
+            &prompt,
+            &tools,
+            &target_collection,
+        )
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+pub async fn set_subscription_enabled_async(
+    ctx: &StorageContext,
+    id: String,
+    enabled: bool,
+) -> Result<bool> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || set_subscription_enabled_with_context(&ctx, &id, enabled))
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
@@ -434,5 +503,63 @@ mod tests {
         assert_eq!(due.len(), 2);
         assert!(due.iter().any(|s| s.id == sub1.id));
         assert!(due.iter().all(|s| s.enabled));
+    }
+
+    #[test]
+    fn test_update_subscription_fields() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).unwrap();
+
+        let sub = create_subscription_with_context(
+            &ctx,
+            "Original Name",
+            "0 0 * * *",
+            "original prompt",
+            "web_search",
+            "Research",
+        )
+        .unwrap();
+
+        // Update all editable fields
+        assert!(update_subscription_with_context(
+            &ctx,
+            &sub.id,
+            "Updated Name",
+            "0 9 * * 1",
+            "updated prompt with {{topic}}",
+            "web_search,read_note",
+            "Market Monitor",
+        )
+        .unwrap());
+
+        let updated = get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name, "Updated Name");
+        assert_eq!(updated.schedule, "0 9 * * 1");
+        assert_eq!(updated.prompt, "updated prompt with {{topic}}");
+        assert_eq!(updated.tools, "web_search,read_note");
+        assert_eq!(updated.target_collection, "Market Monitor");
+        // Fields not updated should remain
+        assert_eq!(updated.run_count, 0);
+        assert!(updated.enabled);
+    }
+
+    #[test]
+    fn test_update_subscription_nonexistent() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).unwrap();
+
+        let result = update_subscription_with_context(
+            &ctx,
+            "nonexistent-id",
+            "Test",
+            "0 0 * * *",
+            "test",
+            "",
+            "",
+        )
+        .unwrap();
+        assert!(!result);
     }
 }

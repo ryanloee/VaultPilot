@@ -10,7 +10,7 @@ import * as Haptics from 'expo-haptics';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { chatWithReconnect, ChatMessage } from '../api/client';
-import { buildNoteContext, buildSystemPrompt, executeToolCalls } from '../services/rag';
+import { buildNoteContext, buildSystemPrompt, executeToolCalls, ResponseStyle, RESPONSE_STYLE_LABELS } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession, getNoteTitleMap } from '../db';
 import { loadNoteTitleMap, clearNoteTitleCache } from '../utils/noteRefs';
 import { MessageBubble } from '../components/chat';
@@ -39,9 +39,11 @@ export default function ChatScreen({ navigation, route }: any) {
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [responseStyle, setResponseStyle] = useState<ResponseStyle>('standard');
   const activeLoadRef = useRef<string | null>(null);
   const isSendingRef = useRef(false);
   const routeHandledRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
 
   // Load a specific session by ID
   const loadSession = useCallback(async (sid: string, sessionTitle: string) => {
@@ -180,11 +182,22 @@ export default function ChatScreen({ navigation, route }: any) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
     const userText = input.trim();
 
+    // Check session consistency after await — if user navigated away, abort
+    const checkSessionAlive = (expectedSessionId: string): boolean => {
+      const current = sessionIdRef.current;
+      if (current !== expectedSessionId) {
+        console.warn('[Chat] session changed from', expectedSessionId, 'to', current, '— aborting send');
+        return false;
+      }
+      return true;
+    };
+
     // Add user message — only clear input after persistence succeeds
     let userId: string;
     let activeSessionId = sessionId;
     try {
       userId = await addMessage(activeSessionId, 'user', userText);
+      if (!checkSessionAlive(activeSessionId)) return;
     } catch (e: any) {
       // FOREIGN KEY = session was deleted/reset; recreate and retry
       if (String(e).includes('FOREIGN KEY') || String(e).includes('constraint')) {
@@ -192,10 +205,12 @@ export default function ChatScreen({ navigation, route }: any) {
           const newId = await createSession('新对话');
           activeSessionId = newId;
           userId = await addMessage(newId, 'user', userText);
+          if (!checkSessionAlive(newId)) return;
           // Only update UI state after message persistence succeeds (#2053)
           setSessionId(newId);
           setTitle('新对话');
           setMsgs([]);
+          msgsRef.current = [];
         } catch (e2) {
           console.warn('[Chat] addMessage retry failed:', e2);
           Alert.alert('发送失败', '无法创建对话，请重试');
@@ -207,6 +222,14 @@ export default function ChatScreen({ navigation, route }: any) {
         return;
       }
     }
+
+    // --- GUARD: session was switched while user message was being persisted? ---
+    if (sessionIdRef.current !== activeSessionId) {
+      // User navigated to another session mid-send; delete orphaned user message and bail
+      try { await deleteMessage(userId); } catch (_) { /* best-effort cleanup */ }
+      return;
+    }
+
     setInput('');
     setInputHeight(0);
     const userMsg: Msg = { id: userId, role: 'user', content: userText };
@@ -219,6 +242,14 @@ export default function ChatScreen({ navigation, route }: any) {
     let aiId: string;
     try {
       aiId = await addMessage(activeSessionId, 'assistant', '');
+      if (!checkSessionAlive(activeSessionId)) {
+        // Clean up: remove user message and AI placeholder from old session
+        try { await deleteMessage(aiId); } catch (_) {}
+        try { await deleteMessage(userId); } catch (_) {}
+        setInput(userText);
+        setMsgs(prev => prev.filter(m => m.id !== userId && m.id !== aiId));
+        return;
+      }
     } catch (e) {
       console.warn('[Chat] addMessage (assistant placeholder) failed:', e);
       // Roll back UI: restore user input and remove the user message bubble
@@ -227,9 +258,20 @@ export default function ChatScreen({ navigation, route }: any) {
       Alert.alert('发送失败', '无法创建 AI 回复记录');
       return;
     }
+
+    // --- GUARD: session was switched while AI placeholder was being created? ---
+    if (sessionIdRef.current !== activeSessionId) {
+      // Session switched; clean up both orphaned messages
+      try { await deleteMessage(userId); } catch (_) { /* best-effort cleanup */ }
+      try { await deleteMessage(aiId); } catch (_) { /* best-effort cleanup */ }
+      return;
+    }
+
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
 
     let full = '';
     try {
@@ -240,21 +282,27 @@ export default function ChatScreen({ navigation, route }: any) {
       } catch (ragErr) {
         console.warn('[Chat] buildNoteContext failed, continuing without RAG:', ragErr);
       }
-      const systemPrompt = buildSystemPrompt(noteContext);
+      const systemPrompt = buildSystemPrompt(noteContext, responseStyle);
 
       const history: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
-
-      abortRef.current?.abort();
-      abortRef.current = new AbortController();
       // #1900: 60s timeout to prevent UI freeze
       const TIMEOUT_MS = 60_000;
       timeoutRef.current = setTimeout(() => {
         abortRef.current?.abort();
       }, TIMEOUT_MS);
+
+      // Check session again before streaming — user may have navigated during the async gap
+      if (!checkSessionAlive(activeSessionId)) {
+        try { await deleteMessage(aiId); } catch (_) {}
+        try { await deleteMessage(userId); } catch (_) {}
+        setInput(userText);
+        setMsgs(prev => prev.filter(m => m.id !== userId && m.id !== aiId));
+        return;
+      }
 
       await chatWithReconnect(history, (chunk) => {
         if (chunk.done) return;
@@ -266,6 +314,11 @@ export default function ChatScreen({ navigation, route }: any) {
 
       // Execute tool calls (save notes etc.) and clean up markers
       const { cleaned, actions } = await executeToolCalls(full);
+      // #2223: Clear note title cache if any CRUD actions (e.g. SAVE_NOTE) were performed,
+      // so that newly created notes are immediately detected as clickable links
+      if (actions.length > 0) {
+        clearNoteTitleCache();
+      }
       const finalContent = actions.length > 0
         ? cleaned + '\n\n_' + actions.join('；') + '_'
         : cleaned;
@@ -277,6 +330,12 @@ export default function ChatScreen({ navigation, route }: any) {
 
       // Persist streamed content — separate try-catch so UI content is preserved on failure
       try {
+        // If session changed during streaming, skip DB write to avoid data leak
+        if (!checkSessionAlive(activeSessionId)) {
+          console.warn('[Chat] session changed during streaming — skipping updateMessage');
+          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
+          return;
+        }
         await updateMessage(aiId, full);
       } catch (persistErr) {
         console.warn('[Chat] updateMessage persist failed:', persistErr);
@@ -287,6 +346,11 @@ export default function ChatScreen({ navigation, route }: any) {
       // Save whatever partial content was received before the error
       const partial = full || (msgsRef.current.find(m => m.id === aiId)?.content ?? '');
       if (err.name === 'AbortError') {
+        // Check if session changed during abort — skip DB writes to avoid leaking data
+        if (!checkSessionAlive(activeSessionId)) {
+          console.warn('[Chat] session changed during abort — skipping DB writes');
+          return;
+        }
         if (partial) {
           try { await updateMessage(aiId, partial + '\n\n_[响应被中止]_'); } catch (dbErr) {
             console.error('[Chat] Failed to persist aborted response to DB:', dbErr);
@@ -303,6 +367,11 @@ export default function ChatScreen({ navigation, route }: any) {
           setMsgs(prev => prev.filter(m => m.id !== aiId));
         }
       } else {
+        // Check if session changed during error — skip DB writes to avoid leaking data
+        if (!checkSessionAlive(activeSessionId)) {
+          console.warn('[Chat] session changed during error — skipping DB writes');
+          return;
+        }
         // Persist partial content + error marker to database before updating UI
         const errorContent = partial
           ? `${partial}\n\n[错误] ${err.message}`
@@ -455,8 +524,33 @@ export default function ChatScreen({ navigation, route }: any) {
         </TouchableOpacity>
       )}
 
+      {/* Response style quick-switch */}
+      <View style={[s.styleRow, { borderTopColor: c.border, backgroundColor: c.bg }]}>
+        {(Object.keys(RESPONSE_STYLE_LABELS) as ResponseStyle[]).map((key) => (
+          <TouchableOpacity
+            key={key}
+            style={[
+              s.stylePill,
+              {
+                borderColor: responseStyle === key ? accentColor : c.border,
+                backgroundColor: responseStyle === key ? accentColor + '15' : 'transparent',
+              },
+            ]}
+            onPress={() => { setResponseStyle(key); }}
+            disabled={streaming}
+            accessibilityRole="button"
+            accessibilityLabel={RESPONSE_STYLE_LABELS[key]}
+            accessibilityState={{ selected: responseStyle === key }}
+          >
+            <Text style={[s.styleText, { color: responseStyle === key ? accentColor : c.textSecondary }]}>
+              {RESPONSE_STYLE_LABELS[key]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* Input bar */}
-      <View style={[s.inputBar, { borderTopColor: c.border, backgroundColor: c.bg }]}>
+      <View style={[s.inputBar, { backgroundColor: c.bg }]}>
         <TextInput
           style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
           value={input}
@@ -495,9 +589,26 @@ const s = StyleSheet.create({
     maxWidth: '80%', paddingHorizontal: 14, paddingVertical: 10,
     borderRadius: 16, marginBottom: 8,
   },
+  styleRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 8,
+    borderTopWidth: 1,
+  },
+  stylePill: {
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  styleText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',
-    padding: 8, borderTopWidth: 1,
+    padding: 8,
   },
   textInput: {
     flex: 1, borderWidth: 1, borderRadius: 20,

@@ -16,18 +16,20 @@ use uuid::Uuid;
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, create_collection_with_context,
-    delete_collection_with_context, delete_note_with_context, export_all_notes_with_context,
+    create_subscription_with_context, delete_collection_with_context, delete_note_with_context,
+    delete_subscription_with_context, export_all_notes_with_context,
     export_note_markdown_with_context, find_related_notes_with_context,
-    import_markdown_with_context, initialize_storage_with_context, list_collections_with_context,
-    list_notes_in_collection_with_context, load_chat_state_async, load_note_with_context,
+    get_subscription_with_context, import_markdown_with_context, initialize_storage_with_context,
+    list_collections_with_context, list_notes_in_collection_with_context,
+    list_subscriptions_with_context, load_chat_state_async, load_note_with_context,
     load_settings_with_context, rebuild_index_with_context,
     remove_note_from_collection_with_context, save_chat_state_async, save_note_with_context,
-    save_settings_with_context, search_notes_with_context, vault_export_with_context,
-    StorageContext,
+    save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
+    vault_export_with_context, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
-    sanitize_error, write_with_ai_with_context,
+    run_all_due_subscriptions, run_single_subscription, sanitize_error, write_with_ai_with_context,
 };
 
 use chrono::Utc;
@@ -205,6 +207,12 @@ enum Commands {
         /// Save the generated content as a new vault note
         #[arg(long)]
         save: bool,
+    },
+
+    /// Manage AI scheduled research subscriptions (#2167)
+    Subscriptions {
+        #[command(subcommand)]
+        action: SubscriptionActions,
     },
 }
 
@@ -394,6 +402,53 @@ enum CollectionActions {
         /// Maximum notes to return
         #[arg(long, default_value = "50")]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum SubscriptionActions {
+    /// List all subscriptions
+    List,
+
+    /// Create a new subscription
+    Create {
+        /// Human-readable name
+        name: String,
+        /// Cron schedule expression (e.g. "0 9 * * 1")
+        #[arg(long, default_value = "0 0 * * *")]
+        schedule: String,
+        /// AI prompt template (may contain {{placeholders}})
+        prompt: String,
+        /// Comma-separated allowed tools (e.g. "web_search,read_note")
+        #[arg(long, default_value = "web_search")]
+        tools: String,
+        /// Target collection name for result notes
+        #[arg(long, default_value = "Scheduled Research")]
+        target_collection: String,
+    },
+
+    /// Delete a subscription by ID
+    Delete {
+        /// Subscription ID
+        id: String,
+    },
+
+    /// Run a specific subscription by ID (or all due subscriptions)
+    Run {
+        /// Optional subscription ID. If omitted, runs all due subscriptions.
+        id: Option<String>,
+
+        /// Force run even if the subscription is disabled
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Enable or disable a subscription
+    Toggle {
+        /// Subscription ID
+        id: String,
+        /// Enable (true) or disable (false)
+        enabled: bool,
     },
 }
 
@@ -609,6 +664,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                     "saved": false,
                 }))
             }
+        }
+        Commands::Subscriptions { action } => {
+            tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
     }
 }
@@ -847,6 +905,87 @@ fn handle_collections(context: &StorageContext, action: &CollectionActions) -> R
                 "notes": notes,
                 "count": count,
                 "collectionId": id
+            }))
+        }
+    }
+}
+
+fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) -> Result<Value> {
+    match action {
+        SubscriptionActions::List => {
+            let subscriptions = list_subscriptions_with_context(context)?;
+            let count = subscriptions.len();
+            Ok(serde_json::json!({
+                "subscriptions": subscriptions,
+                "count": count
+            }))
+        }
+        SubscriptionActions::Create {
+            name,
+            schedule,
+            prompt,
+            tools,
+            target_collection,
+        } => {
+            let sub = create_subscription_with_context(
+                context,
+                name,
+                schedule,
+                prompt,
+                tools,
+                target_collection,
+            )?;
+            Ok(serde_json::json!({
+                "created": true,
+                "subscription": sub
+            }))
+        }
+        SubscriptionActions::Delete { id } => {
+            let deleted = delete_subscription_with_context(context, id)?;
+            Ok(serde_json::json!({
+                "deleted": deleted,
+                "id": id
+            }))
+        }
+        SubscriptionActions::Run { id, force } => {
+            // Run a specific subscription or all due
+            if let Some(sub_id) = id {
+                let sub = get_subscription_with_context(context, sub_id)?
+                    .ok_or_else(|| anyhow::anyhow!("subscription not found: {sub_id}"))?;
+                if !sub.enabled && !*force {
+                    anyhow::bail!(
+                        "subscription '{name}' is disabled (use --force to override)",
+                        name = sub.name
+                    );
+                }
+                let result = tokio::runtime::Runtime::new()
+                    .map_err(|e| anyhow::anyhow!("failed to create runtime: {e}"))?
+                    .block_on(run_single_subscription(context, &sub));
+                Ok(serde_json::json!({
+                    "ran": true,
+                    "result": result
+                }))
+            } else {
+                let results = tokio::runtime::Runtime::new()
+                    .map_err(|e| anyhow::anyhow!("failed to create runtime: {e}"))?
+                    .block_on(run_all_due_subscriptions(context));
+                let count = results.len();
+                Ok(serde_json::json!({
+                    "ran": true,
+                    "count": count,
+                    "results": results
+                }))
+            }
+        }
+        SubscriptionActions::Toggle { id, enabled } => {
+            let updated = set_subscription_enabled_with_context(context, id, *enabled)?;
+            if !updated {
+                anyhow::bail!("subscription not found: {id}");
+            }
+            Ok(serde_json::json!({
+                "updated": true,
+                "id": id,
+                "enabled": enabled
             }))
         }
     }

@@ -69,7 +69,7 @@ static MODEL_CONTEXT_RULES: &[ContextWindowRule] = &[
 pub fn resolve_context_window(settings: &AppSettings) -> (usize, String) {
     // Priority 1: explicit user configuration
     if let Some(explicit) = settings
-        .provider
+        .effective_provider()
         .context_window_tokens
         .filter(|value| *value > 0)
     {

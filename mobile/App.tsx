@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as SplashScreen from 'expo-splash-screen';
@@ -82,46 +82,50 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const loadedRef = useRef(false);
 
-  // Load saved settings on startup
-  useEffect(() => {
-    (async () => {
-      try {
-        await getDb(); // Initialize database
-        await ensureDefaultTemplates(); // #2154 — seed built-in note templates on first launch
-      } catch (e) {
-        console.error('[App] DB init failed:', e);
-        setErrorMsg(String(e));
-        setInitState('error');
-        await SplashScreen.hideAsync();
-        return;
-      }
-      try {
-        // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
-        const apiSettings = await getSettings();
-        useAppStore.getState().setApiSettings(apiSettings);
-
-        // Load theme settings from cfg_* keys
-        const [savedTheme, savedColor] = await Promise.all([
-          AsyncStorage.getItem('cfg_theme_mode'),
-          AsyncStorage.getItem('cfg_accent_color'),
-        ]);
-        if (savedTheme && isValidThemeMode(savedTheme)) {
-          useAppStore.getState().setThemeMode(savedTheme);
-          if (savedTheme === 'system') {
-            setIsDark(systemScheme === 'dark');
-          } else {
-            setIsDark(savedTheme === 'dark');
-          }
-        }
-        if (savedColor) useAppStore.getState().setAccentColor(savedColor);
-      } catch (e) {
-        console.warn('[App] Failed to load settings:', e);
-      }
-      loadedRef.current = true;
-      setInitState('ready');
+  // Initialize the app — reusable so retry button can call it again.
+  const initApp = useCallback(async () => {
+    loadedRef.current = false;
+    setInitState('loading');
+    setErrorMsg('');
+    try {
+      await getDb(); // Initialize database
+      await ensureDefaultTemplates(); // #2154 — seed built-in note templates on first launch
+    } catch (e) {
+      console.error('[App] DB init failed:', e);
+      setErrorMsg(String(e));
+      setInitState('error');
       await SplashScreen.hideAsync();
-    })();
-  }, []);
+      return;
+    }
+    try {
+      // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
+      const apiSettings = await getSettings();
+      useAppStore.getState().setApiSettings(apiSettings);
+
+      // Load theme settings from cfg_* keys
+      const [savedTheme, savedColor] = await Promise.all([
+        AsyncStorage.getItem('cfg_theme_mode'),
+        AsyncStorage.getItem('cfg_accent_color'),
+      ]);
+      if (savedTheme && isValidThemeMode(savedTheme)) {
+        useAppStore.getState().setThemeMode(savedTheme);
+        if (savedTheme === 'system') {
+          setIsDark(systemScheme === 'dark');
+        } else {
+          setIsDark(savedTheme === 'dark');
+        }
+      }
+      if (savedColor) useAppStore.getState().setAccentColor(savedColor);
+    } catch (e) {
+      console.warn('[App] Failed to load settings:', e);
+    }
+    loadedRef.current = true;
+    setInitState('ready');
+    await SplashScreen.hideAsync();
+  }, [systemScheme, setIsDark]);
+
+  // Load saved settings on startup
+  useEffect(() => { initApp(); }, [initApp]);
 
   // Follow system theme — only after initial load to avoid overriding saved preference
   useEffect(() => {
@@ -136,7 +140,7 @@ export default function App() {
         <Text style={{ fontSize: 18, fontWeight: '600', color: isDark ? '#F87171' : '#DC2626', marginBottom: 8 }}>数据库初始化失败</Text>
         <Text style={{ fontSize: 14, color: isDark ? '#9CA3AF' : '#6B7280', textAlign: 'center', marginBottom: 16 }}>{errorMsg}</Text>
         <TouchableOpacity
-          onPress={() => { setInitState('loading'); setErrorMsg(''); }}
+          onPress={() => { initApp(); }}
           style={{ paddingHorizontal: 24, paddingVertical: 12, backgroundColor: '#3B82F6', borderRadius: 8 }}
         >
           <Text style={{ color: '#FFF', fontWeight: '600' }}>重试</Text>

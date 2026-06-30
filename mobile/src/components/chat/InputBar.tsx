@@ -170,7 +170,7 @@ export default function InputBar({
   }, [voiceListening]);
 
   const togglePlus = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
     if (plusExpanded) {
       Animated.timing(expandAnim, { toValue: 0, duration: 150, useNativeDriver: false }).start(({ finished }) => {
         if (finished) setPlusExpanded(false);
@@ -183,7 +183,7 @@ export default function InputBar({
   };
 
   const toggleEmojiPicker = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
     if (showEmojiPicker) {
       setShowEmojiPicker(false);
     } else {
@@ -194,7 +194,7 @@ export default function InputBar({
   };
 
   const handleEmojiSelect = (emoji: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e));
     onEmojiSelect?.(emoji);
   };
 
@@ -263,7 +263,7 @@ export default function InputBar({
               <TouchableOpacity
                 key={i}
                 style={[styles.emojiTab, activeEmojiCategory === i && { borderBottomColor: accentColor, borderBottomWidth: 2 }]}
-                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setActiveEmojiCategory(i); }}
+                onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e)); setActiveEmojiCategory(i); }}
                 accessibilityRole="tab"
                 accessibilityLabel={cat.name}
                 accessibilityState={{ selected: activeEmojiCategory === i }}
@@ -276,7 +276,7 @@ export default function InputBar({
             <View style={{ flex: 1 }} />
             <TouchableOpacity
               style={styles.emojiTab}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowEmojiPicker(false); }}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(e => console.warn('[Haptics] error:', e)); setShowEmojiPicker(false); }}
               accessibilityRole="button"
               accessibilityLabel="关闭表情"
             >

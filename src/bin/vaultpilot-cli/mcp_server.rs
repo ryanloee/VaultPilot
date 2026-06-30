@@ -12,9 +12,8 @@ use axum::Json;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    delete_note_async, find_related_notes_async, import_markdown_async,
-    load_chat_state_async, load_note_async,
-    rebuild_index_async, save_chat_state_async, save_note_async,
+    delete_note_async, find_related_notes_async, import_markdown_async, load_chat_state_async,
+    load_note_async, rebuild_index_async, save_chat_state_async, save_note_async,
     search_notes_async, StorageContext,
 };
 use vaultpilot_lib::{

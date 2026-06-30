@@ -13,6 +13,9 @@ use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+use vaultpilot_lib::ai::actions::{
+    execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
+};
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
@@ -348,6 +351,21 @@ enum Commands {
     RevertEdit {
         /// The note ID to revert
         note_id: String,
+    },
+
+    /// Run AI quick actions on text (summarize, rewrite, translate, explain, etc.)
+    ///
+    /// These actions are part of the global AI command palette feature (#2188).
+    /// They operate on provided text and return AI-generated results.
+    ///
+    /// Examples:
+    ///   vaultpilot ai summarize "Long text to summarize..."
+    ///   vaultpilot ai translate "Hello" --language Chinese
+    ///   vaultpilot ai rewrite "Some text" --tone formal
+    ///   vaultpilot ai list-actions
+    Ai {
+        #[command(subcommand)]
+        action: AiSubcommand,
     },
 
     /// Manage AI scheduled research subscriptions (#2167)
@@ -1176,6 +1194,87 @@ enum ContextSurfaceActions {
     },
 }
 
+// ─── AI Action subcommands (#2188) ─────────────────────────────────
+
+#[derive(Subcommand)]
+enum AiSubcommand {
+    /// Summarize text into key points
+    Summarize {
+        /// The text to summarize
+        text: String,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Rewrite text with a specified tone
+    Rewrite {
+        /// The text to rewrite
+        text: String,
+        /// Target tone: formal, concise, vivid (default: professional)
+        #[arg(long)]
+        tone: Option<String>,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Translate text to a target language
+    Translate {
+        /// The text to translate
+        text: String,
+        /// Target language (default: English)
+        #[arg(long)]
+        language: Option<String>,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Explain a concept or passage
+    Explain {
+        /// The text to explain
+        text: String,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Continue writing from the given text
+    ContinueWriting {
+        /// The text to continue from
+        text: String,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Extract action items and to-dos from text
+    ExtractTodos {
+        /// The text to extract tasks from
+        text: String,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Find notes related to the given text in the vault
+    FindRelatedNotes {
+        /// The text to find related notes for
+        #[arg(long)]
+        text: Option<String>,
+        /// Note ID to use as context (alternative to text)
+        #[arg(long)]
+        note_id: Option<String>,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// List all available AI quick actions with their IDs and labels
+    ListActions,
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -1585,6 +1684,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 "reverted": true,
             }))
         }
+        Commands::Ai { action } => handle_ai(context, action).await,
         Commands::Subscriptions { action } => {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
@@ -1608,6 +1708,77 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Review { action } => {
             tokio::task::block_in_place(|| handle_review(context, action))
+        }
+    }
+}
+
+/// Execute an AI quick action via the backend and return the result.
+async fn run_ai_action(
+    context: &StorageContext,
+    action: AiActionType,
+    text: String,
+    target_language: Option<String>,
+    tone: Option<String>,
+    note_id: Option<String>,
+    model: Option<String>,
+) -> Result<Value> {
+    let settings = vaultpilot_lib::storage::initialize_storage_with_context(context)?;
+
+    let request = AiActionRequest {
+        action,
+        text,
+        target_language,
+        tone,
+        note_id,
+        model,
+    };
+
+    let action_label = request.action.label();
+    let action_id = request.action.id();
+    let result = execute_ai_action(&settings, &request).await;
+
+    if let Some(error) = &result.error {
+        anyhow::bail!("AI 操作失败: {}", error);
+    }
+
+    Ok(serde_json::json!({
+        "action": action_id,
+        "actionLabel": action_label,
+        "result": result.result,
+        "usage": {
+            "inputTokens": result.usage.input_tokens,
+            "outputTokens": result.usage.output_tokens,
+        },
+    }))
+}
+
+async fn handle_ai(context: &StorageContext, action: &AiSubcommand) -> Result<Value> {
+    match action {
+        AiSubcommand::Summarize { text, model } => {
+            run_ai_action(context, AiActionType::Summarize, text.clone(), None, None, None, model.clone()).await
+        }
+        AiSubcommand::Rewrite { text, tone, model } => {
+            run_ai_action(context, AiActionType::Rewrite, text.clone(), None, tone.clone(), None, model.clone()).await
+        }
+        AiSubcommand::Translate { text, language, model } => {
+            run_ai_action(context, AiActionType::Translate, text.clone(), language.clone(), None, None, model.clone()).await
+        }
+        AiSubcommand::Explain { text, model } => {
+            run_ai_action(context, AiActionType::Explain, text.clone(), None, None, None, model.clone()).await
+        }
+        AiSubcommand::ContinueWriting { text, model } => {
+            run_ai_action(context, AiActionType::ContinueWriting, text.clone(), None, None, None, model.clone()).await
+        }
+        AiSubcommand::ExtractTodos { text, model } => {
+            run_ai_action(context, AiActionType::ExtractTodos, text.clone(), None, None, None, model.clone()).await
+        }
+        AiSubcommand::FindRelatedNotes { text, note_id, model } => {
+            let input_text = text.clone().unwrap_or_default();
+            run_ai_action(context, AiActionType::FindRelatedNotes, input_text, None, None, note_id.clone(), model.clone()).await
+        }
+        AiSubcommand::ListActions => {
+            let actions = list_ai_actions();
+            Ok(serde_json::json!({ "actions": actions }))
         }
     }
 }

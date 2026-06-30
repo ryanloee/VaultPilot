@@ -1122,17 +1122,15 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
                         name = sub.name
                     );
                 }
-                let result = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow::anyhow!("failed to create runtime: {e}"))?
-                    .block_on(run_single_subscription(context, &sub));
+                let handle = tokio::runtime::Handle::current();
+                let result = handle.block_on(run_single_subscription(context, &sub));
                 Ok(serde_json::json!({
                     "ran": true,
                     "result": result
                 }))
             } else {
-                let results = tokio::runtime::Runtime::new()
-                    .map_err(|e| anyhow::anyhow!("failed to create runtime: {e}"))?
-                    .block_on(run_all_due_subscriptions(context));
+                let handle = tokio::runtime::Handle::current();
+                let results = handle.block_on(run_all_due_subscriptions(context));
                 let count = results.len();
                 Ok(serde_json::json!({
                     "ran": true,

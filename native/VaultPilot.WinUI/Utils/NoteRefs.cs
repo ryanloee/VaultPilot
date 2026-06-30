@@ -92,11 +92,19 @@ public static class NoteRefs
                 // in the middle of a Latin word (e.g. "React" in "Reactor" -> no match).
                 // For non-ASCII (CJK etc.) titles, boundary check is relaxed because
                 // CJK characters don't form compound words like Latin does.
+                var isAsciiOnly = title.All(c => c <= 0x7f);
                 var afterIdx = idx + title.Length;
                 var afterChar = afterIdx < text.Length ? text[afterIdx] : ' ';
-                var isAsciiOnly = title.All(c => c <= 0x7f);
                 var validAfter = !isAsciiOnly || (!char.IsLetterOrDigit(afterChar) && afterChar != '_');
                 if (!validAfter)
+                {
+                    searchFrom = idx + 1;
+                    continue;
+                }
+                var beforeIdx = idx - 1;
+                var beforeChar = beforeIdx >= 0 ? text[beforeIdx] : ' ';
+                var validBefore = !isAsciiOnly || (!char.IsLetterOrDigit(beforeChar) && beforeChar != '_');
+                if (!validBefore)
                 {
                     searchFrom = idx + 1;
                     continue;

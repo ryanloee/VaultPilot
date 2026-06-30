@@ -80,11 +80,18 @@ export function findNoteReferences(
       // a letter/digit/underscore (e.g. "React" in "Reactor" → no match).
       // For non-ASCII (CJK etc.) titles, boundary check is relaxed because
       // CJK characters don't form compound words like Latin does.
+      const isAsciiOnly = /^[\x00-\x7F]+$/.test(title);
       const afterIdx = idx + title.length;
       const afterChar = afterIdx < text.length ? text[afterIdx] : ' ';
-      const isAsciiOnly = /^[\x00-\x7F]+$/.test(title);
       const validAfter = !isAsciiOnly || !/[a-zA-Z0-9_]/.test(afterChar);
       if (!validAfter) {
+        searchFrom = idx + 1;
+        continue;
+      }
+      const beforeIdx = idx - 1;
+      const beforeChar = beforeIdx >= 0 ? text[beforeIdx] : ' ';
+      const validBefore = !isAsciiOnly || !/[a-zA-Z0-9_]/.test(beforeChar);
+      if (!validBefore) {
         searchFrom = idx + 1;
         continue;
       }

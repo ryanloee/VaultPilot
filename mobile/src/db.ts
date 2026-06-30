@@ -260,7 +260,7 @@ export interface DbMessage {
 export async function getMessages(sessionId: string): Promise<DbMessage[]> {
   const db = await getDb();
   return db.getAllAsync<DbMessage>(
-    'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC', [sessionId]
+    'SELECT * FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC', [sessionId]
   );
 }
 

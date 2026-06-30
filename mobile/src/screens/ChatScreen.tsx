@@ -391,7 +391,7 @@ export default function ChatScreen({ navigation, route }: any) {
       abortRef.current = null;
       if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     }
-  }, [input, streaming, sessionId]);
+  }, [input, streaming, sessionId, responseStyle]);
 
   // Create a new conversation
   const newChat = useCallback(async () => {

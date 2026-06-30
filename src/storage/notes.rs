@@ -1217,9 +1217,7 @@ fn index_note_file_with_connection(
         )?;
         if !document.meta.collections.is_empty() {
             let collection_names = document.meta.collections.clone();
-            let mut lookup = connection.prepare(
-                "SELECT id FROM collections WHERE name = ?1",
-            )?;
+            let mut lookup = connection.prepare("SELECT id FROM collections WHERE name = ?1")?;
             let now = Utc::now().to_rfc3339();
             for name in &collection_names {
                 let cid: Option<String> = lookup

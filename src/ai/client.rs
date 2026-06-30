@@ -519,8 +519,7 @@ pub async fn send_request_streaming(
             let mut err_buf = BytesMut::new();
             let mut err_stream = response.bytes_stream();
             while let Some(chunk) = err_stream.next().await {
-                let chunk =
-                    chunk.map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
+                let chunk = chunk.map_err(|e| anyhow!(format_transport_error(&e, &endpoint)))?;
                 if err_buf.len() + chunk.len() > MAX_RESPONSE_SIZE {
                     return Err(anyhow!(
                         "Streaming API error response body exceeds {}MB size limit, possible misconfigured endpoint",

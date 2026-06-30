@@ -243,7 +243,7 @@ async fn run_mcp_stdio(vault_dir: Option<String>) -> Result<()> {
                         }),
                     ))
                 } else {
-                    handle_request(&context, &state, request)
+                    handle_request(&context, &state, request).await
                 }
             }
             Err(error) => Some(McpResponse::error(
@@ -295,9 +295,9 @@ fn negotiate_protocol(requested: &str) -> &str {
     }
 }
 
-// --- Request Handler (sync, called from async context) ---
+// --- Request Handler (async, wrapped spawn_blocking for sync I/O) ---
 
-fn handle_request(
+async fn handle_request(
     context: &StorageContext,
     state: &McpServerState,
     request: McpRequest,
@@ -352,11 +352,61 @@ fn handle_request(
                 .unwrap_or_else(|| serde_json::json!({}));
 
             let result = match tool_name {
-                "vault_search" => handle_vault_search(context, arguments),
-                "vault_read" => handle_vault_read(context, arguments),
-                "vault_write" => handle_vault_write(context, arguments),
-                "vault_list" => handle_vault_list(context, arguments),
-                "vault_related" => handle_vault_related(context, arguments),
+                "vault_search" => {
+                    let ctx = context.clone();
+                    tokio::task::spawn_blocking(move || handle_vault_search(&ctx, arguments))
+                        .await
+                        .unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "isError": true,
+                                "content": [{"type": "text", "text": format!("task join failed: {e}")}],
+                            })
+                        })
+                }
+                "vault_read" => {
+                    let ctx = context.clone();
+                    tokio::task::spawn_blocking(move || handle_vault_read(&ctx, arguments))
+                        .await
+                        .unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "isError": true,
+                                "content": [{"type": "text", "text": format!("task join failed: {e}")}],
+                            })
+                        })
+                }
+                "vault_write" => {
+                    let ctx = context.clone();
+                    tokio::task::spawn_blocking(move || handle_vault_write(&ctx, arguments))
+                        .await
+                        .unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "isError": true,
+                                "content": [{"type": "text", "text": format!("task join failed: {e}")}],
+                            })
+                        })
+                }
+                "vault_list" => {
+                    let ctx = context.clone();
+                    tokio::task::spawn_blocking(move || handle_vault_list(&ctx, arguments))
+                        .await
+                        .unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "isError": true,
+                                "content": [{"type": "text", "text": format!("task join failed: {e}")}],
+                            })
+                        })
+                }
+                "vault_related" => {
+                    let ctx = context.clone();
+                    tokio::task::spawn_blocking(move || handle_vault_related(&ctx, arguments))
+                        .await
+                        .unwrap_or_else(|e| {
+                            serde_json::json!({
+                                "isError": true,
+                                "content": [{"type": "text", "text": format!("task join failed: {e}")}],
+                            })
+                        })
+                }
                 _ => {
                     return Some(McpResponse::error(
                         id,
@@ -371,53 +421,69 @@ fn handle_request(
         }
         "resources/list" => {
             let id = request.id.unwrap_or(Value::Null);
+            let ctx = context.clone();
             let cursor = request
                 .params
                 .get("cursor")
                 .and_then(Value::as_str)
-                .unwrap_or("");
+                .unwrap_or("")
+                .to_string();
             let offset = cursor.parse::<usize>().unwrap_or(0).min(usize::MAX / 2);
             let limit: usize = 50;
+            let id_for_blocking = id.clone();
 
-            match search_notes_with_context(
-                context,
-                SearchQuery {
-                    text: String::new(),
-                    tags: Vec::new(),
-                    keywords: Vec::new(),
-                    limit: Some(limit),
-                    offset: Some(offset),
-                    ..Default::default()
-                },
-            ) {
-                Ok(result) => {
-                    let resources: Vec<Value> = result
-                        .notes
-                        .into_iter()
-                        .map(|meta| {
-                            serde_json::json!({
-                                "uri": format!("vault://notes/{}", meta.id),
-                                "name": meta.title,
-                                "description": if meta.summary.is_empty() { Value::Null } else { Value::String(meta.summary) },
-                                "mimeType": "text/markdown"
-                            })
-                        })
-                        .collect();
-                    let next_offset = offset.saturating_add(resources.len());
-                    let has_more = next_offset < result.total;
-                    let mut payload = serde_json::json!({ "resources": resources });
-                    if has_more {
-                        payload["nextCursor"] = Value::String(next_offset.to_string());
+            Some(
+                tokio::task::spawn_blocking(move || {
+                    match search_notes_with_context(
+                        &ctx,
+                        SearchQuery {
+                            text: String::new(),
+                            tags: Vec::new(),
+                            keywords: Vec::new(),
+                            limit: Some(limit),
+                            offset: Some(offset),
+                            ..Default::default()
+                        },
+                    ) {
+                        Ok(result) => {
+                            let resources: Vec<Value> = result
+                                .notes
+                                .into_iter()
+                                .map(|meta| {
+                                    serde_json::json!({
+                                        "uri": format!("vault://notes/{}", meta.id),
+                                        "name": meta.title,
+                                        "description": if meta.summary.is_empty() { Value::Null } else { Value::String(meta.summary) },
+                                        "mimeType": "text/markdown"
+                                    })
+                                })
+                                .collect();
+                            let next_offset = offset.saturating_add(resources.len());
+                            let has_more = next_offset < result.total;
+                            let mut payload = serde_json::json!({ "resources": resources });
+                            if has_more {
+                                payload["nextCursor"] = Value::String(next_offset.to_string());
+                            }
+                            McpResponse::ok(id_for_blocking, payload)
+                        }
+                        Err(e) => McpResponse::error(
+                            id_for_blocking,
+                            -32603,
+                            format!("failed to list resources: {e}"),
+                            None,
+                        ),
                     }
-                    Some(McpResponse::ok(id, payload))
-                }
-                Err(e) => Some(McpResponse::error(
-                    id,
-                    -32603,
-                    format!("failed to list resources: {e}"),
-                    None,
-                )),
-            }
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    McpResponse::error(
+                        id,
+                        -32603,
+                        format!("task join failed: {e}"),
+                        None,
+                    )
+                }),
+            )
         }
         _ => Some(McpResponse::error(
             request.id.unwrap_or(Value::Null),

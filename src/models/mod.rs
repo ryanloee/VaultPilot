@@ -11,6 +11,8 @@ pub use settings::{
     default_auto_wake_start_time, AppSettings,
 };
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // AiSubscription — AI Scheduled Research subscription model (#2167)
 // ---------------------------------------------------------------------------
@@ -69,8 +71,6 @@ impl Default for AiSubscription {
         }
     }
 }
-
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -471,6 +471,59 @@ pub struct AiWorkflowManual {
 }
 
 // ---------------------------------------------------------------------------
+// Self-Organizing Vault — Feature #2176
+// ---------------------------------------------------------------------------
+
+/// Status of a weak link between two notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WeakLinkStatus {
+    /// Awaiting user review.
+    #[default]
+    Pending,
+    /// User confirmed the association.
+    Confirmed,
+    /// User dismissed the suggestion.
+    Dismissed,
+}
+
+impl WeakLinkStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WeakLinkStatus::Pending => "pending",
+            WeakLinkStatus::Confirmed => "confirmed",
+            WeakLinkStatus::Dismissed => "dismissed",
+        }
+    }
+}
+
+impl From<String> for WeakLinkStatus {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "confirmed" => WeakLinkStatus::Confirmed,
+            "dismissed" => WeakLinkStatus::Dismissed,
+            _ => WeakLinkStatus::Pending,
+        }
+    }
+}
+
+/// A pending association (weak link) between two notes, awaiting user
+/// confirmation before becoming a real relationship.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeakLink {
+    pub id: String,
+    pub source_note_id: String,
+    pub target_note_id: String,
+    /// Type of link (e.g. "content_similarity", "topic_related", "duplicate").
+    pub link_type: String,
+    /// Confidence score 0.0 (low) to 1.0 (high).
+    pub score: f64,
+    pub status: WeakLinkStatus,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+// ---------------------------------------------------------------------------
 // MessageV2 — Unified cross-platform message schema (#1239)
 // ---------------------------------------------------------------------------
 
@@ -633,6 +686,45 @@ mod tests {
         assert_eq!(parsed.meta.id, "n1");
         assert_eq!(parsed.meta.tags, vec!["tag1"]);
         assert_eq!(parsed.body, "Some content");
+    }
+
+    #[test]
+    fn weak_link_status_from_string() {
+        assert_eq!(
+            WeakLinkStatus::from("pending".to_string()),
+            WeakLinkStatus::Pending
+        );
+        assert_eq!(
+            WeakLinkStatus::from("confirmed".to_string()),
+            WeakLinkStatus::Confirmed
+        );
+        assert_eq!(
+            WeakLinkStatus::from("dismissed".to_string()),
+            WeakLinkStatus::Dismissed
+        );
+        assert_eq!(
+            WeakLinkStatus::from("unknown".to_string()),
+            WeakLinkStatus::Pending
+        );
+    }
+
+    #[test]
+    fn weak_link_round_trips() {
+        let link = WeakLink {
+            id: "wl-1".to_string(),
+            source_note_id: "n1".to_string(),
+            target_note_id: "n2".to_string(),
+            link_type: "content_similarity".to_string(),
+            score: 0.85,
+            status: WeakLinkStatus::Pending,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&link).expect("serialize");
+        let parsed: WeakLink = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.id, "wl-1");
+        assert_eq!(parsed.score, 0.85);
+        assert_eq!(parsed.status.as_str(), "pending");
     }
 
     #[test]

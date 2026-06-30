@@ -84,11 +84,7 @@ pub fn subscribe() -> Receiver<ArcEvent> {
 }
 
 /// Convenience: publish a `NoteChanged` event in one call.
-pub fn publish_note_changed(
-    note_id: String,
-    content_snippet: String,
-    action: NoteAction,
-) -> usize {
+pub fn publish_note_changed(note_id: String, content_snippet: String, action: NoteAction) -> usize {
     publish(Event::NoteChanged(NoteChanged {
         note_id,
         content_snippet,
@@ -103,16 +99,14 @@ pub fn publish_note_changed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::broadcast::TryRecvError;
+    use tokio::sync::broadcast::error::TryRecvError;
 
     #[test]
     fn publish_and_receive_event() {
         let mut rx = subscribe();
-        let n = publish_note_changed(
-            "test-123".into(),
-            "hello world".into(),
-            NoteAction::Created,
-        );
+        // Drain any pending messages from previous tests
+        while rx.try_recv().is_ok() {}
+        let n = publish_note_changed("test-123".into(), "hello world".into(), NoteAction::Created);
         // At least our own receiver got it
         assert!(n >= 1, "expected at least 1 subscriber, got {n}");
 

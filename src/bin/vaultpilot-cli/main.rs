@@ -30,6 +30,7 @@ use vaultpilot_lib::storage::{
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
     run_all_due_subscriptions, run_single_subscription, sanitize_error, write_with_ai_with_context,
+    AutoOrganizer,
 };
 
 use chrono::Utc;
@@ -219,6 +220,16 @@ enum Commands {
     Mail {
         #[command(subcommand)]
         action: MailActions,
+    },
+
+    /// Self-Organizing Vault — auto-analyze, link, and categorize notes (#2176)
+    ///
+    /// Run real-time (Layer 1) keyword extraction, duplicate detection, and
+    /// collection suggestion on new/changed notes.  Also triggers background
+    /// (Layer 2) semantic analysis rounds for deeper linking.
+    Organize {
+        #[command(subcommand)]
+        action: OrganizeActions,
     },
 }
 
@@ -526,6 +537,44 @@ enum MailActions {
     },
 }
 
+/// Sub-commands for the `vp organize` command (#2176).
+#[derive(Subcommand)]
+enum OrganizeActions {
+    /// Run a single auto-organize pass (Layer 1 + Layer 2)
+    ///
+    /// Analyzes notes with empty or auto-extracted keywords, detects possible
+    /// duplicates, suggests collections, and runs the pending analysis queue.
+    Auto {
+        /// Run continuously (watch mode), processing events in real-time.
+        /// Equivalent to subscribing to the event bus and processing notes
+        /// as they are written.
+        #[arg(long)]
+        watch: bool,
+    },
+
+    /// View the pending analysis queue (notes awaiting Layer 2 processing)
+    Pending,
+
+    /// View pending weak links between notes
+    Links {
+        /// Filter by status: pending, confirmed, dismissed
+        #[arg(long, default_value = "pending")]
+        status: String,
+    },
+
+    /// Confirm a pending weak link (promote to actual association)
+    Confirm {
+        /// Weak link ID
+        id: String,
+    },
+
+    /// Dismiss a pending weak link
+    Dismiss {
+        /// Weak link ID
+        id: String,
+    },
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -745,6 +794,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
         Commands::Mail { action } => handle_mail(context, action).await,
+        Commands::Organize { action } => {
+            tokio::task::block_in_place(|| handle_organize(context, action))
+        }
     }
 }
 
@@ -1384,6 +1436,107 @@ fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
     };
     eprintln!("{output}");
     process::exit(1);
+}
+
+// ─── Organize handler (#2176) ─────────────────────────────────────
+
+/// Handle `vp organize` sub-commands.
+fn handle_organize(context: &StorageContext, action: &OrganizeActions) -> Result<Value> {
+    match action {
+        OrganizeActions::Auto { watch } => {
+            if *watch {
+                // Spawn the event listener and the background worker, then wait
+                AutoOrganizer::spawn_event_listener(context.clone());
+                AutoOrganizer::start_background_worker(context.clone());
+                eprintln!("🧠 Self-Organizing Vault Engine started (watch mode)");
+                eprintln!("   Listening for note changes and running Layer 2 every 15 min");
+                eprintln!("   Press Ctrl+C to stop");
+                // Block forever
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(3600));
+                }
+            }
+
+            // Run a single auto-organize pass
+            let summary = vaultpilot_lib::orchestration::auto_organize::run_auto_organize(context)?;
+            let result = serde_json::json!({
+                "summary": {
+                    "notesAnalyzedLayer1": summary.notes_analyzed_layer1,
+                    "duplicatesFound": summary.duplicates_found,
+                    "collectionsSuggested": summary.collections_suggested,
+                    "layer2NotesProcessed": summary.layer2_notes_processed,
+                    "weakLinksGenerated": summary.weak_links_generated,
+                }
+            });
+            eprintln!(
+                "📊 Auto-organize complete: {} notes analyzed, {} duplicates, {} suggestions, {} L2 processed, {} weak links",
+                summary.notes_analyzed_layer1,
+                summary.duplicates_found,
+                summary.collections_suggested,
+                summary.layer2_notes_processed,
+                summary.weak_links_generated
+            );
+            to_json(&result)
+        }
+        OrganizeActions::Pending => {
+            let pending = AutoOrganizer::list_pending_analyses(context)?;
+            let entries: Vec<serde_json::Value> = pending
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "id": e.id,
+                        "noteId": e.note_id,
+                        "action": e.action,
+                        "createdAt": e.created_at,
+                    })
+                })
+                .collect();
+            eprintln!("📋 Pending analysis queue: {} entries", entries.len());
+            to_json(&serde_json::json!({ "pending": entries, "count": entries.len() }))
+        }
+        OrganizeActions::Links { status } => {
+            let link_status = match status.as_str() {
+                "confirmed" => WeakLinkStatus::Confirmed,
+                "dismissed" => WeakLinkStatus::Dismissed,
+                _ => WeakLinkStatus::Pending,
+            };
+            let links = AutoOrganizer::list_weak_links(context, Some(link_status))?;
+            let entries: Vec<serde_json::Value> = links
+                .iter()
+                .map(|l| {
+                    serde_json::json!({
+                        "id": l.id,
+                        "sourceNoteId": l.source_note_id,
+                        "targetNoteId": l.target_note_id,
+                        "linkType": l.link_type,
+                        "score": l.score,
+                        "status": l.status.as_str(),
+                        "createdAt": l.created_at,
+                    })
+                })
+                .collect();
+            eprintln!("🔗 Weak links ({status}): {} entries", entries.len());
+            to_json(&serde_json::json!({ "links": entries, "count": entries.len() }))
+        }
+        OrganizeActions::Confirm { id } => {
+            let confirmed = AutoOrganizer::confirm_weak_link(context, id)?;
+            if confirmed {
+                eprintln!("✅ Weak link {id} confirmed");
+            } else {
+                eprintln!("⚠️ Weak link {id} not found");
+            }
+            to_json(&serde_json::json!({ "confirmed": confirmed, "id": id }))
+        }
+        OrganizeActions::Dismiss { id } => {
+            let dismissed = AutoOrganizer::dismiss_weak_link(context, id)?;
+            if dismissed {
+                eprintln!("🗑️ Weak link {id} dismissed");
+            } else {
+                eprintln!("⚠️ Weak link {id} not found");
+            }
+            to_json(&serde_json::json!({ "dismissed": dismissed, "id": id }))
+        }
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────

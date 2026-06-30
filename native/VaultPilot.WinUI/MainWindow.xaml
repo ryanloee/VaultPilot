@@ -13,6 +13,7 @@
             <KeyboardAccelerator Key="N" Modifiers="Control" Invoked="OnNewSessionAccelerator" />
             <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="OnToggleSidebarAccelerator" />
             <KeyboardAccelerator Key="P" Modifiers="Control,Shift" Invoked="OnAiCommandPaletteAccelerator" />
+            <KeyboardAccelerator Key="Q" Modifiers="Control,Shift" Invoked="OnQuickAskAccelerator" />
             <KeyboardAccelerator Key="Escape" Invoked="OnEscapeAccelerator" />
         </Grid.KeyboardAccelerators>
 
@@ -366,6 +367,13 @@
         <!-- Global AI Command Palette overlay (#2188) -->
         <controls:AiCommandPalette
             x:Name="AiCommandPaletteControl"
+            Visibility="Collapsed"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch" />
+
+        <!-- Quick Ask overlay (#1799) -->
+        <controls:QuickAskOverlay
+            x:Name="QuickAskControl"
             Visibility="Collapsed"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />

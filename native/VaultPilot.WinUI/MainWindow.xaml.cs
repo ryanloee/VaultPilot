@@ -96,6 +96,10 @@ public sealed partial class MainWindow : Window
         // Initialize AI command palette (#2188)
         AiCommandPaletteControl.Backend = _backendClient;
         AiCommandPaletteControl.InsertToChatRequested += OnPaletteInsertToChat;
+
+        // Initialize Quick Ask overlay (#1799)
+        QuickAskControl.Backend = _backendClient;
+        QuickAskControl.InsertToNoteRequested += OnQuickAskInsertToNote;
     }
 
     private void AddKeyboardAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, TypedEventHandler<KeyboardAccelerator, KeyboardAcceleratorInvokedEventArgs> handler)
@@ -549,6 +553,7 @@ public sealed partial class MainWindow : Window
         JumpLatestButton.Click -= OnJumpLatestClicked;
         RootGrid.SizeChanged -= OnRootGridSizeChanged;
         AiCommandPaletteControl.InsertToChatRequested -= OnPaletteInsertToChat;
+        QuickAskControl.InsertToNoteRequested -= OnQuickAskInsertToNote;
     }
 
     #region Keyboard Accelerator Handlers
@@ -574,7 +579,13 @@ public sealed partial class MainWindow : Window
     private void OnEscapeAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        // If the AI command palette is open, dismiss it first
+        // If the Quick Ask overlay is open, dismiss it first
+        if (QuickAskControl.Visibility == Visibility.Visible)
+        {
+            QuickAskControl.Dismiss();
+            return;
+        }
+        // If the AI command palette is open, dismiss it next
         if (AiCommandPaletteControl.Visibility == Visibility.Visible)
         {
             AiCommandPaletteControl.Dismiss();
@@ -587,6 +598,12 @@ public sealed partial class MainWindow : Window
     {
         args.Handled = true;
         ShowAiCommandPalette();
+    }
+
+    private void OnQuickAskAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowQuickAsk();
     }
 
     private void OnNavChatAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -1130,6 +1147,14 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Show the Quick Ask overlay for a one-shot AI question.
+    /// </summary>
+    private void ShowQuickAsk()
+    {
+        QuickAskControl.Show();
+    }
+
+    /// <summary>
     /// Called when the user requests to insert an AI action result into the chat composer.
     /// </summary>
     private void OnPaletteInsertToChat(object? sender, string result)
@@ -1146,6 +1171,30 @@ public sealed partial class MainWindow : Window
                 else
                 {
                     ComposerBox.Text = result;
+                }
+                ComposerBox.Focus(FocusState.Programmatic);
+                ComposerBox.SelectionStart = ComposerBox.Text.Length;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Called when the user requests to insert the Quick Ask answer into the note editor.
+    /// </summary>
+    private void OnQuickAskInsertToNote(object? sender, string answer)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!string.IsNullOrWhiteSpace(answer))
+            {
+                // If the composer already has text, append the answer
+                if (!string.IsNullOrWhiteSpace(ComposerBox.Text))
+                {
+                    ComposerBox.Text += "\n\n" + answer;
+                }
+                else
+                {
+                    ComposerBox.Text = answer;
                 }
                 ComposerBox.Focus(FocusState.Programmatic);
                 ComposerBox.SelectionStart = ComposerBox.Text.Length;

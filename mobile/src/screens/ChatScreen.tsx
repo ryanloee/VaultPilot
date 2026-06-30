@@ -294,6 +294,11 @@ export default function ChatScreen({ navigation, route }: any) {
 
       // Execute tool calls (save notes etc.) and clean up markers
       const { cleaned, actions } = await executeToolCalls(full);
+      // #2223: Clear note title cache if any CRUD actions (e.g. SAVE_NOTE) were performed,
+      // so that newly created notes are immediately detected as clickable links
+      if (actions.length > 0) {
+        clearNoteTitleCache();
+      }
       const finalContent = actions.length > 0
         ? cleaned + '\n\n_' + actions.join('；') + '_'
         : cleaned;

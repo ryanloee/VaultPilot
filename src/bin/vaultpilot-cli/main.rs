@@ -1537,8 +1537,8 @@ mod tests {
         let result = sanitize_mcp_prompt_content(input);
         assert!(result.starts_with("<user_content>\n"));
         assert!(result.ends_with("\n</user_content>"));
-        // </b> gets escaped to <//b> (all closing tags escaped)
-        assert!(result.contains("My note title with <b>html<//b>"));
+        // </b> is a legitimate HTML tag and is preserved (only </user_content> is escaped)
+        assert!(result.contains("My note title with <b>html</b>"));
     }
 
     #[test]

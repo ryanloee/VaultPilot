@@ -108,10 +108,25 @@ pub(super) fn escape_xml_content(content: &str) -> String {
     while let Some(c) = chars.next() {
         match c {
             '<' => {
-                // Escape all closing tags: </ → <//
                 if chars.peek() == Some(&'/') {
-                    out.push_str("<//");
-                    chars.next();
+                    // Only escape </user_content> to prevent breakout from the
+                    // <user_content>...</user_content> wrapper injected by
+                    // sanitize_mcp_prompt_content. All other closing tags (</div>,
+                    // </b>, </code>, etc.) are left untouched so legitimate HTML/XML
+                    // within user content is preserved.
+                    let rest: String = chars.clone().skip(1).take(13).collect();
+                    if rest.starts_with("user_content")
+                        && rest
+                            .chars()
+                            .nth(12)
+                            .is_some_and(|ch| matches!(ch, '>' | ' ' | '\n' | '\r' | '\t' | '/'))
+                    {
+                        out.push_str("<//");
+                        chars.next(); // consume the '/'
+                    } else {
+                        out.push('<');
+                        // '/'' will be emitted on the next iteration
+                    }
                 }
                 // Escape the specific wrapper tag name to prevent nested breakout.
                 // Cover all legal XML tag variants: <user_content>, <user_content attr...>,
@@ -2438,7 +2453,8 @@ mod tests {
 
     #[test]
     fn escape_closing_tag() {
-        assert_eq!(escape_xml_content("</secret>"), "<//secret>");
+        // Only </user_content> is escaped; other closing tags pass through.
+        assert_eq!(escape_xml_content("</secret>"), "</secret>");
     }
 
     #[test]
@@ -2463,7 +2479,8 @@ mod tests {
     fn escape_multiple_threats() {
         let input = "</a><user_content>safe<b>";
         let escaped = escape_xml_content(input);
-        assert!(escaped.contains("<//a>"));
+        // </a> is not </user_content>, so it passes through unchanged
+        assert!(escaped.contains("</a>"));
         assert!(escaped.contains("< user_content>"));
         assert!(escaped.contains("<b>")); // opening tags not targeted
     }
@@ -2626,17 +2643,20 @@ mod tests {
     fn escape_nested_closing_tags() {
         let input = "</a></b></c>";
         let result = escape_xml_content(input);
-        assert_eq!(result, "<//a><//b><//c>");
+        // None of these are </user_content>, so all pass through unchanged
+        assert_eq!(result, "</a></b></c>");
     }
 
     #[test]
     fn escape_mixed_threats_and_safe_content() {
         let input = "Hello </inject> world <user_content> safe <b>bold</b>";
         let result = escape_xml_content(input);
-        assert!(result.contains("<//inject>"));
+        // </inject> is not </user_content>, so it passes through
+        assert!(result.contains("</inject>"));
         assert!(result.contains("< user_content>"));
         assert!(result.contains("<b>"));
-        assert!(result.contains("<//b>")); // ALL closing tags are escaped
+        // </b> is legitimate HTML, preserved unchanged
+        assert!(result.contains("</b>"));
     }
 
     #[test]

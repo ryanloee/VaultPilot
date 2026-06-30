@@ -177,12 +177,10 @@ export default function NotesScreen({ navigation }: any) {
   // #2166 — Studio: generate a delivery type from the current note list
   const handleStudioGenerate = async (type: typeof STUDIO_TYPES[number]) => {
     if (studioGenerating) return;
-
     // #2200 — abort previous generation if any, create new controller
     studioAbortRef.current?.abort();
     const controller = new AbortController();
     studioAbortRef.current = controller;
-
     setStudioGenerating(true);
     setStudioProgress(`正在生成${type.label}...`);
 

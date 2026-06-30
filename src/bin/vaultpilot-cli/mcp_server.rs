@@ -204,7 +204,10 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                 if want == 0 {
                     // Already at limit — drain byte-by-byte until newline.
                     match reader.read(&mut chunk_buf[..1]).await {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) => break,
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("stdin read error: {e}"));
+                        }
                         Ok(_) => {}
                     }
                     if chunk_buf[0] == b'\n' {
@@ -216,7 +219,9 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                 let n = match reader.read(&mut chunk_buf[..want]).await {
                     Ok(0) => break 'read, // EOF
                     Ok(n) => n,
-                    Err(_) => break 'read,
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("stdin read error: {e}"));
+                    }
                 };
                 // Scan the chunk for newline.
                 if let Some(nl_pos) = chunk_buf[..n].iter().position(|&b| b == b'\n') {
@@ -1888,16 +1893,14 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
                 if parent.as_os_str().is_empty() {
                     break;
                 }
-                if parent.exists() {
-                    if let Ok(pc) = parent.canonicalize() {
-                        if !pc.starts_with(&vault_canonical) {
-                            return mcp_tool_error(format!(
-                                "import path '{}' is outside the vault directory",
-                                raw_path
-                            ));
-                        }
-                        confined = true;
+                if let Ok(pc) = parent.canonicalize() {
+                    if !pc.starts_with(&vault_canonical) {
+                        return mcp_tool_error(format!(
+                            "import path '{}' is outside the vault directory",
+                            raw_path
+                        ));
                     }
+                    confined = true;
                     break;
                 }
                 probe = parent;

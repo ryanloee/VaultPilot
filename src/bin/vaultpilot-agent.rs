@@ -19,11 +19,14 @@ use vaultpilot_lib::ai::actions::{
 };
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
-    import_markdown_async, initialize_storage_async, list_notes_async, load_chat_state_async,
-    rebuild_index_async, save_chat_state_async, save_settings_async, StorageContext,
+    create_subscription_async, delete_subscription_async, get_subscription_async,
+    import_markdown_async, initialize_storage_async, list_notes_async, list_subscriptions_async,
+    load_chat_state_async, rebuild_index_async, save_chat_state_async, save_settings_async,
+    set_subscription_enabled_with_context, update_subscription_async, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
+    run_all_due_subscriptions, run_single_subscription,
 };
 
 // ── Agent session state ─────────────────────────────────────────────────
@@ -539,6 +542,121 @@ async fn handle_request(
             serde_json::to_value(&actions)
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
+        // ── Subscription management (#2167) ──────────────────────
+        "listSubscriptions" => {
+            let subs = list_subscriptions_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let count = subs.len();
+            serde_json::to_value(serde_json::json!({
+                "subscriptions": subs,
+                "count": count
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "createSubscription" => {
+            let params: CreateSubscriptionParams = parse_params(&request.params)?;
+            let sub = create_subscription_async(
+                context,
+                params.name,
+                params.schedule,
+                params.prompt,
+                params.tools,
+                params.target_collection,
+            )
+            .await
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            serde_json::to_value(serde_json::json!({
+                "created": true,
+                "subscription": sub
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "getSubscription" => {
+            let params: IdParams = parse_params(&request.params)?;
+            let sub = get_subscription_async(context, params.id)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?
+                .ok_or_else(|| "subscription not found".to_string())?;
+            serde_json::to_value(serde_json::json!({
+                "subscription": sub
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "deleteSubscription" => {
+            let params: IdParams = parse_params(&request.params)?;
+            let deleted = delete_subscription_async(context, params.id)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            serde_json::to_value(serde_json::json!({
+                "deleted": deleted
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "updateSubscription" => {
+            let params: UpdateSubscriptionAgentParams = parse_params(&request.params)?;
+            // Load existing subscription for partial merge
+            let existing = get_subscription_async(context, params.id.clone())
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?
+                .ok_or_else(|| "subscription not found".to_string())?;
+            let new_schedule = params.schedule.unwrap_or(existing.schedule);
+            let new_prompt = params.prompt.unwrap_or(existing.prompt);
+            let new_tools = params.tools.unwrap_or(existing.tools);
+            let new_target = params
+                .target_collection
+                .unwrap_or(existing.target_collection);
+            let updated = update_subscription_async(
+                context,
+                params.id.clone(),
+                params.name,
+                new_schedule,
+                new_prompt,
+                new_tools,
+                new_target,
+            )
+            .await
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            serde_json::to_value(serde_json::json!({
+                "updated": updated
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "setSubscriptionEnabled" => {
+            let params: SetSubscriptionEnabledParams = parse_params(&request.params)?;
+            let updated =
+                set_subscription_enabled_with_context(context, &params.id, params.enabled)
+                    .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            serde_json::to_value(serde_json::json!({
+                "updated": updated,
+                "id": params.id,
+                "enabled": params.enabled
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "runDueSubscriptions" => {
+            let results = run_all_due_subscriptions(context).await;
+            let count = results.len();
+            serde_json::to_value(serde_json::json!({
+                "ran": true,
+                "count": count,
+                "results": results
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "runSingleSubscription" => {
+            let params: IdParams = parse_params(&request.params)?;
+            let sub = get_subscription_async(context, params.id)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?
+                .ok_or_else(|| "subscription not found".to_string())?;
+            let result = run_single_subscription(context, &sub).await;
+            serde_json::to_value(serde_json::json!({
+                "ran": true,
+                "result": result
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
         method => Err(format!("unknown method: {method}")),
     }
 }
@@ -557,6 +675,61 @@ struct ExecuteAiActionParams {
     note_id: Option<String>,
     #[serde(default)]
     model_override: Option<String>,
+}
+
+// ── Subscription method params (#2167) ──────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateSubscriptionParams {
+    name: String,
+    #[serde(default = "default_schedule")]
+    schedule: String,
+    prompt: String,
+    #[serde(default = "default_tools")]
+    tools: String,
+    #[serde(default = "default_target_collection")]
+    target_collection: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetSubscriptionEnabledParams {
+    id: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateSubscriptionAgentParams {
+    id: String,
+    name: String,
+    #[serde(default)]
+    schedule: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    tools: Option<String>,
+    #[serde(default)]
+    target_collection: Option<String>,
+}
+
+fn default_schedule() -> String {
+    "0 0 * * *".to_string()
+}
+
+fn default_tools() -> String {
+    "web_search".to_string()
+}
+
+fn default_target_collection() -> String {
+    "Scheduled Research".to_string()
 }
 
 fn parse_params<T>(params: &Value) -> Result<T, String>

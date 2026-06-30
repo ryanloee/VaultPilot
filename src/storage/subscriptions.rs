@@ -229,13 +229,20 @@ pub fn update_subscription_with_context(
 }
 
 /// List all enabled subscriptions that are due for execution.
-/// Currently returns all enabled subscriptions (simplified MVP — no cron-based
-/// scheduling yet, just manual `run` command).
+///
+/// A subscription is "due" when:
+/// - It is enabled, AND
+/// - Its `next_run_at` is empty (never run) OR `next_run_at <= now`.
+///
+/// This enables cron-based scheduling: after each run, `next_run_at` is
+/// updated to the next future time, so the subscription won't be due again
+/// until that time arrives.
 #[instrument(skip(context))]
 pub fn list_due_subscriptions_with_context(
     context: &StorageContext,
 ) -> Result<Vec<AiSubscription>> {
     let (connection, _) = open_connection(context)?;
+    let now = Utc::now().to_rfc3339();
 
     let mut stmt = connection.prepare(
         r#"
@@ -244,12 +251,13 @@ pub fn list_due_subscriptions_with_context(
                run_count, last_status, last_error
         FROM subscriptions
         WHERE enabled = 1
+          AND (next_run_at = '' OR next_run_at <= ?1)
         ORDER BY created_at ASC
         "#,
     )?;
 
     let subscriptions = stmt
-        .query_map([], |row| {
+        .query_map(params![now], |row| {
             Ok(AiSubscription {
                 id: row.get(0)?,
                 name: row.get(1)?,

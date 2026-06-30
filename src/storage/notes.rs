@@ -177,9 +177,7 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     // For shared files (attachments referenced by multiple notes), we skip
     // deletion by checking if any other note references the same path.
     let attachment_paths: Vec<String> = connection
-        .prepare(
-            "SELECT path FROM attachments WHERE note_id = ?1",
-        )?
+        .prepare("SELECT path FROM attachments WHERE note_id = ?1")?
         .query_map([resolved_note_id.as_str()], |row| row.get(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
@@ -193,12 +191,11 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
         let apath = PathBuf::from(path_str);
         if apath.exists() {
             // Only delete if no other note references the same file
-            let other_refs: i64 = connection
-                .query_row(
-                    "SELECT COUNT(*) FROM attachments WHERE path = ?1 AND note_id != ?2",
-                    [path_str, &resolved_note_id],
-                    |row| row.get(0),
-                )?;
+            let other_refs: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM attachments WHERE path = ?1 AND note_id != ?2",
+                [path_str, &resolved_note_id],
+                |row| row.get(0),
+            )?;
             if other_refs == 0 {
                 if let Err(e) = fs::remove_file(&apath) {
                     warn!(path = %apath.display(), error = %e, "failed to delete attachment file");

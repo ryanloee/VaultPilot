@@ -9,13 +9,10 @@ use anyhow::Result;
 use tracing::instrument;
 
 use crate::models::{AiSubscription, NoteDocument, NoteMeta};
-use crate::storage::{
-    save_note_with_context, StorageContext,
-};
 use crate::storage::subscriptions::{
-    list_due_subscriptions_with_context,
-    update_subscription_run_with_context,
+    list_due_subscriptions_with_context, update_subscription_run_with_context,
 };
+use crate::storage::{save_note_with_context, StorageContext};
 
 /// Per-subscription AI call timeout (3 minutes).
 const _SUBSCRIPTION_AI_TIMEOUT: Duration = Duration::from_secs(180);
@@ -29,9 +26,7 @@ const _STORAGE_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// 2. Save the AI response as a note in the target collection
 /// 3. Update subscription run metadata
 #[instrument(skip(context))]
-pub async fn run_all_due_subscriptions(
-    context: &StorageContext,
-) -> Vec<SubscriptionRunResult> {
+pub async fn run_all_due_subscriptions(context: &StorageContext) -> Vec<SubscriptionRunResult> {
     let subs = match list_due_subscriptions_with_context(context) {
         Ok(s) => s,
         Err(e) => {
@@ -95,6 +90,7 @@ pub async fn run_single_subscription(
                 summary: answer.chars().take(300).collect::<String>(),
                 source: "ai_subscription".to_string(),
                 tags: vec!["scheduled".to_string(), "ai".to_string()],
+                collections: vec![subscription.target_collection.clone()],
                 ..Default::default()
             };
 
@@ -110,23 +106,18 @@ pub async fn run_single_subscription(
             match save_note_with_context(context, note) {
                 Ok(saved_doc) => {
                     // Step 3: Update subscription run metadata
-                    let _ = update_subscription_run_with_context(
-                        context,
-                        &id,
-                        "success",
-                        "",
-                    );
-                    ("success".to_string(), Some(saved_doc.meta.id.clone()), Some(saved_doc.meta.title.clone()), None)
+                    let _ = update_subscription_run_with_context(context, &id, "success", "");
+                    (
+                        "success".to_string(),
+                        Some(saved_doc.meta.id.clone()),
+                        Some(saved_doc.meta.title.clone()),
+                        None,
+                    )
                 }
                 Err(e) => {
                     let err = format!("failed to save note: {e}");
                     tracing::error!(id = %id, error = %err, "subscription save failed");
-                    let _ = update_subscription_run_with_context(
-                        context,
-                        &id,
-                        "failed",
-                        &err,
-                    );
+                    let _ = update_subscription_run_with_context(context, &id, "failed", &err);
                     ("failed".to_string(), None, None, Some(err))
                 }
             }
@@ -134,12 +125,7 @@ pub async fn run_single_subscription(
         Err(e) => {
             let err = format!("{e:#}");
             tracing::error!(id = %id, error = %err, "subscription execution failed");
-            let _ = update_subscription_run_with_context(
-                context,
-                &id,
-                "failed",
-                &err,
-            );
+            let _ = update_subscription_run_with_context(context, &id, "failed", &err);
             ("failed".to_string(), None, None, Some(err))
         }
     };
@@ -184,9 +170,9 @@ Please provide a comprehensive response with:
     let answer = crate::ask_with_ai_with_context(
         context,
         effective_prompt,
-        None,   // no history
-        None,   // no images
-        None,   // no model override
+        None,      // no history
+        None,      // no images
+        None,      // no model override
         |_, _| {}, // suppress status events
     )
     .await?;
@@ -244,12 +230,9 @@ mod tests {
         assert!(result.error.is_some());
 
         // Verify metadata was updated
-        let updated = crate::storage::subscriptions::get_subscription_with_context(
-            &ctx,
-            &sub.id,
-        )
-        .unwrap()
-        .unwrap();
+        let updated = crate::storage::subscriptions::get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.run_count, 1);
         assert_eq!(updated.last_status, "failed");
         assert!(!updated.last_error.is_empty());
@@ -272,21 +255,11 @@ mod tests {
         initialize_storage_with_context(&ctx).unwrap();
 
         // Create a disabled subscription
-        let sub = create_subscription_with_context(
-            &ctx,
-            "Disabled Test",
-            "0 0 * * *",
-            "test",
-            "",
-            "",
-        )
-        .unwrap();
-        crate::storage::subscriptions::set_subscription_enabled_with_context(
-            &ctx,
-            &sub.id,
-            false,
-        )
-        .unwrap();
+        let sub =
+            create_subscription_with_context(&ctx, "Disabled Test", "0 0 * * *", "test", "", "")
+                .unwrap();
+        crate::storage::subscriptions::set_subscription_enabled_with_context(&ctx, &sub.id, false)
+            .unwrap();
 
         let results = tokio::runtime::Runtime::new()
             .unwrap()

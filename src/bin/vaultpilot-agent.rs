@@ -14,6 +14,9 @@ use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::agent::{
     AgentConfig, AgentEvent as LibAgentEvent, AgentPermission, AgentResourceLimits,
 };
+use vaultpilot_lib::ai::actions::{
+    execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
+};
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
     import_markdown_async, initialize_storage_async, list_notes_async, load_chat_state_async,
@@ -21,9 +24,6 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
-};
-use vaultpilot_lib::ai::actions::{
-    execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
 
 // ── Agent session state ─────────────────────────────────────────────────

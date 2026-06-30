@@ -21,20 +21,18 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
 
-use vaultpilot_lib::models::*;
-use vaultpilot_lib::storage::{
-    load_note_async, load_settings_async, save_note_async, search_notes_async, StorageContext,
-};
-use vaultpilot_lib::{
-    ask_with_ai_with_context, normalize_tool_path, run_single_subscription,
-};
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
+use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    list_subscriptions_async, get_subscription_async, delete_subscription_async,
-    create_subscription_async, set_subscription_enabled_async,
+    create_subscription_async, delete_subscription_async, get_subscription_async,
+    list_subscriptions_async, set_subscription_enabled_with_context,
 };
+use vaultpilot_lib::storage::{
+    load_note_async, load_settings_async, save_note_async, search_notes_async, StorageContext,
+};
+use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path, run_single_subscription};
 
 /// Maximum total wall-clock time an upstream AI streaming request may run in
 /// the HTTP bridge's `stream: true` path. The `TimeoutLayer(180s)` on the
@@ -68,13 +66,24 @@ pub(super) async fn run_http_bridge(
         .route("/v1/chat/completions", post(http_chat_completions))
         .route("/api/notes", get(http_list_notes).post(http_create_note))
         .route("/api/notes/search", get(http_search_notes))
-        .route("/api/notes", post(http_create_note))
         .route("/api/notes/{note_id}", get(http_get_note))
         // Subscriptions API (#2167)
-        .route("/api/subscriptions", get(http_list_subscriptions).post(http_create_subscription))
-        .route("/api/subscriptions/{sub_id}", get(http_get_subscription).delete(http_delete_subscription))
-        .route("/api/subscriptions/{sub_id}/run", post(http_run_subscription))
-        .route("/api/subscriptions/{sub_id}/toggle", post(http_toggle_subscription))
+        .route(
+            "/api/subscriptions",
+            get(http_list_subscriptions).post(http_create_subscription),
+        )
+        .route(
+            "/api/subscriptions/{sub_id}",
+            get(http_get_subscription).delete(http_delete_subscription),
+        )
+        .route(
+            "/api/subscriptions/{sub_id}/run",
+            post(http_run_subscription),
+        )
+        .route(
+            "/api/subscriptions/{sub_id}/toggle",
+            post(http_toggle_subscription),
+        )
         // AI Action Palette (#2188)
         .route("/api/ai/actions", get(http_list_ai_actions))
         .route("/api/ai/action", post(http_ai_action))
@@ -573,9 +582,15 @@ struct CreateSubscriptionRequest {
     target_collection: String,
 }
 
-fn default_schedule() -> String { "0 0 * * *".to_string() }
-fn default_tools() -> String { "web_search".to_string() }
-fn default_target_collection() -> String { "Scheduled Research".to_string() }
+fn default_schedule() -> String {
+    "0 0 * * *".to_string()
+}
+fn default_tools() -> String {
+    "web_search".to_string()
+}
+fn default_target_collection() -> String {
+    "Scheduled Research".to_string()
+}
 
 async fn http_create_subscription(
     State(state): State<Arc<HttpBridgeState>>,
@@ -611,7 +626,10 @@ async fn http_get_subscription(
         .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     match sub {
         Some(s) => Ok(Json(serde_json::json!({ "subscription": s }))),
-        None => Err(openai_error(StatusCode::NOT_FOUND, "Subscription not found")),
+        None => Err(openai_error(
+            StatusCode::NOT_FOUND,
+            "Subscription not found",
+        )),
     }
 }
 
@@ -631,7 +649,10 @@ async fn http_delete_subscription(
             "id": sub_id
         })))
     } else {
-        Err(openai_error(StatusCode::NOT_FOUND, "Subscription not found"))
+        Err(openai_error(
+            StatusCode::NOT_FOUND,
+            "Subscription not found",
+        ))
     }
 }
 
@@ -667,8 +688,7 @@ async fn http_toggle_subscription(
     Json(req): Json<ToggleSubscriptionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let updated = set_subscription_enabled_async(&state.context, sub_id.clone(), req.enabled)
-        .await
+    let updated = set_subscription_enabled_with_context(&state.context, &sub_id, req.enabled)
         .map_err(|e| openai_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     if updated {
         Ok(Json(serde_json::json!({
@@ -677,7 +697,10 @@ async fn http_toggle_subscription(
             "enabled": req.enabled
         })))
     } else {
-        Err(openai_error(StatusCode::NOT_FOUND, "Subscription not found"))
+        Err(openai_error(
+            StatusCode::NOT_FOUND,
+            "Subscription not found",
+        ))
     }
 }
 
@@ -876,15 +899,21 @@ async fn http_chat_completions(
                                 "finish_reason": null
                             }]
                         });
-                        // #2104: try_send never blocks the executor thread. If the
-                        // bounded buffer is full (slow client), drop this chunk to keep
-                        // memory bounded instead of growing without limit. Logged at
-                        // debug level to avoid spam under sustained backpressure.
-                        if let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) =
-                            chunk_tx_ref.try_send(chunk_data.to_string())
+                        // #2104, #2228: Use blocking_send instead of try_send so that
+                        // backpressure is properly applied to the upstream when the client
+                        // is slow. blocking_send will block the current tokio task (not
+                        // the entire runtime) until the bounded buffer has space, ensuring
+                        // no chunks are silently dropped. The comment about "never blocking
+                        // the executor thread" from the original try_send approach was
+                        // incorrect: blocking_send inside a spawned task only blocks that
+                        // task, not the executor threads — other tasks continue running.
+                        // If the channel is closed (client disconnected), log and abort.
+                        if let Err(tokio::sync::mpsc::error::SendError(dropped)) =
+                            chunk_tx_ref.blocking_send(chunk_data.to_string())
                         {
-                            tracing::debug!(
-                                "streaming chunk buffer full (slow client); dropping chunk to bound memory"
+                            tracing::warn!(
+                                "streaming chunk send failed (client disconnected?); dropped {} bytes",
+                                dropped.len()
                             );
                         }
                     },

@@ -204,7 +204,10 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                 if want == 0 {
                     // Already at limit — drain byte-by-byte until newline.
                     match reader.read(&mut chunk_buf[..1]).await {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) => break,
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("stdin read error: {e}"));
+                        }
                         Ok(_) => {}
                     }
                     if chunk_buf[0] == b'\n' {
@@ -216,7 +219,9 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                 let n = match reader.read(&mut chunk_buf[..want]).await {
                     Ok(0) => break 'read, // EOF
                     Ok(n) => n,
-                    Err(_) => break 'read,
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("stdin read error: {e}"));
+                    }
                 };
                 // Scan the chunk for newline.
                 if let Some(nl_pos) = chunk_buf[..n].iter().position(|&b| b == b'\n') {
@@ -1888,16 +1893,14 @@ fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
                 if parent.as_os_str().is_empty() {
                     break;
                 }
-                if parent.exists() {
-                    if let Ok(pc) = parent.canonicalize() {
-                        if !pc.starts_with(&vault_canonical) {
-                            return mcp_tool_error(format!(
-                                "import path '{}' is outside the vault directory",
-                                raw_path
-                            ));
-                        }
-                        confined = true;
+                if let Ok(pc) = parent.canonicalize() {
+                    if !pc.starts_with(&vault_canonical) {
+                        return mcp_tool_error(format!(
+                            "import path '{}' is outside the vault directory",
+                            raw_path
+                        ));
                     }
+                    confined = true;
                     break;
                 }
                 probe = parent;
@@ -2175,12 +2178,18 @@ fn split_resource_uri(uri: &str) -> (&str, &'static str) {
     match uri.find('?') {
         Some(idx) => {
             let (left, query) = uri.split_at(idx);
-            let mode = query[1..]
-                .split('&')
-                .filter_map(|kv| kv.strip_prefix("mode="))
-                .next()
-                .and_then(normalize_note_mode)
-                .unwrap_or("full");
+            // query includes the '?' itself; if it's just "?" then query.len() == 1
+            // and query[1..] would panic. Default to "full" in that case.
+            let mode = if query.len() > 1 {
+                query[1..]
+                    .split('&')
+                    .filter_map(|kv| kv.strip_prefix("mode="))
+                    .next()
+                    .and_then(normalize_note_mode)
+                    .unwrap_or("full")
+            } else {
+                "full"
+            };
             (left, mode)
         }
         None => (uri, "full"),
@@ -2713,6 +2722,14 @@ mod tests {
     fn split_resource_uri_invalid_mode_defaults_full() {
         let (path, mode) = split_resource_uri("vault://notes/abc?mode=detailed");
         assert_eq!(path, "vault://notes/abc");
+        assert_eq!(mode, "full");
+    }
+
+    #[test]
+    fn split_resource_uri_empty_query_defaults_full() {
+        // Regression: URI ending with "?" must not panic.
+        let (path, mode) = split_resource_uri("vault://notes/some-id?");
+        assert_eq!(path, "vault://notes/some-id");
         assert_eq!(mode, "full");
     }
 

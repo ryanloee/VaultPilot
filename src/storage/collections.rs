@@ -158,28 +158,19 @@ pub fn add_note_to_collection_with_context(
     let (connection, _) = open_connection(context)?;
     let now = Utc::now().to_rfc3339();
 
-    // Check if the association already exists
-    let exists: bool = connection
-        .query_row(
-            "SELECT 1 FROM note_collections WHERE note_id = ?1 AND collection_id = ?2",
-            params![note_id, collection_id],
-            |_| Ok(true),
-        )
-        .optional()?
-        .unwrap_or(false);
-
-    if exists {
-        return Ok(false);
-    }
-
-    connection
+    // Use INSERT OR IGNORE to avoid TOCTOU race conditions (#2189)
+    let inserted = connection
         .execute(
-            "INSERT INTO note_collections (note_id, collection_id, created_at) VALUES (?1, ?2, ?3)",
+            "INSERT OR IGNORE INTO note_collections (note_id, collection_id, created_at) VALUES (?1, ?2, ?3)",
             params![note_id, collection_id, now],
         )
         .with_context(|| {
             format!("failed to add note '{note_id}' to collection '{collection_id}'")
         })?;
+
+    if inserted == 0 {
+        return Ok(false); // already existed
+    }
 
     // Update the collection's updated_at timestamp
     connection.execute(

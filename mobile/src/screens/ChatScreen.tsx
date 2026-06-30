@@ -208,6 +208,7 @@ export default function ChatScreen({ navigation, route }: any) {
           setSessionId(newId);
           setTitle('新对话');
           setMsgs([]);
+          msgsRef.current = [];
         } catch (e2) {
           console.warn('[Chat] addMessage retry failed:', e2);
           Alert.alert('发送失败', '无法创建对话，请重试');
@@ -250,6 +251,8 @@ export default function ChatScreen({ navigation, route }: any) {
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
 
     let full = '';
     try {
@@ -267,9 +270,6 @@ export default function ChatScreen({ navigation, route }: any) {
         ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
-
-      abortRef.current?.abort();
-      abortRef.current = new AbortController();
       // #1900: 60s timeout to prevent UI freeze
       const TIMEOUT_MS = 60_000;
       timeoutRef.current = setTimeout(() => {
@@ -295,6 +295,11 @@ export default function ChatScreen({ navigation, route }: any) {
 
       // Execute tool calls (save notes etc.) and clean up markers
       const { cleaned, actions } = await executeToolCalls(full);
+      // #2223: Clear note title cache if any CRUD actions (e.g. SAVE_NOTE) were performed,
+      // so that newly created notes are immediately detected as clickable links
+      if (actions.length > 0) {
+        clearNoteTitleCache();
+      }
       const finalContent = actions.length > 0
         ? cleaned + '\n\n_' + actions.join('；') + '_'
         : cleaned;

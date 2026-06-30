@@ -180,7 +180,10 @@ fn system_prompt(action: AiActionType) -> String {
 fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
     match action {
         AiActionType::Summarize => {
-            format!("Please summarize the following text into key points:\n\n{}", request.text)
+            format!(
+                "Please summarize the following text into key points:\n\n{}",
+                request.text
+            )
         }
         AiActionType::Rewrite => {
             let tone = request.tone.as_deref().unwrap_or("professional");
@@ -203,7 +206,10 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
             format!("Please explain the following:\n\n{}", request.text)
         }
         AiActionType::ContinueWriting => {
-            format!("Continue writing from the following text:\n\n{}", request.text)
+            format!(
+                "Continue writing from the following text:\n\n{}",
+                request.text
+            )
         }
         AiActionType::ExtractTodos => {
             format!(
@@ -359,7 +365,10 @@ mod tests {
             model: None,
         };
         let result = validate_request(&request);
-        assert!(result.is_some(), "whitespace-only text should fail validation");
+        assert!(
+            result.is_some(),
+            "whitespace-only text should fail validation"
+        );
     }
 
     #[test]
@@ -372,7 +381,10 @@ mod tests {
             note_id: None,
             model: None,
         };
-        assert!(validate_request(&request).is_none(), "valid text should pass validation");
+        assert!(
+            validate_request(&request).is_none(),
+            "valid text should pass validation"
+        );
     }
 
     #[test]
@@ -394,8 +406,14 @@ mod tests {
         let actions = list_ai_actions();
         assert!(!actions.is_empty(), "should return at least one action");
         for action in &actions {
-            assert!(action.get("id").and_then(|v| v.as_str()).is_some(), "action missing id");
-            assert!(action.get("label").and_then(|v| v.as_str()).is_some(), "action missing label");
+            assert!(
+                action.get("id").and_then(|v| v.as_str()).is_some(),
+                "action missing id"
+            );
+            assert!(
+                action.get("label").and_then(|v| v.as_str()).is_some(),
+                "action missing label"
+            );
         }
     }
 

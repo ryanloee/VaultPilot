@@ -430,14 +430,34 @@ export default function ChatScreen({ navigation, route }: any) {
     setInput(msg.content);
   }, [sessionId]);
 
-  // Throttled scroll-to-end — guarantee at least one scroll every 100ms
+  // Throttled scroll-to-end with trailing guarantee — fires immediately on
+  // the first call in each 100ms window, and also schedules a trailing
+  // scroll 150ms after the last rapid call so the final update is never lost.
   const lastScrollRef = useRef(0);
   const scrollToEndThrottled = useCallback((force = false) => {
     if (!force && !nearBottomRef.current) return;
     const now = Date.now();
-    if (now - lastScrollRef.current < 100) return;
-    lastScrollRef.current = now;
-    listRef.current?.scrollToEnd({ animated: true });
+
+    // Clear any pending trailing scroll
+    if (scrollTimerRef.current) {
+      clearTimeout(scrollTimerRef.current);
+      scrollTimerRef.current = null;
+    }
+
+    if (now - lastScrollRef.current >= 100) {
+      // Leading edge: scroll immediately
+      lastScrollRef.current = now;
+      listRef.current?.scrollToEnd({ animated: true });
+    } else {
+      // Within throttle window — schedule a trailing scroll so the last
+      // rapid update never goes unseen (#2137).
+      scrollTimerRef.current = setTimeout(() => {
+        scrollTimerRef.current = null;
+        if (!nearBottomRef.current) return;
+        lastScrollRef.current = Date.now();
+        listRef.current?.scrollToEnd({ animated: true });
+      }, 150);
+    }
   }, []);
 
   // Wrapper for onContentSizeChange (ignores width/height params)
@@ -455,6 +475,22 @@ export default function ChatScreen({ navigation, route }: any) {
 
   // Scroll when new messages arrive (user sends → force scroll)
   useEffect(() => { scrollToEndThrottled(true); }, [msgs.length]);
+
+  // Stable renderItem callback to preserve React.memo on MessageBubble (#2136)
+  const renderItem = useCallback(
+    ({ item }: { item: Msg }) => (
+      <MessageBubble
+        item={item}
+        isDark={isDark}
+        accentColor={accentColor}
+        onDelete={handleDeleteMsg}
+        onResend={item.role === 'user' ? handleResend : undefined}
+        onNoteLinkPress={handleNoteLinkPress}
+        noteTitleMap={noteTitleMap}
+      />
+    ),
+    [isDark, accentColor, handleDeleteMsg, handleResend, handleNoteLinkPress, noteTitleMap]
+  );
 
   if (loading) {
     return (
@@ -482,17 +518,7 @@ export default function ChatScreen({ navigation, route }: any) {
       <FlatList
         ref={listRef}
         data={msgs}
-        renderItem={({ item }) => (
-          <MessageBubble
-            item={item}
-            isDark={isDark}
-            accentColor={accentColor}
-            onDelete={handleDeleteMsg}
-            onResend={item.role === 'user' ? handleResend : undefined}
-            onNoteLinkPress={handleNoteLinkPress}
-            noteTitleMap={noteTitleMap}
-          />
-        )}
+        renderItem={renderItem}
         keyExtractor={item => item.id}
         contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
         onContentSizeChange={onContentSizeChange}

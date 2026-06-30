@@ -10,9 +10,8 @@ use tracing_subscriber::EnvFilter;
 
 use vaultpilot_lib::models::SearchQuery;
 use vaultpilot_lib::storage::{
-    list_collections_with_context, list_notes_in_collection_with_context,
-    load_note_with_context, save_note_with_context,
-    search_notes_with_context, StorageContext,
+    list_collections_with_context, list_notes_in_collection_with_context, load_note_with_context,
+    save_note_with_context, search_notes_with_context, StorageContext,
 };
 
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -22,8 +21,7 @@ const MAX_MCP_LINE_BYTES: usize = 10 * 1024 * 1024;
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -51,7 +49,11 @@ fn discover_vault_dir_from_config() -> Option<String> {
                     if let Ok(config) = serde_json::from_str::<McpConfig>(&content) {
                         if let Some(ref vault) = config.vault_dir {
                             if !vault.is_empty() {
-                                tracing::info!("discovered vault from {}: {}", config_path.display(), vault);
+                                tracing::info!(
+                                    "discovered vault from {}: {}",
+                                    config_path.display(),
+                                    vault
+                                );
                                 return Some(vault.clone());
                             }
                         }
@@ -119,7 +121,12 @@ struct McpServerState {
 
 impl McpResponse {
     fn ok(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     fn error(id: Value, code: i32, message: String, data: Option<Value>) -> Self {
@@ -127,7 +134,11 @@ impl McpResponse {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(McpError { code, message, data }),
+            error: Some(McpError {
+                code,
+                message,
+                data,
+            }),
         }
     }
 }
@@ -214,8 +225,7 @@ async fn run_mcp_stdio(vault_dir: Option<String>) -> Result<()> {
                         .and_then(Value::as_str)
                         .unwrap_or_default();
                     state.initialized = true;
-                    state.protocol_version =
-                        negotiate_protocol(requested_version).to_string();
+                    state.protocol_version = negotiate_protocol(requested_version).to_string();
                     Some(McpResponse::ok(
                         id,
                         serde_json::json!({
@@ -312,14 +322,15 @@ fn handle_request(
 
     match request.method.as_str() {
         "notifications/initialized" => None,
-        "ping" => {
-            request
-                .id
-                .map(|id| McpResponse::ok(id, serde_json::json!({})))
-        }
+        "ping" => request
+            .id
+            .map(|id| McpResponse::ok(id, serde_json::json!({}))),
         "tools/list" => {
             let id = request.id.unwrap_or(Value::Null);
-            Some(McpResponse::ok(id, serde_json::json!({ "tools": mcp_tools() })))
+            Some(McpResponse::ok(
+                id,
+                serde_json::json!({ "tools": mcp_tools() }),
+            ))
         }
         "tools/call" => {
             let id = request.id.unwrap_or(Value::Null);
@@ -661,7 +672,8 @@ fn handle_vault_write(context: &StorageContext, arguments: Value) -> Value {
                 let coll_id = list_collections_with_context(context)
                     .ok()
                     .and_then(|colls| {
-                        colls.into_iter()
+                        colls
+                            .into_iter()
                             .find(|c| c.name == *coll_name)
                             .map(|c| c.id)
                     })
@@ -711,26 +723,30 @@ fn handle_vault_list(context: &StorageContext, arguments: Value) -> Value {
         .and_then(Value::as_u64)
         .unwrap_or(20)
         .min(100) as usize;
-    let offset = arguments
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+    let offset = arguments.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
 
-    if let Some(ref coll_name) = arguments.get("collection").and_then(Value::as_str).map(String::from) {
+    if let Some(ref coll_name) = arguments
+        .get("collection")
+        .and_then(Value::as_str)
+        .map(String::from)
+    {
         // Find collection by name
         match list_collections_with_context(context) {
             Ok(collections) => {
                 if let Some(coll) = collections.into_iter().find(|c| c.name == *coll_name) {
                     match list_notes_in_collection_with_context(context, &coll.id, limit, offset) {
                         Ok(notes) => {
-                            let result: Vec<Value> = notes.into_iter().map(|meta| {
-                                serde_json::json!({
-                                    "id": meta.id,
-                                    "title": meta.title,
-                                    "summary": meta.summary,
-                                    "tags": meta.tags,
+                            let result: Vec<Value> = notes
+                                .into_iter()
+                                .map(|meta| {
+                                    serde_json::json!({
+                                        "id": meta.id,
+                                        "title": meta.title,
+                                        "summary": meta.summary,
+                                        "tags": meta.tags,
+                                    })
                                 })
-                            }).collect();
+                                .collect();
                             return serde_json::json!({
                                 "content": result,
                             });

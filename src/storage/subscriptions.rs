@@ -215,7 +215,15 @@ pub fn update_subscription_with_context(
             updated_at = ?6
         WHERE id = ?7
         "#,
-        params![name, schedule, prompt, tools, target_collection, Utc::now().to_rfc3339(), id],
+        params![
+            name,
+            schedule,
+            prompt,
+            tools,
+            target_collection,
+            Utc::now().to_rfc3339(),
+            id
+        ],
     )?;
     Ok(rows > 0)
 }
@@ -328,7 +336,15 @@ pub async fn update_subscription_async(
 ) -> Result<bool> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || {
-        update_subscription_with_context(&ctx, &id, &name, &schedule, &prompt, &tools, &target_collection)
+        update_subscription_with_context(
+            &ctx,
+            &id,
+            &name,
+            &schedule,
+            &prompt,
+            &tools,
+            &target_collection,
+        )
     })
     .await
     .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
@@ -340,11 +356,9 @@ pub async fn set_subscription_enabled_async(
     enabled: bool,
 ) -> Result<bool> {
     let ctx = ctx.clone();
-    tokio::task::spawn_blocking(move || {
-        set_subscription_enabled_with_context(&ctx, &id, enabled)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+    tokio::task::spawn_blocking(move || set_subscription_enabled_with_context(&ctx, &id, enabled))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
 
 #[cfg(test)]

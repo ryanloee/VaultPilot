@@ -627,7 +627,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::McpHttp { .. } => Ok(serde_json::json!({
             "message": "The MCP HTTP server is started by running `vaultpilot-cli mcp-http` directly."
         })),
-        Commands::Vault { action } => handle_vault(context, action),
+        Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
         Commands::Collections { action } => {
             tokio::task::block_in_place(|| handle_collections(context, action))
         }

@@ -538,8 +538,8 @@ impl AutoOrganizer {
     ) -> Result<()> {
         let joined = keywords.join(",");
         connection.execute(
-            "UPDATE notes SET keywords = ?1 WHERE id = ?2",
-            params![joined, note_id],
+            "UPDATE notes SET keywords = ?1, updated_at = ?2 WHERE id = ?3",
+            params![joined, Utc::now().to_rfc3339(), note_id],
         )?;
         Ok(())
     }

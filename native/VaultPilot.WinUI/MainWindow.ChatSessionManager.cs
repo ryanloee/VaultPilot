@@ -276,16 +276,25 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var now = DateTimeOffset.UtcNow.ToString("O");
-        var updated = session with
-        {
-            Summary = summary,
-            Turns = session.Turns.Skip(compressibleCount).ToArray(),
-            UpdatedAt = now
-        };
+        // Re-fetch the latest session inside the lock to avoid discarding
+        // messages added by AddTurnAsync during the async compression call (#2267).
+        var resolvedId = session.Id;
         await _chatStateLock.WaitAsync();
         try
         {
+            var latestSession = _chatState.Sessions.FirstOrDefault(s => s.Id == resolvedId);
+            if (latestSession is null)
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow.ToString("O");
+            var updated = latestSession with
+            {
+                Summary = summary,
+                Turns = latestSession.Turns.Skip(compressibleCount).ToArray(),
+                UpdatedAt = now
+            };
             var sessions = _chatState.Sessions
                 .Select(item => item.Id == updated.Id ? updated : item)
                 .ToArray();

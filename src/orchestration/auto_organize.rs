@@ -1088,4 +1088,62 @@ mod tests {
         let result = organizer.run_analysis_round(&ctx).expect("analysis round");
         assert_eq!(result.notes_processed, 1, "should process one note");
     }
+
+    #[test]
+    fn update_note_keywords_updates_updated_at() {
+        let (_tmp, ctx) = setup_test_context();
+        let conn = ctx.get_connection().expect("connection");
+
+        // Insert a note with empty keywords
+        let meta = make_note_meta("kw-test-001", &[]);
+        let body = "test body for keyword update";
+        let doc = crate::models::NoteDocument {
+            meta: meta.clone(),
+            body: body.to_string(),
+            search_snippet: None,
+        };
+        crate::storage::notes::save_note_with_context(&ctx, doc).expect("save note");
+
+        // Grab the initial updated_at
+        let initial: String = conn
+            .query_row(
+                "SELECT updated_at FROM notes WHERE id = 'kw-test-001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read initial updated_at");
+
+        // Small delay so timestamps differ
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Call update_note_keywords
+        let new_keywords = vec!["kernel".to_string(), "debugging".to_string()];
+        AutoOrganizer::update_note_keywords(&conn, "kw-test-001", &new_keywords)
+            .expect("update keywords");
+
+        // Read back updated_at
+        let updated: String = conn
+            .query_row(
+                "SELECT updated_at FROM notes WHERE id = 'kw-test-001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read updated updated_at");
+
+        assert_ne!(
+            initial, updated,
+            "updated_at should change after update_note_keywords; initial={}, updated={}",
+            initial, updated
+        );
+
+        // Also verify the keywords column was actually set
+        let stored_keywords: String = conn
+            .query_row(
+                "SELECT keywords FROM notes WHERE id = 'kw-test-001'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read keywords");
+        assert_eq!(stored_keywords, "kernel,debugging");
+    }
 }

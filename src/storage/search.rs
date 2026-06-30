@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::{debug, instrument, warn};
 
+use chrono::DateTime;
 use crate::models::{NoteDocument, NoteMeta, SearchQuery, SearchResult};
 
 use super::pool::open_connection;
@@ -500,6 +501,9 @@ fn query_like_note_metas(
 }
 
 /// Filter a list of NoteMetas by optional date range bounds.
+/// Parses RFC 3339 timestamps into `DateTime<FixedOffset>` for proper
+/// timezone-aware comparison, avoiding incorrect string-comparison results
+/// when the inputs mix different timezone offset formats (e.g. `Z` vs `+00:00`).
 fn filter_by_date_range(
     mut notes: Vec<NoteMeta>,
     created_after: Option<&str>,
@@ -507,25 +511,44 @@ fn filter_by_date_range(
     modified_after: Option<&str>,
     modified_before: Option<&str>,
 ) -> Vec<NoteMeta> {
+    // Pre-parse filter boundaries once (cached for all notes).
+    let created_after_dt = created_after.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+    let created_before_dt = created_before.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+    let modified_after_dt = modified_after.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+    let modified_before_dt = modified_before.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+
     notes.retain(|note| {
-        if let Some(after) = created_after {
-            if !note.created_at.is_empty() && note.created_at.as_str() < after {
-                return false;
+        // Parse each note's timestamps; if unparseable (e.g. empty/invalid),
+        // skip the corresponding filter checks (conservative: keep the note).
+        let created_dt = DateTime::parse_from_rfc3339(&note.created_at).ok();
+        let updated_dt = DateTime::parse_from_rfc3339(&note.updated_at).ok();
+
+        if let Some(after_dt) = created_after_dt {
+            if let Some(ref dt) = created_dt {
+                if *dt < after_dt {
+                    return false;
+                }
             }
         }
-        if let Some(before) = created_before {
-            if !note.created_at.is_empty() && note.created_at.as_str() > before {
-                return false;
+        if let Some(before_dt) = created_before_dt {
+            if let Some(ref dt) = created_dt {
+                if *dt > before_dt {
+                    return false;
+                }
             }
         }
-        if let Some(after) = modified_after {
-            if !note.updated_at.is_empty() && note.updated_at.as_str() < after {
-                return false;
+        if let Some(after_dt) = modified_after_dt {
+            if let Some(ref dt) = updated_dt {
+                if *dt < after_dt {
+                    return false;
+                }
             }
         }
-        if let Some(before) = modified_before {
-            if !note.updated_at.is_empty() && note.updated_at.as_str() > before {
-                return false;
+        if let Some(before_dt) = modified_before_dt {
+            if let Some(ref dt) = updated_dt {
+                if *dt > before_dt {
+                    return false;
+                }
             }
         }
         true

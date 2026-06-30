@@ -622,14 +622,14 @@ async fn handle_mcp_request(
 
             let result = match tool_name {
                 "chat.send" => mcp_call_chat_send(context, arguments).await,
-                "chat.list_sessions" => mcp_call_chat_list_sessions(context),
-                "chat.get_state" => mcp_call_chat_get_state(context),
+                "chat.list_sessions" => mcp_call_chat_list_sessions(context).await,
+                "chat.get_state" => mcp_call_chat_get_state(context).await,
                 "chat.new" => mcp_call_chat_new(context, arguments).await,
                 "chat.delete" => mcp_call_chat_delete(context, arguments).await,
-                "notes.list" => mcp_call_notes_list(context, arguments),
-                "notes.get" => mcp_call_notes_get(context, arguments),
-                "notes.create" => mcp_call_notes_create(context, arguments),
-                "notes.delete" => mcp_call_notes_delete(context, arguments),
+                "notes.list" => mcp_call_notes_list(context, arguments).await,
+                "notes.get" => mcp_call_notes_get(context, arguments).await,
+                "notes.create" => mcp_call_notes_create(context, arguments).await,
+                "notes.delete" => mcp_call_notes_delete(context, arguments).await,
                 "notes.search" => mcp_call_notes_search(context, arguments).await,
                 "notes.related" => mcp_call_notes_related(context, arguments).await,
                 "notes.import" => mcp_call_notes_import(context, arguments).await,
@@ -1526,8 +1526,9 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
     }
 }
 
-fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
-    match load_chat_state_with_context(context) {
+async fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || match load_chat_state_with_context(&ctx) {
         Ok(state) => {
             let sessions = state
                 .sessions
@@ -1548,11 +1549,14 @@ fn mcp_call_chat_list_sessions(context: &StorageContext) -> Value {
             )
         }
         Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
-    }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
-fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
-    match load_chat_state_with_context(context) {
+async fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || match load_chat_state_with_context(&ctx) {
         Ok(state) => {
             let structured = serde_json::to_value(state).unwrap_or_else(|_| serde_json::json!({}));
             mcp_tool_success(
@@ -1561,7 +1565,9 @@ fn mcp_call_chat_get_state(context: &StorageContext) -> Value {
             )
         }
         Err(error) => mcp_tool_error(sanitize_error(&error.to_string())),
-    }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
 async fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value {
@@ -1685,33 +1691,39 @@ impl FlatNoteInput {
     }
 }
 
-fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_list(context: &StorageContext, arguments: Value) -> Value {
     // Storage layer clamps to 200 (storage.rs:558), so align the MCP cap.
     let limit = arguments
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(20)
         .min(200) as usize;
-    match search_notes_with_context(
-        context,
-        SearchQuery {
-            text: String::new(),
-            tags: Vec::new(),
-            keywords: Vec::new(),
-            limit: Some(limit),
-            ..Default::default()
-        },
-    ) {
-        Ok(result) => {
-            let count = result.notes.len();
-            let structured = with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
-            mcp_tool_success(format!("Found {count} note(s)."), structured)
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || {
+        match search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: Vec::new(),
+                keywords: Vec::new(),
+                limit: Some(limit),
+                ..Default::default()
+            },
+        ) {
+            Ok(result) => {
+                let count = result.notes.len();
+                let structured =
+                    with_token_estimate(serde_json::to_value(&result).unwrap_or_default());
+                mcp_tool_success(format!("Found {count} note(s)."), structured)
+            }
+            Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
         }
-        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-    }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
-fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
     let id = match arguments.get("id").and_then(Value::as_str) {
         Some(id) => id.to_string(),
         None => return mcp_tool_error("notes.get requires 'id' parameter".to_string()),
@@ -1737,8 +1749,8 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
             serde_json::from_value::<Vec<String>>(v.clone()).ok()
         }
     });
-
-    match load_note_with_context(context, &id) {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || match load_note_with_context(&ctx, &id) {
         Ok(note) => {
             let structured = build_note_get_payload(&note, mode, fields.as_deref());
             let hint = if mode == "full" && fields.is_none() {
@@ -1757,10 +1769,12 @@ fn mcp_call_notes_get(context: &StorageContext, arguments: Value) -> Value {
             mcp_tool_success(hint, structured)
         }
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-    }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
-fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
     let flat: FlatNoteInput = match serde_json::from_value(arguments) {
         Ok(n) => n,
         Err(e) => {
@@ -1776,27 +1790,33 @@ fn mcp_call_notes_create(context: &StorageContext, arguments: Value) -> Value {
         return mcp_tool_error("notes.create requires a non-empty 'body'".to_string());
     }
     let note = flat.into_note_document();
-    match save_note_with_context(context, note) {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || match save_note_with_context(&ctx, note) {
         Ok(saved) => mcp_tool_success(
             format!("Created note '{}'", escape_xml_content(&saved.meta.title)),
             serde_json::to_value(&saved).unwrap_or_default(),
         ),
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-    }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
-fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
+async fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Value {
     let id = match arguments.get("id").and_then(Value::as_str) {
         Some(id) => id.to_string(),
         None => return mcp_tool_error("notes.delete requires 'id' parameter".to_string()),
     };
-    match delete_note_with_context(context, &id) {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || match delete_note_with_context(&ctx, &id) {
         Ok(deleted) => mcp_tool_success(
             format!("Deleted={deleted}, id={}", escape_xml_content(&id)),
             serde_json::json!({ "deleted": deleted, "id": id }),
         ),
         Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-    }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
 async fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {

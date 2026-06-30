@@ -28,6 +28,7 @@ pub(super) struct CachedClient {
     timeout_ms: u64,
     provider_type: crate::models::ProviderType,
     base_url: String,
+    resolved_addrs: Vec<(String, SocketAddr)>,
 }
 
 static CACHED_CLIENT: Mutex<Option<CachedClient>> = Mutex::new(None);
@@ -48,6 +49,7 @@ pub(super) fn get_or_build_client(
             && cached.timeout_ms == timeout_ms
             && cached.provider_type == provider_type
             && cached.base_url == base_url
+            && cached.resolved_addrs == resolved_addrs
         {
             return Ok(cached.client.clone());
         }
@@ -92,6 +94,7 @@ pub(super) fn get_or_build_client(
         timeout_ms,
         provider_type,
         base_url: base_url.to_string(),
+        resolved_addrs: resolved_addrs.to_vec(),
     });
     Ok(client)
 }

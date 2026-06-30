@@ -342,6 +342,7 @@ impl ToolProxy {
 
     /// Normalize a path by eliminating `.` and `..` components.
     fn normalize_path_components(path: &str) -> String {
+        let is_absolute = path.starts_with('/');
         let mut components: Vec<&str> = Vec::new();
         for component in path.split('/') {
             match component {
@@ -352,7 +353,11 @@ impl ToolProxy {
                 _ => components.push(component),
             }
         }
-        components.join("/")
+        let mut result = components.join("/");
+        if is_absolute {
+            result.insert(0, '/');
+        }
+        result
     }
 
     /// Check if a path matches the write pattern whitelist.

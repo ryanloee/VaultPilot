@@ -258,8 +258,8 @@ export async function buildNoteContext(userMessage: string, recentMessages?: str
         return `【${title}】\nCREATED_AT: ${created}\nUPDATED_AT: ${updated}\n${content}`;
       });
       return isChinese()
-        ? `以下是用户保存的所有笔记（共${noteCount}条）：\n\n${blocks.join('\n\n---\n\n')}`
-        : `Here are all the user's saved notes (${noteCount} total):\n\n${blocks.join('\n\n---\n\n')}`;
+        ? `以下是用户保存的笔记（数据库共${noteCount}条，展示最近收藏/更新的${results.length}条）：\n\n${blocks.join('\n\n---\n\n')}`
+        : `Here are the user's saved notes (${noteCount} total in DB, showing latest ${results.length}):\n\n${blocks.join('\n\n---\n\n')}`;
     }
 
     // Search with keywords

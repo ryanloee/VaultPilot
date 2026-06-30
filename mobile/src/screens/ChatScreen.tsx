@@ -250,6 +250,8 @@ export default function ChatScreen({ navigation, route }: any) {
     const aiMsg: Msg = { id: aiId, role: 'assistant', content: '', streaming: true };
     setMsgs(prev => [...prev, aiMsg]);
     setStreaming(true);
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
 
     let full = '';
     try {
@@ -267,9 +269,6 @@ export default function ChatScreen({ navigation, route }: any) {
         ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
         { role: 'user', content: userText },
       ];
-
-      abortRef.current?.abort();
-      abortRef.current = new AbortController();
       // #1900: 60s timeout to prevent UI freeze
       const TIMEOUT_MS = 60_000;
       timeoutRef.current = setTimeout(() => {

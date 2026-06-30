@@ -90,6 +90,7 @@ pub async fn run_single_subscription(
                 summary: answer.chars().take(300).collect::<String>(),
                 source: "ai_subscription".to_string(),
                 tags: vec!["scheduled".to_string(), "ai".to_string()],
+                collections: vec![subscription.target_collection.clone()],
                 ..Default::default()
             };
 

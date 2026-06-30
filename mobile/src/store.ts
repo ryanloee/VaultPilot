@@ -92,10 +92,10 @@ export const PROVIDERS = [
 
 // ── Pure helper functions (exported for testing) ──────────
 
-/** Clamp provider index to valid range. */
+/** Clamp provider index to valid range (0 to providerCount-1). */
 export function clampProviderIndex(index: number, providerCount: number): number {
   if (providerCount === 0) return 0;
-  return Math.min(index, providerCount - 1);
+  return Math.max(0, Math.min(index, providerCount - 1));
 }
 
 /** Remove a provider by index, returning a new array. */

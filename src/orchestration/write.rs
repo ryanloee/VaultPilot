@@ -295,7 +295,10 @@ mod tests {
         assert_eq!(backups.len(), MAX_BACKUPS_PER_NOTE);
         // The oldest backup (index 0) should have been dropped
         assert_eq!(backups[0].title, "Title 2"); // indices 0,1 are gone
-        assert_eq!(backups[backups.len() - 1].title, format!("Title {}", MAX_BACKUPS_PER_NOTE + 1));
+        assert_eq!(
+            backups[backups.len() - 1].title,
+            format!("Title {}", MAX_BACKUPS_PER_NOTE + 1)
+        );
     }
 
     #[test]

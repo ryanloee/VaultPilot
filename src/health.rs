@@ -415,6 +415,7 @@ fn generate_suggestions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::{params, Connection};
 
     #[test]
     fn normalize_title_removes_punctuation_and_lowercases() {
@@ -560,5 +561,127 @@ mod tests {
         let link_density = 1.0; // all notes have links
         let tag_diversity = (total_tags as f64 / total_notes as f64).min(1.0);
         tag_coverage * 0.40 + link_density * 0.30 + tag_diversity * 0.30
+    }
+
+    #[test]
+    fn load_all_note_metas_invalid_json_returns_empty_tags() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL,
+                keywords TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                board TEXT NOT NULL,
+                kernel TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                summary TEXT NOT NULL,
+                body_hash TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // Invalid JSON in tags
+        conn.execute(
+            "INSERT INTO notes
+             (id, title, tags, keywords, platform, board, kernel,
+              status, created_at, updated_at, source, path, summary, body_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                "n1",
+                "Bad Tags",
+                "{invalid",
+                "[]",
+                "test",
+                "test",
+                "test",
+                "active",
+                "2026-01-01",
+                "2026-01-01",
+                "test",
+                "/bad-tags.md",
+                "",
+                ""
+            ],
+        )
+        .unwrap();
+
+        // Invalid JSON in keywords
+        conn.execute(
+            "INSERT INTO notes
+             (id, title, tags, keywords, platform, board, kernel,
+              status, created_at, updated_at, source, path, summary, body_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                "n2",
+                "Bad Keywords",
+                "[]",
+                "not-json!!!",
+                "test",
+                "test",
+                "test",
+                "active",
+                "2026-01-01",
+                "2026-01-01",
+                "test",
+                "/bad-keywords.md",
+                "",
+                ""
+            ],
+        )
+        .unwrap();
+
+        // Both valid
+        conn.execute(
+            "INSERT INTO notes
+             (id, title, tags, keywords, platform, board, kernel,
+              status, created_at, updated_at, source, path, summary, body_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                "n3",
+                "Good Note",
+                "[\"rust\"]",
+                "[\"dev\"]",
+                "test",
+                "test",
+                "test",
+                "active",
+                "2026-01-01",
+                "2026-01-01",
+                "test",
+                "/good.md",
+                "",
+                ""
+            ],
+        )
+        .unwrap();
+
+        let metas = load_all_note_metas(&conn, 10).unwrap();
+
+        // n1: invalid tags → empty tags
+        let n1 = metas.iter().find(|m| m.id == "n1").unwrap();
+        assert!(
+            n1.tags.is_empty(),
+            "invalid tags JSON should yield empty tags vec, got {:?}",
+            n1.tags
+        );
+
+        // n2: invalid keywords → empty keywords
+        let n2 = metas.iter().find(|m| m.id == "n2").unwrap();
+        assert!(
+            n2.keywords.is_empty(),
+            "invalid keywords JSON should yield empty keywords vec, got {:?}",
+            n2.keywords
+        );
+
+        // n3: valid JSON preserved
+        let n3 = metas.iter().find(|m| m.id == "n3").unwrap();
+        assert_eq!(n3.tags, vec!["rust"]);
+        assert_eq!(n3.keywords, vec!["dev"]);
     }
 }

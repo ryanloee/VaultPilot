@@ -635,6 +635,7 @@ fn filter_meeting_keys(lines: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::{params, Connection};
 
     fn epoch() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(1970, 1, 1, 0, 0, 0).unwrap()
@@ -797,6 +798,71 @@ END:VCALENDAR\r
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0], "FIRST:this is a very long line that continues");
         assert_eq!(lines[1], "SECOND:value");
+    }
+
+    #[test]
+    fn row_to_event_invalid_attendees_json_returns_empty_vec() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS calendar_events (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT '',
+                provider_event_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                start_utc TEXT NOT NULL,
+                end_utc TEXT NOT NULL,
+                location TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                attendees_json TEXT NOT NULL DEFAULT '[]',
+                all_day INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT '',
+                synced_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO calendar_events
+             (id, provider, provider_event_id, title, start_utc, end_utc,
+              location, description, attendees_json, all_day, source, synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                "bad-attendees-1",
+                "test",
+                "evt-1",
+                "Broken Attendees",
+                "2026-07-01T10:00:00+00:00",
+                "2026-07-01T11:00:00+00:00",
+                "",
+                "",
+                "not-valid-json!!",
+                0,
+                "test",
+                "2026-07-01T00:00:00Z",
+            ],
+        )
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, provider_event_id, title, start_utc, end_utc,
+                        location, description, attendees_json, all_day, source
+                 FROM calendar_events WHERE id = ?1",
+            )
+            .unwrap();
+        let events: Vec<CalendarEvent> = stmt
+            .query_map(params!["bad-attendees-1"], row_to_event)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].attendees.is_empty(),
+            "invalid JSON should yield empty attendees vec"
+        );
+        assert_eq!(events[0].title, "Broken Attendees");
+        assert_eq!(events[0].id, "bad-attendees-1");
     }
 
     #[test]

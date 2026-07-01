@@ -197,7 +197,7 @@ pub fn deep_search_notes(context: &StorageContext, query: SearchQuery) -> Result
     // Step 2: Semantic/vector search — compute semantic vectors and rank
     let semantic_scores = query_attachment_semantic_scores(&connection, &query.text)?;
     let mut scored_ids: Vec<(String, i64)> = semantic_scores.into_iter().collect();
-    scored_ids.sort_by(|a, b| b.1.cmp(&a.1)); // highest score first
+    scored_ids.sort_by_key(|b| std::cmp::Reverse(b.1)); // highest score first
 
     // Step 3: Build combined result set from FTS results + semantically scored notes
     let mut seen_ids: HashSet<String> = fts_results.iter().map(|n| n.id.clone()).collect();

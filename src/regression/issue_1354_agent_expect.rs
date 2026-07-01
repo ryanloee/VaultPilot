@@ -1,6 +1,6 @@
 //! Regression test for issue #1354: .expect() replaced with graceful error handling in agent.rs
 
-use crate::agent::{AgentConfig, AgentPermission, AgentResourceLimits, ExecutionMode, ToolProxy};
+use crate::agent::{AgentConfig, AgentPermission, AgentResourceLimits, ToolProxy};
 
 #[test]
 fn audit_log_survives_normal_operation() {

@@ -8,8 +8,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::models::{
-    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery,
-    SearchResult,
+    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery, SearchResult,
 };
 
 mod backup;

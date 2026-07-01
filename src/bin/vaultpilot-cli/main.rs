@@ -865,12 +865,12 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 Some(image.clone())
             };
             // Apply response style (#1965)
-            if let Ok(rs) = style.parse::<ResponseStyle>() {
-                let mut settings =
-                    vaultpilot_lib::storage::initialize_storage_async(context).await?;
-                settings.response_style = rs;
-                vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
-            }
+            let rs = style
+                .parse::<ResponseStyle>()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = rs;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             let result = ask_with_ai_with_context(
                 context,
                 question.clone(),
@@ -930,12 +930,12 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             style,
         } => {
             // Apply response style (#1965)
-            if let Ok(rs) = style.parse::<ResponseStyle>() {
-                let mut settings =
-                    vaultpilot_lib::storage::initialize_storage_async(context).await?;
-                settings.response_style = rs;
-                vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
-            }
+            let rs = style
+                .parse::<ResponseStyle>()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = rs;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await
         }
         Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
@@ -1007,12 +1007,12 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             style,
         } => {
             // Apply response style (#1965)
-            if let Ok(rs) = style.parse::<ResponseStyle>() {
-                let mut settings =
-                    vaultpilot_lib::storage::initialize_storage_async(context).await?;
-                settings.response_style = rs;
-                vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
-            }
+            let rs = style
+                .parse::<ResponseStyle>()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = rs;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             let result = chat_with_ai_with_context(
                 context,
                 session.clone(),

@@ -1710,7 +1710,7 @@ async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Re
             }
 
             // 3. Build the result
-            let result = vaultpilot_lib::ai::transcription::MeetingTranscriptionResult {
+            let mut result = vaultpilot_lib::ai::transcription::MeetingTranscriptionResult {
                 transcript: transcript.clone(),
                 summary: summary.clone(),
                 usage: vaultpilot_lib::ai::RequestUsage::default(),
@@ -1723,6 +1723,8 @@ async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Re
                 vaultpilot_lib::ai::transcription::create_meeting_note(context, &settings, &result)
             })
             .map_err(|e| anyhow::anyhow!("Failed to save meeting note: {e}"))?;
+
+            result.note_path = Some(saved.meta.path.clone());
 
             eprintln!("📝 Meeting note saved: {}", saved.meta.title);
             to_json(&serde_json::json!({

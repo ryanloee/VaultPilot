@@ -1427,7 +1427,18 @@ pub async fn run_agent(
                     // Build approval args: full JSON with content + current content for diff
                     let approval_args = if tool_name == "save_note" {
                         let mut args_value: serde_json::Value =
-                            serde_json::from_str(&args_json).unwrap_or_default();
+                            match serde_json::from_str(&args_json) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    warn!(
+                                        tool = tool_name,
+                                        error = %e,
+                                        "failed to parse approval args JSON for '{}': {}",
+                                        tool_name, e,
+                                    );
+                                    serde_json::Value::Null
+                                }
+                            };
                         if let Some(obj) = args_value.as_object_mut() {
                             if let ai::AssistantToolCall::SaveNote { note_id, .. } = &tool_call {
                                 match crate::storage::load_note_async(context, note_id).await {

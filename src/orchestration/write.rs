@@ -21,6 +21,7 @@ const MAX_BACKUPS_PER_NOTE: usize = 5;
 // ── Write Backup / Revert (#1986) ──────────────────────────────────────────
 
 /// A backup of a note's state before an AI write was applied.
+/// Stores all `NoteMeta` fields so that a revert fully restores metadata.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WriteBackup {
     /// The note ID that was modified.
@@ -29,6 +30,28 @@ pub struct WriteBackup {
     pub note_path: String,
     /// The note title before modification.
     pub title: String,
+    /// Tags associated with the note.
+    pub tags: Vec<String>,
+    /// Keywords associated with the note.
+    pub keywords: Vec<String>,
+    /// Platform metadata.
+    pub platform: String,
+    /// Board metadata.
+    pub board: String,
+    /// Kernel metadata.
+    pub kernel: String,
+    /// Status metadata.
+    pub status: String,
+    /// Creation timestamp.
+    pub created_at: String,
+    /// Last-updated timestamp.
+    pub updated_at: String,
+    /// Source metadata.
+    pub source: String,
+    /// Summary / excerpt of the note.
+    pub summary: String,
+    /// Collections the note belongs to.
+    pub collections: Vec<String>,
     /// The note body (markdown content) before modification.
     pub body: String,
     /// When the write was approved (Unix timestamp).
@@ -55,6 +78,17 @@ impl WriteTracker {
             note_id: note.meta.id.clone(),
             note_path: note.meta.path.clone(),
             title: note.meta.title.clone(),
+            tags: note.meta.tags.clone(),
+            keywords: note.meta.keywords.clone(),
+            platform: note.meta.platform.clone(),
+            board: note.meta.board.clone(),
+            kernel: note.meta.kernel.clone(),
+            status: note.meta.status.clone(),
+            created_at: note.meta.created_at.clone(),
+            updated_at: note.meta.updated_at.clone(),
+            source: note.meta.source.clone(),
+            summary: note.meta.summary.clone(),
+            collections: note.meta.collections.clone(),
             body: note.body.clone(),
             timestamp: chrono::Utc::now().timestamp(),
         };
@@ -112,8 +146,18 @@ pub async fn revert_write(
         meta: crate::models::NoteMeta {
             id: backup.note_id.clone(),
             title: backup.title.clone(),
+            tags: backup.tags.clone(),
+            keywords: backup.keywords.clone(),
+            platform: backup.platform.clone(),
+            board: backup.board.clone(),
+            kernel: backup.kernel.clone(),
+            status: backup.status.clone(),
+            created_at: backup.created_at.clone(),
+            updated_at: backup.updated_at.clone(),
+            source: backup.source.clone(),
             path: backup.note_path.clone(),
-            ..Default::default()
+            summary: backup.summary.clone(),
+            collections: backup.collections.clone(),
         },
         body: backup.body.clone(),
         ..Default::default()
@@ -241,7 +285,17 @@ mod tests {
                 id: id.to_string(),
                 title: title.to_string(),
                 path: format!("{}.md", id),
-                ..Default::default()
+                tags: vec!["test".to_string(), "rust".to_string()],
+                keywords: vec!["keyword1".to_string()],
+                platform: "test-platform".to_string(),
+                board: "test-board".to_string(),
+                kernel: "test-kernel".to_string(),
+                status: "active".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+                source: "test".to_string(),
+                summary: format!("Summary of {}", title),
+                collections: vec!["collection-a".to_string()],
             },
             body: body.to_string(),
             ..Default::default()
@@ -325,6 +379,17 @@ mod tests {
             note_id: "n1".to_string(),
             note_path: "n1.md".to_string(),
             title: "Title".to_string(),
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+            keywords: vec!["kw1".to_string()],
+            platform: "plat".to_string(),
+            board: "brd".to_string(),
+            kernel: "krn".to_string(),
+            status: "active".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-02T00:00:00Z".to_string(),
+            source: "src".to_string(),
+            summary: "A summary".to_string(),
+            collections: vec!["col1".to_string()],
             body: "Body content".to_string(),
             timestamp: 1700000000,
         };
@@ -332,6 +397,17 @@ mod tests {
         let deserialized: WriteBackup = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.note_id, "n1");
         assert_eq!(deserialized.title, "Title");
+        assert_eq!(deserialized.tags, vec!["tag1", "tag2"]);
+        assert_eq!(deserialized.keywords, vec!["kw1"]);
+        assert_eq!(deserialized.platform, "plat");
+        assert_eq!(deserialized.board, "brd");
+        assert_eq!(deserialized.kernel, "krn");
+        assert_eq!(deserialized.status, "active");
+        assert_eq!(deserialized.created_at, "2024-01-01T00:00:00Z");
+        assert_eq!(deserialized.updated_at, "2024-01-02T00:00:00Z");
+        assert_eq!(deserialized.source, "src");
+        assert_eq!(deserialized.summary, "A summary");
+        assert_eq!(deserialized.collections, vec!["col1"]);
         assert_eq!(deserialized.body, "Body content");
         assert_eq!(deserialized.timestamp, 1700000000);
     }

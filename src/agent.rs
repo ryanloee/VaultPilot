@@ -2746,6 +2746,10 @@ mod pure_function_tests {
         assert_eq!(format_tokens(1000), "~1k");
         assert_eq!(format_tokens(3000), "~3k");
         assert_eq!(format_tokens(3500), "~3.5k");
+        // Large values — fractional detection at high ranges.
+        assert_eq!(format_tokens(999999), "~1000.0k");
+        // Exact ten-thousands.
+        assert_eq!(format_tokens(10_000), "~10k");
     }
 
     #[test]

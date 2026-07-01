@@ -1388,4 +1388,55 @@ mod tests {
         assert!(result.starts_with("<conversation_history>"));
         assert!(result.ends_with("</conversation_history>"));
     }
+
+    // ── Plan Mode prompt tests (#2107) ──────────────────────────────────────
+
+    #[test]
+    fn plan_generation_system_prompt_contains_key_instructions() {
+        let prompt = plan_generation_system_prompt();
+        assert!(prompt.contains("execution plan"));
+        assert!(prompt.contains("search_notes"));
+        assert!(prompt.contains("save_note"));
+        assert!(prompt.contains("Return strict JSON"));
+        assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
+        assert!(prompt.contains(Utc::now().format("%Y-%m-%d").to_string().as_str()));
+    }
+
+    #[test]
+    fn plan_generation_user_prompt_renders_task_and_results() {
+        let results = vec![
+            "TOOL: search_notes\nSTATUS: ok\nINPUT: find meeting notes\nOUTPUT: found 3 notes"
+                .into(),
+            "TOOL: read_file\nSTATUS: ok\nINPUT: notes/meeting-1.md\nOUTPUT: # Meeting 1".into(),
+        ];
+        let prompt = plan_generation_user_prompt("summarize my meetings", &results);
+        assert!(prompt.contains("summarize my meetings"));
+        assert!(prompt.contains("search_notes"));
+        assert!(prompt.contains("read_file"));
+        assert!(prompt.contains("<recon_results>"));
+        assert!(prompt.contains("</recon_results>"));
+        assert!(prompt.contains("found 3 notes"));
+        assert!(prompt.contains("# Meeting 1"));
+    }
+
+    #[test]
+    fn plan_generation_user_prompt_empty_results() {
+        let prompt = plan_generation_user_prompt("do something", &[]);
+        assert!(prompt.contains("do something"));
+        assert!(prompt.contains("<recon_results>"));
+        assert!(prompt.contains("</recon_results>"));
+        // Should not contain any tool output when results are empty.
+        assert!(!prompt.contains("TOOL:"));
+    }
+
+    #[test]
+    fn plan_generation_user_prompt_sanitizes_user_input() {
+        // User input is wrapped in <user_input> XML delimiters to prevent
+        // prompt injections. The raw content (including angle brackets) is
+        // preserved inside the delimiters.
+        let prompt = plan_generation_user_prompt("find <script>alert('xss')</script>", &[]);
+        assert!(prompt.contains("<user_input>"));
+        assert!(prompt.contains("<script>alert('xss')</script>"));
+        assert!(prompt.contains("</user_input>"));
+    }
 }

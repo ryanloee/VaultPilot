@@ -1,6 +1,6 @@
 //! Regression test for issue #1354: .expect() replaced with graceful error handling in agent.rs
 
-use crate::agent::{AgentConfig, AgentPermission, AgentResourceLimits, ToolProxy};
+use crate::agent::{AgentConfig, AgentPermission, AgentResourceLimits, ExecutionMode, ToolProxy};
 
 #[test]
 fn audit_log_survives_normal_operation() {
@@ -10,6 +10,7 @@ fn audit_log_survives_normal_operation() {
         limits: AgentResourceLimits::default(),
         allowed_tools: vec![],
         write_patterns: vec![],
+        execution_mode: Default::default(),
     };
     let proxy = ToolProxy::new(config, "/tmp");
 
@@ -30,6 +31,7 @@ fn deny_entry_recorded_in_audit_log() {
         limits: AgentResourceLimits::default(),
         allowed_tools: vec!["search_notes".into()],
         write_patterns: vec![],
+        execution_mode: Default::default(),
     };
     let proxy = ToolProxy::new(config, "/tmp");
 
@@ -50,6 +52,7 @@ fn multiple_tool_calls_audit_log_ordering() {
         limits: AgentResourceLimits::default(),
         allowed_tools: vec![],
         write_patterns: vec![],
+        execution_mode: Default::default(),
     };
     let proxy = ToolProxy::new(config, "/tmp");
 

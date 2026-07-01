@@ -135,6 +135,7 @@ fn agent_config_serializes_roundtrip() {
         },
         allowed_tools: vec!["search_notes".into(), "read_file".into()],
         write_patterns: vec!["*.md".into(), "inbox/*".into()],
+        execution_mode: Default::default(),
     };
     let json = serde_json::to_string(&config).unwrap();
     let back: AgentConfig = serde_json::from_str(&json).unwrap();

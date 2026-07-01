@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use vaultpilot_lib::agent::{
-    AgentConfig, AgentEvent as LibAgentEvent, AgentPermission, AgentResourceLimits,
+    AgentConfig, AgentEvent as LibAgentEvent, AgentPermission, AgentResourceLimits, PlanDecision,
 };
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
@@ -914,7 +914,27 @@ async fn run_agent_task(
                     // not on the main stdin loop, so blocking is fine).
                     rx.recv().unwrap_or(false)
                 }
+                LibAgentEvent::PlanProposed { plan } => {
+                    emit_event(
+                        &writer,
+                        "planProposed",
+                        &plan.render_markdown(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    );
+                    true
+                }
             }
+        },
+        |_plan| {
+            // The UI sidecar delegates plan decisions to the WinUI/Android client.
+            // For now, auto-approve since the UI does not yet handle plan events.
+            // The plan is displayed via the PlanProposed event above.
+            eprintln!("[vaultpilot-agent] Plan Mode: auto-approving (UI plan handling not yet implemented)");
+            PlanDecision::Approve
         },
     )
     .await;

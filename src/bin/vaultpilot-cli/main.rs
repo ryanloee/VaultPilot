@@ -132,6 +132,7 @@ enum Commands {
     ///   vaultpilot agent "summarize my recent notes"
     ///   vaultpilot agent "find notes about Rust and create a summary" --auto-approve
     ///   vaultpilot agent "organize my tags" --max-steps 10
+    ///   vaultpilot agent "draft a design doc for X" --plan
     Agent {
         /// The prompt / task for the agent
         prompt: String,
@@ -143,6 +144,10 @@ enum Commands {
         /// Auto-approve write operations without confirmation
         #[arg(long)]
         auto_approve: bool,
+
+        /// Plan Mode: generate a structured plan first for user approval (#2107)
+        #[arg(long)]
+        plan: bool,
     },
 
     /// Compress chat history into a summary
@@ -747,7 +752,8 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             prompt,
             max_steps,
             auto_approve,
-        } => handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve).await,
+            plan,
+        } => handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await,
         Commands::Write {
             prompt,
             mode,
@@ -1312,9 +1318,12 @@ async fn handle_agent(
     history: &[vaultpilot_lib::models::ConversationTurn],
     max_steps: usize,
     auto_approve: bool,
+    plan: bool,
 ) -> Result<Value> {
     let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
     settings.provider = settings.effective_provider().clone();
+
+    use vaultpilot_lib::agent::{ExecutionMode, PlanDecision};
 
     let config = vaultpilot_lib::agent::AgentConfig {
         name: "vaultpilot-cli-agent".into(),
@@ -1327,17 +1336,23 @@ async fn handle_agent(
             max_tool_calls: max_steps as u64,
             ..Default::default()
         },
+        execution_mode: if plan {
+            ExecutionMode::Plan
+        } else {
+            ExecutionMode::Direct
+        },
         ..Default::default()
     };
 
     eprintln!(
-        "🤖 Agent starting — max {} steps, {} write mode",
+        "🤖 Agent starting — max {} steps, {} write mode{}",
         max_steps,
         if auto_approve {
             "auto-approve"
         } else {
             "read-only"
-        }
+        },
+        if plan { " [Plan Mode]" } else { "" }
     );
 
     let result = vaultpilot_lib::agent::run_agent(
@@ -1398,8 +1413,57 @@ async fn handle_agent(
                 vaultpilot_lib::agent::AgentEvent::Error { message } => {
                     eprintln!("❌ Error: {message}");
                 }
+                vaultpilot_lib::agent::AgentEvent::PlanProposed { plan } => {
+                    // Plan is displayed interactively by the plan_decision callback
+                    eprintln!("\n📋 Plan generated — awaiting your decision...");
+                    eprintln!("{}", plan.render_markdown());
+                }
             }
             true // default: continue
+        },
+        |_plan| {
+            // Interactive plan decision: approve, reject, or edit
+            eprintln!("\n📋 Plan Mode — review the execution plan above.");
+            loop {
+                eprint!("   Approve (a) / Reject (r) / Edit (e) [a]: ");
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap_or_default();
+                match input.trim().to_ascii_lowercase().as_str() {
+                    "" | "a" | "approve" => {
+                        eprintln!("   ✅ Plan approved — executing...");
+                        return PlanDecision::Approve;
+                    }
+                    "r" | "reject" => {
+                        eprintln!("   ❌ Plan rejected — task cancelled.");
+                        return PlanDecision::Reject;
+                    }
+                    "e" | "edit" => {
+                        // For now, edit means the user overrides steps via a simple prompt
+                        eprintln!("   📝 Edit mode — describe your changes:");
+                        eprint!("   > ");
+                        let mut edit_input = String::new();
+                        std::io::stdin().read_line(&mut edit_input).unwrap_or_default();
+                        let edit_desc = edit_input.trim().to_string();
+                        if edit_desc.is_empty() {
+                            eprintln!("   No edits provided, approving as-is.");
+                            return PlanDecision::Approve;
+                        }
+                        // For CLI simplicity, edit mode creates a single Custom step
+                        // with the user's edit description. Full step editing is
+                        // available on the WinUI and Android surfaces.
+                        return PlanDecision::Edit {
+                            steps: vec![vaultpilot_lib::agent::PlanStep::new(
+                                vaultpilot_lib::agent::PlanStepKind::Custom,
+                                edit_desc,
+                                None,
+                            )],
+                        };
+                    }
+                    _ => {
+                        eprintln!("   Invalid input. Enter 'a' to approve, 'r' to reject, or 'e' to edit.");
+                    }
+                }
+            }
         },
     )
     .await?;

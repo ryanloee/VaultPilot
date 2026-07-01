@@ -74,6 +74,9 @@ pub struct AgentConfig {
     /// Glob patterns for writable paths (e.g. "*.md", "daily-notes/*", "inbox/*").
     /// Only enforced when `permission` is `ReadWrite`. Empty = no write access.
     pub write_patterns: Vec<String>,
+    /// Execution mode: Direct (default, immediate execution) or Plan (plan first).
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
 }
 
 impl Default for AgentConfig {
@@ -84,6 +87,7 @@ impl Default for AgentConfig {
             limits: AgentResourceLimits::default(),
             allowed_tools: Vec::new(),
             write_patterns: Vec::new(),
+            execution_mode: ExecutionMode::default(),
         }
     }
 }
@@ -625,6 +629,8 @@ pub enum AgentEvent {
     Timeout,
     /// Error occurred.
     Error { message: String },
+    /// A structured execution plan has been generated for user approval (Plan Mode, #2107).
+    PlanProposed { plan: ExecutionPlan },
 }
 
 /// Result of an agent execution session.
@@ -1201,6 +1207,12 @@ const DEFAULT_MAX_STEPS: usize = 20;
 /// `on_event` is called for every significant progress change.
 /// For write operations, `on_event` receives `WriteApprovalNeeded` — the
 /// callback should return `true` to approve or `false` to deny.
+/// For Plan Mode, `on_event` receives `PlanProposed` with the generated plan.
+///
+/// `on_plan_decision` is called when Plan Mode generates a plan and needs the
+/// user to approve, reject, or edit it. Only invoked when `config.execution_mode`
+/// is `ExecutionMode::Plan`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent(
     settings: &crate::models::AppSettings,
     context: &StorageContext,
@@ -1209,6 +1221,7 @@ pub async fn run_agent(
     history: &[crate::models::ConversationTurn],
     config: AgentConfig,
     mut on_event: impl FnMut(&AgentEvent) -> bool,
+    mut on_plan_decision: impl FnMut(&ExecutionPlan) -> PlanDecision,
 ) -> Result<AgentResult> {
     let proxy = ToolProxy::new(config.clone(), &settings.vault_dir);
     let max_steps = if config.limits.max_tool_calls > 0
@@ -1232,6 +1245,40 @@ pub async fn run_agent(
     }
     let mut exit_reason = ExitReason::StepLimit;
     let mut actual_steps = 0usize;
+
+    // ── Plan Mode (#2107): generate plan, get user decision, then execute ────
+    if config.execution_mode == ExecutionMode::Plan {
+        let plan = generate_execution_plan(
+            settings,
+            context,
+            prompt,
+            images,
+            history,
+            config.clone(),
+            |event| {
+                on_event(event);
+            },
+        )
+        .await?;
+
+        on_event(&AgentEvent::PlanProposed { plan: plan.clone() });
+
+        let decision = on_plan_decision(&plan);
+        let finalized = plan.apply_decision(&decision);
+
+        if !finalized.has_executable_steps() {
+            return Ok(AgentResult {
+                answer: if matches!(decision, PlanDecision::Reject) {
+                    "[Plan was rejected — no steps to execute]".to_string()
+                } else {
+                    "[Plan has no executable steps after editing]".to_string()
+                },
+                steps_used: 0,
+                tokens_used: 0,
+                audit_log: Vec::new(),
+            });
+        }
+    }
 
     for step in 0..max_steps {
         // Timeout check

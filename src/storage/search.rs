@@ -151,6 +151,87 @@ pub fn search_notes_with_context(
     Ok(SearchResult { notes, total })
 }
 
+/// Instant title-only search for typeahead (<100ms).
+/// Uses SQLite LIKE on the title column — no FTS overhead.
+pub fn typeahead_search(
+    context: &StorageContext,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<NoteMeta>> {
+    let (connection, _) = open_connection(context)?;
+    let limit = limit.clamp(1, 50);
+    let escaped = escape_like_pattern(&query.to_lowercase());
+    let pattern = format!("%{}%", escaped);
+
+    let mut statement = connection.prepare(
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
+         FROM notes
+         WHERE LOWER(title) LIKE ?1 ESCAPE '\\'
+         ORDER BY updated_at DESC
+         LIMIT ?2",
+    )?;
+    let rows = statement
+        .query_map(params![pattern, limit as i64], row_to_meta)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Full deep search that includes semantic/vector scoring.
+/// Meant to be called after the initial FTS5 keyword search to find
+/// additional semantically-related results.
+pub fn deep_search_notes(context: &StorageContext, query: SearchQuery) -> Result<SearchResult> {
+    let (connection, _) = open_connection(context)?;
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0);
+
+    if query.text.trim().is_empty() {
+        let notes = query_recent_note_metas(&connection, limit, offset)?;
+        let total = count_all_notes(&connection)?;
+        return Ok(SearchResult { notes, total });
+    }
+
+    // Step 1: FTS5 keyword search (same as fast path)
+    let fetch_limit = limit + offset;
+    let fts_results = rank_note_metas(context, &connection, &query.text, &[], fetch_limit)?;
+
+    // Step 2: Semantic/vector search — compute semantic vectors and rank
+    let semantic_scores = query_attachment_semantic_scores(&connection, &query.text)?;
+    let mut scored_ids: Vec<(String, i64)> = semantic_scores.into_iter().collect();
+    scored_ids.sort_by(|a, b| b.1.cmp(&a.1)); // highest score first
+
+    // Step 3: Build combined result set from FTS results + semantically scored notes
+    let mut seen_ids: HashSet<String> = fts_results.iter().map(|n| n.id.clone()).collect();
+    let mut combined = fts_results;
+
+    for (note_id, _score) in scored_ids {
+        if seen_ids.contains(&note_id) {
+            continue;
+        }
+        if combined.len() >= fetch_limit {
+            break;
+        }
+        // Load meta for semantically-matched note
+        if let Some(meta) = load_note_meta_by_id(&connection, &note_id)? {
+            combined.push(meta);
+            seen_ids.insert(note_id);
+        }
+    }
+
+    // Step 4: Apply offset/limit
+    let combined_len = combined.len();
+    let effective_offset = offset.min(combined_len);
+    let notes = combined
+        .into_iter()
+        .skip(effective_offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let total = notes
+        .len()
+        .max(combined_len.saturating_sub(effective_offset));
+
+    Ok(SearchResult { notes, total })
+}
+
 pub(super) fn build_attachment_semantic_text(
     file_name: &str,
     stem: &str,

@@ -242,6 +242,22 @@ enum Commands {
         #[command(subcommand)]
         action: MeetingActions,
     },
+
+    /// Show vault health dashboard — note counts, orphan analysis, density score, suggestions (#2014)
+    ///
+    /// Examples:
+    ///   vp health                     — full dashboard
+    ///   vp health --json              — JSON output for programmatic use
+    ///   vp health --weekly            — weekly summary format
+    Health {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Weekly summary format (concise)
+        #[arg(long)]
+        weekly: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -349,6 +365,10 @@ enum NotesActions {
         /// Maximum results
         #[arg(long, default_value = "20")]
         limit: usize,
+
+        /// Enable deep semantic/vector search to find more relevant results (#2033)
+        #[arg(long)]
+        deep_search: bool,
     },
 
     /// Import markdown files
@@ -825,6 +845,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_organize(context, action))
         }
         Commands::Meeting { action } => handle_meeting(context, action).await,
+        Commands::Health { json, weekly } => {
+            tokio::task::block_in_place(|| handle_health(context, *json, *weekly))
+        }
     }
 }
 
@@ -942,6 +965,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             tags,
             keywords,
             limit,
+            deep_search,
         } => {
             let result = search_notes_with_context(
                 context,
@@ -950,10 +974,33 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                     tags: parse_comma_list(tags),
                     keywords: parse_comma_list(keywords),
                     limit: Some(*limit),
+                    deep_search: *deep_search,
                     ..Default::default()
                 },
             )?;
-            to_json(&result)
+            if *deep_search {
+                // Print keyword results first
+                println!("=== Keyword Results ===");
+                to_json(&result)?;
+                // Then perform deep semantic search and show additional results
+                println!("\n--- 正在查找更多相关笔记... ---\n");
+                let deep_result = vaultpilot_lib::storage::deep_search_notes(
+                    context,
+                    SearchQuery {
+                        text: query.clone(),
+                        tags: parse_comma_list(tags),
+                        keywords: parse_comma_list(keywords),
+                        limit: Some(*limit),
+                        deep_search: true,
+                        ..Default::default()
+                    },
+                )?;
+                println!("=== AI 发现 (语义相关) ===");
+                to_json(&deep_result)?;
+            } else {
+                to_json(&result)?;
+            }
+            Ok(Value::Null) // to_json already printed
         }
         NotesActions::Import { paths } => {
             let result = import_markdown_with_context(context, paths)?;
@@ -1684,6 +1731,96 @@ async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Re
                 "note": saved,
             }))
         }
+    }
+}
+
+// ─── Health handler (#2014) ─────────────────────────────────────
+
+/// Handle `vp health` command — show vault health dashboard.
+fn handle_health(context: &StorageContext, json: bool, weekly: bool) -> Result<Value> {
+    let report = vaultpilot_lib::health::health_check(context)?;
+
+    if json {
+        return to_json(&report);
+    }
+
+    if weekly {
+        // Weekly summary format — concise
+        eprintln!("📊 Weekly Vault Health Summary");
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        eprintln!("  Notes:        {}", report.total_notes);
+        eprintln!("  Collections:  {}", report.total_collections);
+        eprintln!("  Unique tags:  {}", report.total_tags);
+        eprintln!("  Orphan notes: {}", report.orphan_notes.len());
+        eprintln!(
+            "  Density:      {:.0}% {}",
+            report.knowledge_density_score * 100.0,
+            density_emoji(report.knowledge_density_score)
+        );
+        if !report.suggestions.is_empty() {
+            eprintln!();
+            eprintln!("  Suggestions:");
+            for s in &report.suggestions {
+                eprintln!("  • {}", s);
+            }
+        }
+        if !report.duplicate_clusters.is_empty() {
+            eprintln!();
+            eprintln!("  Duplicate groups: {}", report.duplicate_clusters.len());
+        }
+        // Return the report as JSON on stdout for programmatic consumption
+        to_json(&report)
+    } else {
+        // Full dashboard
+        eprintln!("📊 Vault Health Dashboard");
+        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        eprintln!("  Total Notes:      {}", report.total_notes);
+        eprintln!("  Collections:      {}", report.total_collections);
+        eprintln!("  Unique Tags:      {}", report.total_tags);
+        eprintln!("  Orphan Notes:     {}", report.orphan_notes.len());
+        eprintln!(
+            "  Knowledge Density: {:.1}% {}",
+            report.knowledge_density_score * 100.0,
+            density_emoji(report.knowledge_density_score)
+        );
+
+        if !report.orphan_notes.is_empty() {
+            eprintln!();
+            eprintln!("🗂️  Orphan Notes (no tags, no links):");
+            for note in &report.orphan_notes {
+                eprintln!("  • {} ({})", note.title, note.id);
+            }
+        }
+
+        if !report.duplicate_clusters.is_empty() {
+            eprintln!();
+            eprintln!("🔁 Potential Duplicates:");
+            for (i, cluster) in report.duplicate_clusters.iter().enumerate() {
+                eprintln!("  Group {}: {} notes", i + 1, cluster.len());
+            }
+        }
+
+        if !report.suggestions.is_empty() {
+            eprintln!();
+            eprintln!("💡 Suggestions:");
+            for s in &report.suggestions {
+                eprintln!("  • {}", s);
+            }
+        }
+
+        eprintln!();
+        to_json(&report)
+    }
+}
+
+/// Return an emoji based on the density score.
+fn density_emoji(score: f64) -> &'static str {
+    if score >= 0.8 {
+        "🟢"
+    } else if score >= 0.5 {
+        "🟡"
+    } else {
+        "🔴"
     }
 }
 

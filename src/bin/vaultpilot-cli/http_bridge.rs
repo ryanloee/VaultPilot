@@ -30,7 +30,8 @@ use vaultpilot_lib::storage::{
     list_subscriptions_async, set_subscription_enabled_with_context, update_subscription_async,
 };
 use vaultpilot_lib::storage::{
-    load_note_async, load_settings_async, save_note_async, search_notes_async, StorageContext,
+    deep_search_notes_async, load_note_async, load_settings_async, save_note_async,
+    search_notes_async, typeahead_search_async, StorageContext,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path, run_single_subscription};
 
@@ -66,7 +67,14 @@ pub(super) async fn run_http_bridge(
         .route("/v1/chat/completions", post(http_chat_completions))
         .route("/api/notes", get(http_list_notes).post(http_create_note))
         .route("/api/notes/search", get(http_search_notes))
+        .route("/api/notes/typeahead", get(http_typeahead))
+        .route(
+            "/api/notes/search/progressive",
+            get(http_progressive_search),
+        )
         .route("/api/notes/{note_id}", get(http_get_note))
+        // Vault Health Dashboard (#2014)
+        .route("/api/vault/health", get(http_vault_health))
         // Subscriptions API (#2167)
         .route(
             "/api/subscriptions",
@@ -480,6 +488,140 @@ async fn http_search_notes(
         "notes": result.notes,
         "total": result.total
     })))
+}
+
+/// GET /api/notes/typeahead?q=... — Instant title-only matching for typeahead.
+async fn http_typeahead(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let query = params.get("q").cloned().unwrap_or_default();
+    if query.is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "Missing 'q' parameter",
+        ));
+    }
+    let limit: usize = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10)
+        .min(50);
+    let results = typeahead_search_async(&state.context, &query, limit)
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_typeahead: failed: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Typeahead search failed")
+        })?;
+    Ok(Json(serde_json::json!({
+        "notes": results
+    })))
+}
+
+/// GET /api/notes/search/progressive?q=... — SSE streaming endpoint
+/// that returns keyword results first, then semantic results progressively.
+async fn http_progressive_search(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> axum::response::Response {
+    if let Err(e) = require_bridge_token(&state, &headers) {
+        return e.into_response();
+    }
+    let query_text = params.get("q").cloned().unwrap_or_default();
+    if query_text.is_empty() {
+        return openai_error(StatusCode::BAD_REQUEST, "Missing 'q' parameter").into_response();
+    }
+    let limit: usize = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20)
+        .min(100);
+
+    let (sse_tx, sse_rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
+    let state_clone = state.clone();
+    let q = query_text.clone();
+
+    tokio::spawn(async move {
+        // Stage 1: Keyword search (FTS5, fast)
+        let kw_query = SearchQuery {
+            text: q.clone(),
+            limit: Some(limit),
+            deep_search: false,
+            ..Default::default()
+        };
+        match search_notes_async(&state_clone.context, kw_query).await {
+            Ok(result) => {
+                let event = ProgressiveSearchEvent {
+                    stage: "keyword".into(),
+                    results: Some(result),
+                    message: None,
+                };
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+            }
+            Err(e) => {
+                tracing::warn!("progressive keyword search failed: {e}");
+                let _ = sse_tx
+                    .send(Ok(Event::default().data(
+                        serde_json::json!({"stage": "error", "message": format!("{e}")})
+                            .to_string(),
+                    )))
+                    .await;
+                return;
+            }
+        }
+
+        // Stage 2: Loading state
+        let loading = ProgressiveSearchEvent {
+            stage: "loading".into(),
+            results: None,
+            message: Some("正在查找更多相关笔记...".into()),
+        };
+        let data = serde_json::to_string(&loading).unwrap_or_default();
+        let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+
+        // Stage 3: Deep semantic search
+        let deep_query = SearchQuery {
+            text: q.clone(),
+            limit: Some(limit),
+            deep_search: true,
+            ..Default::default()
+        };
+        match deep_search_notes_async(&state_clone.context, deep_query).await {
+            Ok(result) => {
+                let event = ProgressiveSearchEvent {
+                    stage: "semantic".into(),
+                    results: Some(result),
+                    message: None,
+                };
+                let data = serde_json::to_string(&event).unwrap_or_default();
+                let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+            }
+            Err(e) => {
+                tracing::warn!("progressive semantic search failed: {e}");
+                // Still send a done event so the client knows search is complete
+                let _ = sse_tx
+                    .send(Ok(
+                        Event::default().data(serde_json::json!({"stage": "done"}).to_string())
+                    ))
+                    .await;
+                return;
+            }
+        }
+
+        // Done
+        let _ = sse_tx
+            .send(Ok(
+                Event::default().data(serde_json::json!({"stage": "done"}).to_string())
+            ))
+            .await;
+    });
+
+    let stream = ReceiverStream::new(sse_rx);
+    Sse::new(stream).into_response()
 }
 
 /// POST /api/notes — Create a new vault note from clipped content (browser clipper MVP).
@@ -902,6 +1044,34 @@ async fn http_health() -> Json<Value> {
     Json(serde_json::json!({
         "status": "ok"
     }))
+}
+
+/// GET /api/vault/health — Return vault health report as JSON (#2014).
+async fn http_vault_health(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    let _ = require_bridge_token(&state, &headers);
+    // Run health check synchronously via spawn_blocking
+    let report = tokio::task::spawn_blocking({
+        let ctx = state.context.clone();
+        move || vaultpilot_lib::health::health_check(&ctx)
+    })
+    .await
+    .map_err(|e| {
+        tracing::warn!("http_vault_health: spawn_blocking failed: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Health check failed")
+    })?
+    .map_err(|e| {
+        tracing::warn!("http_vault_health: health check failed: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Health check failed")
+    })?;
+
+    let value = serde_json::to_value(&report).map_err(|e| {
+        tracing::warn!("http_vault_health: serialization failed: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Serialization failed")
+    })?;
+    Ok(Json(value))
 }
 
 async fn http_models(

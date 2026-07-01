@@ -107,7 +107,7 @@ pub struct NoteMeta {
 
 /// A named group of notes — a flat, many-to-many organizational layer
 /// separate from the filesystem folder hierarchy (#2042).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Collection {
     pub id: String,
@@ -292,6 +292,24 @@ pub struct SearchQuery {
     pub modified_after: Option<String>,
     /// Filter notes modified on or before this ISO-8601 timestamp.
     pub modified_before: Option<String>,
+    /// When true, also kick off async vector/semantic search
+    /// after the initial FTS5 keyword results (#2033).
+    #[serde(default)]
+    pub deep_search: bool,
+}
+
+/// A single event in the progressive search SSE stream (#2033).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressiveSearchEvent {
+    /// Stage name: "keyword", "loading", "semantic", or "done"
+    pub stage: String,
+    /// Keyword or semantic search results (present for "keyword" and "semantic" stages)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results: Option<SearchResult>,
+    /// Loading message (present for "loading" stage)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -653,6 +671,30 @@ impl MessageV2 {
         }
         errors
     }
+}
+
+// ---------------------------------------------------------------------------
+// HealthReport — Vault Health Dashboard (#2014)
+// ---------------------------------------------------------------------------
+
+/// Comprehensive health report for the vault knowledge base.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthReport {
+    /// Total number of notes in the vault.
+    pub total_notes: usize,
+    /// Total number of collections.
+    pub total_collections: usize,
+    /// Total number of unique tags across all notes.
+    pub total_tags: usize,
+    /// Notes that have no tags and no wiki-links to/from other notes.
+    pub orphan_notes: Vec<NoteMeta>,
+    /// Knowledge density score from 0.0 (sparse) to 1.0 (dense).
+    pub knowledge_density_score: f64,
+    /// AI-generated suggestions for improving vault health.
+    pub suggestions: Vec<String>,
+    /// Groups of note IDs whose titles are highly similar (potential duplicates).
+    pub duplicate_clusters: Vec<Vec<String>>,
 }
 
 #[cfg(test)]

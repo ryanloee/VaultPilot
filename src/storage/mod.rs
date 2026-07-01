@@ -28,7 +28,7 @@ pub use chat::{load_chat_state_with_context, save_chat_state_with_context};
 // Re-export settings public API so callers see no difference.
 pub use settings::{load_settings_with_context, save_settings_with_context};
 // Re-export search public API so callers see no difference.
-pub use search::search_notes_with_context;
+pub use search::{deep_search_notes, search_notes_with_context, typeahead_search};
 // Re-export notes public API so callers see no difference.
 pub use notes::{
     delete_note_async, delete_note_with_context, export_all_notes_async,
@@ -323,6 +323,30 @@ pub async fn has_notes_async(ctx: &StorageContext) -> Result<bool> {
 pub async fn search_notes_async(ctx: &StorageContext, query: SearchQuery) -> Result<SearchResult> {
     let ctx = ctx.clone();
     tokio::task::spawn_blocking(move || search_notes_with_context(&ctx, query))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`typeahead_search`].
+pub async fn typeahead_search_async(
+    ctx: &StorageContext,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<NoteMeta>> {
+    let ctx = ctx.clone();
+    let query = query.to_owned();
+    tokio::task::spawn_blocking(move || typeahead_search(&ctx, &query, limit))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`deep_search_notes`].
+pub async fn deep_search_notes_async(
+    ctx: &StorageContext,
+    query: SearchQuery,
+) -> Result<SearchResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || deep_search_notes(&ctx, query))
         .await
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }

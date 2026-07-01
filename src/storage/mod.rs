@@ -8,7 +8,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::models::{
-    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, ResponseStyle, SearchQuery,
+    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery,
     SearchResult,
 };
 
@@ -369,7 +369,7 @@ mod tests {
     };
     use super::settings::normalize_settings;
     use super::*;
-    use crate::models::{ChatSession, ProviderConfig};
+    use crate::models::{ChatSession, ProviderConfig, ResponseStyle};
     use chrono::Utc;
     use std::path::PathBuf;
 

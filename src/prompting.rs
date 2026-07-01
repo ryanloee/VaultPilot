@@ -1463,4 +1463,106 @@ mod tests {
         assert!(prompt.contains("<script>alert('xss')</script>"));
         assert!(prompt.contains("</user_input>"));
     }
+
+    // ── Response Style tests (#1965) ────────────────────────────────────────
+
+    #[test]
+    fn response_style_brief_suffix_is_non_empty() {
+        let suffix = response_style_suffix(ResponseStyle::Brief);
+        assert!(!suffix.is_empty(), "Brief style should add a suffix");
+        assert!(suffix.contains("[Response Style — Brief]"));
+        assert!(suffix.contains("concise"));
+    }
+
+    #[test]
+    fn response_style_standard_suffix_is_empty() {
+        let suffix = response_style_suffix(ResponseStyle::Standard);
+        assert!(
+            suffix.is_empty(),
+            "Standard style should add no extra instructions"
+        );
+    }
+
+    #[test]
+    fn response_style_detailed_suffix_is_non_empty() {
+        let suffix = response_style_suffix(ResponseStyle::Detailed);
+        assert!(!suffix.is_empty(), "Detailed style should add a suffix");
+        assert!(suffix.contains("[Response Style — Detailed]"));
+        assert!(suffix.contains("thorough"));
+    }
+
+    #[test]
+    fn response_style_default_is_standard() {
+        // The #[default] annotation should be Standard — verifying
+        // that constructing without an explicit variant picks Standard.
+        let style = ResponseStyle::default();
+        assert_eq!(style, ResponseStyle::Standard);
+        assert!(response_style_suffix(style).is_empty());
+    }
+
+    #[test]
+    fn response_style_parse_brief() {
+        let style: ResponseStyle = "brief".parse().unwrap();
+        assert_eq!(style, ResponseStyle::Brief);
+    }
+
+    #[test]
+    fn response_style_parse_standard() {
+        let style: ResponseStyle = "standard".parse().unwrap();
+        assert_eq!(style, ResponseStyle::Standard);
+    }
+
+    #[test]
+    fn response_style_parse_detailed() {
+        let style: ResponseStyle = "detailed".parse().unwrap();
+        assert_eq!(style, ResponseStyle::Detailed);
+    }
+
+    #[test]
+    fn response_style_parse_case_insensitive() {
+        let style: ResponseStyle = "BRIEF".parse().unwrap();
+        assert_eq!(style, ResponseStyle::Brief);
+        let style: ResponseStyle = "Standard".parse().unwrap();
+        assert_eq!(style, ResponseStyle::Standard);
+        let style: ResponseStyle = "DETAILED".parse().unwrap();
+        assert_eq!(style, ResponseStyle::Detailed);
+    }
+
+    #[test]
+    fn response_style_parse_invalid_returns_error() {
+        let result: Result<ResponseStyle, String> = "invalid".parse();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown response style"));
+    }
+
+    #[test]
+    fn response_style_parse_trim_whitespace() {
+        let style: ResponseStyle = "  brief  ".parse().unwrap();
+        assert_eq!(style, ResponseStyle::Brief);
+    }
+
+    #[test]
+    fn response_style_serde_roundtrip() {
+        for style in &[
+            ResponseStyle::Brief,
+            ResponseStyle::Standard,
+            ResponseStyle::Detailed,
+        ] {
+            let json = serde_json::to_string(style).unwrap();
+            let back: ResponseStyle = serde_json::from_str(&json).unwrap();
+            assert_eq!(*style, back, "round-trip failed for {style:?}");
+        }
+    }
+
+    #[test]
+    fn response_style_serde_default_for_unknown_field() {
+        // When an AppSettings JSON lacks response_style, it should default to Standard.
+        #[derive(serde::Deserialize)]
+        struct TestSettings {
+            #[serde(default)]
+            response_style: ResponseStyle,
+        }
+        let parsed: TestSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(parsed.response_style, ResponseStyle::Standard);
+    }
 }

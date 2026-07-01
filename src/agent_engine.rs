@@ -30,6 +30,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -229,6 +230,16 @@ pub trait AgentEngine: Send {
 
     /// Run `prompt` against this engine within `ctx`. Returns the captured
     /// response or a clear error (e.g. binary missing, vault invalid).
+    ///
+    /// # Failure semantics (subprocess engines)
+    ///
+    /// For subprocess-backed engines, `send_prompt` returns `Err` when the
+    /// external agent either **times out** (exceeds
+    /// [`EngineContext::limits`].`max_duration`) or **exits with a non-zero
+    /// status** — rather than masking those as success. The captured
+    /// stdout/stderr are preserved in the error message, so callers (including
+    /// the `agent-engine run` CLI) observe a genuine failure and a non-zero
+    /// process exit code (#2284 / #2285).
     fn send_prompt(&mut self, prompt: &str, ctx: &EngineContext) -> Result<EngineResponse>;
 }
 
@@ -296,7 +307,29 @@ impl SubprocessEngine {
     }
 
     /// Spawn the resolved binary, feed it the prompt, and capture output.
+    ///
+    /// # Resource-limit & failure contract (#2284 / #2285)
+    ///
+    /// - **Timeout (`ctx.limits.max_duration`)**: the spawned child is killed
+    ///   and reaped once the deadline elapses, and this method returns `Err`.
+    ///   A hung external agent therefore can never block the caller
+    ///   indefinitely — mirroring the builtin agent's pattern in
+    ///   [`crate::agent::Agent::run_command`] (`tokio::select!` + kill).
+    /// - **Non-zero exit**: a failing agent (e.g. `exit 7`) is surfaced as
+    ///   `Err`, with the captured stdout/stderr preserved in the error
+    ///   message, rather than masked as `Ok`. Callers — including the
+    ///   `agent-engine run` CLI — consequently observe a real failure and a
+    ///   non-zero process exit code.
     fn run(&self, binary: &Path, prompt: &str, ctx: &EngineContext) -> Result<EngineResponse> {
+        use std::io::Read;
+        use std::sync::mpsc;
+        use wait_timeout::ChildExt;
+
+        // Upper bound for draining the child's pipes once it has ended. A
+        // grandchild that inherited the pipes could otherwise keep a drain open
+        // indefinitely; this mirrors the builtin agent's `io_timeout`.
+        const IO_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
         let composed = ctx.compose_prompt(prompt);
         let mut cmd = Self::build_command(binary, self, ctx);
 
@@ -315,14 +348,64 @@ impl SubprocessEngine {
                 let _ = stdin.write_all(composed.as_bytes());
             }
         }
+        // `stdin` is taken + dropped above so the child sees EOF promptly.
 
-        let output = child
-            .wait_with_output()
-            .with_context(|| format!("failed to collect output from '{}'", self.engine_name))?;
+        // Concurrently drain stdout/stderr so a full OS pipe buffer cannot
+        // deadlock the child while we enforce the deadline below. Results come
+        // back over channels so collection can be time-bounded.
+        let stdout_handle = child.stdout.take();
+        let stderr_handle = child.stderr.take();
+        let (out_tx, out_rx) = mpsc::channel::<String>();
+        let (err_tx, err_rx) = mpsc::channel::<String>();
+        let _ = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut s) = stdout_handle {
+                let _ = s.read_to_end(&mut buf);
+            }
+            let _ = out_tx.send(String::from_utf8_lossy(&buf).into_owned());
+        });
+        let _ = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut s) = stderr_handle {
+                let _ = s.read_to_end(&mut buf);
+            }
+            let _ = err_tx.send(String::from_utf8_lossy(&buf).into_owned());
+        });
 
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let code = output.status.code();
+        // Enforce the wall-clock deadline (#2284). On timeout the child is
+        // killed and reaped (no zombies) and the call returns a clear error.
+        let max_duration = ctx.limits.max_duration;
+        let status = match child.wait_timeout(max_duration) {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                // Timed out — child still running.
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
+                let _ = err_rx.recv_timeout(IO_DRAIN_TIMEOUT);
+                bail!(
+                    "agent engine '{}' timed out after {:?}",
+                    self.engine_name,
+                    max_duration
+                );
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
+                let _ = err_rx.recv_timeout(IO_DRAIN_TIMEOUT);
+                bail!(
+                    "failed to wait for agent engine '{}': {}",
+                    self.engine_name,
+                    e
+                );
+            }
+        };
+
+        let stdout = out_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
+        let stderr = err_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
+        let code = status.code();
+        let success = status.success();
 
         let mut events = vec![EngineEvent::started()];
         if !stdout.is_empty() {
@@ -331,11 +414,23 @@ impl SubprocessEngine {
         if !stderr.is_empty() {
             events.push(EngineEvent::stderr(&stderr));
         }
-        events.push(if output.status.success() {
+        events.push(if success {
             EngineEvent::completed()
         } else {
             EngineEvent::failed()
         });
+
+        // A non-zero exit is a real failure: propagate it (preserving the
+        // captured stdout/stderr) instead of masking it as success.
+        if !success {
+            bail!(
+                "agent engine '{}' exited with non-zero status {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                self.engine_name,
+                code,
+                stdout,
+                stderr
+            );
+        }
 
         Ok(EngineResponse {
             engine: self.engine_name.clone(),
@@ -790,6 +885,93 @@ mod tests {
             parts[1],
             caps.join(","),
             "VAULTPILOT_CAPABILITIES must be the comma-joined capability list"
+        );
+    }
+
+    /// #2284 — a subprocess that outlives `ctx.limits.max_duration` must be
+    /// killed and surfaced as `Err`, not block the caller forever. Mirrors the
+    /// builtin agent's `run_command` timeout+kill regression.
+    #[test]
+    fn subprocess_times_out_and_kills_child() {
+        if find_binary(&["sh".to_string()]).is_none() {
+            eprintln!("skipping subprocess_times_out_and_kills_child: 'sh' not on PATH");
+            return;
+        }
+        let vault = temp_vault();
+        let _guard = TempGuard(vault.clone());
+
+        // Sleeps far longer than the deadline we will impose. `exec` makes the
+        // shim replace itself with `sleep`, so killing the tracked PID reaps it
+        // outright (no orphaned grandchild holding the pipe).
+        let mut engine = SubprocessEngine::new(
+            "sleep-shim",
+            vec!["sh".to_string()],
+            vec!["-c".to_string(), "exec sleep 30".to_string()],
+            false,
+            "sh shim that sleeps to exercise the run() deadline",
+        );
+        assert!(engine.available());
+
+        let ctx = EngineContext::new(&vault).with_limits(AgentResourceLimits {
+            max_duration: Duration::from_millis(150),
+            max_tool_calls: 100,
+            max_tokens: 0,
+        });
+
+        let start = std::time::Instant::now();
+        let err = engine.send_prompt("ignored", &ctx).unwrap_err();
+        let elapsed = start.elapsed();
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("timed out"),
+            "error must report the timeout: {msg}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "run() must return well before the shim's 30s sleep (child must be killed): {elapsed:?}"
+        );
+    }
+
+    /// #2285 — a subprocess that exits non-zero must be surfaced as `Err`
+    /// (with stdout/stderr preserved), never masked as `Ok`.
+    #[test]
+    fn subprocess_nonzero_exit_propagates_as_error() {
+        if find_binary(&["sh".to_string()]).is_none() {
+            eprintln!("skipping subprocess_nonzero_exit_propagates_as_error: 'sh' not on PATH");
+            return;
+        }
+        let vault = temp_vault();
+        let _guard = TempGuard(vault.clone());
+
+        let mut engine = SubprocessEngine::new(
+            "fail-shim",
+            vec!["sh".to_string()],
+            vec![
+                "-c".to_string(),
+                "echo OUT-MARKER; echo ERR-MARKER >&2; exit 7".to_string(),
+            ],
+            false,
+            "sh shim that exits non-zero with stdout+stderr",
+        );
+        assert!(engine.available());
+
+        let ctx = EngineContext::new(&vault);
+        let err = engine.send_prompt("ignored", &ctx).unwrap_err();
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("non-zero"),
+            "error must report the non-zero exit: {msg}"
+        );
+        assert!(msg.contains('7'), "error must include exit code 7: {msg}");
+        assert!(
+            msg.contains("OUT-MARKER"),
+            "error must preserve captured stdout: {msg}"
+        );
+        assert!(
+            msg.contains("ERR-MARKER"),
+            "error must preserve captured stderr: {msg}"
         );
     }
 }

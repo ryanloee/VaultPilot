@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
-use tracing::instrument;
+use tracing::{instrument, warn};
 use uuid::Uuid;
 
 use crate::models::{Collection, NoteMeta};
@@ -237,8 +237,30 @@ pub fn list_notes_in_collection_with_context(
             Ok(NoteMeta {
                 id: row.get(0)?,
                 title: row.get(1)?,
-                tags: serde_json::from_str(&row.get::<_, String>(2)?).unwrap_or_default(),
-                keywords: serde_json::from_str(&row.get::<_, String>(3)?).unwrap_or_default(),
+                tags: match serde_json::from_str(&row.get::<_, String>(2)?) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            field = "tags",
+                            error = %e,
+                            "failed to parse tags JSON: {}",
+                            e,
+                        );
+                        Vec::new()
+                    }
+                },
+                keywords: match serde_json::from_str(&row.get::<_, String>(3)?) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            field = "keywords",
+                            error = %e,
+                            "failed to parse keywords JSON: {}",
+                            e,
+                        );
+                        Vec::new()
+                    }
+                },
                 platform: row.get(4)?,
                 board: row.get(5)?,
                 kernel: row.get(6)?,

@@ -356,8 +356,28 @@ fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteMeta> {
     Ok(NoteMeta {
         id: row.get(0)?,
         title: row.get(1)?,
-        tags: serde_json::from_str(&tags).unwrap_or_default(),
-        keywords: serde_json::from_str(&keywords).unwrap_or_default(),
+        tags: match serde_json::from_str(&tags) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    field = "tags",
+                    error = %e,
+                    "failed to parse tags JSON: {}", e,
+                );
+                Vec::new()
+            }
+        },
+        keywords: match serde_json::from_str(&keywords) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    field = "keywords",
+                    error = %e,
+                    "failed to parse keywords JSON: {}", e,
+                );
+                Vec::new()
+            }
+        },
         platform: row.get(4)?,
         board: row.get(5)?,
         kernel: row.get(6)?,

@@ -236,6 +236,27 @@ enum Commands {
         #[command(subcommand)]
         action: OrganizeActions,
     },
+
+    /// Transcribe a meeting audio file and generate an AI summary (#2072)
+    Meeting {
+        #[command(subcommand)]
+        action: MeetingActions,
+    },
+}
+
+#[derive(Subcommand)]
+enum MeetingActions {
+    /// Transcribe an audio file and generate a structured meeting summary
+    Transcribe {
+        /// Path to the audio file to transcribe
+        audio_path: String,
+        /// Optional meeting title (auto-detected if not provided)
+        #[arg(long)]
+        title: Option<String>,
+        /// Optional language code (e.g. "en", "zh")
+        #[arg(long)]
+        language: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -803,6 +824,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Organize { action } => {
             tokio::task::block_in_place(|| handle_organize(context, action))
         }
+        Commands::Meeting { action } => handle_meeting(context, action).await,
     }
 }
 
@@ -1599,6 +1621,68 @@ fn handle_organize(context: &StorageContext, action: &OrganizeActions) -> Result
                 eprintln!("⚠️ Weak link {id} not found");
             }
             to_json(&serde_json::json!({ "dismissed": dismissed, "id": id }))
+        }
+    }
+}
+
+// ─── Meeting handler ──────────────────────────────────────────────
+
+/// Handle the `meeting transcribe` CLI command.
+async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Result<Value> {
+    match action {
+        MeetingActions::Transcribe {
+            audio_path,
+            title,
+            language,
+        } => {
+            let settings = vaultpilot_lib::storage::load_settings_with_context(context)?;
+
+            // 1. Transcribe the audio file
+            eprintln!("🔊 Transcribing audio file: {audio_path}...");
+            let transcript = vaultpilot_lib::ai::transcription::transcribe_audio(
+                audio_path,
+                settings.effective_provider(),
+                language.as_deref(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Transcription failed: {e}"))?;
+            eprintln!("✅ Transcription complete ({} chars)", transcript.len());
+
+            // 2. Generate structured meeting summary
+            eprintln!("🤖 Generating meeting summary...");
+            let mut summary =
+                vaultpilot_lib::ai::transcription::generate_meeting_summary(&transcript, &settings)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Summary generation failed: {e}"))?;
+
+            // Override title if provided via CLI
+            if let Some(t) = title {
+                if !t.trim().is_empty() {
+                    summary.title = t.clone();
+                }
+            }
+
+            // 3. Build the result
+            let result = vaultpilot_lib::ai::transcription::MeetingTranscriptionResult {
+                transcript: transcript.clone(),
+                summary: summary.clone(),
+                usage: vaultpilot_lib::ai::RequestUsage::default(),
+                note_path: None,
+            };
+
+            // 4. Save as a vault note
+            eprintln!("💾 Saving meeting note to vault...");
+            let saved = tokio::task::block_in_place(|| {
+                vaultpilot_lib::ai::transcription::create_meeting_note(context, &settings, &result)
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to save meeting note: {e}"))?;
+
+            eprintln!("📝 Meeting note saved: {}", saved.meta.title);
+            to_json(&serde_json::json!({
+                "transcript": transcript,
+                "summary": summary,
+                "note": saved,
+            }))
         }
     }
 }

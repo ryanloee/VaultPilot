@@ -3,6 +3,7 @@ pub mod audio_overview;
 pub mod client;
 pub mod context;
 pub mod parsing;
+pub mod transcription;
 pub mod tts;
 
 pub use context::{resolve_context_window, resolve_max_output_tokens};
@@ -14,6 +15,10 @@ pub use actions::{
 pub use client::{send_request_streaming, RequestUsage};
 pub use parsing::{
     AssistantToolCall, ChatAnswerResult, RecordInteractionResult, ToolSelectionResult,
+};
+pub use transcription::{
+    create_meeting_note, generate_meeting_summary, transcribe_audio, MeetingActionItem,
+    MeetingSummary, MeetingTranscriptionResult,
 };
 
 use std::collections::HashSet;

@@ -205,7 +205,11 @@ pub async fn select_tool_call(
     history: &[ConversationTurn],
     prior_tool_results: &[String],
 ) -> Result<ToolSelectionResult> {
-    let system = prompting::tool_call_system_prompt();
+    let system = format!(
+        "{}{}",
+        prompting::tool_call_system_prompt(),
+        prompting::response_style_suffix(settings.response_style),
+    );
     let prompt = prompting::tool_call_user_prompt(
         question,
         !image_paths.is_empty(),
@@ -249,14 +253,19 @@ pub async fn answer_question(
     image_paths: &[String],
     history: &[ConversationTurn],
 ) -> Result<ChatAnswerResult> {
+    let style_suffix = prompting::response_style_suffix(settings.response_style);
     let (system, prompt) = if docs.is_empty() {
         (
-            prompting::general_chat_system_prompt(),
+            format!(
+                "{}{}",
+                prompting::general_chat_system_prompt(),
+                style_suffix
+            ),
             prompting::general_chat_user_prompt(question, history),
         )
     } else {
         (
-            prompting::answer_system_prompt(),
+            format!("{}{}", prompting::answer_system_prompt(), style_suffix),
             prompting::answer_user_prompt(question, docs, history),
         )
     };
@@ -284,7 +293,11 @@ pub async fn answer_after_tool(
     docs: &[NoteDocument],
     history: &[ConversationTurn],
 ) -> Result<ChatAnswerResult> {
-    let system = prompting::tool_result_system_prompt();
+    let system = format!(
+        "{}{}",
+        prompting::tool_result_system_prompt(),
+        prompting::response_style_suffix(settings.response_style),
+    );
     let prompt =
         prompting::tool_result_user_prompt(question, tool_name, tool_result, docs, history);
     let response = send_request(settings, &system, &prompt, &[]).await?;
@@ -309,7 +322,11 @@ pub async fn answer_after_tools(
     docs: &[NoteDocument],
     history: &[ConversationTurn],
 ) -> Result<ChatAnswerResult> {
-    let system = prompting::tool_result_system_prompt();
+    let system = format!(
+        "{}{}",
+        prompting::tool_result_system_prompt(),
+        prompting::response_style_suffix(settings.response_style),
+    );
     let prompt = prompting::multi_tool_result_user_prompt(question, tool_results, docs, history);
     let response = send_request(settings, &system, &prompt, &[]).await?;
     let parsed = parse_or_fallback_answer(&response.text, question, docs.is_empty());

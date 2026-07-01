@@ -12,6 +12,53 @@ pub use settings::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+
+// ---------------------------------------------------------------------------
+// ResponseStyle — quick-switch answer length/depth (#1965)
+// ---------------------------------------------------------------------------
+
+/// Response style for controlling AI answer length, structure, and format.
+///
+/// Each style maps to a system-prompt suffix that adjusts output
+/// characteristics without changing the underlying model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ResponseStyle {
+    /// Concise, direct answers with key points only.
+    Brief,
+    /// Balanced, natural answers (default).
+    #[default]
+    Standard,
+    /// Thorough, structured answers with full explanations and examples.
+    Detailed,
+}
+
+impl ResponseStyle {
+    /// Return the CLI-style string representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Brief => "brief",
+            Self::Standard => "standard",
+            Self::Detailed => "detailed",
+        }
+    }
+}
+
+impl FromStr for ResponseStyle {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "brief" => Ok(Self::Brief),
+            "standard" => Ok(Self::Standard),
+            "detailed" => Ok(Self::Detailed),
+            other => Err(format!(
+                "unknown response style: '{other}'; expected 'brief', 'standard', or 'detailed'"
+            )),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // AiSubscription — AI Scheduled Research subscription model (#2167)

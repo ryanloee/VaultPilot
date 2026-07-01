@@ -6,6 +6,30 @@ use crate::models::{AiSkill, AiWorkflowManual, ConversationTurn, NoteDocument, N
 
 static CACHED_MANUAL: OnceLock<String> = OnceLock::new();
 
+// Also re-export the convenience accessor for callers that already import
+// from crate::prompting
+pub use crate::models::ResponseStyle;
+
+/// Return the system-prompt suffix for a given response style (#1965).
+///
+/// These are appended to the base system prompt to steer answer length and
+/// tone without changing the underlying model.
+pub fn response_style_suffix(style: ResponseStyle) -> &'static str {
+    match style {
+        ResponseStyle::Brief => {
+            "\n\n[Response Style — Brief]\n\
+             Keep your answer concise. State the key points directly without \
+             lengthy explanation. Use bullet points for lists. Avoid unnecessary detail."
+        }
+        ResponseStyle::Standard => "",
+        ResponseStyle::Detailed => {
+            "\n\n[Response Style — Detailed]\n\
+             Provide a thorough, structured answer. Use bullet points, sections, \
+             and subheadings. Include full explanations and examples where helpful."
+        }
+    }
+}
+
 /// Escape XML closing tags in content.  Use this for content where there is
 /// no specific opening wrapper tag to neutralise (e.g., system-controlled
 /// tool names).

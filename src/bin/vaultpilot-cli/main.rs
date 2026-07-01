@@ -122,6 +122,10 @@ enum Commands {
         /// Chat history as JSON (array of {role, text})
         #[arg(long)]
         history: Option<String>,
+
+        /// Response style: brief, standard, or detailed
+        #[arg(long, default_value = "standard")]
+        style: String,
     },
 
     /// Run an autonomous AI agent loop (prompt → tool calls → answer)
@@ -149,6 +153,10 @@ enum Commands {
         /// Plan Mode: generate a structured plan first for user approval (#2107)
         #[arg(long)]
         plan: bool,
+
+        /// Response style: brief, standard, or detailed
+        #[arg(long, default_value = "standard")]
+        style: String,
     },
 
     /// Manage external agent engines (Claude Code / Codex) running inside the
@@ -337,6 +345,10 @@ enum ChatActions {
         /// Create a new session before sending this message
         #[arg(long)]
         new_session: bool,
+
+        /// Response style: brief, standard, or detailed
+        #[arg(long, default_value = "standard")]
+        style: String,
     },
 
     /// List saved chat sessions
@@ -841,6 +853,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             question,
             image,
             history,
+            style,
         } => {
             let parsed_history: Option<Vec<ConversationTurn>> = history
                 .as_ref()
@@ -851,6 +864,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             } else {
                 Some(image.clone())
             };
+            // Apply response style (#1965)
+            if let Ok(rs) = style.parse::<ResponseStyle>() {
+                let mut settings =
+                    vaultpilot_lib::storage::initialize_storage_async(context).await?;
+                settings.response_style = rs;
+                vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            }
             let result = ask_with_ai_with_context(
                 context,
                 question.clone(),
@@ -907,7 +927,17 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             max_steps,
             auto_approve,
             plan,
-        } => handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await,
+            style,
+        } => {
+            // Apply response style (#1965)
+            if let Ok(rs) = style.parse::<ResponseStyle>() {
+                let mut settings =
+                    vaultpilot_lib::storage::initialize_storage_async(context).await?;
+                settings.response_style = rs;
+                vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            }
+            handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await
+        }
         Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
         Commands::ContextSurface { action } => {
             tokio::task::block_in_place(|| handle_context_surface(context, action))
@@ -974,7 +1004,15 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             image,
             session,
             new_session,
+            style,
         } => {
+            // Apply response style (#1965)
+            if let Ok(rs) = style.parse::<ResponseStyle>() {
+                let mut settings =
+                    vaultpilot_lib::storage::initialize_storage_async(context).await?;
+                settings.response_style = rs;
+                vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            }
             let result = chat_with_ai_with_context(
                 context,
                 session.clone(),

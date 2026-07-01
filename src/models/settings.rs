@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::provider::ProviderConfig;
+use crate::models::ResponseStyle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +32,9 @@ pub struct AppSettings {
     /// Prompt sent to the AI when auto-wake fires (#861).
     #[serde(default = "default_auto_wake_prompt")]
     pub auto_wake_prompt: String,
+    /// Response style for controlling AI answer length/depth (#1965).
+    #[serde(default)]
+    pub response_style: ResponseStyle,
 }
 
 impl Default for AppSettings {
@@ -47,6 +51,7 @@ impl Default for AppSettings {
             auto_wake_start_time: default_auto_wake_start_time(),
             auto_wake_end_time: default_auto_wake_end_time(),
             auto_wake_prompt: default_auto_wake_prompt(),
+            response_style: ResponseStyle::default(),
         }
     }
 }
@@ -172,6 +177,7 @@ mod tests {
             auto_wake_start_time: "05:00".to_string(),
             auto_wake_end_time: "23:00".to_string(),
             auto_wake_prompt: String::new(),
+            response_style: ResponseStyle::Standard,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

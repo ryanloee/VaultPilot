@@ -8,7 +8,8 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::models::{
-    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery, SearchResult,
+    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, ResponseStyle, SearchQuery,
+    SearchResult,
 };
 
 mod backup;
@@ -868,6 +869,7 @@ mod tests {
             auto_wake_start_time: "05:00".to_string(),
             auto_wake_end_time: "23:00".to_string(),
             auto_wake_prompt: String::new(),
+            response_style: ResponseStyle::Standard,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

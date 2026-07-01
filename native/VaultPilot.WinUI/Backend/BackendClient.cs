@@ -730,6 +730,19 @@ public sealed class BackendClient : IAsyncDisposable
         return actions is not null ? actions.AsReadOnly() : Array.Empty<AiActionInfo>();
     }
 
+    /// <summary>
+    /// Find notes related to a given note by calling the storage-backed
+    /// find_related_notes_with_context endpoint.
+    /// </summary>
+    public async Task<IReadOnlyList<RelatedNote>?> FindRelatedNotesAsync(
+        string noteId,
+        int limit = 5,
+        CancellationToken token = default)
+    {
+        return await SendAsync<IReadOnlyList<RelatedNote>>(
+            "findRelatedNotes", new { id = noteId, limit }, token);
+    }
+
     private async Task PumpStderrAsync(CancellationToken token)
     {
         var process = Volatile.Read(ref _process);

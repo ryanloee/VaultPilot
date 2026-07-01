@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::ai;
 use crate::models::NoteDocument;
 use crate::storage::{
     has_notes_async, initialize_storage_async, load_context_notes_async,
-    load_recent_notes_for_overview_async, StorageContext,
+    load_recent_notes_for_overview_async, save_note_with_images_async, StorageContext,
 };
 use tracing::instrument;
 
@@ -12,6 +14,121 @@ use tracing::instrument;
 const AI_CALL_TIMEOUT: Duration = Duration::from_secs(120);
 /// Timeout for storage-layer I/O calls (NFS, slow disk, etc.).
 const STORAGE_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum number of backups to retain per note.
+const MAX_BACKUPS_PER_NOTE: usize = 5;
+
+// ── Write Backup / Revert (#1986) ──────────────────────────────────────────
+
+/// A backup of a note's state before an AI write was applied.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WriteBackup {
+    /// The note ID that was modified.
+    pub note_id: String,
+    /// The note path (from NoteMeta.path).
+    pub note_path: String,
+    /// The note title before modification.
+    pub title: String,
+    /// The note body (markdown content) before modification.
+    pub body: String,
+    /// When the write was approved (Unix timestamp).
+    pub timestamp: i64,
+}
+
+/// Thread-safe store for write backups, keyed by note_id.
+/// Used to allow the user to revert AI-written notes.
+pub struct WriteTracker {
+    backups: Mutex<HashMap<String, Vec<WriteBackup>>>,
+}
+
+impl WriteTracker {
+    /// Create a new empty WriteTracker.
+    pub fn new() -> Self {
+        Self {
+            backups: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Record a backup of a note before it gets modified.
+    pub fn record_backup(&self, note: &NoteDocument) {
+        let entry = WriteBackup {
+            note_id: note.meta.id.clone(),
+            note_path: note.meta.path.clone(),
+            title: note.meta.title.clone(),
+            body: note.body.clone(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        let mut map = self.backups.lock().unwrap();
+        let backups = map.entry(entry.note_id.clone()).or_default();
+        backups.push(entry);
+        // Keep only the most recent N backups
+        if backups.len() > MAX_BACKUPS_PER_NOTE {
+            backups.remove(0);
+        }
+    }
+
+    /// Retrieve the most recent backup for a given note_id, if any.
+    pub fn get_latest_backup(&self, note_id: &str) -> Option<WriteBackup> {
+        let map = self.backups.lock().unwrap();
+        map.get(note_id).and_then(|v| v.last().cloned())
+    }
+
+    /// Remove and return the most recent backup for a note_id.
+    pub fn pop_backup(&self, note_id: &str) -> Option<WriteBackup> {
+        let mut map = self.backups.lock().unwrap();
+        if let Some(backups) = map.get_mut(note_id) {
+            let entry = backups.pop();
+            if backups.is_empty() {
+                map.remove(note_id);
+            }
+            entry
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for WriteTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Lazy global WriteTracker shared across the agent session.
+use std::sync::LazyLock;
+pub static WRITE_TRACKER: LazyLock<WriteTracker> = LazyLock::new(WriteTracker::new);
+
+/// Revert a note to its pre-AI-write state by restoring the backup.
+/// Returns the restored `NoteDocument` on success, or an error message.
+pub async fn revert_write(
+    ctx: &StorageContext,
+    note_id: &str,
+) -> Result<NoteDocument, anyhow::Error> {
+    let backup = WRITE_TRACKER
+        .pop_backup(note_id)
+        .ok_or_else(|| anyhow::anyhow!("no backup found for note '{}'", note_id))?;
+
+    let restored = NoteDocument {
+        meta: crate::models::NoteMeta {
+            id: backup.note_id.clone(),
+            title: backup.title.clone(),
+            path: backup.note_path.clone(),
+            ..Default::default()
+        },
+        body: backup.body.clone(),
+        ..Default::default()
+    };
+
+    let saved = save_note_with_images_async(ctx, restored, &[]).await?;
+    tracing::info!(
+        "reverted note '{}' to backup from {}",
+        saved.meta.id,
+        backup.timestamp
+    );
+    Ok(saved)
+}
+
+// ── Original module code below ─────────────────────────────────────────────
 
 /// Generate writing-oriented markdown content using vault notes as context.
 ///

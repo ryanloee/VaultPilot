@@ -1424,9 +1424,44 @@ pub async fn run_agent(
 
                 // Write approval callback
                 if ToolProxy::is_write_tool(tool_name) {
+                    // Build approval args: full JSON with content + current content for diff
+                    let approval_args = if tool_name == "save_note" {
+                        let mut args_value: serde_json::Value =
+                            serde_json::from_str(&args_json).unwrap_or_default();
+                        if let Some(obj) = args_value.as_object_mut() {
+                            if let ai::AssistantToolCall::SaveNote { note_id, .. } = &tool_call {
+                                match crate::storage::load_note_async(context, note_id).await {
+                                    Ok(existing) => {
+                                        obj.insert(
+                                            "currentContent".to_string(),
+                                            serde_json::json!(existing.body),
+                                        );
+                                        obj.insert(
+                                            "currentTitle".to_string(),
+                                            serde_json::json!(existing.meta.title),
+                                        );
+                                        obj.insert(
+                                            "currentPath".to_string(),
+                                            serde_json::json!(existing.meta.path),
+                                        );
+                                    }
+                                    _ => {
+                                        obj.insert(
+                                            "currentContent".to_string(),
+                                            serde_json::json!(""),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        args_value.to_string()
+                    } else {
+                        args_json.clone()
+                    };
+
                     let approved = on_event(&AgentEvent::WriteApprovalNeeded {
                         tool: tool_name.to_string(),
-                        args: args_summary.clone(),
+                        args: approval_args,
                     });
                     if !approved {
                         tool_transcripts.push(format!(
@@ -1853,7 +1888,7 @@ fn tool_args_summary(tool: &ai::AssistantToolCall) -> String {
         ai::AssistantToolCall::ListDirectory { path } => format!("path={}", path),
         ai::AssistantToolCall::ReadFile { path } => format!("path={}", path),
         ai::AssistantToolCall::SaveNote { draft, .. } => {
-            format!("title={}", draft.title)
+            format!("title={} body_len={}", draft.title, draft.body.len())
         }
     }
 }
@@ -1876,7 +1911,8 @@ fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
             let short_id: String = note_id.chars().take(8).collect();
             serde_json::json!({"path": format!("{}-{}.md", slugify(&draft.title), short_id),
-                              "title": draft.title})
+                              "title": draft.title,
+                              "body": draft.body})
             .to_string()
         }
     }

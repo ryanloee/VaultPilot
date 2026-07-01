@@ -19,10 +19,11 @@ use vaultpilot_lib::ai::actions::{
 };
 use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{
-    create_subscription_async, delete_subscription_async, get_subscription_async,
-    import_markdown_async, initialize_storage_async, list_notes_async, list_subscriptions_async,
-    load_chat_state_async, rebuild_index_async, save_chat_state_async, save_settings_async,
-    set_subscription_enabled_with_context, update_subscription_async, StorageContext,
+    create_subscription_async, delete_subscription_async, find_related_notes_async,
+    get_subscription_async, import_markdown_async, initialize_storage_async, list_notes_async,
+    list_subscriptions_async, load_chat_state_async, rebuild_index_async, save_chat_state_async,
+    save_settings_async, set_subscription_enabled_with_context, update_subscription_async,
+    StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
@@ -392,6 +393,12 @@ async fn handle_request(
             serialize_result(save_chat_state_async(context, &params.state).await)
         }
         "listNotes" => serialize_result(list_notes_async(context).await),
+        "findRelatedNotes" => {
+            let params: IdWithLimitParams = parse_params(&request.params)?;
+            serialize_result(
+                find_related_notes_async(context, &params.id, params.limit.unwrap_or(5)).await,
+            )
+        }
         "importMarkdown" => {
             let params: ImportMarkdownParams = parse_params(&request.params)?;
             serialize_result(import_markdown_async(context, &params.paths).await)
@@ -696,6 +703,14 @@ struct CreateSubscriptionParams {
 #[serde(rename_all = "camelCase")]
 struct IdParams {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdWithLimitParams {
+    id: String,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

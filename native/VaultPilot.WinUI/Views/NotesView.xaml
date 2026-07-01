@@ -63,11 +63,12 @@
             </Button>
         </Grid>
 
-        <!-- Notes list + detail split -->
+        <!-- Notes list + detail + related notes split -->
         <Grid Grid.Row="2" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="320" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="280" />
             </Grid.ColumnDefinitions>
 
             <!-- Notes list panel -->
@@ -207,6 +208,81 @@
                             AutomationProperties.Name="笔记内容"
                             AutomationProperties.HelpText="笔记的正文内容" />
                     </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- Related notes panel -->
+            <Border
+                x:Name="RelatedNotesPanel"
+                Grid.Column="2"
+                Padding="12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Visibility="Collapsed">
+                <Grid RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock
+                        Grid.Row="0"
+                        Text="相关笔记"
+                        Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <ProgressRing
+                        x:Name="RelatedNotesLoading"
+                        Grid.Row="1"
+                        IsActive="False"
+                        Width="20"
+                        Height="20"
+                        HorizontalAlignment="Left"
+                        Margin="0,4,0,0"
+                        Visibility="Collapsed" />
+                    <ListView
+                        x:Name="RelatedNotesList"
+                        Grid.Row="2"
+                        MinHeight="0"
+                        SelectionMode="Single"
+                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                        AutomationProperties.Name="相关笔记"
+                        AutomationProperties.HelpText="与当前笔记关联的其他笔记">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Padding="0,6" RowSpacing="2">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock
+                                        Grid.Row="0"
+                                        Text="{Binding Title}"
+                                        FontWeight="SemiBold"
+                                        TextWrapping="WrapWholeWords"
+                                        MaxLines="2" />
+                                    <StackPanel
+                                        Grid.Row="1"
+                                        Orientation="Horizontal"
+                                        Spacing="6"
+                                        Margin="0,2,0,0">
+                                        <TextBlock
+                                            Text="{Binding TagsDisplay}"
+                                            FontSize="11"
+                                            Foreground="{ThemeResource SystemControlHighlightAccentBrush}"
+                                            TextTrimming="CharacterEllipsis"
+                                            MaxLines="1" />
+                                        <TextBlock
+                                            FontSize="11"
+                                            Foreground="{ThemeResource SecondaryTextBrush}">
+                                            <Run Text="关联度:" />
+                                            <Run Text="{Binding Score}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
                 </Grid>
             </Border>
         </Grid>

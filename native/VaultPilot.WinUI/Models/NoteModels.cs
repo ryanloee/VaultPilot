@@ -66,3 +66,23 @@ public sealed record NoteDocument
         this.Body = Body ?? string.Empty;
     }
 }
+
+/// <summary>
+/// A note recommended as related to the current note, with a relevance score.
+/// </summary>
+public sealed record RelatedNote
+{
+    public NoteMeta Meta { get; init; } = new NoteMeta();
+    public long Score { get; init; }
+    public string? Snippet { get; init; }
+
+    [JsonConstructor]
+    public RelatedNote() { }
+
+    public RelatedNote(NoteMeta Meta, long Score, string? Snippet)
+    {
+        this.Meta = Meta ?? new NoteMeta();
+        this.Score = Score;
+        this.Snippet = Snippet;
+    }
+}

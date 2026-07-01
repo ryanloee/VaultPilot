@@ -17,10 +17,10 @@ pub mod storage;
 // Re-export public API from orchestration module for backward compatibility
 pub use orchestration::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
-    finalize_chat_with_ai_answer, normalize_tool_path, prepare_chat_for_ai,
+    finalize_chat_with_ai_answer, normalize_tool_path, prepare_chat_for_ai, revert_write,
     rollback_last_user_turn, run_all_due_subscriptions, run_single_subscription,
     write_with_ai_with_context, AutoOrganizer, Event, NoteAction, NoteChanged, PreparedChatContext,
-    SubscriptionRunResult,
+    SubscriptionRunResult, WriteBackup,
 };
 #[cfg(test)]
 mod regression;

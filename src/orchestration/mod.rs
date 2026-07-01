@@ -18,4 +18,4 @@ pub use event_bus::{publish_note_changed, Event, NoteAction, NoteChanged};
 pub use scheduled_research::{
     run_all_due_subscriptions, run_single_subscription, SubscriptionRunResult,
 };
-pub use write::write_with_ai_with_context;
+pub use write::{revert_write, write_with_ai_with_context, WriteBackup};

@@ -3,6 +3,7 @@ using VaultPilot.WinUI.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace VaultPilot.WinUI.Views;
@@ -20,6 +21,7 @@ public sealed partial class NotesView : UserControl
     private IReadOnlyList<NoteMeta>? _allNotesBeforeSearch;
     private CancellationTokenSource? _loadDetailCts;
     private CancellationTokenSource? _searchCts;
+    private CancellationTokenSource? _relatedCts;
 
     public NotesView(BackendClient backendClient)
     {
@@ -31,6 +33,7 @@ public sealed partial class NotesView : UserControl
         NotesList.SelectionChanged += OnNoteSelectionChanged;
         RefreshButton.Click += OnRefreshClicked;
         DeleteNoteButton.Click += OnDeleteNoteClicked;
+        RelatedNotesList.SelectionChanged += OnRelatedNoteSelectionChanged;
         Loaded += OnLoaded;
     }
 
@@ -199,6 +202,12 @@ public sealed partial class NotesView : UserControl
                 ? meta.Summary
                 : "（笔记正文加载失败，请确认后端支持 loadNote 方法）";
         }
+
+        // Kick off related notes lookup in the background (debounced via _relatedCts)
+        _relatedCts?.Cancel();
+        _relatedCts?.Dispose();
+        _relatedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _ = LoadRelatedNotesAsync(meta.Id, _relatedCts.Token);
     }
 
     private async void OnDeleteNoteClicked(object sender, RoutedEventArgs e)
@@ -315,6 +324,70 @@ public sealed partial class NotesView : UserControl
         DetailPath.Text = string.Empty;
         DetailMetaPanel.Visibility = Visibility.Collapsed;
         DetailSeparator.Visibility = Visibility.Collapsed;
+        ClearRelatedNotes();
+    }
+
+    /// <summary>
+    /// Load related notes for the given note ID and display them in the side panel.
+    /// </summary>
+    private async Task LoadRelatedNotesAsync(string noteId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            RelatedNotesPanel.Visibility = Visibility.Visible;
+            RelatedNotesLoading.IsActive = true;
+            RelatedNotesLoading.Visibility = Visibility.Visible;
+
+            var related = await _backendClient.FindRelatedNotesAsync(noteId, limit: 5, token: cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+                return;
+
+            if (related is not null && related.Count > 0)
+            {
+                var items = related.Select(r => new RelatedNoteItem(r)).ToList();
+                RelatedNotesList.ItemsSource = items;
+            }
+            else
+            {
+                // Show "no related notes" placeholder
+                RelatedNotesList.ItemsSource = new List<RelatedNoteItem>
+                {
+                    new RelatedNoteItem(new RelatedNote(new NoteMeta { Title = "（暂无相关笔记）" }, 0, null))
+                };
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled by a newer selection — don't update UI
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine($"LoadRelatedNotesAsync error: {error.Message}");
+        }
+        finally
+        {
+            RelatedNotesLoading.IsActive = false;
+            RelatedNotesLoading.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void ClearRelatedNotes()
+    {
+        RelatedNotesList.ItemsSource = null;
+        RelatedNotesPanel.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// When the user clicks a related note, select it in the main list.
+    /// </summary>
+    private void OnRelatedNoteSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.AddedItems.Count > 0 && e.AddedItems[0] is RelatedNoteItem item)
+        {
+            SelectNoteById(item.Meta.Id);
+            // Clear the selection so the same item can be re-selected
+            RelatedNotesList.SelectedItem = null;
+        }
     }
 
     private void ShowLoading(bool show)
@@ -375,5 +448,25 @@ public sealed class NoteListItem
     public NoteListItem(NoteMeta meta)
     {
         Meta = meta;
+    }
+}
+
+/// <summary>
+/// Display wrapper around <see cref="RelatedNote"/> for data binding in the
+/// related notes ListView.
+/// </summary>
+public sealed class RelatedNoteItem
+{
+    public RelatedNote Note { get; }
+    public NoteMeta Meta => Note.Meta;
+    public string Title => Note.Meta.Title;
+    public long Score => Note.Score;
+    public string TagsDisplay => Note.Meta.Tags.Count > 0
+        ? $"🏷 {string.Join(", ", Note.Meta.Tags)}"
+        : string.Empty;
+
+    public RelatedNoteItem(RelatedNote note)
+    {
+        Note = note;
     }
 }

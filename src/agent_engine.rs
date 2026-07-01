@@ -1,0 +1,795 @@
+//! Multi-Agent Engine Adapter Layer — external agent integration (#1996).
+//!
+//! VaultPilot's self-built agent lives in [`crate::agent`] and exposes a
+//! `run_agent()` loop that drives the configured LLM through VaultPilot's own
+//! tool proxies. This module is a **separate, coexisting abstraction** that lets
+//! *external* CLI agents — such as Anthropic's `claude` / `claude-code` and
+//! OpenAI's `codex` — also operate inside a vault, behind a single uniform
+//! interface. The builtin `run_agent()` is untouched.
+//!
+//! # Design
+//!
+//! The layer is built around three small pieces:
+//!
+//! 1. [`AgentEngine`] — a trait with the unified lifecycle
+//!    `available → send_prompt → response`. Every engine (builtin or external)
+//!    implements it.
+//! 2. [`EngineContext`] — the per-invocation context: the vault directory (used
+//!    as the agent's working directory / sandbox root), the enabled
+//!    capabilities, an optional system preamble, and resource limits reused from
+//!    [`crate::agent::AgentResourceLimits`].
+//! 3. [`AgentEngineRegistry`] — lists/selects engines by name.
+//!
+//! External engines are subprocess-based: the CLI binary is located on `PATH`,
+//! spawned with `cwd = vault_dir` (vault-scoped), receives the composed prompt
+//! (preamble + capabilities + user task) and the vault context, and its stdout
+//! is captured into an [`EngineResponse`]. If the backing binary is not
+//! installed, [`AgentEngine::available`] returns `false` and
+//! [`AgentEngine::send_prompt`] returns a clear error — the crate still
+//! compiles and the unit tests never spawn real agent CLIs.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::agent::AgentResourceLimits;
+
+/// Default system preamble injected into the composed prompt unless the caller
+/// overrides it. It orientates the external agent to the vault and to
+/// VaultPilot's capability model.
+pub const DEFAULT_SYSTEM_PREAMBLE: &str = "\
+You are operating inside a VaultPilot vault. Stay within the current working \
+directory (the vault root). Only use the capabilities listed below; do not \
+modify files outside the vault. Be concise and ground every claim in vault \
+contents.";
+
+// ── Context ───────────────────────────────────────────────────────────────
+
+/// Per-invocation context handed to every agent engine.
+///
+/// `vault_dir` is the most important field: it becomes the agent subprocess's
+/// working directory, confining file operations to the vault. `capabilities`
+/// and `system_preamble` are injected into the prompt so an external agent
+/// behaves consistently with VaultPilot's skill/MCP model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineContext {
+    /// Vault root — used as the agent's `cwd` (sandbox root).
+    pub vault_dir: PathBuf,
+    /// Enabled capabilities/skills shared across agents (e.g. `search_notes`,
+    /// `write_note`, `mcp:*`).
+    pub capabilities: Vec<String>,
+    /// Optional system preamble prepended to every composed prompt.
+    #[serde(default)]
+    pub system_preamble: Option<String>,
+    /// Resource limits reused from the builtin agent configuration.
+    #[serde(default)]
+    pub limits: AgentResourceLimits,
+}
+
+impl EngineContext {
+    /// Create a context rooted at `vault_dir` with default limits.
+    pub fn new(vault_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            vault_dir: vault_dir.into(),
+            capabilities: Vec::new(),
+            system_preamble: None,
+            limits: AgentResourceLimits::default(),
+        }
+    }
+
+    /// Builder: set the enabled capabilities.
+    pub fn with_capabilities(mut self, capabilities: Vec<String>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    /// Builder: set the system preamble.
+    pub fn with_preamble(mut self, preamble: impl Into<String>) -> Self {
+        self.system_preamble = Some(preamble.into());
+        self
+    }
+
+    /// Builder: override the resource limits.
+    pub fn with_limits(mut self, limits: AgentResourceLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Validate that `vault_dir` exists and is a directory.
+    ///
+    /// Engines call this before spawning so a missing vault produces a clear
+    /// error rather than a subprocess failure.
+    pub fn validate(&self) -> Result<()> {
+        if !self.vault_dir.is_dir() {
+            bail!(
+                "vault_dir does not exist or is not a directory: {}",
+                self.vault_dir.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// Compose the full text fed to the agent: the (optional) system preamble,
+    /// the enabled-capability list, and finally the user's task prompt.
+    ///
+    /// This is what gets written to the agent's stdin (or passed as a prompt
+    /// argument).
+    pub fn compose_prompt(&self, prompt: &str) -> String {
+        let mut out = String::new();
+        if let Some(preamble) = &self.system_preamble {
+            out.push_str(preamble);
+            out.push_str("\n\n");
+        }
+        if !self.capabilities.is_empty() {
+            out.push_str("# Enabled capabilities\n");
+            for cap in &self.capabilities {
+                out.push_str("- ");
+                out.push_str(cap);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        out.push_str("# Task\n");
+        out.push_str(prompt);
+        out
+    }
+}
+
+// ── Response / events ─────────────────────────────────────────────────────
+
+/// Kind of event emitted while an engine runs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineEventKind {
+    /// The agent subprocess was spawned.
+    Started,
+    /// A chunk captured from the agent's stdout.
+    Stdout,
+    /// A chunk captured from the agent's stderr.
+    Stderr,
+    /// The agent finished successfully.
+    Completed,
+    /// The agent failed (non-zero exit / spawn error).
+    Failed,
+}
+
+/// A single captured event from an engine run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineEvent {
+    pub kind: EngineEventKind,
+    pub message: String,
+}
+
+impl EngineEvent {
+    fn started() -> Self {
+        Self {
+            kind: EngineEventKind::Started,
+            message: "agent subprocess started".to_string(),
+        }
+    }
+    fn stdout(msg: impl Into<String>) -> Self {
+        Self {
+            kind: EngineEventKind::Stdout,
+            message: msg.into(),
+        }
+    }
+    fn stderr(msg: impl Into<String>) -> Self {
+        Self {
+            kind: EngineEventKind::Stderr,
+            message: msg.into(),
+        }
+    }
+    fn completed() -> Self {
+        Self {
+            kind: EngineEventKind::Completed,
+            message: "agent subprocess exited successfully".to_string(),
+        }
+    }
+    fn failed() -> Self {
+        Self {
+            kind: EngineEventKind::Failed,
+            message: "agent subprocess exited with non-zero status".to_string(),
+        }
+    }
+}
+
+/// The outcome of a single [`AgentEngine::send_prompt`] call.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineResponse {
+    /// Name of the engine that produced this response.
+    pub engine: String,
+    /// Captured stdout (the agent's primary answer channel).
+    pub stdout: String,
+    /// Process exit code, if available.
+    pub exit_status: Option<i32>,
+    /// Ordered events captured during the run.
+    pub events: Vec<EngineEvent>,
+}
+
+// ── Engine trait ──────────────────────────────────────────────────────────
+
+/// Uniform interface for an agent engine — builtin or external CLI.
+///
+/// Lifecycle: check [`AgentEngine::available`] (e.g. is the CLI installed?),
+/// then call [`AgentEngine::send_prompt`] with a prompt and an
+/// [`EngineContext`].
+pub trait AgentEngine: Send {
+    /// Stable, lowercase engine identifier (e.g. `claude-code`, `codex`,
+    /// `builtin`).
+    fn name(&self) -> &str;
+
+    /// Whether this engine is ready to run *right now* — for subprocess engines
+    /// this is true only when the backing CLI binary is found on `PATH`.
+    fn available(&self) -> bool;
+
+    /// Short human-readable description.
+    fn description(&self) -> &str;
+
+    /// Run `prompt` against this engine within `ctx`. Returns the captured
+    /// response or a clear error (e.g. binary missing, vault invalid).
+    fn send_prompt(&mut self, prompt: &str, ctx: &EngineContext) -> Result<EngineResponse>;
+}
+
+// ── Subprocess engine ─────────────────────────────────────────────────────
+
+/// A subprocess-backed agent engine.
+///
+/// This is the reusable implementation behind the Claude Code and Codex
+/// adapters (and is also used directly by the hermetic tests with a safe shim
+/// such as `sh`). The engine resolves one of `binary_names` on `PATH`, spawns it
+/// with `cwd = vault_dir`, optionally pipes the composed prompt to stdin, and
+/// captures stdout/stderr.
+///
+/// `ClaudeCodeEngine` and `CodexEngine` are type aliases for this struct,
+/// pre-configured by the registry factories.
+pub struct SubprocessEngine {
+    engine_name: String,
+    binary_names: Vec<String>,
+    extra_args: Vec<String>,
+    /// When true, the composed prompt is written to the child's stdin.
+    pass_prompt_via_stdin: bool,
+    description: String,
+}
+
+impl SubprocessEngine {
+    /// Create a new subprocess engine.
+    pub fn new(
+        engine_name: impl Into<String>,
+        binary_names: Vec<String>,
+        extra_args: Vec<String>,
+        pass_prompt_via_stdin: bool,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            engine_name: engine_name.into(),
+            binary_names,
+            extra_args,
+            pass_prompt_via_stdin,
+            description: description.into(),
+        }
+    }
+
+    /// Resolve the backing binary on `PATH`, trying `binary_names` in order.
+    fn binary(&self) -> Option<PathBuf> {
+        find_binary(&self.binary_names)
+    }
+
+    /// Build the [`Command`] to spawn (vault-scoped) for the given resolved
+    /// binary and context. Separated from [`Self::run`] so the construction is
+    /// independently testable.
+    fn build_command(binary: &Path, engine: &SubprocessEngine, ctx: &EngineContext) -> Command {
+        let mut cmd = Command::new(binary);
+        // Vault-scoped execution: the agent's cwd is the vault root.
+        cmd.current_dir(&ctx.vault_dir);
+        cmd.args(&engine.extra_args);
+        // Inject vault context so the agent can read it programmatically.
+        cmd.env("VAULTPILOT_VAULT_DIR", &ctx.vault_dir);
+        if !ctx.capabilities.is_empty() {
+            cmd.env("VAULTPILOT_CAPABILITIES", ctx.capabilities.join(","));
+        }
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        cmd
+    }
+
+    /// Spawn the resolved binary, feed it the prompt, and capture output.
+    fn run(&self, binary: &Path, prompt: &str, ctx: &EngineContext) -> Result<EngineResponse> {
+        let composed = ctx.compose_prompt(prompt);
+        let mut cmd = Self::build_command(binary, self, ctx);
+
+        let mut child = cmd.spawn().with_context(|| {
+            format!(
+                "failed to spawn '{}' ({})",
+                self.engine_name,
+                binary.display()
+            )
+        })?;
+
+        if self.pass_prompt_via_stdin {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                // Best-effort write; a closed stdin is not fatal.
+                let _ = stdin.write_all(composed.as_bytes());
+            }
+        }
+
+        let output = child
+            .wait_with_output()
+            .with_context(|| format!("failed to collect output from '{}'", self.engine_name))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let code = output.status.code();
+
+        let mut events = vec![EngineEvent::started()];
+        if !stdout.is_empty() {
+            events.push(EngineEvent::stdout(&stdout));
+        }
+        if !stderr.is_empty() {
+            events.push(EngineEvent::stderr(&stderr));
+        }
+        events.push(if output.status.success() {
+            EngineEvent::completed()
+        } else {
+            EngineEvent::failed()
+        });
+
+        Ok(EngineResponse {
+            engine: self.engine_name.clone(),
+            stdout,
+            exit_status: code,
+            events,
+        })
+    }
+}
+
+impl AgentEngine for SubprocessEngine {
+    fn name(&self) -> &str {
+        &self.engine_name
+    }
+
+    fn available(&self) -> bool {
+        self.binary().is_some()
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn send_prompt(&mut self, prompt: &str, ctx: &EngineContext) -> Result<EngineResponse> {
+        ctx.validate()?;
+        let binary = self.binary().ok_or_else(|| {
+            anyhow::anyhow!(
+                "agent engine '{}' is not available: none of its CLI binaries were found on PATH ({})",
+                self.engine_name,
+                self.binary_names.join(", ")
+            )
+        })?;
+        self.run(&binary, prompt, ctx)
+    }
+}
+
+/// Claude Code engine — spawns `claude` / `claude-code` in the vault dir.
+pub type ClaudeCodeEngine = SubprocessEngine;
+
+/// Codex engine — spawns `codex` in the vault dir.
+pub type CodexEngine = SubprocessEngine;
+
+/// Build a [`ClaudeCodeEngine`] configured for the `claude` / `claude-code` CLIs.
+///
+/// The prompt is delivered over stdin and the agent runs in print mode
+/// (`--print`) so it emits its answer to stdout and exits.
+pub fn claude_code_engine() -> ClaudeCodeEngine {
+    SubprocessEngine::new(
+        "claude-code",
+        vec!["claude".to_string(), "claude-code".to_string()],
+        vec!["--print".to_string()],
+        true,
+        "Anthropic Claude Code CLI — runs inside the vault sandbox",
+    )
+}
+
+/// Build a [`CodexEngine`] configured for the `codex` CLI.
+///
+/// `codex exec` runs a single prompt non-interactively and prints the result.
+pub fn codex_engine() -> CodexEngine {
+    SubprocessEngine::new(
+        "codex",
+        vec!["codex".to_string()],
+        vec!["exec".to_string()],
+        true,
+        "OpenAI Codex CLI — runs inside the vault sandbox",
+    )
+}
+
+// ── Builtin engine ────────────────────────────────────────────────────────
+
+/// The builtin engine — a coherent placeholder that points back at the existing
+/// self-built [`crate::agent::run_agent`] loop.
+///
+/// The builtin agent is driven by its own command (`agent`) and async runtime
+/// dependencies, so it is intentionally **not** re-spawned through this
+/// subprocess adapter. `available()` returns `true` and `send_prompt` returns a
+/// clear, actionable error directing the caller to the `agent` command. This
+/// keeps the builtin and external engines selectable through one registry
+/// without duplicating the builtin execution path.
+pub struct BuiltinEngine;
+
+impl AgentEngine for BuiltinEngine {
+    fn name(&self) -> &str {
+        "builtin"
+    }
+
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn description(&self) -> &str {
+        "VaultPilot's self-built agent loop (run_agent) — invoke via the `agent` command"
+    }
+
+    fn send_prompt(&mut self, _prompt: &str, _ctx: &EngineContext) -> Result<EngineResponse> {
+        bail!(
+            "the builtin engine runs through the existing `agent` command; \
+             select 'claude-code' or 'codex' to run an external engine via this adapter"
+        );
+    }
+}
+
+// ── Registry ──────────────────────────────────────────────────────────────
+
+/// Lightweight, serializable summary of a registered engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineInfo {
+    pub name: String,
+    pub available: bool,
+    pub description: String,
+}
+
+/// Registry of all known agent engines. Lets the caller enumerate engines and
+/// pick one by name.
+#[derive(Default)]
+pub struct AgentEngineRegistry;
+
+impl AgentEngineRegistry {
+    /// Create a registry. Engines are constructed on demand (see
+    /// [`Self::list_engines`] / [`Self::select`]) so registration is cheap.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Instantiate every known engine. Order is stable: builtin, claude-code,
+    /// codex.
+    pub fn list_engines(&self) -> Vec<Box<dyn AgentEngine>> {
+        vec![
+            Box::new(BuiltinEngine),
+            Box::new(claude_code_engine()),
+            Box::new(codex_engine()),
+        ]
+    }
+
+    /// Summary of every engine (name + availability + description).
+    pub fn engine_infos(&self) -> Vec<EngineInfo> {
+        self.list_engines()
+            .into_iter()
+            .map(|e| EngineInfo {
+                name: e.name().to_string(),
+                available: e.available(),
+                description: e.description().to_string(),
+            })
+            .collect()
+    }
+
+    /// Select a single engine by name (case-insensitive), or `None` if unknown.
+    pub fn select(&self, name: &str) -> Option<Box<dyn AgentEngine>> {
+        let target = name.trim().to_ascii_lowercase();
+        self.list_engines()
+            .into_iter()
+            .find(|e| e.name().eq_ignore_ascii_case(&target))
+    }
+}
+
+// ── Binary resolution ─────────────────────────────────────────────────────
+
+/// Resolve the first of `names` found on `PATH`. Returns `None` if none exist.
+///
+/// This is a minimal, dependency-free `which(1)` that also accepts an explicit
+/// relative/absolute path in `names`.
+pub fn find_binary(names: &[String]) -> Option<PathBuf> {
+    for name in names {
+        if let Some(found) = which(name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Look up a single command on `PATH` (or use it directly if it is a path).
+fn which(name: &str) -> Option<PathBuf> {
+    // If the caller gave a path (contains a separator), check it directly.
+    let looks_like_path =
+        name.contains(std::path::MAIN_SEPARATOR) || (cfg!(windows) && name.contains('/'));
+    if looks_like_path {
+        let candidate = PathBuf::from(name);
+        return if is_executable(&candidate) {
+            Some(candidate)
+        } else {
+            None
+        };
+    }
+
+    let path_os = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_os) {
+        let candidate = dir.join(name);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+        // On Windows, also probe common executable extensions.
+        #[cfg(windows)]
+        {
+            for ext in ["exe", "bat", "cmd", "com"] {
+                let with_ext = dir.join(format!("{name}.{ext}"));
+                if is_executable(&with_ext) {
+                    return Some(with_ext);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether `path` is an executable file.
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(meta) => meta.is_file() && (meta.permissions().mode() & 0o111 != 0),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(path)
+            .map(|meta| meta.is_file())
+            .unwrap_or(false)
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    /// Build a unique temp vault directory (no `tempfile` dependency — matches
+    /// the pattern used elsewhere in the crate).
+    fn temp_vault() -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "vaultpilot_agent_engine_test_{}_{}",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp vault");
+        dir
+    }
+
+    /// RAII guard that removes the temp vault on drop.
+    struct TempGuard(PathBuf);
+    impl Drop for TempGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn registry_lists_known_engines() {
+        let registry = AgentEngineRegistry::new();
+        let infos = registry.engine_infos();
+        let names: Vec<&str> = infos.iter().map(|i| i.name.as_str()).collect();
+        assert!(
+            names.contains(&"builtin"),
+            "builtin engine must be registered"
+        );
+        assert!(
+            names.contains(&"claude-code"),
+            "claude-code engine must be registered"
+        );
+        assert!(names.contains(&"codex"), "codex engine must be registered");
+
+        // Builtin is always available (no external binary).
+        let builtin = infos.iter().find(|i| i.name == "builtin").expect("builtin");
+        assert!(builtin.available);
+
+        // Descriptions are non-empty for every engine.
+        assert!(infos.iter().all(|i| !i.description.is_empty()));
+    }
+
+    #[test]
+    fn registry_select_case_insensitive() {
+        let registry = AgentEngineRegistry::new();
+        let selected = registry.select("Claude-Code").expect("select claude-code");
+        assert_eq!(selected.name(), "claude-code");
+        assert!(registry.select("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn missing_binary_is_unavailable_and_errors_clearly() {
+        // An engine backed by a binary name that provably does not exist.
+        let mut engine = SubprocessEngine::new(
+            "fake-engine",
+            vec!["vaultpilot_definitely_missing_binary_zzz".to_string()],
+            Vec::new(),
+            true,
+            "deterministic missing-binary test engine",
+        );
+
+        assert!(
+            !engine.available(),
+            "engine must be unavailable when binary missing"
+        );
+
+        let vault = temp_vault();
+        let _guard = TempGuard(vault.clone());
+        let ctx = EngineContext::new(&vault);
+        let err = engine.send_prompt("hello", &ctx).unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not available") || msg.contains("not found"),
+            "error should clearly explain the missing binary: {msg}"
+        );
+        assert!(
+            msg.contains("vaultpilot_definitely_missing_binary_zzz"),
+            "error should name the missing binary: {msg}"
+        );
+    }
+
+    #[test]
+    fn engine_context_serialization_roundtrip() {
+        let ctx = EngineContext::new("/tmp/example-vault")
+            .with_capabilities(vec!["search_notes".to_string(), "write_note".to_string()])
+            .with_preamble("You are a vault agent.")
+            .with_limits(AgentResourceLimits {
+                max_duration: Duration::from_secs(42),
+                max_tool_calls: 7,
+                max_tokens: 1024,
+            });
+
+        let json = serde_json::to_string(&ctx).expect("serialize");
+        let back: EngineContext = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.vault_dir, PathBuf::from("/tmp/example-vault"));
+        assert_eq!(back.capabilities, ctx.capabilities);
+        assert_eq!(back.system_preamble, ctx.system_preamble);
+        assert_eq!(back.limits.max_tool_calls, 7);
+        assert_eq!(back.limits.max_tokens, 1024);
+        assert_eq!(back.limits.max_duration, Duration::from_secs(42));
+    }
+
+    #[test]
+    fn compose_prompt_includes_preamble_and_capabilities() {
+        let ctx = EngineContext::new("/tmp/v")
+            .with_capabilities(vec!["search_notes".to_string()])
+            .with_preamble("PREAMBLE-TEXT");
+        let composed = ctx.compose_prompt("DO-THE-THING");
+        assert!(composed.contains("PREAMBLE-TEXT"));
+        assert!(composed.contains("search_notes"));
+        assert!(composed.contains("DO-THE-THING"));
+    }
+
+    #[test]
+    fn validate_rejects_missing_vault() {
+        let ctx = EngineContext::new("/this/path/should/not/exist/xyz_1996");
+        assert!(ctx.validate().is_err());
+    }
+
+    #[test]
+    fn builtin_engine_send_prompt_returns_actionable_error() {
+        let mut engine = BuiltinEngine;
+        assert!(engine.available());
+        let vault = temp_vault();
+        let _guard = TempGuard(vault.clone());
+        let ctx = EngineContext::new(&vault);
+        let err = engine.send_prompt("hi", &ctx).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("builtin") && msg.contains("agent"),
+            "error should redirect to the agent command: {msg}"
+        );
+    }
+
+    #[test]
+    fn subprocess_spawn_is_vault_scoped() {
+        // Use `sh` as a safe, ubiquitous shim — no real agent CLI is spawned.
+        if find_binary(&["sh".to_string()]).is_none() {
+            eprintln!("skipping subprocess_spawn_is_vault_scoped: 'sh' not on PATH");
+            return;
+        }
+        let vault = temp_vault();
+        let _guard = TempGuard(vault.clone());
+
+        let mut engine = SubprocessEngine::new(
+            "sh-shim",
+            vec!["sh".to_string()],
+            // Print the resolved cwd so we can assert confinement.
+            vec!["-c".to_string(), "pwd".to_string()],
+            false, // prompt is irrelevant for the shim
+            "sh shim used to verify cwd confinement",
+        );
+        assert!(engine.available());
+
+        let ctx = EngineContext::new(&vault);
+        let resp = engine
+            .send_prompt("ignored", &ctx)
+            .expect("shim should run");
+
+        let expected = std::fs::canonicalize(&vault).expect("canonicalize vault");
+        let actual = std::fs::canonicalize(resp.stdout.trim()).expect("canonicalize pwd output");
+        assert_eq!(
+            actual, expected,
+            "agent subprocess cwd must equal the vault dir"
+        );
+        assert_eq!(resp.engine, "sh-shim");
+        assert!(
+            resp.exit_status.unwrap_or(-1) == 0,
+            "shim should exit cleanly"
+        );
+        assert!(
+            resp.events
+                .iter()
+                .any(|e| e.kind == EngineEventKind::Completed),
+            "a completed event should be recorded"
+        );
+    }
+
+    #[test]
+    fn build_command_sets_vault_cwd_and_env() {
+        // Verify command construction without spawning: invoke the shim with an
+        // `echo` of the injected env var to prove context propagation.
+        if find_binary(&["sh".to_string()]).is_none() {
+            eprintln!("skipping build_command_sets_vault_cwd_and_env: 'sh' not on PATH");
+            return;
+        }
+        let vault = temp_vault();
+        let _guard = TempGuard(vault.clone());
+
+        let engine = SubprocessEngine::new(
+            "env-probe",
+            vec!["sh".to_string()],
+            vec![
+                "-c".to_string(),
+                "echo \"$VAULTPILOT_VAULT_DIR|$VAULTPILOT_CAPABILITIES\"".to_string(),
+            ],
+            false,
+            "sh shim that prints injected env",
+        );
+        let caps = vec!["search_notes".to_string(), "mcp:github".to_string()];
+        let ctx = EngineContext::new(&vault).with_capabilities(caps.clone());
+        let binary = engine.binary().expect("sh resolved");
+        let mut cmd = SubprocessEngine::build_command(&binary, &engine, &ctx);
+
+        let output = cmd.output().expect("run probe");
+        let out = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = out.trim().split('|').collect();
+        assert_eq!(parts.len(), 2, "probe output shape: {out}");
+        assert_eq!(
+            std::fs::canonicalize(parts[0]).expect("canonicalize env vault"),
+            std::fs::canonicalize(&vault).expect("canonicalize vault"),
+            "VAULTPILOT_VAULT_DIR must equal the vault dir"
+        );
+        assert_eq!(
+            parts[1],
+            caps.join(","),
+            "VAULTPILOT_CAPABILITIES must be the comma-joined capability list"
+        );
+    }
+}

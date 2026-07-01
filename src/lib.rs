@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_engine;
 pub mod ai;
 pub mod crypto;
 pub mod health;

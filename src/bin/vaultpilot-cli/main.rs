@@ -151,6 +151,14 @@ enum Commands {
         plan: bool,
     },
 
+    /// Manage external agent engines (Claude Code / Codex) running inside the
+    /// vault sandbox (#1996). The builtin agent keeps its own `agent` command;
+    /// this command exposes the multi-engine adapter layer.
+    AgentEngine {
+        #[command(subcommand)]
+        action: AgentEngineActions,
+    },
+
     /// Compress chat history into a summary
     Compress {
         /// JSON array of conversation turns
@@ -675,6 +683,34 @@ enum OrganizeActions {
     },
 }
 
+/// Sub-commands for the `agent-engine` command group (#1996).
+#[derive(Subcommand)]
+enum AgentEngineActions {
+    /// List registered agent engines and their availability.
+    List,
+
+    /// Run a single prompt through a selected agent engine inside the vault.
+    Run {
+        /// Engine name (e.g. `claude-code`, `codex`, `builtin`).
+        #[arg(long)]
+        engine: String,
+
+        /// The prompt / task to send to the engine.
+        #[arg(long)]
+        prompt: String,
+
+        /// Vault directory to run the engine in. Defaults to the global
+        /// `--vault-dir`.
+        #[arg(long)]
+        vault: Option<PathBuf>,
+
+        /// Comma-separated list of enabled capabilities to inject into the
+        /// engine's prompt context (e.g. `search_notes,write_note,mcp:*`).
+        #[arg(long)]
+        capabilities: Option<String>,
+    },
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -849,6 +885,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             auto_approve,
             plan,
         } => handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await,
+        Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
         Commands::Write {
             prompt,
             mode,
@@ -1430,6 +1467,78 @@ fn chat_session_overview(session: &ChatSession) -> ChatSessionOverview {
         has_summary: session.summary.is_some(),
         created_at: session.created_at.clone(),
         updated_at: session.updated_at.clone(),
+    }
+}
+
+async fn handle_agent_engine(cli: &Cli, action: &AgentEngineActions) -> Result<Value> {
+    use vaultpilot_lib::agent_engine::{AgentEngineRegistry, EngineContext};
+
+    let registry = AgentEngineRegistry::new();
+    match action {
+        AgentEngineActions::List => {
+            let infos = registry.engine_infos();
+            Ok(serde_json::json!({
+                "engines": infos
+                    .iter()
+                    .map(|i| serde_json::json!({
+                        "name": i.name,
+                        "available": i.available,
+                        "description": i.description,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+        }
+        AgentEngineActions::Run {
+            engine,
+            prompt,
+            vault,
+            capabilities,
+        } => {
+            // Resolve the vault directory: explicit --vault wins over the global --vault-dir.
+            let vault_dir = vault
+                .clone()
+                .or_else(|| cli.vault_dir.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no vault directory provided (use --vault or the global --vault-dir)"
+                    )
+                })?;
+            if !vault_dir.is_dir() {
+                anyhow::bail!("vault directory does not exist: {}", vault_dir.display());
+            }
+
+            let mut ctx = EngineContext::new(vault_dir.clone());
+            if let Some(caps) = capabilities {
+                let parsed: Vec<String> = caps
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !parsed.is_empty() {
+                    ctx = ctx.with_capabilities(parsed);
+                }
+            }
+
+            let mut eng = registry.select(engine).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown agent engine '{engine}'. Run 'agent-engine list' to see options."
+                )
+            })?;
+
+            if !eng.available() {
+                anyhow::bail!(
+                    "agent engine '{}' is not available (backing CLI not found on PATH)",
+                    eng.name()
+                );
+            }
+
+            let response = eng.send_prompt(prompt, &ctx)?;
+            Ok(serde_json::json!({
+                "engine": response.engine,
+                "exit_status": response.exit_status,
+                "stdout": response.stdout,
+            }))
+        }
     }
 }
 

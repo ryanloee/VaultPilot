@@ -13,13 +13,12 @@
 //! - Microsoft Graph API connector
 //! - Android system calendar ContentProvider fallback
 
+use crate::storage::StorageContext;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-
-use crate::storage::StorageContext;
 
 // ─── Data types ───────────────────────────────────────────────────
 
@@ -474,7 +473,13 @@ fn row_to_event(row: &rusqlite::Row) -> rusqlite::Result<CalendarEvent> {
     let end = DateTime::parse_from_rfc3339(&end_str)
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| epoch());
-    let attendees: Vec<String> = serde_json::from_str(&attendees_json).unwrap_or_default();
+    let attendees: Vec<String> = match serde_json::from_str(&attendees_json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to parse attendees JSON, falling back to empty vec");
+            Vec::new()
+        }
+    };
 
     Ok(CalendarEvent {
         id,

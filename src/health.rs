@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 use crate::models::{Collection, HealthReport, NoteMeta};
 use crate::storage::{list_collections_with_context, load_settings_with_context, StorageContext};
@@ -100,8 +100,20 @@ fn load_all_note_metas(conn: &rusqlite::Connection, total: usize) -> Result<Vec<
         Ok(NoteMeta {
             id: row.get(0)?,
             title: row.get(1)?,
-            tags: serde_json::from_str(&tags_raw).unwrap_or_default(),
-            keywords: serde_json::from_str(&kw_raw).unwrap_or_default(),
+            tags: match serde_json::from_str(&tags_raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse tags JSON, falling back to empty vec");
+                    Vec::new()
+                }
+            },
+            keywords: match serde_json::from_str(&kw_raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse keywords JSON, falling back to empty vec");
+                    Vec::new()
+                }
+            },
             platform: row.get(4)?,
             board: row.get(5)?,
             kernel: row.get(6)?,

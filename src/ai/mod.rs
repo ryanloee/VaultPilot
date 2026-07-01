@@ -401,6 +401,23 @@ pub async fn generate_with_context(
     Ok(response.text.trim().to_string())
 }
 
+/// Generate a comparison table from vault notes (#1963).
+///
+/// Uses the data-table-analyst persona (instead of the writing assistant) to
+/// extract structured comparison dimensions from the provided vault notes and
+/// return a clean Markdown comparison table.
+#[instrument(skip(settings, prompt, docs))]
+pub async fn generate_table(
+    settings: &AppSettings,
+    prompt: &str,
+    docs: &[NoteDocument],
+) -> Result<String> {
+    let system = prompting::table_system_prompt();
+    let user_prompt = prompting::table_user_prompt(prompt, docs);
+    let response = send_request(settings, &system, &user_prompt, &[]).await?;
+    Ok(response.text.trim().to_string())
+}
+
 #[instrument(skip(settings, existing_summary, history))]
 pub async fn compress_conversation(
     settings: &AppSettings,

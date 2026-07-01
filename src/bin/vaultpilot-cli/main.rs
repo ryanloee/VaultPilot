@@ -30,8 +30,8 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
-    run_all_due_subscriptions, run_single_subscription, sanitize_error, write_with_ai_with_context,
-    AutoOrganizer,
+    run_all_due_subscriptions, run_single_subscription, sanitize_error, table_with_ai_with_context,
+    write_with_ai_with_context, AutoOrganizer,
 };
 
 use chrono::Utc;
@@ -238,6 +238,23 @@ enum Commands {
         /// Save the generated content as a new vault note
         #[arg(long)]
         save: bool,
+    },
+
+    /// Generate a Markdown comparison table from vault notes (#1963)
+    ///
+    /// Uses AI to extract structured comparison dimensions from vault notes
+    /// and produce a clean Markdown comparison table.
+    ///
+    /// Examples:
+    ///   vaultpilot table "Compare the phones I reviewed"
+    ///   vaultpilot table "Compare frameworks" --context-note note_123
+    Table {
+        /// The comparison prompt / instruction
+        prompt: String,
+
+        /// Note ID to use as primary context (optional)
+        #[arg(long)]
+        context_note: Option<String>,
     },
 
     /// Manage AI scheduled research subscriptions (#2167)
@@ -983,6 +1000,16 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                     "saved": false,
                 }))
             }
+        }
+        Commands::Table {
+            prompt,
+            context_note,
+        } => {
+            let result =
+                table_with_ai_with_context(context, prompt.clone(), context_note.clone()).await?;
+            Ok(serde_json::json!({
+                "content": result,
+            }))
         }
         Commands::Subscriptions { action } => {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))

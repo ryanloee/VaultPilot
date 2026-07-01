@@ -163,6 +163,23 @@ pub fn workflow_manual() -> AiWorkflowManual {
                     "Do not include decorative prose.".to_string(),
                 ],
             },
+            AiSkill {
+                id: "data_table".to_string(),
+                title: "Data Table Studio".to_string(),
+                purpose: "Extract structured comparison data from vault notes and produce a Markdown comparison table.".to_string(),
+                steps: vec![
+                    "Identify the notes provided — each one is a separate subject for comparison.".to_string(),
+                    "Extract common comparison dimensions (e.g. price, performance, features) from all notes.".to_string(),
+                    "Align each dimension across notes — if a note lacks info on a dimension, fill with '—'.".to_string(),
+                    "Produce a clean Markdown table with columns: Dimension | Note 1 Title | Note 2 Title | ...".to_string(),
+                ],
+                outputs: vec!["Markdown comparison table".to_string()],
+                guardrails: vec![
+                    "Do not return prose or analysis — only the Markdown table.".to_string(),
+                    "Do not fabricate data that does not appear in the notes.".to_string(),
+                    "Sort rows logically (e.g. by importance or the order dimensions appear in the notes).".to_string(),
+                ],
+            },
         ],
     }
 }
@@ -333,6 +350,55 @@ pub fn write_user_prompt(prompt: &str, docs: &[NoteDocument]) -> String {
          {}\n\n\
          Vault notes for context:\n\
          {}",
+        sanitize_user_input(prompt),
+        sanitize_note_content(&render_notes(docs)),
+    )
+}
+
+/// System prompt for the data-table-analyst persona (#1963).
+///
+/// Instructs the AI to act as a "data table analyst" that extracts
+/// structured comparison dimensions from vault notes and produces a
+/// clean Markdown comparison table, not prose.
+pub fn table_system_prompt() -> String {
+    format!(
+        "You are a data table analyst embedded in a local knowledge app.\n\
+         Date: {}\n\
+         {}\n\
+         Rules:\n\
+         - Extract structured comparison dimensions from the provided vault notes.\n\
+         - Each note is a separate subject for comparison.\n\
+         - Produce a Markdown table with columns: Dimension | Note 1 Title | Note 2 Title | ...\n\
+         - Rows are extracted comparison dimensions (e.g. price, performance, features).\n\
+         - Align each dimension across all notes — if a note lacks information on a dimension, fill with '—'.\n\
+         - Return ONLY the Markdown table — no introductory prose, no commentary, no analysis.\n\
+         - Use standard Markdown table syntax with pipes and dashes.\n\
+         - Do not use JSON wrappers or code fences around the table.\n\
+         - Sort rows logically (e.g. by importance or order of appearance in the notes).\n\
+         {}",
+        Utc::now().format("%Y-%m-%d"),
+        render_manual_for_model(),
+        PROMPT_INJECTION_DEFENSE,
+    )
+}
+
+/// User prompt for the data-table command (#1963).
+///
+/// Takes the user's query and note context, instructs the AI to identify
+/// comparison dimensions, align them across notes, and produce a clean
+/// Markdown comparison table.
+pub fn table_user_prompt(prompt: &str, docs: &[NoteDocument]) -> String {
+    format!(
+        "Generate a comparison table based on the following request.\n\n\
+         User request:\n\
+         {}\n\n\
+         Vault notes to compare:\n\
+         {}\n\n\
+         Instructions:\n\
+         - Identify the common comparison dimensions across all notes.\n\
+         - Align each dimension across notes.\n\
+         - Produce a clean Markdown comparison table.\n\
+         - Return ONLY the table — no explanations, no comments, no surrounding text.",
         sanitize_user_input(prompt),
         sanitize_note_content(&render_notes(docs)),
     )

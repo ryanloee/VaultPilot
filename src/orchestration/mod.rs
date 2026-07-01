@@ -4,6 +4,7 @@ pub mod chat;
 pub mod compress;
 pub mod event_bus;
 pub mod scheduled_research;
+pub mod table;
 pub mod write;
 
 // Re-export the main public API functions for backward compatibility
@@ -18,4 +19,5 @@ pub use event_bus::{publish_note_changed, Event, NoteAction, NoteChanged};
 pub use scheduled_research::{
     run_all_due_subscriptions, run_single_subscription, SubscriptionRunResult,
 };
+pub use table::table_with_ai_with_context;
 pub use write::{revert_write, write_with_ai_with_context, WriteBackup};

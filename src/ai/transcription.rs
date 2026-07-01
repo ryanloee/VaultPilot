@@ -452,6 +452,136 @@ pub fn create_meeting_note(
     Ok(saved)
 }
 
+// ── Voice Note Capture (#2012) ────────────────────────────────────────────
+
+/// `source` marker written onto every voice-note capture (#2012).
+pub const VOICE_NOTE_SOURCE: &str = "voice";
+
+/// Tag applied to every voice-note capture.
+pub const VOICE_NOTE_TAG: &str = "voice";
+
+/// Maximum number of characters taken from the transcript when deriving a
+/// voice-note title — keeps the title / filename readable.
+const VOICE_NOTE_MAX_TITLE_LEN: usize = 60;
+
+/// Result of capturing a voice note: the saved note's id, its title, and the
+/// raw transcript.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceNoteResult {
+    /// Id of the note saved into the vault.
+    pub note_id: String,
+    /// Title of the saved note.
+    pub title: String,
+    /// The transcribed text.
+    pub transcript: String,
+}
+
+/// Derive a human-readable note title from a transcript.
+///
+/// Uses the first non-empty line of the transcript, truncated to
+/// [`VOICE_NOTE_MAX_TITLE_LEN`] characters (an ellipsis is appended when
+/// truncation occurs). Returns `None` when the transcript contains no
+/// meaningful text — callers should then fall back to a timestamp-based title.
+fn derive_voice_note_title(transcript: &str) -> Option<String> {
+    let first_line = transcript
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let truncated: String = first_line.chars().take(VOICE_NOTE_MAX_TITLE_LEN).collect();
+    if first_line.chars().count() > VOICE_NOTE_MAX_TITLE_LEN {
+        Some(format!("{truncated}…"))
+    } else {
+        Some(truncated)
+    }
+}
+
+/// Build the note body for a voice-note capture.
+///
+/// Voice notes are raw captures (no AI summary / action items, unlike meeting
+/// notes), so the body is simply the transcript, trimmed and normalized.
+fn format_voice_note_body(transcript: &str) -> String {
+    transcript.trim().to_string()
+}
+
+/// Build and save a voice-note capture from an already-transcribed transcript.
+///
+/// This is the synchronous note-building half of [`transcribe_voice_note`],
+/// factored out so it can be unit-tested without invoking the speech-to-text
+/// provider. It creates a regular note tagged with `source = "voice"` and
+/// returns the saved note.
+#[instrument(skip(context))]
+pub fn create_voice_note(
+    context: &StorageContext,
+    transcript: &str,
+    title_override: Option<&str>,
+) -> Result<NoteDocument> {
+    let now = Utc::now();
+    let note_title = title_override
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .or_else(|| derive_voice_note_title(transcript))
+        .unwrap_or_else(|| format!("语音笔记 — {}", now.format("%Y-%m-%d %H:%M")));
+
+    let body = format_voice_note_body(transcript);
+    let note = NoteDocument {
+        meta: NoteMeta {
+            id: Uuid::new_v4().to_string(),
+            title: note_title,
+            tags: vec![VOICE_NOTE_TAG.to_string()],
+            created_at: now.to_rfc3339(),
+            updated_at: now.to_rfc3339(),
+            source: VOICE_NOTE_SOURCE.to_string(),
+            summary: transcript.chars().take(200).collect(),
+            ..Default::default()
+        },
+        body,
+        search_snippet: None,
+    };
+
+    let saved = save_note_with_context(context, note)?;
+    Ok(saved)
+}
+
+/// Transcribe an audio file and save it as a voice note in the vault (#2012).
+///
+/// This is a generic voice-note capture: it reuses the same Whisper-based
+/// speech-to-text path as [`transcribe_audio`], but — unlike
+/// [`create_meeting_note`] — performs **no** AI summarization. The transcript
+/// is saved verbatim as a regular note tagged with `source = "voice"`.
+///
+/// `title_override` (when non-empty) is used verbatim; otherwise the title is
+/// derived from the first line of the transcript, falling back to a
+/// timestamped placeholder when the transcript is empty.
+#[instrument(skip(provider_config, context))]
+pub async fn transcribe_voice_note(
+    audio_path: &str,
+    provider_config: &ProviderConfig,
+    language: Option<&str>,
+    context: &StorageContext,
+    title_override: Option<&str>,
+) -> Result<VoiceNoteResult> {
+    // 1. Transcribe via the shared Whisper provider path.
+    let transcript = transcribe_audio(audio_path, provider_config, language).await?;
+
+    // 2. Persist (sync file/SQLite I/O → spawn_blocking). Note-building is
+    //    delegated to create_voice_note so it stays unit-testable.
+    let ctx = context.clone();
+    let transcript_owned = transcript.clone();
+    let title_owned = title_override.map(|s| s.to_string());
+    let saved = tokio::task::spawn_blocking(move || {
+        create_voice_note(&ctx, &transcript_owned, title_owned.as_deref())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))??;
+
+    Ok(VoiceNoteResult {
+        note_id: saved.meta.id,
+        title: saved.meta.title,
+        transcript,
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -19,10 +19,11 @@ use vaultpilot_lib::storage::{
     create_collection_with_context, create_subscription_with_context,
     delete_collection_with_context, delete_note_with_context, delete_subscription_with_context,
     export_all_notes_with_context, export_note_markdown_with_context,
-    find_related_notes_with_context, get_subscription_with_context, import_markdown_with_context,
-    initialize_storage_with_context, list_collections_with_context,
-    list_notes_in_collection_with_context, list_subscriptions_with_context, load_chat_state_async,
-    load_note_with_context, load_settings_with_context, rebuild_index_with_context,
+    find_related_notes_with_context, get_collections_for_note_with_context,
+    get_subscription_with_context, import_markdown_with_context, initialize_storage_with_context,
+    list_collections_with_context, list_notes_in_collection_with_context,
+    list_subscriptions_with_context, load_chat_state_async, load_note_with_context,
+    load_settings_with_context, rebuild_index_with_context,
     remove_note_from_collection_with_context, save_chat_state_async, save_note_with_context,
     save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
     update_subscription_with_context, vault_export_with_context, StorageContext,
@@ -243,6 +244,17 @@ enum Commands {
         action: MeetingActions,
     },
 
+    /// Capture a voice note — transcribe audio and save it as a vault note (#2012)
+    ///
+    /// Examples:
+    ///   vp voice capture recording.wav            — transcribe a file
+    ///   vp voice capture - < recording.wav       — transcribe piped stdin
+    ///   vp voice capture recording.wav --language zh
+    Voice {
+        #[command(subcommand)]
+        action: VoiceActions,
+    },
+
     /// Show vault health dashboard — note counts, orphan analysis, density score, suggestions (#2014)
     ///
     /// Examples:
@@ -267,6 +279,22 @@ enum MeetingActions {
         /// Path to the audio file to transcribe
         audio_path: String,
         /// Optional meeting title (auto-detected if not provided)
+        #[arg(long)]
+        title: Option<String>,
+        /// Optional language code (e.g. "en", "zh")
+        #[arg(long)]
+        language: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum VoiceActions {
+    /// Transcribe an audio file (or stdin) and save it as a voice note
+    Capture {
+        /// Path to the audio file to transcribe, or `-` to read raw audio
+        /// bytes from stdin (e.g. `vp voice capture - < recording.wav`).
+        audio_path: String,
+        /// Optional note title (auto-derived from the transcript if omitted)
         #[arg(long)]
         title: Option<String>,
         /// Optional language code (e.g. "en", "zh")
@@ -619,6 +647,32 @@ enum OrganizeActions {
         /// Weak link ID
         id: String,
     },
+
+    /// Batch AI organize — select notes and let the AI suggest collection
+    /// assignments, then optionally apply them (#2013).
+    ///
+    /// Examples:
+    ///   vp organize batch --select tag:inbox          — preview assignments
+    ///   vp organize batch --select tag:inbox --apply  — apply them
+    ///   vp organize batch --select all --unfiled       — only unfiled notes
+    Batch {
+        /// Selection spec: `tag:NAME`, `id:<uuid>[,<uuid>...]`, or `all`.
+        #[arg(long)]
+        select: String,
+
+        /// Actually apply the suggested assignments. Without this flag the
+        /// command runs as a dry-run preview only.
+        #[arg(long)]
+        apply: bool,
+
+        /// Restrict the selection to notes that are not yet in any collection.
+        #[arg(long)]
+        unfiled: bool,
+
+        /// Maximum number of notes to analyze in a single batch.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
 }
 
 // ─── Main ─────────────────────────────────────────────────────────
@@ -841,10 +895,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
         Commands::Mail { action } => handle_mail(context, action).await,
-        Commands::Organize { action } => {
-            tokio::task::block_in_place(|| handle_organize(context, action))
-        }
+        Commands::Organize { action } => handle_organize(context, action).await,
         Commands::Meeting { action } => handle_meeting(context, action).await,
+        Commands::Voice { action } => handle_voice(context, action).await,
         Commands::Health { json, weekly } => {
             tokio::task::block_in_place(|| handle_health(context, *json, *weekly))
         }
@@ -1574,7 +1627,7 @@ fn exit_error(pretty: &bool, code: &str, message: String) -> ! {
 // ─── Organize handler (#2176) ─────────────────────────────────────
 
 /// Handle `vp organize` sub-commands.
-fn handle_organize(context: &StorageContext, action: &OrganizeActions) -> Result<Value> {
+async fn handle_organize(context: &StorageContext, action: &OrganizeActions) -> Result<Value> {
     match action {
         OrganizeActions::Auto { watch } => {
             if *watch {
@@ -1669,12 +1722,233 @@ fn handle_organize(context: &StorageContext, action: &OrganizeActions) -> Result
             }
             to_json(&serde_json::json!({ "dismissed": dismissed, "id": id }))
         }
+        OrganizeActions::Batch {
+            select,
+            apply,
+            unfiled,
+            limit,
+        } => handle_organize_batch(context, select, *apply, *unfiled, *limit).await,
     }
 }
 
-// ─── Meeting handler ──────────────────────────────────────────────
+// ─── Batch AI organize handler (#2013) ───────────────────────────
 
-/// Handle the `meeting transcribe` CLI command.
+/// A parsed `--select` selector for `organize batch`.
+#[derive(Debug, Clone, PartialEq)]
+enum BatchSelector {
+    /// `tag:NAME` — select notes with the given tag.
+    Tag(String),
+    /// `id:<uuid>[,<uuid>...]` — select the listed notes by id.
+    Ids(Vec<String>),
+    /// `all` — select every note (up to `--limit`).
+    All,
+}
+
+/// Parse a `--select` selector string into a [`BatchSelector`].
+///
+/// Supported forms:
+/// - `tag:NAME`
+/// - `id:<uuid>` or `id:a,b,c`
+/// - `all`
+///
+/// Returns `None` for unrecognized selectors so the caller can surface a
+/// clear error message.
+fn parse_batch_selector(select: &str) -> Option<BatchSelector> {
+    let trimmed = select.trim();
+    if trimmed.eq_ignore_ascii_case("all") {
+        return Some(BatchSelector::All);
+    }
+    if let Some(rest) = trimmed.strip_prefix("tag:") {
+        let tag = rest.trim().to_string();
+        if !tag.is_empty() {
+            return Some(BatchSelector::Tag(tag));
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("id:") {
+        let ids: Vec<String> = rest
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !ids.is_empty() {
+            return Some(BatchSelector::Ids(ids));
+        }
+    }
+    None
+}
+
+/// Handle `vp organize batch` — select notes, get AI collection suggestions,
+/// and optionally apply them (#2013).
+async fn handle_organize_batch(
+    context: &StorageContext,
+    select: &str,
+    apply: bool,
+    unfiled: bool,
+    limit: usize,
+) -> Result<Value> {
+    let selector = parse_batch_selector(select).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid --select '{select}'. Use 'tag:NAME', 'id:<uuid>[,<uuid>...]', or 'all'."
+        )
+    })?;
+
+    let limit = limit.clamp(1, 500);
+
+    // 1. Resolve the selected notes.
+    let mut notes: Vec<NoteMeta> = match &selector {
+        BatchSelector::Tag(tag) => {
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    text: String::new(),
+                    tags: vec![tag.clone()],
+                    limit: Some(limit),
+                    ..Default::default()
+                },
+            )?;
+            result.notes
+        }
+        BatchSelector::Ids(ids) => {
+            // Fetch a wide pool then filter down to the requested ids.
+            let wanted: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    limit: Some(500),
+                    ..Default::default()
+                },
+            )?;
+            result
+                .notes
+                .into_iter()
+                .filter(|n| wanted.contains(n.id.as_str()))
+                .collect()
+        }
+        BatchSelector::All => {
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    limit: Some(limit),
+                    ..Default::default()
+                },
+            )?;
+            result.notes
+        }
+    };
+
+    if notes.is_empty() {
+        eprintln!("ℹ️ No notes matched the selector '{select}'.");
+        return to_json(&serde_json::json!({
+            "selector": select,
+            "matched": 0,
+            "assignments": [],
+        }));
+    }
+
+    // 2. Optionally restrict to notes not yet in any collection.
+    if unfiled {
+        let before = notes.len();
+        notes.retain(|n| {
+            get_collections_for_note_with_context(context, &n.id)
+                .map(|cs| cs.is_empty())
+                .unwrap_or(true)
+        });
+        if notes.is_empty() {
+            eprintln!(
+                "ℹ️ All {} matched notes are already filed (none unfiled).",
+                before
+            );
+            return to_json(&serde_json::json!({
+                "selector": select,
+                "unfiled": true,
+                "matched": before,
+                "unfiledCount": 0,
+                "assignments": [],
+            }));
+        }
+    }
+
+    let matched = notes.len();
+    eprintln!("📦 Selected {matched} notes via '{select}' for AI batch organize…");
+
+    // 3. Load settings + existing collections, then ask the LLM for suggestions.
+    let settings = load_settings_with_context(context)?;
+    let existing = list_collections_with_context(context)?;
+    eprintln!("🤖 Asking AI to suggest collection assignments…");
+    let assignments =
+        vaultpilot_lib::ai::suggest_batch_collections(&settings, &notes, &existing).await?;
+
+    let new_collections: Vec<String> = {
+        let mut v: Vec<String> = assignments
+            .iter()
+            .filter(|a| a.is_new_collection)
+            .map(|a| a.collection.clone())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+
+    eprintln!(
+        "✅ AI suggested {} assignment(s) across {} existing + {} new collection(s).",
+        assignments.len(),
+        existing.len(),
+        new_collections.len()
+    );
+
+    // 4. Apply (or just preview).
+    let mut applied_actions: Vec<serde_json::Value> = Vec::new();
+    if apply {
+        eprintln!("🔧 Applying assignments…");
+        // Map collection name → id, creating new collections as needed.
+        let mut collection_id_by_name: std::collections::HashMap<String, String> = existing
+            .iter()
+            .map(|c| (c.name.clone(), c.id.clone()))
+            .collect();
+        for name in &new_collections {
+            let created = create_collection_with_context(context, name, "")?;
+            eprintln!("   ➕ Created collection '{}'", created.name);
+            collection_id_by_name.insert(created.name.clone(), created.id);
+        }
+        for a in &assignments {
+            let collection_id = match collection_id_by_name.get(&a.collection) {
+                Some(id) => id.clone(),
+                None => {
+                    // Fallback: create it on the fly if missing from the map.
+                    let created = create_collection_with_context(context, &a.collection, "")?;
+                    collection_id_by_name.insert(created.name.clone(), created.id.clone());
+                    created.id
+                }
+            };
+            let added = add_note_to_collection_with_context(context, &a.note_id, &collection_id)?;
+            applied_actions.push(serde_json::json!({
+                "noteId": a.note_id,
+                "noteTitle": a.note_title,
+                "collection": a.collection,
+                "collectionId": collection_id,
+                "added": added,
+            }));
+        }
+        eprintln!(
+            "🎉 Applied {} assignment(s). To undo, remove notes from the listed collections.",
+            applied_actions.len()
+        );
+    } else {
+        eprintln!("👁️ Dry-run preview. Re-run with --apply to execute.");
+    }
+
+    to_json(&serde_json::json!({
+        "selector": select,
+        "unfiled": unfiled,
+        "matched": matched,
+        "newCollections": new_collections,
+        "assignments": assignments,
+        "applied": apply,
+        "appliedActions": applied_actions,
+    }))
+}
+
+// ─── Meeting handler ──────────────────────────────────────────────
 async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Result<Value> {
     match action {
         MeetingActions::Transcribe {
@@ -1731,6 +2005,90 @@ async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Re
                 "transcript": transcript,
                 "summary": summary,
                 "note": saved,
+            }))
+        }
+    }
+}
+
+// ─── Voice handler (#2012) ───────────────────────────────────────
+
+/// Resolve the audio input path, materializing stdin bytes into a temp file
+/// when `audio_path` is `-`.
+///
+/// Returns either the original path or the path to a freshly-written temp
+/// file. The temp file uses a `.wav` extension so the downstream MIME
+/// detection picks `audio/wav`; for non-wav piped audio users should pass a
+/// real file path with the correct extension.
+fn resolve_audio_input(audio_path: &str) -> Result<PathBuf> {
+    if audio_path.trim() != "-" {
+        return Ok(PathBuf::from(audio_path));
+    }
+    eprintln!("📥 Reading audio from stdin…");
+    let mut buffer = Vec::new();
+    io::stdin()
+        .read_to_end(&mut buffer)
+        .map_err(|e| anyhow::anyhow!("failed to read audio from stdin: {e}"))?;
+    if buffer.is_empty() {
+        return Err(anyhow::anyhow!(
+            "stdin audio is empty — did you forget to pipe a file?"
+        ));
+    }
+
+    // Persist to the OS temp dir so it survives the async transcription call.
+    let temp_dir = std::env::temp_dir();
+    let temp_path = temp_dir.join(format!("vaultpilot-voice-{}.wav", Uuid::new_v4()));
+    std::fs::write(&temp_path, &buffer)
+        .map_err(|e| anyhow::anyhow!("failed to write stdin audio to temp file: {e}"))?;
+    eprintln!(
+        "💾 Wrote {} bytes to temporary file {}",
+        buffer.len(),
+        temp_path.display()
+    );
+    Ok(temp_path)
+}
+
+/// Handle `vp voice` sub-commands — capture a voice note (#2012).
+async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result<Value> {
+    match action {
+        VoiceActions::Capture {
+            audio_path,
+            title,
+            language,
+        } => {
+            let settings = load_settings_with_context(context)?;
+
+            // Resolve the audio path (supports `-` for piped stdin).
+            let resolved = resolve_audio_input(audio_path)?;
+            let path_str = resolved
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("audio path is not valid UTF-8"))?;
+
+            // 1. Transcribe + persist as a voice note in one call.
+            eprintln!("🔊 Transcribing voice audio…");
+            let result = vaultpilot_lib::ai::transcription::transcribe_voice_note(
+                path_str,
+                settings.effective_provider(),
+                language.as_deref(),
+                context,
+                title.as_deref(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Voice capture failed: {e}"))?;
+
+            // Clean up the temp file if we created one from stdin.
+            if audio_path.trim() == "-" {
+                let _ = std::fs::remove_file(path_str);
+            }
+
+            eprintln!(
+                "🎤 Voice note saved: \"{}\" ({} chars)",
+                result.title,
+                result.transcript.chars().count()
+            );
+            to_json(&serde_json::json!({
+                "noteId": result.note_id,
+                "title": result.title,
+                "transcript": result.transcript,
             }))
         }
     }
@@ -1838,9 +2196,65 @@ mod tests {
         simplify_cli_text, strip_cli_markdown_from_chat_state, strip_markdown_wrapper_tags,
     };
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
+    use crate::{parse_batch_selector, resolve_audio_input, BatchSelector};
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
     use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
+
+    // ── parse_batch_selector (#2013) ───────────────────────────────
+
+    #[test]
+    fn parse_batch_selector_all() {
+        assert_eq!(parse_batch_selector("all"), Some(BatchSelector::All));
+        assert_eq!(parse_batch_selector("ALL"), Some(BatchSelector::All));
+        assert_eq!(parse_batch_selector("  all "), Some(BatchSelector::All));
+    }
+
+    #[test]
+    fn parse_batch_selector_tag() {
+        assert_eq!(
+            parse_batch_selector("tag:inbox"),
+            Some(BatchSelector::Tag("inbox".to_string()))
+        );
+        assert_eq!(
+            parse_batch_selector("tag: meeting-notes "),
+            Some(BatchSelector::Tag("meeting-notes".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_batch_selector_ids() {
+        assert_eq!(
+            parse_batch_selector("id:abc"),
+            Some(BatchSelector::Ids(vec!["abc".to_string()]))
+        );
+        assert_eq!(
+            parse_batch_selector("id:a,b , c"),
+            Some(BatchSelector::Ids(vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string()
+            ]))
+        );
+    }
+
+    #[test]
+    fn parse_batch_selector_rejects_invalid() {
+        assert_eq!(parse_batch_selector(""), None);
+        assert_eq!(parse_batch_selector("tag:"), None);
+        assert_eq!(parse_batch_selector("id:"), None);
+        assert_eq!(parse_batch_selector("id: , "), None);
+        assert_eq!(parse_batch_selector("whatever"), None);
+    }
+
+    // ── resolve_audio_input (#2012) ────────────────────────────────
+
+    #[test]
+    fn resolve_audio_input_passes_through_file_path() {
+        // A real file path (not "-") is returned unchanged.
+        let resolved = resolve_audio_input("recording.wav").unwrap();
+        assert_eq!(resolved, std::path::PathBuf::from("recording.wav"));
+    }
 
     #[test]
     fn normalize_bridge_token_trims_and_drops_empty_values() {

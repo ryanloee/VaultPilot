@@ -24,9 +24,12 @@ pub use transcription::{
 use std::collections::HashSet;
 
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::models::{AppSettings, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft};
+use crate::models::{
+    AppSettings, Collection, ConversationTurn, NoteDocument, NoteMeta, StructuredNoteDraft,
+};
 use crate::prompting;
 
 use client::{send_request, send_request_with_temperature};
@@ -46,6 +49,152 @@ pub async fn organize_note(
     let response =
         send_request_with_temperature(settings, &system, &prompt, image_paths, 0.1).await?;
     Ok(parse_or_fallback_note(&response.text, raw_input))
+}
+
+// ── Batch AI organize (#2013) ───────────────────────────────────────────
+
+/// A single batch-organize assignment suggestion produced by the LLM.
+///
+/// Each suggestion maps one selected note to a target collection. The
+/// collection may either match an existing one (`is_new_collection = false`)
+/// or be a brand-new name the model proposes (`is_new_collection = true`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchCollectionAssignment {
+    /// Id of the note being assigned.
+    pub note_id: String,
+    /// Title of the note (echoed back for the preview UI).
+    pub note_title: String,
+    /// Target collection name — may match an existing collection or be a new one.
+    pub collection: String,
+    /// Whether `collection` does not yet exist and must be created.
+    pub is_new_collection: bool,
+    /// Short human-readable rationale for the assignment.
+    pub reason: String,
+}
+
+/// Raw shape of the model's JSON payload for batch collection suggestions.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBatchSuggestions {
+    #[serde(default)]
+    assignments: Vec<RawAssignment>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawAssignment {
+    note_id: String,
+    collection: String,
+    #[serde(default)]
+    reason: String,
+}
+
+/// Ask the LLM to suggest collection assignments for a batch of notes (#2013).
+///
+/// Given the titles and summaries of the selected notes together with the
+/// list of existing collection names, the model returns one assignment per
+/// note. Each assignment names a target collection (existing or new) plus a
+/// one-line rationale. Notes whose ids are missing from the model's response
+/// are dropped — callers receive only well-formed suggestions.
+pub async fn suggest_batch_collections(
+    settings: &AppSettings,
+    notes: &[NoteMeta],
+    existing_collections: &[Collection],
+) -> Result<Vec<BatchCollectionAssignment>> {
+    if notes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let existing_names: Vec<&str> = existing_collections
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+
+    let system = "You are a knowledge-management assistant that organizes notes \
+                  into collections. Given a list of notes (with titles and \
+                  summaries) and the existing collection names, assign each note \
+                  to the single most appropriate collection. Prefer an existing \
+                  collection when it is a good fit; otherwise propose a concise, \
+                  descriptive new collection name (Title Case, max 40 chars). \
+                  Every note MUST receive exactly one assignment. Output ONLY \
+                  valid JSON with no markdown fences or extra text.";
+
+    let mut notes_block = String::new();
+    for n in notes {
+        let summary = if n.summary.trim().is_empty() {
+            "(no summary)"
+        } else {
+            n.summary.trim()
+        };
+        notes_block.push_str(&format!(
+            "- id: {}\n  title: {}\n  summary: {}\n",
+            n.id, n.title, summary
+        ));
+    }
+    let existing_str = if existing_names.is_empty() {
+        "(none)".to_string()
+    } else {
+        existing_names.join(", ")
+    };
+
+    let user_prompt = format!(
+        "Existing collections: {existing_str}\n\n\
+         Notes to organize:\n{notes_block}\n\
+         Respond with a JSON object in this schema (camelCase keys):\n\
+         {{\n  \"assignments\": [\n    {{ \"noteId\": \"<note id>\", \
+         \"collection\": \"<collection name>\", \"isNewCollection\": <true|false>, \
+         \"reason\": \"<one short sentence>\" }}\n  ]\n}}\n\
+         Set isNewCollection to true only when the collection name is NOT in the \
+         existing list. Output ONLY valid JSON — no markdown fences, no extra text."
+    );
+
+    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.1).await?;
+    let json_text = extract_json(&response.text).with_context(|| {
+        format!(
+            "model did not return valid JSON for batch collection suggestions. Response: {}",
+            crate::sanitize_error(&response.text.chars().take(300).collect::<String>())
+        )
+    })?;
+    let raw: RawBatchSuggestions = serde_json::from_str(&json_text).with_context(|| {
+        format!(
+            "failed to parse batch collection suggestions JSON. First 200 chars: {}",
+            crate::sanitize_error(&json_text.chars().take(200).collect::<String>())
+        )
+    })?;
+
+    // Index valid note ids so we can drop suggestions for unknown notes and
+    // resolve note titles server-side (the model may truncate/alter them).
+    let title_by_id: std::collections::HashMap<&str, &str> = notes
+        .iter()
+        .map(|n| (n.id.as_str(), n.title.as_str()))
+        .collect();
+
+    let assignments = raw
+        .assignments
+        .into_iter()
+        .filter_map(|a| {
+            let title = title_by_id.get(a.note_id.as_str())?;
+            let collection = a.collection.trim();
+            if collection.is_empty() {
+                return None;
+            }
+            // Authoritatively decide whether the collection is new by checking
+            // against the real existing names — the model's flag is only a hint.
+            let is_new = !existing_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(collection));
+            Some(BatchCollectionAssignment {
+                note_id: a.note_id,
+                note_title: title.to_string(),
+                collection: collection.to_string(),
+                is_new_collection: is_new,
+                reason: a.reason.trim().to_string(),
+            })
+        })
+        .collect();
+
+    Ok(assignments)
 }
 
 #[instrument(skip(settings, question, image_paths, history, prior_tool_results))]

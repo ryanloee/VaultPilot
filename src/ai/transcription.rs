@@ -675,7 +675,6 @@ mod tests {
     #[test]
     fn create_meeting_note_date_fallback() {
         use std::fs;
-        use std::path::PathBuf;
 
         use crate::storage::StorageContext;
 

@@ -230,3 +230,113 @@ async fn load_note_by_id_async(
         Err(e) => Err(e),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_note(id: &str, title: &str, body: &str) -> NoteDocument {
+        NoteDocument {
+            meta: crate::models::NoteMeta {
+                id: id.to_string(),
+                title: title.to_string(),
+                path: format!("{}.md", id),
+                ..Default::default()
+            },
+            body: body.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_write_tracker_new_is_empty() {
+        let tracker = WriteTracker::new();
+        assert!(tracker.get_latest_backup("nonexistent").is_none());
+        assert!(tracker.pop_backup("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_write_tracker_record_and_pop() {
+        let tracker = WriteTracker::new();
+        let note = make_note("n1", "Original Title", "Original body content");
+        tracker.record_backup(&note);
+
+        let backup = tracker.get_latest_backup("n1");
+        assert!(backup.is_some());
+        let b = backup.unwrap();
+        assert_eq!(b.note_id, "n1");
+        assert_eq!(b.title, "Original Title");
+        assert_eq!(b.body, "Original body content");
+        assert_eq!(b.note_path, "n1.md");
+
+        // pop should return the same backup
+        let popped = tracker.pop_backup("n1");
+        assert!(popped.is_some());
+        let p = popped.unwrap();
+        assert_eq!(p.title, "Original Title");
+        assert_eq!(p.body, "Original body content");
+
+        // after pop, no more backups for this note
+        assert!(tracker.get_latest_backup("n1").is_none());
+        assert!(tracker.pop_backup("n1").is_none());
+    }
+
+    #[test]
+    fn test_write_tracker_max_backups() {
+        let tracker = WriteTracker::new();
+        // Record MAX_BACKUPS_PER_NOTE + 2 backups
+        for i in 0..MAX_BACKUPS_PER_NOTE + 2 {
+            let note = make_note("n1", &format!("Title {}", i), &format!("Body {}", i));
+            tracker.record_backup(&note);
+        }
+        // Only the most recent MAX_BACKUPS_PER_NOTE should remain
+        let map = tracker.backups.lock().unwrap();
+        let backups = map.get("n1").unwrap();
+        assert_eq!(backups.len(), MAX_BACKUPS_PER_NOTE);
+        // The oldest backup (index 0) should have been dropped
+        assert_eq!(backups[0].title, "Title 2"); // indices 0,1 are gone
+        assert_eq!(backups[backups.len() - 1].title, format!("Title {}", MAX_BACKUPS_PER_NOTE + 1));
+    }
+
+    #[test]
+    fn test_write_tracker_multiple_notes() {
+        let tracker = WriteTracker::new();
+        tracker.record_backup(&make_note("a", "A", "body-a"));
+        tracker.record_backup(&make_note("b", "B", "body-b"));
+
+        let a = tracker.get_latest_backup("a");
+        assert_eq!(a.unwrap().title, "A");
+
+        let b = tracker.get_latest_backup("b");
+        assert_eq!(b.unwrap().title, "B");
+
+        // pop one note, the other should still be there
+        tracker.pop_backup("a");
+        assert!(tracker.get_latest_backup("a").is_none());
+        assert!(tracker.get_latest_backup("b").is_some());
+    }
+
+    #[test]
+    fn test_write_backup_serde_roundtrip() {
+        let backup = WriteBackup {
+            note_id: "n1".to_string(),
+            note_path: "n1.md".to_string(),
+            title: "Title".to_string(),
+            body: "Body content".to_string(),
+            timestamp: 1700000000,
+        };
+        let json = serde_json::to_string(&backup).unwrap();
+        let deserialized: WriteBackup = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.note_id, "n1");
+        assert_eq!(deserialized.title, "Title");
+        assert_eq!(deserialized.body, "Body content");
+        assert_eq!(deserialized.timestamp, 1700000000);
+    }
+
+    #[test]
+    fn test_write_tracker_poison_handling_default() {
+        // Verify that the default implementation creates a valid tracker
+        let tracker = WriteTracker::default();
+        assert!(tracker.get_latest_backup("x").is_none());
+    }
+}

@@ -1720,7 +1720,7 @@ async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Re
             // 4. Save as a vault note
             eprintln!("💾 Saving meeting note to vault...");
             let saved = tokio::task::block_in_place(|| {
-                vaultpilot_lib::ai::transcription::create_meeting_note(context, &settings, &result)
+                vaultpilot_lib::ai::transcription::create_meeting_note(context, &result)
             })
             .map_err(|e| anyhow::anyhow!("Failed to save meeting note: {e}"))?;
 

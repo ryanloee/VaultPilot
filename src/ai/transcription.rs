@@ -9,7 +9,7 @@
 //! ```ignore
 //! let transcript = transcribe_audio("meeting.mp3", &provider_config).await?;
 //! let summary = generate_meeting_summary(&transcript, &settings).await?;
-//! let note = create_meeting_note(&context, &settings, &result).await?;
+//! let note = create_meeting_note(&context, &result)?;
 //! ```
 
 use std::path::Path;
@@ -331,24 +331,12 @@ fn extract_json_from_response(text: &str) -> Option<String> {
 
 // ── Create Meeting Note ───────────────────────────────────────────────────
 
-/// Save a structured Markdown meeting note to the vault.
-///
-/// Builds a [`NoteDocument`] containing a well-formatted meeting summary in
-/// Markdown, saves it via [`save_note_with_context`], and returns the saved note.
-#[instrument(skip(context, _settings, result))]
-pub fn create_meeting_note(
-    context: &StorageContext,
-    _settings: &AppSettings,
+/// Construct the markdown title and body for a meeting note.
+/// Returns `(note_title, body)`.
+fn format_meeting_note_body(
     result: &MeetingTranscriptionResult,
-) -> Result<NoteDocument> {
-    let now = Utc::now();
-    let date_str = result
-        .summary
-        .date
-        .as_deref()
-        .unwrap_or(&now.format("%Y-%m-%d").to_string())
-        .to_string();
-
+    date_str: &str,
+) -> (String, String) {
     let title = result.summary.title.trim();
     let note_title = if title.is_empty() {
         format!("Meeting Notes — {}", date_str)
@@ -422,6 +410,28 @@ pub fn create_meeting_note(
     body.push_str("<details>\n\n");
     body.push_str(&result.transcript);
     body.push_str("\n\n</details>\n");
+
+    (note_title, body)
+}
+
+/// Save a structured Markdown meeting note to the vault.
+///
+/// Builds a [`NoteDocument`] containing a well-formatted meeting summary in
+/// Markdown, saves it via [`save_note_with_context`], and returns the saved note.
+#[instrument(skip(context, result))]
+pub fn create_meeting_note(
+    context: &StorageContext,
+    result: &MeetingTranscriptionResult,
+) -> Result<NoteDocument> {
+    let now = Utc::now();
+    let date_str = result
+        .summary
+        .date
+        .as_deref()
+        .unwrap_or(&now.format("%Y-%m-%d").to_string())
+        .to_string();
+
+    let (note_title, body) = format_meeting_note_body(result, &date_str);
 
     let note = NoteDocument {
         meta: NoteMeta {
@@ -536,5 +546,168 @@ mod tests {
         };
         assert!(result.note_path.is_none());
         assert_eq!(result.transcript, "hello");
+    }
+
+    // ── Tests for create_meeting_note / format_meeting_note_body ─────────
+
+    /// Helper to create a basic MeetingTranscriptionResult for testing.
+    fn make_test_result() -> MeetingTranscriptionResult {
+        MeetingTranscriptionResult {
+            transcript: "This is the meeting transcript with important details.".to_string(),
+            summary: MeetingSummary {
+                title: "Sprint Review".to_string(),
+                date: Some("2024-07-01".to_string()),
+                attendees: vec!["Alice".to_string(), "Bob".to_string()],
+                summary: "Reviewed sprint progress and planned next iteration.".to_string(),
+                key_decisions: vec!["Ship v2.0 next week".to_string()],
+                action_items: vec![MeetingActionItem {
+                    description: "Update changelog".to_string(),
+                    assignees: vec!["Alice".to_string()],
+                    due_date: Some("2024-07-05".to_string()),
+                }],
+                next_steps: vec!["Schedule retro".to_string()],
+            },
+            usage: RequestUsage::default(),
+            note_path: None,
+        }
+    }
+
+    #[test]
+    fn format_body_empty_attendees() {
+        let mut result = make_test_result();
+        result.summary.attendees.clear();
+
+        let (note_title, body) = format_meeting_note_body(&result, "2024-07-01");
+
+        assert_eq!(note_title, "Meeting: Sprint Review");
+        assert!(
+            !body.contains("**Attendees:**"),
+            "body should not contain attendees line"
+        );
+    }
+
+    #[test]
+    fn format_body_empty_key_decisions() {
+        let mut result = make_test_result();
+        result.summary.key_decisions.clear();
+
+        let (_, body) = format_meeting_note_body(&result, "2024-07-01");
+
+        assert!(
+            !body.contains("## Key Decisions"),
+            "body should not contain Key Decisions section"
+        );
+    }
+
+    #[test]
+    fn format_body_empty_action_items() {
+        let mut result = make_test_result();
+        result.summary.action_items.clear();
+
+        let (_, body) = format_meeting_note_body(&result, "2024-07-01");
+
+        assert!(
+            !body.contains("## Action Items"),
+            "body should not contain Action Items section"
+        );
+    }
+
+    #[test]
+    fn format_body_action_items_empty_assignees_and_due_date() {
+        let mut result = make_test_result();
+        result.summary.action_items = vec![
+            MeetingActionItem {
+                description: "Fix bug".to_string(),
+                assignees: vec![],
+                due_date: None,
+            },
+            MeetingActionItem {
+                description: "Deploy release".to_string(),
+                assignees: vec!["Charlie".to_string()],
+                due_date: Some("2024-07-10".to_string()),
+            },
+        ];
+
+        let (_, body) = format_meeting_note_body(&result, "2024-07-01");
+
+        // First row: empty assignees and due_date should use em-dash
+        assert!(body.contains("| 1 | Fix bug | — | — |"));
+        // Second row: normal
+        assert!(body.contains("| 2 | Deploy release | Charlie | 2024-07-10 |"));
+    }
+
+    #[test]
+    fn format_body_empty_next_steps() {
+        let mut result = make_test_result();
+        result.summary.next_steps.clear();
+
+        let (_, body) = format_meeting_note_body(&result, "2024-07-01");
+
+        assert!(
+            !body.contains("## Next Steps"),
+            "body should not contain Next Steps section"
+        );
+    }
+
+    #[test]
+    fn format_body_full_transcript_section() {
+        let result = make_test_result();
+
+        let (_, body) = format_meeting_note_body(&result, "2024-07-01");
+
+        assert!(body.contains("## Raw Transcript"));
+        assert!(body.contains("<details>"));
+        assert!(body.contains("This is the meeting transcript with important details."));
+        assert!(body.contains("</details>"));
+    }
+
+    #[test]
+    fn format_body_title_fallback() {
+        let mut result = make_test_result();
+        result.summary.title = "   ".to_string(); // empty-ish title
+
+        let (note_title, body) = format_meeting_note_body(&result, "2024-07-01");
+
+        assert_eq!(note_title, "Meeting Notes — 2024-07-01");
+        assert!(body.starts_with("# Meeting Notes — 2024-07-01\n"));
+    }
+
+    #[test]
+    fn create_meeting_note_date_fallback() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        use crate::storage::StorageContext;
+
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-test-meeting-note-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let ctx = StorageContext::for_test(&temp);
+
+        let mut result = make_test_result();
+        result.summary.date = None;
+        result.summary.title.clear(); // so the fallback date appears in the title
+
+        let saved = create_meeting_note(&ctx, &result).expect("create_meeting_note should succeed");
+
+        // Title should contain today's date fallback
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        assert!(
+            saved.meta.title.contains(&today)
+                || saved.meta.title == format!("Meeting Notes — {}", today),
+            "title should contain fallback date: {}",
+            saved.meta.title
+        );
+
+        // Body should contain today's date
+        assert!(
+            saved.body.contains(&today),
+            "body should contain fallback date"
+        );
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp);
     }
 }

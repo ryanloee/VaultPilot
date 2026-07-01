@@ -3,6 +3,7 @@ pub mod agent_engine;
 pub mod ai;
 pub mod context_surface;
 pub mod crypto;
+pub mod file_parsing;
 pub mod health;
 pub mod mail;
 pub mod models;

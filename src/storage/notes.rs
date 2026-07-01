@@ -530,6 +530,66 @@ pub fn find_related_notes_with_context(
     Ok(results)
 }
 
+/// Issue #1995: real-time context surface. Find notes related to **free-form
+/// text** (e.g. what the user is currently typing, or a live meeting
+/// transcript window) rather than to an already-saved note. This powers the
+/// live "relevant notes" panel that recomputes as content changes, without
+/// requiring a save first.
+///
+/// Mirrors [`find_related_notes_with_context`] but derives its signals from raw
+/// text: the first non-empty line stands in for a "title" (word-overlap bonus)
+/// and inline `#hashtags` stand in for tags (tag-overlap bonus).
+pub fn find_related_notes_for_text_with_context(
+    context: &StorageContext,
+    text: &str,
+    limit: usize,
+) -> Result<Vec<crate::models::RelatedNote>> {
+    let (connection, _) = open_connection(context)?;
+    let query = build_related_query_for_text(text);
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let search_limit = limit.saturating_mul(3).max(15);
+    let candidates = rank_documents(context, &connection, &query, &[], search_limit)?;
+
+    let text_tags: HashSet<String> = extract_hashtags(text);
+    let text_title_words: HashSet<String> = first_line(text)
+        .split_whitespace()
+        .map(|w| w.to_lowercase())
+        .collect();
+
+    let mut results: Vec<crate::models::RelatedNote> = Vec::new();
+    for doc in candidates {
+        let mut score = 10i64;
+        // title-word overlap bonus
+        let target_words: HashSet<String> = doc
+            .meta
+            .title
+            .split_whitespace()
+            .map(|w| w.to_lowercase())
+            .collect();
+        let overlap = text_title_words.intersection(&target_words).count();
+        score += (overlap as i64) * 30;
+        // tag overlap bonus
+        let target_tags: HashSet<&str> = doc.meta.tags.iter().map(String::as_str).collect();
+        let tag_overlap = text_tags
+            .iter()
+            .filter(|t| target_tags.contains(t.as_str()))
+            .count();
+        score += (tag_overlap as i64) * 50;
+        results.push(crate::models::RelatedNote {
+            meta: doc.meta,
+            score,
+            snippet: doc.search_snippet,
+        });
+    }
+
+    results.sort_by_key(|b| std::cmp::Reverse(b.score));
+    results.truncate(limit);
+    Ok(results)
+}
+
 /// Extract key terms from a note to build a search query for related notes.
 /// Uses only title + tags for focused matching (avoids FTS5 AND-query bloat).
 pub(crate) fn build_related_query(doc: &NoteDocument) -> String {
@@ -562,6 +622,58 @@ pub(crate) fn build_related_query(doc: &NoteDocument) -> String {
         .filter(|t| seen.insert(t.to_lowercase()))
         .collect();
     unique.join(" ")
+}
+
+/// Issue #1995: tokenize free-form text into a focused search query for the live
+/// context surface. Keeps significant words (length >= 3, skipping a small stop
+/// list) plus any inline `#hashtags`, deduplicated case-insensitively. Caps the
+/// term count to avoid FTS5 AND-query bloat on long inputs.
+pub(crate) fn build_related_query_for_text(text: &str) -> String {
+    const STOPWORDS: &[&str] = &[
+        "the", "and", "for", "with", "that", "this", "from", "have", "your", "you", "are", "was",
+        "were", "but", "not", "can", "all", "use", "using", "into", "they", "them", "their",
+        "will", "would", "could", "should", "about",
+    ];
+    let mut terms: Vec<String> = Vec::new();
+    for token in text.split(|c: char| c.is_whitespace()) {
+        // strip a leading '#' so hashtags also flow through the word path,
+        // then trim surrounding non-alphanumerics.
+        let stripped = token.strip_prefix('#').unwrap_or(token);
+        let w = stripped.trim_matches(|c: char| !c.is_alphanumeric());
+        if w.len() < 3 {
+            continue;
+        }
+        let lower = w.to_lowercase();
+        if STOPWORDS.contains(&lower.as_str()) {
+            continue;
+        }
+        terms.push(lower);
+    }
+    let mut seen = HashSet::new();
+    let unique: Vec<String> = terms
+        .into_iter()
+        .filter(|t| seen.insert(t.to_lowercase()))
+        .take(12)
+        .collect();
+    unique.join(" ")
+}
+
+/// Extract inline `#hashtags` (lowercased, alnum-only) from free-form text.
+fn extract_hashtags(text: &str) -> HashSet<String> {
+    text.split_whitespace()
+        .filter_map(|w| w.strip_prefix('#'))
+        .map(|t| {
+            t.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// First non-empty line of `text`, used as a stand-in "title" for word-overlap
+/// scoring in the free-text related-notes path.
+fn first_line(text: &str) -> &str {
+    text.lines().find(|l| !l.trim().is_empty()).unwrap_or("")
 }
 
 /// Load recent notes with body text for overview/listing. Performs sync I/O.

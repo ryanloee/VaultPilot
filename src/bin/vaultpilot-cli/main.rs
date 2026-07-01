@@ -159,6 +159,14 @@ enum Commands {
         action: AgentEngineActions,
     },
 
+    /// Real-time context surface: surface notes related to the text you are
+    /// currently editing (#1995 Phase 1). Powers the live "relevant notes"
+    /// panel without requiring a saved note.
+    ContextSurface {
+        #[command(subcommand)]
+        action: ContextSurfaceActions,
+    },
+
     /// Compress chat history into a summary
     Compress {
         /// JSON array of conversation turns
@@ -711,6 +719,21 @@ enum AgentEngineActions {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ContextSurfaceActions {
+    /// Surface notes related to free-form text right now (one-shot, no state).
+    /// Useful for CLI / MCP callers and for testing the underlying ranker.
+    Live {
+        /// Free-form text to surface related notes for (e.g. what you are
+        /// typing, or a recent meeting transcript snippet).
+        text: String,
+
+        /// Maximum number of related notes to return.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+    },
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -886,6 +909,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             plan,
         } => handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await,
         Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
+        Commands::ContextSurface { action } => {
+            tokio::task::block_in_place(|| handle_context_surface(context, action))
+        }
         Commands::Write {
             prompt,
             mode,
@@ -1537,6 +1563,29 @@ async fn handle_agent_engine(cli: &Cli, action: &AgentEngineActions) -> Result<V
                 "engine": response.engine,
                 "exit_status": response.exit_status,
                 "stdout": response.stdout,
+            }))
+        }
+    }
+}
+
+fn handle_context_surface(
+    context: &StorageContext,
+    action: &ContextSurfaceActions,
+) -> Result<Value> {
+    use vaultpilot_lib::context_surface::surface_for_text;
+    match action {
+        ContextSurfaceActions::Live { text, limit } => {
+            let results = surface_for_text(context, text, *limit)?;
+            Ok(serde_json::json!({
+                "query_text": text,
+                "count": results.len(),
+                "related_notes": results.iter().map(|n| serde_json::json!({
+                    "id": n.meta.id,
+                    "title": n.meta.title,
+                    "score": n.score,
+                    "tags": n.meta.tags,
+                    "snippet": n.snippet,
+                })).collect::<Vec<_>>(),
             }))
         }
     }

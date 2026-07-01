@@ -326,7 +326,12 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public void CancelActiveRequest()
     {
-        try { Volatile.Read(ref _activeRequestCts)?.Cancel(); }
-        catch (ObjectDisposedException) { }
+        var cts = Volatile.Read(ref _activeRequestCts);
+        if (cts != null)
+        {
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { }
+            cts.Dispose();
+        }
     }
 }

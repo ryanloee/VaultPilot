@@ -221,7 +221,9 @@ public sealed partial class QuickAskOverlay : UserControl
     /// </summary>
     private void CancelActiveRequest()
     {
-        Interlocked.Exchange(ref _activeRequestCts, null)?.Cancel();
+        var old = Interlocked.Exchange(ref _activeRequestCts, null);
+        old?.Cancel();
+        old?.Dispose();
     }
 
     // ── Event handlers ─────────────────────────────────────────────

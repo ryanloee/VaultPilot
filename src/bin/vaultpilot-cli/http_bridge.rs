@@ -1148,7 +1148,11 @@ async fn http_chat_completions(
         // when full instead of growing unboundedly.
         let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<String>(64);
         let settings_arc = Arc::new(settings);
-        let system_owned = vaultpilot_lib::prompting::general_chat_system_prompt();
+        let system_owned = format!(
+            "{}{}",
+            vaultpilot_lib::prompting::general_chat_system_prompt(),
+            vaultpilot_lib::prompting::response_style_suffix(settings_arc.response_style),
+        );
         let user_prompt_owned =
             vaultpilot_lib::prompting::general_chat_user_prompt(&question, &history);
         let model_for_task = model_id;

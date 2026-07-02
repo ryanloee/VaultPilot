@@ -1674,21 +1674,30 @@ async fn mcp_call_chat_new(context: &StorageContext, arguments: Value) -> Value 
         }
     };
     let _guard = context.chat_state_lock.lock().await;
-    match load_chat_state_with_context(context) {
-        Ok(mut state) => {
-            let session = new_cli_chat_session(args.title.as_deref());
-            state.current_session_id = session.id.clone();
-            state.sessions.insert(0, session.clone());
-            match save_chat_state_with_context(context, &state) {
-                Ok(_) => mcp_tool_success(
-                    format!("Created session '{}'", escape_xml_content(&session.title)),
-                    serde_json::json!({ "session": session }),
-                ),
-                Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-            }
-        }
-        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+    let ctx = context.clone();
+    let state_result = tokio::task::spawn_blocking(move || load_chat_state_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))
+        .unwrap_or_else(Err);
+    let mut state = match state_result {
+        Ok(s) => s,
+        Err(e) => return mcp_tool_error(sanitize_error(&e.to_string())),
+    };
+    let session = new_cli_chat_session(args.title.as_deref());
+    state.current_session_id = session.id.clone();
+    state.sessions.insert(0, session.clone());
+    let ctx = context.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || save_chat_state_with_context(&ctx, &state))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))
+        .unwrap_or_else(Err)
+    {
+        return mcp_tool_error(sanitize_error(&e.to_string()));
     }
+    mcp_tool_success(
+        format!("Created session '{}'", escape_xml_content(&session.title)),
+        serde_json::json!({ "session": session }),
+    )
 }
 
 async fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Value {
@@ -1706,36 +1715,45 @@ async fn mcp_call_chat_delete(context: &StorageContext, arguments: Value) -> Val
         }
     };
     let _guard = context.chat_state_lock.lock().await;
-    match load_chat_state_with_context(context) {
-        Ok(mut state) => {
-            let original_len = state.sessions.len();
-            state.sessions.retain(|s| s.id != args.session_id);
-            let deleted = state.sessions.len() != original_len;
-            // Reset current_session_id if it points to a deleted or missing session
-            if !state
-                .sessions
-                .iter()
-                .any(|s| s.id == state.current_session_id)
-            {
-                state.current_session_id = state
-                    .sessions
-                    .first()
-                    .map(|s| s.id.clone())
-                    .unwrap_or_default();
-            }
-            match save_chat_state_with_context(context, &state) {
-                Ok(_) => mcp_tool_success(
-                    format!(
-                        "Deleted={deleted}, id={}",
-                        escape_xml_content(&args.session_id)
-                    ),
-                    serde_json::json!({ "deleted": deleted, "id": args.session_id }),
-                ),
-                Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
-            }
-        }
-        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+    let ctx = context.clone();
+    let state_result = tokio::task::spawn_blocking(move || load_chat_state_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))
+        .unwrap_or_else(Err);
+    let mut state = match state_result {
+        Ok(s) => s,
+        Err(e) => return mcp_tool_error(sanitize_error(&e.to_string())),
+    };
+    let original_len = state.sessions.len();
+    state.sessions.retain(|s| s.id != args.session_id);
+    let deleted = state.sessions.len() != original_len;
+    // Reset current_session_id if it points to a deleted or missing session
+    if !state
+        .sessions
+        .iter()
+        .any(|s| s.id == state.current_session_id)
+    {
+        state.current_session_id = state
+            .sessions
+            .first()
+            .map(|s| s.id.clone())
+            .unwrap_or_default();
     }
+    let ctx = context.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || save_chat_state_with_context(&ctx, &state))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))
+        .unwrap_or_else(Err)
+    {
+        return mcp_tool_error(sanitize_error(&e.to_string()));
+    }
+    mcp_tool_success(
+        format!(
+            "Deleted={deleted}, id={}",
+            escape_xml_content(&args.session_id)
+        ),
+        serde_json::json!({ "deleted": deleted, "id": args.session_id }),
+    )
 }
 
 /// MCP schema sends flat fields (title, tags, keywords, ...) but NoteDocument

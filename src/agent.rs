@@ -1923,7 +1923,7 @@ fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
             let short_id: String = note_id.chars().take(8).collect();
             serde_json::json!({"path": format!("{}-{}.md", slugify(&draft.title), short_id),
                               "title": draft.title,
-                              "body": draft.body})
+                              "body": truncate_preview(&draft.body, 500)})
             .to_string()
         }
     }

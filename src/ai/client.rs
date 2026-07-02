@@ -2,6 +2,8 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
@@ -420,15 +422,15 @@ pub(crate) async fn send_request_with_temperature(
 
     Err(anyhow!("API request failed after retries"))
 }
-/// Send a streaming request to the AI provider. Calls `on_chunk` for each
-/// text delta received. Returns the full accumulated text.
-pub async fn send_request_streaming(
+/// Send a streaming request to the AI provider. Calls the async `on_chunk` for
+/// each text delta received. Returns the full accumulated text.
+pub async fn send_request_streaming<'a>(
     settings: &AppSettings,
     system: &str,
     prompt: &str,
     image_paths: &[String],
     temperature: f32,
-    mut on_chunk: impl FnMut(&str),
+    mut on_chunk: impl FnMut(&str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
 ) -> Result<String> {
     let provider = settings.effective_provider();
     if provider.api_key.trim().is_empty() {
@@ -614,7 +616,7 @@ pub async fn send_request_streaming(
                                             ));
                                         }
                                         accumulated.push_str(text);
-                                        on_chunk(text);
+                                        on_chunk(text).await;
                                     }
                                 }
                             }
@@ -632,7 +634,7 @@ pub async fn send_request_streaming(
                                                 ));
                                             }
                                             accumulated.push_str(text);
-                                            on_chunk(text);
+                                            on_chunk(text).await;
                                         }
                                     }
                                 } else if event_type == "message_stop" {
@@ -685,7 +687,7 @@ pub async fn send_request_streaming(
                                     {
                                         if !text.is_empty() {
                                             accumulated.push_str(text);
-                                            on_chunk(text);
+                                            on_chunk(text).await;
                                         }
                                     }
                                 }
@@ -698,7 +700,7 @@ pub async fn send_request_streaming(
                                         if let Some(text) = parsed["delta"]["text"].as_str() {
                                             if !text.is_empty() {
                                                 accumulated.push_str(text);
-                                                on_chunk(text);
+                                                on_chunk(text).await;
                                             }
                                         }
                                     } else if event_type == "error" {

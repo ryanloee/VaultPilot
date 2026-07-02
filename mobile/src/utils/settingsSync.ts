@@ -9,7 +9,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { saveSettings } from '../api/client';
-import { ApiFormat } from '../store';
+import { ApiFormat, ThemeMode, ProviderConfig } from '../store';
 
 const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
 
@@ -138,6 +138,24 @@ export async function importSettings(json: string): Promise<{ providersImported:
     }
     await saveSettings(settings);
   }
+
+  // Sync Zustand in-memory state so changes take effect immediately without restart
+  const { useAppStore } = await import('../store');
+  const fresh = useAppStore.getState();
+  useAppStore.setState({
+    themeMode: data.themeMode as ThemeMode,
+    accentColor: data.accentColor,
+    providers: data.providers.map(p => ({
+      ...p,
+      apiKey: '',
+      apiFormat: p.apiFormat as ApiFormat,
+    })) as ProviderConfig[],
+    activeProviderIndex: Math.min(data.activeProviderIndex, data.providers.length - 1),
+    apiBase: active?.apiBase ?? fresh.apiBase,
+    apiKey: active?.apiKey ?? fresh.apiKey,
+    model: active?.model ?? fresh.model,
+    apiFormat: (active?.apiFormat as ApiFormat) ?? fresh.apiFormat,
+  });
 
   return { providersImported: data.providers.length };
 }

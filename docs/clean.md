@@ -37,7 +37,7 @@ After cleanup, your git status should mainly show only source changes such as:
 ### Important note
 
 Do not delete tracked source files unless you really want to remove them from the project.  
-For example, `scripts/generate-icons.py` is a tracked script, not a build artifact.
+For example, `scripts/clean.ps1` is a tracked script, not a build artifact.
 
 ## 中文
 
@@ -76,4 +76,4 @@ Remove-Item -LiteralPath .\tmp-icons -Recurse -Force -ErrorAction SilentlyContin
 ### 重要说明
 
 不要把“源码脚本”和“构建产物”混在一起删。  
-例如 `scripts/generate-icons.py` 是已跟踪的源码脚本，不是中间产物。
+例如 `scripts/clean.ps1` 是已跟踪的源码脚本，不是中间产物。

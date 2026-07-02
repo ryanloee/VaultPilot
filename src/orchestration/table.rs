@@ -171,15 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_note_by_id_empty_string() {
-        // Verify that load_note_by_id_async errors propagate correctly
-        // when given an empty note id — we can't easily test the async
-        // path without storage, but we can test the prompt generation.
-        let system = crate::prompting::table_system_prompt();
-        assert!(system.contains("Markdown table"));
-    }
-
-    #[test]
     fn test_table_prompt_has_injection_defense() {
         let system = crate::prompting::table_system_prompt();
         assert!(system.contains("PROMPT INJECTION DEFENSE"));

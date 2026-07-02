@@ -8,9 +8,12 @@ import { useAppStore, getColors, ACCENT_COLORS, PROVIDERS, isValidThemeMode, Api
 import { checkApi, getSettings, saveSettings } from '../api/client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
+import { checkForUpdate, type UpdateInfo } from '../utils/updateChecker';
+import { UpdateModal } from '../components/settings';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
+const SKIP_UPDATE_KEY = 'cfg_skip_update_version';
 
 export default function SettingsScreen() {
   const store = useAppStore();
@@ -20,6 +23,9 @@ export default function SettingsScreen() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
   const testControllerRef = useRef<AbortController | null>(null);
 
   // Abort in-flight test connection on unmount
@@ -87,6 +93,18 @@ export default function SettingsScreen() {
         }
         if (themeMode && isValidThemeMode(themeMode)) currentState.setThemeMode(themeMode);
         if (accentColor) currentState.setAccentColor(accentColor);
+
+        // Auto-check for updates
+        try {
+          const skipVersion = await AsyncStorage.getItem(SKIP_UPDATE_KEY);
+          const info = await checkForUpdate(appJson.expo.version);
+          if (info && info.latestVersion !== skipVersion) {
+            setUpdateInfo(info);
+            setShowUpdateModal(true);
+          }
+        } catch (e) {
+          console.warn('[Settings] Auto-update check failed:', e);
+        }
       } catch (e) {
         console.warn('[Settings] Failed to load:', e);
       }
@@ -121,6 +139,35 @@ export default function SettingsScreen() {
       if (testControllerRef.current === controller) testControllerRef.current = null;
       setTesting(false);
     }
+  };
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    try {
+      const info = await checkForUpdate(appJson.expo.version);
+      if (info) {
+        setUpdateInfo(info);
+        setShowUpdateModal(true);
+      } else {
+        Alert.alert('已是最新', `当前版本 v${appJson.expo.version} 已是最新`);
+      }
+    } catch (e) {
+      console.warn('[Settings] Check update failed:', e);
+      Alert.alert('检查失败', '无法连接到更新服务器');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleSkipUpdate = async () => {
+    if (updateInfo) {
+      try {
+        await AsyncStorage.setItem(SKIP_UPDATE_KEY, updateInfo.latestVersion);
+      } catch (e) {
+        console.warn('[Settings] Failed to persist skip version:', e);
+      }
+    }
+    setShowUpdateModal(false);
   };
 
   const addFromPreset = (preset: typeof PROVIDERS[0]) => {
@@ -350,8 +397,33 @@ export default function SettingsScreen() {
         ))}
       </View>
 
+      <TouchableOpacity
+        style={[s.updateBtn, { borderColor: store.accentColor }]}
+        onPress={handleCheckUpdate}
+        disabled={checkingUpdate}
+      >
+        {checkingUpdate ? (
+          <ActivityIndicator color={store.accentColor} size="small" />
+        ) : (
+          <Text style={{ color: store.accentColor, fontWeight: '600' }}>检查更新</Text>
+        )}
+      </TouchableOpacity>
+
       <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
     </ScrollView>
+
+    {/* ── Update Modal ── */}
+    <UpdateModal
+      visible={showUpdateModal}
+      updateInfo={updateInfo}
+      accentColor={store.accentColor}
+      textColor={c.text}
+      textColorSecondary={c.textSecondary}
+      borderColor={c.border}
+      cardBgColor={c.card}
+      onClose={() => setShowUpdateModal(false)}
+      onSkip={handleSkipUpdate}
+    />
 
     {/* ── Add Provider Modal ── */}
     <Modal visible={showAddModal} transparent animationType="slide">
@@ -431,6 +503,17 @@ const s = StyleSheet.create({
   colorRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
   version: { textAlign: 'center', fontSize: 12, marginTop: 20, marginBottom: 40 },
+  updateBtn: {
+    alignSelf: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    marginTop: 16,
+    marginBottom: 4,
+    minWidth: 110,
+    alignItems: 'center',
+  },
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '70%' },
   modalItem: { borderBottomWidth: 1, paddingVertical: 14 },

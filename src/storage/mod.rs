@@ -55,7 +55,7 @@ pub use subscriptions::{
     compute_and_update_next_run, create_subscription_async, create_subscription_with_context,
     delete_subscription_async, delete_subscription_with_context, get_last_successful_run_note,
     get_subscription_async, get_subscription_with_context, list_due_subscriptions_with_context,
-    list_subscriptions_async, list_subscriptions_with_context,
+    list_subscriptions_async, list_subscriptions_with_context, set_subscription_enabled_async,
     set_subscription_enabled_with_context, update_subscription_async,
     update_subscription_next_run_with_context, update_subscription_run_with_context,
     update_subscription_with_context,

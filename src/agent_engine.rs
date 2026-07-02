@@ -474,6 +474,7 @@ impl SubprocessEngine {
                 );
             }
         };
+        drain_done.store(true, Ordering::Relaxed);
 
         let stdout = out_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
         let stderr = err_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();

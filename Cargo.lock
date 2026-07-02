@@ -2690,6 +2690,7 @@ dependencies = [
  "hostname",
  "image",
  "imap",
+ "libc",
  "mailparse",
  "native-tls",
  "r2d2",

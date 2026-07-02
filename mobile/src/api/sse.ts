@@ -123,7 +123,7 @@ export function parseSSEStream(
           reject(new DOMException("Aborted", "AbortError"));
           return;
         }
-        if (!doneReceived && buffer.trim().length > 0) {
+        if (!doneReceived && !rejected && buffer.trim().length > 0) {
           buffer += "\n\n"; // Ensure last data line is processed even without trailing newline
           processBuffer();
         }

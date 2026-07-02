@@ -43,12 +43,20 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
   }, [refresh]);
 
   // Auto-flush when transitioning from offline → online
+  // Guard against concurrent invocations when isOnline oscillates rapidly (#2351)
+  const flushingRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
-    if (isOnline && !prevOnline.current) {
+    if (isOnline && !prevOnline.current && !flushingRef.current) {
+      flushingRef.current = true;
       flushPendingSyncs()
-        .then(() => { if (!cancelled) refreshRef.current(); })
-        .catch(e => console.warn('[OfflineSync] flush failed:', e));
+        .then(() => {
+          if (!cancelled) refreshRef.current();
+        })
+        .catch(e => console.warn('[OfflineSync] flush failed:', e))
+        .finally(() => {
+          flushingRef.current = false;
+        });
     }
     prevOnline.current = isOnline;
     return () => { cancelled = true; };

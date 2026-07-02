@@ -160,6 +160,10 @@ jobs:
             echo "Attempt $i failed, retrying in 30s..."
             sleep 30
           done
+          if ! command -v cargo-audit &>/dev/null; then
+            echo "FATAL: cargo-audit installation failed after 5 attempts"
+            exit 1
+          fi
 
       - name: Run cargo audit
         run: cargo audit

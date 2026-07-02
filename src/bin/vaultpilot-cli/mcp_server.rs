@@ -308,14 +308,14 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
             }
         } else {
             let mut shutdown = false;
-            let result = tokio::select! {
-                result = read_line_bounded => result?,
+            let result = tokio::select!(biased;
                 _ = shutdown_rx.changed() => {
                     eprintln!("MCP server: received shutdown signal");
                     shutdown = true;
                     None
-                }
-            };
+                },
+                result = read_line_bounded => result?,
+            );
             if shutdown {
                 break;
             }

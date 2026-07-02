@@ -545,13 +545,16 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
     const format = settings.apiFormat ?? 'openai';
     if (!apiKey) return { ok: false, error: '未配置 API Key' };
 
-    // Merge the built-in 8s timeout with any externally-provided signal so a
-    // slow / non-responsive host always aborts, even when the caller supplies
-    // its own AbortSignal (e.g. SettingsScreen.testConnection). Previously
-    // `signal ?? AbortSignal.timeout(...)` dropped the timeout entirely once an
-    // external signal was passed, leaving the request hanging forever (#2115).
-    const timeoutSignal = AbortSignal.timeout(CHECK_API_TIMEOUT_MS);
-    const effectiveSignal = signal ? AbortSignal.any([timeoutSignal, signal]) : timeoutSignal;
+    // Hermes-compatible timeout: AbortSignal.timeout() / AbortSignal.any() are
+    // unavailable on React Native Hermes (Hermes 0.12 / RN 0.73). Use setTimeout +
+    // a manual AbortController instead to combine timeout and user signal (#2329).
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), CHECK_API_TIMEOUT_MS);
+    if (signal) {
+      if (signal.aborted) timeoutController.abort(signal.reason);
+      else signal.addEventListener('abort', () => timeoutController.abort(signal.reason), { once: true });
+    }
+    const effectiveSignal = timeoutController.signal;
 
     if (format === 'anthropic') {
       // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable

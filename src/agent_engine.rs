@@ -803,6 +803,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_os = "windows", ignore)]
     fn subprocess_spawn_is_vault_scoped() {
         // Use `sh` as a safe, ubiquitous shim — no real agent CLI is spawned.
         if find_binary(&["sh".to_string()]).is_none() {
@@ -892,6 +893,7 @@ mod tests {
     /// killed and surfaced as `Err`, not block the caller forever. Mirrors the
     /// builtin agent's `run_command` timeout+kill regression.
     #[test]
+    #[cfg_attr(target_os = "windows", ignore)]
     fn subprocess_times_out_and_kills_child() {
         if find_binary(&["sh".to_string()]).is_none() {
             eprintln!("skipping subprocess_times_out_and_kills_child: 'sh' not on PATH");

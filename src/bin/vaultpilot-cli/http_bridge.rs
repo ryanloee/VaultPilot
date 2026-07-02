@@ -1233,7 +1233,9 @@ async fn http_chat_completions(
                                 });
                                 let tx = upstream_tx.clone();
                                 Box::pin(async move {
-                                    let _ = tx.send(chunk_data.to_string()).await;
+                                    if let Err(e) = tx.send(chunk_data.to_string()).await {
+                                        tracing::warn!("streaming chunk send failed (client disconnected?): {e}");
+                                    }
                                 })
                             },
                         ) => result,

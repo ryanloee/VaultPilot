@@ -57,8 +57,14 @@ export async function pingBackend(): Promise<boolean> {
   const { url } = await getServerConfig();
   if (!url) return false;
   try {
-    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
-    return res.ok;
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), 5000);
+    try {
+      const res = await fetch(`${url}/health`, { signal: timeoutController.signal });
+      return res.ok;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (e) {
     console.warn('[Sync] pingBackend failed:', e);
     return false;
@@ -119,28 +125,34 @@ async function doSync(
         await new Promise(r => setTimeout(r, delay));
       }
       // 声明在 try 外部，确保 cleanup 在 catch/所有路径都可调用 (#2122)
-      const { signal: fetchSignal, cleanup } = combineSignals(signal, AbortSignal.timeout(30000));
+      const listTimeoutController = new AbortController();
+      const listTimeoutTimer = setTimeout(() => listTimeoutController.abort(), 30000);
       try {
-        listRes = await fetch(`${url}/api/notes?limit=${PAGE_SIZE}&offset=${offset}`, {
-          headers,
-          signal: fetchSignal,
-        });
-        if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
-        if (isRetryable(listRes.status)) {
-          // 429/502/503/504 等可重试状态：尊重 Retry-After 头后重试 (#2132)
-          retryAfterMs = parseRetryAfter(listRes);
-          lastNetworkErr = new Error(`获取笔记列表失败: ${listRes.status}`);
-          if (attempt >= MAX_RETRIES) break;
-          continue;
+        const { signal: fetchSignal, cleanup } = combineSignals(signal, listTimeoutController.signal);
+        try {
+          listRes = await fetch(`${url}/api/notes?limit=${PAGE_SIZE}&offset=${offset}`, {
+            headers,
+            signal: fetchSignal,
+          });
+          if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
+          if (isRetryable(listRes.status)) {
+            // 429/502/503/504 等可重试状态：尊重 Retry-After 头后重试 (#2132)
+            retryAfterMs = parseRetryAfter(listRes);
+            lastNetworkErr = new Error(`获取笔记列表失败: ${listRes.status}`);
+            if (attempt >= MAX_RETRIES) break;
+            continue;
+          }
+          break; // got a response (even if not ok), stop retrying
+        } catch (fetchErr: unknown) {
+          if (signal.aborted) throw new Error('同步超时');
+          lastNetworkErr = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
+          if (attempt >= MAX_RETRIES) throw lastNetworkErr;
+          // network error → retry
+        } finally {
+          cleanup();
         }
-        break; // got a response (even if not ok), stop retrying
-      } catch (fetchErr: unknown) {
-        if (signal.aborted) throw new Error('同步超时');
-        lastNetworkErr = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
-        if (attempt >= MAX_RETRIES) throw lastNetworkErr;
-        // network error → retry
       } finally {
-        cleanup();
+        clearTimeout(listTimeoutTimer);
       }
     }
     if (!listRes) {

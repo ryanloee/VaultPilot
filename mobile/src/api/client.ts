@@ -537,8 +537,7 @@ export async function chatWithReconnect(
 
 // ── Health Check ──────────────────────────────────────────
 export async function checkApi(params?: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal }): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const settings = (params ?? await getSettings()) as { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal };
+  const settings = (params ?? await getSettings()) as { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal };
     const apiKey = settings.apiKey ?? '';
     const signal = settings.signal;
     const apiBase = settings.apiBase ?? '';
@@ -550,35 +549,40 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
     // a manual AbortController instead to combine timeout and user signal (#2329).
     const timeoutController = new AbortController();
     const timer = setTimeout(() => timeoutController.abort(), CHECK_API_TIMEOUT_MS);
+    const onUserAbort = () => timeoutController.abort(signal!.reason);
     if (signal) {
       if (signal.aborted) timeoutController.abort(signal.reason);
-      else signal.addEventListener('abort', () => timeoutController.abort(signal.reason), { once: true });
+      else signal.addEventListener('abort', onUserAbort, { once: true });
     }
     const effectiveSignal = timeoutController.signal;
 
-    if (format === 'anthropic') {
-      // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
-      const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
-      const res = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({ model: settings.model ?? 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+    try {
+      if (format === 'anthropic') {
+        // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
+        const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
+        const res = await fetch(`${base}/v1/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({ model: settings.model ?? 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+          signal: effectiveSignal,
+        });
+        // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error
+        return { ok: res.ok || res.status === 400, error: res.ok || res.status === 400 ? undefined : `HTTP ${res.status}` };
+      }
+
+      const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
         signal: effectiveSignal,
       });
-      // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error
-      return { ok: res.ok || res.status === 400, error: res.ok || res.status === 400 ? undefined : `HTTP ${res.status}` };
+      return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
+    } catch (e: unknown) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onUserAbort);
     }
-
-    const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: effectiveSignal,
-    });
-    return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
-  } catch (e: unknown) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
 }

@@ -20,13 +20,19 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
   const checkConnection = useCallback(async (): Promise<boolean> => {
     try {
       // Quick HEAD request to a reliable endpoint
-      const res = await fetch('https://www.gstatic.com/generate_204', {
-        method: 'HEAD',
-        signal: AbortSignal.timeout(3000),
-      });
-      const online = res.ok;
-      setIsOnline(online);
-      return online;
+      const timeoutController = new AbortController();
+      const timer = setTimeout(() => timeoutController.abort(), 3000);
+      try {
+        const res = await fetch('https://www.gstatic.com/generate_204', {
+          method: 'HEAD',
+          signal: timeoutController.signal,
+        });
+        const online = res.ok;
+        setIsOnline(online);
+        return online;
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (e) {
       console.warn('[NetworkState] checkConnection failed:', e);
       setIsOnline(false);

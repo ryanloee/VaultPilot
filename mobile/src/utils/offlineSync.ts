@@ -82,12 +82,19 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({ title: note.title, content: note.content }),
-        signal: AbortSignal.timeout(10000),
-      });
+      const timeoutController = new AbortController();
+      const timer = setTimeout(() => timeoutController.abort(), 10000);
+      let res: Response;
+      try {
+        res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ title: note.title, content: note.content }),
+          signal: timeoutController.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
 
       if (res.ok) {
         await clearPendingSync(entry.note_id);

@@ -33,71 +33,83 @@ export function compareSemver(a: string, b: string): number {
 
 export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo | null> {
   try {
-    const res = await fetch(GITHUB_API, {
-      headers: { Accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
+    const timeout1 = new AbortController();
+    const timer1 = setTimeout(() => timeout1.abort(), 8000);
+    try {
+      const res = await fetch(GITHUB_API, {
+        headers: { Accept: 'application/vnd.github+json' },
+        signal: timeout1.signal,
+      });
+      if (!res.ok) return null;
 
-    const release = await res.json();
-    const tag: string = release.tag_name ?? '';
-    const latestVersion = tag.replace(/^v/, '');
+      const release = await res.json();
+      const tag: string = release.tag_name ?? '';
+      const latestVersion = tag.replace(/^v/, '');
 
-    if (!latestVersion || compareSemver(latestVersion, currentVersion) <= 0) {
-      return null;
-    }
-
-    const apkAsset = (release.assets ?? []).find(
-      (a: { name: string }) => a.name.endsWith('.apk')
-    );
-
-    // If the latest release has no APK, search recent releases for one that does
-    let finalRelease = release;
-    let finalVersion = latestVersion;
-    let finalApkAsset = apkAsset;
-
-    if (!apkAsset) {
-      try {
-        const listRes = await fetch(GITHUB_RELEASES, {
-          headers: { Accept: 'application/vnd.github+json' },
-          signal: AbortSignal.timeout(8000),
-        });
-        if (listRes.ok) {
-          const releases: Array<{
-            tag_name?: string;
-            assets?: Array<{ name: string; browser_download_url: string }>;
-            html_url?: string;
-            body?: string;
-            published_at?: string;
-          }> = await listRes.json();
-
-          for (const r of releases) {
-            const v = (r.tag_name ?? '').replace(/^v/, '');
-            if (!v || compareSemver(v, currentVersion) <= 0) continue;
-            const asset = (r.assets ?? []).find(
-              (a: { name: string }) => a.name.endsWith('.apk'),
-            );
-            if (asset) {
-              finalRelease = r;
-              finalVersion = v;
-              finalApkAsset = asset;
-              break;
-            }
-          }
-        }
-      } catch (listErr) {
-        console.warn('[UpdateChecker] fallback releases fetch failed:', listErr);
+      if (!latestVersion || compareSemver(latestVersion, currentVersion) <= 0) {
+        return null;
       }
-    }
 
-    return {
-      latestVersion: finalVersion,
-      currentVersion,
-      releaseUrl: finalRelease.html_url ?? '',
-      body: finalRelease.body ?? '',
-      apkUrl: finalApkAsset?.browser_download_url ?? null,
-      publishedAt: finalRelease.published_at ?? '',
-    };
+      const apkAsset = (release.assets ?? []).find(
+        (a: { name: string }) => a.name.endsWith('.apk')
+      );
+
+      // If the latest release has no APK, search recent releases for one that does
+      let finalRelease = release;
+      let finalVersion = latestVersion;
+      let finalApkAsset = apkAsset;
+
+      if (!apkAsset) {
+        try {
+          const timeout2 = new AbortController();
+          const timer2 = setTimeout(() => timeout2.abort(), 8000);
+          try {
+            const listRes = await fetch(GITHUB_RELEASES, {
+              headers: { Accept: 'application/vnd.github+json' },
+              signal: timeout2.signal,
+            });
+            if (listRes.ok) {
+              const releases: Array<{
+                tag_name?: string;
+                assets?: Array<{ name: string; browser_download_url: string }>;
+                html_url?: string;
+                body?: string;
+                published_at?: string;
+              }> = await listRes.json();
+
+              for (const r of releases) {
+                const v = (r.tag_name ?? '').replace(/^v/, '');
+                if (!v || compareSemver(v, currentVersion) <= 0) continue;
+                const asset = (r.assets ?? []).find(
+                  (a: { name: string }) => a.name.endsWith('.apk'),
+                );
+                if (asset) {
+                  finalRelease = r;
+                  finalVersion = v;
+                  finalApkAsset = asset;
+                  break;
+                }
+              }
+            }
+          } catch (listErr) {
+            console.warn('[UpdateChecker] fallback releases fetch failed:', listErr);
+          } finally {
+            clearTimeout(timer2);
+          }
+        } catch {}
+      }
+
+      return {
+        latestVersion: finalVersion,
+        currentVersion,
+        releaseUrl: finalRelease.html_url ?? '',
+        body: finalRelease.body ?? '',
+        apkUrl: finalApkAsset?.browser_download_url ?? null,
+        publishedAt: finalRelease.published_at ?? '',
+      };
+    } finally {
+      clearTimeout(timer1);
+    }
   } catch (e) {
     console.warn('[UpdateChecker] fetchLatestRelease failed:', e);
     return null;

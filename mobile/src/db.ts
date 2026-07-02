@@ -320,6 +320,8 @@ export async function updateNote(id: string, title: string, content: string): Pr
     [title, content, id]
   );
   invalidateNoteTitleCache();
+  // Queue note for offline sync push (#2372)
+  await queuePendingSync(id);
 }
 
 export async function deleteNote(id: string): Promise<void> {

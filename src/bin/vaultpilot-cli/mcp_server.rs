@@ -190,8 +190,17 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                         error = %e,
                         "failed to register SIGTERM handler, falling back to ctrl_c only"
                     );
-                    let _ = tokio::signal::ctrl_c().await;
-                    let _ = shutdown_tx.send(true);
+                    match tokio::signal::ctrl_c().await {
+                        Ok(()) => {
+                            let _ = shutdown_tx.send(true);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                "ctrl_c fallback also failed — not sending early shutdown signal"
+                            );
+                        }
+                    }
                     return;
                 }
             };

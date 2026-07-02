@@ -26,6 +26,7 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
   const [pendingCount, setPendingCount] = useState(0);
   const { isOnline } = useNetworkState();
   const prevOnline = useRef(isOnline);
+  const isFlushingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const count = await getPendingSyncCount();
@@ -45,10 +46,18 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
   // Auto-flush when transitioning from offline → online
   useEffect(() => {
     let cancelled = false;
-    if (isOnline && !prevOnline.current) {
-      flushPendingSyncs()
-        .then(() => { if (!cancelled) refreshRef.current(); })
-        .catch(e => console.warn('[OfflineSync] flush failed:', e));
+    if (isOnline && !prevOnline.current && !isFlushingRef.current) {
+      isFlushingRef.current = true;
+      (async () => {
+        try {
+          await flushPendingSyncs();
+          if (!cancelled) refreshRef.current();
+        } catch (e) {
+          console.warn('[OfflineSync] flush failed:', e);
+        } finally {
+          isFlushingRef.current = false;
+        }
+      })();
     }
     prevOnline.current = isOnline;
     return () => { cancelled = true; };

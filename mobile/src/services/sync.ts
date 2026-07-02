@@ -205,7 +205,7 @@ async function doSync(
 
   // Concurrent detail fetches with concurrency limit (#2011)
   await runWithConcurrency(notesToFetch, DETAIL_CONCURRENCY, async (meta) => {
-    if (signal.aborted) return;
+    if (signal.aborted) throw new Error('同步超时');
 
     try {
       // Fetch full note (with retry on transient failures)
@@ -214,7 +214,7 @@ async function doSync(
       let noteRetryAfterMs: number | null = null;
       const noteTimeoutMs = 10000;
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (signal.aborted) return;
+        if (signal.aborted) throw new Error('同步超时');
         if (attempt > 0) {
           // 优先尊重服务端 Retry-After 头，否则走指数退避 (#2132)
           const delay = noteRetryAfterMs ?? RETRY_BASE_MS * Math.pow(2, attempt - 1);
@@ -277,14 +277,17 @@ async function doSync(
       }
       emitProgress('details');
     } catch (e) {
-      if (signal.aborted) return;
+      if (signal.aborted) throw new Error('同步超时');
       console.warn(`[Sync] Failed: ${meta.id}`, e);
       errors++;
       emitProgress('details');
     }
   });
 
-  await AsyncStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
+  // Only persist the sync timestamp on a clean (non-aborted) sync (#2369)
+  if (!signal.aborted) {
+    await AsyncStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
+  }
   return { imported, updated, skipped, errors, duration_ms: Date.now() - start };
 }
 

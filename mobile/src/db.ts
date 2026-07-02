@@ -361,13 +361,14 @@ export async function getNoteTitleMap(): Promise<Map<string, string>> {
   const notes = await db.getAllAsync<{ id: string; title: string }>(
     'SELECT id, title FROM notes WHERE is_template = 0'
   );
-  noteTitleCache = new Map<string, string>();
+  const map = new Map<string, string>();
   for (const n of notes) {
     if (n.title.trim()) {
       // Lowercase key for case-insensitive matching
-      noteTitleCache.set(n.title.trim().toLowerCase(), n.id);
+      map.set(n.title.trim().toLowerCase(), n.id);
     }
   }
+  noteTitleCache = map;
   return noteTitleCache;
 }
 

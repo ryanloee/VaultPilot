@@ -62,13 +62,12 @@ const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 1000;
 
 // ── Settings ──────────────────────────────────────────────
-let _settingsCache: { apiBase: string; apiKey: string; model: string; apiFormat: ApiFormat } | null = null;
+// Cache lives in settingsCache.ts (shared with store.ts to avoid circular imports).
 
-export function invalidateSettingsCache() {
-  _settingsCache = null;
-}
+import { invalidateSettingsCache, getSettingsCache, setSettingsCache } from './settingsCache';
+export { invalidateSettingsCache } from './settingsCache';
 
-export async function getSettings() {
+export async function getSettings(): Promise<{ apiBase: string; apiKey: string; model: string; apiFormat: ApiFormat }> {
   // Use Zustand store as the primary source of truth — this ensures that
   // any changes made via the UI (setApiSettings, setActiveProvider, etc.)
   // are immediately reflected in API calls.
@@ -86,20 +85,22 @@ export async function getSettings() {
     // Store not available — fall through to legacy keys
   }
 
-  if (_settingsCache) return _settingsCache;
+  const cached = getSettingsCache();
+  if (cached) return cached;
   const [base, key, model, fmt] = await Promise.all([
     AsyncStorage.getItem(KEYS.apiBase),
     getApiKey(),
     AsyncStorage.getItem(KEYS.model),
     AsyncStorage.getItem(KEYS.apiFormat),
   ]);
-  _settingsCache = {
+  const settings = {
     apiBase: base || DEFAULTS.apiBase,
     apiKey: key,
     model: model || DEFAULTS.model,
     apiFormat: (fmt as ApiFormat) || 'openai',
-  };
-  return _settingsCache;
+  } as const;
+  setSettingsCache(settings);
+  return settings;
 }
 
 export async function saveSettings(s: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }) {
@@ -172,102 +173,105 @@ async function chatAnthropic(
 
   let res: Response | null = null;
   let lastError: Error | null = null;
+  let started = false; // tracks whether the ReadableStream was returned (its own finally handles cleanup)
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
-      await new Promise(r => setTimeout(r, delay));
-      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    }
-
-    try {
-      res = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-    } catch (fetchErr: unknown) {
-      lastError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
-      if (lastError.name === 'AbortError') {
-        clearTimeout(timeout);
-        signal?.removeEventListener('abort', onSignalAbort!);
-        throw fetchErr;
+  try {
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+        await new Promise(r => setTimeout(r, delay));
+        if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError');
       }
-      continue; // network error → retry
-    }
 
-    // Retry on transient server errors
-    if (isRetryable(res.status)) {
-      lastError = new Error(sanitizeApiError(res.status, ''));
-      await res.body?.cancel().catch(() => {});
-      res = null;
-      continue;
-    }
-    break;
-  }
-
-  if (!res) {
-    clearTimeout(timeout);
-    signal?.removeEventListener('abort', onSignalAbort!);
-    throw new Error('请求失败，已重试多次');
-  }
-
-  if (!res.ok) {
-    clearTimeout(timeout);
-    signal?.removeEventListener('abort', onSignalAbort!);
-    const text = await res.text().catch(() => '');
-    throw new Error(sanitizeApiError(res.status, text));
-  }
-
-  if (!res.body) { clearTimeout(timeout); signal?.removeEventListener('abort', onSignalAbort!); throw new Error('No response body'); }
-
-  // Wrap Anthropic SSE into OpenAI-compatible format so parseSSEStream works
-  const anthropicBody = res.body;
-  return new ReadableStream<Uint8Array>({
-    start(ctrl) {
-      const reader = anthropicBody.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let currentEvent = '';
-      const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
-      controller.signal.addEventListener('abort', onTimeout, { once: true });
-
-      (async () => {
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split(/\r\n|\r|\n/);
-            buffer = lines.pop() || '';
-
-
-            for (const line of lines) {
-              if (line.startsWith('event:')) {
-                currentEvent = line.slice(6).trim();
-                continue;
-              }
-              if (!line.startsWith('data:')) continue;
-              const data = line.slice(5).trimStart();
-              const result = convertAnthropicEvent(currentEvent, data);
-              if (result) ctrl.enqueue(new TextEncoder().encode(result));
-            }
-          }
-          ctrl.close();
-        } catch (e) { ctrl.error(e); }
-        finally {
-          clearTimeout(timeout);
-          controller.signal.removeEventListener('abort', onTimeout);
-          signal?.removeEventListener('abort', onSignalAbort!);
+      try {
+        res = await fetch(`${base}/v1/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (fetchErr: unknown) {
+        lastError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
+        if (lastError.name === 'AbortError') {
+          throw fetchErr;
         }
-      })();
-    },
-  });
+        continue; // network error → retry
+      }
+
+      // Retry on transient server errors
+      if (isRetryable(res.status)) {
+        lastError = new Error(sanitizeApiError(res.status, ''));
+        await res.body?.cancel().catch(() => {});
+        res = null;
+        continue;
+      }
+      break;
+    }
+
+    if (!res) throw new Error('请求失败，已重试多次');
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(sanitizeApiError(res.status, text));
+    }
+
+    if (!res.body) throw new Error('No response body');
+
+    // Mark success before returning the stream — the stream's own finally handles cleanup
+    started = true;
+
+    // Wrap Anthropic SSE into OpenAI-compatible format so parseSSEStream works
+    const anthropicBody = res.body;
+    return new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        const reader = anthropicBody.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = '';
+        const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
+        controller.signal.addEventListener('abort', onTimeout, { once: true });
+
+        (async () => {
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split(/\r\n|\r|\n/);
+              buffer = lines.pop() || '';
+
+
+              for (const line of lines) {
+                if (line.startsWith('event:')) {
+                  currentEvent = line.slice(6).trim();
+                  continue;
+                }
+                if (!line.startsWith('data:')) continue;
+                const data = line.slice(5).trimStart();
+                const result = convertAnthropicEvent(currentEvent, data);
+                if (result) ctrl.enqueue(new TextEncoder().encode(result));
+              }
+            }
+            ctrl.close();
+          } catch (e) { ctrl.error(e); }
+          finally {
+            clearTimeout(timeout);
+            controller.signal.removeEventListener('abort', onTimeout);
+            signal?.removeEventListener('abort', onSignalAbort!);
+          }
+        })();
+      },
+    });
+  } finally {
+    if (!started) {
+      clearTimeout(timeout);
+      if (onSignalAbort) signal?.removeEventListener('abort', onSignalAbort);
+    }
+  }
 }
 
 // ── OpenAI-compatible Chat Completions API ─────────────────
@@ -325,7 +329,7 @@ async function chatOpenAI(
     if (!res) throw lastError ?? new Error('请求失败，已重试多次');
 
     if (res.status === 400) {
-      await res.body?.cancel(); // Release connection back to pool
+      await res.body?.cancel().catch(() => {}); // Release connection back to pool
       res = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: {

@@ -207,10 +207,14 @@ public sealed partial class NotesView : UserControl
         }
 
         // Kick off related notes lookup in the background (debounced via _relatedCts)
-        _relatedCts?.Cancel();
-        _relatedCts?.Dispose();
-        _relatedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _ = LoadRelatedNotesAsync(meta.Id, _relatedCts.Token);
+        // Only proceed if this request hasn't been superseded (#2288)
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            _relatedCts?.Cancel();
+            _relatedCts?.Dispose();
+            _relatedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _ = LoadRelatedNotesAsync(meta.Id, _relatedCts.Token);
+        }
     }
 
     private async void OnDeleteNoteClicked(object sender, RoutedEventArgs e)
@@ -371,6 +375,9 @@ public sealed partial class NotesView : UserControl
         {
             RelatedNotesLoading.IsActive = false;
             RelatedNotesLoading.Visibility = Visibility.Collapsed;
+            // Hide the panel itself so cancellation doesn't leave an empty
+            // ghost panel visible (#2288)
+            RelatedNotesPanel.Visibility = Visibility.Collapsed;
         }
     }
 

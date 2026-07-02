@@ -627,9 +627,9 @@ async fn http_progressive_search(
         if let Err(panic) = result {
             tracing::error!("progressive search background task panicked: {:?}", panic);
             let _ = sse_tx_done
-                .send(Ok(
-                    Event::default().data(serde_json::json!({"stage": "done"}).to_string())
-                ))
+                .send(Ok(Event::default().data(
+                    serde_json::json!({"stage": "error", "message": "Internal error"}).to_string(),
+                )))
                 .await;
         }
     });

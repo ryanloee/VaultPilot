@@ -326,7 +326,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public void CancelActiveRequest()
     {
-        var cts = Volatile.Read(ref _activeRequestCts);
+        var cts = Interlocked.Exchange(ref _activeRequestCts, null);
         if (cts != null)
         {
             try { cts.Cancel(); }

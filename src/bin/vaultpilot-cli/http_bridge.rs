@@ -545,79 +545,93 @@ async fn http_progressive_search(
     let q = query_text.clone();
 
     tokio::spawn(async move {
-        // Stage 1: Keyword search (FTS5, fast)
-        let kw_query = SearchQuery {
-            text: q.clone(),
-            limit: Some(limit),
-            deep_search: false,
-            ..Default::default()
-        };
-        match search_notes_async(&state_clone.context, kw_query).await {
-            Ok(result) => {
-                let event = ProgressiveSearchEvent {
-                    stage: "keyword".into(),
-                    results: Some(result),
-                    message: None,
+        let sse_tx_done = sse_tx.clone();
+        let result = futures_util::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+            async move {
+                // Stage 1: Keyword search (FTS5, fast)
+                let kw_query = SearchQuery {
+                    text: q.clone(),
+                    limit: Some(limit),
+                    deep_search: false,
+                    ..Default::default()
                 };
-                let data = serde_json::to_string(&event).unwrap_or_default();
-                let _ = sse_tx.send(Ok(Event::default().data(data))).await;
-            }
-            Err(e) => {
-                tracing::warn!("progressive keyword search failed: {e}");
-                let _ = sse_tx
-                    .send(Ok(Event::default().data(
-                        serde_json::json!({"stage": "error", "message": format!("{e}")})
-                            .to_string(),
-                    )))
-                    .await;
-                return;
-            }
-        }
+                match search_notes_async(&state_clone.context, kw_query).await {
+                    Ok(result) => {
+                        let event = ProgressiveSearchEvent {
+                            stage: "keyword".into(),
+                            results: Some(result),
+                            message: None,
+                        };
+                        let data = serde_json::to_string(&event).unwrap_or_default();
+                        let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("progressive keyword search failed: {e}");
+                        let _ = sse_tx
+                            .send(Ok(Event::default().data(
+                                serde_json::json!({"stage": "error", "message": format!("{e}")})
+                                    .to_string(),
+                            )))
+                            .await;
+                        return;
+                    }
+                }
 
-        // Stage 2: Loading state
-        let loading = ProgressiveSearchEvent {
-            stage: "loading".into(),
-            results: None,
-            message: Some("正在查找更多相关笔记...".into()),
-        };
-        let data = serde_json::to_string(&loading).unwrap_or_default();
-        let _ = sse_tx.send(Ok(Event::default().data(data))).await;
-
-        // Stage 3: Deep semantic search
-        let deep_query = SearchQuery {
-            text: q.clone(),
-            limit: Some(limit),
-            deep_search: true,
-            ..Default::default()
-        };
-        match deep_search_notes_async(&state_clone.context, deep_query).await {
-            Ok(result) => {
-                let event = ProgressiveSearchEvent {
-                    stage: "semantic".into(),
-                    results: Some(result),
-                    message: None,
+                // Stage 2: Loading state
+                let loading = ProgressiveSearchEvent {
+                    stage: "loading".into(),
+                    results: None,
+                    message: Some("正在查找更多相关笔记...".into()),
                 };
-                let data = serde_json::to_string(&event).unwrap_or_default();
+                let data = serde_json::to_string(&loading).unwrap_or_default();
                 let _ = sse_tx.send(Ok(Event::default().data(data))).await;
-            }
-            Err(e) => {
-                tracing::warn!("progressive semantic search failed: {e}");
-                // Still send a done event so the client knows search is complete
+
+                // Stage 3: Deep semantic search
+                let deep_query = SearchQuery {
+                    text: q.clone(),
+                    limit: Some(limit),
+                    deep_search: true,
+                    ..Default::default()
+                };
+                match deep_search_notes_async(&state_clone.context, deep_query).await {
+                    Ok(result) => {
+                        let event = ProgressiveSearchEvent {
+                            stage: "semantic".into(),
+                            results: Some(result),
+                            message: None,
+                        };
+                        let data = serde_json::to_string(&event).unwrap_or_default();
+                        let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("progressive semantic search failed: {e}");
+                        // Still send a done event so the client knows search is complete
+                        let _ = sse_tx
+                            .send(Ok(Event::default()
+                                .data(serde_json::json!({"stage": "done"}).to_string())))
+                            .await;
+                        return;
+                    }
+                }
+
+                // Done
                 let _ = sse_tx
                     .send(Ok(
                         Event::default().data(serde_json::json!({"stage": "done"}).to_string())
                     ))
                     .await;
-                return;
-            }
-        }
+            },
+        ))
+        .await;
 
-        // Done
-        let _ = sse_tx
-            .send(Ok(
-                Event::default().data(serde_json::json!({"stage": "done"}).to_string())
-            ))
-            .await;
+        if let Err(panic) = result {
+            tracing::error!("progressive search background task panicked: {:?}", panic);
+            let _ = sse_tx_done
+                .send(Ok(
+                    Event::default().data(serde_json::json!({"stage": "done"}).to_string())
+                ))
+                .await;
+        }
     });
 
     let stream = ReceiverStream::new(sse_rx);
@@ -1165,6 +1179,7 @@ async fn http_chat_completions(
         tokio::spawn(async move {
             let chunk_tx_ref = &chunk_tx;
             let model_ref = &model_for_task;
+            let model_for_inner = model_for_task.clone();
             // #2128: Cap the total upstream streaming time. The HTTP
             // TimeoutLayer(180s) does NOT cover the SSE body stream (it only
             // times the Response future, which for SSE resolves immediately),
@@ -1172,95 +1187,103 @@ async fn http_chat_completions(
             // sends partial data, then hangs) with a non-disconnecting client
             // would hold a tokio task + channels + upstream HTTP connection
             // indefinitely. Consistent with the non-streaming 180s cap.
-            let result = tokio::select! {
-                biased;
-                _ = cancel_upstream.cancelled() => {
-                    tracing::info!("client disconnected, cancelling upstream AI request");
-                    return;
-                }
-                _ = tokio::time::sleep(STREAM_UPSTREAM_TIMEOUT) => {
-                    tracing::warn!(
-                        "streaming upstream timed out after {}s, aborting stream",
-                        STREAM_UPSTREAM_TIMEOUT.as_secs()
-                    );
-                    let error_data = serde_json::json!({
-                        "error": {
-                            "message": "Upstream service timed out",
-                            "type": "upstream_timeout",
-                            "code": "upstream_timeout"
+            let catch_result = futures_util::future::FutureExt::catch_unwind(
+                std::panic::AssertUnwindSafe(async move {
+                    let result = tokio::select! {
+                        biased;
+                        _ = cancel_upstream.cancelled() => {
+                            tracing::info!("client disconnected, cancelling upstream AI request");
+                            return;
                         }
-                    });
-                    let _ = chunk_tx.send(error_data.to_string()).await;
-                    let _ = chunk_tx.send("[DONE]".to_string()).await;
-                    return;
-                }
-                result = vaultpilot_lib::ai::send_request_streaming(
-                    &settings_arc,
-                    &system_owned,
-                    &user_prompt_owned,
-                    &image_paths,
-                    0.2,
-                    |chunk| {
-                        let chunk_data = serde_json::json!({
-                            "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
-                            "object": "chat.completion.chunk",
-                            "created": Utc::now().timestamp(),
-                            "model": model_ref,
-                            "choices": [{
-                                "index": 0,
-                                "delta": { "content": chunk },
-                                "finish_reason": null
-                            }]
-                        });
-                        // #2104, #2228: Use blocking_send instead of try_send so that
-                        // backpressure is properly applied to the upstream when the client
-                        // is slow. blocking_send will block the current tokio task (not
-                        // the entire runtime) until the bounded buffer has space, ensuring
-                        // no chunks are silently dropped. The comment about "never blocking
-                        // the executor thread" from the original try_send approach was
-                        // incorrect: blocking_send inside a spawned task only blocks that
-                        // task, not the executor threads — other tasks continue running.
-                        // If the channel is closed (client disconnected), log and abort.
-                        if let Err(tokio::sync::mpsc::error::SendError(dropped)) =
-                            chunk_tx_ref.blocking_send(chunk_data.to_string())
-                        {
+                        _ = tokio::time::sleep(STREAM_UPSTREAM_TIMEOUT) => {
                             tracing::warn!(
-                                "streaming chunk send failed (client disconnected?); dropped {} bytes",
-                                dropped.len()
+                                "streaming upstream timed out after {}s, aborting stream",
+                                STREAM_UPSTREAM_TIMEOUT.as_secs()
                             );
+                            let error_data = serde_json::json!({
+                                "error": {
+                                    "message": "Upstream service timed out",
+                                    "type": "upstream_timeout",
+                                    "code": "upstream_timeout"
+                                }
+                            });
+                            let _ = chunk_tx_ref.send(error_data.to_string()).await;
+                            let _ = chunk_tx_ref.send("[DONE]".to_string()).await;
+                            return;
                         }
-                    },
-                ) => result,
-            };
+                        result = vaultpilot_lib::ai::send_request_streaming(
+                            &settings_arc,
+                            &system_owned,
+                            &user_prompt_owned,
+                            &image_paths,
+                            0.2,
+                            |chunk| {
+                                let chunk_data = serde_json::json!({
+                                    "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
+                                    "object": "chat.completion.chunk",
+                                    "created": Utc::now().timestamp(),
+                                    "model": model_ref,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": { "content": chunk },
+                                        "finish_reason": null
+                                    }]
+                                });
+                                // #2104, #2228: Use blocking_send instead of try_send so that
+                                // backpressure is properly applied to the upstream when the client
+                                // is slow. blocking_send will block the current tokio task (not
+                                // the entire runtime) until the bounded buffer has space, ensuring
+                                // no chunks are silently dropped. The comment about "never blocking
+                                // the executor thread" from the original try_send approach was
+                                // incorrect: blocking_send inside a spawned task only blocks that
+                                // task, not the executor threads — other tasks continue running.
+                                // If the channel is closed (client disconnected), log and abort.
+                                if let Err(tokio::sync::mpsc::error::SendError(dropped)) =
+                                    chunk_tx_ref.blocking_send(chunk_data.to_string())
+                                {
+                                    tracing::warn!(
+                                        "streaming chunk send failed (client disconnected?); dropped {} bytes",
+                                        dropped.len()
+                                    );
+                                }
+                            },
+                        ) => result,
+                    };
 
-            match result {
-                Ok(_) => {
-                    let finish_data = serde_json::json!({
-                        "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
-                        "object": "chat.completion.chunk",
-                        "created": Utc::now().timestamp(),
-                        "model": model_for_task,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }]
-                    });
-                    let _ = chunk_tx.send(finish_data.to_string()).await;
-                    let _ = chunk_tx.send("[DONE]".to_string()).await;
-                }
-                Err(error) => {
-                    tracing::warn!("http_chat_completions streaming error: {error}");
-                    let error_data = serde_json::json!({
-                        "error": {
-                            "message": "Upstream service error",
-                            "type": "upstream_error",
-                            "code": "upstream_error"
+                    match result {
+                        Ok(_) => {
+                            let finish_data = serde_json::json!({
+                                "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
+                                "object": "chat.completion.chunk",
+                                "created": Utc::now().timestamp(),
+                                "model": model_for_inner,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {},
+                                    "finish_reason": "stop"
+                                }]
+                            });
+                            let _ = chunk_tx_ref.send(finish_data.to_string()).await;
+                            let _ = chunk_tx_ref.send("[DONE]".to_string()).await;
                         }
-                    });
-                    let _ = chunk_tx.send(error_data.to_string()).await;
-                    let _ = chunk_tx.send("[DONE]".to_string()).await;
-                }
+                        Err(error) => {
+                            tracing::warn!("http_chat_completions streaming error: {error}");
+                            let error_data = serde_json::json!({
+                                "error": {
+                                    "message": "Upstream service error",
+                                    "type": "upstream_error",
+                                    "code": "upstream_error"
+                                }
+                            });
+                            let _ = chunk_tx_ref.send(error_data.to_string()).await;
+                            let _ = chunk_tx_ref.send("[DONE]".to_string()).await;
+                        }
+                    }
+                })
+            ).await;
+
+            if let Err(panic) = catch_result {
+                tracing::error!("upstream streaming task panicked: {:?}", panic);
             }
             // chunk_tx is dropped here, causing chunk_rx to return None
         });
@@ -1270,13 +1293,26 @@ async fn http_chat_completions(
         // triggers cancellation of the upstream task.
         let cancel_forwarder = cancel.clone();
         tokio::spawn(async move {
-            while let Some(data) = chunk_rx.recv().await {
-                if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
-                    // SSE receiver dropped — client disconnected
-                    cancel_forwarder.cancel();
-                    break;
-                }
+            let cancel_on_panic = cancel_forwarder.clone();
+            let result = futures_util::future::FutureExt::catch_unwind(
+                std::panic::AssertUnwindSafe(async move {
+                    while let Some(data) = chunk_rx.recv().await {
+                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
+                            // SSE receiver dropped — client disconnected
+                            cancel_forwarder.cancel();
+                            break;
+                        }
+                    }
+                }),
+            )
+            .await;
+
+            if let Err(panic) = result {
+                tracing::error!("forwarding task panicked: {:?}", panic);
+                // Ensure upstream cancellation is triggered even if forwarding task panics
+                cancel_on_panic.cancel();
             }
+            // sse_tx dropped here, closing SSE channel
         });
 
         let stream = ReceiverStream::new(sse_rx);

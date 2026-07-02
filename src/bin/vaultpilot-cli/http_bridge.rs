@@ -543,12 +543,17 @@ async fn http_progressive_search(
     let (sse_tx, sse_rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
     let state_clone = state.clone();
     let q = query_text.clone();
+    let cancel = CancellationToken::new();
 
     tokio::spawn(async move {
         let sse_tx_done = sse_tx.clone();
+        let cancel = cancel;
         let result = futures_util::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
             async move {
                 // Stage 1: Keyword search (FTS5, fast)
+                if cancel.is_cancelled() {
+                    return;
+                }
                 let kw_query = SearchQuery {
                     text: q.clone(),
                     limit: Some(limit),
@@ -557,13 +562,19 @@ async fn http_progressive_search(
                 };
                 match search_notes_async(&state_clone.context, kw_query).await {
                     Ok(result) => {
+                        if cancel.is_cancelled() {
+                            return;
+                        }
                         let event = ProgressiveSearchEvent {
                             stage: "keyword".into(),
                             results: Some(result),
                             message: None,
                         };
                         let data = serde_json::to_string(&event).unwrap_or_default();
-                        let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
+                            cancel.cancel();
+                            return;
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("progressive keyword search failed: {e}");
@@ -578,15 +589,24 @@ async fn http_progressive_search(
                 }
 
                 // Stage 2: Loading state
+                if cancel.is_cancelled() {
+                    return;
+                }
                 let loading = ProgressiveSearchEvent {
                     stage: "loading".into(),
                     results: None,
                     message: Some("正在查找更多相关笔记...".into()),
                 };
                 let data = serde_json::to_string(&loading).unwrap_or_default();
-                let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+                if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
+                    cancel.cancel();
+                    return;
+                }
 
                 // Stage 3: Deep semantic search
+                if cancel.is_cancelled() {
+                    return;
+                }
                 let deep_query = SearchQuery {
                     text: q.clone(),
                     limit: Some(limit),
@@ -595,13 +615,19 @@ async fn http_progressive_search(
                 };
                 match deep_search_notes_async(&state_clone.context, deep_query).await {
                     Ok(result) => {
+                        if cancel.is_cancelled() {
+                            return;
+                        }
                         let event = ProgressiveSearchEvent {
                             stage: "semantic".into(),
                             results: Some(result),
                             message: None,
                         };
                         let data = serde_json::to_string(&event).unwrap_or_default();
-                        let _ = sse_tx.send(Ok(Event::default().data(data))).await;
+                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
+                            cancel.cancel();
+                            return;
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("progressive semantic search failed: {e}");
@@ -615,6 +641,9 @@ async fn http_progressive_search(
                 }
 
                 // Done
+                if cancel.is_cancelled() {
+                    return;
+                }
                 let _ = sse_tx
                     .send(Ok(
                         Event::default().data(serde_json::json!({"stage": "done"}).to_string())
@@ -1066,7 +1095,7 @@ async fn http_vault_health(
     State(state): State<Arc<HttpBridgeState>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
-    let _ = require_bridge_token(&state, &headers);
+    require_bridge_token(&state, &headers)?;
     // Run health check synchronously via spawn_blocking
     let report = tokio::task::spawn_blocking({
         let ctx = state.context.clone();

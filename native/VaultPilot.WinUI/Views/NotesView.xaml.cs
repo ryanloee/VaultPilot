@@ -161,6 +161,9 @@ public sealed partial class NotesView : UserControl
         }
         else
         {
+            _loadDetailCts?.Cancel();
+            _loadDetailCts?.Dispose();
+            _loadDetailCts = null;
             _selectedNote = null;
             DeleteNoteButton.IsEnabled = false;
         }

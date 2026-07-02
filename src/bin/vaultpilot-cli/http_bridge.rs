@@ -1180,6 +1180,7 @@ async fn http_chat_completions(
         tokio::spawn(async move {
             let model_ref = &model_for_task;
             let model_for_inner = model_for_task.clone();
+            let chunk_tx_ref = &chunk_tx;
             // #2128: Cap the total upstream streaming time. The HTTP
             // TimeoutLayer(180s) does NOT cover the SSE body stream (it only
             // times the Response future, which for SSE resolves immediately),
@@ -1207,8 +1208,8 @@ async fn http_chat_completions(
                                     "code": "upstream_timeout"
                                 }
                             });
-                            let _ = chunk_tx.send(error_data.to_string()).await;
-                            let _ = chunk_tx.send("[DONE]".to_string()).await;
+                            let _ = chunk_tx_ref.send(error_data.to_string()).await;
+                            let _ = chunk_tx_ref.send("[DONE]".to_string()).await;
                             return;
                         }
                         result = vaultpilot_lib::ai::send_request_streaming(
@@ -1250,8 +1251,8 @@ async fn http_chat_completions(
                                     "finish_reason": "stop"
                                 }]
                             });
-                            let _ = chunk_tx.send(finish_data.to_string()).await;
-                            let _ = chunk_tx.send("[DONE]".to_string()).await;
+                            let _ = chunk_tx_ref.send(finish_data.to_string()).await;
+                            let _ = chunk_tx_ref.send("[DONE]".to_string()).await;
                         }
                         Err(error) => {
                             tracing::warn!("http_chat_completions streaming error: {error}");
@@ -1262,8 +1263,8 @@ async fn http_chat_completions(
                                     "code": "upstream_error"
                                 }
                             });
-                            let _ = chunk_tx.send(error_data.to_string()).await;
-                            let _ = chunk_tx.send("[DONE]".to_string()).await;
+                            let _ = chunk_tx_ref.send(error_data.to_string()).await;
+                            let _ = chunk_tx_ref.send("[DONE]".to_string()).await;
                         }
                     }
                 }),
@@ -1272,6 +1273,16 @@ async fn http_chat_completions(
 
             if let Err(panic) = catch_result {
                 tracing::error!("upstream streaming task panicked: {:?}", panic);
+                // Send error + [DONE] to the client so the SSE stream doesn't hang
+                let error_data = serde_json::json!({
+                    "error": {
+                        "message": "Internal service error",
+                        "type": "internal_error",
+                        "code": "internal_error"
+                    }
+                });
+                let _ = chunk_tx.send(error_data.to_string()).await;
+                let _ = chunk_tx.send("[DONE]".to_string()).await;
             }
             // chunk_tx is dropped here, causing chunk_rx to return None
         });

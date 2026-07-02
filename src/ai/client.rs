@@ -1,8 +1,8 @@
 //! HTTP client, request construction, API communication, retry logic.
 
+use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};

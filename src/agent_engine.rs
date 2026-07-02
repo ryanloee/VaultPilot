@@ -30,6 +30,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -264,6 +266,24 @@ pub struct SubprocessEngine {
     description: String,
 }
 
+// ── Internal helpers ──────────────────────────────────────────────────────
+
+/// Set the pipe file descriptor `O_NONBLOCK` so that a read loop can avoid
+/// hanging indefinitely when grandchild processes inherit the write end of
+/// the pipe (#2364).
+#[cfg(unix)]
+fn make_nonblocking<T: std::os::unix::io::AsRawFd>(handle: &T) {
+    let fd = handle.as_raw_fd();
+    // Safety: `fcntl` is safe as long as `fd` is valid and we pass valid
+    // arguments. `fd` came from a valid OS pipe handle.
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+}
+
 impl SubprocessEngine {
     /// Create a new subprocess engine.
     pub fn new(
@@ -353,21 +373,72 @@ impl SubprocessEngine {
         // Concurrently drain stdout/stderr so a full OS pipe buffer cannot
         // deadlock the child while we enforce the deadline below. Results come
         // back over channels so collection can be time-bounded.
+        //
+        // #2364 — use NON-BLOCKING I/O + cancellation flag. When the agent
+        // subprocess creates grandchildren that inherit the pipe write ends,
+        // the write end stays open after the child is killed. Blocking
+        // `read_to_end` would hang forever, leaking OS threads. Instead, we
+        // set the pipe FDs to non-blocking mode and loop with short sleeps;
+        // the `drain_done` flag (set after the child is reaped) terminates
+        // the drain threads promptly.
         let stdout_handle = child.stdout.take();
         let stderr_handle = child.stderr.take();
         let (out_tx, out_rx) = mpsc::channel::<String>();
         let (err_tx, err_rx) = mpsc::channel::<String>();
+
+        let drain_done = Arc::new(AtomicBool::new(false));
+
+        let done = drain_done.clone();
         let _ = std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut s) = stdout_handle {
-                let _ = s.read_to_end(&mut buf);
+                #[cfg(unix)]
+                make_nonblocking(&s);
+                let mut tmp = [0u8; 4096];
+                loop {
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    match s.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        Err(ref e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::Interrupted =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        Err(_) => break,
+                    }
+                }
             }
             let _ = out_tx.send(String::from_utf8_lossy(&buf).into_owned());
         });
+        let done = drain_done.clone();
         let _ = std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut s) = stderr_handle {
-                let _ = s.read_to_end(&mut buf);
+                #[cfg(unix)]
+                make_nonblocking(&s);
+                let mut tmp = [0u8; 4096];
+                loop {
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    match s.read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        Err(ref e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::Interrupted =>
+                        {
+                            std::thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        Err(_) => break,
+                    }
+                }
             }
             let _ = err_tx.send(String::from_utf8_lossy(&buf).into_owned());
         });
@@ -381,6 +452,7 @@ impl SubprocessEngine {
                 // Timed out — child still running.
                 let _ = child.kill();
                 let _ = child.wait();
+                drain_done.store(true, Ordering::Relaxed);
                 let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 let _ = err_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 bail!(
@@ -392,6 +464,7 @@ impl SubprocessEngine {
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                drain_done.store(true, Ordering::Relaxed);
                 let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 let _ = err_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 bail!(

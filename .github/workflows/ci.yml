@@ -129,11 +129,13 @@ jobs:
       - name: Run regression tests (dedicated)
         if: always()
         run: |
-          cargo test --workspace regression -- --format=terse 2>&1 | tee /tmp/regression-results.txt
+          exit_code=0
+          cargo test --workspace regression -- --format=terse 2>&1 | tee "${{ runner.temp }}/regression-results.txt" || exit_code=$?
           echo "### Regression Test Results" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat /tmp/regression-results.txt >> "$GITHUB_STEP_SUMMARY"
+          cat "${{ runner.temp }}/regression-results.txt" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $exit_code
 
   cargo-audit:
     name: cargo audit

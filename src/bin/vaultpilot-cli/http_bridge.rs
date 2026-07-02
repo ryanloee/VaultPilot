@@ -1176,6 +1176,7 @@ async fn http_chat_completions(
         // Upstream request task: runs the AI streaming request, sends chunks via the
         // bounded channel. The async on_chunk callback uses send().await so it
         // never blocks the executor thread, preserving cooperative scheduling.
+        let cancel_on_chunk = cancel.clone();
         let cancel_upstream = cancel.clone();
         let upstream_tx = chunk_tx.clone();
         tokio::spawn(async move {
@@ -1232,9 +1233,18 @@ async fn http_chat_completions(
                                     }]
                                 });
                                 let tx = upstream_tx.clone();
+                                let cancel_inner = cancel_on_chunk.clone();
                                 Box::pin(async move {
-                                    if let Err(e) = tx.send(chunk_data.to_string()).await {
-                                        tracing::warn!("streaming chunk send failed (client disconnected?): {e}");
+                                    tokio::select! {
+                                        biased;
+                                        _ = cancel_inner.cancelled() => {
+                                            tracing::debug!("on_chunk: upstream cancelled, skipping chunk");
+                                        }
+                                        result = tx.send(chunk_data.to_string()) => {
+                                            if let Err(e) = result {
+                                                tracing::warn!("streaming chunk send failed (client disconnected?): {e}");
+                                            }
+                                        }
                                     }
                                 })
                             },
@@ -1298,11 +1308,27 @@ async fn http_chat_completions(
             let cancel_on_panic = cancel_forwarder.clone();
             let result = futures_util::future::FutureExt::catch_unwind(
                 std::panic::AssertUnwindSafe(async move {
-                    while let Some(data) = chunk_rx.recv().await {
-                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
-                            // SSE receiver dropped — client disconnected
-                            cancel_forwarder.cancel();
-                            break;
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = cancel_forwarder.cancelled() => break,
+                            data = chunk_rx.recv() => {
+                                match data {
+                                    Some(data) => {
+                                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
+                                            // SSE receiver dropped — client disconnected
+                                            cancel_forwarder.cancel();
+                                            break;
+                                        }
+                                    }
+                                    None => break,
+                                }
+                            }
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                                tracing::warn!("forwarding task: no progress for 5s, breaking to prevent permanent hang");
+                                cancel_forwarder.cancel();
+                                break;
+                            }
                         }
                     }
                 }),

@@ -7,7 +7,7 @@ use crate::models::{
     StructuredNoteDraft, ThinkingTrace, ThinkingTraceStep,
 };
 use crate::storage::{
-    has_notes_async, initialize_storage_async, load_context_notes_async,
+    has_notes_async, initialize_storage_async, load_context_notes_async, load_note_async,
     load_recent_notes_for_overview_async, save_note_with_images_async, StorageContext,
 };
 use ai::AssistantToolCall;
@@ -352,9 +352,13 @@ pub async fn ask_with_ai_with_context(
                     is_error,
                 ));
             }
-            AssistantToolCall::SaveNote { draft, .. } => {
+            AssistantToolCall::SaveNote { draft, note_id } => {
                 let note_identity = format!("save_note:{}", draft.title);
                 emit_status("saving", "Saving generated note".to_string());
+                // Record backup before saving so revert_write works (#2286)
+                if let Ok(existing) = load_note_async(context, &note_id).await {
+                    crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+                }
                 match tokio::time::timeout(
                     STORAGE_IO_TIMEOUT,
                     save_note_with_images_async(context, draft_to_note_document(*draft), &images),

@@ -1719,6 +1719,10 @@ async fn execute_tool(
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
             use crate::storage::save_note_with_images_async;
+            // Record backup before saving so revert_write works (#2286)
+            if let Ok(existing) = crate::storage::load_note_async(context, note_id).await {
+                crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+            }
             let short_id: String = note_id.chars().take(8).collect();
             let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(4); // "-" + ".md"
             let slug = slugify(&draft.title);

@@ -71,6 +71,7 @@ public sealed partial class MainWindow : Window
         _agentModeActive = true;
         _agentCurrentStep = 0;
         _agentMaxSteps = maxSteps;
+        _agentCts?.Dispose();
         _agentCts = new CancellationTokenSource();
 
         // Update UI state
@@ -91,7 +92,9 @@ public sealed partial class MainWindow : Window
 
     private void StopAgentMode(string reason)
     {
-        _agentCts?.Cancel();
+        var old = Interlocked.Exchange(ref _agentCts, null);
+        old?.Cancel();
+        old?.Dispose();
         _agentModeActive = false;
 
         AgentModeButton.Visibility = Visibility.Visible;

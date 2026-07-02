@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn test_deep_research_event_variants() {
-        let events = vec![
+        let events = [
             DeepResearchEvent::Planning {
                 detail: "planning".into(),
             },

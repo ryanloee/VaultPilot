@@ -222,7 +222,8 @@ async function doSync(
           await new Promise(r => setTimeout(r, delay));
         }
         const noteController = new AbortController();
-        const timer = setTimeout(() => noteController.abort('timeout'), noteTimeoutMs);
+        let abortedDueToTimeout = false;
+        const timer = setTimeout(() => { abortedDueToTimeout = true; noteController.abort('timeout'); }, noteTimeoutMs);
         // 声明在 try 外部，确保 cleanup 在 catch/所有路径都可调用 (#2122)
         const { signal: noteSignal, cleanup: noteCleanup } = combineSignals(signal, noteController.signal);
         try {
@@ -244,7 +245,7 @@ async function doSync(
           if (signal.aborted) return;
           lastFetchError = fetchErr instanceof Error ? fetchErr : new Error(String(fetchErr));
           // Only break on user-initiated abort; timeout aborts should be retried
-          if (lastFetchError.name === 'AbortError' && noteController.signal.reason !== 'timeout') break;
+          if (lastFetchError.name === 'AbortError' && !abortedDueToTimeout) break;
           // network error or timeout → retry
         } finally {
           noteCleanup();

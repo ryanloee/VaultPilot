@@ -232,7 +232,7 @@ async function chatAnthropic(
         const decoder = new TextDecoder();
         let buffer = '';
         let currentEvent = '';
-        const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
+        const onTimeout = () => { reader.cancel('timeout').catch(() => {}); ctrl.error(new DOMException('Timeout', 'AbortError')); };
         controller.signal.addEventListener('abort', onTimeout, { once: true });
 
         (async () => {
@@ -363,7 +363,7 @@ async function chatOpenAI(
     return new ReadableStream<Uint8Array>({
       start(ctrl) {
         const reader = body.getReader();
-        const onTimeout = () => { reader.cancel('timeout'); ctrl.error(new DOMException('Timeout', 'AbortError')); };
+        const onTimeout = () => { reader.cancel('timeout').catch(() => {}); ctrl.error(new DOMException('Timeout', 'AbortError')); };
         timeoutController.signal.addEventListener('abort', onTimeout, { once: true });
         (async () => {
           try {
@@ -441,7 +441,7 @@ function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uin
         }
       } catch (e) { reader.cancel().catch(() => {}); ctrl.error(e); }
     },
-    cancel() { reader.cancel(); },
+    cancel() { reader.cancel().catch(() => {}); },
   });
 }
 

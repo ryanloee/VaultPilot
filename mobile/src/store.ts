@@ -120,6 +120,7 @@ export function computeActiveIndexAfterRemove(currentIndex: number, removedIndex
 
 /** Update a provider at index with partial fields, returning a new array. */
 export function updateProviderInList(providers: ProviderConfig[], index: number, patch: Partial<ProviderConfig>): ProviderConfig[] {
+  if (index < 0 || index >= providers.length) return providers;
   const next = [...providers];
   next[index] = { ...next[index], ...patch };
   return next;

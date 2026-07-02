@@ -34,15 +34,19 @@
 #     - ❌ PR #NNN: Bug label but no test, no REGRESSION comment
 #
 # ─────────────────────────────────────────────────────────────────────
-# GitHub Actions Scheduled Workflow
+# GitHub Actions PR-Gate Workflow
 # ─────────────────────────────────────────────────────────────────────
 #
-# Create .github/workflows/regression-audit.yml:
+# The actual workflow is .github/workflows/regression-check.yml:
 #
 #   on:
-#     schedule:
-#       - cron: '0 9 * * 1'   # Weekly Monday 09:00 UTC
-#     workflow_dispatch:         # Manual trigger
+#     pull_request:
+#       branches: [main]
+#
+# It runs automatically on every PR, but only takes action
+# (posts a warning comment) when the PR has the 'bug' label
+# and no regression test changes are detected. This is a soft
+# PR gate — it does NOT block merge, it informs.
 #
 # ─────────────────────────────────────────────────────────────────────
 # What to check

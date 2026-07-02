@@ -29,7 +29,7 @@ jobs:
         id: check
         run: |
           echo "Checking if bug-fix PR includes regression test..."
-          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -q "regression/"; then
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qi "regression/"; then
             echo "has_regression=true" >> "$GITHUB_OUTPUT"
             echo "✅ PR includes regression test changes"
           else

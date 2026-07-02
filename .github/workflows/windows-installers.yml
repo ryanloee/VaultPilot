@@ -230,6 +230,7 @@ jobs:
           mkdir -p "$HOME/.local/zig"
           cd "$HOME/.local/zig"
           curl -L https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz -o zig.tar.xz
+          echo "8ea3e97bd562a41d11f59e1f0148e8050d6ef6e4fbafdf1070d66e2aebfb56f7  zig.tar.xz" | sha256sum -c -
           tar -xf zig.tar.xz
           echo "$HOME/.local/zig/zig-linux-x86_64-0.14.0" >> "$GITHUB_PATH"
 
@@ -382,8 +383,9 @@ jobs:
             }
 
             foreach ($asset in $assets) {
-              if ($KnownAssets.ContainsKey($asset.Name)) {
-                Write-Host "Skipping existing asset $($asset.Name)"
+              $key = "$Directory/$($asset.Name)"
+              if ($KnownAssets.ContainsKey($key)) {
+                Write-Host "Skipping existing asset $Directory/$($asset.Name)"
                 continue
               }
 
@@ -393,7 +395,7 @@ jobs:
                 throw "Failed to upload asset $($asset.Name)"
               }
 
-              $KnownAssets[$asset.Name] = $true
+              $KnownAssets[$key] = $true
             }
           }
 

@@ -51,9 +51,7 @@ const mockFetch = jest.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).fetch = mockFetch;
 
-// Mock AbortSignal.timeout
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(globalThis as any).AbortSignal = { timeout: jest.fn().mockReturnValue(undefined) };
+// AbortSignal is no longer mocked — code uses AbortController directly (fix #2329).
 
 import { flushPendingSyncs } from '../../utils/offlineSync';
 
@@ -190,14 +188,16 @@ describe('flushPendingSyncs', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('passes AbortSignal.timeout to fetch', async () => {
-    const mockTimeout = (globalThis as any).AbortSignal.timeout as jest.Mock;
+  it('passes AbortController signal to fetch (timeout via setTimeout)', async () => {
     mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
     mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
     mockFetch.mockResolvedValue({ ok: true });
 
     await flushPendingSyncs();
-    expect(mockTimeout).toHaveBeenCalledWith(10000);
+    const callSignal = mockFetch.mock.calls[0][1]?.signal;
+    expect(callSignal).toBeDefined();
+    expect(callSignal instanceof AbortSignal).toBe(true);
+    expect(callSignal.aborted).toBe(false);
   });
 
   it('sends correct PUT body with title and content', async () => {

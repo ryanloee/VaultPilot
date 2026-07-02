@@ -92,7 +92,7 @@ impl WriteTracker {
             body: note.body.clone(),
             timestamp: chrono::Utc::now().timestamp(),
         };
-        let mut map = self.backups.lock().unwrap();
+        let mut map = self.backups.lock().unwrap_or_else(|e| e.into_inner());
         let backups = map.entry(entry.note_id.clone()).or_default();
         backups.push(entry);
         // Keep only the most recent N backups
@@ -103,13 +103,13 @@ impl WriteTracker {
 
     /// Retrieve the most recent backup for a given note_id, if any.
     pub fn get_latest_backup(&self, note_id: &str) -> Option<WriteBackup> {
-        let map = self.backups.lock().unwrap();
+        let map = self.backups.lock().unwrap_or_else(|e| e.into_inner());
         map.get(note_id).and_then(|v| v.last().cloned())
     }
 
     /// Remove and return the most recent backup for a note_id.
     pub fn pop_backup(&self, note_id: &str) -> Option<WriteBackup> {
-        let mut map = self.backups.lock().unwrap();
+        let mut map = self.backups.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(backups) = map.get_mut(note_id) {
             let entry = backups.pop();
             if backups.is_empty() {

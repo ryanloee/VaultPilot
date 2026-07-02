@@ -105,7 +105,9 @@ export async function importSettings(json: string): Promise<{ providersImported:
 
   state.themeMode = data.themeMode;
   state.accentColor = data.accentColor;
-  state.activeProviderIndex = Math.min(data.activeProviderIndex, data.providers.length - 1);
+  state.activeProviderIndex = data.providers.length > 0
+    ? Math.min(data.activeProviderIndex, data.providers.length - 1)
+    : 0;
 
   // Save API keys to SecureStore FIRST — if this fails we must not overwrite
   // the existing provider list with empty keys, otherwise keys are lost.
@@ -150,7 +152,9 @@ export async function importSettings(json: string): Promise<{ providersImported:
       apiKey: '',
       apiFormat: p.apiFormat as ApiFormat,
     })) as ProviderConfig[],
-    activeProviderIndex: Math.min(data.activeProviderIndex, data.providers.length - 1),
+    activeProviderIndex: data.providers.length > 0
+      ? Math.min(data.activeProviderIndex, data.providers.length - 1)
+      : 0,
     apiBase: active?.apiBase ?? fresh.apiBase,
     apiKey: active?.apiKey ?? fresh.apiKey,
     model: active?.model ?? fresh.model,

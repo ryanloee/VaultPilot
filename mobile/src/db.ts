@@ -403,7 +403,7 @@ export async function getNotes(folder?: string, limit?: number): Promise<DbNote[
 /** 只加载 id 和 updated_at，用于同步比较，避免全量 content 导致 OOM (#1668) */
 export async function getNoteTimestamps(): Promise<Array<{ id: string; updated_at: number }>> {
   const db = await getDb();
-  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes');
+  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes WHERE is_template = 0');
 }
 
 export async function getFolders(): Promise<string[]> {

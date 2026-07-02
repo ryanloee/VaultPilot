@@ -428,6 +428,7 @@ function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uin
             const result = convertAnthropicEvent(currentEvent, data);
             if (result === 'data: [DONE]\n\n') {
               ctrl.enqueue(encoder.encode(result));
+              reader.cancel().catch(() => {});
               ctrl.close();
               return;
             }

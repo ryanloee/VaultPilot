@@ -667,7 +667,7 @@ pub(super) fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-pub(super) fn extract_json(text: &str) -> Result<String> {
+pub(crate) fn extract_json(text: &str) -> Result<String> {
     let trimmed = text.trim();
     // Try extracting a well-delimited, validated JSON block first.
     // This prevents returning strings like `{"a":1} prose {"b":2}` that

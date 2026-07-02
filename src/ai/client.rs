@@ -105,9 +105,9 @@ pub struct RequestUsage {
     pub output_tokens: Option<usize>,
 }
 
-pub(super) struct ModelResponse {
-    pub(super) text: String,
-    pub(super) usage: RequestUsage,
+pub(crate) struct ModelResponse {
+    pub(crate) text: String,
+    pub(crate) usage: RequestUsage,
 }
 
 #[derive(Debug, Serialize)]
@@ -206,7 +206,7 @@ pub(super) async fn send_request(
 }
 
 #[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.effective_provider().model, temperature))]
-pub(super) async fn send_request_with_temperature(
+pub(crate) async fn send_request_with_temperature(
     settings: &AppSettings,
     system: &str,
     prompt: &str,

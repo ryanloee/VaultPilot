@@ -30,8 +30,9 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
-    run_all_due_subscriptions, run_single_subscription, sanitize_error, table_with_ai_with_context,
-    write_with_ai_with_context, AutoOrganizer,
+    run_all_due_subscriptions, run_deep_research, run_single_subscription, sanitize_error,
+    table_with_ai_with_context, write_with_ai_with_context, AutoOrganizer, DeepResearchEvent,
+    DeepResearchTier,
 };
 
 use chrono::Utc;
@@ -212,6 +213,25 @@ enum Commands {
 
     /// List registered plugins
     Plugins,
+
+    /// Run Deep Research: AI plans a multi-round search, synthesizes a report
+    /// with citations, and saves it as a vault note.
+    ///
+    /// Two tiers:
+    ///   fast — 3–5 search rounds, ~30s
+    ///   deep — 10–20 search rounds, 2–5min
+    ///
+    /// Examples:
+    ///   vaultpilot deep-research "Compare Rust async runtimes"
+    ///   vaultpilot deep-research "History of deep learning" --tier deep
+    DeepResearch {
+        /// The research topic (required)
+        topic: String,
+
+        /// Research depth: fast (3-5 rounds) or deep (10-20 rounds)
+        #[arg(long, default_value = "fast")]
+        tier: String,
+    },
 
     /// Generate markdown content with AI-powered writing assistance
     ///
@@ -939,6 +959,49 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 .collect();
             Ok(serde_json::json!({ "plugins": plugins, "count": plugins.len() }))
         }
+        Commands::DeepResearch { topic, tier } => {
+            let research_tier = match tier.to_lowercase().as_str() {
+                "deep" => DeepResearchTier::Deep,
+                _ => DeepResearchTier::Fast,
+            };
+            let settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            let result = run_deep_research(&settings, context, topic, research_tier, |event| {
+                let detail = match &event {
+                    DeepResearchEvent::Planning { detail } => detail.clone(),
+                    DeepResearchEvent::Searching {
+                        round,
+                        total_rounds,
+                        question,
+                        ..
+                    } => format!("Searching [{}/{}]: {}", round, total_rounds, question),
+                    DeepResearchEvent::SearchResult {
+                        round, question, ..
+                    } => format!("Results for [{}]: {}", round, question),
+                    DeepResearchEvent::Synthesizing => "Synthesizing report...".into(),
+                    DeepResearchEvent::Saving { title } => format!("Saving: {}", title),
+                    DeepResearchEvent::Completed { note_id, .. } => {
+                        format!("Completed. Note: {}", note_id)
+                    }
+                    DeepResearchEvent::Error { message } => format!("Error: {}", message),
+                };
+                eprintln!("  [Deep Research] {}", detail);
+            })
+            .await?;
+            eprintln!();
+            eprintln!("╔══════════════════════════════════════════════╗");
+            eprintln!("║        🎯 Deep Research Report               ║");
+            eprintln!("╚══════════════════════════════════════════════╝");
+            eprintln!("Topic: {}", result.topic);
+            eprintln!("Rounds executed: {}", result.rounds_used);
+            eprintln!("Sources: {}", result.citations.len());
+            eprintln!(
+                "Note ID: {}",
+                result.saved_note_id.as_deref().unwrap_or("N/A")
+            );
+            eprintln!();
+            println!("{}", result.report);
+            to_json(&result)
+        }
         Commands::Agent {
             prompt,
             max_steps,
@@ -946,7 +1009,6 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             plan,
             style,
         } => {
-            // Apply response style (#1965)
             let rs = style
                 .parse::<ResponseStyle>()
                 .map_err(|e| anyhow::anyhow!("{}", e))?;

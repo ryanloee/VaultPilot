@@ -2,6 +2,7 @@ pub mod ask;
 pub mod auto_organize;
 pub mod chat;
 pub mod compress;
+pub mod deep_research;
 pub mod event_bus;
 pub mod scheduled_research;
 pub mod table;
@@ -15,6 +16,10 @@ pub use chat::{
     prepare_chat_for_ai, rollback_last_user_turn, PreparedChatContext,
 };
 pub use compress::compress_chat_history_with_context;
+pub use deep_research::{
+    run_deep_research, DeepResearchEvent, DeepResearchTier, ResearchCitation, ResearchPlan,
+    ResearchResult, ResearchSubQuestion, SearchRoundResult,
+};
 pub use event_bus::{publish_note_changed, Event, NoteAction, NoteChanged};
 pub use scheduled_research::{
     run_all_due_subscriptions, run_single_subscription, SubscriptionRunResult,

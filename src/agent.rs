@@ -377,12 +377,26 @@ impl ToolProxy {
             return false;
         }
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
-        let relative =
-            if let Ok(stripped) = std::path::Path::new(trimmed).strip_prefix(&self.vault_dir) {
-                stripped.to_string_lossy().to_string()
-            } else {
-                trimmed.to_string()
-            };
+
+        // Canonicalize vault_dir for consistent comparison, matching the
+        // canonical approach used by confine_path (via normalize_tool_path).
+        let canonical_vault = self
+            .vault_dir
+            .canonicalize()
+            .unwrap_or_else(|_| self.vault_dir.clone());
+
+        // Try to canonicalize the candidate path. If it doesn't exist on disk
+        // (e.g. the file hasn't been created yet), fall back to the raw path.
+        let path_ref = std::path::Path::new(trimmed);
+        let effective = path_ref
+            .canonicalize()
+            .unwrap_or_else(|_| path_ref.to_path_buf());
+
+        let relative = if let Ok(stripped) = effective.strip_prefix(&canonical_vault) {
+            stripped.to_string_lossy().to_string()
+        } else {
+            trimmed.to_string()
+        };
         let normalized = Self::normalize_path_components(&relative);
         self.config
             .write_patterns

@@ -15,7 +15,7 @@ The Linux build is CLI-only and does not include the WinUI frontend.
 
 For local testing, run:
 
-- `native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/VaultPilot.WinUI.exe`
+- `native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
 
 If you only built Debug, the Debug output can also be launched.
 
@@ -80,7 +80,7 @@ Linux 版本只包含 CLI，不包含 WinUI 图形界面。
 
 本地测试时，通常启动：
 
-- `native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/VaultPilot.WinUI.exe`
+- `native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
 
 如果你只构建了 Debug，也可以直接运行 Debug 输出。
 

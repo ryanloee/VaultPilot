@@ -547,10 +547,34 @@ impl SubprocessEngine {
                 // ensures no data is lost even when grandchildren hold pipe
                 // write ends (#2440, #2442).
                 drain_done.store(true, Ordering::Relaxed);
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                let stdout = out_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
-                let stderr = err_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
+                if let Err(e) = stdout_thread.join() {
+                    tracing::warn!("[agent_engine] stdout drain thread panicked: {e:?}");
+                }
+                if let Err(e) = stderr_thread.join() {
+                    tracing::warn!("[agent_engine] stderr drain thread panicked: {e:?}");
+                }
+                let stdout = match out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
+                    Ok(s) => s,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        tracing::warn!("[agent_engine] stdout drain timed out after normal exit");
+                        String::new()
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        tracing::warn!("[agent_engine] stdout channel disconnected — drain thread may have panicked");
+                        String::new()
+                    }
+                };
+                let stderr = match err_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
+                    Ok(s) => s,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        tracing::warn!("[agent_engine] stderr drain timed out after normal exit");
+                        String::new()
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        tracing::warn!("[agent_engine] stderr channel disconnected — drain thread may have panicked");
+                        String::new()
+                    }
+                };
 
                 let code = status.code();
                 let success = status.success();

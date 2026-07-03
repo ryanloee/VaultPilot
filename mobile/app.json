@@ -13,10 +13,8 @@
     },
     "android": {
       "package": "com.vaultpilot.mobile",
-      "versionCode": 476,
-      "permissions": [
-        "android.permission.REQUEST_INSTALL_PACKAGES"
-      ],
+      "versionCode": 40076,
+      "permissions": [],
       "adaptiveIcon": {
         "backgroundColor": "#1E3A5F",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -34,7 +32,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "vaultpilot-mobile"
+        "projectId": "ec06327b-5d3d-4147-8d79-b86be2b2996f"
       }
     }
   }

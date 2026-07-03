@@ -21,6 +21,8 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::sanitize_error;
 
 // ── Permission model ──────────────────────────────────────────────────────
@@ -1050,14 +1052,19 @@ pub async fn generate_execution_plan(
                 });
 
                 let remaining = recon_max_duration.saturating_sub(proxy.elapsed());
+                let cancel_token = CancellationToken::new();
+                let cancel_on_timeout = cancel_token.clone();
                 let (result, is_error) = match tokio::time::timeout(
                     remaining,
-                    execute_tool(context, settings, &tool_call),
+                    execute_tool(context, settings, &tool_call, cancel_on_timeout),
                 )
                 .await
                 {
                     Ok(res) => res,
-                    Err(_) => (format!("tool error: {tool_name} timed out"), true),
+                    Err(_) => {
+                        cancel_token.cancel();
+                        (format!("tool error: {tool_name} timed out"), true)
+                    }
                 };
                 let preview = truncate_preview(&result, 200);
                 on_event(&AgentEvent::ToolResult {
@@ -1526,21 +1533,26 @@ pub async fn run_agent(
 
                 // Execute the tool (with timeout — #1602)
                 let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
+                let cancel_token = CancellationToken::new();
+                let cancel_on_timeout = cancel_token.clone();
                 let (result, is_error) = match tokio::time::timeout(
                     remaining,
-                    execute_tool(context, settings, &tool_call),
+                    execute_tool(context, settings, &tool_call, cancel_on_timeout),
                 )
                 .await
                 {
                     Ok(res) => res,
-                    Err(_) => (
-                        format!(
-                            "tool error: {} timed out after {}s",
-                            tool_name,
-                            remaining.as_secs()
-                        ),
-                        true,
-                    ),
+                    Err(_) => {
+                        cancel_token.cancel();
+                        (
+                            format!(
+                                "tool error: {} timed out after {}s",
+                                tool_name,
+                                remaining.as_secs()
+                            ),
+                            true,
+                        )
+                    }
                 };
                 let preview = truncate_preview(&result, 200);
 
@@ -1679,10 +1691,38 @@ pub async fn run_agent(
 
 /// Execute a tool call against the vault storage layer.
 /// Returns (output, is_error).
+/// Wraps `tokio::task::spawn_blocking` with a cancellation token.
+///
+/// If the cancellation token fires before the blocking operation completes,
+/// the `JoinHandle` is absorbed into a background task (preventing tokio's
+/// "spawn_blocking task was cancelled" diagnostic), and `None` is returned
+/// — the leaking-thread problem described in #2455.
+async fn spawn_blocking_abortable<F, T>(
+    f: F,
+    cancel: CancellationToken,
+) -> Option<Result<T, tokio::task::JoinError>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let handle = tokio::task::spawn_blocking(f);
+    let mut handle = Box::pin(handle);
+
+    tokio::select! {
+        result = handle.as_mut() => Some(result),
+        _ = cancel.cancelled() => {
+            // Absorb the handle so tokio doesn't warn about a dropped JoinHandle.
+            tokio::spawn(async move { let _ = handle.await; });
+            None
+        }
+    }
+}
+
 async fn execute_tool(
     context: &StorageContext,
     settings: &crate::models::AppSettings,
     tool_call: &ai::AssistantToolCall,
+    cancel: CancellationToken,
 ) -> (String, bool) {
     use crate::storage::{load_context_notes_async, load_recent_notes_for_overview_async};
 
@@ -1731,25 +1771,37 @@ async fn execute_tool(
         ai::AssistantToolCall::ListDirectory { path } => {
             let vault_root = PathBuf::from(&settings.vault_dir);
             let path_owned = path.clone();
-            match tokio::task::spawn_blocking(move || {
-                list_directory_for_agent(&path_owned, &vault_root)
-            })
+            match spawn_blocking_abortable(
+                move || list_directory_for_agent(&path_owned, &vault_root),
+                cancel.clone(),
+            )
             .await
             {
-                Ok(Ok(output)) => (output, false),
-                Ok(Err(e)) => (format!("tool error: {}", e), true),
-                Err(e) => (format!("tool error: task join failed: {}", e), true),
+                Some(Ok(Ok(output))) => (output, false),
+                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
+                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
+                None => (
+                    "tool error: tool timed out — blocking thread aborted".to_string(),
+                    true,
+                ),
             }
         }
         ai::AssistantToolCall::ReadFile { path } => {
             let vault_root = PathBuf::from(&settings.vault_dir);
             let path_owned = path.clone();
-            match tokio::task::spawn_blocking(move || read_file_for_agent(&path_owned, &vault_root))
-                .await
+            match spawn_blocking_abortable(
+                move || read_file_for_agent(&path_owned, &vault_root),
+                cancel.clone(),
+            )
+            .await
             {
-                Ok(Ok(output)) => (output, false),
-                Ok(Err(e)) => (format!("tool error: {}", e), true),
-                Err(e) => (format!("tool error: task join failed: {}", e), true),
+                Some(Ok(Ok(output))) => (output, false),
+                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
+                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
+                None => (
+                    "tool error: tool timed out — blocking thread aborted".to_string(),
+                    true,
+                ),
             }
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {

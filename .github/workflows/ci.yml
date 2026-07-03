@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -32,8 +32,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
+          git fetch upstream ${{ github.base_ref }}
+          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -59,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -69,8 +70,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
+          git fetch upstream ${{ github.base_ref }}
+          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -96,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -106,8 +108,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
+          git fetch upstream ${{ github.base_ref }}
+          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -143,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -153,8 +156,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
+          git fetch upstream ${{ github.base_ref }}
+          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Install cargo-audit
         run: |
@@ -175,7 +179,7 @@ jobs:
     name: linux-cli-build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -185,8 +189,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
+          git fetch upstream ${{ github.base_ref }}
+          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -202,12 +207,20 @@ jobs:
             ${{ runner.os }}-cargo-build-
       - run: cargo build --release
 
+      - name: Upload Linux CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-cli
+          path: target/release/vaultpilot-cli
+          if-no-files-found: error
+          retention-days: 7
+
   winui_build:
     name: winui-build
     runs-on: windows-2022
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -218,8 +231,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
+          git fetch upstream ${{ github.base_ref }}
+          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5

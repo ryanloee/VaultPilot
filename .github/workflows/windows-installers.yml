@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -110,7 +110,7 @@ jobs:
 
       - name: Upload validation diagnostics
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: release-validate-logs
           path: artifacts/logs
@@ -135,7 +135,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -182,10 +182,18 @@ jobs:
             -GitHubToken "$env:GITHUB_TOKEN" `
             -FetchReleaseHistory:$fetchReleaseHistory
 
+      - name: Set publish directory
+        shell: powershell
+        run: |
+          $arch = "${{ matrix.platform }}"
+          $dir = if ($arch -eq "x64") { "win-x64" } else { "win-x86" }
+          "publishDir=artifacts/velopack/publish/$dir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        id: publish-dir
+
       - name: Smoke test published app
         shell: powershell
         run: |
-          $publishDir = "artifacts/velopack/publish/${{ matrix.platform == 'x64' && 'win-x64' || 'win-x86' }}"
+          $publishDir = "${{ steps.publish-dir.outputs.publishDir }}"
           $exePath = Join-Path $publishDir "VaultPilot.WinUI.exe"
           if (Test-Path $exePath) {
             ./scripts/smoke-test-winui.ps1 -ExePath $exePath -TimeoutSeconds 8
@@ -195,7 +203,7 @@ jobs:
           }
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: windows-package-${{ matrix.platform }}
           path: artifacts/velopack/packages/${{ matrix.channel }}
@@ -210,7 +218,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Install Linux packaging prerequisites
         run: |
@@ -241,7 +249,7 @@ jobs:
           ./scripts/smoke-test-linux-cli.sh artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: linux-package-x64
           path: |
@@ -259,7 +267,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
@@ -267,19 +275,19 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Download x86 package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: windows-package-x86
           path: release-assets/win-x86
 
       - name: Download x64 package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: windows-package-x64
           path: release-assets/win-x64
 
       - name: Download Linux x64 package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: linux-package-x64
           path: release-assets/linux-x64
@@ -355,7 +363,7 @@ jobs:
           function Upload-ReleaseAssets {
             param(
               [string]$Directory,
-              [hashtable]$KnownAssets
+              [hashtable]$ExistingNames
             )
 
             $assets = Get-ChildItem $Directory -File -Recurse | Where-Object {
@@ -370,10 +378,19 @@ jobs:
               throw "No release assets found in $Directory"
             }
 
+            # Track uploaded assets with directory-prefixed keys to avoid
+            # cross-directory collisions (e.g. Setup.exe from win-x86 vs win-x64)
+            $uploadedKeys = @{}
+
             foreach ($asset in $assets) {
-              $key = $asset.Name
-              if ($KnownAssets.ContainsKey($key)) {
-                Write-Host "Skipping existing asset $Directory/$($asset.Name)"
+              # Skip if already on the release (by filename)
+              if ($ExistingNames.ContainsKey($asset.Name.Trim())) {
+                Write-Host "Skipping already-released asset $Directory/$($asset.Name)"
+                continue
+              }
+              # Skip if already uploaded from another directory in this run
+              $key = "$Directory/$($asset.Name.Trim())"
+              if ($uploadedKeys.ContainsKey($key)) {
                 continue
               }
 
@@ -383,10 +400,10 @@ jobs:
                 throw "Failed to upload asset $($asset.Name)"
               }
 
-              $KnownAssets[$key] = $true
+              $uploadedKeys[$key] = $true
             }
           }
 
-          Upload-ReleaseAssets -Directory "release-assets/win-x86" -KnownAssets $existingAssetNames
-          Upload-ReleaseAssets -Directory "release-assets/win-x64" -KnownAssets $existingAssetNames
-          Upload-ReleaseAssets -Directory "release-assets/linux-x64" -KnownAssets $existingAssetNames
+          Upload-ReleaseAssets -Directory "release-assets/win-x86" -ExistingNames $existingAssetNames
+          Upload-ReleaseAssets -Directory "release-assets/win-x64" -ExistingNames $existingAssetNames
+          Upload-ReleaseAssets -Directory "release-assets/linux-x64" -ExistingNames $existingAssetNames

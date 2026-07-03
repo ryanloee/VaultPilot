@@ -19,7 +19,7 @@ jobs:
         working-directory: mobile
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -29,8 +29,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git merge origin/main --no-edit || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
+          git fetch upstream ${{ github.base_ref }}
+          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - uses: actions/setup-node@v6
         with:
@@ -108,7 +109,7 @@ jobs:
           print(f'APK valid: {size_mb:.1f}MB, {len(names)} entries')
           "
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: vaultpilot-android-${{ github.sha }}
           path: mobile/android/app/build/outputs/apk/release/app-release.apk
@@ -122,10 +123,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Download APK artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: vaultpilot-android-${{ github.sha }}
           path: release-assets/android

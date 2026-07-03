@@ -586,9 +586,28 @@ async fn handle_mcp_request(
             ))
         }
         "notifications/initialized" => None,
-        "ping" => request
-            .id
-            .map(|id| McpResponse::ok(id, serde_json::json!({}))),
+        "ping" => {
+            let id = match request.id {
+                Some(id) => id,
+                None => {
+                    return Some(McpResponse::error(
+                        Value::Null,
+                        -32600,
+                        "ping requires a request id".to_string(),
+                        None,
+                    ))
+                }
+            };
+            if !state.initialized {
+                return Some(McpResponse::error(
+                    id,
+                    -32002,
+                    "server not initialized".to_string(),
+                    None,
+                ));
+            }
+            Some(McpResponse::ok(id, serde_json::json!({})))
+        }
         "tools/list" => {
             let id = match request.id {
                 Some(id) => id,

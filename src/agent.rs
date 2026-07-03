@@ -1724,15 +1724,19 @@ async fn execute_tool(
     tool_call: &ai::AssistantToolCall,
     cancel: CancellationToken,
 ) -> (String, bool) {
-    use crate::storage::{load_context_notes_async, load_recent_notes_for_overview_async};
-
     match tool_call {
         ai::AssistantToolCall::None => ("no tool selected".into(), false),
         ai::AssistantToolCall::SearchNotes { query, limit } => {
-            match load_context_notes_async(context, query, &[], limit.saturating_mul(3).max(8))
-                .await
+            let ctx = context.clone();
+            let q = query.clone();
+            let lim = limit.saturating_mul(3).max(8);
+            match spawn_blocking_abortable(
+                move || crate::storage::load_context_notes_with_context(&ctx, &q, &[], lim),
+                cancel.clone(),
+            )
+            .await
             {
-                Ok(docs) => {
+                Some(Ok(Ok(docs))) => {
                     let summary = docs
                         .iter()
                         .take(*limit)
@@ -1748,12 +1752,24 @@ async fn execute_tool(
                         )
                     }
                 }
-                Err(e) => (format!("tool error: {}", e), true),
+                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
+                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
+                None => (
+                    "tool error: tool timed out — blocking thread aborted".to_string(),
+                    true,
+                ),
             }
         }
         ai::AssistantToolCall::ListNotes { limit } => {
-            match load_recent_notes_for_overview_async(context, *limit).await {
-                Ok(docs) => {
+            let ctx = context.clone();
+            let lim = *limit;
+            match spawn_blocking_abortable(
+                move || crate::storage::load_recent_notes_for_overview(&ctx, lim),
+                cancel.clone(),
+            )
+            .await
+            {
+                Some(Ok(Ok(docs))) => {
                     let summary = docs
                         .iter()
                         .map(|d| format!("- {} ({})", d.meta.title, d.meta.path))
@@ -1765,7 +1781,12 @@ async fn execute_tool(
                         (format!("{} notes:\n{}", docs.len(), summary), false)
                     }
                 }
-                Err(e) => (format!("tool error: {}", e), true),
+                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
+                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
+                None => (
+                    "tool error: tool timed out — blocking thread aborted".to_string(),
+                    true,
+                ),
             }
         }
         ai::AssistantToolCall::ListDirectory { path } => {
@@ -1805,10 +1826,18 @@ async fn execute_tool(
             }
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
-            use crate::storage::save_note_with_images_async;
             // Record backup before saving so revert_write works (#2286)
-            if let Ok(existing) = crate::storage::load_note_async(context, note_id).await {
-                crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+            {
+                let ctx = context.clone();
+                let nid = note_id.clone();
+                if let Some(Ok(Ok(existing))) = spawn_blocking_abortable(
+                    move || crate::storage::load_note_with_context(&ctx, &nid),
+                    cancel.clone(),
+                )
+                .await
+                {
+                    crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+                }
             }
             let short_id: String = note_id.chars().take(8).collect();
             let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(4); // "-" + ".md"
@@ -1840,12 +1869,23 @@ async fn execute_tool(
                 body: draft.body.clone(),
                 ..Default::default()
             };
-            match save_note_with_images_async(context, note, &[]).await {
-                Ok(saved) => (
+            let ctx = context.clone();
+            match spawn_blocking_abortable(
+                move || crate::storage::save_note_with_images_with_context(&ctx, note, &[]),
+                cancel.clone(),
+            )
+            .await
+            {
+                Some(Ok(Ok(saved))) => (
                     format!("Note saved: {} at {}", saved.meta.title, saved.meta.path),
                     false,
                 ),
-                Err(e) => (format!("tool error: save_note failed: {}", e), true),
+                Some(Ok(Err(e))) => (format!("tool error: save_note failed: {}", e), true),
+                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
+                None => (
+                    "tool error: tool timed out — blocking thread aborted".to_string(),
+                    true,
+                ),
             }
         }
     }

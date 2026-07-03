@@ -400,6 +400,23 @@ impl SubprocessEngine {
                     let mut tmp = [0u8; 4096];
                     loop {
                         if done.load(Ordering::Relaxed) {
+                            // One last non-blocking read so data sitting in the
+                            // pipe buffer is captured even when grandchildren
+                            // hold the write end open (#2440).
+                            match s.read(&mut tmp) {
+                                Ok(0) => {}
+                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                Err(ref e)
+                                    if e.kind() == std::io::ErrorKind::WouldBlock
+                                        || e.kind() == std::io::ErrorKind::Interrupted =>
+                                {}
+                                Err(ref e) => {
+                                    tracing::warn!(
+                                        "[agent_engine] stdout final drain \
+                                         read failed: {e}"
+                                    );
+                                }
+                            }
                             break;
                         }
                         match s.read(&mut tmp) {
@@ -449,6 +466,23 @@ impl SubprocessEngine {
                     let mut tmp = [0u8; 4096];
                     loop {
                         if done.load(Ordering::Relaxed) {
+                            // One last non-blocking read so data sitting in the
+                            // pipe buffer is captured even when grandchildren
+                            // hold the write end open (#2440).
+                            match s.read(&mut tmp) {
+                                Ok(0) => {}
+                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                Err(ref e)
+                                    if e.kind() == std::io::ErrorKind::WouldBlock
+                                        || e.kind() == std::io::ErrorKind::Interrupted =>
+                                {}
+                                Err(ref e) => {
+                                    tracing::warn!(
+                                        "[agent_engine] stderr final drain \
+                                         read failed: {e}"
+                                    );
+                                }
+                            }
                             break;
                         }
                         match s.read(&mut tmp) {
@@ -461,6 +495,10 @@ impl SubprocessEngine {
                                 std::thread::sleep(Duration::from_millis(10));
                                 continue;
                             }
+                            // #2414 — log unexpected read errors (e.g. a broken
+                            // pipe from an abruptly-closed write end) so any
+                            // truncation of the child's output is visible in
+                            // diagnostics instead of silently discarded.
                             Err(ref e) => {
                                 tracing::warn!(
                                     "[agent_engine] stderr drain stopped on \
@@ -500,24 +538,68 @@ impl SubprocessEngine {
             }
         }
 
-        // The drain threads terminate via `drain_done` (set after the child is
-        // reaped) or natural EOF; the JoinHandles are detached here, matching
-        // the channel-based completion design (#2364).
-        let _ = stdout_thread;
-        let _ = stderr_thread;
-
         // Enforce the wall-clock deadline (#2284). On timeout the child is
         // killed and reaped (no zombies) and the call returns a clear error.
         let max_duration = ctx.limits.max_duration;
-        let status = match child.wait_timeout(max_duration) {
-            Ok(Some(status)) => status,
+        match child.wait_timeout(max_duration) {
+            Ok(Some(status)) => {
+                // Normal exit — child exited on its own.
+                // Signal drain threads to stop, join them (so they finish
+                // sending their data), then drain the channels. This order
+                // ensures no data is lost even when grandchildren hold pipe
+                // write ends (#2440, #2442).
+                drain_done.store(true, Ordering::Relaxed);
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                let stdout = out_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
+                let stderr = err_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
+
+                let code = status.code();
+                let success = status.success();
+
+                let mut events = vec![EngineEvent::started()];
+                if !stdout.is_empty() {
+                    events.push(EngineEvent::stdout(&stdout));
+                }
+                if !stderr.is_empty() {
+                    events.push(EngineEvent::stderr(&stderr));
+                }
+                events.push(if success {
+                    EngineEvent::completed()
+                } else {
+                    EngineEvent::failed()
+                });
+
+                // A non-zero exit is a real failure: propagate it (preserving
+                // the captured stdout/stderr) instead of masking it as success.
+                if !success {
+                    bail!(
+                        "agent engine '{}' exited with non-zero status {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                        self.engine_name,
+                        code,
+                        stdout,
+                        stderr
+                    );
+                }
+
+                Ok(EngineResponse {
+                    engine: self.engine_name.clone(),
+                    stdout,
+                    exit_status: code,
+                    events,
+                })
+            }
             Ok(None) => {
                 // Timed out — child still running.
                 let _ = child.kill();
                 let _ = child.wait();
-                // Drain the channels FIRST (#2405), then set the flag.
-                // Handle recv_timeout errors so blocked drain threads are
-                // not silently leaked (#2407).
+                // Signal drain threads to stop and join them so the OS
+                // threads do not accumulate across calls (#2442).
+                drain_done.store(true, Ordering::Relaxed);
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                // Drain for diagnostics; the timeout error is what
+                // propagates.
                 if let Err(e) = out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
                     tracing::warn!(
                         "[agent_engine] stdout drain timed out after kill — \
@@ -530,7 +612,6 @@ impl SubprocessEngine {
                          thread may be blocked on a non-blocking FD: {e:?}"
                     );
                 }
-                drain_done.store(true, Ordering::Relaxed);
                 bail!(
                     "agent engine '{}' timed out after {:?}",
                     self.engine_name,
@@ -540,7 +621,9 @@ impl SubprocessEngine {
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                // Drain the channels FIRST (#2405), then set the flag.
+                drain_done.store(true, Ordering::Relaxed);
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
                 if let Err(e) = out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
                     tracing::warn!(
                         "[agent_engine] stdout drain timed out after error — \
@@ -553,59 +636,13 @@ impl SubprocessEngine {
                          thread may be blocked on a non-blocking FD: {e:?}"
                     );
                 }
-                drain_done.store(true, Ordering::Relaxed);
                 bail!(
                     "failed to wait for agent engine '{}': {}",
                     self.engine_name,
                     e
                 );
             }
-        };
-
-        // First drain the channels (readers break naturally on EOF when the
-        // child has exited).  Only then set drain_done to prevent a thread
-        // leak when grandchildren keep the pipe write ends open.
-        //
-        // Order matters: setting drain_done BEFORE recv_timeout creates a race
-        // where readers see the flag and break before reading the pipe tail,
-        // causing lost stdout/stderr data.
-        let stdout = out_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
-        let stderr = err_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
-        drain_done.store(true, Ordering::Relaxed);
-        let code = status.code();
-        let success = status.success();
-
-        let mut events = vec![EngineEvent::started()];
-        if !stdout.is_empty() {
-            events.push(EngineEvent::stdout(&stdout));
         }
-        if !stderr.is_empty() {
-            events.push(EngineEvent::stderr(&stderr));
-        }
-        events.push(if success {
-            EngineEvent::completed()
-        } else {
-            EngineEvent::failed()
-        });
-
-        // A non-zero exit is a real failure: propagate it (preserving the
-        // captured stdout/stderr) instead of masking it as success.
-        if !success {
-            bail!(
-                "agent engine '{}' exited with non-zero status {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
-                self.engine_name,
-                code,
-                stdout,
-                stderr
-            );
-        }
-
-        Ok(EngineResponse {
-            engine: self.engine_name.clone(),
-            stdout,
-            exit_status: code,
-            events,
-        })
     }
 }
 

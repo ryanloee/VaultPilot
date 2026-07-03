@@ -266,6 +266,16 @@ impl ToolProxy {
             .clone()
     }
 
+    /// Merge external audit entries into this proxy's audit log.
+    /// Used by Plan Mode to preserve the recon-pass audit trail
+    /// that was collected on a separate short-lived ToolProxy (#2425).
+    pub fn merge_audit_log(&self, entries: Vec<AgentAuditEntry>) {
+        self.audit_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(entries);
+    }
+
     /// Number of tool calls so far.
     pub fn tool_call_count(&self) -> u64 {
         self.tool_call_count.load(Ordering::Relaxed)
@@ -960,7 +970,7 @@ pub async fn generate_execution_plan(
     history: &[crate::models::ConversationTurn],
     config: AgentConfig,
     mut on_event: impl FnMut(&AgentEvent),
-) -> Result<ExecutionPlan> {
+) -> Result<(ExecutionPlan, Vec<AgentAuditEntry>)> {
     // Force the recon pass to be read-only and constrained to recon tools.
     let recon_config = AgentConfig {
         permission: AgentPermission::ReadOnly,
@@ -1057,7 +1067,9 @@ pub async fn generate_execution_plan(
 
     // Convert task + recon transcript into a structured plan.
     let plan_response = ai::generate_plan(settings, prompt, &tool_transcripts).await?;
-    Ok(parse_execution_plan(&plan_response.text, prompt))
+    let plan = parse_execution_plan(&plan_response.text, prompt);
+    let recon_audit_log = proxy.audit_log();
+    Ok((plan, recon_audit_log))
 }
 
 /// Parse a model plan response into an [`ExecutionPlan`].
@@ -1254,7 +1266,7 @@ pub async fn run_agent(
 
     // ── Plan Mode (#2107): generate plan, get user decision, then execute ────
     if config.execution_mode == ExecutionMode::Plan {
-        let plan = generate_execution_plan(
+        let (plan, recon_audit_log) = generate_execution_plan(
             settings,
             context,
             prompt,
@@ -1281,9 +1293,13 @@ pub async fn run_agent(
                 },
                 steps_used: 0,
                 tokens_used: 0,
-                audit_log: Vec::new(),
+                audit_log: recon_audit_log,
             });
         }
+
+        // Preserve recon-pass audit entries in the main proxy so they
+        // are included in the final AgentResult (#2425).
+        proxy.merge_audit_log(recon_audit_log);
     }
 
     for step in 0..max_steps {

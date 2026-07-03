@@ -167,7 +167,7 @@ export function uuid(): string {
   });
 }
 
-/** Escape SQL LIKE special characters (%, _, \\) so they match literally. */
+/** Escape SQL LIKE special characters (%, _, \) so they match literally. */
 export function escapeLikePattern(pattern: string): string {
   return pattern.replace(/[\\%_]/g, ch => `\\${ch}`);
 }
@@ -231,7 +231,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
   if (!ftsSupported) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbSession>(
-      `SELECT * FROM sessions WHERE title LIKE ? ESCAPE '\' ORDER BY updated_at DESC LIMIT 50`,
+      `SELECT * FROM sessions WHERE title LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`]
     );
   }
@@ -666,7 +666,7 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
   if (!ftsSupported) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbNote>(
-      `SELECT * FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
+      `SELECT * FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`, `%${escaped}%`, ...folderParams]
     );
   }
@@ -689,7 +689,7 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
   if (ftsResults.length === 0) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbNote>(
-      `SELECT * FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
+      `SELECT * FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')${folderFilter} ORDER BY updated_at DESC LIMIT 50`,
       [`%${escaped}%`, `%${escaped}%`, ...folderParams]
     );
   }
@@ -735,7 +735,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
       noteResults = await db.getAllAsync<GlobalSearchResult>(
         `SELECT 'note' as type, id, title,
                 SUBSTR(content, 1, 120) as snippet, updated_at
-         FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')
+         FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')
          ORDER BY updated_at DESC LIMIT ?`,
         [`%${escaped}%`, `%${escaped}%`, limit]
       );
@@ -744,7 +744,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
     noteResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'note' as type, id, title,
               SUBSTR(content, 1, 120) as snippet, updated_at
-       FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\')
+       FROM notes WHERE is_template = 0 AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')
        ORDER BY updated_at DESC LIMIT ?`,
       [`%${escaped}%`, `%${escaped}%`, limit]
     );
@@ -776,7 +776,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
                 s.id as sessionId
          FROM messages m
          INNER JOIN sessions s ON m.session_id = s.id
-         WHERE m.content LIKE ? ESCAPE '\' OR s.title LIKE ? ESCAPE '\'
+         WHERE m.content LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
          ORDER BY m.created_at DESC LIMIT ?`,
         [`%${escaped}%`, `%${escaped}%`, limit]
       );
@@ -788,7 +788,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
               s.id as sessionId
        FROM messages m
        INNER JOIN sessions s ON m.session_id = s.id
-       WHERE m.content LIKE ? ESCAPE '\' OR s.title LIKE ? ESCAPE '\'
+       WHERE m.content LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
        ORDER BY m.created_at DESC LIMIT ?`,
       [`%${escaped}%`, `%${escaped}%`, limit]
     );

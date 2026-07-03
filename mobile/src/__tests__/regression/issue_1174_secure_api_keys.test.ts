@@ -54,7 +54,8 @@ describe('Issue #1174 — API keys must use SecureStore, not AsyncStorage', () =
 
     const lastCall = SecureStore.setItemAsync.mock.calls.at(-1);
     const stored = JSON.parse(lastCall[1]);
-    expect(stored).toContain('sk-a-key');
+    // Keys are stored as a Record<providerName, apiKey> since store.ts v0.4.75+
+    expect(stored).toMatchObject({ 'Provider A': 'sk-a-key' });
   });
 
   it('updateProvider saves updated keys to SecureStore', async () => {
@@ -74,8 +75,9 @@ describe('Issue #1174 — API keys must use SecureStore, not AsyncStorage', () =
     const lastCall = SecureStore.setItemAsync.mock.calls.at(-1);
     expect(lastCall).toBeDefined();
     const stored = JSON.parse(lastCall[1]);
-    expect(stored[0]).toBe('key-p1-updated');
-    expect(stored[1]).toBe('key-p2');
+    // Keys are stored as Record<providerName, apiKey>
+    expect(stored['P1']).toBe('key-p1-updated');
+    expect(stored['P2']).toBe('key-p2');
   });
 
   it('legacy apiKey field is excluded from partialize output', () => {

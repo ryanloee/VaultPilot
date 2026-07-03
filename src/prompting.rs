@@ -434,11 +434,11 @@ pub fn compression_user_prompt(existing_summary: &str, history: &[ConversationTu
          {}\n\n\
          Conversation to compress:\n{}\n\n\
          Produce a compact memory summary in the user's language.",
-        sanitize_user_input(if existing_summary.trim().is_empty() {
-            "(none)"
+        if existing_summary.trim().is_empty() {
+            "(none)".to_string()
         } else {
-            existing_summary
-        }),
+            existing_summary.to_string()
+        },
         sanitize_history(&render_history(history)),
     )
 }
@@ -709,7 +709,7 @@ pub fn plan_generation_user_prompt(task: &str, tool_results: &[String]) -> Strin
          {}\n\n\
          <recon_results>\n{}\n</recon_results>",
         sanitize_user_input(task),
-        escape_xml_close_tags(&render_tool_results(tool_results)),
+        escape_xml_tags(&render_tool_results(tool_results), "<recon_results>"),
     )
 }
 

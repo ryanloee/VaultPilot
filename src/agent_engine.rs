@@ -364,15 +364,6 @@ impl SubprocessEngine {
             )
         })?;
 
-        if self.pass_prompt_via_stdin {
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                // Best-effort write; a closed stdin is not fatal.
-                let _ = stdin.write_all(composed.as_bytes());
-            }
-        }
-        // `stdin` is taken + dropped above so the child sees EOF promptly.
-
         // Concurrently drain stdout/stderr so a full OS pipe buffer cannot
         // deadlock the child while we enforce the deadline below. Results come
         // back over channels so collection can be time-bounded.
@@ -384,6 +375,13 @@ impl SubprocessEngine {
         // set the pipe FDs to non-blocking mode and loop with short sleeps;
         // the `drain_done` flag (set after the child is reaped) terminates
         // the drain threads promptly.
+        //
+        // #2428 — the drain threads are spawned BEFORE feeding the prompt to
+        // stdin. Writing first could block forever on `write_all` if the
+        // prompt exceeds the OS pipe buffer (~64 KB on Linux) while the child
+        // blocks on a full stdout pipe that nobody is draining — a classic
+        // subprocess deadlock. With the drains running first, stdout/stderr
+        // can flow while we feed stdin below.
         let stdout_handle = child.stdout.take();
         let stderr_handle = child.stderr.take();
         let (out_tx, out_rx) = mpsc::channel::<String>();
@@ -392,7 +390,7 @@ impl SubprocessEngine {
         let drain_done = Arc::new(AtomicBool::new(false));
 
         let done = drain_done.clone();
-        let _ = std::thread::Builder::new()
+        let stdout_thread = match std::thread::Builder::new()
             .name("agent-stdout-drain".into())
             .spawn(move || {
                 let mut buf = Vec::new();
@@ -414,15 +412,34 @@ impl SubprocessEngine {
                                 std::thread::sleep(Duration::from_millis(10));
                                 continue;
                             }
-                            Err(_) => break,
+                            // #2414 — log unexpected read errors (e.g. a broken
+                            // pipe from an abruptly-closed write end) so any
+                            // truncation of the child's output is visible in
+                            // diagnostics instead of silently discarded.
+                            Err(ref e) => {
+                                tracing::warn!(
+                                    "[agent_engine] stdout drain stopped on \
+                                     unexpected read error (output may be \
+                                     truncated): {e}"
+                                );
+                                break;
+                            }
                         }
                     }
                 }
                 let _ = out_tx.send(String::from_utf8_lossy(&buf).into_owned());
-            })
-            .with_context(|| "failed to spawn stdout drain thread")?;
+            }) {
+            Ok(handle) => handle,
+            Err(e) => {
+                // #2427 — no drain thread is running yet, but the child must
+                // not be orphaned. Kill and reap it before propagating.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e).with_context(|| "failed to spawn stdout drain thread");
+            }
+        };
         let done = drain_done.clone();
-        let _ = std::thread::Builder::new()
+        let stderr_thread = match std::thread::Builder::new()
             .name("agent-stderr-drain".into())
             .spawn(move || {
                 let mut buf = Vec::new();
@@ -444,13 +461,50 @@ impl SubprocessEngine {
                                 std::thread::sleep(Duration::from_millis(10));
                                 continue;
                             }
-                            Err(_) => break,
+                            Err(ref e) => {
+                                tracing::warn!(
+                                    "[agent_engine] stderr drain stopped on \
+                                     unexpected read error (output may be \
+                                     truncated): {e}"
+                                );
+                                break;
+                            }
                         }
                     }
                 }
                 let _ = err_tx.send(String::from_utf8_lossy(&buf).into_owned());
-            })
-            .with_context(|| "failed to spawn stderr drain thread")?;
+            }) {
+            Ok(handle) => handle,
+            Err(e) => {
+                // #2427 — the stdout drain is already running. Signal it to
+                // stop via `drain_done`, kill/reap the child to avoid a zombie,
+                // drain the stdout channel with a bounded wait, then join the
+                // stdout thread so it does not leak.
+                drain_done.store(true, Ordering::Relaxed);
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
+                let _ = stdout_thread.join();
+                return Err(e).with_context(|| "failed to spawn stderr drain thread");
+            }
+        };
+
+        // #2428 — feed the prompt to stdin AFTER the drain threads are running
+        // so a large prompt cannot deadlock against an un-drained stdout pipe.
+        // Best-effort write; a closed stdin is not fatal. Taking + dropping
+        // stdin here sends EOF to the child promptly.
+        if self.pass_prompt_via_stdin {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(composed.as_bytes());
+            }
+        }
+
+        // The drain threads terminate via `drain_done` (set after the child is
+        // reaped) or natural EOF; the JoinHandles are detached here, matching
+        // the channel-based completion design (#2364).
+        let _ = stdout_thread;
+        let _ = stderr_thread;
 
         // Enforce the wall-clock deadline (#2284). On timeout the child is
         // killed and reaped (no zombies) and the call returns a clear error.

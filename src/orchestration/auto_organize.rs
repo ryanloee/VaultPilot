@@ -176,14 +176,13 @@ impl AutoOrganizer {
             pending_analysis_id: pending_id,
         })
     }
-
-    /// Subscribe to the event bus and process `NoteChanged` events.
     pub fn spawn_event_listener(context: StorageContext) {
         tokio::spawn(async move {
             let mut rx = event_bus::subscribe();
             let organizer = std::sync::Arc::new(AutoOrganizer::default());
             loop {
-                match rx.recv().await {
+                let event = rx.recv().await;
+                match event {
                     Ok(arc_ev) => {
                         let Event::NoteChanged(nc) = &*arc_ev;
                         if nc.action == NoteAction::Deleted {
@@ -191,23 +190,54 @@ impl AutoOrganizer {
                         }
                         // Clone what each blocking task needs
                         let context = context.clone();
+                        let note_id = nc.note_id.clone();
                         let nc = nc.clone();
                         let organizer = std::sync::Arc::clone(&organizer);
-                        // Wrap blocking SQLite operations in spawn_blocking
-                        let _ = tokio::task::spawn_blocking(move || {
-                            match crate::storage::load_note_with_context(&context, &nc.note_id) {
-                                Ok(doc) => {
-                                    if let Err(e) = organizer
-                                        .process_new_note(&context, &doc.meta, &doc.body, nc.action)
-                                    {
-                                        warn!(note_id = %nc.note_id, error = %e, "Layer 1 analysis failed");
+                        // Wrap blocking SQLite operations in a catch_unwind-protected spawn_blocking
+                        let result = futures_util::future::FutureExt::catch_unwind(
+                            std::panic::AssertUnwindSafe(async move {
+                                if let Err(e) = tokio::task::spawn_blocking(move || {
+                                    match crate::storage::load_note_with_context(
+                                        &context,
+                                        &nc.note_id,
+                                    ) {
+                                        Ok(doc) => {
+                                            if let Err(e) = organizer.process_new_note(
+                                                &context, &doc.meta, &doc.body, nc.action,
+                                            ) {
+                                                warn!(
+                                                    note_id = %nc.note_id,
+                                                    error = %e,
+                                                    "Layer 1 analysis failed"
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                note_id = %nc.note_id,
+                                                error = %e,
+                                                "failed to load note for analysis"
+                                            );
+                                        }
                                     }
+                                })
+                                .await
+                                {
+                                    warn!(
+                                        note_id = %note_id,
+                                        error = %e,
+                                        "spawn_blocking Layer 1 analysis panicked"
+                                    );
                                 }
-                                Err(e) => {
-                                    warn!(note_id = %nc.note_id, error = %e, "failed to load note for analysis");
-                                }
-                            }
-                        }).await;
+                            }),
+                        )
+                        .await;
+                        if let Err(panic) = result {
+                            warn!(
+                                error = ?panic,
+                                "spawn_event_listener task panicked, restarting"
+                            );
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         warn!(lagged = n, "event bus subscriber lagged");
@@ -248,16 +278,33 @@ impl AutoOrganizer {
             let interval = Duration::from_secs(interval_minutes * 60);
             loop {
                 tokio::time::sleep(interval).await;
-                // Clone what each blocking task needs
-                let context = context.clone();
-                let organizer = std::sync::Arc::clone(&organizer);
-                // Wrap blocking SQLite operations in spawn_blocking
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Err(e) = organizer.run_analysis_round(&context) {
-                        warn!(error = %e, "Layer 2 analysis round failed");
-                    }
-                })
+                let result = futures_util::future::FutureExt::catch_unwind(
+                    std::panic::AssertUnwindSafe(async {
+                        // Clone what each blocking task needs
+                        let context = context.clone();
+                        let organizer = std::sync::Arc::clone(&organizer);
+                        // Wrap blocking SQLite operations in spawn_blocking
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            if let Err(e) = organizer.run_analysis_round(&context) {
+                                warn!(error = %e, "Layer 2 analysis round failed");
+                            }
+                        })
+                        .await
+                        {
+                            warn!(
+                                error = %e,
+                                "spawn_blocking Layer 2 analysis panicked"
+                            );
+                        }
+                    }),
+                )
                 .await;
+                if let Err(panic) = result {
+                    warn!(
+                        error = ?panic,
+                        "start_background_worker task panicked, restarting"
+                    );
+                }
             }
         });
     }

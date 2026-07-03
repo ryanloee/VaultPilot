@@ -238,7 +238,23 @@ pub async fn select_tool_call(
                     crate::sanitize_error(retry_response.text.trim())
                 )
             })?;
-            (tool_call, retry_response.usage)
+            let combined_usage = RequestUsage {
+                input_tokens: match (
+                    response.usage.input_tokens,
+                    retry_response.usage.input_tokens,
+                ) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    (a, b) => a.or(b),
+                },
+                output_tokens: match (
+                    response.usage.output_tokens,
+                    retry_response.usage.output_tokens,
+                ) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    (a, b) => a.or(b),
+                },
+            };
+            (tool_call, combined_usage)
         }
     };
 

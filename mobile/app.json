@@ -2,7 +2,7 @@
   "expo": {
     "name": "VaultPilot",
     "slug": "vaultpilot",
-    "version": "0.4.74",
+    "version": "0.4.75",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.vaultpilot.mobile",
-      "versionCode": 474,
+      "versionCode": 475,
       "permissions": [
         "android.permission.REQUEST_INSTALL_PACKAGES"
       ],

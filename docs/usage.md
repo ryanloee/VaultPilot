@@ -15,9 +15,9 @@ The Linux build is CLI-only and does not include the WinUI frontend.
 
 For local testing, run:
 
-- `native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
+- `native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
 
-If you only built Debug, the Debug output can also be launched.
+If you built Release instead, use the equivalent Release path.
 
 ### Start the installed app
 

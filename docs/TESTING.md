@@ -187,8 +187,17 @@ cargo test --workspace   # runs ALL tests including regression
 The CI includes a dedicated step to report regression test results separately:
 
 ```yaml
-- name: Run regression tests (report)
-  run: cargo test --workspace regression -- --format=terse 2>&1 | tee regression-results.txt
+- name: Run regression tests (dedicated)
+  if: always()
+  run: |
+    set -o pipefail
+    exit_code=0
+    cargo test --workspace regression -- --format=terse 2>&1 | tee "${{ runner.temp }}/regression-results.txt" || exit_code=$?
+    echo "### Regression Test Results" >> "$GITHUB_STEP_SUMMARY"
+    echo '```' >> "$GITHUB_STEP_SUMMARY"
+    cat "${{ runner.temp }}/regression-results.txt" >> "$GITHUB_STEP_SUMMARY"
+    echo '```' >> "$GITHUB_STEP_SUMMARY"
+    exit $exit_code
 ```
 
 ### Mobile CI (when enabled)

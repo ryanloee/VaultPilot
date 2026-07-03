@@ -78,6 +78,50 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
   for (const entry of pending) {
     try {
       const note = await getNote(entry.note_id);
+
+      // Handle delete action: send DELETE request to server (#2433)
+      if (entry.action === 'delete') {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const timeoutController = new AbortController();
+        const timer = setTimeout(() => timeoutController.abort(), 10000);
+        try {
+          const res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
+            method: 'DELETE',
+            headers,
+            signal: timeoutController.signal,
+          });
+
+          if (res.ok) {
+            await clearPendingSync(entry.note_id);
+            synced++;
+          } else if (res.status === 429) {
+            console.warn(`[OfflineSync] rate limited on delete for note ${entry.note_id}: ${res.status}, pausing flush`);
+            failed++;
+            break;
+          } else if (res.status >= 400 && res.status < 500) {
+            console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: client error ${res.status}`);
+            await clearPendingSync(entry.note_id);
+            failed++;
+          } else {
+            await incrementPendingSyncRetry(entry.note_id);
+            const retryCount = await getPendingSyncRetryCount(entry.note_id);
+            if (retryCount >= MAX_RETRY_ATTEMPTS) {
+              console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: max retries exceeded`);
+              await clearPendingSync(entry.note_id);
+            }
+            failed++;
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+        continue;
+      }
+
       if (!note) {
         // Note was deleted locally, just clear the pending entry
         await clearPendingSync(entry.note_id);
@@ -114,6 +158,16 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
         console.warn(`[OfflineSync] rate limited for note ${entry.note_id}: ${res.status}, pausing flush`);
         failed++;
         break;
+      } else if (res.status === 408) {
+        // Request Timeout: transient, retry on next flush (#2434)
+        console.warn(`[OfflineSync] request timeout for note ${entry.note_id}: ${res.status}, will retry`);
+        await incrementPendingSyncRetry(entry.note_id);
+        const retryCount = await getPendingSyncRetryCount(entry.note_id);
+        if (retryCount >= MAX_RETRY_ATTEMPTS) {
+          console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded (408)`);
+          await clearPendingSync(entry.note_id);
+        }
+        failed++;
       } else if (res.status >= 400 && res.status < 500) {
         // Client error (4xx): clear entry, won't succeed on retry
         console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: client error ${res.status}`);

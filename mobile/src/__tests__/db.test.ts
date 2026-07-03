@@ -263,12 +263,17 @@ describe('updateNote', () => {
 });
 
 describe('deleteNote', () => {
-  it('deletes note by id', async () => {
+  it('deletes note by id and queues delete sync', async () => {
     const db = await freshDb();
     await db.deleteNote('n1');
-    const [sql, params] = mockDb.runAsync.mock.calls[0];
-    expect(sql).toContain('DELETE FROM notes');
-    expect(params).toEqual(['n1']);
+    // First call: DELETE FROM notes
+    const [delSql, delParams] = mockDb.runAsync.mock.calls[0];
+    expect(delSql).toContain('DELETE FROM notes');
+    expect(delParams).toEqual(['n1']);
+    // Second call: INSERT INTO pending_syncs with delete action (#2433)
+    const [syncSql, syncParams] = mockDb.runAsync.mock.calls[1];
+    expect(syncSql).toContain('INSERT INTO pending_syncs');
+    expect(syncParams).toEqual(['n1', 'delete']);
   });
 });
 

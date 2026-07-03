@@ -282,7 +282,7 @@ async function doSync(
       errors++;
       emitProgress('details');
     }
-  });
+  }, signal);
 
   // Only persist the sync timestamp on a clean (non-aborted) sync (#2369)
   if (!signal.aborted) {

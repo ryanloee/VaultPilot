@@ -14,7 +14,7 @@ export const DEFAULTS = {
  * Check if an HTTP status code is retryable (transient server/rate-limit errors).
  */
 export function isRetryable(status: number): boolean {
-  return status === 429 || status === 502 || status === 503 || status === 504;
+  return status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
 }
 
 /** Friendly error messages for common HTTP status codes */

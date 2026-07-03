@@ -155,7 +155,8 @@ async function chatAnthropic(
   const systemText = systemMsgs.map(m => extractTextContent(m.content)).join('\n') || undefined;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+  let abortedByTimeout = false;
+  const timeout = setTimeout(() => { abortedByTimeout = true; controller.abort(); }, CHAT_TIMEOUT_MS);
   let onSignalAbort: (() => void) | undefined;
   if (signal) {
     onSignalAbort = () => controller.abort(signal.reason);
@@ -232,8 +233,11 @@ async function chatAnthropic(
         const decoder = new TextDecoder();
         let buffer = '';
         let currentEvent = '';
-        const onTimeout = () => { reader.cancel('timeout').catch(() => {}); ctrl.error(new DOMException('Timeout', 'AbortError')); };
-        controller.signal.addEventListener('abort', onTimeout, { once: true });
+        const onAbort = () => {
+          reader.cancel('abort').catch(() => {});
+          ctrl.error(abortedByTimeout ? new DOMException('Timeout', 'AbortError') : new DOMException('Cancelled', 'AbortError'));
+        };
+        controller.signal.addEventListener('abort', onAbort, { once: true });
 
         (async () => {
           try {
@@ -260,7 +264,7 @@ async function chatAnthropic(
           } catch (e) { ctrl.error(e); }
           finally {
             clearTimeout(timeout);
-            controller.signal.removeEventListener('abort', onTimeout);
+            controller.signal.removeEventListener('abort', onAbort);
             if (onSignalAbort) signal?.removeEventListener('abort', onSignalAbort);
           }
         })();

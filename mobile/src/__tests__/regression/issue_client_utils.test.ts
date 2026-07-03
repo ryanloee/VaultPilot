@@ -10,6 +10,10 @@ import { isRetryable, sanitizeApiError, normalizeApiBase, DEFAULTS } from '../..
 // ── isRetryable ──────────────────────────────────────────
 
 describe('isRetryable', () => {
+  it('returns true for 408 (request timeout)', () => {
+    expect(isRetryable(408)).toBe(true);
+  });
+
   it('returns true for 429 (rate limit)', () => {
     expect(isRetryable(429)).toBe(true);
   });

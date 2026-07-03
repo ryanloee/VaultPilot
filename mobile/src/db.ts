@@ -338,6 +338,8 @@ export async function deleteNote(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
   invalidateNoteTitleCache();
+  // Queue delete for offline sync push (#2433)
+  await queuePendingSync(id, 'delete');
 }
 
 /**

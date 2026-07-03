@@ -313,11 +313,18 @@ export default function ChatScreen({ navigation, route }: any) {
       }, abortRef.current.signal);
 
       // Execute tool calls (save notes etc.) and clean up markers
-      const { cleaned, actions } = await executeToolCalls(full);
-      // #2223: Clear note title cache if any CRUD actions (e.g. SAVE_NOTE) were performed,
-      // so that newly created notes are immediately detected as clickable links
-      if (actions.length > 0) {
+      const { cleaned, actions, savedNoteIds } = await executeToolCalls(full);
+      // #2223 / #2446: Clear note title cache if any notes were created/updated
+      // so that newly saved notes are immediately detected as clickable links
+      // and the Notes tab list refreshes on focus.
+      if (savedNoteIds.length > 0) {
         clearNoteTitleCache();
+        // Reload the ChatScreen's own note-title map so wikilinks for the
+        // freshly saved note become clickable in this same response (#2446).
+        // Errors are non-fatal — wikilinks simply won't render until next mount.
+        loadNoteTitleMap()
+          .then(map => { if (!checkSessionAlive(activeSessionId)) return; setNoteTitleMap(map); })
+          .catch(e => console.warn('[Chat] post-save loadNoteTitleMap failed:', e));
       }
       const finalContent = actions.length > 0
         ? cleaned + '\n\n_' + actions.join('；') + '_'

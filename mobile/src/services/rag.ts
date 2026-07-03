@@ -320,88 +320,143 @@ export interface PendingSave {
   content: string;
 }
 
+/** Opening marker tag for a SAVE_NOTE block. */
+const SAVE_NOTE_OPEN = '[SAVE_NOTE:';
+/** Optional closing marker tag for a SAVE_NOTE block. */
+const SAVE_NOTE_CLOSE = '[/SAVE_NOTE]';
+
 /**
- * Parse LLM response for tool-call markers. Returns pending saves that
+ * Parse LLM response for SAVE_NOTE blocks. Returns pending saves that
  * require user confirmation before execution.
  *
- * Uses indexOf-based parsing (not regex) to correctly handle note content
- * that contains '[' characters — fixes #1187.
+ * Supports two formats (parser accepts both, system prompt recommends the
+ * closed form so trailing AI commentary is not captured as note content):
  *
- * Supported marker:
- *   [SAVE_NOTE: title\n *   content
+ *   1. Closed form (preferred):
+ *        [SAVE_NOTE: title]
+ *        content line 1
+ *        content line 2
+ *        [/SAVE_NOTE]
+ *
+ *   2. Legacy open form (backward compat with #1187):
+ *        [SAVE_NOTE: title
+ *        content until next [SAVE_NOTE: marker or end of response
+ *
+ * Title may optionally include a trailing `]` (e.g. `[SAVE_NOTE: title]`)
+ * which is stripped automatically — fixes #2446 where models routinely emit
+ * the closing bracket on the title line per markdown convention.
  */
 export function parseToolCalls(response: string): {
   cleaned: string;
   pendingSaves: PendingSave[];
 } {
   const pendingSaves: PendingSave[] = [];
-  const saves: { title: string; content: string; startIdx: number; endIdx: number }[] = [];
+  // Record each block as { startIdx, endIdx } so we can strip them from the
+  // cleaned response afterwards (descending order to keep indices valid).
+  const blocks: { startIdx: number; endIdx: number; title: string; content: string }[] = [];
 
-  // Parse ALL markers using indexOf (avoids regex truncation at '[')
-  const markerTag = '[SAVE_NOTE:';
   let searchFrom = 0;
   while (searchFrom < response.length) {
-    const markerIdx = response.indexOf(markerTag, searchFrom);
+    const markerIdx = response.indexOf(SAVE_NOTE_OPEN, searchFrom);
     if (markerIdx === -1) break;
 
-    const titleStart = markerIdx + markerTag.length;
-    // Use newline to find title end — the title is always on the same line as
-    // [SAVE_NOTE:, content starts on the next line.  Using indexOf(']') breaks
-    // when the title itself contains brackets (e.g. "什么是 [机器学习]").
-    const titleEnd = response.indexOf('\n', titleStart);
-    if (titleEnd === -1) break;
+    const titleStart = markerIdx + SAVE_NOTE_OPEN.length;
 
-    const title = response.slice(titleStart, titleEnd).trim();
-    if (!title) { searchFrom = titleEnd + 1; continue; }
+    // Title ends at the first newline. Using indexOf(']') directly would
+    // break on titles that themselves contain brackets (see #1187).
+    const newlineAfterTitle = response.indexOf('\n', titleStart);
+    if (newlineAfterTitle === -1) {
+      // No newline anywhere after the marker — malformed, bail out.
+      break;
+    }
 
-    // Content: everything after newline until next marker or end
-    const contentStart = titleEnd + 1;
-    const nextMarker = response.indexOf(markerTag, contentStart);
-    const contentEnd = nextMarker !== -1 ? nextMarker : response.length;
-    const content = response.slice(contentStart, contentEnd).trim();
+    // Strip an optional trailing `]` from the title — many models emit
+    // `[SAVE_NOTE: title]` per markdown convention. Without this, the
+    // saved note's title would be "title]" (#2446).
+    let title = response.slice(titleStart, newlineAfterTitle).trim();
+    if (title.endsWith(']')) {
+      title = title.slice(0, -1).trim();
+    }
+    if (!title) {
+      // Empty title → skip this block but continue scanning for more markers.
+      searchFrom = newlineAfterTitle + 1;
+      continue;
+    }
 
+    const contentStart = newlineAfterTitle + 1;
+
+    // Prefer an explicit [/SAVE_NOTE] end marker. If absent, fall back to the
+    // next opening marker, otherwise consume to end of response (legacy form).
+    const closeIdx = response.indexOf(SAVE_NOTE_CLOSE, contentStart);
+    const nextOpenIdx = response.indexOf(SAVE_NOTE_OPEN, contentStart);
+
+    let contentEnd: number;
+    let blockEnd: number; // includes the closing marker if any (for stripping)
+    if (closeIdx !== -1 && (nextOpenIdx === -1 || closeIdx < nextOpenIdx)) {
+      contentEnd = closeIdx;
+      blockEnd = closeIdx + SAVE_NOTE_CLOSE.length;
+    } else if (nextOpenIdx !== -1) {
+      // Legacy form: content runs until the next opening marker.
+      contentEnd = nextOpenIdx;
+      blockEnd = nextOpenIdx;
+    } else {
+      contentEnd = response.length;
+      blockEnd = response.length;
+    }
+
+    const content = response.slice(contentStart, contentEnd).replace(/\s+$/, '').trim();
     if (content) {
-      saves.push({ title, content, startIdx: markerIdx, endIdx: contentEnd });
+      blocks.push({ startIdx: markerIdx, endIdx: blockEnd, title, content });
       pendingSaves.push({ title, content });
     }
-    searchFrom = contentEnd;
+    // Continue scanning after the current block regardless of whether it was
+    // accepted — overlapping markers should not produce duplicate content.
+    searchFrom = blockEnd;
   }
 
-  // Strip markers from displayed response (remove from end to preserve indices)
+  // Strip accepted blocks from displayed response (from end to preserve indices)
   let cleaned = response;
-  for (let i = saves.length - 1; i >= 0; i--) {
-    cleaned = cleaned.slice(0, saves[i].startIdx) + cleaned.slice(saves[i].endIdx);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    cleaned = cleaned.slice(0, blocks[i].startIdx) + cleaned.slice(blocks[i].endIdx);
   }
-  cleaned = cleaned.trim();
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
 
   return { cleaned, pendingSaves };
 }
 
 /**
  * Execute a single pending save after user confirmation.
+ * Returns the new note's id so callers can navigate to it or refresh caches.
  */
-export async function executeSave(save: PendingSave): Promise<string> {
-  await createNote(save.title, save.content);
-  return `已保存笔记「${save.title}」`;
+export async function executeSave(save: PendingSave): Promise<{ noteId: string; title: string }> {
+  const noteId = await createNote(save.title, save.content);
+  return { noteId, title: save.title };
 }
 
 /**
  * Parse and execute all tool calls in an AI response.
- * Returns cleaned text and action descriptions.
+ * Returns cleaned text, action descriptions, and the ids of newly created notes
+ * (so the chat layer can refresh the note title cache / wikilink map).
  */
-export async function executeToolCalls(response: string): Promise<{ cleaned: string; actions: string[] }> {
+export async function executeToolCalls(response: string): Promise<{
+  cleaned: string;
+  actions: string[];
+  savedNoteIds: string[];
+}> {
   const { cleaned, pendingSaves } = parseToolCalls(response);
   const actions: string[] = [];
+  const savedNoteIds: string[] = [];
   for (const save of pendingSaves) {
     try {
-      const result = await executeSave(save);
-      actions.push(result);
+      const { noteId, title } = await executeSave(save);
+      savedNoteIds.push(noteId);
+      actions.push(`已保存笔记「${title}」`);
     } catch (e) {
       console.error('[RAG] Failed to save note:', save.title, e);
       actions.push(`保存失败「${save.title}」`);
     }
   }
-  return { cleaned, actions };
+  return { cleaned, actions, savedNoteIds };
 }
 
 /**
@@ -456,17 +511,27 @@ export function buildSystemPrompt(noteContext: string | null, style: ResponseSty
 
   const noteInstructions = zh
     ? `\n你有笔记能力：
-- 当用户说"记录"、"保存"、"记下"时，使用以下格式保存笔记：
-[SAVE_NOTE: 笔记标题
-笔记的完整内容，要结构化、完整。
-- 标题要简洁有意义，内容要完整。
-- 保存后正常回复用户，说明已保存。`
+- 当用户说"记录"、"保存"、"记下"、"备忘"时，必须使用下面的格式保存笔记。每次记录都创建一条新笔记，不要复用已有笔记的标题，不要覆盖已有笔记。
+- 保存格式（严格遵守，标题与内容之间用换行分隔，结尾必须有 [/SAVE_NOTE] 标记）：
+[SAVE_NOTE: 简洁有意义的标题]
+完整的笔记内容，结构化、详细。
+可以有多行。
+[/SAVE_NOTE]
+- 标题要简洁有意义（如"2026-07-04 周会纪要"、"React Hooks 学习笔记"），不要使用"笔记标题"、"无标题"、"新笔记"等占位词作为标题。
+- 内容要完整，把用户想记录的内容全部写进去。
+- 一条 [SAVE_NOTE: ...] 块只保存一条笔记；如需保存多条，使用多个独立的块，每条用不同的标题。
+- 保存后用一句话回复用户"已保存为「标题」"，不要把笔记内容再复述一遍。`
     : `\nYou have note abilities:
-- When the user says "record", "save", "note down", etc., save a note using the format:
-[SAVE_NOTE: note title
-The complete note content, structured and complete.
-- Titles should be concise and meaningful, content should be complete.
-- After saving, reply normally and confirm the note was saved.`;
+- When the user says "record", "save", "note down", "remember", you MUST save a note using the format below. Each save creates a NEW note — never reuse or overwrite an existing note's title.
+- Save format (strict — title and content separated by a newline, must end with the [/SAVE_NOTE] marker):
+[SAVE_NOTE: concise meaningful title]
+Full note content, structured and detailed.
+Can span multiple lines.
+[/SAVE_NOTE]
+- Titles must be concise and meaningful (e.g. "2026-07-04 Meeting Notes", "React Hooks Study Notes"). Never use placeholders like "Note Title", "Untitled", or "New Note" as the title.
+- Content must capture everything the user wanted to record.
+- One [SAVE_NOTE: ...] block = one note. To save multiple notes, emit multiple blocks each with a distinct title.
+- After saving, reply with a single sentence confirming "Saved as 「title」". Do not repeat the note content back to the user.`;
 
   let prompt = base;
 

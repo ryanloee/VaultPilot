@@ -4,6 +4,7 @@ import {
   Animated, Easing, Modal, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -73,6 +74,23 @@ export default function NotesScreen({ navigation }: any) {
     const timer = setTimeout(() => load(search, activeFolder), 300);
     return () => clearTimeout(timer);
   }, [search, activeFolder, load]);
+
+  // #2446: Refresh the list whenever the screen gains focus (e.g. returning
+  // from NoteEditorScreen after a create/delete/edit). Without this, the list
+  // shows stale data — deleted notes keep appearing in the list, and clicking
+  // them triggers "笔记不存在" because getNote() returns null. Also picks up
+  // notes newly created from the Chat screen's SAVE_NOTE flow.
+  useFocusEffect(
+    useCallback(() => {
+      load(search, activeFolder);
+      // Return a no-op cleanup so the effect re-runs on every focus event.
+      // search/activeFolder are captured at focus time; we intentionally do
+      // NOT list them as deps because useFocusEffect already re-subscribes on
+      // every focus transition and we want the freshest values.
+      return () => {};
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [load])
+  );
 
   // #2200 — abort studio generation on component unmount
   useEffect(() => {

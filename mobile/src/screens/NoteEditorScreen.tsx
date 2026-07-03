@@ -120,6 +120,10 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       { text: '删除', style: 'destructive', onPress: async () => {
         try {
           await deleteNote(noteId);
+          // #2446: clear any pending autosave so we don't re-create the note
+          // after the DELETE has been issued.
+          pendingRef.current = null;
+          clearTimeout(timerRef.current);
           navigation.goBack();
         } catch (e) {
           Alert.alert('删除失败', String(e));

@@ -238,14 +238,18 @@ describe('executeSave', () => {
     const result = await executeSave({ title: 'My Note', content: 'Note body here' });
     expect(mockCreateNote).toHaveBeenCalledWith('My Note', 'Note body here');
     expect(mockUpdateNote).not.toHaveBeenCalled();
-    expect(result).toContain('My Note');
+    // #2446: executeSave now returns { noteId, title } so the chat layer can
+    // refresh the note-title cache and navigate to the freshly saved note.
+    expect(result.noteId).toBe('note-123');
+    expect(result.title).toBe('My Note');
   });
 
-  it('returns Chinese confirmation message', async () => {
+  it('returns the new note id and title', async () => {
     mockCreateNote.mockResolvedValue('id-1');
 
     const result = await executeSave({ title: '测试', content: '内容' });
-    expect(result).toBe('已保存笔记「测试」');
+    expect(result.noteId).toBe('id-1');
+    expect(result.title).toBe('测试');
   });
 });
 

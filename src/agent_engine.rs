@@ -389,59 +389,65 @@ impl SubprocessEngine {
         let drain_done = Arc::new(AtomicBool::new(false));
 
         let done = drain_done.clone();
-        let _ = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut s) = stdout_handle {
-                #[cfg(unix)]
-                make_nonblocking(&s);
-                let mut tmp = [0u8; 4096];
-                loop {
-                    if done.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    match s.read(&mut tmp) {
-                        Ok(0) => break,
-                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                        Err(ref e)
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                || e.kind() == std::io::ErrorKind::Interrupted =>
-                        {
-                            std::thread::sleep(Duration::from_millis(10));
-                            continue;
+        let _ = std::thread::Builder::new()
+            .name("agent-stdout-drain".into())
+            .spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut s) = stdout_handle {
+                    #[cfg(unix)]
+                    make_nonblocking(&s);
+                    let mut tmp = [0u8; 4096];
+                    loop {
+                        if done.load(Ordering::Relaxed) {
+                            break;
                         }
-                        Err(_) => break,
+                        match s.read(&mut tmp) {
+                            Ok(0) => break,
+                            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                            Err(ref e)
+                                if e.kind() == std::io::ErrorKind::WouldBlock
+                                    || e.kind() == std::io::ErrorKind::Interrupted =>
+                            {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(_) => break,
+                        }
                     }
                 }
-            }
-            let _ = out_tx.send(String::from_utf8_lossy(&buf).into_owned());
-        });
+                let _ = out_tx.send(String::from_utf8_lossy(&buf).into_owned());
+            })
+            .with_context(|| "failed to spawn stdout drain thread")?;
         let done = drain_done.clone();
-        let _ = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut s) = stderr_handle {
-                #[cfg(unix)]
-                make_nonblocking(&s);
-                let mut tmp = [0u8; 4096];
-                loop {
-                    if done.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    match s.read(&mut tmp) {
-                        Ok(0) => break,
-                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                        Err(ref e)
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                || e.kind() == std::io::ErrorKind::Interrupted =>
-                        {
-                            std::thread::sleep(Duration::from_millis(10));
-                            continue;
+        let _ = std::thread::Builder::new()
+            .name("agent-stderr-drain".into())
+            .spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut s) = stderr_handle {
+                    #[cfg(unix)]
+                    make_nonblocking(&s);
+                    let mut tmp = [0u8; 4096];
+                    loop {
+                        if done.load(Ordering::Relaxed) {
+                            break;
                         }
-                        Err(_) => break,
+                        match s.read(&mut tmp) {
+                            Ok(0) => break,
+                            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                            Err(ref e)
+                                if e.kind() == std::io::ErrorKind::WouldBlock
+                                    || e.kind() == std::io::ErrorKind::Interrupted =>
+                            {
+                                std::thread::sleep(Duration::from_millis(10));
+                                continue;
+                            }
+                            Err(_) => break,
+                        }
                     }
                 }
-            }
-            let _ = err_tx.send(String::from_utf8_lossy(&buf).into_owned());
-        });
+                let _ = err_tx.send(String::from_utf8_lossy(&buf).into_owned());
+            })
+            .with_context(|| "failed to spawn stderr drain thread")?;
 
         // Enforce the wall-clock deadline (#2284). On timeout the child is
         // killed and reaped (no zombies) and the call returns a clear error.

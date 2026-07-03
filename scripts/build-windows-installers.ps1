@@ -123,17 +123,18 @@ function Download-ReleaseHistory {
         try {
             [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $GitHubToken, "Process")
             & $Vpk @arguments | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "vpk download failed with exit code $LASTEXITCODE for channel '$Channel'."
+            }
         }
         finally {
             [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousToken, "Process")
         }
     }
     else {
-        try {
-            & $Vpk @arguments | Out-Host
-        }
-        catch {
-            Write-Warning "Unable to download existing release history for channel '$Channel'. Continuing without delta history."
+        & $Vpk @arguments | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Unable to download existing release history for channel '$Channel' (exit code $LASTEXITCODE). Continuing without delta history."
         }
     }
 }
@@ -152,6 +153,7 @@ function Remove-CurrentVersionRelease {
     $escapedVersion = [regex]::Escape($Version)
     $escapedChannel = [regex]::Escape($Channel)
     $packagePattern = "^VaultPilot-$escapedVersion-$escapedChannel-(full|delta)\.nupkg$"
+    $packageRelativePattern = "VaultPilot-$escapedVersion-$escapedChannel-(full|delta)\.nupkg$"
 
     Get-ChildItem -LiteralPath $PackageDir -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match $packagePattern } |
@@ -186,7 +188,7 @@ function Remove-CurrentVersionRelease {
     if (Test-Path $assetsJsonFile) {
         $assetsJson = @(Get-Content $assetsJsonFile -Raw | ConvertFrom-Json)
         $remainingAssets = @($assetsJson | Where-Object {
-            $_.RelativeFileName -notmatch $packagePattern
+            $_.RelativeFileName -notmatch $packageRelativePattern
         })
         if ($remainingAssets.Count -gt 0) {
             $remainingAssets | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $assetsJsonFile

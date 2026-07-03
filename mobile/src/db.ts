@@ -231,8 +231,14 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
   if (!ftsSupported) {
     const escaped = escapeLikePattern(query);
     return db.getAllAsync<DbSession>(
-      `SELECT * FROM sessions WHERE title LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 50`,
-      [`%${escaped}%`]
+      `SELECT DISTINCT s.* FROM sessions s
+       WHERE s.id IN (
+         SELECT m.session_id FROM messages m
+         WHERE m.content LIKE ? ESCAPE '\\'
+       )
+       OR s.title LIKE ? ESCAPE '\\'
+       ORDER BY s.updated_at DESC LIMIT 50`,
+      [`%${escaped}%`, `%${escaped}%`]
     );
   }
   const ftsQuery = buildFtsQuery(query);
@@ -255,9 +261,13 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
     console.warn('[DB] FTS5 searchSessions MATCH failed, falling back to LIKE:', e);
     return db.getAllAsync<DbSession>(
       `SELECT DISTINCT s.* FROM sessions s
-       WHERE s.title LIKE ? ESCAPE '\\'
+       WHERE s.id IN (
+         SELECT m.session_id FROM messages m
+         WHERE m.content LIKE ? ESCAPE '\\'
+       )
+       OR s.title LIKE ? ESCAPE '\\'
        ORDER BY s.updated_at DESC LIMIT 50`,
-      [`%${escaped}%`]
+      [`%${escaped}%`, `%${escaped}%`]
     );
   }
 }

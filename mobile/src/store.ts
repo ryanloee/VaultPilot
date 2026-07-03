@@ -27,7 +27,10 @@ export interface ProviderConfig {
 const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
 
 async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void> {
-  const keys = providers.map(p => p.apiKey);
+  const keys: Record<string, string> = {};
+  for (const p of providers) {
+    keys[p.name] = p.apiKey;
+  }
   try {
     await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
   } catch (e) {
@@ -40,10 +43,16 @@ async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void
   }
 }
 
-async function loadProviderKeysSecure(): Promise<string[] | null> {
+async function loadProviderKeysSecure(): Promise<Record<string, string> | null> {
   try {
     const raw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    // Support legacy string[] format for backward compatibility (#1629)
+    if (Array.isArray(parsed)) {
+      return {}; // Return empty — legacy keys cannot be reliably matched
+    }
+    return parsed as Record<string, string>;
   } catch (e) {
     console.warn('[Store] Failed to load provider keys from SecureStore:', e);
     return null; // Signal load failure — caller must handle to avoid wiping keys (#1629)
@@ -141,9 +150,9 @@ export function sanitizeForPersistence(providers: ProviderConfig[]): ProviderCon
   return providers.map(p => ({ ...p, apiKey: '' }));
 }
 
-/** Restore API keys into providers from SecureStore keys array. */
-export function restoreProviderKeys(providers: ProviderConfig[], keys: string[]): ProviderConfig[] {
-  return providers.map((p, i) => ({ ...p, apiKey: keys[i] ?? '' }));
+/** Restore API keys into providers from SecureStore keys map. */
+export function restoreProviderKeys(providers: ProviderConfig[], keys: Record<string, string>): ProviderConfig[] {
+  return providers.map(p => ({ ...p, apiKey: keys[p.name] ?? '' }));
 }
 
 const LIGHT_COLORS = {
@@ -201,7 +210,7 @@ export const useAppStore = create<AppState>()(
       apiKey: '',
       model: 'deepseek-v4-flash-free',
       apiFormat: 'openai' as ApiFormat,
-      setApiSettings: (s) => {
+      setApiSettings: async (s) => {
         let updatedProviders: ProviderConfig[] | undefined;
         set((state) => {
           const newState = mergeApiSettings(state, s);
@@ -214,13 +223,13 @@ export const useAppStore = create<AppState>()(
           }
           return { ...newState, providers };
         });
-        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+        if (updatedProviders) await saveProviderKeysSecure(updatedProviders);
       },
 
       providers: [],
       activeProviderIndex: 0,
 
-      addProvider: (p) => {
+      addProvider: async (p) => {
         let updatedProviders: ProviderConfig[] | undefined;
         set((state) => {
           const providers = [...state.providers, p];
@@ -233,10 +242,10 @@ export const useAppStore = create<AppState>()(
             model: active.model, apiFormat: active.apiFormat,
           };
         });
-        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+        if (updatedProviders) await saveProviderKeysSecure(updatedProviders);
       },
 
-      removeProvider: (index) => {
+      removeProvider: async (index) => {
         let updatedProviders: ProviderConfig[] | undefined;
         set((state) => {
           if (state.providers.length === 0) return {}; // Guard: nothing to remove
@@ -253,10 +262,10 @@ export const useAppStore = create<AppState>()(
           }
           return update;
         });
-        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+        if (updatedProviders) await saveProviderKeysSecure(updatedProviders);
       },
 
-      updateProvider: (index, p) => {
+      updateProvider: async (index, p) => {
         let updatedProviders: ProviderConfig[] | undefined;
         set((state) => {
           const providers = updateProviderInList(state.providers, index, p);
@@ -271,7 +280,7 @@ export const useAppStore = create<AppState>()(
           }
           return update;
         });
-        if (updatedProviders) void saveProviderKeysSecure(updatedProviders);
+        if (updatedProviders) await saveProviderKeysSecure(updatedProviders);
       },
 
       setActiveProvider: (index) => set((state) => {
@@ -313,13 +322,12 @@ export const useAppStore = create<AppState>()(
             );
             return;
           }
-          const safeKeys: string[] = keys;
-          if (safeKeys.length === 0) {
+          if (Object.keys(keys).length === 0) {
             // SecureStore returned empty and providers were rehydrated with sanitized (empty) apiKeys,
             // so hasExistingKeys was always false. Simply return — there are no keys to restore.
             return;
           }
-          const restored = restoreProviderKeys(fresh.providers, safeKeys);
+          const restored = restoreProviderKeys(fresh.providers, keys);
           useAppStore.setState({ providers: restored });
           syncLegacyFields(useAppStore.setState, restored, fresh.activeProviderIndex);
           // Invalidate the getSettings module-level cache after hydration so that

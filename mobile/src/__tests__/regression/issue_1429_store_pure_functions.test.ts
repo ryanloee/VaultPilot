@@ -193,23 +193,23 @@ describe('sanitizeForPersistence', () => {
 // ── restoreProviderKeys ───────────────────────────────────
 
 describe('restoreProviderKeys', () => {
-  test('restores keys by index', () => {
+  test('restores keys by provider name', () => {
     const providers = [makeProvider('a', { apiKey: '' }), makeProvider('b', { apiKey: '' })];
-    const result = restoreProviderKeys(providers, ['key-a', 'key-b']);
+    const result = restoreProviderKeys(providers, { 'a': 'key-a', 'b': 'key-b' });
     expect(result[0].apiKey).toBe('key-a');
     expect(result[1].apiKey).toBe('key-b');
   });
 
   test('uses empty string for missing keys', () => {
     const providers = [makeProvider('a', { apiKey: '' }), makeProvider('b', { apiKey: '' })];
-    const result = restoreProviderKeys(providers, ['key-a']);
+    const result = restoreProviderKeys(providers, { 'a': 'key-a' });
     expect(result[0].apiKey).toBe('key-a');
     expect(result[1].apiKey).toBe('');
   });
 
-  test('handles empty keys array', () => {
+  test('handles empty keys map', () => {
     const providers = [makeProvider('a', { apiKey: '' })];
-    const result = restoreProviderKeys(providers, []);
+    const result = restoreProviderKeys(providers, {});
     expect(result[0].apiKey).toBe('');
   });
 });

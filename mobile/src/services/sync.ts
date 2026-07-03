@@ -299,14 +299,19 @@ async function runWithConcurrency<T>(
   signal?: AbortSignal,
 ): Promise<void> {
   let index = 0;
+  let aborted = false;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (index < items.length) {
-      if (signal?.aborted) return;
+      if (signal?.aborted) { aborted = true; return; }
       const i = index++;
-      try { await fn(items[i]); } catch (e) { if (signal?.aborted) return; throw e; }
+      try { await fn(items[i]); } catch (e) {
+        if (signal?.aborted) { aborted = true; return; }
+        throw e;
+      }
     }
   });
   await Promise.all(workers);
+  if (aborted) throw new Error('同步超时');
 }
 
 /**

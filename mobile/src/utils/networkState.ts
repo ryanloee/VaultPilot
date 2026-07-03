@@ -5,7 +5,7 @@
  * No external dependencies required.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 
 /** Typed accessor for globalThis event listeners (browser/RN). */
 interface GlobalEventBus {
@@ -16,11 +16,13 @@ interface GlobalEventBus {
 /** Simple online/offline state hook. */
 export function useNetworkState(): { isOnline: boolean; checkConnection: () => Promise<boolean> } {
   const [isOnline, setIsOnline] = useState(true);
+  const abortRef = useRef<AbortController | null>(null);
 
   const checkConnection = useCallback(async (): Promise<boolean> => {
     try {
       // Quick HEAD request to a reliable endpoint
       const timeoutController = new AbortController();
+      abortRef.current = timeoutController;
       const timer = setTimeout(() => timeoutController.abort(), 3000);
       try {
         const res = await fetch('https://www.gstatic.com/generate_204', {
@@ -32,6 +34,7 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
         return online;
       } finally {
         clearTimeout(timer);
+        abortRef.current = null;
       }
     } catch (e) {
       console.warn('[NetworkState] checkConnection failed:', e);
@@ -60,6 +63,8 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
     }
 
     return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
       if (win.removeEventListener) {
         win.removeEventListener('online', handleOnline);
         win.removeEventListener('offline', handleOffline);

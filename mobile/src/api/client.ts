@@ -81,8 +81,8 @@ export async function getSettings(): Promise<{ apiBase: string; apiKey: string; 
         apiFormat: storeState.apiFormat || 'openai',
       };
     }
-  } catch {
-    // Store not available — fall through to legacy keys
+  } catch (e: unknown) {
+    console.warn('[Settings] Failed to read from store:', e instanceof Error ? e.message : e);
   }
 
   const cached = getSettingsCache();
@@ -261,7 +261,7 @@ async function chatAnthropic(
           finally {
             clearTimeout(timeout);
             controller.signal.removeEventListener('abort', onTimeout);
-            signal?.removeEventListener('abort', onSignalAbort!);
+            if (onSignalAbort) signal?.removeEventListener('abort', onSignalAbort);
           }
         })();
       },
@@ -377,7 +377,7 @@ async function chatOpenAI(
           finally {
             clearTimeout(timeout);
             timeoutController.signal.removeEventListener('abort', onTimeout);
-            sig?.removeEventListener('abort', onSignalAbort!);
+            if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
           }
         })();
       },
@@ -554,7 +554,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
     // a manual AbortController instead to combine timeout and user signal (#2329).
     const timeoutController = new AbortController();
     const timer = setTimeout(() => timeoutController.abort(), CHECK_API_TIMEOUT_MS);
-    const onUserAbort = () => timeoutController.abort(signal!.reason);
+    const onUserAbort = () => timeoutController.abort(signal?.reason);
     if (signal) {
       if (signal.aborted) timeoutController.abort(signal.reason);
       else signal.addEventListener('abort', onUserAbort, { once: true });

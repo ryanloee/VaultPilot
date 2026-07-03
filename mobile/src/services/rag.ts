@@ -47,7 +47,9 @@ function isChinese(): boolean {
 const CJK_STOP_CHARS = new Set(['的', '了', '呢', '吗', '啊', '呀', '吧', '么', '我', '你']);
 
 export function isCJK(ch: string): boolean {
-  const code = ch.codePointAt(0)!;
+  const cp = ch.codePointAt(0);
+  if (cp === undefined) return false;
+  const code = cp;
   return (code >= 0x3000 && code <= 0x303F)   // CJK Symbols and Punctuation
     || (code >= 0x3040 && code <= 0x309F)      // Japanese Hiragana
     || (code >= 0x30A0 && code <= 0x30FF)      // Japanese Katakana

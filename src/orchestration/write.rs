@@ -139,7 +139,7 @@ pub async fn revert_write(
     note_id: &str,
 ) -> Result<NoteDocument, anyhow::Error> {
     let backup = WRITE_TRACKER
-        .pop_backup(note_id)
+        .get_latest_backup(note_id)
         .ok_or_else(|| anyhow::anyhow!("no backup found for note '{}'", note_id))?;
 
     let restored = NoteDocument {
@@ -164,6 +164,11 @@ pub async fn revert_write(
     };
 
     let saved = save_note_with_images_async(ctx, restored, &[]).await?;
+
+    // Only pop the backup after the save succeeded — if the save fails,
+    // the backup is preserved for a retry.
+    WRITE_TRACKER.pop_backup(note_id);
+
     tracing::info!(
         "reverted note '{}' to backup from {}",
         saved.meta.id,

@@ -155,6 +155,7 @@ public sealed partial class AiCommandPalette : UserControl
 
         CancelActiveRequest();
         _activeRequestCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var ct = _activeRequestCts.Token; // Capture token before any await (re-entrancy guard)
 
         try
         {
@@ -193,7 +194,7 @@ public sealed partial class AiCommandPalette : UserControl
                     tone = request.Tone,
                     noteId = request.NoteId
                 },
-                _activeRequestCts.Token);
+                ct);
 
             _lastResult = result;
 

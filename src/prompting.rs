@@ -48,7 +48,14 @@ fn escape_xml_close_tags(content: &str) -> String {
 /// space-separated variant (`< user_input>`) to prevent nested delimiter
 /// injection from user-supplied content.
 fn escape_xml_tags(content: &str, open_tag: &str) -> String {
-    // Derive the closing tag from the opening tag (e.g., <user_input> → </user_input>)
+    // Guard: if the tag doesn't start with '<' or is too short for a valid
+    // XML tag (e.g. `<x>`), return the content unchanged. Prevents a latent
+    // panic from the unchecked `&open_tag[1..]` byte index below (#2381).
+    if !open_tag.starts_with('<') || open_tag.len() < 3 {
+        return content.to_string();
+    }
+
+    // Derive the closing tag from the opening tag (e.g., &lt;user_input&gt; → &lt;/user_input&gt;)
     // and escape only that specific closing tag to prevent breakout from the wrapper.
     let close_tag = format!("</{}", &open_tag[1..]); // <user_input> → </user_input>
     let escaped_close = format!("<//{}", &open_tag[1..]); // <user_input> → <//user_input>

@@ -355,7 +355,7 @@ fn sandbox_malformed_json_args_denies_write_when_no_path_extractable() {
 
     // Malformed JSON — cannot extract path, write tool should be denied
     let check = proxy
-        .check_tool_call("write_note", "not-valid-json")
+        .check_tool_call("save_note", "not-valid-json")
         .unwrap();
     assert!(
         !check.allowed,
@@ -462,7 +462,7 @@ fn sandbox_large_args_json_does_not_panic() {
     // 100KB of content
     let large_content = "x".repeat(100_000);
     let args = format!(r#"{{"path":"test.md","content":"{}"}}"#, large_content);
-    let check = proxy.check_tool_call("write_note", &args).unwrap();
+    let check = proxy.check_tool_call("save_note", &args).unwrap();
     // Should not panic — just process normally
     assert!(check.allowed, "large args should not crash");
 }

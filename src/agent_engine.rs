@@ -474,10 +474,17 @@ impl SubprocessEngine {
                 );
             }
         };
-        drain_done.store(true, Ordering::Relaxed);
 
+        // First drain the channels (readers break naturally on EOF when the
+        // child has exited).  Only then set drain_done to prevent a thread
+        // leak when grandchildren keep the pipe write ends open.
+        //
+        // Order matters: setting drain_done BEFORE recv_timeout creates a race
+        // where readers see the flag and break before reading the pipe tail,
+        // causing lost stdout/stderr data.
         let stdout = out_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
         let stderr = err_rx.recv_timeout(IO_DRAIN_TIMEOUT).unwrap_or_default();
+        drain_done.store(true, Ordering::Relaxed);
         let code = status.code();
         let success = status.success();
 

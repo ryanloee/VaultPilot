@@ -99,11 +99,7 @@ const ALL_KNOWN_TOOLS: &[&str] = &[
     "read_file",
     "list_directory",
     "list_notes",
-    "chat",
     "save_note",
-    "write_note",
-    "delete_note",
-    "rename_note",
 ];
 
 // ── Audit log ─────────────────────────────────────────────────────────────

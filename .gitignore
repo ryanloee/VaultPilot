@@ -4,7 +4,6 @@ target/
 gen/
 native/**/bin/
 native/**/obj/
-installer/Output/
 
 .env
 .env.*
@@ -20,8 +19,6 @@ Thumbs.db
 .idea/
 .claude/
 CLAUDE.md
-installer/
-packaging/windows/Output/
 packaging/windows/WindowsAppRuntimeInstall-*.exe
 artifacts/
 .tmp/

@@ -13,8 +13,7 @@ $targets = @(
     (Join-Path $repoRoot "tmp-icons"),
     (Join-Path $repoRoot "native\VaultPilot.WinUI\bin"),
     (Join-Path $repoRoot "native\VaultPilot.WinUI\obj"),
-    (Join-Path $repoRoot "packaging\windows\Output"),
-    (Join-Path $repoRoot "installer\Output")
+
 )
 
 if ($IncludeReleaseAssets) {

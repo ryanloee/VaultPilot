@@ -188,7 +188,7 @@ The CI includes a dedicated step to report regression test results separately:
 
 ```yaml
 - name: Run regression tests (report)
-  run: cargo test regression -- --format=terse 2>&1 | tee regression-results.txt
+  run: cargo test --workspace regression -- --format=terse 2>&1 | tee regression-results.txt
 ```
 
 ### Mobile CI (when enabled)

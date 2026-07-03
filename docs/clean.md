@@ -11,8 +11,6 @@ You can safely remove them before packaging again or before checking git status.
 - `artifacts/`
 - `native/VaultPilot.WinUI/bin/`
 - `native/VaultPilot.WinUI/obj/`
-- `packaging/windows/Output/`
-- `installer/Output/`
 - `release-assets/` (only when using `-IncludeReleaseAssets`)
 - temporary folders such as `tmp-icons/`
 
@@ -23,8 +21,6 @@ Remove-Item -LiteralPath .\target -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\artifacts -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\native\VaultPilot.WinUI\bin -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\native\VaultPilot.WinUI\obj -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\packaging\windows\Output -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\installer\Output -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\tmp-icons -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
@@ -57,8 +53,6 @@ For example, `scripts/clean.ps1` is a tracked script, not a build artifact.
 - `artifacts/`
 - `native/VaultPilot.WinUI/bin/`
 - `native/VaultPilot.WinUI/obj/`
-- `packaging/windows/Output/`
-- `installer/Output/`
 - `release-assets/`（仅在使用 `-IncludeReleaseAssets` 时生成）
 
 ### 手动清理命令
@@ -68,8 +62,6 @@ Remove-Item -LiteralPath .\target -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\artifacts -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\native\VaultPilot.WinUI\bin -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\native\VaultPilot.WinUI\obj -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\packaging\windows\Output -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\installer\Output -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\tmp-icons -Recurse -Force -ErrorAction SilentlyContinue
 ```
 

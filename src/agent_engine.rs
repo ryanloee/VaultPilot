@@ -408,8 +408,7 @@ impl SubprocessEngine {
                                 Ok(n) => buf.extend_from_slice(&tmp[..n]),
                                 Err(ref e)
                                     if e.kind() == std::io::ErrorKind::WouldBlock
-                                        || e.kind() == std::io::ErrorKind::Interrupted =>
-                                {}
+                                        || e.kind() == std::io::ErrorKind::Interrupted => {}
                                 Err(ref e) => {
                                     tracing::warn!(
                                         "[agent_engine] stdout final drain \
@@ -474,8 +473,7 @@ impl SubprocessEngine {
                                 Ok(n) => buf.extend_from_slice(&tmp[..n]),
                                 Err(ref e)
                                     if e.kind() == std::io::ErrorKind::WouldBlock
-                                        || e.kind() == std::io::ErrorKind::Interrupted =>
-                                {}
+                                        || e.kind() == std::io::ErrorKind::Interrupted => {}
                                 Err(ref e) => {
                                     tracing::warn!(
                                         "[agent_engine] stderr final drain \

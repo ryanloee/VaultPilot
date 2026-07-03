@@ -315,9 +315,9 @@ export const useAppStore = create<AppState>()(
           }
           const safeKeys: string[] = keys;
           if (safeKeys.length === 0) {
-            // SecureStore returned empty — check if providers already have keys (from current session)
-            const hasExistingKeys = fresh.providers.some(p => p.apiKey && p.apiKey.length > 0);
-            if (hasExistingKeys) return; // Don't overwrite existing keys with empty ones (#1577)
+            // SecureStore returned empty and providers were rehydrated with sanitized (empty) apiKeys,
+            // so hasExistingKeys was always false. Simply return — there are no keys to restore.
+            return;
           }
           const restored = restoreProviderKeys(fresh.providers, safeKeys);
           useAppStore.setState({ providers: restored });

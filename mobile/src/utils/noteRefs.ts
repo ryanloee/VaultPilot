@@ -64,11 +64,11 @@ export function findNoteReferences(
   if (!titleMap.size || !text) return [];
 
   const refs: NoteRef[] = [];
+  const lowerText = text.toLowerCase();  // hoisted — O(n²) → O(n) (#2396)
 
   for (const [title, noteId] of titleMap) {
     if (!title.trim()) continue;
     const lowerTitle = title.toLowerCase();
-    const lowerText = text.toLowerCase();
     let searchFrom = 0;
 
     while (true) {

@@ -239,17 +239,27 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
   if (!ftsQuery) return [];
   const escaped = escapeLikePattern(query);
   // FTS5 on message content + LIKE on session title (titles are short, LIKE is fine)
-  return db.getAllAsync<DbSession>(
-    `SELECT DISTINCT s.* FROM sessions s
-     WHERE s.id IN (
-       SELECT m.session_id FROM messages m
-       INNER JOIN messages_fts fts ON m.rowid = fts.rowid
-       WHERE messages_fts MATCH ?
-     )
-     OR s.title LIKE ? ESCAPE '\'
-     ORDER BY s.updated_at DESC LIMIT 50`,
-    [ftsQuery, `%${escaped}%`]
-  );
+  try {
+    return await db.getAllAsync<DbSession>(
+      `SELECT DISTINCT s.* FROM sessions s
+       WHERE s.id IN (
+         SELECT m.session_id FROM messages m
+         INNER JOIN messages_fts fts ON m.rowid = fts.rowid
+         WHERE messages_fts MATCH ?
+       )
+       OR s.title LIKE ? ESCAPE '\\'
+       ORDER BY s.updated_at DESC LIMIT 50`,
+      [ftsQuery, `%${escaped}%`]
+    );
+  } catch (e) {
+    console.warn('[DB] FTS5 searchSessions MATCH failed, falling back to LIKE:', e);
+    return db.getAllAsync<DbSession>(
+      `SELECT DISTINCT s.* FROM sessions s
+       WHERE s.title LIKE ? ESCAPE '\\'
+       ORDER BY s.updated_at DESC LIMIT 50`,
+      [`%${escaped}%`]
+    );
+  }
 }
 
 export interface DbMessage {
@@ -662,13 +672,19 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
   }
   const ftsQuery = buildFtsQuery(query);
   if (!ftsQuery) return [];
-  const ftsResults = await db.getAllAsync<DbNote>(
-    `SELECT n.* FROM notes n
-     INNER JOIN notes_fts fts ON n.rowid = fts.rowid
-     WHERE n.is_template = 0 AND notes_fts MATCH ?${folderFilter.replace('folder', 'n.folder')}
-     ORDER BY n.updated_at DESC LIMIT 50`,
-    [ftsQuery, ...folderParams]
-  );
+  let ftsResults: DbNote[];
+  try {
+    ftsResults = await db.getAllAsync<DbNote>(
+      `SELECT n.* FROM notes n
+       INNER JOIN notes_fts fts ON n.rowid = fts.rowid
+       WHERE n.is_template = 0 AND notes_fts MATCH ?${folderFilter.replace('folder', 'n.folder')}
+       ORDER BY n.updated_at DESC LIMIT 50`,
+      [ftsQuery, ...folderParams]
+    );
+  } catch (e) {
+    console.warn('[DB] FTS5 searchNotes MATCH failed, falling back to LIKE:', e);
+    ftsResults = [];
+  }
   // Fallback to LIKE search if FTS returns no results (common with CJK text)
   if (ftsResults.length === 0) {
     const escaped = escapeLikePattern(query);
@@ -701,15 +717,20 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
   // Search notes — FTS with LIKE fallback when FTS returns empty (common with CJK)
   let noteResults: GlobalSearchResult[];
   if (ftsQuery) {
-    noteResults = await db.getAllAsync<GlobalSearchResult>(
-      `SELECT 'note' as type, n.id, n.title,
-              SUBSTR(n.content, 1, 120) as snippet, n.updated_at
-       FROM notes n
-       INNER JOIN notes_fts fts ON n.rowid = fts.rowid
-       WHERE n.is_template = 0 AND notes_fts MATCH ?
-       ORDER BY n.updated_at DESC LIMIT ?`,
-      [ftsQuery, limit]
-    );
+    try {
+      noteResults = await db.getAllAsync<GlobalSearchResult>(
+        `SELECT 'note' as type, n.id, n.title,
+                SUBSTR(n.content, 1, 120) as snippet, n.updated_at
+         FROM notes n
+         INNER JOIN notes_fts fts ON n.rowid = fts.rowid
+         WHERE n.is_template = 0 AND notes_fts MATCH ?
+         ORDER BY n.updated_at DESC LIMIT ?`,
+        [ftsQuery, limit]
+      );
+    } catch (e) {
+      console.warn('[DB] FTS5 globalSearch notes MATCH failed, falling back to LIKE:', e);
+      noteResults = [];
+    }
     if (noteResults.length === 0) {
       noteResults = await db.getAllAsync<GlobalSearchResult>(
         `SELECT 'note' as type, id, title,
@@ -732,17 +753,22 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
   // Search session messages — FTS with LIKE fallback
   let sessionResults: GlobalSearchResult[];
   if (ftsQuery) {
-    sessionResults = await db.getAllAsync<GlobalSearchResult>(
-      `SELECT 'session' as type, m.id, s.title,
-              SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
-              s.id as sessionId
-       FROM messages m
-       INNER JOIN messages_fts fts ON m.rowid = fts.rowid
-       INNER JOIN sessions s ON m.session_id = s.id
-       WHERE messages_fts MATCH ?
-       ORDER BY m.created_at DESC LIMIT ?`,
-      [ftsQuery, limit]
-    );
+    try {
+      sessionResults = await db.getAllAsync<GlobalSearchResult>(
+        `SELECT 'session' as type, m.id, s.title,
+                SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
+                s.id as sessionId
+         FROM messages m
+         INNER JOIN messages_fts fts ON m.rowid = fts.rowid
+         INNER JOIN sessions s ON m.session_id = s.id
+         WHERE messages_fts MATCH ?
+         ORDER BY m.created_at DESC LIMIT ?`,
+        [ftsQuery, limit]
+      );
+    } catch (e) {
+      console.warn('[DB] FTS5 globalSearch sessions MATCH failed, falling back to LIKE:', e);
+      sessionResults = [];
+    }
     if (sessionResults.length === 0) {
       sessionResults = await db.getAllAsync<GlobalSearchResult>(
         `SELECT 'session' as type, m.id, s.title,

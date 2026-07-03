@@ -407,7 +407,8 @@ impl ToolProxy {
     /// Confine a path to the vault directory. Relative paths are resolved
     /// against `vault_dir`. Delegates to `normalize_tool_path` which
     /// handles canonicalization and TOCTOU prevention. (#2258)
-    fn confine_path(&self, path: &str) -> Result<()> {
+    /// Returns the canonicalized `PathBuf` on success.
+    fn confine_path(&self, path: &str) -> Result<PathBuf> {
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
         if trimmed.is_empty() {
             return Err(anyhow!("path is empty"));
@@ -425,10 +426,8 @@ impl ToolProxy {
         // the canonicalized (symlink-resolved) path, preventing TOCTOU
         // between the security check and subsequent I/O. (#2258)
         let candidate_str = candidate.to_string_lossy().to_string();
-        match crate::normalize_tool_path(&candidate_str, &self.vault_dir) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow!("{}", sanitize_error(&e.to_string()))),
-        }
+        crate::normalize_tool_path(&candidate_str, &self.vault_dir)
+            .map_err(|e| anyhow!("{}", sanitize_error(&e.to_string())))
     }
 
     fn allow(&self, tool: &str, args_json: &str) -> ToolProxyResult {

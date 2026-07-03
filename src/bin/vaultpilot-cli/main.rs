@@ -1224,7 +1224,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             if *deep_search {
                 // Print keyword results first
                 println!("=== Keyword Results ===");
-                to_json(&result)?;
+                println!("{}", serde_json::to_string(&result)?);
                 // Then perform deep semantic search and show additional results
                 println!("\n--- 正在查找更多相关笔记... ---\n");
                 let deep_result = vaultpilot_lib::storage::deep_search_notes(
@@ -1238,12 +1238,12 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                         ..Default::default()
                     },
                 )?;
-                println!("=== AI 发现 (语义相关) ===");
-                to_json(&deep_result)?;
+                println!("=== AI 发现 (语义相关) ===\n");
+                println!("{}", serde_json::to_string(&deep_result)?);
+                Ok(Value::Null)
             } else {
-                to_json(&result)?;
+                to_json(&result)
             }
-            Ok(Value::Null) // to_json already printed
         }
         NotesActions::Import { paths } => {
             let result = import_markdown_with_context(context, paths)?;

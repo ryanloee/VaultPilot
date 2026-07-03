@@ -223,6 +223,27 @@ mod tests {
     }
 
     #[test]
+    fn regression_2368_windowed_uses_char_count_not_byte_count() {
+        let cfg = LiveContextConfig {
+            window_chars: 5,
+            ..Default::default()
+        };
+        let session = LiveContextSession::new(cfg);
+
+        // CJK text: each char is 3 bytes. Old code treated window_chars as
+        // byte offset, so 5 chars = 15 bytes — only ~5 bytes (= ~1 char) would
+        // be returned. With the fix, exactly 5 chars are returned.
+        let s = "你好世界你好世界"; // 8 chars, 24 bytes
+        let w = session.windowed(s);
+        assert_eq!(
+            w.chars().count(),
+            5,
+            "window should contain exactly window_chars characters"
+        );
+        assert_eq!(w, "界你好世界");
+    }
+
+    #[test]
     fn regression_1995_reset_clears_session_state() {
         let (temp, ctx) = setup_temp_context();
         let note = make_note("n", "Rust note", vec!["rust"], "ownership");

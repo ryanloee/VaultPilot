@@ -104,13 +104,17 @@ impl LiveContextSession {
     ///
     /// [`window_chars`]: LiveContextConfig::window_chars
     pub fn windowed<'a>(&self, text: &'a str) -> &'a str {
-        let len = text.len();
-        if len <= self.config.window_chars {
+        let byte_len = text.len();
+        if byte_len <= self.config.window_chars {
             return text;
         }
-        let mut start = len - self.config.window_chars;
-        while start < len && !text.is_char_boundary(start) {
-            start += 1;
+        // Walk backward by actual character count, not byte count (#2368).
+        let mut start = byte_len;
+        for (count, (idx, _)) in text.char_indices().rev().enumerate() {
+            if count >= self.config.window_chars {
+                break;
+            }
+            start = idx;
         }
         &text[start..]
     }

@@ -771,6 +771,7 @@ async fn http_list_subscriptions(
 
 /// POST /api/subscriptions — Create a new subscription.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateSubscriptionRequest {
     name: String,
     #[serde(default = "default_schedule")]

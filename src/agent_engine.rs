@@ -278,8 +278,11 @@ fn make_nonblocking<T: std::os::unix::io::AsRawFd>(handle: &T) {
     // arguments. `fd` came from a valid OS pipe handle.
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL, 0);
-        if flags >= 0 {
-            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        if flags >= 0 && libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            let err = std::io::Error::last_os_error();
+            eprintln!(
+                "[agent_engine] make_nonblocking: failed to set O_NONBLOCK on fd {fd}: {err}"
+            );
         }
     }
 }
@@ -458,9 +461,22 @@ impl SubprocessEngine {
                 // Timed out — child still running.
                 let _ = child.kill();
                 let _ = child.wait();
+                // Drain the channels FIRST (#2405), then set the flag.
+                // Handle recv_timeout errors so blocked drain threads are
+                // not silently leaked (#2407).
+                if let Err(e) = out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
+                    tracing::warn!(
+                        "[agent_engine] stdout drain timed out after kill — \
+                         thread may be blocked on a non-blocking FD: {e:?}"
+                    );
+                }
+                if let Err(e) = err_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
+                    tracing::warn!(
+                        "[agent_engine] stderr drain timed out after kill — \
+                         thread may be blocked on a non-blocking FD: {e:?}"
+                    );
+                }
                 drain_done.store(true, Ordering::Relaxed);
-                let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
-                let _ = err_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 bail!(
                     "agent engine '{}' timed out after {:?}",
                     self.engine_name,
@@ -470,9 +486,20 @@ impl SubprocessEngine {
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // Drain the channels FIRST (#2405), then set the flag.
+                if let Err(e) = out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
+                    tracing::warn!(
+                        "[agent_engine] stdout drain timed out after error — \
+                         thread may be blocked on a non-blocking FD: {e:?}"
+                    );
+                }
+                if let Err(e) = err_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
+                    tracing::warn!(
+                        "[agent_engine] stderr drain timed out after error — \
+                         thread may be blocked on a non-blocking FD: {e:?}"
+                    );
+                }
                 drain_done.store(true, Ordering::Relaxed);
-                let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
-                let _ = err_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 bail!(
                     "failed to wait for agent engine '{}': {}",
                     self.engine_name,

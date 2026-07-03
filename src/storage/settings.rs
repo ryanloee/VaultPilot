@@ -31,13 +31,16 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
         .with_context(|| format!("failed to parse {}", paths.settings_path.display()))?;
 
     // Decrypt API keys so comparison with incoming (plaintext) values works.
+    // Propagate decryption errors so callers can distinguish between "no key"
+    // and "key present but undecryptable" (#2406).
     if !parsed.provider.api_key.is_empty() {
         parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
-            .unwrap_or(parsed.provider.api_key);
+            .context("Failed to decrypt stored API key — the machine key may have changed. Please re-enter your API key in Settings")?;
     }
     for p in &mut parsed.providers {
         if !p.api_key.is_empty() {
-            p.api_key = crate::crypto::decrypt_secret(&p.api_key).unwrap_or(p.api_key.clone());
+            p.api_key = crate::crypto::decrypt_secret(&p.api_key)
+                .context("Failed to decrypt provider API key")?;
         }
     }
     parsed.migrate_providers();
@@ -189,7 +192,18 @@ pub fn save_settings_with_context(
     // The UI sends masked keys (e.g. "sk-a…qrst") which would overwrite
     // the real encrypted key if saved as-is. Load the current settings
     // and keep any key that hasn't been explicitly changed by the user.
-    if let Ok(existing_settings) = load_settings_raw(context) {
+    // If decryption fails (e.g. machine key changed), fall back to reading
+    // the encrypted keys from raw JSON so we don't overwrite them with
+    // masked values (#2406).
+    let existing_settings = load_settings_raw(context).or_else(|_| -> Result<AppSettings> {
+        // Decryption failed — read raw JSON to preserve encrypted keys.
+        let raw = fs::read_to_string(&paths.settings_path)
+            .with_context(|| format!("failed to read {}", paths.settings_path.display()))?;
+        let normalized = raw.trim_start_matches('\u{feff}');
+        serde_json::from_str(normalized)
+            .with_context(|| format!("failed to parse {}", paths.settings_path.display()))
+    });
+    if let Ok(existing_settings) = existing_settings {
         if existing_settings.provider.api_key != settings.provider.api_key
             && is_masked_key(&settings.provider.api_key)
             && !settings.provider.api_key.is_empty()

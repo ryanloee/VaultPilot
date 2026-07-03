@@ -576,8 +576,18 @@ impl AgentSession {
         // never close and the I/O tasks would hang forever. (#2177)
         let io_timeout = Duration::from_secs(5);
         tokio::select! {
-            _ = &mut stdout_task => {},
-            _ = &mut stderr_task => {},
+            _ = &mut stdout_task => {
+                // stdout finished first — abort the still-running stderr
+                // task to avoid leaking the JoinHandle (#2404).
+                stderr_task.abort();
+                let _ = stderr_task.await;
+            },
+            _ = &mut stderr_task => {
+                // stderr finished first — abort the still-running stdout
+                // task to avoid leaking the JoinHandle (#2404).
+                stdout_task.abort();
+                let _ = stdout_task.await;
+            },
             _ = tokio::time::sleep(io_timeout) => {
                 stdout_task.abort();
                 stderr_task.abort();

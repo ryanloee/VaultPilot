@@ -315,7 +315,7 @@ pub async fn ask_with_ai_with_context(
                 };
                 tool_results.push(ToolExecution::new(
                     "list_directory",
-                    format!("path={}", path),
+                    format!("path={}", path.trim()),
                     output,
                     is_error,
                 ));
@@ -347,7 +347,7 @@ pub async fn ask_with_ai_with_context(
                 };
                 tool_results.push(ToolExecution::new(
                     "read_file",
-                    format!("path={}", path),
+                    format!("path={}", path.trim()),
                     output,
                     is_error,
                 ));

@@ -323,7 +323,7 @@ export async function getNote(id: string): Promise<DbNote | null> {
   return db.getFirstAsync<DbNote>('SELECT * FROM notes WHERE id = ?', [id]);
 }
 
-export async function updateNote(id: string, title: string, content: string): Promise<void> {
+export async function updateNote(id: string, title: string, content: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
   await db.runAsync(
     'UPDATE notes SET title = ?, content = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?',
@@ -331,7 +331,7 @@ export async function updateNote(id: string, title: string, content: string): Pr
   );
   invalidateNoteTitleCache();
   // Queue note for offline sync push (#2372)
-  await queuePendingSync(id);
+  if (!options?.skipQueue) await queuePendingSync(id);
 }
 
 export async function deleteNote(id: string): Promise<void> {

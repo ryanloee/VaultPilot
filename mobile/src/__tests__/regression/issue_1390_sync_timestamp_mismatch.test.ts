@@ -90,7 +90,7 @@ describe('sync timestamp unit mismatch (#1390)', () => {
     const result = await syncNotesFromServer();
     expect(result.updated).toBe(1);
     expect(result.skipped).toBe(0);
-    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content');
+    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content', { skipQueue: true });
   });
 
   it('skips when local and server timestamps are equal (boundary)', async () => {

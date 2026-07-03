@@ -54,7 +54,7 @@ export function parseSSEStream(
 
       for (const line of lines) {
         if (line.startsWith("data:")) {
-          dataParts.push(line.slice(5).trimStart());
+          dataParts.push(line.slice(5).trim());
           continue;
         }
         // Empty line = end of event; process accumulated data parts

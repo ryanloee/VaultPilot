@@ -233,7 +233,7 @@ describe('syncNotesFromServer', () => {
     const result = await syncNotesFromServer();
     expect(result.updated).toBe(1);
     expect(result.imported).toBe(0);
-    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content');
+    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content', { skipQueue: true });
   });
 
   it('counts errors when note detail fetch fails', async () => {

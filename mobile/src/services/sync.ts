@@ -269,7 +269,7 @@ async function doSync(
 
       const localNote = localMap.get(meta.id);
       if (localNote) {
-        await updateNote(meta.id, title, content);
+        await updateNote(meta.id, title, content, { skipQueue: true });
         updated++;
       } else {
         await createNote(title, content, meta.id);
@@ -296,12 +296,14 @@ async function runWithConcurrency<T>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let index = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (index < items.length) {
+      if (signal?.aborted) return;
       const i = index++;
-      await fn(items[i]);
+      try { await fn(items[i]); } catch (e) { if (signal?.aborted) return; throw e; }
     }
   });
   await Promise.all(workers);
@@ -333,6 +335,9 @@ function combineSignals(...signals: AbortSignal[]): { signal: AbortSignal; clean
   const handlers: Array<[AbortSignal, () => void]> = [];
   for (const s of signals) {
     if (s.aborted) {
+      for (const [sig, h] of handlers) {
+        sig.removeEventListener('abort', h);
+      }
       combined.abort(s.reason);
       return { signal: combined.signal, cleanup: () => {} };
     }

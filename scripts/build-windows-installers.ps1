@@ -239,6 +239,7 @@ foreach ($platform in $Platforms) {
         /p:Platform=$platform `
         /p:RuntimeIdentifier=$($build.RuntimeId) `
         /p:SelfContained=true `
+        /p:WindowsAppSDKSelfContained=true `
         /p:PublishDir=$publishDir
     if ($LASTEXITCODE -ne 0) {
         throw "MSBuild publish failed for $platform."

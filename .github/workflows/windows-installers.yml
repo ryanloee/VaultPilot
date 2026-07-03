@@ -10,7 +10,7 @@ jobs:
   validate:
     permissions:
       contents: read
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout
@@ -121,7 +121,7 @@ jobs:
     permissions:
       contents: read
     needs: validate
-    runs-on: windows-latest
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
@@ -255,7 +255,7 @@ jobs:
       contents: write
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, linux_build]
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout

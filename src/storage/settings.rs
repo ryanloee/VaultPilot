@@ -8,6 +8,44 @@ use crate::models::AppSettings;
 use super::atomic_write;
 use super::pool::{AppPaths, StorageContext};
 
+/// Check if a string value looks like it was masked by [`mask_secret`] in
+/// `models::provider`.  Masked values either contain the Unicode ellipsis
+/// character `…` (U+2026) or are entirely composed of `*` (short keys).
+fn is_masked_key(s: &str) -> bool {
+    s.contains('\u{2026}') || (!s.is_empty() && s.chars().all(|c| c == '*'))
+}
+
+/// Load settings directly from the disk file, bypassing the in-memory cache.
+/// Returns `Err` if the file doesn't exist or can't be parsed, which is
+/// perfectly normal on first run — callers should use `Result<Option<..>>`
+/// semantics via `if let Ok`.
+fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
+    let paths = &context.paths;
+    if !paths.settings_path.exists() {
+        return Err(anyhow::anyhow!("settings file not found"));
+    }
+    let raw = fs::read_to_string(&paths.settings_path)
+        .with_context(|| format!("failed to read {}", paths.settings_path.display()))?;
+    let normalized = raw.trim_start_matches('\u{feff}');
+    let mut parsed: AppSettings = serde_json::from_str(normalized)
+        .with_context(|| format!("failed to parse {}", paths.settings_path.display()))?;
+
+    // Decrypt API keys so comparison with incoming (plaintext) values works.
+    if !parsed.provider.api_key.is_empty() {
+        parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
+            .unwrap_or(parsed.provider.api_key);
+    }
+    for p in &mut parsed.providers {
+        if !p.api_key.is_empty() {
+            p.api_key = crate::crypto::decrypt_secret(&p.api_key)
+                .unwrap_or(p.api_key.clone());
+        }
+    }
+    parsed.migrate_providers();
+    normalize_settings(&mut parsed, paths);
+    Ok(parsed)
+}
+
 pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     if let Some(vault_dir_override) = &paths.vault_dir_override {
         settings.vault_dir = vault_dir_override.to_string_lossy().to_string();
@@ -146,6 +184,28 @@ pub fn save_settings_with_context(
             "settings validation failed: {}",
             errors.join("; ")
         ));
+    }
+
+    // Preserve existing API keys if the incoming values are masked.
+    // The UI sends masked keys (e.g. "sk-a…qrst") which would overwrite
+    // the real encrypted key if saved as-is. Load the current settings
+    // and keep any key that hasn't been explicitly changed by the user.
+    if let Ok(existing_settings) = load_settings_raw(context) {
+        if existing_settings.provider.api_key != settings.provider.api_key
+            && is_masked_key(&settings.provider.api_key)
+            && !settings.provider.api_key.is_empty()
+        {
+            settings.provider.api_key = existing_settings.provider.api_key.clone();
+        }
+        for p in &mut settings.providers {
+            let existing = existing_settings.providers.iter()
+                .find(|ep| ep.name == p.name || ep.base_url == p.base_url);
+            if let Some(existing) = existing {
+                if p.api_key != existing.api_key && is_masked_key(&p.api_key) && !p.api_key.is_empty() {
+                    p.api_key = existing.api_key.clone();
+                }
+            }
+        }
     }
 
     // Encrypt API key before persisting to disk.

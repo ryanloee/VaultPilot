@@ -428,17 +428,18 @@ pub fn compression_system_prompt() -> String {
 }
 
 pub fn compression_user_prompt(existing_summary: &str, history: &[ConversationTurn]) -> String {
+    let summary = if existing_summary.trim().is_empty() {
+        "(none)".to_string()
+    } else {
+        existing_summary.to_string()
+    };
     format!(
         "Return strict JSON in this exact shape:\n\
          {{\"summary\":\"\"}}\n\n\
          {}\n\n\
          Conversation to compress:\n{}\n\n\
          Produce a compact memory summary in the user's language.",
-        if existing_summary.trim().is_empty() {
-            "(none)".to_string()
-        } else {
-            existing_summary.to_string()
-        },
+        sanitize_user_input(&summary),
         sanitize_history(&render_history(history)),
     )
 }

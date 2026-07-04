@@ -212,18 +212,25 @@ export const useAppStore = create<AppState>()(
       apiFormat: 'openai' as ApiFormat,
       setApiSettings: async (s) => {
         let updatedProviders: ProviderConfig[] | undefined;
+        let apiKeyChanged = false;
         set((state) => {
           const newState = mergeApiSettings(state, s);
           // Also sync to active provider
           const providers = [...state.providers];
           if (providers.length > 0) {
             const idx = clampProviderIndex(state.activeProviderIndex, providers.length);
+            // Track whether apiKey was explicitly provided and actually changed,
+            // so we only call saveProviderKeysSecure when meaningful and avoid
+            // overwriting SecureStore with empty keys on non-key updates (#2507 regression).
+            if (s.apiKey !== undefined && s.apiKey !== providers[idx].apiKey) {
+              apiKeyChanged = true;
+            }
             providers[idx] = { ...providers[idx], ...newState };
             updatedProviders = providers;
           }
           return { ...newState, providers };
         });
-        if (updatedProviders) await saveProviderKeysSecure(updatedProviders);
+        if (updatedProviders && apiKeyChanged) await saveProviderKeysSecure(updatedProviders);
       },
 
       providers: [],

@@ -111,10 +111,14 @@ export async function saveSettings(s: { apiBase?: string; apiKey?: string; model
   if (s.apiFormat !== undefined) ops.push(AsyncStorage.setItem(KEYS.apiFormat, s.apiFormat));
   await Promise.all(ops);
   invalidateSettingsCache();
-  // Also sync the in-memory Zustand store so getSettings() doesn't return stale data (#2507)
-  const store = useAppStore.getState();
-  if (store.apiBase || store.providers.length > 0) {
-    await store.setApiSettings(s);
+  // Also sync the in-memory Zustand store so getSettings() doesn't return stale data (#2507).
+  // Only do this when at least one field was actually provided — otherwise skip to avoid
+  // triggering unnecessary persist middleware writes that break tests expecting no side effects.
+  if (s.apiBase !== undefined || s.apiKey !== undefined || s.model !== undefined || s.apiFormat !== undefined) {
+    const store = useAppStore.getState();
+    if (store.apiBase || store.providers.length > 0) {
+      await store.setApiSettings(s);
+    }
   }
 }
 

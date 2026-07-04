@@ -580,7 +580,7 @@ async fn http_progressive_search(
                         tracing::warn!("progressive keyword search failed: {e}");
                         let _ = sse_tx
                             .send(Ok(Event::default().data(
-                                serde_json::json!({"stage": "error", "message": format!("{e}")})
+                                serde_json::json!({"stage": "error", "message": "Internal error"})
                                     .to_string(),
                             )))
                             .await;

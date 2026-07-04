@@ -541,12 +541,28 @@ impl SubprocessEngine {
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
                 let (tx, rx) = mpsc::channel::<std::io::Result<()>>();
-                std::thread::Builder::new()
+                let _stdin_thread = match std::thread::Builder::new()
                     .name("agent-stdin-write".into())
                     .spawn(move || {
                         let _ = tx.send(stdin.write_all(composed.as_bytes()));
-                    })
-                    .unwrap();
+                    }) {
+                    Ok(handle) => handle,
+                    Err(e) => {
+                        // #2493 — the stdin-write thread could not be spawned
+                        // (e.g. resource exhaustion on a heavily loaded system).
+                        // Signal drain threads to stop, kill/reap the child to
+                        // avoid a zombie, join both drain threads so they finish
+                        // sending their data, then drain the channels.
+                        drain_done.store(true, Ordering::Relaxed);
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = stdout_thread.join();
+                        let _ = stderr_thread.join();
+                        let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
+                        let _ = err_rx.recv_timeout(IO_DRAIN_TIMEOUT);
+                        return Err(e).with_context(|| "failed to spawn stdin write thread");
+                    }
+                };
                 match rx.recv_timeout(IO_DRAIN_TIMEOUT) {
                     Ok(Ok(())) => { /* written successfully */ }
                     Ok(Err(e)) => {

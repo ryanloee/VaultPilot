@@ -33,6 +33,11 @@ export function parseSSEStream(
   options?: ParseSSEOptions,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Fail fast if signal is already aborted (#2508)
+    if (options?.signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = "";

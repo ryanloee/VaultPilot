@@ -111,6 +111,11 @@ export async function saveSettings(s: { apiBase?: string; apiKey?: string; model
   if (s.apiFormat !== undefined) ops.push(AsyncStorage.setItem(KEYS.apiFormat, s.apiFormat));
   await Promise.all(ops);
   invalidateSettingsCache();
+  // Also sync the in-memory Zustand store so getSettings() doesn't return stale data (#2507)
+  const store = useAppStore.getState();
+  if (store.apiBase || store.providers.length > 0) {
+    await store.setApiSettings(s);
+  }
 }
 
 // ── Chat ──────────────────────────────────────────────────
@@ -160,7 +165,8 @@ async function chatAnthropic(
   let onSignalAbort: (() => void) | undefined;
   if (signal) {
     onSignalAbort = () => controller.abort(signal.reason);
-    signal.addEventListener('abort', onSignalAbort, { once: true });
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener('abort', onSignalAbort, { once: true });
   }
 
   const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
@@ -227,9 +233,11 @@ async function chatAnthropic(
 
     // Wrap Anthropic SSE into OpenAI-compatible format so parseSSEStream works
     const anthropicBody = res.body;
+    let anthropicReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     return new ReadableStream<Uint8Array>({
       start(ctrl) {
         const reader = anthropicBody.getReader();
+        anthropicReader = reader;
         const decoder = new TextDecoder();
         let buffer = '';
         let currentEvent = '';
@@ -269,6 +277,9 @@ async function chatAnthropic(
           }
         })();
       },
+      cancel(reason) {
+        anthropicReader?.cancel(reason).catch(() => {});
+      },
     });
   } finally {
     if (!started) {
@@ -290,8 +301,9 @@ async function chatOpenAI(
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
   const sig = signal;
   const onSignalAbort = sig ? () => controller.abort(sig.reason) : undefined;
-  if (sig && onSignalAbort) {
-    sig.addEventListener('abort', onSignalAbort, { once: true });
+  if (sig) {
+    if (sig.aborted) controller.abort(sig.reason);
+    else sig.addEventListener('abort', onSignalAbort!, { once: true });
   }
 
   let streamingReturned = false;
@@ -364,9 +376,11 @@ async function chatOpenAI(
     const body = res.body;
     const timeoutController = controller;
     streamingReturned = true;
+    let openaiReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     return new ReadableStream<Uint8Array>({
       start(ctrl) {
         const reader = body.getReader();
+        openaiReader = reader;
         const onTimeout = () => { reader.cancel('timeout').catch(() => {}); ctrl.error(new DOMException('Timeout', 'AbortError')); };
         timeoutController.signal.addEventListener('abort', onTimeout, { once: true });
         (async () => {
@@ -384,6 +398,9 @@ async function chatOpenAI(
             if (onSignalAbort) sig?.removeEventListener('abort', onSignalAbort);
           }
         })();
+      },
+      cancel(reason) {
+        openaiReader?.cancel(reason).catch(() => {});
       },
     });
   } catch (e: unknown) {
@@ -481,8 +498,9 @@ export async function chatWithReconnect(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
     const onSignalAbort = signal ? () => controller.abort(signal.reason) : undefined;
-    if (signal && onSignalAbort) {
-      signal.addEventListener('abort', onSignalAbort, { once: true });
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener('abort', onSignalAbort!, { once: true });
     }
 
     try {
@@ -518,8 +536,9 @@ export async function chatWithReconnect(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
   const onSignalAbort = signal ? () => controller.abort(signal.reason) : undefined;
-  if (signal && onSignalAbort) {
-    signal.addEventListener('abort', onSignalAbort, { once: true });
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener('abort', onSignalAbort!, { once: true });
   }
 
   try {

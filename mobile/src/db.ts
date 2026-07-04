@@ -566,6 +566,7 @@ export async function setTemplateFlag(noteId: string, isTemplate: boolean): Prom
     isTemplate ? 1 : 0,
     noteId,
   ]);
+  invalidateNoteTitleCache();
 }
 
 /**

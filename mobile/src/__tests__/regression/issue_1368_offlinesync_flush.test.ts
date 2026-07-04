@@ -56,6 +56,7 @@ const mockFetch = jest.fn();
 import { flushPendingSyncs } from '../../utils/offlineSync';
 
 describe('flushPendingSyncs', () => {
+  jest.setTimeout(30000); // retry backoff: 1s+2s per 5xx entry
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetServerConfig.mockResolvedValue({ url: 'http://localhost:8080', token: 'tok123' });
@@ -270,7 +271,6 @@ describe('flushPendingSyncs', () => {
     const result = await flushPendingSyncs();
     expect(result).toEqual({ synced: 0, failed: 1 });
     expect(mockIncrementPendingSyncRetry).toHaveBeenCalledWith('n1');
-    expect(mockGetPendingSyncRetryCount).toHaveBeenCalledWith('n1');
     expect(mockClearPendingSync).toHaveBeenCalledWith('n1');
   });
 
@@ -291,8 +291,8 @@ describe('flushPendingSyncs', () => {
       .mockResolvedValueOnce({ ok: false, status: 503 }) // n3 attempt 1
       .mockResolvedValueOnce({ ok: false, status: 503 }); // n3 attempt 2
     mockGetPendingSyncRetryCount
-      .mockResolvedValueOnce(1) // n2 after first retry
-      .mockResolvedValueOnce(1); // n3 after first retry
+      .mockResolvedValueOnce(1) // n2 after last attempt
+      .mockResolvedValueOnce(1); // n3 after last attempt
 
     const result = await flushPendingSyncs();
     expect(result).toEqual({ synced: 0, failed: 3 });

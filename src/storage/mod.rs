@@ -40,7 +40,7 @@ pub use notes::{
     ocr_image_text_async, rebuild_index_async, rebuild_index_with_context, save_note_async,
     save_note_with_context, save_note_with_images_async, save_note_with_images_with_context,
     search_candidate_notes_async, search_candidate_notes_with_context, vault_export_async,
-    vault_export_with_context,
+    vault_export_with_context, NoteNotFound,
 };
 // Re-export collections public API so callers see no difference.
 pub use collections::{

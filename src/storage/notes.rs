@@ -20,6 +20,19 @@ use tracing::{instrument, warn};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+/// Error type indicating a note was not found. Used instead of string matching
+/// for robust 404 detection. (#2516)
+#[derive(Debug)]
+pub struct NoteNotFound(pub String);
+
+impl std::fmt::Display for NoteNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "note not found: {}", self.0)
+    }
+}
+
+impl std::error::Error for NoteNotFound {}
+
 use crate::models::{ExportResult, ImportResult, NoteDocument, NoteMeta, VaultExportResult};
 
 use super::pool::open_connection;
@@ -152,7 +165,7 @@ pub fn load_note_with_context(context: &StorageContext, note_id: &str) -> Result
             |row| row.get::<_, String>(0),
         )
         .optional()?
-        .ok_or_else(|| anyhow!("note not found: {note_id}"))?;
+        .ok_or_else(|| anyhow::Error::from(NoteNotFound(note_id.to_string())))?;
     parse_markdown_note(Path::new(&path), "manual")
 }
 
@@ -487,7 +500,7 @@ pub fn find_related_notes_with_context(
 ) -> Result<Vec<crate::models::RelatedNote>> {
     let (connection, _) = open_connection(context)?;
     let source_meta = load_note_meta_by_id(&connection, note_id)?
-        .ok_or_else(|| anyhow!("note not found: {note_id}"))?;
+        .ok_or_else(|| anyhow::Error::from(NoteNotFound(note_id.to_string())))?;
     let source_doc = load_note_with_context(context, &source_meta.id)?;
 
     // Build a focused query from title + tags (most distinctive terms).

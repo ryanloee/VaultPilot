@@ -31,7 +31,7 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::storage::{
     deep_search_notes_async, load_note_async, load_settings_async, save_note_async,
-    search_notes_async, typeahead_search_async, StorageContext,
+    search_notes_async, typeahead_search_async, NoteNotFound, StorageContext,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path, run_single_subscription};
 
@@ -445,10 +445,7 @@ async fn http_get_note(
 /// distinguish "permanently absent" from "temporarily unreadable" and avoid
 /// accidentally deleting a local copy on a transient failure. (#2129)
 fn classify_note_load_error(e: &anyhow::Error) -> StatusCode {
-    let is_not_found = e
-        .chain()
-        .any(|cause| cause.to_string().contains("note not found"));
-    if is_not_found {
+    if e.downcast_ref::<NoteNotFound>().is_some() {
         StatusCode::NOT_FOUND
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
@@ -2185,9 +2182,9 @@ mod tests {
 
     #[test]
     fn classify_note_load_error_not_found_is_404() {
-        // The storage layer emits `anyhow!("note not found: {id}")` for a
-        // genuinely absent note. This must classify as 404.
-        let e = anyhow::Error::msg("note not found: some-note-id");
+        // The storage layer emits `NoteNotFound` wrapped in an `anyhow::Error`
+        // for a genuinely absent note. This must classify as 404.
+        let e = anyhow::Error::from(NoteNotFound("some-note-id".to_string()));
         assert_eq!(classify_note_load_error(&e), StatusCode::NOT_FOUND);
     }
 
@@ -2215,11 +2212,10 @@ mod tests {
 
     #[test]
     fn classify_note_load_error_chained_not_found_is_404() {
-        // When "note not found" appears in the error CHAIN (wrapped by another
-        // error), it should still be recognized as 404.
-        let result: Result<(), anyhow::Error> =
-            Err(anyhow::Error::msg("note not found: wrapped-id"));
-        let outer = result.context("failed during sync").unwrap_err();
+        // When `NoteNotFound` appears in the error CHAIN (wrapped by another
+        // error using `.context()`), it should still be recognized as 404.
+        let inner = anyhow::Error::from(NoteNotFound("wrapped-id".to_string()));
+        let outer = inner.context("failed during sync");
         assert_eq!(classify_note_load_error(&outer), StatusCode::NOT_FOUND);
     }
 }

@@ -436,10 +436,10 @@ pub fn compression_user_prompt(existing_summary: &str, history: &[ConversationTu
     format!(
         "Return strict JSON in this exact shape:\n\
          {{\"summary\":\"\"}}\n\n\
-         {}\n\n\
+         Existing summary:\n{}\n\n\
          Conversation to compress:\n{}\n\n\
          Produce a compact memory summary in the user's language.",
-        sanitize_user_input(&summary),
+        summary,
         sanitize_history(&render_history(history)),
     )
 }
@@ -710,7 +710,7 @@ pub fn plan_generation_user_prompt(task: &str, tool_results: &[String]) -> Strin
          {}\n\n\
          <recon_results>\n{}\n</recon_results>",
         sanitize_user_input(task),
-        escape_xml_tags(&render_tool_results(tool_results), "<recon_results>"),
+        sanitize_tool_result(&render_tool_results(tool_results)),
     )
 }
 
@@ -1243,7 +1243,7 @@ mod tests {
         let prompt = compression_user_prompt("previous summary here", &history);
 
         assert!(prompt.contains("previous summary here"));
-        assert!(prompt.contains("<user_input>"));
+        assert!(prompt.contains("Existing summary:"));
         assert!(prompt.contains("user: question 1"));
         assert!(prompt.contains("assistant: answer 1"));
         assert!(prompt.contains("<conversation_history>"));

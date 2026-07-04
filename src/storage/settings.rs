@@ -214,7 +214,7 @@ pub fn save_settings_with_context(
             let existing = existing_settings
                 .providers
                 .iter()
-                .find(|ep| ep.name == p.name && ep.base_url == p.base_url && ep.model == p.model);
+                .find(|ep| ep.name == p.name && ep.base_url == p.base_url);
             if let Some(existing) = existing {
                 if p.api_key != existing.api_key
                     && is_masked_key(&p.api_key)

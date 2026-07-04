@@ -130,7 +130,9 @@ describe('#2154 template DB operations', () => {
     expect(params[0]).toBe(1);
 
     await db.setTemplateFlag('note1', false);
-    const [, params2] = mockDb.runAsync.mock.calls[1];
+    // calls[2] because each setTemplateFlag now does UPDATE + queuePendingSync
+    const [sql2, params2] = mockDb.runAsync.mock.calls[2];
+    expect(sql2).toContain('UPDATE notes SET is_template');
     expect(params2[0]).toBe(0);
   });
 

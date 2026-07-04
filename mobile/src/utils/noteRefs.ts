@@ -8,7 +8,7 @@
  * to avoid substring false positives (e.g. "React" ≠ "React Native").
  */
 
-import { getNotes } from '../db';
+import { getNotes, invalidateNoteTitleCache, setOnInvalidateNoteTitleCache } from '../db';
 
 export interface NoteRef {
   title: string;
@@ -19,35 +19,71 @@ export interface NoteRef {
 
 // Module-level cache: title → noteId
 let noteTitleCache: Map<string, string> | null = null;
+/** Promise for in-flight loadNoteTitleMap() — dedup concurrent callers (#2526). */
+let noteTitleMapPromise: Promise<Map<string, string>> | null = null;
+/** True if invalidation happened while loading — prevents restoring stale data. */
+let noteTitleMapDirty = false;
 let cacheTimestamp = 0;
 const CACHE_TTL_MS = 30_000;
+
+// Register a callback so db.ts invalidations also clear this cache (#2527).
+setOnInvalidateNoteTitleCache(() => {
+  noteTitleCache = null;
+  if (noteTitleMapPromise) {
+    noteTitleMapDirty = true;
+  }
+  cacheTimestamp = 0;
+});
 
 /**
  * Load all non-template note titles from DB into a cached map (title → id).
  * Titles sorted by length descending for greedy longest-match.
+ *
+ * Dedups concurrent callers: if another call is already in-flight, subsequent
+ * callers await the same promise instead of firing duplicate DB queries (#2526).
  */
 export async function loadNoteTitleMap(): Promise<Map<string, string>> {
   const now = Date.now();
   if (noteTitleCache && now - cacheTimestamp < CACHE_TTL_MS) {
     return noteTitleCache;
   }
-  const notes = await getNotes();
-  const sorted = [...notes].sort((a, b) => b.title.length - a.title.length);
-  const map = new Map<string, string>();
-  for (const n of sorted) {
-    if (n.title.trim()) {
-      map.set(n.title, n.id);
-    }
-  }
-  noteTitleCache = map;
-  cacheTimestamp = now;
-  return map;
+  if (noteTitleMapPromise) return noteTitleMapPromise;
+  noteTitleMapPromise = _doLoadNoteTitleMap(now);
+  return noteTitleMapPromise;
 }
 
-/** Force cache refresh on next load (e.g. after note create/delete). */
+async function _doLoadNoteTitleMap(startTime: number): Promise<Map<string, string>> {
+  try {
+    const notes = await getNotes();
+    const sorted = [...notes].sort((a, b) => b.title.length - a.title.length);
+    const map = new Map<string, string>();
+    for (const n of sorted) {
+      if (n.title.trim()) {
+        map.set(n.title, n.id);
+      }
+    }
+    // Only cache if not invalidated while we were loading (#2526 read race)
+    if (!noteTitleMapDirty) {
+      noteTitleCache = map;
+      cacheTimestamp = startTime;
+    }
+    return map;
+  } finally {
+    noteTitleMapPromise = null;
+    noteTitleMapDirty = false;
+  }
+}
+
+/** Force cache refresh on next load (e.g. after note create/delete). Also
+ *  invalidates the db.ts cache to keep both caches in sync (#2527). */
 export function clearNoteTitleCache(): void {
   noteTitleCache = null;
   cacheTimestamp = 0;
+  if (noteTitleMapPromise) {
+    noteTitleMapDirty = true;
+  }
+  // Invalidate the db.ts cache too, so both note-title caches stay in sync (#2527).
+  invalidateNoteTitleCache();
 }
 
 /**

@@ -55,7 +55,7 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
       (async () => {
         try {
           await flushPendingSyncs();
-          if (!cancelled) refreshRef.current();
+          if (!cancelled) await refreshRef.current();
         } catch (e) {
           console.warn('[OfflineSync] flush failed:', e);
         } finally {
@@ -64,7 +64,7 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
       })();
     }
     prevOnline.current = isOnline;
-    return () => { cancelled = true; isFlushingRef.current = false; };
+    return () => { cancelled = true; };
   }, [isOnline]);
 
   return { pendingCount, refresh };

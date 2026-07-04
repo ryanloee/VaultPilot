@@ -332,7 +332,8 @@ export async function createNote(title = '无标题', content = '', id?: string,
   const db = await getDb();
   const noteId = id ?? uuid();
   const isTemplate = options?.is_template ?? 0;
-  await db.runAsync('INSERT OR REPLACE INTO notes (id, title, content, is_template) VALUES (?, ?, ?, ?)',
+  await db.runAsync(
+    'INSERT INTO notes (id, title, content, is_template) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, content = excluded.content, is_template = excluded.is_template, updated_at = strftime(\'%s\',\'now\')',
     [noteId, title, content, isTemplate]);
   invalidateNoteTitleCache();
   if (!options?.skipQueue) await queuePendingSync(noteId);
@@ -377,34 +378,72 @@ export async function getNoteByTitle(title: string): Promise<DbNote | null> {
 
 /** Cache of note title → id mappings, built lazily for wikilink resolution. */
 let noteTitleCache: Map<string, string> | null = null;
+/** Promise for an in-flight getNoteTitleMap() call — dedup concurrent callers (#2526). */
+let noteTitleMapPromise: Promise<Map<string, string>> | null = null;
+/** True if an invalidation occurred while a load was in-flight; prevents restoring stale data. */
+let noteTitleMapDirty = false;
+/** External cache-invalidation callbacks (e.g. noteRefs.ts keeps its own cache in sync — #2527). */
+let onInvalidateNoteTitleCache: (() => void) | null = null;
+
+/**
+ * Register a callback invoked whenever the note title cache is invalidated.
+ * Used by noteRefs.ts to keep its separate cache in sync and prevent
+ * cross-invalidation bugs (#2527).
+ */
+export function setOnInvalidateNoteTitleCache(fn: () => void): void {
+  onInvalidateNoteTitleCache = fn;
+}
 
 /**
  * Invalidate the note title cache. Call whenever notes are created, updated, or deleted.
  * The cache is rebuilt on the next call to getNoteTitleMap().
+ * Also notifies registered external listeners (e.g. noteRefs.ts) so their cache
+ * stays in sync (#2527).
  */
 export function invalidateNoteTitleCache(): void {
   noteTitleCache = null;
+  if (noteTitleMapPromise) {
+    noteTitleMapDirty = true;
+  }
+  onInvalidateNoteTitleCache?.();
 }
 
 /**
  * Build or return the cached note title → id map.
  * Used by MarkdownPreview to resolve [[wikilinks]] without repeated DB queries.
+ *
+ * Dedups concurrent callers: if another call is already in-flight, subsequent
+ * callers await the same promise instead of firing duplicate DB queries (#2526).
  */
 export async function getNoteTitleMap(): Promise<Map<string, string>> {
   if (noteTitleCache) return noteTitleCache;
-  const db = await getDb();
-  const notes = await db.getAllAsync<{ id: string; title: string }>(
-    'SELECT id, title FROM notes WHERE is_template = 0'
-  );
-  const map = new Map<string, string>();
-  for (const n of notes) {
-    if (n.title.trim()) {
-      // Lowercase key for case-insensitive matching
-      map.set(n.title.trim().toLowerCase(), n.id);
+  if (noteTitleMapPromise) return noteTitleMapPromise;
+  noteTitleMapPromise = _doGetNoteTitleMap();
+  return noteTitleMapPromise;
+}
+
+async function _doGetNoteTitleMap(): Promise<Map<string, string>> {
+  try {
+    const db = await getDb();
+    const notes = await db.getAllAsync<{ id: string; title: string }>(
+      'SELECT id, title FROM notes WHERE is_template = 0'
+    );
+    const map = new Map<string, string>();
+    for (const n of notes) {
+      if (n.title.trim()) {
+        // Lowercase key for case-insensitive matching
+        map.set(n.title.trim().toLowerCase(), n.id);
+      }
     }
+    // Only cache if not invalidated while we were loading (#2526 read race)
+    if (!noteTitleMapDirty) {
+      noteTitleCache = map;
+    }
+    return map;
+  } finally {
+    noteTitleMapPromise = null;
+    noteTitleMapDirty = false;
   }
-  noteTitleCache = map;
-  return noteTitleCache;
 }
 
 export async function toggleStar(id: string): Promise<void> {

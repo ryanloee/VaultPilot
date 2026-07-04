@@ -120,16 +120,19 @@ describe('flushPendingSyncs', () => {
     ]);
     // First note succeeds, second throws network error, third succeeds
     mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    // n2's network error is retried 3 times (FLUSH_RETRIES=2 → loop 0..2)
     mockFetch
-      .mockResolvedValueOnce({ ok: true })                              // n1 succeeds
-      .mockRejectedValueOnce(new Error('Network request failed'))      // n2 network error
-      .mockResolvedValue({ ok: true });                                 // n3+ success (default)
+      .mockResolvedValueOnce({ ok: true })                              // n1
+      .mockRejectedValueOnce(new Error('Network request failed'))      // n2 attempt 0
+      .mockRejectedValueOnce(new Error('Network request failed'))      // n2 attempt 1
+      .mockRejectedValueOnce(new Error('Network request failed'))      // n2 attempt 2
+      .mockResolvedValue({ ok: true });                                 // n3+
 
     const result = await flushPendingSyncs();
     expect(result.synced).toBe(2);   // n1 + n3
     expect(result.failed).toBe(1);   // n2 only
-    // Should have continued after error — n3 processed too
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    // Should have continued after error — n3 processed too (n1×1 + n2×3 + n3×1 = 5 calls)
+    expect(mockFetch).toHaveBeenCalledTimes(5);
   });
 
   it('includes Authorization header when token is set', async () => {
@@ -162,17 +165,19 @@ describe('flushPendingSyncs', () => {
       { note_id: 'n3' },
     ]);
     mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
-    // First returns 500, second succeeds, third succeeds
+    // n1's 500 is retried 3 times before giving up
     mockFetch
-      .mockResolvedValueOnce({ ok: false, status: 500 })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true });
+      .mockResolvedValueOnce({ ok: false, status: 500 })   // n1 attempt 0
+      .mockResolvedValueOnce({ ok: false, status: 500 })   // n1 attempt 1
+      .mockResolvedValueOnce({ ok: false, status: 500 })   // n1 attempt 2
+      .mockResolvedValueOnce({ ok: true })                 // n2
+      .mockResolvedValue({ ok: true });                    // n3+
 
     const result = await flushPendingSyncs();
     // n1 failed (server error), n2 and n3 synced
     expect(result.synced).toBe(2);
     expect(result.failed).toBe(1);
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch).toHaveBeenCalledTimes(5);  // n1×3 + n2×1 + n3×1
   });
 
   it('handles all notes deleted locally', async () => {
@@ -276,10 +281,15 @@ describe('flushPendingSyncs', () => {
       { note_id: 'n3' },
     ]);
     mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    // 5xx entries are retried 3 times each (FLUSH_RETRIES=2 → loop 0..2)
     mockFetch
-      .mockResolvedValueOnce({ ok: false, status: 404 }) // 4xx: clear
-      .mockResolvedValueOnce({ ok: false, status: 500 }) // 5xx: retry
-      .mockResolvedValueOnce({ ok: false, status: 503 }); // 5xx: retry
+      .mockResolvedValueOnce({ ok: false, status: 404 }) // n1 → clear (no retry)
+      .mockResolvedValueOnce({ ok: false, status: 500 }) // n2 attempt 0
+      .mockResolvedValueOnce({ ok: false, status: 500 }) // n2 attempt 1
+      .mockResolvedValueOnce({ ok: false, status: 500 }) // n2 attempt 2
+      .mockResolvedValueOnce({ ok: false, status: 503 }) // n3 attempt 0
+      .mockResolvedValueOnce({ ok: false, status: 503 }) // n3 attempt 1
+      .mockResolvedValueOnce({ ok: false, status: 503 }); // n3 attempt 2
     mockGetPendingSyncRetryCount
       .mockResolvedValueOnce(1) // n2 after first retry
       .mockResolvedValueOnce(1); // n3 after first retry

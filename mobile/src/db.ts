@@ -313,7 +313,13 @@ export async function updateMessage(id: string, content: string): Promise<void> 
 
 export async function deleteMessage(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('DELETE FROM messages WHERE id = ?', [id]);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "UPDATE sessions SET updated_at = strftime('%s','now') WHERE id = (SELECT session_id FROM messages WHERE id = ?)",
+      [id]
+    );
+    await db.runAsync('DELETE FROM messages WHERE id = ?', [id]);
+  });
 }
 
 export interface DbNote {
@@ -322,12 +328,14 @@ export interface DbNote {
   is_template?: number; // #2154 — 0 (regular note) or 1 (template). Optional for legacy rows pre-migration.
 }
 
-export async function createNote(title = '无标题', content = '', id?: string): Promise<string> {
+export async function createNote(title = '无标题', content = '', id?: string, options?: { skipQueue?: boolean; is_template?: number }): Promise<string> {
   const db = await getDb();
   const noteId = id ?? uuid();
-  await db.runAsync('INSERT INTO notes (id, title, content) VALUES (?, ?, ?)', [noteId, title, content]);
+  const isTemplate = options?.is_template ?? 0;
+  await db.runAsync('INSERT OR REPLACE INTO notes (id, title, content, is_template) VALUES (?, ?, ?, ?)',
+    [noteId, title, content, isTemplate]);
   invalidateNoteTitleCache();
-  await queuePendingSync(noteId);
+  if (!options?.skipQueue) await queuePendingSync(noteId);
   return noteId;
 }
 
@@ -432,7 +440,7 @@ export async function getNotes(folder?: string, limit?: number): Promise<DbNote[
 /** 只加载 id 和 updated_at，用于同步比较，避免全量 content 导致 OOM (#1668) */
 export async function getNoteTimestamps(): Promise<Array<{ id: string; updated_at: number }>> {
   const db = await getDb();
-  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes WHERE is_template = 0');
+  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes');
 }
 
 export async function getFolders(): Promise<string[]> {
@@ -455,16 +463,16 @@ export async function getNoteTags(noteId: string): Promise<string[]> {
   return rows.map(r => r.tag);
 }
 
-export async function addTag(noteId: string, tag: string): Promise<void> {
+export async function addTag(noteId: string, tag: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
   await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
-  await queuePendingSync(noteId);
+  if (!options?.skipQueue) await queuePendingSync(noteId);
 }
 
-export async function removeTag(noteId: string, tag: string): Promise<void> {
+export async function removeTag(noteId: string, tag: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
-  await queuePendingSync(noteId);
+  if (!options?.skipQueue) await queuePendingSync(noteId);
 }
 
 export async function getAllTags(): Promise<string[]> {

@@ -260,7 +260,7 @@ async function doSync(
       }
 
       const noteData = await noteRes.json() as {
-        meta: { id: string; title: string; tags?: string[] };
+        meta: { id: string; title: string; tags?: string[]; is_template?: number };
         body: string;
       };
 
@@ -272,7 +272,7 @@ async function doSync(
         await updateNote(meta.id, title, content, { skipQueue: true });
         updated++;
       } else {
-        await createNote(title, content, meta.id);
+        await createNote(title, content, meta.id, { skipQueue: true, is_template: noteData.meta.is_template ?? 0 });
         imported++;
       }
       // Sync tags from server to local database (#2477)
@@ -280,12 +280,12 @@ async function doSync(
       const localTags = await getNoteTags(meta.id);
       for (const tag of serverTags) {
         if (!localTags.includes(tag)) {
-          await addTag(meta.id, tag);
+          await addTag(meta.id, tag, { skipQueue: true });
         }
       }
       for (const tag of localTags) {
         if (!serverTags.includes(tag)) {
-          await removeTag(meta.id, tag);
+          await removeTag(meta.id, tag, { skipQueue: true });
         }
       }
       emitProgress('details');

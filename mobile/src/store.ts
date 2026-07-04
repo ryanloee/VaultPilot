@@ -26,21 +26,29 @@ export interface ProviderConfig {
 // API keys are stored in SecureStore (encrypted), not AsyncStorage (plain text).
 const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
 
+// Write queue to serialize SecureStore writes and prevent race conditions (#2519)
+let keySavePromise: Promise<void> = Promise.resolve();
+
 async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void> {
   const keys: Record<string, string> = {};
   for (const p of providers) {
     keys[p.name] = p.apiKey;
   }
-  try {
-    await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
-  } catch (e) {
-    console.warn('[SecureStore] Failed to save provider keys:', e);
-    Alert.alert(
-      '存储警告',
-      'API Key 未能安全保存，重启后可能丢失。请检查设备存储空间。',
-      [{ text: '知道了' }],
-    );
-  }
+  const prevPromise = keySavePromise;
+  const savePromise = prevPromise.then(async () => {
+    try {
+      await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+    } catch (e) {
+      console.warn('[SecureStore] Failed to save provider keys:', e);
+      Alert.alert(
+        '存储警告',
+        'API Key 未能安全保存，重启后可能丢失。请检查设备存储空间。',
+        [{ text: '知道了' }],
+      );
+    }
+  });
+  keySavePromise = savePromise.then(() => {}, () => {});
+  await savePromise;
 }
 
 async function loadProviderKeysSecure(): Promise<Record<string, string> | null> {

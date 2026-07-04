@@ -532,10 +532,48 @@ impl SubprocessEngine {
         // so a large prompt cannot deadlock against an un-drained stdout pipe.
         // Best-effort write; a closed stdin is not fatal. Taking + dropping
         // stdin here sends EOF to the child promptly.
+        //
+        // #2484 — protect the write with a timeout. If the child does not read
+        // stdin, `write_all` blocks indefinitely once the OS pipe buffer (~64 KB
+        // on Linux) fills up. We spawn a dedicated thread and use a channel with
+        // `recv_timeout` so the caller is never permanently blocked.
         if self.pass_prompt_via_stdin {
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
-                let _ = stdin.write_all(composed.as_bytes());
+                let (tx, rx) = mpsc::channel::<std::io::Result<()>>();
+                std::thread::Builder::new()
+                    .name("agent-stdin-write".into())
+                    .spawn(move || {
+                        let _ = tx.send(stdin.write_all(composed.as_bytes()));
+                    })
+                    .unwrap();
+                match rx.recv_timeout(IO_DRAIN_TIMEOUT) {
+                    Ok(Ok(())) => { /* written successfully */ }
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            "[agent_engine] stdin write failed for '{}': {e}",
+                            self.engine_name,
+                        );
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        tracing::warn!(
+                            "[agent_engine] stdin write timed out for '{}' after {}.{:03}s \
+                             — child may not be reading stdin",
+                            self.engine_name,
+                            IO_DRAIN_TIMEOUT.as_secs(),
+                            IO_DRAIN_TIMEOUT.subsec_millis(),
+                        );
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        tracing::warn!(
+                            "[agent_engine] stdin write thread disconnected for '{}'",
+                            self.engine_name,
+                        );
+                    }
+                }
+                // stdin is dropped here (thread owns it; if the thread is
+                // still blocked on write_all, stdin stays open until the child
+                // drains the pipe — acceptable for a best-effort write).
             }
         }
 

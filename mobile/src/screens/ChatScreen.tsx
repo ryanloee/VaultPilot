@@ -340,7 +340,9 @@ export default function ChatScreen({ navigation, route }: any) {
         // If session changed during streaming, skip DB write to avoid data leak
         if (!checkSessionAlive(activeSessionId)) {
           console.warn('[Chat] session changed during streaming — skipping updateMessage');
-          setMsgs(prev => prev.map(m => m.id === aiId ? { ...m, streaming: false } : m));
+          try { await deleteMessage(aiId); } catch (_) {}
+          try { await deleteMessage(userId); } catch (_) {}
+          setMsgs(prev => prev.filter(m => m.id !== userId && m.id !== aiId));
           return;
         }
         await updateMessage(aiId, full);
@@ -356,6 +358,9 @@ export default function ChatScreen({ navigation, route }: any) {
         // Check if session changed during abort — skip DB writes to avoid leaking data
         if (!checkSessionAlive(activeSessionId)) {
           console.warn('[Chat] session changed during abort — skipping DB writes');
+          try { await deleteMessage(aiId); } catch (_) {}
+          try { await deleteMessage(userId); } catch (_) {}
+          setMsgs(prev => prev.filter(m => m.id !== userId && m.id !== aiId));
           return;
         }
         if (partial) {
@@ -377,6 +382,9 @@ export default function ChatScreen({ navigation, route }: any) {
         // Check if session changed during error — skip DB writes to avoid leaking data
         if (!checkSessionAlive(activeSessionId)) {
           console.warn('[Chat] session changed during error — skipping DB writes');
+          try { await deleteMessage(aiId); } catch (_) {}
+          try { await deleteMessage(userId); } catch (_) {}
+          setMsgs(prev => prev.filter(m => m.id !== userId && m.id !== aiId));
           return;
         }
         // Persist partial content + error marker to database before updating UI

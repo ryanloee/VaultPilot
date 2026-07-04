@@ -185,9 +185,15 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
       }
     } catch (e) {
       console.warn('[OfflineSync] flush failed for note:', entry.note_id, e);
+      await incrementPendingSyncRetry(entry.note_id);
+      const retryCount = await getPendingSyncRetryCount(entry.note_id);
+      if (retryCount >= MAX_RETRY_ATTEMPTS) {
+        console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded (network error)`);
+        await clearPendingSync(entry.note_id);
+      }
       failed++;
-      // Stop flushing if network error — will retry next time
-      break;
+      // Continue processing remaining entries in the queue
+      continue;
     }
   }
 

@@ -206,7 +206,8 @@ pub async fn run_deep_research(
     });
 
     // ── Phase 1: Plan the research outline ──────────────────────────────
-    let plan = generate_research_plan(settings, &topic, &tier).await?;
+    let (plan, plan_usage) = generate_research_plan(settings, &topic, &tier).await?;
+    let mut total_usage = plan_usage;
     let total_rounds = plan.sub_questions.len();
     if total_rounds == 0 {
         return Err(anyhow!("research plan has no sub-questions"));
@@ -278,7 +279,16 @@ pub async fn run_deep_research(
             let summary = if raw_results.contains("[Search failed") {
                 raw_results.clone()
             } else {
-                summarize_search_round(settings, &sub_q.question, query, &raw_results).await?
+                match summarize_search_round(settings, &sub_q.question, query, &raw_results).await {
+                    Ok((s, usage)) => {
+                        total_usage = merge_usage(total_usage, usage);
+                        s
+                    }
+                    Err(e) => {
+                        tracing::warn!("summarize failed, falling back to raw results: {e}");
+                        raw_results.clone()
+                    }
+                }
             };
 
             // Extract citations from raw results
@@ -303,8 +313,9 @@ pub async fn run_deep_research(
     // ── Phase 3: Synthesize final report ─────────────────────────────────
     emit(DeepResearchEvent::Synthesizing);
 
-    let (report, report_citations) =
+    let (report, report_citations, synthesis_usage) =
         synthesize_report(settings, &topic, &plan, &round_results, &all_citations).await?;
+    total_usage = merge_usage(total_usage, synthesis_usage);
 
     // ── Phase 4: Save as vault note ─────────────────────────────────────
     let now = Utc::now();
@@ -363,11 +374,6 @@ pub async fn run_deep_research(
         note_title: saved_note_title.clone(),
     });
 
-    let total_usage = RequestUsage {
-        input_tokens: None,
-        output_tokens: None,
-    };
-
     Ok(ResearchResult {
         topic: topic.clone(),
         report,
@@ -387,7 +393,7 @@ async fn generate_research_plan(
     settings: &AppSettings,
     topic: &str,
     _tier: &DeepResearchTier,
-) -> Result<ResearchPlan> {
+) -> Result<(ResearchPlan, RequestUsage)> {
     let system = "\
 You are a research planning assistant. Your task is to decompose a research topic \
 into a structured set of sub-questions that, when answered, form a comprehensive \
@@ -442,7 +448,7 @@ Focus on producing sub-questions that are:
         return Err(anyhow!("research plan has no sub-questions"));
     }
 
-    Ok(plan)
+    Ok((plan, response.usage))
 }
 
 // ── Phase 2: Web Search ──────────────────────────────────────────────────
@@ -649,7 +655,7 @@ async fn summarize_search_round(
     question: &str,
     query: &str,
     raw_results: &str,
-) -> Result<String> {
+) -> Result<(String, RequestUsage)> {
     let system = "\
 You are a research assistant analyzing web search results. \
 Summarize the key findings from the search results that are relevant to the sub-question. \
@@ -674,7 +680,7 @@ Focus on factual information, specific data points, and named sources."#,
         .await
         .context("AI search round summarization failed")?;
 
-    Ok(response.text.trim().to_string())
+    Ok((response.text.trim().to_string(), response.usage))
 }
 
 /// Extract citations from raw search results.
@@ -726,7 +732,7 @@ async fn synthesize_report(
     plan: &ResearchPlan,
     round_results: &[SearchRoundResult],
     citations: &[ResearchCitation],
-) -> Result<(String, Vec<ResearchCitation>)> {
+) -> Result<(String, Vec<ResearchCitation>, RequestUsage)> {
     // Build the search context for the AI
     let mut context_parts = Vec::new();
     for (i, r) in round_results.iter().enumerate() {
@@ -823,7 +829,7 @@ IMPORTANT: Return the complete report as a Markdown string. Do NOT wrap it in JS
     // Re-number citations based on what's actually used in the report
     let report_citations = renumber_citations(&report_text, citations);
 
-    Ok((report_text, report_citations))
+    Ok((report_text, report_citations, response.usage))
 }
 
 /// Re-number citations based on what's actually referenced in the report.
@@ -861,6 +867,21 @@ fn renumber_citations(report: &str, all_citations: &[ResearchCitation]) -> Vec<R
     new_citations.sort_by_key(|c| c.number);
 
     new_citations
+}
+
+/// Merge two RequestUsage values by summing token counts.
+/// Matches the semantics of ask.rs:merge_usage.
+fn merge_usage(current: RequestUsage, next: RequestUsage) -> RequestUsage {
+    RequestUsage {
+        input_tokens: match (current.input_tokens, next.input_tokens) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+        },
+        output_tokens: match (current.output_tokens, next.output_tokens) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+        },
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

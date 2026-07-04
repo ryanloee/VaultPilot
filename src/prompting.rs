@@ -710,7 +710,7 @@ pub fn plan_generation_user_prompt(task: &str, tool_results: &[String]) -> Strin
          {}\n\n\
          <recon_results>\n{}\n</recon_results>",
         sanitize_user_input(task),
-        sanitize_tool_result(&render_tool_results(tool_results)),
+        escape_xml_tags(&render_tool_results(tool_results), "<recon_results>"),
     )
 }
 

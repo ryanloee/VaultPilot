@@ -39,6 +39,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentResourceLimits;
 
+/// Close a pipe handle on Windows via FFI.
+/// Equivalent to `CloseHandle` from `kernel32.dll`.
+#[cfg(windows)]
+unsafe fn close_windows_handle(handle: *mut std::ffi::c_void) {
+    extern "system" {
+        fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+    }
+    CloseHandle(handle);
+}
+
 /// Default system preamble injected into the composed prompt unless the caller
 /// overrides it. It orientates the external agent to the vault and to
 /// VaultPilot's capability model.
@@ -540,12 +550,21 @@ impl SubprocessEngine {
         if self.pass_prompt_via_stdin {
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
-                use std::os::unix::io::AsRawFd;
 
-                // Capture the raw fd before moving `stdin` into the closure,
-                // so we can close the pipe on timeout to unblock the thread
-                // (forcing BrokenPipe) and then join it cleanly.
-                let stdin_fd = stdin.as_raw_fd();
+                // Platform-specific raw handle capture.
+                // On Unix we need the raw fd so we can close the pipe on timeout
+                // (forcing BrokenPipe in the blocked thread). On Windows we use
+                // CloseHandle via FFI for the same purpose.
+                #[cfg(unix)]
+                use std::os::unix::io::AsRawFd;
+                #[cfg(windows)]
+                use std::os::windows::io::AsRawHandle;
+
+                #[cfg(unix)]
+                let stdin_raw = stdin.as_raw_fd();
+                #[cfg(windows)]
+                let stdin_raw = stdin.as_raw_handle();
+
                 let (tx, rx) = mpsc::channel::<std::io::Result<()>>();
                 let std_in_thread = match std::thread::Builder::new()
                     .name("agent-stdin-write".into())
@@ -592,8 +611,13 @@ impl SubprocessEngine {
                         // #2497 — close the pipe from this side to force BrokenPipe
                         // in the blocked thread, then join it to reclaim the OS
                         // resources (preventing unbounded thread leaks).
+                        #[cfg(unix)]
                         unsafe {
-                            libc::close(stdin_fd);
+                            libc::close(stdin_raw);
+                        }
+                        #[cfg(windows)]
+                        unsafe {
+                            close_windows_handle(stdin_raw);
                         }
                         let _ = std_in_thread.join();
                     }

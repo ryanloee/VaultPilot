@@ -1532,6 +1532,10 @@ pub async fn run_agent(
                                         );
                                     }
                                     _ => {
+                                        warn!(
+                                            "load_note_async failed for note_id={}: silently using empty content",
+                                            note_id
+                                        );
                                         obj.insert(
                                             "currentContent".to_string(),
                                             serde_json::json!(""),

@@ -7,7 +7,7 @@
  * 3. All syncs succeed → correct counts
  * 4. Deleted note locally → clears pending, counts as synced
  * 5. Server returns non-ok → increments failed
- * 6. Network error mid-flush → stops and returns partial counts
+ * 6. Network error mid-flush → continues processing, returns partial counts
  * 7. 4xx error → clears entry from queue, counts as failed
  * 8. 5xx error → increments retry count
  * 9. 5xx error max retries → clears entry from queue
@@ -112,23 +112,24 @@ describe('flushPendingSyncs', () => {
     expect(mockIncrementPendingSyncRetry).toHaveBeenCalledWith('n1');
   });
 
-  it('stops flushing on network error and returns partial counts', async () => {
+  it('continues flushing after network error and returns partial counts', async () => {
     mockGetPendingSyncs.mockResolvedValue([
       { note_id: 'n1' },
       { note_id: 'n2' },
       { note_id: 'n3' },
     ]);
-    // First note succeeds, second throws network error
+    // First note succeeds, second throws network error, third succeeds
     mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
     mockFetch
-      .mockResolvedValueOnce({ ok: true })
-      .mockRejectedValueOnce(new Error('Network request failed'));
+      .mockResolvedValueOnce({ ok: true })                              // n1 succeeds
+      .mockRejectedValueOnce(new Error('Network request failed'))      // n2 network error
+      .mockResolvedValue({ ok: true });                                 // n3+ success (default)
 
     const result = await flushPendingSyncs();
-    expect(result.synced).toBe(1);
-    expect(result.failed).toBe(1);
-    // Should have stopped after error — n3 never processed
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.synced).toBe(2);   // n1 + n3
+    expect(result.failed).toBe(1);   // n2 only
+    // Should have continued after error — n3 processed too
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
   it('includes Authorization header when token is set', async () => {

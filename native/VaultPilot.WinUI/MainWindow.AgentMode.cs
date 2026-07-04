@@ -71,7 +71,8 @@ public sealed partial class MainWindow : Window
         _agentModeActive = true;
         _agentCurrentStep = 0;
         _agentMaxSteps = maxSteps;
-        _agentCts?.Dispose();
+        var old = Interlocked.Exchange(ref _agentCts, null);
+        old?.Dispose();
         _agentCts = new CancellationTokenSource();
 
         // Update UI state

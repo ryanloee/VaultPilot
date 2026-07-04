@@ -128,13 +128,14 @@ public sealed class BackendClient : IAsyncDisposable
 
         try
         {
-            _readerCts?.Cancel();
+            var oldReaderCts = Interlocked.Exchange(ref _readerCts, null);
+            oldReaderCts?.Cancel();
             // Await old pump tasks to prevent concurrent readers on the same stream
             var oldStdout = _pumpStdoutTask;
             var oldStderr = _pumpStderrTask;
             if (oldStdout != null) try { await oldStdout; } catch { /* cancelled */ }
             if (oldStderr != null) try { await oldStderr; } catch { /* cancelled */ }
-            _readerCts?.Dispose();
+            oldReaderCts?.Dispose();
             _readerCts = new CancellationTokenSource();
             var token = _readerCts.Token;
             _pumpStdoutTask = Task.Run(() => PumpStdoutAsync(token));
@@ -523,7 +524,8 @@ public sealed class BackendClient : IAsyncDisposable
         _healthCheckTimer = null;
 
         // Cancel reader first to stop Pump thread from adding new pending entries
-        _readerCts?.Cancel();
+        var readerCts = Interlocked.Exchange(ref _readerCts, null);
+        readerCts?.Cancel();
 
         // Then fail all existing pending requests
         FailPending("Backend client disposed.");
@@ -532,7 +534,7 @@ public sealed class BackendClient : IAsyncDisposable
 
         _writeLock?.Dispose();
         _reconnectLock?.Dispose();
-        _readerCts?.Dispose();
+        readerCts?.Dispose();
     }
 
     private async Task DisposeProcessAsync()
@@ -564,7 +566,7 @@ public sealed class BackendClient : IAsyncDisposable
         }
         finally
         {
-            _readerCts?.Cancel();
+            Interlocked.Exchange(ref _readerCts, null)?.Cancel();
             process.Dispose();
             ConnectionStateChanged?.Invoke(false);
         }

@@ -678,11 +678,18 @@ public sealed partial class MainWindow : Window
 
         activeCts?.Dispose();
 
+        // Cancel Agent mode to prevent ObjectDisposedException from
+        // ExecuteAgentRequestAsync accessing disposed _backendClient (#2304)
+        var agentCts = Interlocked.Exchange(ref _agentCts, null);
+        agentCts?.Cancel();
+        agentCts?.Dispose();
+
         RemoveThinkingIndicator();
         StopAutoWakeTimer();
         UnsubscribeEvents();
         TryReleaseWindowFileDropHook();
         await SaveChatStateAsync();
+        _chatStateLock?.Dispose();
         await _backendClient.DisposeAsync();
         PruneClipboardImages();
     }

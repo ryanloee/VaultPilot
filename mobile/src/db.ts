@@ -917,6 +917,15 @@ export async function getPendingSyncs(): Promise<Array<{ id: number; note_id: st
   );
 }
 
+/** Get a single pending sync entry by note_id. */
+export async function getPendingSync(noteId: string): Promise<{ id: number; note_id: string; action: string; retry_count: number } | null> {
+  const db = await getDb();
+  return db.getFirstAsync<{ id: number; note_id: string; action: string; retry_count: number }>(
+    'SELECT * FROM pending_syncs WHERE note_id = ?',
+    [noteId]
+  );
+}
+
 /** Remove a pending sync entry after successful sync. */
 export async function clearPendingSync(noteId: string): Promise<void> {
   const db = await getDb();

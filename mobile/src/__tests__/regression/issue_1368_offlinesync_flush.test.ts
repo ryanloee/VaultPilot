@@ -19,6 +19,7 @@ const mockGetNote = jest.fn();
 const mockClearPendingSync = jest.fn();
 const mockGetPendingSyncCount = jest.fn().mockResolvedValue(0);
 const mockQueuePendingSync = jest.fn();
+const mockGetPendingSync = jest.fn();
 const mockIncrementPendingSyncRetry = jest.fn();
 const mockGetPendingSyncRetryCount = jest.fn();
 
@@ -32,6 +33,7 @@ jest.mock('../../db', () => ({
   clearPendingSync: mockClearPendingSync,
   getPendingSyncCount: mockGetPendingSyncCount,
   queuePendingSync: mockQueuePendingSync,
+  getPendingSync: mockGetPendingSync,
   incrementPendingSyncRetry: mockIncrementPendingSyncRetry,
   getPendingSyncRetryCount: mockGetPendingSyncRetryCount,
 }));
@@ -63,6 +65,9 @@ describe('flushPendingSyncs', () => {
     mockGetPendingSyncs.mockResolvedValue([]);
     mockGetNote.mockResolvedValue(null);
     mockClearPendingSync.mockResolvedValue(undefined);
+    mockGetPendingSync.mockImplementation((noteId: string) =>
+      Promise.resolve({ id: 1, note_id: noteId, action: 'update', retry_count: 0 })
+    );
     mockIncrementPendingSyncRetry.mockResolvedValue(undefined);
     mockGetPendingSyncRetryCount.mockResolvedValue(0);
   });
@@ -100,6 +105,34 @@ describe('flushPendingSyncs', () => {
     const result = await flushPendingSyncs();
     expect(result).toEqual({ synced: 1, failed: 0 });
     expect(mockClearPendingSync).toHaveBeenCalledWith('deleted1');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // #2522: Stale snapshot with 'update' action while DB has 'delete' action
+  it('sends DELETE to server when stale snapshot had update but DB action is delete', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    // Note was deleted locally after snapshot, so getNote returns null
+    mockGetNote.mockResolvedValue(null);
+    // The DB entry now has action='delete' but snapshot had stale 'update'
+    mockGetPendingSync.mockResolvedValue({ id: 1, note_id: 'n1', action: 'delete', retry_count: 0 });
+    mockFetch.mockResolvedValue({ ok: true });
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 1, failed: 0 });
+    // Must send DELETE to server to prevent data loss
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][1].method).toBe('DELETE');
+    expect(mockClearPendingSync).toHaveBeenCalledWith('n1');
+  });
+
+  // #2522: Entry cleared between snapshot and re-query — skip gracefully
+  it('skips entry that was cleared between snapshot and re-query', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetPendingSync.mockResolvedValue(null); // entry already deleted
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 0, failed: 0 });
+    expect(mockClearPendingSync).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

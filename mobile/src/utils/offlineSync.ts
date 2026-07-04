@@ -10,6 +10,7 @@ import { useNetworkState } from './networkState';
 import {
   getPendingSyncCount,
   getPendingSyncs,
+  getPendingSync,
   clearPendingSync,
   getNote,
   queuePendingSync,
@@ -81,10 +82,19 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
 
   for (const entry of pending) {
     try {
+      // Re-query current action from DB — entry.action from the initial snapshot
+      // may be stale if a local delete happened after getPendingSyncs() (#2522)
+      const currentEntry = await getPendingSync(entry.note_id);
+      if (!currentEntry) {
+        // Entry was already cleared between snapshot and now
+        continue;
+      }
+
+      const action = currentEntry.action;
       const note = await getNote(entry.note_id);
 
       // Handle delete action: send DELETE request to server (#2433)
-      if (entry.action === 'delete') {
+      if (action === 'delete') {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           'Accept': 'application/json',

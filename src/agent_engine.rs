@@ -540,8 +540,14 @@ impl SubprocessEngine {
         if self.pass_prompt_via_stdin {
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
+                use std::os::unix::io::AsRawFd;
+
+                // Capture the raw fd before moving `stdin` into the closure,
+                // so we can close the pipe on timeout to unblock the thread
+                // (forcing BrokenPipe) and then join it cleanly.
+                let stdin_fd = stdin.as_raw_fd();
                 let (tx, rx) = mpsc::channel::<std::io::Result<()>>();
-                let _stdin_thread = match std::thread::Builder::new()
+                let std_in_thread = match std::thread::Builder::new()
                     .name("agent-stdin-write".into())
                     .spawn(move || {
                         let _ = tx.send(stdin.write_all(composed.as_bytes()));
@@ -564,12 +570,16 @@ impl SubprocessEngine {
                     }
                 };
                 match rx.recv_timeout(IO_DRAIN_TIMEOUT) {
-                    Ok(Ok(())) => { /* written successfully */ }
+                    Ok(Ok(())) => {
+                        /* written successfully */
+                        let _ = std_in_thread.join();
+                    }
                     Ok(Err(e)) => {
                         tracing::warn!(
                             "[agent_engine] stdin write failed for '{}': {e}",
                             self.engine_name,
                         );
+                        let _ = std_in_thread.join();
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         tracing::warn!(
@@ -579,17 +589,22 @@ impl SubprocessEngine {
                             IO_DRAIN_TIMEOUT.as_secs(),
                             IO_DRAIN_TIMEOUT.subsec_millis(),
                         );
+                        // #2497 — close the pipe from this side to force BrokenPipe
+                        // in the blocked thread, then join it to reclaim the OS
+                        // resources (preventing unbounded thread leaks).
+                        unsafe {
+                            libc::close(stdin_fd);
+                        }
+                        let _ = std_in_thread.join();
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                         tracing::warn!(
                             "[agent_engine] stdin write thread disconnected for '{}'",
                             self.engine_name,
                         );
+                        let _ = std_in_thread.join();
                     }
                 }
-                // stdin is dropped here (thread owns it; if the thread is
-                // still blocked on write_all, stdin stays open until the child
-                // drains the pipe — acceptable for a best-effort write).
             }
         }
 

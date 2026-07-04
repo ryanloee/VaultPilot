@@ -48,15 +48,15 @@ mod tests {
             "missing 'codex' engine: {names:?}"
         );
 
-        // The builtin engine has no external dependency and must always be
-        // available.
+        // The builtin engine has no external dependency, but is not available
+        // via send_prompt (it redirects to the `agent` command).
         let builtin = infos
             .iter()
             .find(|i| i.name == "builtin")
             .expect("builtin engine present");
         assert!(
-            builtin.available,
-            "builtin engine must report available == true"
+            !builtin.available,
+            "builtin engine must report available == false (send_prompt not supported)"
         );
     }
 
@@ -90,8 +90,11 @@ mod tests {
     #[test]
     fn regression_1996_builtin_engine_send_prompt_bails_to_agent_command() {
         let mut engine = BuiltinEngine;
-        // The builtin engine is always available (it is the in-process loop).
-        assert!(engine.available(), "BuiltinEngine must always be available");
+        // The builtin engine is not available via send_prompt (it redirects to the `agent` command).
+        assert!(
+            !engine.available(),
+            "BuiltinEngine must not be available (it redirects to the `agent` command)"
+        );
 
         // It deliberately does NOT run through this adapter — it redirects the
         // caller to the dedicated `agent` command. Assert Err, never unwrap Ok.

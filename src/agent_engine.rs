@@ -791,10 +791,18 @@ pub fn codex_engine() -> CodexEngine {
 ///
 /// The builtin agent is driven by its own command (`agent`) and async runtime
 /// dependencies, so it is intentionally **not** re-spawned through this
-/// subprocess adapter. `available()` returns `true` and `send_prompt` returns a
-/// clear, actionable error directing the caller to the `agent` command. This
-/// keeps the builtin and external engines selectable through one registry
-/// without duplicating the builtin execution path.
+/// subprocess adapter. `available()` returns `false` (the engine does not
+/// implement `send_prompt` directly) and `send_prompt` returns a clear,
+/// actionable error directing the caller to the `agent` command. This keeps
+/// the builtin and external engines selectable through one registry without
+/// duplicating the builtin execution path.
+///
+/// # Contract note
+///
+/// Unlike subprocess engines where `available() == true` guarantees
+/// `send_prompt()` will succeed, `BuiltinEngine` always returns `false` from
+/// `available()` because it cannot service `send_prompt` calls — it redirects
+/// callers to the dedicated `agent` command instead.
 pub struct BuiltinEngine;
 
 impl AgentEngine for BuiltinEngine {
@@ -803,7 +811,7 @@ impl AgentEngine for BuiltinEngine {
     }
 
     fn available(&self) -> bool {
-        true
+        false
     }
 
     fn description(&self) -> &str {
@@ -889,8 +897,9 @@ pub fn find_binary(names: &[String]) -> Option<PathBuf> {
 /// Look up a single command on `PATH` (or use it directly if it is a path).
 fn which(name: &str) -> Option<PathBuf> {
     // If the caller gave a path (contains a separator), check it directly.
-    let looks_like_path =
-        name.contains(std::path::MAIN_SEPARATOR) || (cfg!(windows) && name.contains('/'));
+    let looks_like_path = name.contains(std::path::MAIN_SEPARATOR);
+    #[cfg(windows)]
+    let looks_like_path = looks_like_path || name.contains('/');
     if looks_like_path {
         let candidate = PathBuf::from(name);
         return if is_executable(&candidate) {
@@ -984,9 +993,9 @@ mod tests {
         );
         assert!(names.contains(&"codex"), "codex engine must be registered");
 
-        // Builtin is always available (no external binary).
+        // Builtin is not available via send_prompt (it redirects to the `agent` command).
         let builtin = infos.iter().find(|i| i.name == "builtin").expect("builtin");
-        assert!(builtin.available);
+        assert!(!builtin.available);
 
         // Descriptions are non-empty for every engine.
         assert!(infos.iter().all(|i| !i.description.is_empty()));
@@ -1074,7 +1083,8 @@ mod tests {
     #[test]
     fn builtin_engine_send_prompt_returns_actionable_error() {
         let mut engine = BuiltinEngine;
-        assert!(engine.available());
+        // The builtin engine is not available via send_prompt (it redirects to the `agent` command).
+        assert!(!engine.available());
         let vault = temp_vault();
         let _guard = TempGuard(vault.clone());
         let ctx = EngineContext::new(&vault);

@@ -248,9 +248,20 @@ pub fn save_settings_with_context(
         .with_context(|| format!("failed to write {}", paths.settings_path.display()))?;
 
     // Restore the plaintext keys in the struct we return and cache.
-    settings.provider.api_key = api_key_plaintext;
+    // If the key is still encrypted (undecryptable fallback from
+    // load_settings_raw failing), clear it to avoid leaking encrypted
+    // data into memory where it would end up in IPC and CLI output (#2467).
+    if crate::crypto::is_encrypted(&api_key_plaintext) {
+        settings.provider.api_key = String::new();
+    } else {
+        settings.provider.api_key = api_key_plaintext;
+    }
     for (p, plain) in settings.providers.iter_mut().zip(providers_plaintext) {
-        p.api_key = plain;
+        if crate::crypto::is_encrypted(&plain) {
+            p.api_key = String::new();
+        } else {
+            p.api_key = plain;
+        }
     }
 
     let connection = context

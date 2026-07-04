@@ -1,7 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let dbInitPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let ftsSupported = true;
 
 /** Ensure columns added after the initial schema exist on existing installs. */
@@ -69,12 +69,10 @@ async function migrateFts(db: SQLite.SQLiteDatabase): Promise<void> {
   });
 }
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (!dbPromise) {
-    dbPromise = (async () => {
-      const db = await SQLite.openDatabaseAsync('vaultpilot.db');
-      await db.execAsync('PRAGMA foreign_keys = ON;');
-      await db.execAsync(`
+async function initDb(): Promise<SQLite.SQLiteDatabase> {
+  const db = await SQLite.openDatabaseAsync('vaultpilot.db');
+  await db.execAsync('PRAGMA foreign_keys = ON;');
+  await db.execAsync(`
         CREATE TABLE IF NOT EXISTS sessions (
           id TEXT PRIMARY KEY,
           title TEXT NOT NULL DEFAULT '新对话',
@@ -150,12 +148,16 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
       }
       await migrateSchema(db);
       return db;
-    })().catch(err => {
-      dbPromise = null; // Reset so next call retries instead of caching the failure
+}
+
+export async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbInitPromise) {
+    dbInitPromise = initDb().catch(err => {
+      dbInitPromise = null; // Reset so next call retries instead of caching the failure
       throw err;
     });
   }
-  return dbPromise;
+  return dbInitPromise;
 }
 
 export function uuid(): string {
@@ -325,6 +327,7 @@ export async function createNote(title = '无标题', content = '', id?: string)
   const noteId = id ?? uuid();
   await db.runAsync('INSERT INTO notes (id, title, content) VALUES (?, ?, ?)', [noteId, title, content]);
   invalidateNoteTitleCache();
+  await queuePendingSync(noteId);
   return noteId;
 }
 
@@ -399,6 +402,7 @@ export async function getNoteTitleMap(): Promise<Map<string, string>> {
 export async function toggleStar(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync("UPDATE notes SET starred = 1 - starred, updated_at = strftime('%s','now') WHERE id = ?", [id]);
+  await queuePendingSync(id);
 }
 
 export async function getNoteCount(): Promise<number> {
@@ -442,6 +446,7 @@ export async function getFolders(): Promise<string[]> {
 export async function moveToFolder(id: string, folder: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE notes SET folder = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [folder, id]);
+  await queuePendingSync(id);
 }
 
 export async function getNoteTags(noteId: string): Promise<string[]> {
@@ -453,11 +458,13 @@ export async function getNoteTags(noteId: string): Promise<string[]> {
 export async function addTag(noteId: string, tag: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
+  await queuePendingSync(noteId);
 }
 
 export async function removeTag(noteId: string, tag: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
+  await queuePendingSync(noteId);
 }
 
 export async function getAllTags(): Promise<string[]> {
@@ -567,6 +574,7 @@ export async function setTemplateFlag(noteId: string, isTemplate: boolean): Prom
     noteId,
   ]);
   invalidateNoteTitleCache();
+  await queuePendingSync(noteId);
 }
 
 /**

@@ -121,6 +121,19 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
               break; // rate limited, stop entire flush
             }
 
+            if (res.status === 408) {
+              // Request Timeout: transient, retry on next flush (#2502)
+              console.warn(`[OfflineSync] request timeout for delete of note ${entry.note_id}: ${res.status}, will retry`);
+              await incrementPendingSyncRetry(entry.note_id);
+              const retryCount = await getPendingSyncRetryCount(entry.note_id);
+              if (retryCount >= MAX_RETRY_ATTEMPTS) {
+                console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: max retries exceeded (408)`);
+                await clearPendingSync(entry.note_id);
+              }
+              failed++;
+              break;
+            }
+
             if (res.status >= 400 && res.status < 500) {
               console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: client error ${res.status}`);
               await clearPendingSync(entry.note_id);
@@ -174,54 +187,88 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const timeoutController = new AbortController();
-      const timer = setTimeout(() => timeoutController.abort(), 10000);
-      let res: Response;
-      try {
-        res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({ title: note.title, content: note.content }),
-          signal: timeoutController.signal,
-        });
-      } finally {
-        clearTimeout(timer);
+      let shouldStopFlush = false;
+
+      for (let attempt = 0; attempt <= FLUSH_RETRIES; attempt++) {
+        if (attempt > 0) {
+          // Exponential backoff: 1s, 2s
+          await new Promise((r) => setTimeout(r, RETRY_BASE_MS * Math.pow(2, attempt - 1)));
+        }
+
+        const timeoutController = new AbortController();
+        const timer = setTimeout(() => timeoutController.abort(), 10000);
+        try {
+          const res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({ title: note.title, content: note.content }),
+            signal: timeoutController.signal,
+          });
+
+          if (res.ok) {
+            await clearPendingSync(entry.note_id);
+            synced++;
+            break; // success
+          }
+
+          if (res.status === 429) {
+            console.warn(`[OfflineSync] rate limited for note ${entry.note_id}: ${res.status}, pausing flush`);
+            failed++;
+            shouldStopFlush = true;
+            break; // rate limited, stop entire flush
+          }
+
+          if (res.status === 408) {
+            // Request Timeout: transient, retry on next flush (#2501)
+            console.warn(`[OfflineSync] request timeout for note ${entry.note_id}: ${res.status}, will retry`);
+            await incrementPendingSyncRetry(entry.note_id);
+            const retryCount = await getPendingSyncRetryCount(entry.note_id);
+            if (retryCount >= MAX_RETRY_ATTEMPTS) {
+              console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded (408)`);
+              await clearPendingSync(entry.note_id);
+            }
+            failed++;
+            break;
+          }
+
+          if (res.status >= 400 && res.status < 500) {
+            // Client error (4xx): clear entry, won't succeed on retry
+            console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: client error ${res.status}`);
+            await clearPendingSync(entry.note_id);
+            failed++;
+            break; // client error, won't succeed on retry
+          }
+
+          // 5xx or unknown server error — retry if attempts remain
+          if (attempt >= FLUSH_RETRIES) {
+            // Last attempt failed — fall back to cross-cycle retry
+            await incrementPendingSyncRetry(entry.note_id);
+            const retryCount = await getPendingSyncRetryCount(entry.note_id);
+            if (retryCount >= MAX_RETRY_ATTEMPTS) {
+              console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded`);
+              await clearPendingSync(entry.note_id);
+            }
+            failed++;
+          }
+          // else: transient 5xx, loop continues with exponential backoff
+        } catch (fetchErr) {
+          if (attempt >= FLUSH_RETRIES) {
+            console.warn(`[OfflineSync] PUT failed for note ${entry.note_id}:`, fetchErr);
+            await incrementPendingSyncRetry(entry.note_id);
+            const retryCount = await getPendingSyncRetryCount(entry.note_id);
+            if (retryCount >= MAX_RETRY_ATTEMPTS) {
+              console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded (network error)`);
+              await clearPendingSync(entry.note_id);
+            }
+            failed++;
+          }
+          // else: transient network error, loop continues with exponential backoff
+        } finally {
+          clearTimeout(timer);
+        }
       }
 
-      if (res.ok) {
-        await clearPendingSync(entry.note_id);
-        synced++;
-      } else if (res.status === 429) {
-        // Rate limited: stop the entire flush to avoid hammering an already-limited server.
-        // Remaining entries will be retried on the next flush.
-        console.warn(`[OfflineSync] rate limited for note ${entry.note_id}: ${res.status}, pausing flush`);
-        failed++;
-        break;
-      } else if (res.status === 408) {
-        // Request Timeout: transient, retry on next flush (#2434)
-        console.warn(`[OfflineSync] request timeout for note ${entry.note_id}: ${res.status}, will retry`);
-        await incrementPendingSyncRetry(entry.note_id);
-        const retryCount = await getPendingSyncRetryCount(entry.note_id);
-        if (retryCount >= MAX_RETRY_ATTEMPTS) {
-          console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded (408)`);
-          await clearPendingSync(entry.note_id);
-        }
-        failed++;
-      } else if (res.status >= 400 && res.status < 500) {
-        // Client error (4xx): clear entry, won't succeed on retry
-        console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: client error ${res.status}`);
-        await clearPendingSync(entry.note_id);
-        failed++;
-      } else {
-        // Server error (5xx): increment retry count
-        await incrementPendingSyncRetry(entry.note_id);
-        const retryCount = await getPendingSyncRetryCount(entry.note_id);
-        if (retryCount >= MAX_RETRY_ATTEMPTS) {
-          console.warn(`[OfflineSync] clearing entry for note ${entry.note_id}: max retries exceeded`);
-          await clearPendingSync(entry.note_id);
-        }
-        failed++;
-      }
+      if (shouldStopFlush) break;
     } catch (e) {
       console.warn('[OfflineSync] flush failed for note:', entry.note_id, e);
       await incrementPendingSyncRetry(entry.note_id);

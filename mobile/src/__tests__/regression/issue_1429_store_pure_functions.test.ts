@@ -30,8 +30,8 @@ const makeProvider = (name: string, overrides?: Partial<ProviderConfig>): Provid
 // ── clampProviderIndex ────────────────────────────────────
 
 describe('clampProviderIndex', () => {
-  test('returns 0 for empty providers', () => {
-    expect(clampProviderIndex(5, 0)).toBe(0);
+  test('returns -1 for empty providers', () => {
+    expect(clampProviderIndex(5, 0)).toBe(-1);
   });
 
   test('returns index when within range', () => {
@@ -92,8 +92,8 @@ describe('removeProviderFromList', () => {
 // ── computeActiveIndexAfterRemove ─────────────────────────
 
 describe('computeActiveIndexAfterRemove', () => {
-  test('returns 0 for empty list', () => {
-    expect(computeActiveIndexAfterRemove(2, 0, 0)).toBe(0);
+  test('returns -1 for empty list', () => {
+    expect(computeActiveIndexAfterRemove(2, 0, 0)).toBe(-1);
   });
 
   test('keeps index when removed item is after active', () => {

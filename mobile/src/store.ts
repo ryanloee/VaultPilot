@@ -103,7 +103,7 @@ export const PROVIDERS = [
 
 /** Clamp provider index to valid range (0 to providerCount-1). */
 export function clampProviderIndex(index: number, providerCount: number): number {
-  if (providerCount === 0) return 0;
+  if (providerCount === 0) return -1;
   return Math.max(0, Math.min(index, providerCount - 1));
 }
 
@@ -114,7 +114,7 @@ export function removeProviderFromList(providers: ProviderConfig[], index: numbe
 
 /** Compute the new active index after removing a provider. */
 export function computeActiveIndexAfterRemove(currentIndex: number, removedIndex: number, newLength: number): number {
-  if (newLength === 0) return 0;
+  if (newLength === 0) return -1;
   if (currentIndex === removedIndex) {
     // Active item was deleted — clamp to valid range
     return Math.min(currentIndex, newLength - 1);

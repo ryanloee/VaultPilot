@@ -60,7 +60,7 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
       })();
     }
     prevOnline.current = isOnline;
-    return () => { cancelled = true; };
+    return () => { cancelled = true; isFlushingRef.current = false; };
   }, [isOnline]);
 
   return { pendingCount, refresh };

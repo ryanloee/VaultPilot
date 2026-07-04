@@ -3,7 +3,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createNote, updateNote, getNoteTimestamps } from '../db';
+import { createNote, updateNote, getNoteTimestamps, getNoteTags, addTag, removeTag } from '../db';
 import { isRetryable } from '../api/clientUtils';
 
 const SERVER_URL_KEY = 'cfg_backend_url';
@@ -274,6 +274,19 @@ async function doSync(
       } else {
         await createNote(title, content, meta.id);
         imported++;
+      }
+      // Sync tags from server to local database (#2477)
+      const serverTags = noteData.meta.tags ?? [];
+      const localTags = await getNoteTags(meta.id);
+      for (const tag of serverTags) {
+        if (!localTags.includes(tag)) {
+          await addTag(meta.id, tag);
+        }
+      }
+      for (const tag of localTags) {
+        if (!serverTags.includes(tag)) {
+          await removeTag(meta.id, tag);
+        }
       }
       emitProgress('details');
     } catch (e) {

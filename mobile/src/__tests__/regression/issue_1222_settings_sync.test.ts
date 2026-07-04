@@ -43,7 +43,7 @@ const SAMPLE_STORE = JSON.stringify({
 beforeEach(() => {
   jest.clearAllMocks();
   mockAsyncStorage.getItem.mockResolvedValue(SAMPLE_STORE);
-  mockSecureStore.getItemAsync.mockResolvedValue(JSON.stringify(['sk-test-key-1', 'sk-test-key-2']));
+  mockSecureStore.getItemAsync.mockResolvedValue(JSON.stringify({ OpenAI: '***', Anthropic: '***' }));
 });
 
 describe('Settings Export (#1222)', () => {
@@ -72,8 +72,8 @@ describe('Settings Export (#1222)', () => {
   it('should include API keys when requested', async () => {
     const json = await exportSettings(true);
     const parsed = JSON.parse(json);
-    expect(parsed.providers[0].apiKey).toBe('sk-test-key-1');
-    expect(parsed.providers[1].apiKey).toBe('sk-test-key-2');
+    expect(parsed.providers[0].apiKey).toBe('***');
+    expect(parsed.providers[1].apiKey).toBe('***');
   });
 
   it('should export provider count', async () => {
@@ -209,7 +209,7 @@ describe('Settings Import (#1222)', () => {
 
     expect(mockSecureStore.setItemAsync).toHaveBeenCalledWith(
       'vaultpilot_provider_keys',
-      JSON.stringify(['sk-real'])
+      JSON.stringify({ Provider1: 'sk-real' })
     );
   });
 });

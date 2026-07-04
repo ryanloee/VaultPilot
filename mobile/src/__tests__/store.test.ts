@@ -115,7 +115,7 @@ describe('removeProvider', () => {
     useAppStore.getState().addProvider(p);
     useAppStore.getState().removeProvider(0);
     expect(useAppStore.getState().providers).toHaveLength(0);
-    expect(useAppStore.getState().activeProviderIndex).toBe(0);
+    expect(useAppStore.getState().activeProviderIndex).toBe(-1);
   });
 });
 

@@ -21,6 +21,9 @@ jest.mock('../../db', () => ({
   getNote: jest.fn(),
   getNotes: jest.fn(),
   getNoteTimestamps: jest.fn(),
+  getNoteTags: jest.fn(),
+  addTag: jest.fn(),
+  removeTag: jest.fn(),
 }));
 
 const mockCreateNote = require('../../db').createNote as jest.MockedFunction<any>;
@@ -38,6 +41,9 @@ beforeEach(async () => {
   await AsyncStorage.clear();
   mockFetch.mockReset();
   mockGetNoteTimestamps.mockResolvedValue([]);
+  // Mock tag functions for the new sync-tag logic (#2477)
+  const mockGetNoteTags = require('../../db').getNoteTags as jest.MockedFunction<any>;
+  mockGetNoteTags.mockResolvedValue([]);
 });
 
 // ── getServerConfig ─────────────────────────────────────────

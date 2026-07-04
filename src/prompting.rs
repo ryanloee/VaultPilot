@@ -48,17 +48,22 @@ fn escape_xml_close_tags(content: &str) -> String {
 /// space-separated variant (`< user_input>`) to prevent nested delimiter
 /// injection from user-supplied content.
 fn escape_xml_tags(content: &str, open_tag: &str) -> String {
-    // Guard: if the tag doesn't start with '<' or is too short for a valid
-    // XML tag (e.g. `<x>`), return the content unchanged. Prevents a latent
-    // panic from the unchecked `&open_tag[1..]` byte index below (#2381).
-    if !open_tag.starts_with('<') || open_tag.len() < 3 {
+    // Guard: the tag must be a well-formed XML opening tag: starts with '<',
+    // ends with '>', and has at least one char between them.  This prevents
+    // the unchecked `&open_tag[1..]` byte index below from ever hitting a
+    // degenerate string (#2381) and ensures non-ASCII tag names are handled
+    // correctly (#2512).  Slicing at byte 1 is always safe because '<' is
+    // exactly one byte in UTF-8, so byte 1 is always a valid char boundary.
+    if !open_tag.starts_with('<') || !open_tag.ends_with('>') || open_tag.len() < 3 {
         return content.to_string();
     }
 
-    // Derive the closing tag from the opening tag (e.g., &lt;user_input&gt; → &lt;/user_input&gt;)
-    // and escape only that specific closing tag to prevent breakout from the wrapper.
-    let close_tag = format!("</{}", &open_tag[1..]); // <user_input> → </user_input>
-    let escaped_close = format!("<//{}", &open_tag[1..]); // <user_input> → <//user_input>
+    // Derive the closing tag from the opening tag (e.g., <user_input> → </user_input>
+    // or <árbol> → </árbol>) and escape only that specific closing tag to
+    // prevent breakout from the wrapper.
+    let tag_body = &open_tag[1..]; // safe: '<' is always 1 byte in UTF-8
+    let close_tag = format!("</{tag_body}");
+    let escaped_close = format!("<//{tag_body}");
     content
         .replace(&close_tag, &escaped_close)
         .replace(open_tag, &open_tag.replacen('<', "< ", 1))
@@ -1257,6 +1262,27 @@ mod tests {
     }
 
     #[test]
+    fn compression_user_prompt_does_not_produce_user_input_tag() {
+        // Bug #2447 regression: compression_user_prompt wraps the conversation
+        // history in <conversation_history> but does NOT wrap the existing
+        // summary in <user_input> tags (the summary is AI-generated trusted
+        // data, not user-supplied content).
+        let history = vec![ConversationTurn {
+            role: "user".to_string(),
+            text: "hello".to_string(),
+        }];
+        let prompt = compression_user_prompt("existing summary", &history);
+        assert!(
+            prompt.contains("<conversation_history>"),
+            "history is wrapped in conversation_history tags"
+        );
+        assert!(
+            !prompt.contains("<user_input>"),
+            "summary is NOT wrapped in user_input tags"
+        );
+    }
+
+    #[test]
     fn note_selection_user_prompt_includes_candidates() {
         let candidates = vec![NoteMeta {
             id: "c1".to_string(),
@@ -1419,6 +1445,54 @@ mod tests {
     #[test]
     fn escape_xml_close_tags_empty() {
         assert_eq!(escape_xml_close_tags(""), "");
+    }
+
+    #[test]
+    fn escape_xml_tags_with_non_ascii_tag() {
+        // Bug #2512 regression: non-ASCII tag names must not panic.
+        // Use a Spanish/CJK-style tag name with multi-byte characters.
+        let content = "Some content with </árbol> and also <árbol> inject</árbol> plus </xxx>";
+        let result = escape_xml_tags(content, "<árbol>");
+        // The specific closing tag </árbol> should be escaped to <//árbol>
+        assert!(
+            !result.contains("</árbol>"),
+            "should not contain raw close tag"
+        );
+        assert!(result.contains("<//árbol>"), "close tag should be escaped");
+        // The opening tag should have space inserted
+        assert!(result.contains("< árbol>"), "opening tag should have space");
+        // Unrelated closing tags must remain untouched
+        assert!(result.contains("</xxx>"), "unrelated close tags preserved");
+    }
+
+    #[test]
+    fn escape_xml_tags_with_cjk_tag() {
+        // Bug #2512: explicitly test with full-width CJK characters (each 3 bytes).
+        let tag = "<用户输入>";
+        // Include both opening and closing variants of the tag in the content
+        let malicious = format!("malicious {tag}content</用户输入> and <用户输入>again</用户输入>");
+        let result = escape_xml_tags(&malicious, tag);
+        // The specific closing tag should be escaped
+        assert!(!result.contains("</用户输入>"), "raw close tag removed");
+        assert!(result.contains("<//用户输入>"), "close tag escaped");
+        // Opening tag should have space inserted
+        assert!(result.contains("< 用户输入>"), "opening tag neutralised");
+    }
+
+    #[test]
+    fn escape_xml_tags_guard_rejects_malformed_tags() {
+        // Tags without closing '>' should pass through unchanged
+        let content = "some content </bad";
+        let result = escape_xml_tags(content, "<bad");
+        assert_eq!(result, "some content </bad", "no closing > -> pass through");
+
+        // Too-short tag
+        let result2 = escape_xml_tags("test", "<a>");
+        assert_eq!(result2, "test", "too short tag -> pass through");
+
+        // Non-tag string
+        let result3 = escape_xml_tags("test", "hello");
+        assert_eq!(result3, "test", "no leading < -> pass through");
     }
 
     #[test]

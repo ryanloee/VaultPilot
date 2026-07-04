@@ -409,7 +409,7 @@ impl SubprocessEngine {
                     make_nonblocking(&s);
                     let mut tmp = [0u8; 4096];
                     loop {
-                        if done.load(Ordering::Relaxed) {
+                        if done.load(Ordering::Acquire) {
                             // One last non-blocking read so data sitting in the
                             // pipe buffer is captured even when grandchildren
                             // hold the write end open (#2440).
@@ -474,7 +474,7 @@ impl SubprocessEngine {
                     make_nonblocking(&s);
                     let mut tmp = [0u8; 4096];
                     loop {
-                        if done.load(Ordering::Relaxed) {
+                        if done.load(Ordering::Acquire) {
                             // One last non-blocking read so data sitting in the
                             // pipe buffer is captured even when grandchildren
                             // hold the write end open (#2440).
@@ -529,7 +529,7 @@ impl SubprocessEngine {
                 // `recv_timeout` BEFORE `join`, which could waste the entire
                 // 5-second timeout waiting on data the thread hadn't finished
                 // producing yet — and the data was discarded anyway (#2473).
-                drain_done.store(true, Ordering::Relaxed);
+                drain_done.store(true, Ordering::Release);
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = stdout_thread.join();
@@ -548,7 +548,7 @@ impl SubprocessEngine {
         // on Linux) fills up. We spawn a dedicated thread and use a channel with
         // `recv_timeout` so the caller is never permanently blocked.
         if self.pass_prompt_via_stdin {
-            if let Some(mut stdin) = child.stdin.take() {
+            if let Some(stdin) = child.stdin.take() {
                 use std::io::Write;
 
                 // Platform-specific raw handle capture.
@@ -569,7 +569,24 @@ impl SubprocessEngine {
                 let std_in_thread = match std::thread::Builder::new()
                     .name("agent-stdin-write".into())
                     .spawn(move || {
-                        let _ = tx.send(stdin.write_all(composed.as_bytes()));
+                        // #2509 — wrap stdin in ManuallyDrop to prevent a
+                        // double-close race. When the parent closes the raw fd
+                        // on timeout (via libc::close), the thread's write_all
+                        // receives BrokenPipe, and the closure ends. Without
+                        // ManuallyDrop, ChildStdin::Drop would then call
+                        // close() on the same fd — which may already have been
+                        // reused by another thread.
+                        use std::mem::ManuallyDrop;
+                        let stdin = ManuallyDrop::new(stdin);
+                        let result = (&*stdin).write_all(composed.as_bytes());
+                        // If write succeeded, take stdin back and drop it
+                        // (closes fd, sends EOF to child). If write failed
+                        // (e.g. BrokenPipe from timeout close), forget stdin
+                        // — the parent already closed (or will close) the fd.
+                        if result.is_ok() {
+                            drop(ManuallyDrop::into_inner(stdin));
+                        }
+                        let _ = tx.send(result);
                     }) {
                     Ok(handle) => handle,
                     Err(e) => {
@@ -578,7 +595,7 @@ impl SubprocessEngine {
                         // Signal drain threads to stop, kill/reap the child to
                         // avoid a zombie, join both drain threads so they finish
                         // sending their data, then drain the channels.
-                        drain_done.store(true, Ordering::Relaxed);
+                        drain_done.store(true, Ordering::Release);
                         let _ = child.kill();
                         let _ = child.wait();
                         let _ = stdout_thread.join();
@@ -590,7 +607,7 @@ impl SubprocessEngine {
                 };
                 match rx.recv_timeout(IO_DRAIN_TIMEOUT) {
                     Ok(Ok(())) => {
-                        /* written successfully */
+                        /* written successfully — thread already closed stdin */
                         let _ = std_in_thread.join();
                     }
                     Ok(Err(e)) => {
@@ -599,6 +616,16 @@ impl SubprocessEngine {
                             self.engine_name,
                         );
                         let _ = std_in_thread.join();
+                        // Write failed before timeout; ManuallyDrop prevented
+                        // the thread from closing stdin. Close it here.
+                        #[cfg(unix)]
+                        unsafe {
+                            libc::close(stdin_raw);
+                        }
+                        #[cfg(windows)]
+                        unsafe {
+                            close_windows_handle(stdin_raw);
+                        }
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         tracing::warn!(
@@ -627,9 +654,24 @@ impl SubprocessEngine {
                             self.engine_name,
                         );
                         let _ = std_in_thread.join();
+                        // Thread may not have closed stdin; close it here.
+                        #[cfg(unix)]
+                        unsafe {
+                            libc::close(stdin_raw);
+                        }
+                        #[cfg(windows)]
+                        unsafe {
+                            close_windows_handle(stdin_raw);
+                        }
                     }
                 }
             }
+        } else {
+            // #2510 — close stdin immediately when not piping the prompt.
+            // Without this, the pipe write end stays open until `child` is
+            // dropped at the end of `run()`, which could cause the child to
+            // hang if it reads stdin waiting for EOF.
+            drop(child.stdin.take());
         }
 
         // Enforce the wall-clock deadline (#2284). On timeout the child is
@@ -642,7 +684,7 @@ impl SubprocessEngine {
                 // sending their data), then drain the channels. This order
                 // ensures no data is lost even when grandchildren hold pipe
                 // write ends (#2440, #2442).
-                drain_done.store(true, Ordering::Relaxed);
+                drain_done.store(true, Ordering::Release);
                 if let Err(e) = stdout_thread.join() {
                     tracing::warn!("[agent_engine] stdout drain thread panicked: {e:?}");
                 }
@@ -713,7 +755,7 @@ impl SubprocessEngine {
                 let _ = child.wait();
                 // Signal drain threads to stop and join them so the OS
                 // threads do not accumulate across calls (#2442).
-                drain_done.store(true, Ordering::Relaxed);
+                drain_done.store(true, Ordering::Release);
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
                 // Drain for diagnostics; the timeout error is what
@@ -739,7 +781,7 @@ impl SubprocessEngine {
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                drain_done.store(true, Ordering::Relaxed);
+                drain_done.store(true, Ordering::Release);
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
                 if let Err(e) = out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {

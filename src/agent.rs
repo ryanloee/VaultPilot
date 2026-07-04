@@ -1887,6 +1887,8 @@ async fn execute_tool(
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
             // Record backup before saving so revert_write works (#2286)
+            // Also capture the original created_at to preserve it (#2426)
+            let mut existing_created_at: Option<String> = None;
             {
                 let ctx = context.clone();
                 let nid = note_id.clone();
@@ -1897,6 +1899,7 @@ async fn execute_tool(
                 .await
                 {
                     crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+                    existing_created_at = Some(existing.meta.created_at.clone());
                 }
             }
             let short_id: String = note_id.chars().take(8).collect();
@@ -1922,7 +1925,8 @@ async fn execute_tool(
                     path: format!("{}-{}.md", slug, short_id),
                     tags: draft.tags.clone(),
                     keywords: draft.keywords.clone(),
-                    created_at: chrono::Utc::now().to_rfc3339(),
+                    created_at: existing_created_at
+                        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
                     updated_at: chrono::Utc::now().to_rfc3339(),
                     ..Default::default()
                 },

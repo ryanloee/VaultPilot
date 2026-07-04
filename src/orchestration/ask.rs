@@ -895,7 +895,34 @@ fn read_file_result(path: &str, vault_root: &Path) -> Result<String, anyhow::Err
 }
 
 pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, anyhow::Error> {
-    let trimmed = path.trim().trim_matches('\"').trim_matches('`');
+    // Resolve the vault directory once. Callers that already hold a cached
+    // canonical path (e.g. `ToolProxy`) should use
+    // [`normalize_tool_path_with_canonical`] instead to avoid recomputing
+    // this on every tool check — canonicalize() does blocking I/O that can
+    // stall tokio worker threads (#2470).
+    let vault_canonical = vault_root.canonicalize().map_err(|error| {
+        anyhow::anyhow!(
+            "cannot resolve vault directory '{}': {error}",
+            vault_root.display()
+        )
+    })?;
+    normalize_tool_path_with_canonical(path, &vault_canonical)
+}
+
+/// Confinement check using a **pre-canonicalized** vault root.
+///
+/// This is the hot-path entry point: the vault directory never changes during
+/// a session, so callers that perform many path checks (e.g. `ToolProxy`) can
+/// canonicalize once at construction and reuse the result here, avoiding
+/// repeated blocking `canonicalize()` I/O on tokio worker threads (#2470).
+/// The candidate path is still canonicalized per-call because it may be a
+/// user-supplied path and its symlink resolution is required for TOCTOU
+/// safety (#2258).
+pub fn normalize_tool_path_with_canonical(
+    path: &str,
+    vault_canonical: &Path,
+) -> Result<PathBuf, anyhow::Error> {
+    let trimmed = path.trim().trim_matches('"').trim_matches('`');
     if trimmed.is_empty() {
         return Err(anyhow::anyhow!("path is empty"));
     }
@@ -913,17 +940,9 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, any
     // Confinement check: resolved path must stay within the vault directory.
     // Try canonicalize first (requires the path to exist). If it doesn't,
     // walk up to the nearest existing ancestor and verify the prefix.
-    // Confinement check is fail-closed: if vault_root cannot be resolved,
-    // reject the operation rather than silently skipping the security check.
-    let vault_canonical = vault_root.canonicalize().map_err(|error| {
-        anyhow::anyhow!(
-            "cannot resolve vault directory '{}': {error}",
-            vault_root.display()
-        )
-    })?;
 
     if let Ok(canonical) = candidate.canonicalize() {
-        if !canonical.starts_with(&vault_canonical) {
+        if !canonical.starts_with(vault_canonical) {
             return Err(anyhow::anyhow!(
                 "access denied: path '{}' is outside the vault directory",
                 trimmed
@@ -946,7 +965,7 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, any
             }
             if parent.exists() {
                 if let Ok(pc) = parent.canonicalize() {
-                    if !pc.starts_with(&vault_canonical) {
+                    if !pc.starts_with(vault_canonical) {
                         return Err(anyhow::anyhow!(
                             "access denied: path '{}' is outside the vault directory",
                             trimmed

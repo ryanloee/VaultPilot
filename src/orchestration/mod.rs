@@ -9,7 +9,7 @@ pub mod table;
 pub mod write;
 
 // Re-export the main public API functions for backward compatibility
-pub use ask::{ask_with_ai_with_context, normalize_tool_path};
+pub use ask::{ask_with_ai_with_context, normalize_tool_path, normalize_tool_path_with_canonical};
 pub use auto_organize::{run_auto_organize, AutoOrganizeSummary, AutoOrganizer};
 pub use chat::{
     build_effective_question, chat_with_ai_with_context, finalize_chat_with_ai_answer,

@@ -138,6 +138,10 @@ pub struct ToolProxyResult {
 pub struct ToolProxy {
     config: AgentConfig,
     vault_dir: PathBuf,
+    /// Canonicalized vault path, resolved once at construction. The vault
+    /// directory never changes during a session, so caching avoids repeated
+    /// blocking `canonicalize()` I/O on tokio worker threads (#2470).
+    vault_dir_canonical: PathBuf,
     tool_call_count: AtomicU64,
     session_start: Instant,
     audit_log: Mutex<Vec<AgentAuditEntry>>,
@@ -145,9 +149,18 @@ pub struct ToolProxy {
 
 impl ToolProxy {
     pub fn new(config: AgentConfig, vault_dir: impl Into<PathBuf>) -> Self {
+        let vault_dir = vault_dir.into();
+        // Resolve the canonical vault path once — fail-open to the raw path if
+        // canonicalization fails (e.g. the vault is on a mount that is briefly
+        // unavailable). Subsequent per-call confinement checks handle their
+        // own error reporting for the candidate paths.
+        let vault_dir_canonical = vault_dir
+            .canonicalize()
+            .unwrap_or_else(|_| vault_dir.clone());
         Self {
             config,
-            vault_dir: vault_dir.into(),
+            vault_dir,
+            vault_dir_canonical,
             tool_call_count: AtomicU64::new(0),
             session_start: Instant::now(),
             audit_log: Mutex::new(Vec::new()),
@@ -380,12 +393,10 @@ impl ToolProxy {
         }
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
 
-        // Canonicalize vault_dir for consistent comparison, matching the
-        // canonical approach used by confine_path (via normalize_tool_path).
-        let canonical_vault = self
-            .vault_dir
-            .canonicalize()
-            .unwrap_or_else(|_| self.vault_dir.clone());
+        // Use the canonical vault path cached at construction — the vault
+        // directory never changes during a session, so recomputing it here on
+        // every write-tool check was unnecessary blocking I/O (#2470).
+        let canonical_vault = &self.vault_dir_canonical;
 
         // Try to canonicalize the candidate path. If it doesn't exist on disk
         // (e.g. the file hasn't been created yet), fall back to the raw path.
@@ -394,7 +405,7 @@ impl ToolProxy {
             .canonicalize()
             .unwrap_or_else(|_| path_ref.to_path_buf());
 
-        let relative = if let Ok(stripped) = effective.strip_prefix(&canonical_vault) {
+        let relative = if let Ok(stripped) = effective.strip_prefix(canonical_vault) {
             stripped.to_string_lossy().to_string()
         } else {
             trimmed.to_string()
@@ -407,8 +418,10 @@ impl ToolProxy {
     }
 
     /// Confine a path to the vault directory. Relative paths are resolved
-    /// against `vault_dir`. Delegates to `normalize_tool_path` which
-    /// handles canonicalization and TOCTOU prevention. (#2258)
+    /// against `vault_dir`. Delegates to `normalize_tool_path_with_canonical`
+    /// using the vault path canonicalized once at construction, avoiding
+    /// repeated blocking `canonicalize()` I/O on tokio worker threads (#2470).
+    /// Handles TOCTOU prevention via per-call candidate canonicalization (#2258).
     /// Returns the canonicalized `PathBuf` on success.
     fn confine_path(&self, path: &str) -> Result<PathBuf> {
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
@@ -427,8 +440,9 @@ impl ToolProxy {
         // Delegate to the canonical implementation that correctly returns
         // the canonicalized (symlink-resolved) path, preventing TOCTOU
         // between the security check and subsequent I/O. (#2258)
+        // Use the cached canonical vault path (#2470).
         let candidate_str = candidate.to_string_lossy().to_string();
-        crate::normalize_tool_path(&candidate_str, &self.vault_dir)
+        crate::normalize_tool_path_with_canonical(&candidate_str, &self.vault_dir_canonical)
             .map_err(|e| anyhow!("{}", sanitize_error(&e.to_string())))
     }
 
@@ -1054,18 +1068,37 @@ pub async fn generate_execution_plan(
                 let remaining = recon_max_duration.saturating_sub(proxy.elapsed());
                 let cancel_token = CancellationToken::new();
                 let cancel_on_timeout = cancel_token.clone();
-                let (result, is_error) = match tokio::time::timeout(
-                    remaining,
-                    execute_tool(context, settings, &tool_call, cancel_on_timeout),
-                )
-                .await
-                {
-                    Ok(res) => res,
-                    Err(_) => {
-                        cancel_token.cancel();
-                        (format!("tool error: {tool_name} timed out"), true)
-                    }
-                };
+                // Pin the tool future so it is NOT dropped on timeout — the
+                // future owns the only token clone that listens on `cancel`.
+                // On timeout we fire the cancel WHILE the future is still
+                // alive, then briefly re-poll so `spawn_blocking_abortable`
+                // observes the signal and detaches its blocking handle via
+                // the cancel branch instead of being dropped mid-flight (#2471).
+                let mut tool_fut = std::pin::pin!(execute_tool(
+                    context,
+                    settings,
+                    &tool_call,
+                    cancel_on_timeout
+                ));
+                let (result, is_error) =
+                    match tokio::time::timeout(remaining, tool_fut.as_mut()).await {
+                        Ok(res) => res,
+                        Err(_) => {
+                            // Fire cancel while the tool future is still alive
+                            // and owns its token clone (#2471).
+                            cancel_token.cancel();
+                            // Re-poll briefly so the cancel signal is observed
+                            // by `spawn_blocking_abortable`'s `select!`. The
+                            // cancel branch resolves immediately once polled,
+                            // so this returns well within the grace window.
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_millis(200),
+                                tool_fut.as_mut(),
+                            )
+                            .await;
+                            (format!("tool error: {tool_name} timed out"), true)
+                        }
+                    };
                 let preview = truncate_preview(&result, 200);
                 on_event(&AgentEvent::ToolResult {
                     step: step + 1,
@@ -1535,25 +1568,37 @@ pub async fn run_agent(
                 let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
                 let cancel_token = CancellationToken::new();
                 let cancel_on_timeout = cancel_token.clone();
-                let (result, is_error) = match tokio::time::timeout(
-                    remaining,
-                    execute_tool(context, settings, &tool_call, cancel_on_timeout),
-                )
-                .await
-                {
-                    Ok(res) => res,
-                    Err(_) => {
-                        cancel_token.cancel();
-                        (
-                            format!(
-                                "tool error: {} timed out after {}s",
-                                tool_name,
-                                remaining.as_secs()
-                            ),
-                            true,
-                        )
-                    }
-                };
+                // Pin the tool future so it is NOT dropped on timeout — the
+                // future owns the only token clone listening on `cancel`. On
+                // timeout we fire cancel WHILE the future is still alive, then
+                // briefly re-poll so `spawn_blocking_abortable` observes the
+                // signal and detaches cleanly (#2471).
+                let mut tool_fut = std::pin::pin!(execute_tool(
+                    context,
+                    settings,
+                    &tool_call,
+                    cancel_on_timeout
+                ));
+                let (result, is_error) =
+                    match tokio::time::timeout(remaining, tool_fut.as_mut()).await {
+                        Ok(res) => res,
+                        Err(_) => {
+                            cancel_token.cancel();
+                            let _ = tokio::time::timeout(
+                                std::time::Duration::from_millis(200),
+                                tool_fut.as_mut(),
+                            )
+                            .await;
+                            (
+                                format!(
+                                    "tool error: {} timed out after {}s",
+                                    tool_name,
+                                    remaining.as_secs()
+                                ),
+                                true,
+                            )
+                        }
+                    };
                 let preview = truncate_preview(&result, 200);
 
                 on_event(&AgentEvent::ToolResult {
@@ -1711,8 +1756,19 @@ where
     tokio::select! {
         result = handle.as_mut() => Some(result),
         _ = cancel.cancelled() => {
-            // Absorb the handle so tokio doesn't warn about a dropped JoinHandle.
-            tokio::spawn(async move { let _ = handle.await; });
+            // The cancellation fired. Dropping the JoinHandle of a
+            // `spawn_blocking` task does NOT abort the underlying work — the
+            // blocking OS thread continues until the I/O syscall completes
+            // (syscalls cannot be interrupted cooperatively), and tokio's
+            // blocking thread pool reaps it afterwards.
+            //
+            // We intentionally detach here rather than wrapping the handle in
+            // an extra `tokio::spawn` task: that earlier wrapper only leaked a
+            // second, unsupervised tokio task that consumed a task slot
+            // indefinitely without any benefit (#2472). Detaching via plain
+            // `drop` achieves the same "absorb and forget" semantics without
+            // the extra leak.
+            drop(handle);
             None
         }
     }

@@ -514,13 +514,16 @@ impl SubprocessEngine {
             Err(e) => {
                 // #2427 — the stdout drain is already running. Signal it to
                 // stop via `drain_done`, kill/reap the child to avoid a zombie,
-                // drain the stdout channel with a bounded wait, then join the
-                // stdout thread so it does not leak.
+                // join the stdout thread first (so it finishes sending its
+                // data), then drain the channel. The previous code called
+                // `recv_timeout` BEFORE `join`, which could waste the entire
+                // 5-second timeout waiting on data the thread hadn't finished
+                // producing yet — and the data was discarded anyway (#2473).
                 drain_done.store(true, Ordering::Relaxed);
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 let _ = stdout_thread.join();
+                let _ = out_rx.recv_timeout(IO_DRAIN_TIMEOUT);
                 return Err(e).with_context(|| "failed to spawn stderr drain thread");
             }
         };

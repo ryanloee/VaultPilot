@@ -20,12 +20,16 @@ import { getServerConfig } from '../services/sync';
 
 /** Maximum retry attempts for server errors (5xx) before giving up. */
 const MAX_RETRY_ATTEMPTS = 5;
+/** Maximum retry attempts per flush cycle for transient fetch errors. */
+const FLUSH_RETRIES = 2;
+/** Base delay (ms) for exponential backoff between retry attempts. */
+const RETRY_BASE_MS = 1000;
 
 /** Hook: returns pending sync count and auto-flushes when online. */
 export function usePendingSync(): { pendingCount: number; refresh: () => Promise<void> } {
   const [pendingCount, setPendingCount] = useState(0);
   const { isOnline } = useNetworkState();
-  const prevOnline = useRef(isOnline);
+  const prevOnline = useRef(false);
   const isFlushingRef = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -87,38 +91,73 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
         };
         if (token) headers['Authorization'] = `Bearer ${token}`;
 
-        const timeoutController = new AbortController();
-        const timer = setTimeout(() => timeoutController.abort(), 10000);
-        try {
-          const res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
-            method: 'DELETE',
-            headers,
-            signal: timeoutController.signal,
-          });
+        let shouldStopFlush = false;
 
-          if (res.ok) {
-            await clearPendingSync(entry.note_id);
-            synced++;
-          } else if (res.status === 429) {
-            console.warn(`[OfflineSync] rate limited on delete for note ${entry.note_id}: ${res.status}, pausing flush`);
-            failed++;
-            break;
-          } else if (res.status >= 400 && res.status < 500) {
-            console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: client error ${res.status}`);
-            await clearPendingSync(entry.note_id);
-            failed++;
-          } else {
-            await incrementPendingSyncRetry(entry.note_id);
-            const retryCount = await getPendingSyncRetryCount(entry.note_id);
-            if (retryCount >= MAX_RETRY_ATTEMPTS) {
-              console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: max retries exceeded`);
-              await clearPendingSync(entry.note_id);
-            }
-            failed++;
+        for (let attempt = 0; attempt <= FLUSH_RETRIES; attempt++) {
+          if (attempt > 0) {
+            // Exponential backoff: 1s, 2s
+            await new Promise((r) => setTimeout(r, RETRY_BASE_MS * Math.pow(2, attempt - 1)));
           }
-        } finally {
-          clearTimeout(timer);
+
+          const timeoutController = new AbortController();
+          const timer = setTimeout(() => timeoutController.abort(), 10000);
+          try {
+            const res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
+              method: 'DELETE',
+              headers,
+              signal: timeoutController.signal,
+            });
+
+            if (res.ok) {
+              await clearPendingSync(entry.note_id);
+              synced++;
+              break; // success
+            }
+
+            if (res.status === 429) {
+              console.warn(`[OfflineSync] rate limited on delete for note ${entry.note_id}: ${res.status}, pausing flush`);
+              failed++;
+              shouldStopFlush = true;
+              break; // rate limited, stop entire flush
+            }
+
+            if (res.status >= 400 && res.status < 500) {
+              console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: client error ${res.status}`);
+              await clearPendingSync(entry.note_id);
+              failed++;
+              break; // client error, won't succeed on retry
+            }
+
+            // 5xx or unknown server error — retry if attempts remain
+            if (attempt >= FLUSH_RETRIES) {
+              // Last attempt failed — fall back to cross-cycle retry
+              await incrementPendingSyncRetry(entry.note_id);
+              const retryCount = await getPendingSyncRetryCount(entry.note_id);
+              if (retryCount >= MAX_RETRY_ATTEMPTS) {
+                console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: max retries exceeded`);
+                await clearPendingSync(entry.note_id);
+              }
+              failed++;
+            }
+            // else: transient 5xx, loop continues with exponential backoff
+          } catch (fetchErr) {
+            if (attempt >= FLUSH_RETRIES) {
+              console.warn(`[OfflineSync] delete failed for note ${entry.note_id}:`, fetchErr);
+              await incrementPendingSyncRetry(entry.note_id);
+              const retryCount = await getPendingSyncRetryCount(entry.note_id);
+              if (retryCount >= MAX_RETRY_ATTEMPTS) {
+                console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: max retries exceeded (network error)`);
+                await clearPendingSync(entry.note_id);
+              }
+              failed++;
+            }
+            // else: transient network error, loop continues with exponential backoff
+          } finally {
+            clearTimeout(timer);
+          }
         }
+
+        if (shouldStopFlush) break; // stop processing remaining pending entries
         continue;
       }
 

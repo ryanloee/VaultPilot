@@ -1655,7 +1655,6 @@ fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Context;
 
     // ── constant_time_eq ──────────────────────────────────────────
 

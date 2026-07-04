@@ -232,7 +232,7 @@ describe('deleteMessage', () => {
   it('deletes message by id', async () => {
     const db = await freshDb();
     await db.deleteMessage('msg1');
-    const [sql, params] = mockDb.runAsync.mock.calls[0];
+    const [sql, params] = mockDb.runAsync.mock.calls[1];
     expect(sql).toContain('DELETE FROM messages');
     expect(params).toEqual(['msg1']);
   });

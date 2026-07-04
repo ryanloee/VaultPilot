@@ -63,14 +63,11 @@ describe('Issue #1174 — API keys must use SecureStore, not AsyncStorage', () =
     const { useAppStore } = require('../../store');
 
     const s = useAppStore.getState();
-    s.addProvider({ name: 'P1', apiBase: 'https://p1.com', apiKey: 'key-p1', model: 'm', apiFormat: 'openai' });
-    s.addProvider({ name: 'P2', apiBase: 'https://p2.com', apiKey: 'key-p2', model: 'm', apiFormat: 'openai' });
-
-    await new Promise(r => setTimeout(r, 100));
+    await s.addProvider({ name: 'P1', apiBase: 'https://p1.com', apiKey: 'key-p1', model: 'm', apiFormat: 'openai' });
+    await s.addProvider({ name: 'P2', apiBase: 'https://p2.com', apiKey: 'key-p2', model: 'm', apiFormat: 'openai' });
 
     // Update provider 0's key
-    useAppStore.getState().updateProvider(0, { apiKey: 'key-p1-updated' });
-    await new Promise(r => setTimeout(r, 100));
+    await useAppStore.getState().updateProvider(0, { apiKey: 'key-p1-updated' });
 
     const lastCall = SecureStore.setItemAsync.mock.calls.at(-1);
     expect(lastCall).toBeDefined();

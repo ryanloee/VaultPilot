@@ -162,7 +162,7 @@ describe('syncNotesFromServer', () => {
     expect(result.updated).toBe(0);
     expect(result.skipped).toBe(0);
     expect(result.errors).toBe(0);
-    expect(mockCreateNote).toHaveBeenCalledWith('Test Note', 'Note content here', 'note-1');
+    expect(mockCreateNote).toHaveBeenCalledWith('Test Note', 'Note content here', 'note-1', { is_template: 0, skipQueue: true });
     expect(mockUpdateNote).not.toHaveBeenCalled();
   });
 

@@ -210,11 +210,8 @@ pub fn save_settings_with_context(
         {
             settings.provider.api_key = existing_settings.provider.api_key.clone();
         }
-        for p in &mut settings.providers {
-            let existing = existing_settings
-                .providers
-                .iter()
-                .find(|ep| ep.name == p.name && ep.base_url == p.base_url);
+        for (i, p) in settings.providers.iter_mut().enumerate() {
+            let existing = existing_settings.providers.get(i);
             if let Some(existing) = existing {
                 if p.api_key != existing.api_key
                     && is_masked_key(&p.api_key)
@@ -249,19 +246,14 @@ pub fn save_settings_with_context(
 
     // Restore the plaintext keys in the struct we return and cache.
     // If the key is still encrypted (undecryptable fallback from
-    // load_settings_raw failing), clear it to avoid leaking encrypted
-    // data into memory where it would end up in IPC and CLI output (#2467).
-    if crate::crypto::is_encrypted(&api_key_plaintext) {
-        settings.provider.api_key = String::new();
-    } else {
-        settings.provider.api_key = api_key_plaintext;
-    }
+    // load_settings_raw failing), keep the encrypted value rather than
+    // clearing to empty — clearing poisons the cache with empty keys,
+    // causing subsequent loads to return falsified no-key settings
+    // even though the disk has valid (but undecryptable) keys (#2513).
+    // The encrypted value is already machine-bound and safe in memory.
+    settings.provider.api_key = api_key_plaintext;
     for (p, plain) in settings.providers.iter_mut().zip(providers_plaintext) {
-        if crate::crypto::is_encrypted(&plain) {
-            p.api_key = String::new();
-        } else {
-            p.api_key = plain;
-        }
+        p.api_key = plain;
     }
 
     let connection = context

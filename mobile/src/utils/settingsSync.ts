@@ -51,11 +51,11 @@ export async function exportSettings(includeKeys = false): Promise<string> {
   }>;
 
   if (includeKeys) {
-    // Restore keys from SecureStore
+    // Restore keys from SecureStore (stored as Record<string, string>)
     try {
       const keysRaw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
-      const keys: string[] = keysRaw ? JSON.parse(keysRaw) : [];
-      providers = providers.map((p, i) => ({ ...p, apiKey: keys[i] ?? '' }));
+      const keysRecord: Record<string, string> = keysRaw ? JSON.parse(keysRaw) : {};
+      providers = providers.map(p => ({ ...p, apiKey: (keysRecord as Record<string, string>)[p.name] ?? '' }));
     } catch (e) {
       console.warn('[SettingsSync] Failed to read SecureStore keys:', e);
     }
@@ -111,8 +111,12 @@ export async function importSettings(json: string): Promise<{ providersImported:
 
   // Save API keys to SecureStore FIRST — if this fails we must not overwrite
   // the existing provider list with empty keys, otherwise keys are lost.
-  const keys = data.providers.map(p => p.apiKey ?? '');
-  if (keys.some(k => k !== '')) {
+  // Store as Record<string, string> matching what saveProviderKeysSecure uses.
+  const keys: Record<string, string> = {};
+  for (const p of data.providers) {
+    if (p.apiKey) keys[p.name] = p.apiKey;
+  }
+  if (Object.keys(keys).length > 0) {
     await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
   }
   // If all keys are empty, preserve existing SecureStore content

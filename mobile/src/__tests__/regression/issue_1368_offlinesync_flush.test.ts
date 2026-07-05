@@ -22,6 +22,7 @@ const mockQueuePendingSync = jest.fn();
 const mockGetPendingSync = jest.fn();
 const mockIncrementPendingSyncRetry = jest.fn();
 const mockGetPendingSyncRetryCount = jest.fn();
+const mockGetNoteTags = jest.fn();
 
 jest.mock('../../services/sync', () => ({
   getServerConfig: mockGetServerConfig,
@@ -36,6 +37,7 @@ jest.mock('../../db', () => ({
   getPendingSync: mockGetPendingSync,
   incrementPendingSyncRetry: mockIncrementPendingSyncRetry,
   getPendingSyncRetryCount: mockGetPendingSyncRetryCount,
+  getNoteTags: mockGetNoteTags,
 }));
 
 jest.mock('expo-sqlite', () => ({
@@ -70,6 +72,7 @@ describe('flushPendingSyncs', () => {
     );
     mockIncrementPendingSyncRetry.mockResolvedValue(undefined);
     mockGetPendingSyncRetryCount.mockResolvedValue(0);
+    mockGetNoteTags.mockResolvedValue([]);
   });
 
   it('returns zeros when no server URL configured', async () => {

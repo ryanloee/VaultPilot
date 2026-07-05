@@ -7,14 +7,14 @@ use crate::agent::{
 // ── AgentEvent tests ──────────────────────────────────────────────────
 
 #[test]
-fn agent_event_is_clone_and_debug() {
+fn regression_1342_agent_event_is_clone_and_debug() {
     let event = AgentEvent::Thinking { step: 1 };
     let _cloned = event.clone();
     let _debug = format!("{:?}", event);
 }
 
 #[test]
-fn agent_event_tool_call_fields() {
+fn regression_1342_agent_event_tool_call_fields() {
     let event = AgentEvent::ToolCall {
         step: 3,
         tool: "search_notes".into(),
@@ -31,7 +31,7 @@ fn agent_event_tool_call_fields() {
 }
 
 #[test]
-fn agent_event_step_limit_reached() {
+fn regression_1342_agent_event_step_limit_reached() {
     let event = AgentEvent::StepLimitReached { steps: 20 };
     match event {
         AgentEvent::StepLimitReached { steps } => assert_eq!(steps, 20),
@@ -40,7 +40,7 @@ fn agent_event_step_limit_reached() {
 }
 
 #[test]
-fn agent_event_token_budget_exceeded() {
+fn regression_1342_agent_event_token_budget_exceeded() {
     let event = AgentEvent::TokenBudgetExceeded {
         tokens_used: 5000,
         budget: 4000,
@@ -58,7 +58,7 @@ fn agent_event_token_budget_exceeded() {
 }
 
 #[test]
-fn agent_event_write_approval_needed() {
+fn regression_1342_agent_event_write_approval_needed() {
     let event = AgentEvent::WriteApprovalNeeded {
         tool: "save_note".into(),
         args: "title=Test".into(),
@@ -75,7 +75,7 @@ fn agent_event_write_approval_needed() {
 // ── AgentResult tests ─────────────────────────────────────────────────
 
 #[test]
-fn agent_result_serializes() {
+fn regression_1342_agent_result_serializes() {
     let result = AgentResult {
         answer: "test answer".into(),
         steps_used: 3,
@@ -88,7 +88,7 @@ fn agent_result_serializes() {
 }
 
 #[test]
-fn agent_result_with_audit_entries() {
+fn regression_1342_agent_result_with_audit_entries() {
     let result = AgentResult {
         answer: "ok".into(),
         steps_used: 1,
@@ -108,7 +108,7 @@ fn agent_result_with_audit_entries() {
 // ── AgentConfig tests ─────────────────────────────────────────────────
 
 #[test]
-fn agent_config_default_is_read_only() {
+fn regression_1342_agent_config_default_is_read_only() {
     let config = AgentConfig::default();
     assert_eq!(config.permission, AgentPermission::ReadOnly);
     assert!(config.write_patterns.is_empty());
@@ -116,7 +116,7 @@ fn agent_config_default_is_read_only() {
 }
 
 #[test]
-fn agent_config_resource_limits_default() {
+fn regression_1342_agent_config_resource_limits_default() {
     let limits = AgentResourceLimits::default();
     assert_eq!(limits.max_duration.as_secs(), 300);
     assert_eq!(limits.max_tool_calls, 100);
@@ -124,7 +124,7 @@ fn agent_config_resource_limits_default() {
 }
 
 #[test]
-fn agent_config_serializes_roundtrip() {
+fn regression_1342_agent_config_serializes_roundtrip() {
     let config = AgentConfig {
         name: "test-agent".into(),
         permission: AgentPermission::ReadWrite,

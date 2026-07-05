@@ -5,7 +5,7 @@
 //! Unified Ideographs.
 
 #[test]
-fn issue_1328_hiragana_recognized_as_cjk() {
+fn regression_1328_hiragana_recognized_as_cjk() {
     assert!(is_cjk_for_test('あ'));
     assert!(is_cjk_for_test('の'));
     assert!(is_cjk_for_test('を'));
@@ -13,7 +13,7 @@ fn issue_1328_hiragana_recognized_as_cjk() {
 }
 
 #[test]
-fn issue_1328_katakana_recognized_as_cjk() {
+fn regression_1328_katakana_recognized_as_cjk() {
     assert!(is_cjk_for_test('ア'));
     assert!(is_cjk_for_test('ン'));
     assert!(is_cjk_for_test('ガ'));
@@ -21,7 +21,7 @@ fn issue_1328_katakana_recognized_as_cjk() {
 }
 
 #[test]
-fn issue_1328_hangul_recognized_as_cjk() {
+fn regression_1328_hangul_recognized_as_cjk() {
     assert!(is_cjk_for_test('한'));
     assert!(is_cjk_for_test('글'));
     assert!(is_cjk_for_test('가'));
@@ -29,41 +29,41 @@ fn issue_1328_hangul_recognized_as_cjk() {
 }
 
 #[test]
-fn issue_1328_cjk_symbols_recognized() {
+fn regression_1328_cjk_symbols_recognized() {
     assert!(is_cjk_for_test('「'));
     assert!(is_cjk_for_test('」'));
     assert!(is_cjk_for_test('〒'));
 }
 
 #[test]
-fn issue_1328_chinese_still_works() {
+fn regression_1328_chinese_still_works() {
     assert!(is_cjk_for_test('中'));
     assert!(is_cjk_for_test('文'));
     assert!(is_cjk_for_test('龙'));
 }
 
 #[test]
-fn issue_1328_latin_not_cjk() {
+fn regression_1328_latin_not_cjk() {
     assert!(!is_cjk_for_test('a'));
     assert!(!is_cjk_for_test('Z'));
     assert!(!is_cjk_for_test('0'));
 }
 
 #[test]
-fn issue_1328_japanese_tokenization_not_split() {
+fn regression_1328_japanese_tokenization_not_split() {
     // Japanese text should be classified as CJK (kind 1), not separator (kind 0)
     let tokens = split_search_token_for_test("あいう");
     assert_eq!(tokens, vec!["あいう"]);
 }
 
 #[test]
-fn issue_1328_korean_tokenization_not_split() {
+fn regression_1328_korean_tokenization_not_split() {
     let tokens = split_search_token_for_test("한글");
     assert_eq!(tokens, vec!["한글"]);
 }
 
 #[test]
-fn issue_1328_mixed_japanese_ascii_splits_correctly() {
+fn regression_1328_mixed_japanese_ascii_splits_correctly() {
     let tokens = split_search_token_for_test("testあいうabc");
     assert_eq!(tokens, vec!["test", "あいう", "abc"]);
 }

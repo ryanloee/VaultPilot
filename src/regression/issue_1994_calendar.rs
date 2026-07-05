@@ -65,7 +65,7 @@ fn make_event(id: &str, title: &str) -> CalendarEvent {
 // ─── ICS Parser ───────────────────────────────────────────────────
 
 #[test]
-fn issue_1994_parse_multi_event_ics() {
+fn regression_1994_parse_multi_event_ics() {
     let provider = IcsCalendarProvider::from_content(SAMPLE_ICS, "test-cal");
     let events = provider.parse_events();
     assert_eq!(events.len(), 3, "should parse exactly 3 events");
@@ -105,7 +105,7 @@ fn issue_1994_parse_multi_event_ics() {
 }
 
 #[test]
-fn issue_1994_parse_rfc3339_timezone() {
+fn regression_1994_parse_rfc3339_timezone() {
     let ics = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:tz-1@vp\nDTSTART:2026-07-01T10:00:00+08:00\nSUMMARY:TZ Event\nEND:VEVENT\nEND:VCALENDAR\n";
     let provider = IcsCalendarProvider::from_content(ics, "tz-cal");
     let events = provider.parse_events();
@@ -122,7 +122,7 @@ fn issue_1994_parse_rfc3339_timezone() {
 // ─── Meeting Metadata ─────────────────────────────────────────────
 
 #[test]
-fn issue_1994_attach_metadata_no_frontmatter() {
+fn regression_1994_attach_metadata_no_frontmatter() {
     let event = make_event("mtg-1", "Sprint Planning");
     let note = "# My Note\nSome content here";
     let result = attach_meeting_metadata(note, &event);
@@ -137,7 +137,7 @@ fn issue_1994_attach_metadata_no_frontmatter() {
 }
 
 #[test]
-fn issue_1994_attach_metadata_existing_frontmatter() {
+fn regression_1994_attach_metadata_existing_frontmatter() {
     let event = make_event("mtg-2", "Review");
     let note = "---\ntitle: My Note\ntags: [work]\n---\n# Content\nBody text";
     let result = attach_meeting_metadata(note, &event);
@@ -151,7 +151,7 @@ fn issue_1994_attach_metadata_existing_frontmatter() {
 }
 
 #[test]
-fn issue_1994_attach_metadata_cjk_preserved() {
+fn regression_1994_attach_metadata_cjk_preserved() {
     let mut event = make_event("mtg-3", "");
     event.title = "产品评审会议".to_string();
     event.attendees = vec!["张三".to_string(), "李四".to_string()];
@@ -165,7 +165,7 @@ fn issue_1994_attach_metadata_cjk_preserved() {
 }
 
 #[test]
-fn issue_1994_attach_metadata_replaces_old_keys() {
+fn regression_1994_attach_metadata_replaces_old_keys() {
     let event = make_event("mtg-new", "New Title");
     let note = "---\nmeeting_event_id: mtg-old\nmeeting_title: Old Title\ntitle: Keep\n---\nBody";
     let result = attach_meeting_metadata(note, &event);
@@ -180,7 +180,7 @@ fn issue_1994_attach_metadata_replaces_old_keys() {
 // ─── Cache round-trip ─────────────────────────────────────────────
 
 #[test]
-fn issue_1994_sync_and_cached_agenda() {
+fn regression_1994_sync_and_cached_agenda() {
     let temp = std::env::temp_dir().join(format!(
         "vp-cal-regression-{}",
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
@@ -216,7 +216,7 @@ fn issue_1994_sync_and_cached_agenda() {
 // ─── Async today_agenda with LocalCalendarProvider ─────────────────
 
 #[tokio::test]
-async fn issue_1994_today_agenda_filters_by_date() {
+async fn regression_1994_today_agenda_filters_by_date() {
     let day = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
     let events = vec![
         CalendarEvent {
@@ -262,7 +262,7 @@ async fn issue_1994_today_agenda_filters_by_date() {
 // ─── Ensure calendar module compiles ──────────────────────────────
 
 #[test]
-fn issue_1994_module_compiles() {
+fn regression_1994_module_compiles() {
     // Touch the module to ensure it links.
     let _ = std::any::type_name::<calendar::CalendarEvent>();
 }

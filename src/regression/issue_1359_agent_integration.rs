@@ -43,7 +43,7 @@ impl Drop for TestGuard {
 // ── Sandbox boundary tests ────────────────────────────────────────────
 
 #[test]
-fn sandbox_blocks_path_traversal() {
+fn regression_1359_sandbox_blocks_path_traversal() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -60,7 +60,7 @@ fn sandbox_blocks_path_traversal() {
 }
 
 #[test]
-fn sandbox_blocks_absolute_path_outside_vault() {
+fn regression_1359_sandbox_blocks_absolute_path_outside_vault() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -75,7 +75,7 @@ fn sandbox_blocks_absolute_path_outside_vault() {
 }
 
 #[test]
-fn sandbox_allows_relative_path_inside_vault() {
+fn regression_1359_sandbox_allows_relative_path_inside_vault() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -91,7 +91,7 @@ fn sandbox_allows_relative_path_inside_vault() {
 }
 
 #[test]
-fn sandbox_read_only_blocks_write_tools() {
+fn regression_1359_sandbox_read_only_blocks_write_tools() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -109,7 +109,7 @@ fn sandbox_read_only_blocks_write_tools() {
 }
 
 #[test]
-fn sandbox_read_only_allows_read_tools() {
+fn regression_1359_sandbox_read_only_allows_read_tools() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -132,7 +132,7 @@ fn sandbox_read_only_allows_read_tools() {
 }
 
 #[test]
-fn sandbox_write_pattern_blocks_non_matching() {
+fn regression_1359_sandbox_write_pattern_blocks_non_matching() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
@@ -149,7 +149,7 @@ fn sandbox_write_pattern_blocks_non_matching() {
 }
 
 #[test]
-fn sandbox_write_pattern_allows_matching() {
+fn regression_1359_sandbox_write_pattern_allows_matching() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
@@ -163,7 +163,7 @@ fn sandbox_write_pattern_allows_matching() {
 }
 
 #[test]
-fn sandbox_empty_write_patterns_blocks_all_writes() {
+fn regression_1359_sandbox_empty_write_patterns_blocks_all_writes() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
@@ -180,7 +180,7 @@ fn sandbox_empty_write_patterns_blocks_all_writes() {
 }
 
 #[test]
-fn sandbox_unknown_tool_blocked() {
+fn regression_1359_sandbox_unknown_tool_blocked() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -192,7 +192,7 @@ fn sandbox_unknown_tool_blocked() {
 // ── Resource limit tests ──────────────────────────────────────────────
 
 #[test]
-fn resource_limits_default_values() {
+fn regression_1359_resource_limits_default_values() {
     let limits = AgentResourceLimits::default();
     assert_eq!(limits.max_duration, Duration::from_secs(300));
     assert_eq!(limits.max_tool_calls, 100);
@@ -200,14 +200,14 @@ fn resource_limits_default_values() {
 }
 
 #[test]
-fn agent_config_default_is_read_only() {
+fn regression_1359_agent_config_default_is_read_only() {
     let config = AgentConfig::default();
     assert_eq!(config.permission, AgentPermission::ReadOnly);
     assert!(config.write_patterns.is_empty());
 }
 
 #[test]
-fn tool_call_limit_enforced() {
+fn regression_1359_tool_call_limit_enforced() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.limits.max_tool_calls = 2;
@@ -236,7 +236,7 @@ fn tool_call_limit_enforced() {
 // ── Tool proxy audit log tests ────────────────────────────────────────
 
 #[test]
-fn tool_proxy_records_audit_log() {
+fn regression_1359_tool_proxy_records_audit_log() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -249,7 +249,7 @@ fn tool_proxy_records_audit_log() {
 }
 
 #[test]
-fn tool_proxy_tool_call_count_increments() {
+fn regression_1359_tool_proxy_tool_call_count_increments() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -264,7 +264,7 @@ fn tool_proxy_tool_call_count_increments() {
 // ── Event serialization tests ─────────────────────────────────────────
 
 #[test]
-fn agent_event_all_variants_clone_and_debug() {
+fn regression_1359_agent_event_all_variants_clone_and_debug() {
     let events = vec![
         AgentEvent::Thinking { step: 1 },
         AgentEvent::ToolCall {
@@ -305,7 +305,7 @@ fn agent_event_all_variants_clone_and_debug() {
 // ── Write approval coordination test ──────────────────────────────────
 
 #[test]
-fn write_approval_channel_coordination() {
+fn regression_1359_write_approval_channel_coordination() {
     use std::sync::mpsc;
     use std::thread;
 
@@ -326,7 +326,7 @@ fn write_approval_channel_coordination() {
 }
 
 #[test]
-fn write_approval_channel_timeout_behavior() {
+fn regression_1359_write_approval_channel_timeout_behavior() {
     use std::sync::mpsc;
 
     let (tx, rx) = mpsc::channel::<bool>();
@@ -346,7 +346,7 @@ fn write_approval_channel_timeout_behavior() {
 // ── Malformed JSON args tests ─────────────────────────────────────────
 
 #[test]
-fn sandbox_malformed_json_args_denies_write_when_no_path_extractable() {
+fn regression_1359_sandbox_malformed_json_args_denies_write_when_no_path_extractable() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
@@ -369,7 +369,7 @@ fn sandbox_malformed_json_args_denies_write_when_no_path_extractable() {
 }
 
 #[test]
-fn sandbox_malformed_json_args_allows_read() {
+fn regression_1359_sandbox_malformed_json_args_allows_read() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -384,7 +384,7 @@ fn sandbox_malformed_json_args_allows_read() {
 }
 
 #[test]
-fn sandbox_empty_json_object_denies_write_when_no_path() {
+fn regression_1359_sandbox_empty_json_object_denies_write_when_no_path() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
@@ -400,7 +400,7 @@ fn sandbox_empty_json_object_denies_write_when_no_path() {
 }
 
 #[test]
-fn sandbox_null_path_in_json_denies_write() {
+fn regression_1359_sandbox_null_path_in_json_denies_write() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
@@ -417,7 +417,7 @@ fn sandbox_null_path_in_json_denies_write() {
 // ── Timeout behavior tests ────────────────────────────────────────────
 
 #[test]
-fn sandbox_timeout_blocks_new_tool_calls() {
+fn regression_1359_sandbox_timeout_blocks_new_tool_calls() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     // Set a very short timeout
@@ -439,7 +439,7 @@ fn sandbox_timeout_blocks_new_tool_calls() {
 }
 
 #[test]
-fn sandbox_elapsed_tracks_time() {
+fn regression_1359_sandbox_elapsed_tracks_time() {
     let (tmp, config) = setup();
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
@@ -452,7 +452,7 @@ fn sandbox_elapsed_tracks_time() {
 // ── Large args handling ───────────────────────────────────────────────
 
 #[test]
-fn sandbox_large_args_json_does_not_panic() {
+fn regression_1359_sandbox_large_args_json_does_not_panic() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.permission = AgentPermission::ReadWrite;
@@ -470,7 +470,7 @@ fn sandbox_large_args_json_does_not_panic() {
 // ── Write approval denial flow ────────────────────────────────────────
 
 #[test]
-fn write_denied_records_in_transcript() {
+fn regression_1359_write_denied_records_in_transcript() {
     use std::sync::mpsc;
     use std::thread;
 
@@ -494,7 +494,7 @@ fn write_denied_records_in_transcript() {
 // ── Token budget tests ────────────────────────────────────────────────
 
 #[test]
-fn token_budget_zero_means_unlimited() {
+fn regression_1359_token_budget_zero_means_unlimited() {
     let limits = AgentResourceLimits::default();
     assert_eq!(
         limits.max_tokens, 0,
@@ -503,7 +503,7 @@ fn token_budget_zero_means_unlimited() {
 }
 
 #[test]
-fn token_budget_nonzero_is_respected() {
+fn regression_1359_token_budget_nonzero_is_respected() {
     let limits = AgentResourceLimits {
         max_tokens: 1000,
         ..Default::default()
@@ -514,7 +514,7 @@ fn token_budget_nonzero_is_respected() {
 // ── Step limit edge case ──────────────────────────────────────────────
 
 #[test]
-fn max_tool_calls_one_allows_exactly_one() {
+fn regression_1359_max_tool_calls_one_allows_exactly_one() {
     let (tmp, mut config) = setup();
     let _guard = TestGuard(tmp.clone());
     config.limits.max_tool_calls = 1;

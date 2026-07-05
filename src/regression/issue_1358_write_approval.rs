@@ -9,7 +9,7 @@
 use serde_json::json;
 
 #[test]
-fn run_agent_params_deserializes_with_defaults() {
+fn regression_1358_run_agent_params_deserializes_with_defaults() {
     let json = json!({ "prompt": "test task" });
     // Simulate the deserialization that happens in handle_request
     #[derive(serde::Deserialize)]
@@ -29,7 +29,7 @@ fn run_agent_params_deserializes_with_defaults() {
 }
 
 #[test]
-fn run_agent_params_deserializes_with_all_fields() {
+fn regression_1358_run_agent_params_deserializes_with_all_fields() {
     let json = json!({ "prompt": "write a note", "maxSteps": 10, "autoApprove": true });
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -48,7 +48,7 @@ fn run_agent_params_deserializes_with_all_fields() {
 }
 
 #[test]
-fn respond_to_write_approval_params_deserializes() {
+fn regression_1358_respond_to_write_approval_params_deserializes() {
     let json = json!({ "approved": true });
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -65,7 +65,7 @@ fn respond_to_write_approval_params_deserializes() {
 }
 
 #[test]
-fn approval_channel_send_receive() {
+fn regression_1358_approval_channel_send_receive() {
     // Simulates the AGENT_APPROVAL mechanism
     use std::sync::mpsc;
 
@@ -79,7 +79,7 @@ fn approval_channel_send_receive() {
 }
 
 #[test]
-fn agent_event_json_has_expected_fields() {
+fn regression_1358_agent_event_json_has_expected_fields() {
     // Verify that the event JSON format matches what WinUI expects
     let event = json!({
         "event": "agentStatus",
@@ -102,7 +102,7 @@ fn agent_event_json_has_expected_fields() {
 }
 
 #[test]
-fn agent_completed_event_has_stats() {
+fn regression_1358_agent_completed_event_has_stats() {
     let event = json!({
         "event": "agentStatus",
         "payload": {

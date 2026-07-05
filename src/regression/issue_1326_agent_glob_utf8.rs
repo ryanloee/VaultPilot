@@ -5,7 +5,7 @@
 //! Bug 3: glob_match("?", "/") returns true (should be false).
 
 #[test]
-fn issue_1326_summarize_args_cjk_no_panic() {
+fn regression_1326_summarize_args_cjk_no_panic() {
     // 300 CJK chars = 900 bytes. Old code did &args_json[..200] which panics
     // because byte 200 falls inside a multi-byte UTF-8 char.
     let cjk: String = "中".repeat(300);
@@ -16,7 +16,7 @@ fn issue_1326_summarize_args_cjk_no_panic() {
 }
 
 #[test]
-fn issue_1326_glob_double_star_matches_path_separator() {
+fn regression_1326_glob_double_star_matches_path_separator() {
     assert!(glob_match_for_test("**", "a/b"));
     assert!(glob_match_for_test("**", "a/b/c/d"));
     assert!(glob_match_for_test("**", ""));
@@ -26,7 +26,7 @@ fn issue_1326_glob_double_star_matches_path_separator() {
 }
 
 #[test]
-fn issue_1326_glob_question_mark_rejects_path_separator() {
+fn regression_1326_glob_question_mark_rejects_path_separator() {
     assert!(glob_match_for_test("?", "a"));
     assert!(glob_match_for_test("?", "中"));
     assert!(!glob_match_for_test("?", "/"));

@@ -3,7 +3,7 @@
 use crate::agent::{AgentConfig, AgentPermission, AgentResourceLimits, ToolProxy};
 
 #[test]
-fn audit_log_survives_normal_operation() {
+fn regression_1354_audit_log_survives_normal_operation() {
     let config = AgentConfig {
         name: "test".into(),
         permission: AgentPermission::ReadOnly,
@@ -24,7 +24,7 @@ fn audit_log_survives_normal_operation() {
 }
 
 #[test]
-fn deny_entry_recorded_in_audit_log() {
+fn regression_1354_deny_entry_recorded_in_audit_log() {
     let config = AgentConfig {
         name: "test".into(),
         permission: AgentPermission::ReadOnly,
@@ -45,7 +45,7 @@ fn deny_entry_recorded_in_audit_log() {
 }
 
 #[test]
-fn multiple_tool_calls_audit_log_ordering() {
+fn regression_1354_multiple_tool_calls_audit_log_ordering() {
     let config = AgentConfig {
         name: "test".into(),
         permission: AgentPermission::ReadOnly,

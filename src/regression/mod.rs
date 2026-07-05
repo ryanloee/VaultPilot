@@ -30,6 +30,3 @@ mod issue_1994_calendar;
 mod issue_1995_context_surface;
 mod issue_1996_agent_engine;
 mod issue_914_related_notes;
-
-// Example — reference only, delete once you have real regression tests
-mod _example_042;

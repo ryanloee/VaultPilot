@@ -2,10 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
-use deunicode::deunicode;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::{debug, instrument, warn};
 
 use crate::models::{NoteDocument, NoteMeta, SearchQuery, SearchResult};
@@ -1663,26 +1661,7 @@ pub(super) fn fallback_source(source: &str) -> String {
 }
 
 pub(super) fn slugify(value: &str) -> String {
-    let ascii = deunicode(value);
-    let mut slug = String::new();
-    let mut last_was_dash = false;
-    for ch in ascii.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if !last_was_dash {
-            slug.push('-');
-            last_was_dash = true;
-        }
-    }
-    let cleaned = slug.trim_matches('-').to_string();
-    if cleaned.is_empty() {
-        let mut hasher = DefaultHasher::new();
-        value.hash(&mut hasher);
-        format!("note-{:08x}", hasher.finish())
-    } else {
-        cleaned
-    }
+    crate::utils::slugify(value)
 }
 
 pub(super) fn hash_content(content: &str) -> String {

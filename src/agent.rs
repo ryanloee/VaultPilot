@@ -9,8 +9,6 @@
 //! - **Fail-closed**: any sandbox violation terminates the agent immediately.
 //! - **Auditable**: every tool call is logged for security review.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -2059,28 +2057,7 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
 }
 
 fn slugify(title: &str) -> String {
-    let mut slug: String = title
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    // Collapse consecutive dashes
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    let cleaned = slug.trim_matches('-').to_string();
-    if cleaned.is_empty() {
-        let mut hasher = DefaultHasher::new();
-        title.hash(&mut hasher);
-        format!("note-{:08x}", hasher.finish())
-    } else {
-        cleaned
-    }
+    crate::utils::slugify(title)
 }
 
 fn tool_display_name(tool: &ai::AssistantToolCall) -> &'static str {
@@ -2524,14 +2501,14 @@ mod pure_function_tests {
 
     #[test]
     fn slugify_basic() {
-        assert_eq!(slugify("Hello World"), "Hello-World");
+        assert_eq!(slugify("Hello World"), "hello-world");
         assert_eq!(slugify("test.md"), "test-md");
         assert_eq!(slugify("hello"), "hello");
     }
 
     #[test]
     fn slugify_special_chars() {
-        assert_eq!(slugify("Hello! @#$% World"), "Hello-World");
+        assert_eq!(slugify("Hello! @#$% World"), "hello-world");
         assert_eq!(slugify("path/to/file"), "path-to-file");
     }
 

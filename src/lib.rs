@@ -13,6 +13,7 @@ pub mod plugin;
 pub mod prompting;
 pub mod search_rules;
 pub mod storage;
+pub mod utils;
 
 // Re-export public API from orchestration module for backward compatibility
 pub use orchestration::{

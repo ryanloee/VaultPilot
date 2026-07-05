@@ -311,33 +311,22 @@ impl ToolProxy {
     }
 
     fn is_write_tool(tool: &str) -> bool {
-        matches!(
-            tool,
-            "save_note" | "write_note" | "delete_note" | "rename_note"
-        )
+        // The only write-capable tool is `save_note`. The names `write_note`,
+        // `delete_note`, and `rename_note` were leftovers from an earlier tool
+        // design and never correspond to real tool calls (#2424).
+        matches!(tool, "save_note")
     }
 
     /// Whether the tool is expected to take a `path` argument.
     fn takes_path(tool: &str) -> bool {
-        matches!(
-            tool,
-            "read_file"
-                | "list_directory"
-                | "write_note"
-                | "save_note"
-                | "delete_note"
-                | "rename_note"
-        )
+        matches!(tool, "read_file" | "list_directory" | "save_note")
     }
 
     /// Extract file-path arguments from the tool's JSON args.
     /// Returns an empty vector for tools that don't take a path.
-    /// For `rename_note`, both the source `path` and destination `newPath`
-    /// are returned so that both are checked against confine_path and
-    /// is_path_writable.
     fn extract_path_args(tool: &str, args_json: &str) -> Vec<String> {
         match tool {
-            "read_file" | "list_directory" | "write_note" | "save_note" | "delete_note" => {
+            "read_file" | "list_directory" | "save_note" => {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(args_json) else {
                     return vec![];
                 };
@@ -345,19 +334,6 @@ impl ToolProxy {
                     Some(p) => vec![p.to_string()],
                     None => vec![],
                 }
-            }
-            "rename_note" => {
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(args_json) else {
-                    return vec![];
-                };
-                let mut paths = Vec::new();
-                if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
-                    paths.push(p.to_string());
-                }
-                if let Some(p) = v.get("newPath").and_then(|p| p.as_str()) {
-                    paths.push(p.to_string());
-                }
-                paths
             }
             _ => vec![],
         }
@@ -2827,10 +2803,14 @@ mod pure_function_tests {
     }
 
     #[test]
-    fn extract_path_args_rename_note() {
-        let paths =
-            ToolProxy::extract_path_args("rename_note", r#"{"path":"old.md","newPath":"new.md"}"#);
-        assert_eq!(paths, vec!["old.md", "new.md"]);
+    fn extract_path_args_phantom_tools_return_empty() {
+        // Tools that don't exist in the real toolset (#2424) should fall
+        // through to the catch-all arm and return an empty vector.
+        for tool in &["write_note", "delete_note", "rename_note"] {
+            let paths =
+                ToolProxy::extract_path_args(tool, r#"{"path":"old.md","newPath":"new.md"}"#);
+            assert!(paths.is_empty(), "{} should return empty", tool);
+        }
     }
 
     #[test]

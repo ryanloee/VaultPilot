@@ -96,16 +96,15 @@ fn regression_1359_sandbox_read_only_blocks_write_tools() {
     let _guard = TestGuard(tmp.clone());
     let proxy = ToolProxy::new(config, &tmp);
 
-    for tool in &["save_note", "write_note", "delete_note", "rename_note"] {
-        let check = proxy
-            .check_tool_call(tool, r#"{"path": "test.md"}"#)
-            .unwrap();
-        assert!(
-            !check.allowed,
-            "read-only agent should not be able to call {}",
-            tool
-        );
-    }
+    let tool = "save_note";
+    let check = proxy
+        .check_tool_call(tool, r#"{"path": "test.md"}"#)
+        .unwrap();
+    assert!(
+        !check.allowed,
+        "read-only agent should not be able to call {}",
+        tool
+    );
 }
 
 #[test]
@@ -392,7 +391,7 @@ fn regression_1359_sandbox_empty_json_object_denies_write_when_no_path() {
     let proxy = ToolProxy::new(config, &tmp);
 
     // Empty JSON object — no path field, write tool should be denied
-    let check = proxy.check_tool_call("write_note", "{}").unwrap();
+    let check = proxy.check_tool_call("save_note", "{}").unwrap();
     assert!(
         !check.allowed,
         "empty JSON args with no path should be denied for write tools"
@@ -409,7 +408,7 @@ fn regression_1359_sandbox_null_path_in_json_denies_write() {
 
     // null path — extract_path_arg returns None, write tool should be denied
     let check = proxy
-        .check_tool_call("write_note", r#"{"path": null, "content": "test"}"#)
+        .check_tool_call("save_note", r#"{"path": null, "content": "test"}"#)
         .unwrap();
     assert!(!check.allowed, "null path should be denied for write tools");
 }

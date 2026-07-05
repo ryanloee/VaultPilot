@@ -80,9 +80,9 @@ Linux 版本只包含 CLI，不包含 WinUI 图形界面。
 
 本地测试时，通常启动：
 
-- `native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
+- `native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
 
-如果你只构建了 Debug，也可以直接运行 Debug 输出。
+如果你构建的是 Release 版本，也可以直接运行 Release 输出。
 
 ### 启动安装版程序
 

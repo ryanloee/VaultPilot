@@ -10,7 +10,7 @@ All Rust tests use the built-in `#[cfg(test)]` + `#[test]` framework. No externa
 |-----------|----------|-------------------|-------------|
 | Unit tests | Inline `#[cfg(test)] mod tests {}` in each source file | `fn test_<function_name>_<scenario>()` | `cargo test -p vaultpilot` |
 | Regression tests | `src/regression/` directory, one file per issue | `fn regression_<issue_number>_<short_desc>()` | `cargo test regression` |
-| Integration tests | `tests/` directory (top-level) | `fn it_<feature>_<scenario>()` | `cargo test --test '*'` |
+| Integration tests | `tests/` (⚠ currently empty — only `fixtures/` exists; coming soon) | `fn it_<feature>_<scenario>()` | `cargo test --test '*'` (finds nothing currently) |
 
 ### Regression Test File Naming
 

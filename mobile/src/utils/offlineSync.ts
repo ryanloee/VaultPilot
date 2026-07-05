@@ -13,6 +13,7 @@ import {
   getPendingSync,
   clearPendingSync,
   getNote,
+  getNoteTags,
   queuePendingSync,
   incrementPendingSyncRetry,
   getPendingSyncRetryCount,
@@ -205,13 +206,21 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
           await new Promise((r) => setTimeout(r, RETRY_BASE_MS * Math.pow(2, attempt - 1)));
         }
 
+        const tags = await getNoteTags(entry.note_id);
+        const body: Record<string, unknown> = { title: note.title, content: note.content };
+        // Also transmit folder, starred, and tags so offline changes to these fields
+        // are not silently lost (#2531)
+        if (note.folder !== undefined) body.folder = note.folder;
+        if (note.starred !== undefined) body.starred = Boolean(note.starred);
+        if (tags.length > 0) body.tags = tags;
+
         const timeoutController = new AbortController();
         const timer = setTimeout(() => timeoutController.abort(), 10000);
         try {
           const res = await fetch(`${url}/api/notes/${encodeURIComponent(entry.note_id)}`, {
             method: 'PUT',
             headers,
-            body: JSON.stringify({ title: note.title, content: note.content }),
+            body: JSON.stringify(body),
             signal: timeoutController.signal,
           });
 

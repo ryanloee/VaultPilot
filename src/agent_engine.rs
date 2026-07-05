@@ -608,14 +608,22 @@ impl SubprocessEngine {
                 match rx.recv_timeout(IO_DRAIN_TIMEOUT) {
                     Ok(Ok(())) => {
                         /* written successfully — thread already closed stdin */
-                        let _ = std_in_thread.join();
+                        if let Err(e) = std_in_thread.join() {
+                            tracing::warn!(
+                                "[agent_engine] stdin write thread panicked (after success): {e:?}",
+                            );
+                        }
                     }
                     Ok(Err(e)) => {
                         tracing::warn!(
                             "[agent_engine] stdin write failed for '{}': {e}",
                             self.engine_name,
                         );
-                        let _ = std_in_thread.join();
+                        if let Err(e) = std_in_thread.join() {
+                            tracing::warn!(
+                                "[agent_engine] stdin write thread panicked (after error): {e:?}",
+                            );
+                        }
                         // Write failed before timeout; ManuallyDrop prevented
                         // the thread from closing stdin. Close it here.
                         #[cfg(unix)]
@@ -646,14 +654,22 @@ impl SubprocessEngine {
                         unsafe {
                             close_windows_handle(stdin_raw);
                         }
-                        let _ = std_in_thread.join();
+                        if let Err(e) = std_in_thread.join() {
+                            tracing::warn!(
+                                "[agent_engine] stdin write thread panicked (after timeout): {e:?}",
+                            );
+                        }
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                         tracing::warn!(
                             "[agent_engine] stdin write thread disconnected for '{}'",
                             self.engine_name,
                         );
-                        let _ = std_in_thread.join();
+                        if let Err(e) = std_in_thread.join() {
+                            tracing::warn!(
+                                "[agent_engine] stdin write thread panicked (after disconnect): {e:?}",
+                            );
+                        }
                         // Thread may not have closed stdin; close it here.
                         #[cfg(unix)]
                         unsafe {

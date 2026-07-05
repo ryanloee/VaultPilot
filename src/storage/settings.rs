@@ -200,8 +200,10 @@ pub fn save_settings_with_context(
         let raw = fs::read_to_string(&paths.settings_path)
             .with_context(|| format!("failed to read {}", paths.settings_path.display()))?;
         let normalized = raw.trim_start_matches('\u{feff}');
-        serde_json::from_str(normalized)
-            .with_context(|| format!("failed to parse {}", paths.settings_path.display()))
+        let mut parsed: AppSettings = serde_json::from_str(normalized)
+            .with_context(|| format!("failed to parse {}", paths.settings_path.display()))?;
+        parsed.migrate_providers();
+        Ok(parsed)
     });
     if let Ok(existing_settings) = existing_settings {
         if existing_settings.provider.api_key != settings.provider.api_key

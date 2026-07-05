@@ -574,6 +574,10 @@ async fn http_progressive_search(
                                         .to_string(),
                                 )
                                 .await;
+                            // Send done so the client knows search is complete (#2499)
+                            let _ = result_tx_search
+                                .send(serde_json::json!({"stage": "done"}).to_string())
+                                .await;
                         }
                         _ = async {
                             // Stage 1: Keyword search (FTS5, fast)
@@ -609,6 +613,10 @@ async fn http_progressive_search(
                                             serde_json::json!({"stage": "error", "message": "Internal error"})
                                                 .to_string(),
                                         )
+                                        .await;
+                                    // Send done so the client knows search is complete (#2499)
+                                    let _ = result_tx_search
+                                        .send(serde_json::json!({"stage": "done"}).to_string())
                                         .await;
                                     return;
                                 }
@@ -685,6 +693,10 @@ async fn http_progressive_search(
                         serde_json::json!({"stage": "error", "message": "Internal error"})
                             .to_string(),
                     )
+                    .await;
+                // Send done so the client knows search is complete (#2499)
+                let _ = result_tx_done
+                    .send(serde_json::json!({"stage": "done"}).to_string())
                     .await;
             }
             // result_tx clones dropped here → result_rx returns None → forwarder exits

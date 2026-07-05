@@ -42,6 +42,11 @@ use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path, run_single_s
 /// stalled upstream + a non-disconnecting client holds a tokio task, two bounded
 /// channels, and an upstream HTTP connection indefinitely. (#2128)
 const STREAM_UPSTREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+/// Maximum wall-clock time for the progressive search (keyword + deep semantic).
+/// Without this, a hung search (e.g. SQLite WAL stall, DB lock) leaks the tokio
+/// task, the bounded channels, and the upstream HTTP connection. The router-level
+/// TimeoutLayer(180s) does NOT cover the SSE body stream. (#2547)
+const PROGRESSIVE_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 // ─── Public entry point ────────────────────────────────────────────
 
@@ -538,127 +543,193 @@ async fn http_progressive_search(
         .min(100);
 
     let (sse_tx, sse_rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(16);
-    let state_clone = state.clone();
-    let q = query_text.clone();
+    // Intermediate channel between search task and forwarding task so that
+    // client disconnect is detected even while a search future is in flight.
+    let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<String>(8);
     let cancel = CancellationToken::new();
 
-    tokio::spawn(async move {
-        let sse_tx_done = sse_tx.clone();
-        let cancel = cancel;
-        let result = futures_util::future::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
-            async move {
-                // Stage 1: Keyword search (FTS5, fast)
-                if cancel.is_cancelled() {
-                    return;
-                }
-                let kw_query = SearchQuery {
-                    text: q.clone(),
-                    limit: Some(limit),
-                    deep_search: false,
-                    ..Default::default()
-                };
-                match search_notes_async(&state_clone.context, kw_query).await {
-                    Ok(result) => {
-                        if cancel.is_cancelled() {
-                            return;
+    // --- Search task: runs the actual search stages (keyword → loading → deep → done) ---
+    {
+        let state_clone = state.clone();
+        let q = query_text.clone();
+        let cancel_search = cancel.clone();
+        let result_tx_search = result_tx.clone();
+        let result_tx_done = result_tx.clone();
+        tokio::spawn(async move {
+            let catch_result = futures_util::future::FutureExt::catch_unwind(
+                std::panic::AssertUnwindSafe(async move {
+                    tokio::select! {
+                        biased;
+                        _ = cancel_search.cancelled() => {
+                            tracing::info!("progressive search cancelled before starting");
                         }
-                        let event = ProgressiveSearchEvent {
-                            stage: "keyword".into(),
-                            results: Some(result),
-                            message: None,
-                        };
-                        let data = serde_json::to_string(&event).unwrap_or_default();
-                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
-                            cancel.cancel();
-                            return;
+                        _ = tokio::time::sleep(PROGRESSIVE_SEARCH_TIMEOUT) => {
+                            tracing::warn!(
+                                "progressive search timed out after {}s",
+                                PROGRESSIVE_SEARCH_TIMEOUT.as_secs()
+                            );
+                            let _ = result_tx_search
+                                .send(
+                                    serde_json::json!({"stage": "error", "message": "Search timed out"})
+                                        .to_string(),
+                                )
+                                .await;
                         }
-                    }
-                    Err(e) => {
-                        tracing::warn!("progressive keyword search failed: {e}");
-                        let _ = sse_tx
-                            .send(Ok(Event::default().data(
-                                serde_json::json!({"stage": "error", "message": "Internal error"})
-                                    .to_string(),
-                            )))
-                            .await;
-                        return;
-                    }
-                }
+                        _ = async {
+                            // Stage 1: Keyword search (FTS5, fast)
+                            if cancel_search.is_cancelled() {
+                                return;
+                            }
+                            let kw_query = SearchQuery {
+                                text: q.clone(),
+                                limit: Some(limit),
+                                deep_search: false,
+                                ..Default::default()
+                            };
+                            match search_notes_async(&state_clone.context, kw_query).await {
+                                Ok(result) => {
+                                    if cancel_search.is_cancelled() {
+                                        return;
+                                    }
+                                    let event = ProgressiveSearchEvent {
+                                        stage: "keyword".into(),
+                                        results: Some(result),
+                                        message: None,
+                                    };
+                                    let data = serde_json::to_string(&event).unwrap_or_default();
+                                    if result_tx_search.send(data).await.is_err() {
+                                        cancel_search.cancel();
+                                        return;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("progressive keyword search failed: {e}");
+                                    let _ = result_tx_search
+                                        .send(
+                                            serde_json::json!({"stage": "error", "message": "Internal error"})
+                                                .to_string(),
+                                        )
+                                        .await;
+                                    return;
+                                }
+                            }
 
-                // Stage 2: Loading state
-                if cancel.is_cancelled() {
-                    return;
-                }
-                let loading = ProgressiveSearchEvent {
-                    stage: "loading".into(),
-                    results: None,
-                    message: Some("正在查找更多相关笔记...".into()),
-                };
-                let data = serde_json::to_string(&loading).unwrap_or_default();
-                if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
-                    cancel.cancel();
-                    return;
-                }
+                            // Stage 2: Loading state
+                            if cancel_search.is_cancelled() {
+                                return;
+                            }
+                            let loading = ProgressiveSearchEvent {
+                                stage: "loading".into(),
+                                results: None,
+                                message: Some("正在查找更多相关笔记...".into()),
+                            };
+                            let data = serde_json::to_string(&loading).unwrap_or_default();
+                            if result_tx_search.send(data).await.is_err() {
+                                cancel_search.cancel();
+                                return;
+                            }
 
-                // Stage 3: Deep semantic search
-                if cancel.is_cancelled() {
-                    return;
-                }
-                let deep_query = SearchQuery {
-                    text: q.clone(),
-                    limit: Some(limit),
-                    deep_search: true,
-                    ..Default::default()
-                };
-                match deep_search_notes_async(&state_clone.context, deep_query).await {
-                    Ok(result) => {
-                        if cancel.is_cancelled() {
-                            return;
-                        }
-                        let event = ProgressiveSearchEvent {
-                            stage: "semantic".into(),
-                            results: Some(result),
-                            message: None,
-                        };
-                        let data = serde_json::to_string(&event).unwrap_or_default();
-                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
-                            cancel.cancel();
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("progressive semantic search failed: {e}");
-                        // Still send a done event so the client knows search is complete
-                        let _ = sse_tx
-                            .send(Ok(Event::default()
-                                .data(serde_json::json!({"stage": "done"}).to_string())))
-                            .await;
-                        return;
-                    }
-                }
+                            // Stage 3: Deep semantic search
+                            if cancel_search.is_cancelled() {
+                                return;
+                            }
+                            let deep_query = SearchQuery {
+                                text: q.clone(),
+                                limit: Some(limit),
+                                deep_search: true,
+                                ..Default::default()
+                            };
+                            match deep_search_notes_async(&state_clone.context, deep_query).await {
+                                Ok(result) => {
+                                    if cancel_search.is_cancelled() {
+                                        return;
+                                    }
+                                    let event = ProgressiveSearchEvent {
+                                        stage: "semantic".into(),
+                                        results: Some(result),
+                                        message: None,
+                                    };
+                                    let data = serde_json::to_string(&event).unwrap_or_default();
+                                    if result_tx_search.send(data).await.is_err() {
+                                        cancel_search.cancel();
+                                        return;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("progressive semantic search failed: {e}");
+                                    // Still send a done event so the client knows search is complete
+                                    let _ = result_tx_search
+                                        .send(serde_json::json!({"stage": "done"}).to_string())
+                                        .await;
+                                    return;
+                                }
+                            }
 
-                // Done
-                if cancel.is_cancelled() {
-                    return;
-                }
-                let _ = sse_tx
-                    .send(Ok(
-                        Event::default().data(serde_json::json!({"stage": "done"}).to_string())
-                    ))
+                            // Done
+                            if cancel_search.is_cancelled() {
+                                return;
+                            }
+                            let _ = result_tx_search
+                                .send(serde_json::json!({"stage": "done"}).to_string())
+                                .await;
+                        } => {}
+                    }
+                }),
+            )
+            .await;
+
+            if let Err(panic) = catch_result {
+                tracing::error!("progressive search background task panicked: {:?}", panic);
+                let _ = result_tx_done
+                    .send(
+                        serde_json::json!({"stage": "error", "message": "Internal error"})
+                            .to_string(),
+                    )
                     .await;
-            },
-        ))
-        .await;
+            }
+            // result_tx clones dropped here → result_rx returns None → forwarder exits
+        });
+    }
 
-        if let Err(panic) = result {
-            tracing::error!("progressive search background task panicked: {:?}", panic);
-            let _ = sse_tx_done
-                .send(Ok(Event::default().data(
-                    serde_json::json!({"stage": "error", "message": "Internal error"}).to_string(),
-                )))
-                .await;
-        }
-    });
+    // --- Forwarding task: reads from result_rx, sends to sse_tx, detects disconnect ---
+    {
+        let cancel_forwarder = cancel.clone();
+        tokio::spawn(async move {
+            let result = futures_util::future::FutureExt::catch_unwind(
+                std::panic::AssertUnwindSafe(async move {
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = cancel_forwarder.cancelled() => break,
+                            data = result_rx.recv() => {
+                                match data {
+                                    Some(data) => {
+                                        if sse_tx.send(Ok(Event::default().data(data))).await.is_err() {
+                                            // SSE receiver dropped — client disconnected
+                                            tracing::info!("progressive search client disconnected, cancelling search");
+                                            cancel_forwarder.cancel();
+                                            break;
+                                        }
+                                    }
+                                    None => break,
+                                }
+                            }
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                                tracing::warn!("progressive search forwarder: no progress for 5s, cancelling");
+                                cancel_forwarder.cancel();
+                                break;
+                            }
+                        }
+                    }
+                }),
+            )
+            .await;
+
+            if let Err(panic) = result {
+                tracing::error!("progressive search forwarder panicked: {:?}", panic);
+            }
+        });
+    }
 
     let stream = ReceiverStream::new(sse_rx);
     Sse::new(stream).into_response()

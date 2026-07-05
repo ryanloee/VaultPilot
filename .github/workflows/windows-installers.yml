@@ -388,10 +388,17 @@ jobs:
                 continue
               }
 
-              Write-Host "Uploading $($asset.Name)..."
-              gh release upload $tag $asset.FullName --clobber
+              # Use directory-based channel to disambiguate duplicate filenames
+              $channel = Split-Path $Directory -Leaf
+              $assetName = if ($asset.Name -eq 'Setup.exe') {
+                "Setup-$channel.exe"
+              } else {
+                $asset.Name
+              }
+              Write-Host "Uploading $($asset.Name) as $assetName..."
+              gh release upload $tag "$($asset.FullName)#$assetName" --clobber
               if ($LASTEXITCODE -ne 0) {
-                throw "Failed to upload asset $($asset.Name)"
+                throw "Failed to upload asset $assetName"
               }
 
               $uploadedKeys[$key] = $true

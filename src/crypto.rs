@@ -7,7 +7,7 @@
 //! values from legacy plaintext.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, Generate, KeyInit},
     Aes256Gcm, Nonce,
 };
 use anyhow::{anyhow, Result};
@@ -236,21 +236,15 @@ pub fn encrypt_secret(plaintext: &str) -> Result<String> {
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|e| anyhow!("failed to create AES-256-GCM cipher: {e}"))?;
 
-    let nonce_bytes: [u8; 12] = {
-        use aes_gcm::aead::rand_core::RngCore;
-        let mut buf = [0u8; 12];
-        OsRng.fill_bytes(&mut buf);
-        buf
-    };
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::generate();
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|e| anyhow!("AES-GCM encryption failed: {e}"))?;
 
     // Concatenate nonce + ciphertext, then base64-encode.
     let mut payload = Vec::with_capacity(12 + ciphertext.len());
-    payload.extend_from_slice(&nonce_bytes);
+    payload.extend_from_slice(&nonce[..]);
     payload.extend_from_slice(&ciphertext);
 
     Ok(format!("{}{}", ENCRYPTED_PREFIX, B64.encode(payload)))
@@ -288,9 +282,9 @@ pub fn decrypt_secret(value: &str) -> Result<String> {
     let key = derive_machine_key();
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|e| anyhow!("failed to create AES-256-GCM cipher: {e}"))?;
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes).map_err(|e| anyhow!("invalid nonce: {e}"))?;
 
-    let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+    let plaintext = cipher.decrypt(&nonce, ciphertext).map_err(|_| {
         anyhow!(
             "AES-GCM decryption failed — the machine key may have changed; \
              please re-enter your API key in Settings"

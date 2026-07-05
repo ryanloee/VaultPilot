@@ -34,10 +34,19 @@ export function usePendingSync(): { pendingCount: number; refresh: () => Promise
   const { isOnline } = useNetworkState();
   const prevOnline = useRef(false);
   const isFlushingRef = useRef(false);
+  // Guard against state updates after the component unmounts (#2550).
+  // refresh() has an await point; without this guard, setPendingCount can
+  // fire on an unmounted component.
+  const mountedRef = useRef(true);
+
+  // Mark as unmounted on cleanup so async callbacks (refresh, flush) can bail.
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const refresh = useCallback(async () => {
     const count = await getPendingSyncCount();
-    setPendingCount(count);
+    if (mountedRef.current) setPendingCount(count);
   }, []);
 
   // Keep a ref to the latest refresh callback so the online-transition
@@ -259,12 +268,14 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
           }
 
           if (res.status === 404) {
-            // Note was deleted on server — delete local copy to match (#2545)
+            // Note was deleted on server — delete local copy to match (#2545).
+            // Delete the local note FIRST, then clear pending entries, so a
+            // deleteNote failure doesn't orphan the note without a pending sync
+            // entry to retry (#2548).
             console.warn(`[OfflineSync] note ${entry.note_id} was deleted on server (404), deleting local copy`);
-            await clearPendingSync(entry.note_id);
             await deleteNote(entry.note_id);
-            // clearPendingSync again in case deleteNote queued a delete sync entry
-            await clearPendingSync(entry.note_id);
+            await clearPendingSync(entry.note_id);   // clears the original update entry
+            await clearPendingSync(entry.note_id);   // clears any re-queued delete entry (no-op if none)
             synced++;
             break;
           }

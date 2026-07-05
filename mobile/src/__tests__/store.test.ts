@@ -178,12 +178,26 @@ describe('setApiSettings', () => {
     expect(useAppStore.getState().apiBase).toBe('https://opencode.ai/zen/v1'); // unchanged
   });
 
-  it('syncs to active provider', () => {
+  it('does NOT back-write to active provider (one-directional sync, #2551)', () => {
     const p = { name: 'A', apiBase: 'https://a.com', apiKey: 'k', model: 'm', apiFormat: 'openai' as const };
     useAppStore.getState().addProvider(p);
     useAppStore.getState().setApiSettings({ model: 'new-model' });
-    // syncLegacyFields runs via setTimeout, check provider was updated in the set call
+    // Flat field is updated (legacy compat)
     expect(useAppStore.getState().model).toBe('new-model');
+    // Provider is NOT mutated — one-directional contract (provider → flat, not flat → provider)
+    expect(useAppStore.getState().providers[0].model).toBe('m');
+  });
+
+  it('removeProvider with out-of-bounds index is a safe no-op (#2549)', () => {
+    const p = { name: 'A', apiBase: 'https://a.com', apiKey: 'k', model: 'm', apiFormat: 'openai' as const };
+    useAppStore.getState().addProvider(p);
+    const before = useAppStore.getState().providers.length;
+    // -1 and >= length should not crash or mutate state
+    useAppStore.getState().removeProvider(-1);
+    useAppStore.getState().removeProvider(99);
+    const s = useAppStore.getState();
+    expect(s.providers).toHaveLength(before);
+    expect(s.activeProviderIndex).toBe(0);
   });
 });
 

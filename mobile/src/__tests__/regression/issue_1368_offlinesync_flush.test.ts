@@ -367,4 +367,37 @@ describe('flushPendingSyncs', () => {
     // No entries should be cleared (they remain for next flush)
     expect(mockClearPendingSync).not.toHaveBeenCalled();
   });
+
+  // #2548: On 404 (note deleted on server), deleteNote must run BEFORE clearPendingSync
+  // so a deleteNote failure doesn't orphan the note without a pending sync entry.
+  it('on 404: calls deleteNote before clearPendingSync (no orphan if deleteNote fails)', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+    mockDeleteNote.mockResolvedValue(undefined);
+
+    const result = await flushPendingSyncs();
+    expect(result).toEqual({ synced: 1, failed: 0 });
+
+    // deleteNote should have been called
+    expect(mockDeleteNote).toHaveBeenCalledWith('n1');
+    // Collect the call order: deleteNote must come before the first clearPendingSync
+    const allCalls = jest.mocked(mockDeleteNote).mock.invocationCallOrder[0];
+    const firstClear = jest.mocked(mockClearPendingSync).mock.invocationCallOrder[0];
+    expect(allCalls).toBeLessThan(firstClear);
+  });
+
+  // #2548: If deleteNote throws on 404, the pending entry must NOT have been cleared yet
+  it('on 404 with failing deleteNote: pending entry survives for retry', async () => {
+    mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
+    mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
+    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+    mockDeleteNote.mockRejectedValue(new Error('DB constraint error'));
+
+    const result = await flushPendingSyncs();
+    // The flush outer try/catch catches the deleteNote rejection
+    expect(result.failed).toBe(1);
+    // clearPendingSync must NOT have been called before deleteNote threw
+    expect(mockClearPendingSync).not.toHaveBeenCalledWith('n1');
+  });
 });

@@ -219,26 +219,11 @@ export const useAppStore = create<AppState>()(
       model: 'deepseek-v4-flash-free',
       apiFormat: 'openai' as ApiFormat,
       setApiSettings: async (s) => {
-        let updatedProviders: ProviderConfig[] | undefined;
-        let apiKeyChanged = false;
-        set((state) => {
-          const newState = mergeApiSettings(state, s);
-          // Also sync to active provider
-          const providers = [...state.providers];
-          if (providers.length > 0) {
-            const idx = clampProviderIndex(state.activeProviderIndex, providers.length);
-            // Track whether apiKey was explicitly provided and actually changed,
-            // so we only call saveProviderKeysSecure when meaningful and avoid
-            // overwriting SecureStore with empty keys on non-key updates (#2507 regression).
-            if (s.apiKey !== undefined && s.apiKey !== providers[idx].apiKey) {
-              apiKeyChanged = true;
-            }
-            providers[idx] = { ...providers[idx], ...newState };
-            updatedProviders = providers;
-          }
-          return { ...newState, providers };
-        });
-        if (updatedProviders && apiKeyChanged) await saveProviderKeysSecure(updatedProviders);
+        // Legacy compatibility shim: only update flat fields, do NOT back-write
+        // into the active provider. The documented contract is one-directional
+        // (provider → legacy fields via syncLegacyFields), not bidirectional.
+        // Back-writing overwrote provider config with stale flat-field values (#2551).
+        set((state) => mergeApiSettings(state, s));
       },
 
       providers: [],
@@ -264,6 +249,10 @@ export const useAppStore = create<AppState>()(
         let updatedProviders: ProviderConfig[] | undefined;
         set((state) => {
           if (state.providers.length === 0) return {}; // Guard: nothing to remove
+          // Bounds check: an out-of-range index (e.g. -1) would leave the
+          // providers array unchanged but produce an invalid activeProviderIndex
+          // → providers[activeProviderIndex] is undefined → TypeError crash (#2549)
+          if (index < 0 || index >= state.providers.length) return {};
           const providers = removeProviderFromList(state.providers, index);
           const activeProviderIndex = computeActiveIndexAfterRemove(state.activeProviderIndex, index, providers.length);
           updatedProviders = providers;
@@ -338,8 +327,14 @@ export const useAppStore = create<AppState>()(
             return;
           }
           if (Object.keys(keys).length === 0) {
-            // SecureStore returned empty and providers were rehydrated with sanitized (empty) apiKeys,
-            // so hasExistingKeys was always false. Simply return — there are no keys to restore.
+            // SecureStore returned empty and providers were rehydrated with sanitized
+            // (empty) apiKeys, so there are no keys to restore. Still invalidate the
+            // settings cache so post-hydration getSettings() reads fresh store values
+            // instead of a stale pre-hydration cache (#2553, #2102 regression for the
+            // empty-keys case).
+            import('./api/settingsCache').then(m => m.invalidateSettingsCache()).catch(e => {
+              console.warn('[Store] failed to invalidate settings cache after rehydration (empty keys):', e);
+            });
             return;
           }
           const restored = restoreProviderKeys(fresh.providers, keys);

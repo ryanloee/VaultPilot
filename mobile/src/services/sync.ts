@@ -122,7 +122,7 @@ async function doSync(
         // 优先尊重服务端 Retry-After 头，否则走指数退避 (#2132)
         const delay = retryAfterMs ?? RETRY_BASE_MS * Math.pow(2, attempt - 1);
         retryAfterMs = null;
-        await new Promise(r => setTimeout(r, delay));
+        await raceDelayOrAbort(signal, delay);
       }
       // 声明在 try 外部，确保 cleanup 在 catch/所有路径都可调用 (#2122)
       const listTimeoutController = new AbortController();
@@ -219,7 +219,7 @@ async function doSync(
           // 优先尊重服务端 Retry-After 头，否则走指数退避 (#2132)
           const delay = noteRetryAfterMs ?? RETRY_BASE_MS * Math.pow(2, attempt - 1);
           noteRetryAfterMs = null;
-          await new Promise(r => setTimeout(r, delay));
+          await raceDelayOrAbort(signal, delay);
         }
         const noteController = new AbortController();
         let abortedDueToTimeout = false;
@@ -345,6 +345,22 @@ export function parseRetryAfter(res: Response): number | null {
     return Math.min(Math.max(0, date - Date.now()), RETRY_AFTER_MAX_MS);
   }
   return null;
+}
+
+/**
+ * Wait for `delay` ms, but resolve immediately if `signal` aborts (#2552).
+ * Ensures retry backoff / Retry-After delays don't block sync exit past the
+ * overall timeout or user cancellation. Exported for unit testing.
+ */
+export function raceDelayOrAbort(signal: AbortSignal, delay: number): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>(resolve => {
+    const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); };
+    const done = () => { cleanup(); resolve(); };
+    const onAbort = done;
+    const timer = setTimeout(done, delay);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /** Combine multiple AbortSignals into one. Returns a merged signal that aborts when any source aborts. */

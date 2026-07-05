@@ -446,10 +446,10 @@ async function _doGetNoteTitleMap(): Promise<Map<string, string>> {
   }
 }
 
-export async function toggleStar(id: string): Promise<void> {
+export async function toggleStar(id: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
   await db.runAsync("UPDATE notes SET starred = 1 - starred, updated_at = strftime('%s','now') WHERE id = ?", [id]);
-  await queuePendingSync(id);
+  if (!options?.skipQueue) await queuePendingSync(id);
 }
 
 export async function getNoteCount(): Promise<number> {
@@ -505,12 +505,14 @@ export async function getNoteTags(noteId: string): Promise<string[]> {
 export async function addTag(noteId: string, tag: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
   await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
+  await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
   if (!options?.skipQueue) await queuePendingSync(noteId);
 }
 
 export async function removeTag(noteId: string, tag: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
+  await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
   if (!options?.skipQueue) await queuePendingSync(noteId);
 }
 

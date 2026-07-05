@@ -1743,9 +1743,11 @@ pub async fn run_agent(
 /// Wraps `tokio::task::spawn_blocking` with a cancellation token.
 ///
 /// If the cancellation token fires before the blocking operation completes,
-/// the `JoinHandle` is absorbed into a background task (preventing tokio's
-/// "spawn_blocking task was cancelled" diagnostic), and `None` is returned
-/// — the leaking-thread problem described in #2455.
+/// the incomplete `JoinHandle` is silently dropped (preventing tokio's
+/// "spawn_blocking task was cancelled" diagnostic), and `None` is returned.
+/// The underlying blocking OS thread continues until its I/O completes — see
+/// #2455 for the leaking-thread problem. Each cancellation is counted and
+/// logged as a warning so operators can detect pathological patterns (#2472).
 async fn spawn_blocking_abortable<F, T>(
     f: F,
     cancel: CancellationToken,
@@ -1754,6 +1756,8 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
+    static BLOCKING_LEAK_COUNT: AtomicU64 = AtomicU64::new(0);
+
     let handle = tokio::task::spawn_blocking(f);
     let mut handle = Box::pin(handle);
 
@@ -1766,12 +1770,18 @@ where
             // (syscalls cannot be interrupted cooperatively), and tokio's
             // blocking thread pool reaps it afterwards.
             //
-            // We intentionally detach here rather than wrapping the handle in
-            // an extra `tokio::spawn` task: that earlier wrapper only leaked a
-            // second, unsupervised tokio task that consumed a task slot
-            // indefinitely without any benefit (#2472). Detaching via plain
-            // `drop` achieves the same "absorb and forget" semantics without
-            // the extra leak.
+            // We intentionally detach here via plain `drop` rather than the
+            // former `tokio::spawn` wrapper, which only leaked a second
+            // unsupervised tokio task without any benefit (#2472).
+            //
+            // Each leak is counted and logged so operators can detect
+            // pathological timeout patterns and tune timeouts accordingly.
+            let count = BLOCKING_LEAK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            warn!(
+                blocking_leak_count = count,
+                "blocking task cancelled — OS thread continues until I/O completes (leak #{})",
+                count,
+            );
             drop(handle);
             None
         }

@@ -1167,11 +1167,14 @@ mod tests {
         );
 
         let sanitized = sanitize_note_content(&rendered);
-        // </content> is not </note_content>, so it passes through unchanged
-        assert!(sanitized.contains("</content>"), "</content> preserved");
+        // All XML close tags are now escaped via escape_xml_close_tags (#2515).
         assert!(
-            !sanitized.contains("<//content>"),
-            "</content> is not </note_content>, should not be escaped"
+            !sanitized.contains("</content>"),
+            "</content> should be escaped by sanitize_note_content"
+        );
+        assert!(
+            sanitized.contains("<//content>"),
+            "</content> becomes <//content> after escaping"
         );
     }
 

@@ -26,6 +26,7 @@ pub use pool::StorageContext;
 // Re-export chat session public API so callers see no difference.
 pub use chat::{load_chat_state_with_context, save_chat_state_with_context};
 // Re-export settings public API so callers see no difference.
+pub(crate) use settings::is_masked_key;
 pub use settings::{load_settings_with_context, save_settings_with_context};
 // Re-export search public API so callers see no difference.
 pub use search::{deep_search_notes, search_notes_with_context, typeahead_search};

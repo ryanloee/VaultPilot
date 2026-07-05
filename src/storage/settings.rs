@@ -11,8 +11,12 @@ use super::pool::{AppPaths, StorageContext};
 /// Check if a string value looks like it was masked by [`mask_secret`] in
 /// `models::provider`.  Masked values either contain the Unicode ellipsis
 /// character `…` (U+2026) or are entirely composed of `*` (short keys).
-fn is_masked_key(s: &str) -> bool {
-    s.contains('\u{2026}') || (!s.is_empty() && s.chars().all(|c| c == '*'))
+///
+/// Uses [`MASK_ELLIPSIS`] from the provider module so that changes to the
+/// masking format don't silently corrupt stored keys (#2539).
+pub(crate) fn is_masked_key(s: &str) -> bool {
+    s.contains(crate::models::provider::MASK_ELLIPSIS)
+        || (!s.is_empty() && s.chars().all(|c| c == '*'))
 }
 
 /// Load settings directly from the disk file, bypassing the in-memory cache.
@@ -168,6 +172,7 @@ pub fn save_settings_with_context(
     mut settings: AppSettings,
 ) -> Result<AppSettings> {
     let paths = &context.paths;
+    settings.migrate_providers();
     normalize_settings(&mut settings, paths);
     if let Some(parent) = paths.settings_path.parent() {
         fs::create_dir_all(parent)?;

@@ -131,6 +131,12 @@ impl std::fmt::Debug for ProviderConfig {
     }
 }
 
+/// The Unicode ellipsis character used to mask API keys for safe display.
+/// Shared between [`mask_secret`] (which produces masked strings) and
+/// [`is_masked_key`] (which detects them) so that changes to one side
+/// don't silently corrupt stored keys (#2539).
+pub(crate) const MASK_ELLIPSIS: char = '\u{2026}';
+
 /// Mask a secret string for safe display: show first 4 and last 4 chars.
 pub(crate) fn mask_secret(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
@@ -142,7 +148,7 @@ pub(crate) fn mask_secret(s: &str) -> String {
     }
     let prefix: String = chars[..4].iter().collect();
     let suffix: String = chars[chars.len() - 4..].iter().collect();
-    format!("{}…{}", prefix, suffix)
+    format!("{prefix}{MASK_ELLIPSIS}{suffix}")
 }
 
 pub fn default_base_url() -> String {
@@ -186,6 +192,70 @@ mod tests {
     fn mask_secret_exactly_13_chars() {
         let masked = mask_secret("1234567890123");
         assert_eq!(masked, "1234…0123");
+    }
+
+    // ── mask_secret ↔ is_masked_key round-trip (#2539) ──
+    //
+    // These tests ensure that every masking format produced by mask_secret
+    // is correctly detected by is_masked_key. If either function drifts
+    // independently, the other will catch it here.
+
+    #[test]
+    fn is_masked_key_detects_short_all_star() {
+        let masked = mask_secret("abc");
+        assert!(crate::storage::is_masked_key(&masked));
+    }
+
+    #[test]
+    fn is_masked_key_detects_12_char_all_star() {
+        let masked = mask_secret("123456789012");
+        assert!(crate::storage::is_masked_key(&masked));
+    }
+
+    #[test]
+    fn is_masked_key_detects_long_with_ellipsis() {
+        let masked = mask_secret("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789-0123456789");
+        assert!(crate::storage::is_masked_key(&masked));
+        // Verify the ellipsis from MASK_ELLIPSIS is present
+        assert!(masked.contains(MASK_ELLIPSIS));
+    }
+
+    #[test]
+    fn is_masked_key_returns_false_for_plaintext() {
+        assert!(!crate::storage::is_masked_key("sk-real-key-12345-abcde"));
+    }
+
+    #[test]
+    fn is_masked_key_returns_false_for_empty() {
+        assert!(!crate::storage::is_masked_key(""));
+    }
+
+    #[test]
+    fn is_masked_key_round_trip_all_formats() {
+        // Every masking format that mask_secret can produce
+        let inputs = &[
+            "",
+            "a",
+            "ab",
+            "abc",
+            "123456789012",  // exactly 12 chars — all stars
+            "1234567890123", // 13 chars — prefix…suffix
+            "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+        ];
+        for input in inputs {
+            let masked = mask_secret(input);
+            if input.is_empty() {
+                assert!(
+                    !crate::storage::is_masked_key(&masked),
+                    "empty key produces empty masked output, which is not masked"
+                );
+            } else {
+                assert!(
+                    crate::storage::is_masked_key(&masked),
+                    "mask_secret({input:?}) = {masked:?} should be detected as masked"
+                );
+            }
+        }
     }
 
     // ── ProviderType::from_base_url ──

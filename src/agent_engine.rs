@@ -281,8 +281,11 @@ pub struct SubprocessEngine {
 /// Set the pipe file descriptor `O_NONBLOCK` so that a read loop can avoid
 /// hanging indefinitely when grandchild processes inherit the write end of
 /// the pipe (#2364).
+///
+/// Returns an error if `fcntl` fails, so callers can abort the subprocess
+/// upfront rather than risk a permanent thread hang (#2541).
 #[cfg(unix)]
-fn make_nonblocking<T: std::os::unix::io::AsRawFd>(handle: &T) {
+fn make_nonblocking<T: std::os::unix::io::AsRawFd>(handle: &T) -> Result<()> {
     let fd = handle.as_raw_fd();
     // Safety: `fcntl` is safe as long as `fd` is valid and we pass valid
     // arguments. `fd` came from a valid OS pipe handle.
@@ -290,11 +293,12 @@ fn make_nonblocking<T: std::os::unix::io::AsRawFd>(handle: &T) {
         let flags = libc::fcntl(fd, libc::F_GETFL, 0);
         if flags >= 0 && libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
             let err = std::io::Error::last_os_error();
-            eprintln!(
-                "[agent_engine] make_nonblocking: failed to set O_NONBLOCK on fd {fd}: {err}"
-            );
+            return Err(anyhow::anyhow!(
+                "make_nonblocking: failed to set O_NONBLOCK on fd {fd}: {err}"
+            ));
         }
     }
+    Ok(())
 }
 
 impl SubprocessEngine {
@@ -394,6 +398,22 @@ impl SubprocessEngine {
         // can flow while we feed stdin below.
         let stdout_handle = child.stdout.take();
         let stderr_handle = child.stderr.take();
+
+        // #2541 — set O_NONBLOCK on pipe read ends BEFORE spawning drain
+        // threads, so a failure here kills the child and reports an error
+        // rather than risking a permanent thread hang later.
+        #[cfg(unix)]
+        {
+            if let Some(ref handle) = stdout_handle {
+                make_nonblocking(handle)
+                    .with_context(|| "failed to set O_NONBLOCK on stdout pipe")?;
+            }
+            if let Some(ref handle) = stderr_handle {
+                make_nonblocking(handle)
+                    .with_context(|| "failed to set O_NONBLOCK on stderr pipe")?;
+            }
+        }
+
         let (out_tx, out_rx) = mpsc::channel::<String>();
         let (err_tx, err_rx) = mpsc::channel::<String>();
 
@@ -405,8 +425,6 @@ impl SubprocessEngine {
             .spawn(move || {
                 let mut buf = Vec::new();
                 if let Some(mut s) = stdout_handle {
-                    #[cfg(unix)]
-                    make_nonblocking(&s);
                     let mut tmp = [0u8; 4096];
                     loop {
                         if done.load(Ordering::Acquire) {
@@ -470,8 +488,6 @@ impl SubprocessEngine {
             .spawn(move || {
                 let mut buf = Vec::new();
                 if let Some(mut s) = stderr_handle {
-                    #[cfg(unix)]
-                    make_nonblocking(&s);
                     let mut tmp = [0u8; 4096];
                     loop {
                         if done.load(Ordering::Acquire) {

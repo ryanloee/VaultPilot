@@ -575,10 +575,8 @@ pub async fn send_request_streaming<'a>(
             // Process complete lines
             while let Some(newline_pos) = buf.iter().position(|&b| b == b'\n') {
                 let line_bytes = buf.split_to(newline_pos + 1);
-                let line = std::str::from_utf8(&line_bytes)
-                    .unwrap_or("")
-                    .trim_end_matches('\r')
-                    .trim_end_matches('\n');
+                let line_cow = String::from_utf8_lossy(&line_bytes);
+                let line = line_cow.trim_end_matches('\r').trim_end_matches('\n');
 
                 if line.is_empty() {
                     continue;
@@ -680,10 +678,8 @@ pub async fn send_request_streaming<'a>(
         // The stream may end without a trailing \n, leaving the final SSE frame
         // unprocessed. (Fixes #1597)
         if !buf.is_empty() {
-            let line = std::str::from_utf8(&buf)
-                .unwrap_or("")
-                .trim_end_matches('\r')
-                .trim_end_matches('\n');
+            let line_cow = String::from_utf8_lossy(&buf);
+            let line = line_cow.trim_end_matches('\r').trim_end_matches('\n');
 
             if !line.is_empty()
                 && !line.starts_with("event:")

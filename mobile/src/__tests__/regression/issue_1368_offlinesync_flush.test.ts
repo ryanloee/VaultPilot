@@ -17,6 +17,7 @@ const mockGetServerConfig = jest.fn();
 const mockGetPendingSyncs = jest.fn();
 const mockGetNote = jest.fn();
 const mockClearPendingSync = jest.fn();
+const mockDeleteNote = jest.fn();
 const mockGetPendingSyncCount = jest.fn().mockResolvedValue(0);
 const mockQueuePendingSync = jest.fn();
 const mockGetPendingSync = jest.fn();
@@ -32,6 +33,7 @@ jest.mock('../../db', () => ({
   getPendingSyncs: mockGetPendingSyncs,
   getNote: mockGetNote,
   clearPendingSync: mockClearPendingSync,
+  deleteNote: mockDeleteNote,
   getPendingSyncCount: mockGetPendingSyncCount,
   queuePendingSync: mockQueuePendingSync,
   getPendingSync: mockGetPendingSync,
@@ -267,7 +269,7 @@ describe('flushPendingSyncs', () => {
   it('clears entry on 4xx client error', async () => {
     mockGetPendingSyncs.mockResolvedValue([{ note_id: 'n1' }]);
     mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
-    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+    mockFetch.mockResolvedValue({ ok: false, status: 403 });
 
     const result = await flushPendingSyncs();
     expect(result).toEqual({ synced: 0, failed: 1 });
@@ -319,7 +321,7 @@ describe('flushPendingSyncs', () => {
     mockGetNote.mockResolvedValue({ id: 'n1', title: 'T', content: 'C' });
     // 5xx entries are retried 3 times each (FLUSH_RETRIES=2 → loop 0..2)
     mockFetch
-      .mockResolvedValueOnce({ ok: false, status: 404 }) // n1 → clear (no retry)
+      .mockResolvedValueOnce({ ok: false, status: 410 }) // n1 → clear (no retry)
       .mockResolvedValueOnce({ ok: false, status: 500 }) // n2 attempt 0
       .mockResolvedValueOnce({ ok: false, status: 500 }) // n2 attempt 1
       .mockResolvedValueOnce({ ok: false, status: 500 }) // n2 attempt 2

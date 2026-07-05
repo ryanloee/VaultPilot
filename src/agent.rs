@@ -1243,6 +1243,48 @@ fn extract_first_json_object(text: &str) -> Option<String> {
 /// Maximum tool-calling rounds in the agent loop.
 const DEFAULT_MAX_STEPS: usize = 20;
 
+/// Minimum per-call token cost assumed when the provider omits token counts (#2542).
+/// Without this floor, a provider that never returns `input_tokens`/`output_tokens`
+/// would make every `unwrap_or(0)` add zero and the token-budget check would never
+/// fire — silently allowing the agent to run far past its budget.
+const TOKEN_FALLBACK_COST_PER_CALL: u64 = 200;
+
+/// Accumulate tokens from a `RequestUsage`, applying a minimum estimate when the
+/// provider omits counts (see #2542).
+///
+/// * When both fields are present, returns their sum.
+/// * When one field is present, returns that value and logs a warning so the
+///   undercount becomes visible.
+/// * When both are `None`, returns [`TOKEN_FALLBACK_COST_PER_CALL`] and logs a
+///   warning, so the budget check still has a non-zero signal to act on.
+fn accumulate_token_usage(usage: &ai::RequestUsage, step: usize) -> u64 {
+    let input = usage.input_tokens;
+    let output = usage.output_tokens;
+    match (input, output) {
+        (Some(i), Some(o)) => (i + o) as u64,
+        (Some(i), None) => {
+            warn!(
+                step,
+                input_tokens = i,
+                "provider omitted output_tokens; token budget may undercount (#2542)"
+            );
+            i as u64
+        }
+        (None, Some(o)) => {
+            warn!(
+                step,
+                output_tokens = o,
+                "provider omitted input_tokens; token budget may undercount (#2542)"
+            );
+            o as u64
+        }
+        (None, None) => {
+            warn!(step, fallback = TOKEN_FALLBACK_COST_PER_CALL, "provider returned no token counts; applying minimum estimate to avoid silent budget bypass (#2542)");
+            TOKEN_FALLBACK_COST_PER_CALL
+        }
+    }
+}
+
 /// Run an autonomous agent loop: prompt → LLM → tool call → execute → repeat.
 ///
 /// The agent uses `select_tool_call` to decide which tool to invoke, executes
@@ -1373,8 +1415,7 @@ pub async fn run_agent(
             })?,
         };
 
-        total_tokens += selection.usage.input_tokens.unwrap_or(0) as u64
-            + selection.usage.output_tokens.unwrap_or(0) as u64;
+        total_tokens += accumulate_token_usage(&selection.usage, step);
 
         // Token budget check
         if token_budget > 0 && total_tokens > token_budget {
@@ -1449,8 +1490,7 @@ pub async fn run_agent(
                         })?,
                     }
                 };
-                total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
-                    + answer.usage.output_tokens.unwrap_or(0) as u64;
+                total_tokens += accumulate_token_usage(&answer.usage, step);
                 on_event(&AgentEvent::FinalAnswer {
                     text: answer.answer.clone(),
                 });
@@ -1633,8 +1673,7 @@ pub async fn run_agent(
                 )
                 .await;
                 if let Ok(Ok(answer)) = answer_result {
-                    total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
-                        + answer.usage.output_tokens.unwrap_or(0) as u64;
+                    total_tokens += accumulate_token_usage(&answer.usage, actual_steps);
                     return Ok(AgentResult {
                         answer: answer.answer,
                         steps_used: actual_steps,
@@ -1694,8 +1733,7 @@ pub async fn run_agent(
         None
     };
     if let Some(answer) = answer_result {
-        total_tokens += answer.usage.input_tokens.unwrap_or(0) as u64
-            + answer.usage.output_tokens.unwrap_or(0) as u64;
+        total_tokens += accumulate_token_usage(&answer.usage, max_steps);
         return Ok(AgentResult {
             answer: answer.answer,
             steps_used: max_steps,

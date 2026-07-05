@@ -210,23 +210,51 @@ pub fn save_settings_with_context(
         parsed.migrate_providers();
         Ok(parsed)
     });
-    if let Ok(existing_settings) = existing_settings {
-        if existing_settings.provider.api_key != settings.provider.api_key
-            && is_masked_key(&settings.provider.api_key)
-            && !settings.provider.api_key.is_empty()
-        {
-            settings.provider.api_key = existing_settings.provider.api_key.clone();
-        }
-        for (i, p) in settings.providers.iter_mut().enumerate() {
-            let existing = existing_settings.providers.get(i);
-            if let Some(existing) = existing {
-                if p.api_key != existing.api_key
-                    && is_masked_key(&p.api_key)
-                    && !p.api_key.is_empty()
-                {
-                    p.api_key = existing.api_key.clone();
+    match &existing_settings {
+        Ok(existing_settings) => {
+            if existing_settings.provider.api_key != settings.provider.api_key
+                && is_masked_key(&settings.provider.api_key)
+                && !settings.provider.api_key.is_empty()
+            {
+                settings.provider.api_key = existing_settings.provider.api_key.clone();
+            }
+            for (i, p) in settings.providers.iter_mut().enumerate() {
+                let existing = existing_settings.providers.get(i);
+                if let Some(existing) = existing {
+                    if p.api_key != existing.api_key
+                        && is_masked_key(&p.api_key)
+                        && !p.api_key.is_empty()
+                    {
+                        p.api_key = existing.api_key.clone();
+                    }
                 }
             }
+        }
+        Err(e) => {
+            // #2557: we could not load the existing settings to resolve masked
+            // API keys (the file is corrupt/unreadable and the raw-JSON
+            // fallback also failed). If the incoming request contains any
+            // masked key (e.g. "sk-a…qrst"), persisting it as-is would
+            // overwrite the real (encrypted) key on disk with a display-only
+            // mask, permanently losing the user's API key with no warning.
+            // Refuse the save and surface the underlying load error so the
+            // user can fix the settings file or re-enter the key.
+            let main_masked =
+                !settings.provider.api_key.is_empty() && is_masked_key(&settings.provider.api_key);
+            let any_provider_masked = settings
+                .providers
+                .iter()
+                .any(|p| !p.api_key.is_empty() && is_masked_key(&p.api_key));
+            if main_masked || any_provider_masked {
+                return Err(anyhow::anyhow!(
+                    "Could not load existing settings to resolve masked API key ({}); \
+                     refusing to save to avoid overwriting the real key with a display \
+                     mask. Please fix the settings file or re-enter the API key.",
+                    crate::sanitize_error(&e.to_string())
+                ));
+            }
+            // No masked keys present — incoming values are real keys (or
+            // empty), so it is safe to persist them without the preservation step.
         }
     }
 
@@ -431,5 +459,77 @@ mod tests {
         s.active_provider_index = 99;
         normalize_settings(&mut s, &paths);
         assert_eq!(s.active_provider_index, 99);
+    }
+
+    // ── #2557: masked key must not be persisted when settings file is corrupt ──
+
+    fn unique_temp(label: &str) -> std::path::PathBuf {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-{label}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        temp
+    }
+
+    #[test]
+    fn save_masked_key_rejected_when_settings_corrupt() {
+        // When the settings file is corrupt (unparseable), the masked-key
+        // preservation logic cannot resolve a masked incoming key against the
+        // existing real key. Saving must be refused rather than persisting the
+        // mask string and permanently losing the real key (#2557).
+        let temp = unique_temp("2557");
+        let ctx = StorageContext::for_test(&temp);
+        // Both load_settings_raw and its raw-JSON fallback fail to parse this.
+        std::fs::write(&ctx.paths.settings_path, "{ this is not valid json }")
+            .expect("write corrupt file");
+
+        let settings = AppSettings {
+            vault_dir: temp.join("vault").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                api_key: "sk-abcd…wxyz".to_string(), // masked
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+
+        let result = save_settings_with_context(&ctx, settings);
+        assert!(
+            result.is_err(),
+            "saving a masked key over a corrupt settings file must be refused"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("masked"),
+            "error should mention masked key resolution, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn save_real_key_succeeds_when_settings_corrupt() {
+        // When the file is corrupt but the incoming key is real (not masked),
+        // the save should proceed and repair the corrupt file (#2557).
+        let temp = unique_temp("2557ok");
+        let ctx = StorageContext::for_test(&temp);
+        std::fs::write(&ctx.paths.settings_path, "{ corrupt").expect("write corrupt file");
+
+        let settings = AppSettings {
+            vault_dir: temp.join("vault").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                api_key: "sk-real-key-12345".to_string(), // real, unmasked
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+
+        let result = save_settings_with_context(&ctx, settings);
+        assert!(
+            result.is_ok(),
+            "saving a real key should repair the corrupt file: {:?}",
+            result.err()
+        );
     }
 }

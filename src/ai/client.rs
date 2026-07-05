@@ -302,6 +302,9 @@ pub(crate) async fn send_request_with_temperature(
             }
         };
         let status = response.status();
+        // Capture Retry-After here — the body stream is consumed below and
+        // the headers are no longer accessible from the response (#2559).
+        let retry_after = retry_after_secs(response.headers());
         let mut buf = BytesMut::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -350,12 +353,16 @@ pub(crate) async fn send_request_with_temperature(
                 );
                 // Issue #749: add jitter to prevent thundering herd
                 let base = 2u64.pow(attempt as u32 + 1);
+                // #2559: honor the server's Retry-After directive when present,
+                // taking the max of (retry_after, computed_backoff) so we never
+                // retry sooner than the server asked.
+                let backoff = retry_after.unwrap_or(0).max(base);
                 let jitter = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
                     .subsec_nanos() as u64
                     % base;
-                sleep(Duration::from_secs(base + jitter)).await;
+                sleep(Duration::from_secs(backoff + jitter)).await;
                 continue;
             }
 
@@ -517,6 +524,8 @@ pub async fn send_request_streaming<'a>(
         };
 
         let status = response.status();
+        // #2559: capture Retry-After before the body stream is consumed below.
+        let retry_after = retry_after_secs(response.headers());
         if !status.is_success() {
             // Read the error body with the same size cap as the success path to
             // avoid OOM when a misconfigured endpoint returns a huge non-2xx body.
@@ -542,12 +551,15 @@ pub async fn send_request_streaming<'a>(
                     "retryable streaming API error, retrying"
                 );
                 let base = 2u64.pow(attempt as u32 + 1);
+                // #2559: honor the server's Retry-After directive, taking the
+                // max of (retry_after, computed_backoff).
+                let backoff = retry_after.unwrap_or(0).max(base);
                 let jitter = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
                     .subsec_nanos() as u64
                     % base;
-                sleep(Duration::from_secs(base + jitter)).await;
+                sleep(Duration::from_secs(backoff + jitter)).await;
                 continue;
             }
 
@@ -1142,6 +1154,22 @@ pub(super) fn is_retryable_provider_error(status: u16, detail: &str) -> bool {
         || detail.to_ascii_lowercase().contains("rate limit")
 }
 
+/// Parse a `Retry-After` response header into seconds.
+///
+/// Supports the delta-seconds form (`Retry-After: 30`), which is what
+/// OpenAI/Anthropic and the vast majority of rate-limiting gateways send.
+/// The HTTP-date form (RFC 7231) is not parsed and yields `None`; callers
+/// fall back to the computed exponential backoff in that case.
+///
+/// The result is clamped to 60s so a hostile or buggy server cannot force
+/// the client to stall for an unbounded time. A 60s cap comfortably covers
+/// realistic rate-limit windows while keeping retries responsive.
+fn retry_after_secs(headers: &HeaderMap) -> Option<u64> {
+    let val = headers.get("retry-after")?.to_str().ok()?;
+    let secs = val.trim().parse::<u64>().ok()?;
+    Some(secs.min(60))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1453,6 +1481,54 @@ mod tests {
     #[test]
     fn not_retryable_501() {
         assert!(!is_retryable_provider_error(501, "not implemented"));
+    }
+
+    // ── retry_after_secs ────────────────────────────────────────
+
+    #[test]
+    fn retry_after_delta_seconds() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", "30".parse().unwrap());
+        assert_eq!(retry_after_secs(&headers), Some(30));
+    }
+
+    #[test]
+    fn retry_after_whitespace_trimmed() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", "  12  ".parse().unwrap());
+        assert_eq!(retry_after_secs(&headers), Some(12));
+    }
+
+    #[test]
+    fn retry_after_clamped_to_60s() {
+        let mut headers = HeaderMap::new();
+        // A hostile server asking for 600s should be clamped to 60s.
+        headers.insert("retry-after", "600".parse().unwrap());
+        assert_eq!(retry_after_secs(&headers), Some(60));
+    }
+
+    #[test]
+    fn retry_after_missing_returns_none() {
+        let headers = HeaderMap::new();
+        assert_eq!(retry_after_secs(&headers), None);
+    }
+
+    #[test]
+    fn retry_after_non_numeric_returns_none() {
+        // HTTP-date form is intentionally not parsed — falls back to None.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "retry-after",
+            "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+        );
+        assert_eq!(retry_after_secs(&headers), None);
+    }
+
+    #[test]
+    fn retry_after_invalid_value_returns_none() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", "abc".parse().unwrap());
+        assert_eq!(retry_after_secs(&headers), None);
     }
 
     // ── format_transport_error ───────────────────────────────────

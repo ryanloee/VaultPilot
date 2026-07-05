@@ -1417,11 +1417,6 @@ async fn http_chat_completions(
                                     None => break,
                                 }
                             }
-                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-                                tracing::warn!("forwarding task: no progress for 5s, breaking to prevent permanent hang");
-                                cancel_forwarder.cancel();
-                                break;
-                            }
                         }
                     }
                 }),

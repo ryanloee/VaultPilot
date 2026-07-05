@@ -1353,6 +1353,14 @@ pub async fn run_agent(
         proxy.merge_audit_log(recon_audit_log);
     }
 
+    // Reset the execution-phase proxy so plan time (generate_execution_plan +
+    // user decision) does not consume the timeout budget (#2540).
+    // We extract the accumulated audit log, create a fresh proxy with a new
+    // session_start clock, then re-merge the audit entries.
+    let audit_log = proxy.audit_log();
+    let proxy = ToolProxy::new(config.clone(), &settings.vault_dir);
+    proxy.merge_audit_log(audit_log);
+
     for step in 0..max_steps {
         // Timeout check
         if proxy.elapsed() > config.limits.max_duration {

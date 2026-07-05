@@ -14,6 +14,7 @@ import {
   clearPendingSync,
   getNote,
   getNoteTags,
+  deleteNote,
   queuePendingSync,
   incrementPendingSyncRetry,
   getPendingSyncRetryCount,
@@ -145,6 +146,13 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
               break;
             }
 
+            if (res.status === 404) {
+              // Note already deleted on server — success for a DELETE (#2544)
+              await clearPendingSync(entry.note_id);
+              synced++;
+              break;
+            }
+
             if (res.status >= 400 && res.status < 500) {
               console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: client error ${res.status}`);
               await clearPendingSync(entry.note_id);
@@ -247,6 +255,17 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
               await clearPendingSync(entry.note_id);
             }
             failed++;
+            break;
+          }
+
+          if (res.status === 404) {
+            // Note was deleted on server — delete local copy to match (#2545)
+            console.warn(`[OfflineSync] note ${entry.note_id} was deleted on server (404), deleting local copy`);
+            await clearPendingSync(entry.note_id);
+            await deleteNote(entry.note_id);
+            // clearPendingSync again in case deleteNote queued a delete sync entry
+            await clearPendingSync(entry.note_id);
+            synced++;
             break;
           }
 

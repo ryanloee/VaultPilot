@@ -73,7 +73,7 @@ fn escape_xml_tags(content: &str, open_tag: &str) -> String {
 fn sanitize_user_input(input: &str) -> String {
     format!(
         "<user_input>\n{}\n</user_input>",
-        escape_xml_tags(input, "<user_input>")
+        escape_xml_close_tags(&escape_xml_tags(input, "<user_input>"))
     )
 }
 
@@ -81,7 +81,7 @@ fn sanitize_user_input(input: &str) -> String {
 fn sanitize_tool_result(result: &str) -> String {
     format!(
         "<tool_result>\n{}\n</tool_result>",
-        escape_xml_tags(result, "<tool_result>")
+        escape_xml_close_tags(&escape_xml_tags(result, "<tool_result>"))
     )
 }
 
@@ -101,7 +101,7 @@ fn sanitize_note_content(content: &str) -> String {
 fn sanitize_history(content: &str) -> String {
     format!(
         "<conversation_history>\n{}\n</conversation_history>",
-        escape_xml_tags(content, "<conversation_history>")
+        escape_xml_close_tags(&escape_xml_tags(content, "<conversation_history>"))
     )
 }
 
@@ -1038,6 +1038,11 @@ mod tests {
         // (only the wrapper's own closing tag should be present).
         let count = prompt.matches("</user_input>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
+        // All other XML close tags must also be neutralised (#2562).
+        assert!(
+            !prompt.contains("</system>"),
+            "other XML close tags like </system> must be escaped"
+        );
     }
 
     #[test]
@@ -1061,6 +1066,10 @@ mod tests {
         let prompt = sanitize_tool_result(malicious);
         let count = prompt.matches("</tool_result>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
+        assert!(
+            !prompt.contains("</system>"),
+            "other XML close tags like </system> must be escaped"
+        );
     }
 
     #[test]
@@ -1092,6 +1101,10 @@ mod tests {
         let prompt = sanitize_history(malicious);
         let count = prompt.matches("</conversation_history>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
+        assert!(
+            !prompt.contains("</system>"),
+            "other XML close tags like </system> must be escaped"
+        );
     }
 
     #[test]
@@ -1134,15 +1147,16 @@ mod tests {
             "render_history should not escape"
         );
 
-        // sanitize_history only escapes </conversation_history>, not </note>
+        // sanitize_history now escapes ALL XML close tags via
+        // escape_xml_close_tags (#2562), matching sanitize_note_content (#2515).
         let sanitized = sanitize_history(&rendered);
         assert!(
-            sanitized.contains("</note>"),
-            "legitimate closing tags like </note> are preserved"
+            !sanitized.contains("</note>"),
+            "</note> should be escaped by sanitize_history"
         );
         assert!(
-            !sanitized.contains("<//note>"),
-            "</note> is not </conversation_history>, should not be escaped"
+            sanitized.contains("<//note>"),
+            "</note> becomes <//note> after escaping"
         );
     }
 
@@ -1617,10 +1631,15 @@ mod tests {
     fn plan_generation_user_prompt_sanitizes_user_input() {
         // User input is wrapped in <user_input> XML delimiters to prevent
         // prompt injections. The raw content (including angle brackets) is
-        // preserved inside the delimiters.
+        // preserved inside the delimiters, but all XML *closing* tags are
+        // escaped (#2562) to prevent cross-tag injection.
         let prompt = plan_generation_user_prompt("find <script>alert('xss')</script>", &[]);
         assert!(prompt.contains("<user_input>"));
-        assert!(prompt.contains("<script>alert('xss')</script>"));
+        // Opening tag is preserved (no leading slash to escape).
+        assert!(prompt.contains("<script>alert('xss'"));
+        // Closing tag is escaped to prevent structural breakout (#2562).
+        assert!(!prompt.contains("</script>"));
+        assert!(prompt.contains("<//script>"));
         assert!(prompt.contains("</user_input>"));
     }
 

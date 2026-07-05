@@ -623,6 +623,9 @@ pub async fn send_request_streaming<'a>(
                         }
                         crate::models::ProviderType::Anthropic => {
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                                if !parsed["type"].is_string() {
+                                    tracing::warn!(?parsed, "SSE event missing 'type' field — event will be silently dropped");
+                                }
                                 let event_type = parsed["type"].as_str().unwrap_or("");
                                 if event_type == "content_block_delta" {
                                     if let Some(text) = parsed["delta"]["text"].as_str() {
@@ -643,8 +646,20 @@ pub async fn send_request_streaming<'a>(
                                     }
                                     return Ok(accumulated);
                                 } else if event_type == "error" {
+                                    if !parsed["error"].is_object() {
+                                        tracing::warn!(
+                                            ?parsed,
+                                            "SSE error event with malformed 'error' field"
+                                        );
+                                    }
                                     let error_type =
                                         parsed["error"]["type"].as_str().unwrap_or("unknown");
+                                    if error_type == "unknown" {
+                                        tracing::warn!(
+                                            ?parsed,
+                                            "SSE error event missing 'error.type' field"
+                                        );
+                                    }
                                     let error_message = parsed["error"]["message"]
                                         .as_str()
                                         .unwrap_or("unknown error");
@@ -695,6 +710,9 @@ pub async fn send_request_streaming<'a>(
                             crate::models::ProviderType::Anthropic => {
                                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
                                 {
+                                    if !parsed["type"].is_string() {
+                                        tracing::warn!(?parsed, "SSE event missing 'type' field in trailing-buffer handler — event will be silently dropped");
+                                    }
                                     let event_type = parsed["type"].as_str().unwrap_or("");
                                     if event_type == "content_block_delta" {
                                         if let Some(text) = parsed["delta"]["text"].as_str() {
@@ -704,8 +722,14 @@ pub async fn send_request_streaming<'a>(
                                             }
                                         }
                                     } else if event_type == "error" {
+                                        if !parsed["error"].is_object() {
+                                            tracing::warn!(?parsed, "SSE error event with malformed 'error' field in trailing-buffer handler");
+                                        }
                                         let error_type =
                                             parsed["error"]["type"].as_str().unwrap_or("unknown");
+                                        if error_type == "unknown" {
+                                            tracing::warn!(?parsed, "SSE error event missing 'error.type' field in trailing-buffer handler");
+                                        }
                                         let error_message = parsed["error"]["message"]
                                             .as_str()
                                             .unwrap_or("unknown error");

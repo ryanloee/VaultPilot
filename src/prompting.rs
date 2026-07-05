@@ -86,10 +86,14 @@ fn sanitize_tool_result(result: &str) -> String {
 }
 
 /// Wrap note content in XML delimiters.
+///
+/// Escapes both the matching closing tag (`</note_content>`) via
+/// `escape_xml_tags` and *all* XML closing tags (`</...`) via
+/// `escape_xml_close_tags` to prevent cross-tag injection (#2515).
 fn sanitize_note_content(content: &str) -> String {
     format!(
         "<note_content>\n{}\n</note_content>",
-        escape_xml_tags(content, "<note_content>")
+        escape_xml_close_tags(&escape_xml_tags(content, "<note_content>"))
     )
 }
 
@@ -1065,6 +1069,11 @@ mod tests {
         let prompt = sanitize_note_content(malicious);
         let count = prompt.matches("</note_content>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
+        // All other XML close tags must also be neutralised (#2515).
+        assert!(
+            !prompt.contains("</system>"),
+            "other XML close tags like </system> must be escaped"
+        );
     }
 
     #[test]

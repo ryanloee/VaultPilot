@@ -218,8 +218,21 @@ pub fn save_settings_with_context(
             {
                 settings.provider.api_key = existing_settings.provider.api_key.clone();
             }
-            for (i, p) in settings.providers.iter_mut().enumerate() {
-                let existing = existing_settings.providers.get(i);
+            for p in settings.providers.iter_mut() {
+                // Match by (name, base_url) first — handles reordering (#2514).
+                let existing = existing_settings
+                    .providers
+                    .iter()
+                    .find(|ep| ep.name == p.name && ep.base_url == p.base_url)
+                    .or_else(|| {
+                        // Fallback: match by name alone (user renamed provider,
+                        // changed base_url, etc.) — keeps the key for
+                        // pre-existing providers that were modified.
+                        existing_settings
+                            .providers
+                            .iter()
+                            .find(|ep| ep.name == p.name)
+                    });
                 if let Some(existing) = existing {
                     if p.api_key != existing.api_key
                         && is_masked_key(&p.api_key)

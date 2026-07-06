@@ -667,15 +667,12 @@ pub async fn send_request_streaming<'a>(
                                 } else if event_type == "message_start" {
                                     // Anthropic sends input_tokens in message_start event
                                     // Structure: {"type":"message_start","message":{"usage":{"input_tokens":25}}}
+                                    // output_tokens in message_start is always 0 — actual value
+                                    // comes in message_delta. Don't set output_tokens here or the
+                                    // message_delta handler's .is_none() guard will skip the real value.
                                     if usage.input_tokens.is_none() {
                                         usage.input_tokens = parsed["message"]["usage"]
                                             ["input_tokens"]
-                                            .as_u64()
-                                            .map(|n| n as usize);
-                                    }
-                                    if usage.output_tokens.is_none() {
-                                        usage.output_tokens = parsed["message"]["usage"]
-                                            ["output_tokens"]
                                             .as_u64()
                                             .map(|n| n as usize);
                                     }
@@ -782,15 +779,12 @@ pub async fn send_request_streaming<'a>(
                                     } else if event_type == "message_start" {
                                         // Anthropic sends input_tokens in message_start event
                                         // Structure: {"type":"message_start","message":{"usage":{"input_tokens":25}}}
+                                        // output_tokens in message_start is always 0 — actual value
+                                        // comes in message_delta. Don't set output_tokens here or the
+                                        // message_delta handler's .is_none() guard will skip the real value.
                                         if usage.input_tokens.is_none() {
                                             usage.input_tokens = parsed["message"]["usage"]
                                                 ["input_tokens"]
-                                                .as_u64()
-                                                .map(|n| n as usize);
-                                        }
-                                        if usage.output_tokens.is_none() {
-                                            usage.output_tokens = parsed["message"]["usage"]
-                                                ["output_tokens"]
                                                 .as_u64()
                                                 .map(|n| n as usize);
                                         }

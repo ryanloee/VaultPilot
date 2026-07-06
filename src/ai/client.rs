@@ -631,6 +631,18 @@ pub async fn send_request_streaming<'a>(
                                         on_chunk(text).await;
                                     }
                                 }
+                                // Extract token usage from standard SSE frames (OpenAI puts
+                                // usage in the final chunk's top-level "usage" field)
+                                if usage.input_tokens.is_none() {
+                                    usage.input_tokens = parsed["usage"]["prompt_tokens"]
+                                        .as_u64()
+                                        .map(|n| n as usize);
+                                }
+                                if usage.output_tokens.is_none() {
+                                    usage.output_tokens = parsed["usage"]["completion_tokens"]
+                                        .as_u64()
+                                        .map(|n| n as usize);
+                                }
                             }
                         }
                         crate::models::ProviderType::Anthropic => {
@@ -651,6 +663,18 @@ pub async fn send_request_streaming<'a>(
                                             accumulated.push_str(text);
                                             on_chunk(text).await;
                                         }
+                                    }
+                                } else if event_type == "message_delta" {
+                                    // Anthropic sends usage in message_delta event
+                                    if usage.input_tokens.is_none() {
+                                        usage.input_tokens = parsed["usage"]["input_tokens"]
+                                            .as_u64()
+                                            .map(|n| n as usize);
+                                    }
+                                    if usage.output_tokens.is_none() {
+                                        usage.output_tokens = parsed["usage"]["output_tokens"]
+                                            .as_u64()
+                                            .map(|n| n as usize);
                                     }
                                 } else if event_type == "message_stop" {
                                     if accumulated.trim().is_empty() {

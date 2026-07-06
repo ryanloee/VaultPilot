@@ -109,22 +109,9 @@ public sealed partial class AiCommandPalette : UserControl
         if (!string.IsNullOrWhiteSpace(SourceText))
             return SourceText;
 
-        // Otherwise, try to get from clipboard as fallback
-        try
-        {
-            var package = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
-            if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
-            {
-                var textTask = package.GetTextAsync();
-                // Synchronous wait with timeout is not ideal, but this is a fallback
-                return string.Empty; // Async clipboard requires different approach
-            }
-        }
-        catch
-        {
-            // Silently fall through
-        }
-
+        // Clipboard fallback intentionally omitted: this method is synchronous and
+        // WinUI clipboard access is async-only (GetTextAsync). Implementing it would
+        // require making GetEffectiveText (and its callers) async. See issue #2574.
         return string.Empty;
     }
 

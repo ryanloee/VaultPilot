@@ -1922,10 +1922,10 @@ async fn execute_tool(
             }
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
-            // Record backup before saving so revert_write works (#2286)
+            // Load existing note for backup (recorded only after save succeeds, #2498)
             // Also capture the original created_at to preserve it (#2426)
             let mut existing_created_at: Option<String> = None;
-            {
+            let backup_note: Option<crate::models::NoteDocument> = {
                 let ctx = context.clone();
                 let nid = note_id.clone();
                 if let Some(Ok(Ok(existing))) = spawn_blocking_abortable(
@@ -1934,10 +1934,12 @@ async fn execute_tool(
                 )
                 .await
                 {
-                    crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
                     existing_created_at = Some(existing.meta.created_at.clone());
+                    Some(existing)
+                } else {
+                    None
                 }
-            }
+            };
             let short_id: String = note_id.chars().take(8).collect();
             let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(4); // "-" + ".md"
             let slug = slugify(&draft.title);
@@ -1976,10 +1978,16 @@ async fn execute_tool(
             )
             .await
             {
-                Some(Ok(Ok(saved))) => (
-                    format!("Note saved: {} at {}", saved.meta.title, saved.meta.path),
-                    false,
-                ),
+                Some(Ok(Ok(saved))) => {
+                    // Record backup only after save succeeds (#2498)
+                    if let Some(existing) = &backup_note {
+                        crate::orchestration::write::WRITE_TRACKER.record_backup(existing);
+                    }
+                    (
+                        format!("Note saved: {} at {}", saved.meta.title, saved.meta.path),
+                        false,
+                    )
+                }
                 Some(Ok(Err(e))) => (format!("tool error: save_note failed: {}", e), true),
                 Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
                 None => (

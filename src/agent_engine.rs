@@ -405,12 +405,24 @@ impl SubprocessEngine {
         #[cfg(unix)]
         {
             if let Some(ref handle) = stdout_handle {
-                make_nonblocking(handle)
-                    .with_context(|| "failed to set O_NONBLOCK on stdout pipe")?;
+                if let Err(e) = make_nonblocking(handle)
+                    .with_context(|| "failed to set O_NONBLOCK on stdout pipe")
+                {
+                    // Kill and reap the child before propagating, otherwise
+                    // the child becomes an orphan/zombie process.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e);
+                }
             }
             if let Some(ref handle) = stderr_handle {
-                make_nonblocking(handle)
-                    .with_context(|| "failed to set O_NONBLOCK on stderr pipe")?;
+                if let Err(e) = make_nonblocking(handle)
+                    .with_context(|| "failed to set O_NONBLOCK on stderr pipe")
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e);
+                }
             }
         }
 

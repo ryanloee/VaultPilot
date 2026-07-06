@@ -352,9 +352,14 @@ impl ToolProxy {
 
     /// Normalize a path by eliminating `.` and `..` components.
     fn normalize_path_components(path: &str) -> String {
-        let is_absolute = path.starts_with('/');
+        // Normalize Windows backslashes to forward slashes so glob matching
+        // works cross-platform (#2576). Path::canonicalize() returns paths
+        // with backslashes on Windows, but normalize_path_components splits
+        // on '/' and glob_match treats '\\' as a path separator.
+        let normalized = path.replace('\\', "/");
+        let is_absolute = normalized.starts_with('/');
         let mut components: Vec<&str> = Vec::new();
-        for component in path.split('/') {
+        for component in normalized.split('/') {
             match component {
                 "." | "" => {}
                 ".." => {

@@ -161,13 +161,20 @@ jobs:
         id: version
         shell: powershell
         run: |
-          $cargo = Get-Content Cargo.toml
-          $line = $cargo | Where-Object { $_ -match '^version\s*=\s*".*"$' } | Select-Object -First 1
-          if (-not $line) {
-            throw "Unable to resolve version from Cargo.toml"
+          # Prefer git tag name when triggered by a tag push
+          $tagRef = "${{ github.ref }}"
+          if ($tagRef -match '^refs/tags/v(.+)$') {
+            $version = $Matches[1]
+          } else {
+            $cargo = Get-Content Cargo.toml
+            $line = $cargo | Where-Object { $_ -match '^version\s*=\s*".*"$' } | Select-Object -First 1
+            if (-not $line) {
+              throw "Unable to resolve version from Cargo.toml"
+            }
+            $version = [regex]::Match($line, '"([^"]+)"').Groups[1].Value
           }
-          $version = [regex]::Match($line, '"([^"]+)"').Groups[1].Value
-          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          echo "Resolved version: $version"
 
       - name: Build Velopack package
         shell: powershell
@@ -187,7 +194,7 @@ jobs:
         run: |
           $arch = "${{ matrix.platform }}"
           $dir = if ($arch -eq "x64") { "win-x64" } else { "win-x86" }
-          "publishDir=artifacts/velopack/publish/$dir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "publishDir=artifacts/velopack/publish/$dir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
         id: publish-dir
 
       # Smoke test skipped — the CI runner (windows-2022) has WinAppSDK

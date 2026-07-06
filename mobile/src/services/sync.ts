@@ -324,7 +324,7 @@ async function runWithConcurrency<T>(
     }
   });
   await Promise.all(workers);
-  if (aborted) throw new Error('同步超时');
+  if (aborted) return;  // Return partial results instead of throwing (#2451)
 }
 
 /**

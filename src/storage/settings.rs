@@ -225,13 +225,22 @@ pub fn save_settings_with_context(
                     .iter()
                     .find(|ep| ep.name == p.name && ep.base_url == p.base_url)
                     .or_else(|| {
-                        // Fallback: match by name alone (user renamed provider,
-                        // changed base_url, etc.) — keeps the key for
-                        // pre-existing providers that were modified.
+                        // Fallback: match by name alone (user changed base_url, etc.).
                         existing_settings
                             .providers
                             .iter()
                             .find(|ep| ep.name == p.name)
+                    })
+                    .or_else(|| {
+                        // Final fallback: match by base_url alone (#2587).
+                        // If the user renamed the provider (name changed but base_url
+                        // unchanged), neither (name, base_url) nor name alone match.
+                        // Matching by base_url identifies this as a rename and
+                        // preserves the existing API key instead of silently losing it.
+                        existing_settings
+                            .providers
+                            .iter()
+                            .find(|ep| ep.base_url == p.base_url)
                     });
                 if let Some(existing) = existing {
                     if p.api_key != existing.api_key

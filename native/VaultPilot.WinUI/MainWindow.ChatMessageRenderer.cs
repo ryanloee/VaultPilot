@@ -34,7 +34,7 @@ public sealed partial class MainWindow : Window
             var author = turn.Role == "user"
                 ? (isScheduledWake ? "⏰ 定时唤醒" : "你")
                 : (isScheduledWake && turn.Text.StartsWith("⏰") ? "⏰ 定时唤醒" : "助手");
-            AppendMessage(author, turn.Text);
+            AppendMessage(author, turn.Text, turn.CreatedAt);
             if (turn.Attachments is { Count: > 0 })
             {
                 AppendAttachmentPreviews(turn.Attachments, turn.Role);
@@ -54,7 +54,7 @@ public sealed partial class MainWindow : Window
 
                 if (turn.SavedNote is not null)
                 {
-                    AppendMessage("系统", $"已保存笔记：{turn.SavedNote.Title}");
+                    AppendMessage("系统", $"已保存笔记：{turn.SavedNote.Title}", turn.CreatedAt);
                 }
             }
         }
@@ -144,7 +144,7 @@ public sealed partial class MainWindow : Window
         MessagesPanel.Children.Add(container);
     }
 
-    private void AppendMessage(string author, string text)
+    private void AppendMessage(string author, string text, string? createdAt = null)
     {
         var isUser = author == "你";
         var isAssistant = author == "助手";
@@ -167,9 +167,17 @@ public sealed partial class MainWindow : Window
             Child = bubbleContent
         };
 
-        // Author label with timestamp
-        var now = DateTime.Now;
-        var timeStr = now.ToString("HH:mm");
+        // Author label with timestamp — use turn's CreatedAt when available (#2578)
+        DateTime displayTime;
+        if (!string.IsNullOrEmpty(createdAt) && DateTime.TryParse(createdAt, out var parsed))
+        {
+            displayTime = parsed;
+        }
+        else
+        {
+            displayTime = DateTime.Now;
+        }
+        var timeStr = displayTime.ToString("HH:mm");
         var authorLine = new StackPanel
         {
             Orientation = Orientation.Horizontal,

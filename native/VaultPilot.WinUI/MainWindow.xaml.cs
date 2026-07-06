@@ -47,7 +47,7 @@ public sealed partial class MainWindow : Window
     private static Brush BrushRed => GetThemeBrush("StatusErrorBrush");
     private static Brush BrushOrange => GetThemeBrush("StatusWarningBrush");
     private static Brush BrushGreen => GetThemeBrush("StatusSuccessBrush");
-    private static Brush BrushLimeGreen => GetThemeBrush("StatusSuccessBrush");
+    private static Brush BrushLimeGreen => GetThemeBrush("SystemFillColorSuccessBrush");
 
     private AppSettings? _settings;
     private int _noteCount;

@@ -800,8 +800,12 @@ impl SubprocessEngine {
                 // Signal drain threads to stop and join them so the OS
                 // threads do not accumulate across calls (#2442).
                 drain_done.store(true, Ordering::Release);
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
+                if let Err(e) = stdout_thread.join() {
+                    tracing::warn!("[agent_engine] stdout drain thread panicked on timeout: {e:?}");
+                }
+                if let Err(e) = stderr_thread.join() {
+                    tracing::warn!("[agent_engine] stderr drain thread panicked on timeout: {e:?}");
+                }
                 // Drain for diagnostics; the timeout error is what
                 // propagates.
                 if let Err(e) = out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
@@ -826,8 +830,12 @@ impl SubprocessEngine {
                 let _ = child.kill();
                 let _ = child.wait();
                 drain_done.store(true, Ordering::Release);
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
+                if let Err(e) = stdout_thread.join() {
+                    tracing::warn!("[agent_engine] stdout drain thread panicked on error: {e:?}");
+                }
+                if let Err(e) = stderr_thread.join() {
+                    tracing::warn!("[agent_engine] stderr drain thread panicked on error: {e:?}");
+                }
                 if let Err(e) = out_rx.recv_timeout(IO_DRAIN_TIMEOUT) {
                     tracing::warn!(
                         "[agent_engine] stdout drain timed out after error — \

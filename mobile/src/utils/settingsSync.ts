@@ -153,7 +153,6 @@ export async function importSettings(json: string): Promise<{ providersImported:
     accentColor: data.accentColor,
     providers: data.providers.map(p => ({
       ...p,
-      apiKey: '',
       apiFormat: p.apiFormat as ApiFormat,
     })) as ProviderConfig[],
     activeProviderIndex: data.providers.length > 0

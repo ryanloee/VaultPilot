@@ -209,14 +209,17 @@ public sealed partial class MainWindow : Window
                 {
                     AgentTokenCount.Text = $"Token: {tokensUsed}";
                 }
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    _agentModeActive = false;
-                    AgentModeButton.Visibility = Visibility.Visible;
-                    StopAgentButton.Visibility = Visibility.Collapsed;
-                    AgentStatusText.Text = "Agent 完成";
-                    UpdateStatusBar("success", "Agent 模式", "任务完成");
-                });
+                // HandleAgentEvent is already invoked on the UI thread via
+                // OnAgentStatusReceived's DispatcherQueue.TryEnqueue, so the
+                // previous inner enqueue was redundant and delayed the
+                // _agentModeActive=false reset — creating a window where a
+                // subsequent event could be misrouted here instead of being
+                // ignored. Execute the UI reset synchronously. (Issue #2586)
+                _agentModeActive = false;
+                AgentModeButton.Visibility = Visibility.Visible;
+                StopAgentButton.Visibility = Visibility.Collapsed;
+                AgentStatusText.Text = "Agent 完成";
+                UpdateStatusBar("success", "Agent 模式", "任务完成");
                 break;
 
             case "stepLimitReached":

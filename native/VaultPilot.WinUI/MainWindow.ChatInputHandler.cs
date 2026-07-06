@@ -187,7 +187,17 @@ public sealed partial class MainWindow : Window
             prompt, userDisplay, pendingAttachments, text,
             "正在记录知识", "正在整理并保存...", "记录失败");
 
-        if (_lastAiAnswer?.SavedNote is null)
+        // If the AI request itself failed (network error, timeout, etc.),
+        // ExecuteAiRequestAsync already caught and displayed the error via
+        // ShowError, and _lastAiAnswer remains null. Return early to avoid
+        // throwing a misleading "知识库写入未完成" error that the caller would
+        // display as a second, confusing error dialog. (Issue #2585)
+        if (_lastAiAnswer is null)
+        {
+            return;
+        }
+
+        if (_lastAiAnswer.SavedNote is null)
         {
             throw new InvalidOperationException("知识库写入未完成，模型未返回已保存笔记。");
         }

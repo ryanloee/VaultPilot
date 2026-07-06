@@ -198,7 +198,17 @@ impl ToolProxy {
         // resolved path, eliminating the race window.
         let paths = Self::extract_path_args(tool, args_json);
         if paths.is_empty() {
-            if Self::takes_path(tool) && !Self::is_write_tool(tool) {
+            if Self::is_write_tool(tool) {
+                // Write tools always need a path — deny before we reach the
+                // else branch where write checks live (#2517 regression).
+                let entry = self.deny(
+                    tool,
+                    args_json,
+                    "write denied: missing required 'path' argument",
+                );
+                return Ok(entry);
+            }
+            if Self::takes_path(tool) {
                 let entry = self.deny(tool, args_json, "missing required 'path' argument");
                 return Ok(entry);
             }

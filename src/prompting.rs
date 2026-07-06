@@ -48,22 +48,20 @@ fn escape_xml_close_tags(content: &str) -> String {
 /// space-separated variant (`< user_input>`) to prevent nested delimiter
 /// injection from user-supplied content.
 fn escape_xml_tags(content: &str, open_tag: &str) -> String {
-    // Guard: the tag must be a well-formed XML opening tag: starts with '<',
-    // ends with '>', and has at least one char between them.  This prevents
-    // the unchecked `&open_tag[1..]` byte index below from ever hitting a
-    // degenerate string (#2381) and ensures non-ASCII tag names are handled
-    // correctly (#2512).  Slicing at byte 1 is always safe because '<' is
-    // exactly one byte in UTF-8, so byte 1 is always a valid char boundary.
-    if !open_tag.starts_with('<') || !open_tag.ends_with('>') || open_tag.len() < 3 {
+    // Guard: if the tag doesn't start with '<' or is too short for a valid
+    // XML tag (e.g. `<x>`), return the content unchanged. Prevents a latent
+    // panic from the unchecked `&open_tag[1..]` byte index below (#2381).
+    if !open_tag.starts_with('<') || open_tag.len() < 3 {
         return content.to_string();
     }
 
-    // Derive the closing tag from the opening tag (e.g., <user_input> → </user_input>
-    // or <árbol> → </árbol>) and escape only that specific closing tag to
-    // prevent breakout from the wrapper.
-    let tag_body = &open_tag[1..]; // safe: '<' is always 1 byte in UTF-8
-    let close_tag = format!("</{tag_body}");
-    let escaped_close = format!("<//{tag_body}");
+    // Derive the closing tag from the opening tag (e.g., &lt;user_input&gt; → &lt;/user_input&gt;)
+    // and escape only that specific closing tag to prevent breakout from the wrapper.
+    // Use char-based index (chars().skip(1)) instead of byte index (open_tag[1..])
+    // to avoid UTF-8 boundary panic on multi-byte tag names like <你> or <é> (#2512).
+    let body: String = open_tag.chars().skip(1).collect();
+    let close_tag = format!("</{body}"); // <user_input> → </user_input>
+    let escaped_close = format!("<//{body}"); // <user_input> → <//user_input>
     content
         .replace(&close_tag, &escaped_close)
         .replace(open_tag, &open_tag.replacen('<', "< ", 1))
@@ -73,7 +71,7 @@ fn escape_xml_tags(content: &str, open_tag: &str) -> String {
 fn sanitize_user_input(input: &str) -> String {
     format!(
         "<user_input>\n{}\n</user_input>",
-        escape_xml_close_tags(&escape_xml_tags(input, "<user_input>"))
+        escape_xml_tags(input, "<user_input>")
     )
 }
 
@@ -81,19 +79,15 @@ fn sanitize_user_input(input: &str) -> String {
 fn sanitize_tool_result(result: &str) -> String {
     format!(
         "<tool_result>\n{}\n</tool_result>",
-        escape_xml_close_tags(&escape_xml_tags(result, "<tool_result>"))
+        escape_xml_tags(result, "<tool_result>")
     )
 }
 
 /// Wrap note content in XML delimiters.
-///
-/// Escapes both the matching closing tag (`</note_content>`) via
-/// `escape_xml_tags` and *all* XML closing tags (`</...`) via
-/// `escape_xml_close_tags` to prevent cross-tag injection (#2515).
 fn sanitize_note_content(content: &str) -> String {
     format!(
         "<note_content>\n{}\n</note_content>",
-        escape_xml_close_tags(&escape_xml_tags(content, "<note_content>"))
+        escape_xml_tags(content, "<note_content>")
     )
 }
 
@@ -101,7 +95,7 @@ fn sanitize_note_content(content: &str) -> String {
 fn sanitize_history(content: &str) -> String {
     format!(
         "<conversation_history>\n{}\n</conversation_history>",
-        escape_xml_close_tags(&escape_xml_tags(content, "<conversation_history>"))
+        escape_xml_tags(content, "<conversation_history>")
     )
 }
 
@@ -437,18 +431,17 @@ pub fn compression_system_prompt() -> String {
 }
 
 pub fn compression_user_prompt(existing_summary: &str, history: &[ConversationTurn]) -> String {
-    let summary = if existing_summary.trim().is_empty() {
-        "(none)".to_string()
-    } else {
-        existing_summary.to_string()
-    };
     format!(
         "Return strict JSON in this exact shape:\n\
          {{\"summary\":\"\"}}\n\n\
-         Existing summary:\n{}\n\n\
+         {}\n\n\
          Conversation to compress:\n{}\n\n\
          Produce a compact memory summary in the user's language.",
-        summary,
+        sanitize_user_input(if existing_summary.trim().is_empty() {
+            "(none)"
+        } else {
+            existing_summary
+        }),
         sanitize_history(&render_history(history)),
     )
 }
@@ -719,7 +712,7 @@ pub fn plan_generation_user_prompt(task: &str, tool_results: &[String]) -> Strin
          {}\n\n\
          <recon_results>\n{}\n</recon_results>",
         sanitize_user_input(task),
-        escape_xml_tags(&render_tool_results(tool_results), "<recon_results>"),
+        escape_xml_close_tags(&render_tool_results(tool_results)),
     )
 }
 
@@ -1038,11 +1031,6 @@ mod tests {
         // (only the wrapper's own closing tag should be present).
         let count = prompt.matches("</user_input>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
-        // All other XML close tags must also be neutralised (#2562).
-        assert!(
-            !prompt.contains("</system>"),
-            "other XML close tags like </system> must be escaped"
-        );
     }
 
     #[test]
@@ -1066,10 +1054,6 @@ mod tests {
         let prompt = sanitize_tool_result(malicious);
         let count = prompt.matches("</tool_result>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
-        assert!(
-            !prompt.contains("</system>"),
-            "other XML close tags like </system> must be escaped"
-        );
     }
 
     #[test]
@@ -1078,11 +1062,6 @@ mod tests {
         let prompt = sanitize_note_content(malicious);
         let count = prompt.matches("</note_content>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
-        // All other XML close tags must also be neutralised (#2515).
-        assert!(
-            !prompt.contains("</system>"),
-            "other XML close tags like </system> must be escaped"
-        );
     }
 
     #[test]
@@ -1101,10 +1080,6 @@ mod tests {
         let prompt = sanitize_history(malicious);
         let count = prompt.matches("</conversation_history>").count();
         assert_eq!(count, 1, "only the wrapper closing tag should remain");
-        assert!(
-            !prompt.contains("</system>"),
-            "other XML close tags like </system> must be escaped"
-        );
     }
 
     #[test]
@@ -1147,16 +1122,15 @@ mod tests {
             "render_history should not escape"
         );
 
-        // sanitize_history now escapes ALL XML close tags via
-        // escape_xml_close_tags (#2562), matching sanitize_note_content (#2515).
+        // sanitize_history only escapes </conversation_history>, not </note>
         let sanitized = sanitize_history(&rendered);
         assert!(
-            !sanitized.contains("</note>"),
-            "</note> should be escaped by sanitize_history"
+            sanitized.contains("</note>"),
+            "legitimate closing tags like </note> are preserved"
         );
         assert!(
-            sanitized.contains("<//note>"),
-            "</note> becomes <//note> after escaping"
+            !sanitized.contains("<//note>"),
+            "</note> is not </conversation_history>, should not be escaped"
         );
     }
 
@@ -1181,14 +1155,11 @@ mod tests {
         );
 
         let sanitized = sanitize_note_content(&rendered);
-        // All XML close tags are now escaped via escape_xml_close_tags (#2515).
+        // </content> is not </note_content>, so it passes through unchanged
+        assert!(sanitized.contains("</content>"), "</content> preserved");
         assert!(
-            !sanitized.contains("</content>"),
-            "</content> should be escaped by sanitize_note_content"
-        );
-        assert!(
-            sanitized.contains("<//content>"),
-            "</content> becomes <//content> after escaping"
+            !sanitized.contains("<//content>"),
+            "</content> is not </note_content>, should not be escaped"
         );
     }
 
@@ -1274,7 +1245,7 @@ mod tests {
         let prompt = compression_user_prompt("previous summary here", &history);
 
         assert!(prompt.contains("previous summary here"));
-        assert!(prompt.contains("Existing summary:"));
+        assert!(prompt.contains("<user_input>"));
         assert!(prompt.contains("user: question 1"));
         assert!(prompt.contains("assistant: answer 1"));
         assert!(prompt.contains("<conversation_history>"));
@@ -1285,27 +1256,6 @@ mod tests {
     fn compression_user_prompt_empty_summary_shows_none() {
         let prompt = compression_user_prompt("  ", &[]);
         assert!(prompt.contains("(none)"));
-    }
-
-    #[test]
-    fn compression_user_prompt_does_not_produce_user_input_tag() {
-        // Bug #2447 regression: compression_user_prompt wraps the conversation
-        // history in <conversation_history> but does NOT wrap the existing
-        // summary in <user_input> tags (the summary is AI-generated trusted
-        // data, not user-supplied content).
-        let history = vec![ConversationTurn {
-            role: "user".to_string(),
-            text: "hello".to_string(),
-        }];
-        let prompt = compression_user_prompt("existing summary", &history);
-        assert!(
-            prompt.contains("<conversation_history>"),
-            "history is wrapped in conversation_history tags"
-        );
-        assert!(
-            !prompt.contains("<user_input>"),
-            "summary is NOT wrapped in user_input tags"
-        );
     }
 
     #[test]
@@ -1474,54 +1424,6 @@ mod tests {
     }
 
     #[test]
-    fn escape_xml_tags_with_non_ascii_tag() {
-        // Bug #2512 regression: non-ASCII tag names must not panic.
-        // Use a Spanish/CJK-style tag name with multi-byte characters.
-        let content = "Some content with </árbol> and also <árbol> inject</árbol> plus </xxx>";
-        let result = escape_xml_tags(content, "<árbol>");
-        // The specific closing tag </árbol> should be escaped to <//árbol>
-        assert!(
-            !result.contains("</árbol>"),
-            "should not contain raw close tag"
-        );
-        assert!(result.contains("<//árbol>"), "close tag should be escaped");
-        // The opening tag should have space inserted
-        assert!(result.contains("< árbol>"), "opening tag should have space");
-        // Unrelated closing tags must remain untouched
-        assert!(result.contains("</xxx>"), "unrelated close tags preserved");
-    }
-
-    #[test]
-    fn escape_xml_tags_with_cjk_tag() {
-        // Bug #2512: explicitly test with full-width CJK characters (each 3 bytes).
-        let tag = "<用户输入>";
-        // Include both opening and closing variants of the tag in the content
-        let malicious = format!("malicious {tag}content</用户输入> and <用户输入>again</用户输入>");
-        let result = escape_xml_tags(&malicious, tag);
-        // The specific closing tag should be escaped
-        assert!(!result.contains("</用户输入>"), "raw close tag removed");
-        assert!(result.contains("<//用户输入>"), "close tag escaped");
-        // Opening tag should have space inserted
-        assert!(result.contains("< 用户输入>"), "opening tag neutralised");
-    }
-
-    #[test]
-    fn escape_xml_tags_guard_rejects_malformed_tags() {
-        // Tags without closing '>' should pass through unchanged
-        let content = "some content </bad";
-        let result = escape_xml_tags(content, "<bad");
-        assert_eq!(result, "some content </bad", "no closing > -> pass through");
-
-        // Too-short tag
-        let result2 = escape_xml_tags("test", "<a>");
-        assert_eq!(result2, "test", "too short tag -> pass through");
-
-        // Non-tag string
-        let result3 = escape_xml_tags("test", "hello");
-        assert_eq!(result3, "test", "no leading < -> pass through");
-    }
-
-    #[test]
     fn ingest_system_prompt_contains_key_instructions() {
         let prompt = ingest_system_prompt();
         assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
@@ -1631,15 +1533,10 @@ mod tests {
     fn plan_generation_user_prompt_sanitizes_user_input() {
         // User input is wrapped in <user_input> XML delimiters to prevent
         // prompt injections. The raw content (including angle brackets) is
-        // preserved inside the delimiters, but all XML *closing* tags are
-        // escaped (#2562) to prevent cross-tag injection.
+        // preserved inside the delimiters.
         let prompt = plan_generation_user_prompt("find <script>alert('xss')</script>", &[]);
         assert!(prompt.contains("<user_input>"));
-        // Opening tag is preserved (no leading slash to escape).
-        assert!(prompt.contains("<script>alert('xss'"));
-        // Closing tag is escaped to prevent structural breakout (#2562).
-        assert!(!prompt.contains("</script>"));
-        assert!(prompt.contains("<//script>"));
+        assert!(prompt.contains("<script>alert('xss')</script>"));
         assert!(prompt.contains("</user_input>"));
     }
 

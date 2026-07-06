@@ -9,6 +9,8 @@
 //! - **Fail-closed**: any sandbox violation terminates the agent immediately.
 //! - **Auditable**: every tool call is logged for security review.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,8 +20,6 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
-
-use tokio_util::sync::CancellationToken;
 
 use crate::sanitize_error;
 
@@ -136,10 +136,6 @@ pub struct ToolProxyResult {
 pub struct ToolProxy {
     config: AgentConfig,
     vault_dir: PathBuf,
-    /// Canonicalized vault path, resolved once at construction. The vault
-    /// directory never changes during a session, so caching avoids repeated
-    /// blocking `canonicalize()` I/O on tokio worker threads (#2470).
-    vault_dir_canonical: PathBuf,
     tool_call_count: AtomicU64,
     session_start: Instant,
     audit_log: Mutex<Vec<AgentAuditEntry>>,
@@ -147,18 +143,9 @@ pub struct ToolProxy {
 
 impl ToolProxy {
     pub fn new(config: AgentConfig, vault_dir: impl Into<PathBuf>) -> Self {
-        let vault_dir = vault_dir.into();
-        // Resolve the canonical vault path once — fail-open to the raw path if
-        // canonicalization fails (e.g. the vault is on a mount that is briefly
-        // unavailable). Subsequent per-call confinement checks handle their
-        // own error reporting for the candidate paths.
-        let vault_dir_canonical = vault_dir
-            .canonicalize()
-            .unwrap_or_else(|_| vault_dir.clone());
         Self {
             config,
-            vault_dir,
-            vault_dir_canonical,
+            vault_dir: vault_dir.into(),
             tool_call_count: AtomicU64::new(0),
             session_start: Instant::now(),
             audit_log: Mutex::new(Vec::new()),
@@ -190,17 +177,15 @@ impl ToolProxy {
             return Ok(entry);
         }
 
-        // 4+5. Path confinement + write permission check (combined to prevent TOCTOU #2517)
-        // Both confine_path and is_path_writable independently canonicalize the input path.
-        // If they operated on separate path resolutions a symlink swap between checks could
-        // bypass security. By confining FIRST (which canonicalizes the path) and then using
-        // the canonical result for the writability check, both checks operate on the same
-        // resolved path, eliminating the race window.
-        let paths = Self::extract_path_args(tool, args_json);
-        if paths.is_empty() {
-            if Self::is_write_tool(tool) {
-                // Write tools always need a path — deny before we reach the
-                // else branch where write checks live (#2517 regression).
+        // 4. Write permission check
+        if Self::is_write_tool(tool) {
+            if self.config.permission == AgentPermission::ReadOnly {
+                let entry = self.deny(tool, args_json, "write denied: agent is read-only");
+                return Ok(entry);
+            }
+            // Check write pattern whitelist
+            let paths = Self::extract_path_args(tool, args_json);
+            if paths.is_empty() {
                 let entry = self.deny(
                     tool,
                     args_json,
@@ -208,41 +193,37 @@ impl ToolProxy {
                 );
                 return Ok(entry);
             }
-            if Self::takes_path(tool) {
+            for path_value in &paths {
+                if !self.is_path_writable(path_value) {
+                    let entry = self.deny(
+                        tool,
+                        args_json,
+                        &format!(
+                            "write denied: path '{}' does not match write patterns",
+                            sanitize_error(path_value)
+                        ),
+                    );
+                    return Ok(entry);
+                }
+            }
+        }
+
+        // 5. Path confinement for file-path tools
+        let paths = Self::extract_path_args(tool, args_json);
+        if paths.is_empty() {
+            // Write tools already denied above. For read tools that
+            // take a path (read_file, list_directory), missing path
+            // is also a problem — deny it. Tools that don't take a
+            // path at all (e.g. search_notes) are unaffected.
+            if Self::takes_path(tool) && !Self::is_write_tool(tool) {
                 let entry = self.deny(tool, args_json, "missing required 'path' argument");
                 return Ok(entry);
             }
         } else {
-            // 5a. Path confinement — canonicalize and check vault boundary first
-            let mut confined = Vec::with_capacity(paths.len());
             for path_value in &paths {
-                match self.confine_path(path_value) {
-                    Ok(canonical) => confined.push(canonical),
-                    Err(e) => {
-                        let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
-                        return Ok(entry);
-                    }
-                }
-            }
-
-            // 4. Write permission check using the SAME canonicalized path (#2517)
-            if Self::is_write_tool(tool) {
-                if self.config.permission == AgentPermission::ReadOnly {
-                    let entry = self.deny(tool, args_json, "write denied: agent is read-only");
+                if let Err(e) = self.confine_path(path_value) {
+                    let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
                     return Ok(entry);
-                }
-                for (path_value, canonical) in paths.iter().zip(&confined) {
-                    if !self.is_path_writable(&canonical.to_string_lossy()) {
-                        let entry = self.deny(
-                            tool,
-                            args_json,
-                            &format!(
-                                "write denied: path '{}' does not match write patterns",
-                                sanitize_error(path_value)
-                            ),
-                        );
-                        return Ok(entry);
-                    }
                 }
             }
         }
@@ -317,22 +298,33 @@ impl ToolProxy {
     }
 
     fn is_write_tool(tool: &str) -> bool {
-        // The only write-capable tool is `save_note`. The names `write_note`,
-        // `delete_note`, and `rename_note` were leftovers from an earlier tool
-        // design and never correspond to real tool calls (#2424).
-        matches!(tool, "save_note")
+        matches!(
+            tool,
+            "save_note" | "write_note" | "delete_note" | "rename_note"
+        )
     }
 
     /// Whether the tool is expected to take a `path` argument.
     fn takes_path(tool: &str) -> bool {
-        matches!(tool, "read_file" | "list_directory" | "save_note")
+        matches!(
+            tool,
+            "read_file"
+                | "list_directory"
+                | "write_note"
+                | "save_note"
+                | "delete_note"
+                | "rename_note"
+        )
     }
 
     /// Extract file-path arguments from the tool's JSON args.
     /// Returns an empty vector for tools that don't take a path.
+    /// For `rename_note`, both the source `path` and destination `newPath`
+    /// are returned so that both are checked against confine_path and
+    /// is_path_writable.
     fn extract_path_args(tool: &str, args_json: &str) -> Vec<String> {
         match tool {
-            "read_file" | "list_directory" | "save_note" => {
+            "read_file" | "list_directory" | "write_note" | "save_note" | "delete_note" => {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(args_json) else {
                     return vec![];
                 };
@@ -340,6 +332,19 @@ impl ToolProxy {
                     Some(p) => vec![p.to_string()],
                     None => vec![],
                 }
+            }
+            "rename_note" => {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(args_json) else {
+                    return vec![];
+                };
+                let mut paths = Vec::new();
+                if let Some(p) = v.get("path").and_then(|p| p.as_str()) {
+                    paths.push(p.to_string());
+                }
+                if let Some(p) = v.get("newPath").and_then(|p| p.as_str()) {
+                    paths.push(p.to_string());
+                }
+                paths
             }
             _ => vec![],
         }
@@ -372,24 +377,12 @@ impl ToolProxy {
             return false;
         }
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
-
-        // Use the canonical vault path cached at construction — the vault
-        // directory never changes during a session, so recomputing it here on
-        // every write-tool check was unnecessary blocking I/O (#2470).
-        let canonical_vault = &self.vault_dir_canonical;
-
-        // Try to canonicalize the candidate path. If it doesn't exist on disk
-        // (e.g. the file hasn't been created yet), fall back to the raw path.
-        let path_ref = std::path::Path::new(trimmed);
-        let effective = path_ref
-            .canonicalize()
-            .unwrap_or_else(|_| path_ref.to_path_buf());
-
-        let relative = if let Ok(stripped) = effective.strip_prefix(canonical_vault) {
-            stripped.to_string_lossy().to_string()
-        } else {
-            trimmed.to_string()
-        };
+        let relative =
+            if let Ok(stripped) = std::path::Path::new(trimmed).strip_prefix(&self.vault_dir) {
+                stripped.to_string_lossy().to_string()
+            } else {
+                trimmed.to_string()
+            };
         let normalized = Self::normalize_path_components(&relative);
         self.config
             .write_patterns
@@ -398,12 +391,9 @@ impl ToolProxy {
     }
 
     /// Confine a path to the vault directory. Relative paths are resolved
-    /// against `vault_dir`. Delegates to `normalize_tool_path_with_canonical`
-    /// using the vault path canonicalized once at construction, avoiding
-    /// repeated blocking `canonicalize()` I/O on tokio worker threads (#2470).
-    /// Handles TOCTOU prevention via per-call candidate canonicalization (#2258).
-    /// Returns the canonicalized `PathBuf` on success.
-    fn confine_path(&self, path: &str) -> Result<PathBuf> {
+    /// against `vault_dir`. Delegates to `normalize_tool_path` which
+    /// handles canonicalization and TOCTOU prevention. (#2258)
+    fn confine_path(&self, path: &str) -> Result<()> {
         let trimmed = path.trim().trim_matches('"').trim_matches('`');
         if trimmed.is_empty() {
             return Err(anyhow!("path is empty"));
@@ -420,10 +410,11 @@ impl ToolProxy {
         // Delegate to the canonical implementation that correctly returns
         // the canonicalized (symlink-resolved) path, preventing TOCTOU
         // between the security check and subsequent I/O. (#2258)
-        // Use the cached canonical vault path (#2470).
         let candidate_str = candidate.to_string_lossy().to_string();
-        crate::normalize_tool_path_with_canonical(&candidate_str, &self.vault_dir_canonical)
-            .map_err(|e| anyhow!("{}", sanitize_error(&e.to_string())))
+        match crate::normalize_tool_path(&candidate_str, &self.vault_dir) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("{}", sanitize_error(&e.to_string()))),
+        }
     }
 
     fn allow(&self, tool: &str, args_json: &str) -> ToolProxyResult {
@@ -622,6 +613,13 @@ impl AgentSession {
 
 use crate::ai;
 use crate::storage::StorageContext;
+
+/// Estimate token count when the provider omits usage data (#2542).
+/// Falls back to a rough text-length estimate (4 bytes ≈ 1 token) to prevent
+/// silent budget bypass when AI providers return null/missing token counts.
+fn estimate_tokens(count: Option<usize>, text_len: usize) -> u64 {
+    count.unwrap_or_else(|| std::cmp::max(1, text_len / 4)) as u64
+}
 
 /// Progress event emitted during agent execution.
 #[derive(Debug, Clone, Serialize)]
@@ -1046,39 +1044,15 @@ pub async fn generate_execution_plan(
                 });
 
                 let remaining = recon_max_duration.saturating_sub(proxy.elapsed());
-                let cancel_token = CancellationToken::new();
-                let cancel_on_timeout = cancel_token.clone();
-                // Pin the tool future so it is NOT dropped on timeout — the
-                // future owns the only token clone that listens on `cancel`.
-                // On timeout we fire the cancel WHILE the future is still
-                // alive, then briefly re-poll so `spawn_blocking_abortable`
-                // observes the signal and detaches its blocking handle via
-                // the cancel branch instead of being dropped mid-flight (#2471).
-                let mut tool_fut = std::pin::pin!(execute_tool(
-                    context,
-                    settings,
-                    &tool_call,
-                    cancel_on_timeout
-                ));
-                let (result, is_error) =
-                    match tokio::time::timeout(remaining, tool_fut.as_mut()).await {
-                        Ok(res) => res,
-                        Err(_) => {
-                            // Fire cancel while the tool future is still alive
-                            // and owns its token clone (#2471).
-                            cancel_token.cancel();
-                            // Re-poll briefly so the cancel signal is observed
-                            // by `spawn_blocking_abortable`'s `select!`. The
-                            // cancel branch resolves immediately once polled,
-                            // so this returns well within the grace window.
-                            let _ = tokio::time::timeout(
-                                std::time::Duration::from_millis(200),
-                                tool_fut.as_mut(),
-                            )
-                            .await;
-                            (format!("tool error: {tool_name} timed out"), true)
-                        }
-                    };
+                let (result, is_error) = match tokio::time::timeout(
+                    remaining,
+                    execute_tool(context, settings, &tool_call),
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(_) => (format!("tool error: {tool_name} timed out"), true),
+                };
                 let preview = truncate_preview(&result, 200);
                 on_event(&AgentEvent::ToolResult {
                     step: step + 1,
@@ -1249,48 +1223,6 @@ fn extract_first_json_object(text: &str) -> Option<String> {
 /// Maximum tool-calling rounds in the agent loop.
 const DEFAULT_MAX_STEPS: usize = 20;
 
-/// Minimum per-call token cost assumed when the provider omits token counts (#2542).
-/// Without this floor, a provider that never returns `input_tokens`/`output_tokens`
-/// would make every `unwrap_or(0)` add zero and the token-budget check would never
-/// fire — silently allowing the agent to run far past its budget.
-const TOKEN_FALLBACK_COST_PER_CALL: u64 = 200;
-
-/// Accumulate tokens from a `RequestUsage`, applying a minimum estimate when the
-/// provider omits counts (see #2542).
-///
-/// * When both fields are present, returns their sum.
-/// * When one field is present, returns that value and logs a warning so the
-///   undercount becomes visible.
-/// * When both are `None`, returns [`TOKEN_FALLBACK_COST_PER_CALL`] and logs a
-///   warning, so the budget check still has a non-zero signal to act on.
-fn accumulate_token_usage(usage: &ai::RequestUsage, step: usize) -> u64 {
-    let input = usage.input_tokens;
-    let output = usage.output_tokens;
-    match (input, output) {
-        (Some(i), Some(o)) => (i + o) as u64,
-        (Some(i), None) => {
-            warn!(
-                step,
-                input_tokens = i,
-                "provider omitted output_tokens; token budget may undercount (#2542)"
-            );
-            i as u64
-        }
-        (None, Some(o)) => {
-            warn!(
-                step,
-                output_tokens = o,
-                "provider omitted input_tokens; token budget may undercount (#2542)"
-            );
-            o as u64
-        }
-        (None, None) => {
-            warn!(step, fallback = TOKEN_FALLBACK_COST_PER_CALL, "provider returned no token counts; applying minimum estimate to avoid silent budget bypass (#2542)");
-            TOKEN_FALLBACK_COST_PER_CALL
-        }
-    }
-}
-
 /// Run an autonomous agent loop: prompt → LLM → tool call → execute → repeat.
 ///
 /// The agent uses `select_tool_call` to decide which tool to invoke, executes
@@ -1377,14 +1309,6 @@ pub async fn run_agent(
         proxy.merge_audit_log(recon_audit_log);
     }
 
-    // Reset the execution-phase proxy so plan time (generate_execution_plan +
-    // user decision) does not consume the timeout budget (#2540).
-    // We extract the accumulated audit log, create a fresh proxy with a new
-    // session_start clock, then re-merge the audit entries.
-    let audit_log = proxy.audit_log();
-    let proxy = ToolProxy::new(config.clone(), &settings.vault_dir);
-    proxy.merge_audit_log(audit_log);
-
     for step in 0..max_steps {
         // Timeout check
         if proxy.elapsed() > config.limits.max_duration {
@@ -1421,7 +1345,8 @@ pub async fn run_agent(
             })?,
         };
 
-        total_tokens += accumulate_token_usage(&selection.usage, step);
+        total_tokens += estimate_tokens(selection.usage.input_tokens, 0)
+            + estimate_tokens(selection.usage.output_tokens, 0);
 
         // Token budget check
         if token_budget > 0 && total_tokens > token_budget {
@@ -1496,7 +1421,8 @@ pub async fn run_agent(
                         })?,
                     }
                 };
-                total_tokens += accumulate_token_usage(&answer.usage, step);
+                total_tokens += estimate_tokens(answer.usage.input_tokens, answer.answer.len())
+                    + estimate_tokens(answer.usage.output_tokens, answer.answer.len());
                 on_event(&AgentEvent::FinalAnswer {
                     text: answer.answer.clone(),
                 });
@@ -1560,10 +1486,6 @@ pub async fn run_agent(
                                         );
                                     }
                                     _ => {
-                                        warn!(
-                                            "load_note_async failed for note_id={}: silently using empty content",
-                                            note_id
-                                        );
                                         obj.insert(
                                             "currentContent".to_string(),
                                             serde_json::json!(""),
@@ -1598,39 +1520,22 @@ pub async fn run_agent(
 
                 // Execute the tool (with timeout — #1602)
                 let remaining = config.limits.max_duration.saturating_sub(proxy.elapsed());
-                let cancel_token = CancellationToken::new();
-                let cancel_on_timeout = cancel_token.clone();
-                // Pin the tool future so it is NOT dropped on timeout — the
-                // future owns the only token clone listening on `cancel`. On
-                // timeout we fire cancel WHILE the future is still alive, then
-                // briefly re-poll so `spawn_blocking_abortable` observes the
-                // signal and detaches cleanly (#2471).
-                let mut tool_fut = std::pin::pin!(execute_tool(
-                    context,
-                    settings,
-                    &tool_call,
-                    cancel_on_timeout
-                ));
-                let (result, is_error) =
-                    match tokio::time::timeout(remaining, tool_fut.as_mut()).await {
-                        Ok(res) => res,
-                        Err(_) => {
-                            cancel_token.cancel();
-                            let _ = tokio::time::timeout(
-                                std::time::Duration::from_millis(200),
-                                tool_fut.as_mut(),
-                            )
-                            .await;
-                            (
-                                format!(
-                                    "tool error: {} timed out after {}s",
-                                    tool_name,
-                                    remaining.as_secs()
-                                ),
-                                true,
-                            )
-                        }
-                    };
+                let (result, is_error) = match tokio::time::timeout(
+                    remaining,
+                    execute_tool(context, settings, &tool_call),
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(_) => (
+                        format!(
+                            "tool error: {} timed out after {}s",
+                            tool_name,
+                            remaining.as_secs()
+                        ),
+                        true,
+                    ),
+                };
                 let preview = truncate_preview(&result, 200);
 
                 on_event(&AgentEvent::ToolResult {
@@ -1679,7 +1584,8 @@ pub async fn run_agent(
                 )
                 .await;
                 if let Ok(Ok(answer)) = answer_result {
-                    total_tokens += accumulate_token_usage(&answer.usage, actual_steps);
+                    total_tokens += estimate_tokens(answer.usage.input_tokens, answer.answer.len())
+                        + estimate_tokens(answer.usage.output_tokens, answer.answer.len());
                     return Ok(AgentResult {
                         answer: answer.answer,
                         steps_used: actual_steps,
@@ -1739,7 +1645,8 @@ pub async fn run_agent(
         None
     };
     if let Some(answer) = answer_result {
-        total_tokens += accumulate_token_usage(&answer.usage, max_steps);
+        total_tokens += estimate_tokens(answer.usage.input_tokens, answer.answer.len())
+            + estimate_tokens(answer.usage.output_tokens, answer.answer.len());
         return Ok(AgentResult {
             answer: answer.answer,
             steps_used: max_steps,
@@ -1766,73 +1673,20 @@ pub async fn run_agent(
 
 /// Execute a tool call against the vault storage layer.
 /// Returns (output, is_error).
-/// Wraps `tokio::task::spawn_blocking` with a cancellation token.
-///
-/// If the cancellation token fires before the blocking operation completes,
-/// the incomplete `JoinHandle` is silently dropped (preventing tokio's
-/// "spawn_blocking task was cancelled" diagnostic), and `None` is returned.
-/// The underlying blocking OS thread continues until its I/O completes — see
-/// #2455 for the leaking-thread problem. Each cancellation is counted and
-/// logged as a warning so operators can detect pathological patterns (#2472).
-async fn spawn_blocking_abortable<F, T>(
-    f: F,
-    cancel: CancellationToken,
-) -> Option<Result<T, tokio::task::JoinError>>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    static BLOCKING_LEAK_COUNT: AtomicU64 = AtomicU64::new(0);
-
-    let handle = tokio::task::spawn_blocking(f);
-    let mut handle = Box::pin(handle);
-
-    tokio::select! {
-        result = handle.as_mut() => Some(result),
-        _ = cancel.cancelled() => {
-            // The cancellation fired. Dropping the JoinHandle of a
-            // `spawn_blocking` task does NOT abort the underlying work — the
-            // blocking OS thread continues until the I/O syscall completes
-            // (syscalls cannot be interrupted cooperatively), and tokio's
-            // blocking thread pool reaps it afterwards.
-            //
-            // We intentionally detach here via plain `drop` rather than the
-            // former `tokio::spawn` wrapper, which only leaked a second
-            // unsupervised tokio task without any benefit (#2472).
-            //
-            // Each leak is counted and logged so operators can detect
-            // pathological timeout patterns and tune timeouts accordingly.
-            let count = BLOCKING_LEAK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-            warn!(
-                blocking_leak_count = count,
-                "blocking task cancelled — OS thread continues until I/O completes (leak #{})",
-                count,
-            );
-            drop(handle);
-            None
-        }
-    }
-}
-
 async fn execute_tool(
     context: &StorageContext,
     settings: &crate::models::AppSettings,
     tool_call: &ai::AssistantToolCall,
-    cancel: CancellationToken,
 ) -> (String, bool) {
+    use crate::storage::{load_context_notes_async, load_recent_notes_for_overview_async};
+
     match tool_call {
         ai::AssistantToolCall::None => ("no tool selected".into(), false),
         ai::AssistantToolCall::SearchNotes { query, limit } => {
-            let ctx = context.clone();
-            let q = query.clone();
-            let lim = limit.saturating_mul(3).max(8);
-            match spawn_blocking_abortable(
-                move || crate::storage::load_context_notes_with_context(&ctx, &q, &[], lim),
-                cancel.clone(),
-            )
-            .await
+            match load_context_notes_async(context, query, &[], limit.saturating_mul(3).max(8))
+                .await
             {
-                Some(Ok(Ok(docs))) => {
+                Ok(docs) => {
                     let summary = docs
                         .iter()
                         .take(*limit)
@@ -1848,24 +1702,12 @@ async fn execute_tool(
                         )
                     }
                 }
-                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
-                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
-                None => (
-                    "tool error: tool timed out — blocking thread aborted".to_string(),
-                    true,
-                ),
+                Err(e) => (format!("tool error: {}", e), true),
             }
         }
         ai::AssistantToolCall::ListNotes { limit } => {
-            let ctx = context.clone();
-            let lim = *limit;
-            match spawn_blocking_abortable(
-                move || crate::storage::load_recent_notes_for_overview(&ctx, lim),
-                cancel.clone(),
-            )
-            .await
-            {
-                Some(Ok(Ok(docs))) => {
+            match load_recent_notes_for_overview_async(context, *limit).await {
+                Ok(docs) => {
                     let summary = docs
                         .iter()
                         .map(|d| format!("- {} ({})", d.meta.title, d.meta.path))
@@ -1877,69 +1719,39 @@ async fn execute_tool(
                         (format!("{} notes:\n{}", docs.len(), summary), false)
                     }
                 }
-                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
-                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
-                None => (
-                    "tool error: tool timed out — blocking thread aborted".to_string(),
-                    true,
-                ),
+                Err(e) => (format!("tool error: {}", e), true),
             }
         }
         ai::AssistantToolCall::ListDirectory { path } => {
             let vault_root = PathBuf::from(&settings.vault_dir);
             let path_owned = path.clone();
-            match spawn_blocking_abortable(
-                move || list_directory_for_agent(&path_owned, &vault_root),
-                cancel.clone(),
-            )
+            match tokio::task::spawn_blocking(move || {
+                list_directory_for_agent(&path_owned, &vault_root)
+            })
             .await
             {
-                Some(Ok(Ok(output))) => (output, false),
-                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
-                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
-                None => (
-                    "tool error: tool timed out — blocking thread aborted".to_string(),
-                    true,
-                ),
+                Ok(Ok(output)) => (output, false),
+                Ok(Err(e)) => (format!("tool error: {}", e), true),
+                Err(e) => (format!("tool error: task join failed: {}", e), true),
             }
         }
         ai::AssistantToolCall::ReadFile { path } => {
             let vault_root = PathBuf::from(&settings.vault_dir);
             let path_owned = path.clone();
-            match spawn_blocking_abortable(
-                move || read_file_for_agent(&path_owned, &vault_root),
-                cancel.clone(),
-            )
-            .await
+            match tokio::task::spawn_blocking(move || read_file_for_agent(&path_owned, &vault_root))
+                .await
             {
-                Some(Ok(Ok(output))) => (output, false),
-                Some(Ok(Err(e))) => (format!("tool error: {}", e), true),
-                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
-                None => (
-                    "tool error: tool timed out — blocking thread aborted".to_string(),
-                    true,
-                ),
+                Ok(Ok(output)) => (output, false),
+                Ok(Err(e)) => (format!("tool error: {}", e), true),
+                Err(e) => (format!("tool error: task join failed: {}", e), true),
             }
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
-            // Load existing note for backup (recorded only after save succeeds, #2498)
-            // Also capture the original created_at to preserve it (#2426)
-            let mut existing_created_at: Option<String> = None;
-            let backup_note: Option<crate::models::NoteDocument> = {
-                let ctx = context.clone();
-                let nid = note_id.clone();
-                if let Some(Ok(Ok(existing))) = spawn_blocking_abortable(
-                    move || crate::storage::load_note_with_context(&ctx, &nid),
-                    cancel.clone(),
-                )
-                .await
-                {
-                    existing_created_at = Some(existing.meta.created_at.clone());
-                    Some(existing)
-                } else {
-                    None
-                }
-            };
+            use crate::storage::save_note_with_images_async;
+            // Record backup before saving so revert_write works (#2286)
+            if let Ok(existing) = crate::storage::load_note_async(context, note_id).await {
+                crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+            }
             let short_id: String = note_id.chars().take(8).collect();
             let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(4); // "-" + ".md"
             let slug = slugify(&draft.title);
@@ -1963,37 +1775,19 @@ async fn execute_tool(
                     path: format!("{}-{}.md", slug, short_id),
                     tags: draft.tags.clone(),
                     keywords: draft.keywords.clone(),
-                    created_at: existing_created_at
-                        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                    created_at: chrono::Utc::now().to_rfc3339(),
                     updated_at: chrono::Utc::now().to_rfc3339(),
                     ..Default::default()
                 },
                 body: draft.body.clone(),
                 ..Default::default()
             };
-            let ctx = context.clone();
-            match spawn_blocking_abortable(
-                move || crate::storage::save_note_with_images_with_context(&ctx, note, &[]),
-                cancel.clone(),
-            )
-            .await
-            {
-                Some(Ok(Ok(saved))) => {
-                    // Record backup only after save succeeds (#2498)
-                    if let Some(existing) = &backup_note {
-                        crate::orchestration::write::WRITE_TRACKER.record_backup(existing);
-                    }
-                    (
-                        format!("Note saved: {} at {}", saved.meta.title, saved.meta.path),
-                        false,
-                    )
-                }
-                Some(Ok(Err(e))) => (format!("tool error: save_note failed: {}", e), true),
-                Some(Err(e)) => (format!("tool error: task join failed: {}", e), true),
-                None => (
-                    "tool error: tool timed out — blocking thread aborted".to_string(),
-                    true,
+            match save_note_with_images_async(context, note, &[]).await {
+                Ok(saved) => (
+                    format!("Note saved: {} at {}", saved.meta.title, saved.meta.path),
+                    false,
                 ),
+                Err(e) => (format!("tool error: save_note failed: {}", e), true),
             }
         }
     }
@@ -2093,7 +1887,28 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
 }
 
 fn slugify(title: &str) -> String {
-    crate::utils::slugify(title)
+    let mut slug: String = title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Collapse consecutive dashes
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    let cleaned = slug.trim_matches('-').to_string();
+    if cleaned.is_empty() {
+        let mut hasher = DefaultHasher::new();
+        title.hash(&mut hasher);
+        format!("note-{:08x}", hasher.finish())
+    } else {
+        cleaned
+    }
 }
 
 fn tool_display_name(tool: &ai::AssistantToolCall) -> &'static str {
@@ -2537,14 +2352,14 @@ mod pure_function_tests {
 
     #[test]
     fn slugify_basic() {
-        assert_eq!(slugify("Hello World"), "hello-world");
+        assert_eq!(slugify("Hello World"), "Hello-World");
         assert_eq!(slugify("test.md"), "test-md");
         assert_eq!(slugify("hello"), "hello");
     }
 
     #[test]
     fn slugify_special_chars() {
-        assert_eq!(slugify("Hello! @#$% World"), "hello-world");
+        assert_eq!(slugify("Hello! @#$% World"), "Hello-World");
         assert_eq!(slugify("path/to/file"), "path-to-file");
     }
 
@@ -2855,14 +2670,10 @@ mod pure_function_tests {
     }
 
     #[test]
-    fn extract_path_args_phantom_tools_return_empty() {
-        // Tools that don't exist in the real toolset (#2424) should fall
-        // through to the catch-all arm and return an empty vector.
-        for tool in &["write_note", "delete_note", "rename_note"] {
-            let paths =
-                ToolProxy::extract_path_args(tool, r#"{"path":"old.md","newPath":"new.md"}"#);
-            assert!(paths.is_empty(), "{} should return empty", tool);
-        }
+    fn extract_path_args_rename_note() {
+        let paths =
+            ToolProxy::extract_path_args("rename_note", r#"{"path":"old.md","newPath":"new.md"}"#);
+        assert_eq!(paths, vec!["old.md", "new.md"]);
     }
 
     #[test]

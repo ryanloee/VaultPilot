@@ -71,7 +71,7 @@ fn escape_xml_tags(content: &str, open_tag: &str) -> String {
 fn sanitize_user_input(input: &str) -> String {
     format!(
         "<user_input>\n{}\n</user_input>",
-        escape_xml_tags(input, "<user_input>")
+        escape_xml_close_tags(&escape_xml_tags(input, "<user_input>"))
     )
 }
 
@@ -79,7 +79,7 @@ fn sanitize_user_input(input: &str) -> String {
 fn sanitize_tool_result(result: &str) -> String {
     format!(
         "<tool_result>\n{}\n</tool_result>",
-        escape_xml_tags(result, "<tool_result>")
+        escape_xml_close_tags(&escape_xml_tags(result, "<tool_result>"))
     )
 }
 
@@ -87,7 +87,7 @@ fn sanitize_tool_result(result: &str) -> String {
 fn sanitize_note_content(content: &str) -> String {
     format!(
         "<note_content>\n{}\n</note_content>",
-        escape_xml_tags(content, "<note_content>")
+        escape_xml_close_tags(&escape_xml_tags(content, "<note_content>"))
     )
 }
 
@@ -95,7 +95,7 @@ fn sanitize_note_content(content: &str) -> String {
 fn sanitize_history(content: &str) -> String {
     format!(
         "<conversation_history>\n{}\n</conversation_history>",
-        escape_xml_tags(content, "<conversation_history>")
+        escape_xml_close_tags(&escape_xml_tags(content, "<conversation_history>"))
     )
 }
 

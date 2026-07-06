@@ -664,13 +664,23 @@ pub async fn send_request_streaming<'a>(
                                             on_chunk(text).await;
                                         }
                                     }
-                                } else if event_type == "message_delta" {
-                                    // Anthropic sends usage in message_delta event
+                                } else if event_type == "message_start" {
+                                    // Anthropic sends input_tokens in message_start event
+                                    // Structure: {"type":"message_start","message":{"usage":{"input_tokens":25}}}
                                     if usage.input_tokens.is_none() {
-                                        usage.input_tokens = parsed["usage"]["input_tokens"]
+                                        usage.input_tokens = parsed["message"]["usage"]
+                                            ["input_tokens"]
                                             .as_u64()
                                             .map(|n| n as usize);
                                     }
+                                    if usage.output_tokens.is_none() {
+                                        usage.output_tokens = parsed["message"]["usage"]
+                                            ["output_tokens"]
+                                            .as_u64()
+                                            .map(|n| n as usize);
+                                    }
+                                } else if event_type == "message_delta" {
+                                    // Anthropic sends output_tokens in message_delta event
                                     if usage.output_tokens.is_none() {
                                         usage.output_tokens = parsed["usage"]["output_tokens"]
                                             .as_u64()

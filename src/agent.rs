@@ -190,53 +190,49 @@ impl ToolProxy {
             return Ok(entry);
         }
 
-        // 4. Write permission check
-        if Self::is_write_tool(tool) {
-            if self.config.permission == AgentPermission::ReadOnly {
-                let entry = self.deny(tool, args_json, "write denied: agent is read-only");
-                return Ok(entry);
-            }
-            // Check write pattern whitelist
-            let paths = Self::extract_path_args(tool, args_json);
-            if paths.is_empty() {
-                let entry = self.deny(
-                    tool,
-                    args_json,
-                    "write denied: missing required 'path' argument",
-                );
-                return Ok(entry);
-            }
-            for path_value in &paths {
-                if !self.is_path_writable(path_value) {
-                    let entry = self.deny(
-                        tool,
-                        args_json,
-                        &format!(
-                            "write denied: path '{}' does not match write patterns",
-                            sanitize_error(path_value)
-                        ),
-                    );
-                    return Ok(entry);
-                }
-            }
-        }
-
-        // 5. Path confinement for file-path tools
+        // 4+5. Path confinement + write permission check (combined to prevent TOCTOU #2517)
+        // Both confine_path and is_path_writable independently canonicalize the input path.
+        // If they operated on separate path resolutions a symlink swap between checks could
+        // bypass security. By confining FIRST (which canonicalizes the path) and then using
+        // the canonical result for the writability check, both checks operate on the same
+        // resolved path, eliminating the race window.
         let paths = Self::extract_path_args(tool, args_json);
         if paths.is_empty() {
-            // Write tools already denied above. For read tools that
-            // take a path (read_file, list_directory), missing path
-            // is also a problem — deny it. Tools that don't take a
-            // path at all (e.g. search_notes) are unaffected.
             if Self::takes_path(tool) && !Self::is_write_tool(tool) {
                 let entry = self.deny(tool, args_json, "missing required 'path' argument");
                 return Ok(entry);
             }
         } else {
+            // 5a. Path confinement — canonicalize and check vault boundary first
+            let mut confined = Vec::with_capacity(paths.len());
             for path_value in &paths {
-                if let Err(e) = self.confine_path(path_value) {
-                    let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
+                match self.confine_path(path_value) {
+                    Ok(canonical) => confined.push(canonical),
+                    Err(e) => {
+                        let entry = self.deny(tool, args_json, &format!("path violation: {e}"));
+                        return Ok(entry);
+                    }
+                }
+            }
+
+            // 4. Write permission check using the SAME canonicalized path (#2517)
+            if Self::is_write_tool(tool) {
+                if self.config.permission == AgentPermission::ReadOnly {
+                    let entry = self.deny(tool, args_json, "write denied: agent is read-only");
                     return Ok(entry);
+                }
+                for (path_value, canonical) in paths.iter().zip(&confined) {
+                    if !self.is_path_writable(&canonical.to_string_lossy()) {
+                        let entry = self.deny(
+                            tool,
+                            args_json,
+                            &format!(
+                                "write denied: path '{}' does not match write patterns",
+                                sanitize_error(path_value)
+                            ),
+                        );
+                        return Ok(entry);
+                    }
                 }
             }
         }

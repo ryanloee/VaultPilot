@@ -23,7 +23,8 @@ function formatNoteTimestamp(ts: number): string {
   try {
     const d = new Date(ts * 1000);
     return d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
-  } catch {
+  } catch (e: unknown) {
+    console.warn('[RAG] formatNoteTimestamp failed:', e instanceof Error ? e.message : e);
     return '';
   }
 }

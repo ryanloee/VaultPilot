@@ -17,8 +17,10 @@ interface GlobalEventBus {
 export function useNetworkState(): { isOnline: boolean; checkConnection: () => Promise<boolean> } {
   const [isOnline, setIsOnline] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
+  const generationRef = useRef(0);
 
   const checkConnection = useCallback(async (): Promise<boolean> => {
+    const gen = ++generationRef.current;
     try {
       // Quick HEAD request to a reliable endpoint
       const timeoutController = new AbortController();
@@ -30,7 +32,11 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
           signal: timeoutController.signal,
         });
         const online = res.ok;
-        setIsOnline(online);
+        // Only apply result if no newer fetch was started (avoids stale
+        // result overwriting event-driven state changes).
+        if (gen === generationRef.current) {
+          setIsOnline(online);
+        }
         return online;
       } finally {
         clearTimeout(timer);
@@ -38,7 +44,9 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
       }
     } catch (e) {
       console.warn('[NetworkState] checkConnection failed:', e);
-      setIsOnline(false);
+      if (gen === generationRef.current) {
+        setIsOnline(false);
+      }
       return false;
     }
   }, []);

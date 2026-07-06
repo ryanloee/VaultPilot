@@ -55,7 +55,7 @@ futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = "8.6.0"
-cron = "0.15"
+cron = "0.17"
 imap = "3.0.0-alpha.15"
 mailparse = "0.15"
 native-tls = "0.2"

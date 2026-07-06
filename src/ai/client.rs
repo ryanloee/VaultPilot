@@ -733,86 +733,95 @@ pub async fn send_request_streaming<'a>(
             {
                 if let Some(data) = line.strip_prefix("data: ") {
                     let data = data.trim();
-                    if data != "[DONE]" {
-                        match provider_type {
-                            crate::models::ProviderType::OpenAi => {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
+                    // Handle [DONE] marker first — same logic as the main loop (#2588).
+                    if data == "[DONE]" {
+                        if accumulated.trim().is_empty() {
+                            return Err(anyhow!("API returned an empty response"));
+                        }
+                        return Ok((accumulated, usage));
+                    }
+                    match provider_type {
+                        crate::models::ProviderType::OpenAi => {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                                // Extract text delta
+                                if let Some(text) =
+                                    parsed["choices"][0]["delta"]["content"].as_str()
                                 {
-                                    // Extract text delta
-                                    if let Some(text) =
-                                        parsed["choices"][0]["delta"]["content"].as_str()
-                                    {
+                                    if !text.is_empty() {
+                                        accumulated.push_str(text);
+                                        on_chunk(text).await;
+                                    }
+                                }
+                                // Extract token usage from final/usage chunk
+                                if let Some(u) = parsed["usage"].as_object() {
+                                    if usage.input_tokens.is_none() {
+                                        usage.input_tokens = u
+                                            .get("prompt_tokens")
+                                            .and_then(|v| v.as_u64().map(|n| n as usize));
+                                    }
+                                    if usage.output_tokens.is_none() {
+                                        usage.output_tokens = u
+                                            .get("completion_tokens")
+                                            .and_then(|v| v.as_u64().map(|n| n as usize));
+                                    }
+                                }
+                            }
+                        }
+                        crate::models::ProviderType::Anthropic => {
+                            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                                if !parsed["type"].is_string() {
+                                    tracing::warn!(?parsed, "SSE event missing 'type' field in trailing-buffer handler — event will be silently dropped");
+                                }
+                                let event_type = parsed["type"].as_str().unwrap_or("");
+                                if event_type == "content_block_delta" {
+                                    if let Some(text) = parsed["delta"]["text"].as_str() {
                                         if !text.is_empty() {
                                             accumulated.push_str(text);
                                             on_chunk(text).await;
                                         }
                                     }
-                                    // Extract token usage from final/usage chunk
-                                    if let Some(u) = parsed["usage"].as_object() {
-                                        if usage.input_tokens.is_none() {
-                                            usage.input_tokens = u
-                                                .get("prompt_tokens")
-                                                .and_then(|v| v.as_u64().map(|n| n as usize));
-                                        }
-                                        if usage.output_tokens.is_none() {
-                                            usage.output_tokens = u
-                                                .get("completion_tokens")
-                                                .and_then(|v| v.as_u64().map(|n| n as usize));
-                                        }
+                                } else if event_type == "message_start" {
+                                    // Anthropic sends input_tokens in message_start event
+                                    // Structure: {"type":"message_start","message":{"usage":{"input_tokens":25}}}
+                                    // output_tokens in message_start is always 0 — actual value
+                                    // comes in message_delta. Don't set output_tokens here or the
+                                    // message_delta handler's .is_none() guard will skip the real value.
+                                    if usage.input_tokens.is_none() {
+                                        usage.input_tokens = parsed["message"]["usage"]
+                                            ["input_tokens"]
+                                            .as_u64()
+                                            .map(|n| n as usize);
                                     }
-                                }
-                            }
-                            crate::models::ProviderType::Anthropic => {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
-                                {
-                                    if !parsed["type"].is_string() {
-                                        tracing::warn!(?parsed, "SSE event missing 'type' field in trailing-buffer handler — event will be silently dropped");
+                                } else if event_type == "message_delta" {
+                                    // Anthropic sends output_tokens in message_delta event
+                                    if usage.output_tokens.is_none() {
+                                        usage.output_tokens = parsed["usage"]["output_tokens"]
+                                            .as_u64()
+                                            .map(|n| n as usize);
                                     }
-                                    let event_type = parsed["type"].as_str().unwrap_or("");
-                                    if event_type == "content_block_delta" {
-                                        if let Some(text) = parsed["delta"]["text"].as_str() {
-                                            if !text.is_empty() {
-                                                accumulated.push_str(text);
-                                                on_chunk(text).await;
-                                            }
-                                        }
-                                    } else if event_type == "message_start" {
-                                        // Anthropic sends input_tokens in message_start event
-                                        // Structure: {"type":"message_start","message":{"usage":{"input_tokens":25}}}
-                                        // output_tokens in message_start is always 0 — actual value
-                                        // comes in message_delta. Don't set output_tokens here or the
-                                        // message_delta handler's .is_none() guard will skip the real value.
-                                        if usage.input_tokens.is_none() {
-                                            usage.input_tokens = parsed["message"]["usage"]
-                                                ["input_tokens"]
-                                                .as_u64()
-                                                .map(|n| n as usize);
-                                        }
-                                    } else if event_type == "message_delta" {
-                                        // Anthropic sends output_tokens in message_delta event
-                                        if usage.output_tokens.is_none() {
-                                            usage.output_tokens = parsed["usage"]["output_tokens"]
-                                                .as_u64()
-                                                .map(|n| n as usize);
-                                        }
-                                    } else if event_type == "error" {
-                                        if !parsed["error"].is_object() {
-                                            tracing::warn!(?parsed, "SSE error event with malformed 'error' field in trailing-buffer handler");
-                                        }
-                                        let error_type =
-                                            parsed["error"]["type"].as_str().unwrap_or("unknown");
-                                        if error_type == "unknown" {
-                                            tracing::warn!(?parsed, "SSE error event missing 'error.type' field in trailing-buffer handler");
-                                        }
-                                        let error_message = parsed["error"]["message"]
-                                            .as_str()
-                                            .unwrap_or("unknown error");
-                                        return Err(anyhow!(
-                                            "Anthropic API error ({}): {}",
-                                            error_type,
-                                            error_message
-                                        ));
+                                } else if event_type == "message_stop" {
+                                    // Handle message_stop in trailing buffer — same as main loop (#2588).
+                                    if accumulated.trim().is_empty() {
+                                        return Err(anyhow!("API returned an empty response"));
                                     }
+                                    return Ok((accumulated, usage));
+                                } else if event_type == "error" {
+                                    if !parsed["error"].is_object() {
+                                        tracing::warn!(?parsed, "SSE error event with malformed 'error' field in trailing-buffer handler");
+                                    }
+                                    let error_type =
+                                        parsed["error"]["type"].as_str().unwrap_or("unknown");
+                                    if error_type == "unknown" {
+                                        tracing::warn!(?parsed, "SSE error event missing 'error.type' field in trailing-buffer handler");
+                                    }
+                                    let error_message = parsed["error"]["message"]
+                                        .as_str()
+                                        .unwrap_or("unknown error");
+                                    return Err(anyhow!(
+                                        "Anthropic API error ({}): {}",
+                                        error_type,
+                                        error_message
+                                    ));
                                 }
                             }
                         }

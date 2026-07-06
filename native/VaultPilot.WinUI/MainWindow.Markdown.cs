@@ -172,6 +172,25 @@ public sealed partial class MainWindow : Window
         var index = 0;
         while (index < text.Length)
         {
+            // Check for inline code (`code`) — must be before [[wikilink]] to
+            // prevent wikilink parsing inside code backticks (#2589).
+            if (text[index] == '`')
+            {
+                var closeIndex = text.IndexOf('`', index + 1);
+                if (closeIndex > index)
+                {
+                    var span = new Span
+                    {
+                        FontFamily = new FontFamily("Consolas"),
+                        Foreground = GetThemeBrush("CodeInlineForegroundBrush")
+                    };
+                    span.Inlines.Add(new Run { Text = text[(index + 1)..closeIndex] });
+                    inlines.Add(span);
+                    index = closeIndex + 1;
+                    continue;
+                }
+            }
+
             // Check for [[wikilink]] — must be before [link] to avoid double-bracket confusion
             if (text[index] == '[' && index + 1 < text.Length && text[index + 1] == '[')
             {
@@ -242,23 +261,6 @@ public sealed partial class MainWindow : Window
                     AppendInlineMarkdown(span.Inlines, text[(index + 2)..closeIndex]);
                     inlines.Add(span);
                     index = closeIndex + 2;
-                    continue;
-                }
-            }
-
-            if (text[index] == '`')
-            {
-                var closeIndex = text.IndexOf('`', index + 1);
-                if (closeIndex > index)
-                {
-                    var span = new Span
-                    {
-                        FontFamily = new FontFamily("Consolas"),
-                        Foreground = GetThemeBrush("CodeInlineForegroundBrush")
-                    };
-                    span.Inlines.Add(new Run { Text = text[(index + 1)..closeIndex] });
-                    inlines.Add(span);
-                    index = closeIndex + 1;
                     continue;
                 }
             }

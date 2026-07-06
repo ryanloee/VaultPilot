@@ -167,12 +167,28 @@ public sealed partial class MainWindow : Window
             Child = bubbleContent
         };
 
-        var label = new TextBlock
+        // Author label with timestamp
+        var now = DateTime.Now;
+        var timeStr = now.ToString("HH:mm");
+        var authorLine = new StackPanel
         {
-            Text = author,
-            Opacity = 0.72,
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
             HorizontalAlignment = bubble.HorizontalAlignment
         };
+        var authorText = new TextBlock
+        {
+            Text = author,
+            Opacity = 0.72
+        };
+        var timeText = new TextBlock
+        {
+            Text = timeStr,
+            Opacity = 0.45,
+            FontSize = 11
+        };
+        authorLine.Children.Add(authorText);
+        authorLine.Children.Add(timeText);
         AutomationProperties.SetName(bubble, isUser ? "用户消息" : "AI 消息");
 
         var stack = new StackPanel
@@ -180,12 +196,12 @@ public sealed partial class MainWindow : Window
             Spacing = 4,
             HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left
         };
-        stack.Children.Add(label);
+        stack.Children.Add(authorLine);
         stack.Children.Add(bubble);
 
         if (!isUser && !isAssistant)
         {
-            stack.Children.Remove(label);
+            stack.Children.Remove(authorLine);
         }
 
         // Invalidate note title cache when a tool action has saved a note (#2035)

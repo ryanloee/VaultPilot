@@ -155,14 +155,10 @@ public sealed partial class MainWindow : Window
 
     private void ShowLoadingOverlay(string message = "正在处理...")
     {
-        ComposerProgressRing.IsActive = true;
-        ComposerProgressRing.Visibility = Visibility.Visible;
     }
 
     private void HideLoadingOverlay()
     {
-        ComposerProgressRing.IsActive = false;
-        ComposerProgressRing.Visibility = Visibility.Collapsed;
     }
 
     // ── Logging ──

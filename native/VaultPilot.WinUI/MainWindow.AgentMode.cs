@@ -80,7 +80,6 @@ public sealed partial class MainWindow : Window
         StopAgentButton.Visibility = Visibility.Visible;
         AgentToolCallPanel.Visibility = Visibility.Visible;
         AgentToolCallList.Children.Clear();
-        AgentProgressRing.IsActive = true;
         AgentStatusText.Text = "Agent 启动中...";
         AgentStepCount.Text = $"步骤: 0/{maxSteps}";
         AgentTokenCount.Text = "Token: 0";
@@ -100,7 +99,6 @@ public sealed partial class MainWindow : Window
 
         AgentModeButton.Visibility = Visibility.Visible;
         StopAgentButton.Visibility = Visibility.Collapsed;
-        AgentProgressRing.IsActive = false;
         AgentStatusText.Text = $"Agent 已停止: {reason}";
 
         UpdateStatusBar("info", "Agent 模式", $"已停止: {reason}");
@@ -144,7 +142,6 @@ public sealed partial class MainWindow : Window
                 _agentModeActive = false;
                 AgentModeButton.Visibility = Visibility.Visible;
                 StopAgentButton.Visibility = Visibility.Collapsed;
-                AgentProgressRing.IsActive = false;
                 AgentStatusText.Text = "Agent 完成";
                 UpdateStatusBar("success", "Agent 模式", "任务完成");
             });
@@ -217,7 +214,6 @@ public sealed partial class MainWindow : Window
                     _agentModeActive = false;
                     AgentModeButton.Visibility = Visibility.Visible;
                     StopAgentButton.Visibility = Visibility.Collapsed;
-                    AgentProgressRing.IsActive = false;
                     AgentStatusText.Text = "Agent 完成";
                     UpdateStatusBar("success", "Agent 模式", "任务完成");
                 });

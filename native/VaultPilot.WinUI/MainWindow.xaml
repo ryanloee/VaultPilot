@@ -201,7 +201,6 @@
                                                 </Grid.RowDefinitions>
                                                 <!-- Agent status header -->
                                                 <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
-                                                    <ProgressRing x:Name="AgentProgressRing" IsActive="True" Width="16" Height="16" />
                                                     <TextBlock x:Name="AgentStatusText" Text="Agent 运行中..." FontWeight="SemiBold" />
                                                     <TextBlock x:Name="AgentStepCount" Text="步骤: 0/20" Opacity="0.7" />
                                                     <TextBlock x:Name="AgentTokenCount" Text="Token: 0" Opacity="0.7" />
@@ -261,20 +260,9 @@
                                             ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
                                             AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
                                         </TextBox>
-                                        <ProgressRing
-                                            x:Name="ComposerProgressRing"
-                                            Grid.Row="1"
-                                            IsActive="False"
-                                            Width="16"
-                                            Height="16"
-                                            Visibility="Collapsed"
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Center"
-                                            Margin="4,0,0,0"
-                                            AutomationProperties.Name="正在处理" />
                                         <TextBlock
                                             x:Name="ComposerHintText"
-                                            Grid.Row="2"
+                                            Grid.Row="1"
                                             Text="Enter 发送 · Shift+Enter 换行"
                                             FontSize="11"
                                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"

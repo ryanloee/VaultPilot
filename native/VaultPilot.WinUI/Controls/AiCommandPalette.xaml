@@ -74,11 +74,18 @@
                     Margin="8,4,8,4"
                     SelectionMode="Single"
                     ScrollViewer.VerticalScrollBarVisibility="Auto"
-                    ItemTemplate="{StaticResource AiActionItemTemplate}"
                     SelectionChanged="OnActionSelectionChanged"
                     DoubleTapped="OnActionDoubleTapped"
                     AutomationProperties.Name="AI 操作列表"
                     AutomationProperties.HelpText="按上下键选择 AI 操作，Enter 或双击执行">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <FontIcon Glyph="&#xE8A7;" FontSize="14" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
                 </ListView>
 
                 <!-- Footer status -->

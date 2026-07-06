@@ -1357,7 +1357,7 @@ async fn http_chat_completions(
                     };
 
                     match result {
-                        Ok(_) => {
+                        Ok((_text, _usage)) => {
                             let finish_data = serde_json::json!({
                                 "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),
                                 "object": "chat.completion.chunk",

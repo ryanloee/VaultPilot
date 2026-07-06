@@ -430,7 +430,8 @@ pub(crate) async fn send_request_with_temperature(
     Err(anyhow!("API request failed after retries"))
 }
 /// Send a streaming request to the AI provider. Calls the async `on_chunk` for
-/// each text delta received. Returns the full accumulated text.
+/// each text delta received. Returns the full accumulated text together with
+/// token usage (if reported by the provider).
 pub async fn send_request_streaming<'a>(
     settings: &AppSettings,
     system: &str,
@@ -438,7 +439,7 @@ pub async fn send_request_streaming<'a>(
     image_paths: &[String],
     temperature: f32,
     mut on_chunk: impl FnMut(&str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
-) -> Result<String> {
+) -> Result<(String, RequestUsage)> {
     let provider = settings.effective_provider();
     if provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
@@ -571,6 +572,7 @@ pub async fn send_request_streaming<'a>(
         }
 
         let mut accumulated = String::new();
+        let mut usage = RequestUsage::default();
         let mut buf = BytesMut::new();
         let mut stream = response.bytes_stream();
 
@@ -608,7 +610,7 @@ pub async fn send_request_streaming<'a>(
                         if accumulated.trim().is_empty() {
                             return Err(anyhow!("API returned an empty response"));
                         }
-                        return Ok(accumulated);
+                        return Ok((accumulated, usage));
                     }
 
                     // Parse SSE data based on provider type
@@ -654,7 +656,7 @@ pub async fn send_request_streaming<'a>(
                                     if accumulated.trim().is_empty() {
                                         return Err(anyhow!("API returned an empty response"));
                                     }
-                                    return Ok(accumulated);
+                                    return Ok((accumulated, usage));
                                 } else if event_type == "error" {
                                     if !parsed["error"].is_object() {
                                         tracing::warn!(
@@ -705,12 +707,26 @@ pub async fn send_request_streaming<'a>(
                             crate::models::ProviderType::OpenAi => {
                                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
                                 {
+                                    // Extract text delta
                                     if let Some(text) =
                                         parsed["choices"][0]["delta"]["content"].as_str()
                                     {
                                         if !text.is_empty() {
                                             accumulated.push_str(text);
                                             on_chunk(text).await;
+                                        }
+                                    }
+                                    // Extract token usage from final/usage chunk
+                                    if let Some(u) = parsed["usage"].as_object() {
+                                        if usage.input_tokens.is_none() {
+                                            usage.input_tokens = u
+                                                .get("prompt_tokens")
+                                                .and_then(|v| v.as_u64().map(|n| n as usize));
+                                        }
+                                        if usage.output_tokens.is_none() {
+                                            usage.output_tokens = u
+                                                .get("completion_tokens")
+                                                .and_then(|v| v.as_u64().map(|n| n as usize));
                                         }
                                     }
                                 }
@@ -728,6 +744,18 @@ pub async fn send_request_streaming<'a>(
                                                 accumulated.push_str(text);
                                                 on_chunk(text).await;
                                             }
+                                        }
+                                    } else if event_type == "message_delta" {
+                                        // Anthropic sends usage in message_delta event
+                                        if usage.input_tokens.is_none() {
+                                            usage.input_tokens = parsed["usage"]["input_tokens"]
+                                                .as_u64()
+                                                .map(|n| n as usize);
+                                        }
+                                        if usage.output_tokens.is_none() {
+                                            usage.output_tokens = parsed["usage"]["output_tokens"]
+                                                .as_u64()
+                                                .map(|n| n as usize);
                                         }
                                     } else if event_type == "error" {
                                         if !parsed["error"].is_object() {
@@ -758,7 +786,7 @@ pub async fn send_request_streaming<'a>(
         if accumulated.trim().is_empty() {
             return Err(anyhow!("API returned an empty response"));
         }
-        return Ok(accumulated);
+        return Ok((accumulated, usage));
     }
 
     Err(anyhow!("Streaming API request failed after retries"))

@@ -208,7 +208,7 @@ export async function executeAiAction(
     };
   } catch (e: any) {
     // AbortError from user cancellation
-    if (e instanceof DOMException && e.name === 'AbortError') {
+    if ((e as Error).name === 'AbortError') {
       return {
         result: '',
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },

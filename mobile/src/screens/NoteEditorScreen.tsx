@@ -209,7 +209,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       }
     } catch (e: any) {
       // AbortError: user left the screen → silent return
-      if (e instanceof DOMException && e.name === 'AbortError') return;
+      if ((e as Error).name === 'AbortError') return;
       if (mountedRef.current) {
         Alert.alert('AI 写作失败', e.message || '请重试');
       }

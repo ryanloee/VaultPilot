@@ -208,7 +208,7 @@ export async function parseSSEStreamWithReconnect(
       await parseSSEStream(streamBody, wrappedOnChunk, options);
       return; // Success
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === "AbortError") throw err;
+      if ((err as Error).name === "AbortError") throw err;
 
       // Don't retry client errors (4xx) — they won't succeed on retry
       const status = (err as { status?: number }).status;

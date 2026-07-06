@@ -24,7 +24,18 @@ export interface ProviderConfig {
 
 // ── Secure provider key storage ───────────────────────────
 // API keys are stored in SecureStore (encrypted), not AsyncStorage (plain text).
+// A fallback copy is kept in AsyncStorage (base64 obfuscated) so keys survive
+// APK updates where the Android keystore binding changes (#2394).
 const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
+const ASYNC_FALLBACK_KEYS_ID = 'vaultpilot_provider_keys_backup';
+
+/** Minimal obfuscation for AsyncStorage fallback — not crypto, just prevents casual reading. */
+function obfuscate(s: string): string {
+  return btoa(unescape(encodeURIComponent(s)));
+}
+function deobfuscate(s: string): string {
+  return decodeURIComponent(escape(atob(s)));
+}
 
 // Write queue to serialize SecureStore writes and prevent race conditions (#2519)
 let keySavePromise: Promise<void> = Promise.resolve();
@@ -40,11 +51,13 @@ async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void
       await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
     } catch (e) {
       console.warn('[SecureStore] Failed to save provider keys:', e);
-      Alert.alert(
-        '存储警告',
-        'API Key 未能安全保存，重启后可能丢失。请检查设备存储空间。',
-        [{ text: '知道了' }],
-      );
+    }
+    // Always write fallback to AsyncStorage (survives APK updates: #2394)
+    try {
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      await AsyncStorage.setItem(ASYNC_FALLBACK_KEYS_ID, obfuscate(JSON.stringify(keys)));
+    } catch (e) {
+      console.warn('[AsyncStorage] Failed to save fallback provider keys:', e);
     }
   });
   keySavePromise = savePromise.then(() => {}, () => {});
@@ -54,13 +67,28 @@ async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void
 async function loadProviderKeysSecure(): Promise<Record<string, string> | null> {
   try {
     const raw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    // Support legacy string[] format for backward compatibility (#1629)
-    if (Array.isArray(parsed)) {
-      return {}; // Return empty — legacy keys cannot be reliably matched
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Support legacy string[] format for backward compatibility (#1629)
+      if (Array.isArray(parsed)) {
+        return {};
+      }
+      return parsed as Record<string, string>;
     }
-    return parsed as Record<string, string>;
+    // SecureStore empty — try AsyncStorage fallback (survives APK updates: #2394)
+    try {
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      const fallback = await AsyncStorage.getItem(ASYNC_FALLBACK_KEYS_ID);
+      if (fallback) {
+        const keys = JSON.parse(deobfuscate(fallback)) as Record<string, string>;
+        // Re-save to SecureStore so next restart reads from primary storage
+        await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+        return keys;
+      }
+    } catch (fb) {
+      console.warn('[Store] AsyncStorage fallback read failed:', fb);
+    }
+    return {};
   } catch (e) {
     console.warn('[Store] Failed to load provider keys from SecureStore:', e);
     return null; // Signal load failure — caller must handle to avoid wiping keys (#1629)
@@ -327,11 +355,19 @@ export const useAppStore = create<AppState>()(
             return;
           }
           if (Object.keys(keys).length === 0) {
-            // SecureStore returned empty and providers were rehydrated with sanitized
-            // (empty) apiKeys, so there are no keys to restore. Still invalidate the
-            // settings cache so post-hydration getSettings() reads fresh store values
-            // instead of a stale pre-hydration cache (#2553, #2102 regression for the
-            // empty-keys case).
+            // SecureStore returned empty after rehydration. Check if providers
+            // existed before — if so, SecureStore was likely wiped by APK update
+            // or device restore. Show a warning instead of silently clearing keys.
+            const providerCount = fresh.providers.length;
+            if (providerCount > 0) {
+              Alert.alert(
+                'API Key 需要重新输入',
+                `APK 更新后安全存储被清空，请重新输入 ${providerCount} 个 API Key。`,
+                [{ text: '知道了' }],
+              );
+            }
+            // Still invalidate settings cache so getSettings() reads fresh store
+            // values instead of stale pre-hydration cache (#2553).
             import('./api/settingsCache').then(m => m.invalidateSettingsCache()).catch(e => {
               console.warn('[Store] failed to invalidate settings cache after rehydration (empty keys):', e);
             });

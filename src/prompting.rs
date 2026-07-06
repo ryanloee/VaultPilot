@@ -1111,6 +1111,8 @@ mod tests {
         // Regression: render_history should NOT escape internally;
         // sanitize_history handles escaping. Double escaping would turn
         // </note> → <//note> → <////note>.
+        // Since #2562/2569, sanitize_history escapes ALL close tags via
+        // escape_xml_close_tags, so </note> becomes <//note>.
         let turns = vec![ConversationTurn {
             role: "user".to_string(),
             text: "see </note> reference".to_string(),
@@ -1122,16 +1124,13 @@ mod tests {
             "render_history should not escape"
         );
 
-        // sanitize_history only escapes </conversation_history>, not </note>
+        // sanitize_history now escapes all close tags, including </note>
         let sanitized = sanitize_history(&rendered);
         assert!(
-            sanitized.contains("</note>"),
-            "legitimate closing tags like </note> are preserved"
+            sanitized.contains("<//note>"),
+            "all close tags are now escaped by sanitize_history"
         );
-        assert!(
-            !sanitized.contains("<//note>"),
-            "</note> is not </conversation_history>, should not be escaped"
-        );
+        assert!(!sanitized.contains("</note>"), "</note> should be escaped");
     }
 
     #[test]
@@ -1155,11 +1154,14 @@ mod tests {
         );
 
         let sanitized = sanitize_note_content(&rendered);
-        // </content> is not </note_content>, so it passes through unchanged
-        assert!(sanitized.contains("</content>"), "</content> preserved");
+        // Since #2562/2569, sanitize_note_content escapes all close tags
         assert!(
-            !sanitized.contains("<//content>"),
-            "</content> is not </note_content>, should not be escaped"
+            sanitized.contains("<//content>"),
+            "</content> is now escaped"
+        );
+        assert!(
+            !sanitized.contains("</content>"),
+            "</content> should be escaped"
         );
     }
 
@@ -1533,10 +1535,11 @@ mod tests {
     fn plan_generation_user_prompt_sanitizes_user_input() {
         // User input is wrapped in <user_input> XML delimiters to prevent
         // prompt injections. The raw content (including angle brackets) is
-        // preserved inside the delimiters.
+        // preserved inside the delimiters, but close tags are escaped to
+        // prevent breakout.
         let prompt = plan_generation_user_prompt("find <script>alert('xss')</script>", &[]);
         assert!(prompt.contains("<user_input>"));
-        assert!(prompt.contains("<script>alert('xss')</script>"));
+        assert!(prompt.contains("<script>alert('xss')<//script>"));
         assert!(prompt.contains("</user_input>"));
     }
 

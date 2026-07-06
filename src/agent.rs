@@ -377,6 +377,16 @@ impl ToolProxy {
 
     /// Check if a path matches the write pattern whitelist.
     /// Patterns are glob-style: "inbox/*", "daily-notes/*", "inbox/*".
+    ///
+    /// # TOCTOU note
+    /// This function uses lexical `strip_prefix` without resolving symlinks.
+    /// It is a coarse pre-check only. The subsequent `confine_path` call
+    /// performs full canonicalization (`normalize_tool_path`) which resolves
+    /// symlinks and enforces the vault boundary. A path that passes this
+    /// function but fails `confine_path` will be denied; a path that fails
+    /// this pre-check but passes `confine_path` is denied unnecessarily but
+    /// never incorrectly allowed. The true security boundary is
+    /// `confine_path`, not this function.
     fn is_path_writable(&self, path: &str) -> bool {
         if self.config.write_patterns.is_empty() {
             return false;

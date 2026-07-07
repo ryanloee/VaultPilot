@@ -18,6 +18,7 @@ pub(crate) mod instant_search;
 pub(crate) mod notes;
 mod pool;
 mod search;
+pub(crate) mod session_export;
 mod settings;
 pub(crate) mod subscriptions;
 
@@ -880,6 +881,8 @@ mod tests {
             compression_threshold: 0.9,
             model_routing: crate::models::ModelRoutingConfig::default(),
             active_prompt_name: None,
+            session_export_enabled: false,
+            session_export_path: None,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

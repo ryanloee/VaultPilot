@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::models::{ChatSession, ChatState};
 
 use super::atomic_write;
+use super::session_export::export_sessions_to_markdown;
 
 /// Maximum number of chat sessions to retain in the persisted state.
 /// Older sessions beyond this limit are pruned during normalization.
@@ -64,6 +65,16 @@ pub fn save_chat_state_with_context(
     let content = serde_json::to_string_pretty(&normalized)?;
     atomic_write(&paths.chat_state_path, content.as_bytes())
         .with_context(|| format!("failed to write {}", paths.chat_state_path.display()))?;
+
+    // After writing chat state, also export sessions to markdown files if
+    // the feature is enabled in settings (#1944).
+    if let Err(e) = export_sessions_to_markdown(context) {
+        tracing::warn!(
+            error = %e,
+            "failed to export sessions to markdown (session_export feature)"
+        );
+    }
+
     Ok(normalized)
 }
 

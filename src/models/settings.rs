@@ -93,6 +93,18 @@ pub struct AppSettings {
     /// When set, this prompt's content is prepended to AI system prompts (#1929).
     #[serde(default)]
     pub active_prompt_name: Option<String>,
+    /// When true, session history is automatically exported as markdown files
+    /// into the vault after each save (#1944).
+    #[serde(default = "default_session_export_enabled")]
+    pub session_export_enabled: bool,
+    /// Custom path for session export files (relative to vault dir).
+    /// Default: `.vaultpilot/sessions/`
+    #[serde(default)]
+    pub session_export_path: Option<String>,
+}
+
+fn default_session_export_enabled() -> bool {
+    false
 }
 
 impl Default for AppSettings {
@@ -114,6 +126,8 @@ impl Default for AppSettings {
             compression_threshold: default_compression_threshold(),
             model_routing: ModelRoutingConfig::default(),
             active_prompt_name: None,
+            session_export_enabled: false,
+            session_export_path: None,
         }
     }
 }
@@ -250,6 +264,8 @@ mod tests {
             compression_threshold: 0.75,
             model_routing: ModelRoutingConfig::default(),
             active_prompt_name: None,
+            session_export_enabled: false,
+            session_export_path: None,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

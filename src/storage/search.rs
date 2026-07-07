@@ -233,9 +233,7 @@ pub fn deep_search_notes(context: &StorageContext, query: SearchQuery) -> Result
         .skip(effective_offset)
         .take(limit)
         .collect::<Vec<_>>();
-    let total = notes
-        .len()
-        .max(combined_len.saturating_sub(effective_offset));
+    let total = combined_len;
 
     Ok(SearchResult { notes, total })
 }

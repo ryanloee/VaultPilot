@@ -201,16 +201,9 @@ pub fn update_project_with_context(
 
     let json =
         serde_json::to_string_pretty(&project).context("failed to serialize updated project")?;
-    let tmp = dir.join(format!("{}.tmp", project_id));
-    fs::write(&tmp, &json)
-        .with_context(|| format!("failed to write updated project: {}", tmp.display()))?;
-    fs::rename(&tmp, &path).with_context(|| {
-        format!(
-            "failed to rename updated project: {} -> {}",
-            tmp.display(),
-            path.display()
-        )
-    })?;
+    // Use atomic_write which handles temp file naming with UUID suffixes and
+    // proper permissions, avoiding unsanitized project_id in temp path (#2615)
+    super::atomic_write(&path, json.as_bytes())?;
 
     Ok(Some(project))
 }

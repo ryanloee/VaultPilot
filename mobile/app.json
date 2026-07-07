@@ -2,7 +2,7 @@
   "expo": {
     "name": "VaultPilot",
     "slug": "vaultpilot",
-    "version": "0.5.0",
+    "version": "0.5.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.vaultpilot.mobile",
-      "versionCode": 500,
+      "versionCode": 502,
       "permissions": [],
       "adaptiveIcon": {
         "backgroundColor": "#1E3A5F",

@@ -541,7 +541,7 @@ mod tests {
         let settings = AppSettings {
             vault_dir: temp.join("vault").to_string_lossy().to_string(),
             provider: ProviderConfig {
-                api_key: "sk-real-key-12345".to_string(), // real, unmasked
+                api_key: "sk-real-key-for-test".to_string(), // real, unmasked
                 ..ProviderConfig::default()
             },
             ..AppSettings::default()

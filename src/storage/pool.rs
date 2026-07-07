@@ -153,7 +153,7 @@ impl StorageContext {
 
 /// Get a database connection from the connection pool.
 /// Returns a `PooledConnection` that is automatically returned to the pool on drop.
-pub(super) fn open_connection(context: &StorageContext) -> Result<(PooledConnection, AppSettings)> {
+pub(crate) fn open_connection(context: &StorageContext) -> Result<(PooledConnection, AppSettings)> {
     let settings = super::settings::load_settings_with_context(context)?;
     let conn = context
         .pool

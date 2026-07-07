@@ -529,7 +529,7 @@ fn count_all_notes(connection: &Connection) -> Result<usize> {
 
 /// List all note metas without any LIMIT clause. Used by export functions
 /// that need to process every note in the vault.
-pub(super) fn list_all_note_metas(connection: &Connection) -> Result<Vec<NoteMeta>> {
+pub(crate) fn list_all_note_metas(connection: &Connection) -> Result<Vec<NoteMeta>> {
     let mut statement = connection.prepare(
         "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
          FROM notes

@@ -5,6 +5,7 @@ pub mod compress;
 pub mod deep_research;
 pub mod event_bus;
 pub mod scheduled_research;
+pub mod serendipity;
 pub mod table;
 pub mod write;
 
@@ -26,3 +27,6 @@ pub use scheduled_research::{
 };
 pub use table::table_with_ai_with_context;
 pub use write::{revert_write, write_with_ai_with_context, WriteBackup};
+
+// Re-export serendipity public API (#1943)
+pub use serendipity::{generate_serendipity, SerendipityItem, SerendipityResult};

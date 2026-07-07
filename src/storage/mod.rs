@@ -16,8 +16,8 @@ mod chat;
 pub(crate) mod collections;
 pub(crate) mod instant_search;
 pub(crate) mod notes;
-mod pool;
-mod search;
+pub(crate) mod pool;
+pub(crate) mod search;
 pub(crate) mod session_export;
 mod settings;
 pub(crate) mod subscriptions;
@@ -50,6 +50,9 @@ pub use notes::{
     search_candidate_notes_async, search_candidate_notes_with_context, vault_export_async,
     vault_export_with_context, NoteNotFound,
 };
+// Re-export list_all_note_metas from search so orchestration modules can
+// iterate the full vault without access to private modules.
+pub(crate) use search::list_all_note_metas;
 // Re-export collections public API so callers see no difference.
 pub use collections::{
     add_note_to_collection_with_context, count_notes_in_collection_with_context,

@@ -30,9 +30,9 @@ use vaultpilot_lib::storage::{
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
-    run_all_due_subscriptions, run_deep_research, run_single_subscription, sanitize_error,
-    table_with_ai_with_context, write_with_ai_with_context, AutoOrganizer, DeepResearchEvent,
-    DeepResearchTier,
+    generate_serendipity, run_all_due_subscriptions, run_deep_research, run_single_subscription,
+    sanitize_error, table_with_ai_with_context, write_with_ai_with_context, AutoOrganizer,
+    DeepResearchEvent, DeepResearchTier,
 };
 
 use chrono::Utc;
@@ -330,6 +330,25 @@ enum Commands {
         /// Weekly summary format (concise)
         #[arg(long)]
         weekly: bool,
+    },
+
+    /// Serendipity — discover forgotten notes (#1943)
+    ///
+    /// Surfaces 1-3 old notes you may have forgotten about, scored against
+    /// your recent activity for relevance.
+    ///
+    /// Examples:
+    ///   vp serendipity                          — show 3 suggestions
+    ///   vp serendipity --count 5                — show 5 suggestions
+    ///   vp serendipity --json                   — JSON output
+    Serendipity {
+        /// Number of suggestions (1-10, default 3)
+        #[arg(long, default_value_t = 3)]
+        count: usize,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Manage vault prompts — system prompt templates stored as vault notes (#1929)
@@ -1141,6 +1160,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Voice { action } => handle_voice(context, action).await,
         Commands::Health { json, weekly } => {
             tokio::task::block_in_place(|| handle_health(context, *json, *weekly))
+        }
+        Commands::Serendipity { count, json } => {
+            tokio::task::block_in_place(|| handle_serendipity(context, *count, *json))
         }
         Commands::Prompt { action } => {
             tokio::task::block_in_place(|| handle_prompt(context, action))
@@ -2692,6 +2714,49 @@ fn handle_health(context: &StorageContext, json: bool, weekly: bool) -> Result<V
         eprintln!();
         to_json(&report)
     }
+}
+
+/// Generate serendipity — forgotten note suggestions (#1943).
+fn handle_serendipity(context: &StorageContext, count: usize, json: bool) -> Result<Value> {
+    let result = generate_serendipity(context, Some(count))?;
+
+    if json {
+        return to_json(&result);
+    }
+
+    if result.items.is_empty() {
+        eprintln!("💡 No serendipity suggestions right now.");
+        eprintln!("   Try again after you've written more notes or revisited old ones.");
+        return to_json(&result);
+    }
+
+    eprintln!("💡 Serendipity — forgotten notes you might enjoy");
+    eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    eprintln!(
+        "  Considered {} stale notes × {} recent notes for signals",
+        result.stale_count, result.recent_count
+    );
+    eprintln!();
+
+    for (i, item) in result.items.iter().enumerate() {
+        eprintln!("  {}. {}", i + 1, item.note.title);
+        eprintln!("     {}", item.reason);
+        if !item.note.tags.is_empty() {
+            eprintln!("     tags: {}", item.note.tags.join(", "));
+        }
+        eprintln!(
+            "     last updated: {}",
+            if item.note.updated_at.is_empty() {
+                "unknown".to_string()
+            } else {
+                item.note.updated_at[..10].to_string()
+            }
+        );
+        eprintln!();
+    }
+
+    // Return JSON on stdout for programmatic use
+    to_json(&result)
 }
 
 /// Return an emoji based on the density score.

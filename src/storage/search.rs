@@ -71,6 +71,16 @@ pub fn search_notes_with_context(
         let (notes, used_like_fallback) = if fts_results.is_empty() {
             // Fuzzy/approximate fallback: split query into words and use LIKE
             let like_results = query_like_note_metas(&connection, &query.text, fetch_limit)?;
+            if like_results.is_empty() {
+                // #1903: zero-index instant search fallback. When both FTS5 and
+                // the LIKE fallback return nothing (e.g. the index has not been
+                // built yet, or the query terms simply are not in the indexed
+                // corpus), scan the vault directory directly and match against
+                // the raw note files. The instant search owns filtering,
+                // ranking, and pagination, so it returns a complete result and
+                // we short-circuit the rest of this function.
+                return super::instant_search::instant_search_notes_with_context(context, query);
+            }
             (like_results, true)
         } else {
             (fts_results, false)
@@ -626,7 +636,7 @@ fn parse_dt(s: &str) -> Option<DateTime<Utc>> {
 /// Parses RFC 3339 timestamps into `DateTime<FixedOffset>` for proper
 /// timezone-aware comparison, avoiding incorrect string-comparison results
 /// when the inputs mix different timezone offset formats (e.g. `Z` vs `+00:00`).
-fn filter_by_date_range(
+pub(super) fn filter_by_date_range(
     mut notes: Vec<NoteMeta>,
     created_after: Option<&str>,
     created_before: Option<&str>,
@@ -1322,7 +1332,7 @@ fn attachment_text_relevance_score(query_text: &str, attachments: &[AttachmentEn
     score
 }
 
-fn document_relevance_score(query: &str, doc: &NoteDocument) -> i64 {
+pub(super) fn document_relevance_score(query: &str, doc: &NoteDocument) -> i64 {
     let normalized_query = normalize_query_for_search(query);
     if normalized_query.is_empty() {
         return 0;
@@ -1405,7 +1415,7 @@ fn document_relevance_score(query: &str, doc: &NoteDocument) -> i64 {
     score
 }
 
-fn normalize_search_text(text: &str) -> String {
+pub(super) fn normalize_search_text(text: &str) -> String {
     text.to_lowercase()
         .chars()
         .map(|ch| {
@@ -1418,7 +1428,7 @@ fn normalize_search_text(text: &str) -> String {
         .collect::<String>()
 }
 
-fn normalize_query_for_search(text: &str) -> String {
+pub(super) fn normalize_query_for_search(text: &str) -> String {
     let mut normalized = normalize_search_text(text);
     for noise in [
         "告诉我",
@@ -1448,7 +1458,7 @@ fn normalize_query_for_search(text: &str) -> String {
     normalized.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn extract_search_terms(text: &str) -> Vec<String> {
+pub(super) fn extract_search_terms(text: &str) -> Vec<String> {
     let normalized = normalize_query_for_search(text);
     let mut terms = Vec::new();
     let mut seen = HashSet::new();
@@ -1554,7 +1564,7 @@ fn expand_term_aliases(term: &str) -> Vec<String> {
     crate::search_rules::SearchRules::global().expand_term_aliases(term)
 }
 
-fn collect_document_terms(doc: &NoteDocument) -> Vec<String> {
+pub(super) fn collect_document_terms(doc: &NoteDocument) -> Vec<String> {
     extract_search_terms(&format!(
         "{}\n{}\n{}\n{}\n{}",
         doc.meta.title,
@@ -1616,7 +1626,7 @@ fn is_cjk(ch: char) -> bool {
     )
 }
 
-fn has_all_terms(source: &[String], expected: &[String]) -> bool {
+pub(super) fn has_all_terms(source: &[String], expected: &[String]) -> bool {
     expected.iter().all(|needle| {
         source
             .iter()

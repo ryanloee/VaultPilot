@@ -3,6 +3,45 @@ use serde::{Deserialize, Serialize};
 use super::provider::ProviderConfig;
 use crate::models::ResponseStyle;
 
+/// Configuration for intelligent model routing (#1842).
+///
+/// When enabled, VaultPilot inspects each request and routes it to a
+/// different model depending on its task type (simple / complex / code),
+/// so cheap models handle trivial work and stronger models handle hard work.
+/// Disabled by default; users opt in via Settings.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRoutingConfig {
+    /// Master switch. Disabled by default — the active provider's model is
+    /// used for every request when this is `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Model used for simple tasks (short Q&A, translation, summaries).
+    /// When `None`, falls back to the active provider's configured model.
+    #[serde(default)]
+    pub simple_task_model: Option<String>,
+    /// Model used for complex tasks (long-form analysis, reasoning, multi-step).
+    /// When `None`, falls back to the active provider's configured model.
+    #[serde(default)]
+    pub complex_task_model: Option<String>,
+    /// Model used for code tasks (contains code or programming keywords).
+    /// When `None`, falls back to the active provider's configured model.
+    #[serde(default)]
+    pub code_task_model: Option<String>,
+}
+
+impl ModelRoutingConfig {
+    /// Returns `true` when routing is both enabled and has at least one
+    /// per-task model configured. A config that is `enabled` but has no
+    /// model overrides is a no-op (everything routes to the default model).
+    pub fn is_active(&self) -> bool {
+        self.enabled
+            && (self.simple_task_model.is_some()
+                || self.complex_task_model.is_some()
+                || self.code_task_model.is_some())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -35,6 +74,21 @@ pub struct AppSettings {
     /// Response style for controlling AI answer length/depth (#1965).
     #[serde(default)]
     pub response_style: ResponseStyle,
+    /// Enable automatic context compression (#1928). When enabled, earlier
+    /// conversation history is compressed into a summary once token usage
+    /// exceeds `compression_threshold` of the model's context window, so that
+    /// long conversations are not silently truncated. Disabled by default;
+    /// users opt in via Settings.
+    #[serde(default)]
+    pub context_compression: bool,
+    /// Fraction (0.0–1.0) of the model context window at which automatic
+    /// compression triggers (#1928). Default 0.8 (compress at 80% capacity).
+    /// Values outside [0.1, 1.0] are clamped at runtime.
+    #[serde(default = "default_compression_threshold")]
+    pub compression_threshold: f32,
+    /// Intelligent model routing config (#1842). Defaults to disabled.
+    #[serde(default)]
+    pub model_routing: ModelRoutingConfig,
 }
 
 impl Default for AppSettings {
@@ -52,6 +106,9 @@ impl Default for AppSettings {
             auto_wake_end_time: default_auto_wake_end_time(),
             auto_wake_prompt: default_auto_wake_prompt(),
             response_style: ResponseStyle::default(),
+            context_compression: false,
+            compression_threshold: default_compression_threshold(),
+            model_routing: ModelRoutingConfig::default(),
         }
     }
 }
@@ -149,6 +206,12 @@ pub fn default_auto_wake_prompt() -> String {
     String::new()
 }
 
+/// Default compression threshold: compress once token usage reaches 80% of the
+/// model's context window (#1928).
+pub fn default_compression_threshold() -> f32 {
+    0.8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +241,9 @@ mod tests {
             auto_wake_end_time: "23:00".to_string(),
             auto_wake_prompt: String::new(),
             response_style: ResponseStyle::Standard,
+            context_compression: true,
+            compression_threshold: 0.75,
+            model_routing: ModelRoutingConfig::default(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -192,12 +258,22 @@ mod tests {
         assert!(json.contains("\"autoWakeModel\""));
         assert!(json.contains("\"autoWakeStartTime\""));
         assert!(json.contains("\"autoWakeEndTime\""));
+        // #1928: compression settings serialize as camelCase.
+        assert!(json.contains("\"contextCompression\""));
+        assert!(json.contains("\"compressionThreshold\""));
+        // #1842: model routing config serializes as camelCase.
+        assert!(json.contains("\"modelRouting\""));
+        assert!(json.contains("\"simpleTaskModel\""));
+        assert!(json.contains("\"complexTaskModel\""));
+        assert!(json.contains("\"codeTaskModel\""));
 
         let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.vault_dir, settings.vault_dir);
         assert_eq!(parsed.provider.api_key, settings.provider.api_key);
         assert_eq!(parsed.provider.context_window_tokens, Some(128_000));
         assert_eq!(parsed.provider.max_output_tokens, Some(16384));
+        assert!(parsed.context_compression);
+        assert_eq!(parsed.compression_threshold, 0.75);
     }
 
     #[test]
@@ -218,6 +294,124 @@ mod tests {
         assert_eq!(default_model(), "deepseek-v4-flash-free");
         assert_eq!(default_timeout_ms(), 60_000);
         assert!(default_auto_check_updates());
+        // #1928: compression is off by default; threshold defaults to 0.8.
+        assert!(!settings.context_compression);
+        assert_eq!(settings.compression_threshold, 0.8);
+        assert_eq!(default_compression_threshold(), 0.8);
+    }
+
+    #[test]
+    fn compression_settings_round_trip_disabled() {
+        // Default (disabled) settings must round-trip and preserve the toggle.
+        let settings = AppSettings::default();
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert!(!parsed.context_compression);
+        assert_eq!(parsed.compression_threshold, 0.8);
+    }
+
+    #[test]
+    fn compression_settings_backwards_compatible_when_absent() {
+        // A legacy settings JSON that omits the new fields entirely must
+        // deserialize to safe defaults (compression disabled) (#1928).
+        let legacy = serde_json::json!({
+            "vaultDir": "/tmp/vault",
+            "provider": {
+                "apiKey": "k",
+                "baseUrl": "https://api.example.com",
+                "model": "m",
+                "requestTimeoutMs": 60000,
+            },
+        });
+        let parsed: AppSettings =
+            serde_json::from_value(legacy).expect("legacy JSON must deserialize");
+        assert!(!parsed.context_compression);
+        assert_eq!(parsed.compression_threshold, 0.8);
+    }
+
+    // ── #1842: model routing ──
+
+    #[test]
+    fn model_routing_defaults_to_disabled() {
+        let settings = AppSettings::default();
+        assert!(!settings.model_routing.enabled);
+        assert!(!settings.model_routing.is_active());
+        assert!(settings.model_routing.simple_task_model.is_none());
+        assert!(settings.model_routing.complex_task_model.is_none());
+        assert!(settings.model_routing.code_task_model.is_none());
+    }
+
+    #[test]
+    fn model_routing_backwards_compatible_when_absent() {
+        // A legacy settings JSON that omits modelRouting entirely must
+        // deserialize to a disabled, empty config (#1842).
+        let legacy = serde_json::json!({
+            "vaultDir": "/tmp/vault",
+            "provider": {
+                "apiKey": "k",
+                "baseUrl": "https://api.example.com",
+                "model": "m",
+                "requestTimeoutMs": 60000,
+            },
+        });
+        let parsed: AppSettings =
+            serde_json::from_value(legacy).expect("legacy JSON must deserialize");
+        assert!(!parsed.model_routing.enabled);
+        assert!(!parsed.model_routing.is_active());
+    }
+
+    #[test]
+    fn model_routing_round_trips_enabled_with_models() {
+        let settings = AppSettings {
+            model_routing: ModelRoutingConfig {
+                enabled: true,
+                simple_task_model: Some("haiku".into()),
+                complex_task_model: Some("sonnet".into()),
+                code_task_model: Some("coder".into()),
+            },
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert!(parsed.model_routing.enabled);
+        assert!(parsed.model_routing.is_active());
+        assert_eq!(
+            parsed.model_routing.simple_task_model.as_deref(),
+            Some("haiku")
+        );
+        assert_eq!(
+            parsed.model_routing.complex_task_model.as_deref(),
+            Some("sonnet")
+        );
+        assert_eq!(
+            parsed.model_routing.code_task_model.as_deref(),
+            Some("coder")
+        );
+    }
+
+    #[test]
+    fn model_routing_accepts_camel_case_json() {
+        // Verify the canonical camelCase JSON shape produced/consumed by the UI.
+        let json = serde_json::json!({
+            "modelRouting": {
+                "enabled": true,
+                "simpleTaskModel": "cheap",
+                "complexTaskModel": null,
+                "codeTaskModel": "coder",
+            }
+        });
+        let parsed: AppSettings =
+            serde_json::from_value(json).expect("camelCase JSON must deserialize");
+        assert!(parsed.model_routing.enabled);
+        assert_eq!(
+            parsed.model_routing.simple_task_model.as_deref(),
+            Some("cheap")
+        );
+        assert!(parsed.model_routing.complex_task_model.is_none());
+        assert_eq!(
+            parsed.model_routing.code_task_model.as_deref(),
+            Some("coder")
+        );
     }
 
     #[test]

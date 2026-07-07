@@ -19,7 +19,7 @@ use url::Url;
 
 use super::context::{is_openai_reasoning_model, resolve_max_output_tokens};
 use super::parsing::{AnthropicResponse, OpenAiResponse};
-use crate::models::AppSettings;
+use crate::models::{AppSettings, ProviderConfig};
 
 pub(super) const MAX_RESPONSE_SIZE: usize = 50 * 1024 * 1024;
 
@@ -207,7 +207,7 @@ pub(super) async fn send_request(
     send_request_with_temperature(settings, system, prompt, image_paths, 0.2).await
 }
 
-#[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.effective_provider().model, temperature))]
+#[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.effective_provider().model, temperature, routed))]
 pub(crate) async fn send_request_with_temperature(
     settings: &AppSettings,
     system: &str,
@@ -215,7 +215,35 @@ pub(crate) async fn send_request_with_temperature(
     image_paths: &[String],
     temperature: f32,
 ) -> Result<ModelResponse> {
-    let provider = settings.effective_provider();
+    let base_provider = settings.effective_provider();
+
+    // ── #1842: intelligent model routing ──
+    // When enabled and a per-task model override applies, route this request
+    // to that model (keeping the provider's API key, base URL, etc.).
+    let routing =
+        super::model_routing::route(&settings.model_routing, base_provider, system, prompt);
+    let routed_provider: ProviderConfig;
+    let provider: &ProviderConfig = match &routing {
+        Some(decision) => {
+            tracing::Span::current().record("model", &decision.model);
+            tracing::Span::current().record("routed", true);
+            info!(
+                from_model = %base_provider.model,
+                routed_model = %decision.model,
+                task_type = decision.task_type.as_str(),
+                reason = decision.reason,
+                "model routing applied"
+            );
+            let mut p = base_provider.clone();
+            p.model = decision.model.clone();
+            routed_provider = p;
+            &routed_provider
+        }
+        None => {
+            tracing::Span::current().record("routed", false);
+            base_provider
+        }
+    };
     if provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
     }
@@ -440,7 +468,27 @@ pub async fn send_request_streaming<'a>(
     temperature: f32,
     mut on_chunk: impl FnMut(&str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
 ) -> Result<(String, RequestUsage)> {
-    let provider = settings.effective_provider();
+    // ── #1842: intelligent model routing ──
+    let base_provider = settings.effective_provider();
+    let routing =
+        super::model_routing::route(&settings.model_routing, base_provider, system, prompt);
+    let routed_provider: ProviderConfig;
+    let provider: &ProviderConfig = match &routing {
+        Some(decision) => {
+            info!(
+                from_model = %base_provider.model,
+                routed_model = %decision.model,
+                task_type = decision.task_type.as_str(),
+                reason = decision.reason,
+                "model routing applied (streaming)"
+            );
+            let mut p = base_provider.clone();
+            p.model = decision.model.clone();
+            routed_provider = p;
+            &routed_provider
+        }
+        None => base_provider,
+    };
     if provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
     }

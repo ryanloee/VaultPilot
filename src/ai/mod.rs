@@ -2,6 +2,7 @@ pub mod actions;
 pub mod audio_overview;
 pub mod client;
 pub mod context;
+pub mod model_routing;
 pub mod parsing;
 pub mod transcription;
 pub mod tts;

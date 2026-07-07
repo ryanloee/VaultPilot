@@ -17,7 +17,13 @@ use crate::ai;
 use super::ask::ask_with_ai_with_context;
 use super::compress::compress_chat_history_with_context;
 
-const CONTEXT_COMPRESSION_THRESHOLD: f64 = 0.95;
+/// Default compression threshold (80% of the model context window) used when
+/// automatic compression is enabled but the configured value is unusable (#1928).
+const DEFAULT_COMPRESSION_THRESHOLD: f64 = 0.8;
+/// Clamp bounds for the user-configurable threshold. Values below 10% would
+/// compress almost every turn; values above 100% are meaningless.
+const MIN_COMPRESSION_THRESHOLD: f64 = 0.1;
+const MAX_COMPRESSION_THRESHOLD: f64 = 1.0;
 const RECENT_TURNS_AFTER_COMPRESSION: usize = 8;
 const IMAGE_ATTACHMENT_TOKEN_ESTIMATE: u64 = 1_200;
 const IMAGE_ONLY_PROMPT: &str = "请结合我发送的图片理解并回复。";
@@ -444,6 +450,28 @@ fn current_session_history(
     Ok(history)
 }
 
+/// Resolve the effective compression threshold from user settings (#1928).
+///
+/// Returns `None` when automatic compression is disabled (the default), which
+/// causes [`compress_chat_session_if_needed`] to skip compression entirely.
+/// Otherwise returns the user's threshold clamped to
+/// `[MIN_COMPRESSION_THRESHOLD, MAX_COMPRESSION_THRESHOLD]`, falling back to
+/// [`DEFAULT_COMPRESSION_THRESHOLD`] for non-finite or otherwise unusable
+/// configured values.
+///
+/// Extracted as a pure function so the decision logic is unit-testable without
+/// a storage context or live AI call.
+fn effective_compression_threshold(settings: &AppSettings) -> Option<f64> {
+    if !settings.context_compression {
+        return None;
+    }
+    let raw = f64::from(settings.compression_threshold);
+    if !raw.is_finite() {
+        return Some(DEFAULT_COMPRESSION_THRESHOLD);
+    }
+    Some(raw.clamp(MIN_COMPRESSION_THRESHOLD, MAX_COMPRESSION_THRESHOLD))
+}
+
 async fn compress_chat_session_if_needed(
     context: &StorageContext,
     settings: &AppSettings,
@@ -453,6 +481,11 @@ async fn compress_chat_session_if_needed(
     pending_attachments: &[ChatAttachment],
     emit_status: &mut impl FnMut(&str, String),
 ) -> Result<(), anyhow::Error> {
+    // #1928: automatic context compression is opt-in. When disabled (the
+    // default), long conversations are passed through unchanged.
+    let Some(threshold) = effective_compression_threshold(settings) else {
+        return Ok(());
+    };
     let session = find_chat_session(state, session_id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("chat session not found: {}", session_id))?;
@@ -463,7 +496,7 @@ async fn compress_chat_session_if_needed(
 
     let projected_tokens =
         estimate_session_tokens(&session) + estimate_turn_tokens(pending_text, pending_attachments);
-    if projected_tokens < ((context_window_tokens as f64) * CONTEXT_COMPRESSION_THRESHOLD) as u64 {
+    if projected_tokens < ((context_window_tokens as f64) * threshold) as u64 {
         return Ok(());
     }
 
@@ -1393,5 +1426,107 @@ mod tests {
         let tokens = estimate_turn_tokens("你好世界", &attachments);
         // 4 CJK chars = 8 tokens, + 1200
         assert_eq!(tokens, 8 + IMAGE_ATTACHMENT_TOKEN_ESTIMATE);
+    }
+
+    // ── effective_compression_threshold (#1928) ────────────────────
+
+    fn make_settings_for_compression(enabled: bool, threshold: f32) -> AppSettings {
+        AppSettings {
+            context_compression: enabled,
+            compression_threshold: threshold,
+            ..AppSettings::default()
+        }
+    }
+
+    #[test]
+    fn compression_threshold_disabled_returns_none() {
+        // Default: compression off → never compress.
+        let settings = AppSettings::default();
+        assert_eq!(effective_compression_threshold(&settings), None);
+    }
+
+    #[test]
+    fn compression_threshold_disabled_even_when_threshold_set() {
+        // Toggle off wins regardless of the threshold value.
+        let settings = make_settings_for_compression(false, 0.5);
+        assert_eq!(effective_compression_threshold(&settings), None);
+    }
+
+    #[test]
+    fn compression_threshold_enabled_uses_configured_value() {
+        let settings = make_settings_for_compression(true, 0.8);
+        // f32 → f64 promotion is not exact; compare against the same promotion.
+        assert_eq!(
+            effective_compression_threshold(&settings),
+            Some(f64::from(0.8_f32))
+        );
+    }
+
+    #[test]
+    fn compression_threshold_clamps_below_minimum() {
+        // A value below 10% would compress nearly every turn; clamp it.
+        let settings = make_settings_for_compression(true, 0.01);
+        assert_eq!(
+            effective_compression_threshold(&settings),
+            Some(MIN_COMPRESSION_THRESHOLD)
+        );
+    }
+
+    #[test]
+    fn compression_threshold_clamps_above_maximum() {
+        let settings = make_settings_for_compression(true, 2.5);
+        assert_eq!(
+            effective_compression_threshold(&settings),
+            Some(MAX_COMPRESSION_THRESHOLD)
+        );
+    }
+
+    #[test]
+    fn compression_threshold_negative_clamps_to_minimum() {
+        let settings = make_settings_for_compression(true, -0.5);
+        assert_eq!(
+            effective_compression_threshold(&settings),
+            Some(MIN_COMPRESSION_THRESHOLD)
+        );
+    }
+
+    #[test]
+    fn compression_threshold_at_bounds_preserved() {
+        let min = make_settings_for_compression(true, MIN_COMPRESSION_THRESHOLD as f32);
+        // f32 → f64 promotion of 0.1 is not exact; compare via the same path.
+        assert_eq!(
+            effective_compression_threshold(&min),
+            Some(f64::from(MIN_COMPRESSION_THRESHOLD as f32))
+        );
+        let max = make_settings_for_compression(true, MAX_COMPRESSION_THRESHOLD as f32);
+        assert_eq!(
+            effective_compression_threshold(&max),
+            Some(MAX_COMPRESSION_THRESHOLD)
+        );
+    }
+
+    #[test]
+    fn compression_threshold_non_finite_falls_back_to_default() {
+        // NaN / infinity must not silently disable or runaway-compress.
+        let settings = make_settings_for_compression(true, f32::NAN);
+        assert_eq!(
+            effective_compression_threshold(&settings),
+            Some(DEFAULT_COMPRESSION_THRESHOLD)
+        );
+        let settings = make_settings_for_compression(true, f32::INFINITY);
+        assert_eq!(
+            effective_compression_threshold(&settings),
+            Some(DEFAULT_COMPRESSION_THRESHOLD)
+        );
+    }
+
+    #[test]
+    fn compression_threshold_zero_clamps_to_minimum() {
+        // 0.0 is finite, so it is clamped (not treated as "unset").
+        let settings = make_settings_for_compression(true, 0.0);
+        assert_eq!(
+            effective_compression_threshold(&settings),
+            Some(MIN_COMPRESSION_THRESHOLD)
+        );
     }
 }

@@ -14,6 +14,7 @@ use crate::models::{
 mod backup;
 mod chat;
 pub(crate) mod collections;
+pub(crate) mod instant_search;
 pub(crate) mod notes;
 mod pool;
 mod search;
@@ -31,6 +32,10 @@ pub(crate) use settings::is_masked_key;
 pub use settings::{load_settings_with_context, save_settings_with_context};
 // Re-export search public API so callers see no difference.
 pub use search::{deep_search_notes, search_notes_with_context, typeahead_search};
+// Re-export zero-index instant search public API (#1903).
+pub use instant_search::{
+    instant_search_documents_with_context, instant_search_notes_with_context,
+};
 // Re-export notes public API so callers see no difference.
 pub use notes::{
     delete_note_async, delete_note_with_context, export_all_notes_async,
@@ -871,6 +876,9 @@ mod tests {
             auto_wake_end_time: "23:00".to_string(),
             auto_wake_prompt: String::new(),
             response_style: ResponseStyle::Standard,
+            context_compression: true,
+            compression_threshold: 0.9,
+            model_routing: crate::models::ModelRoutingConfig::default(),
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");
@@ -879,6 +887,9 @@ mod tests {
         assert_eq!(loaded.provider.model, "custom-model");
         assert_eq!(loaded.provider.request_timeout_ms, 99_000);
         assert_eq!(loaded.provider.context_window_tokens, Some(200_000));
+        // #1928: compression settings persist across save/load.
+        assert!(loaded.context_compression);
+        assert_eq!(loaded.compression_threshold, 0.9);
     }
 
     #[test]

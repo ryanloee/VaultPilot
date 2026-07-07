@@ -110,7 +110,7 @@ jobs:
 
       - name: Upload validation diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-validate-logs
           path: artifacts/logs
@@ -204,7 +204,7 @@ jobs:
       # WinAppSDK is installed.
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-package-${{ matrix.platform }}
           path: artifacts/velopack/packages/${{ matrix.channel }}
@@ -250,7 +250,7 @@ jobs:
           ./scripts/smoke-test-linux-cli.sh artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-package-x64
           path: |

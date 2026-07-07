@@ -213,7 +213,7 @@ jobs:
       - run: cargo build --release
 
       - name: Upload Linux CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-cli
           path: target/release/vaultpilot-cli

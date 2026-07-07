@@ -2857,7 +2857,12 @@ fn handle_serendipity(context: &StorageContext, count: usize, json: bool) -> Res
             if item.note.updated_at.is_empty() {
                 "unknown".to_string()
             } else {
-                item.note.updated_at[..10].to_string()
+                // Use get(..10) to avoid panic on short/partial timestamps (#2614)
+                item.note
+                    .updated_at
+                    .get(..10)
+                    .unwrap_or("unknown")
+                    .to_string()
             }
         );
         eprintln!();

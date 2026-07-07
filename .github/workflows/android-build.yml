@@ -26,12 +26,15 @@ jobs:
 
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
+        env:
+          CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
-          git fetch upstream ${{ github.base_ref }}
-          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream $CLONE_URL
+          git fetch upstream $BASE_REF
+          git merge --no-edit upstream/$BASE_REF || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - uses: actions/setup-node@v6
         with:
@@ -60,22 +63,48 @@ jobs:
 
       - name: Set version from tag
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"  # e.g. v0.4.9
-          VERSION="${TAG#v}"             # 0.4.9
+          TAG="$REF_NAME"  # e.g. v0.4.9 or v0.5.0-rc1
+          VERSION="${TAG#v}"  # 0.4.9 or 0.5.0-rc1
+
+          # Split pre-release suffix for versionCode computation (#2536)
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE="${VERSION#*-}"
+            VERSION_BASE="${VERSION%%-*}"
+          else
+            PRERELEASE=""
+            VERSION_BASE="$VERSION"
+          fi
+
           # versionCode: major*10000 + minor*100 + patch (monotonically increasing)
           # 0.3.55 -> 3055, 0.4.9 -> 409 — always increasing
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_BASE"
           VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+
+          # For pre-release tags, offset versionCode to avoid collision with release (#2536)
+          if [ -n "$PRERELEASE" ]; then
+            # Extract numeric suffix (e.g., rc1 -> 1)
+            PR_NUM="${PRERELEASE##*[!0-9]}"
+            [[ "$PR_NUM" =~ ^[0-9]+$ ]] || PR_NUM=0
+            # Multiply and add pre-release number to ensure unique, monotonic versionCode
+            VERSION_CODE=$((VERSION_CODE * 100 + PR_NUM))
+          fi
+
           echo "VERSION_NAME=$VERSION VERSION_CODE=$VERSION_CODE"
-          # Update app.json in-place
+          # Update app.json in-place — pass values as args to avoid shell injection (#2478)
           python3 -c "
-          import json
-          with open('app.json') as f: cfg = json.load(f)
-          cfg['expo']['version'] = '$VERSION'
-          cfg['expo']['android']['versionCode'] = int('$VERSION_CODE')
-          with open('app.json', 'w') as f: json.dump(cfg, f, indent=2)
-          "
+          import json, sys
+          version = sys.argv[1]
+          version_code = int(sys.argv[2])
+          with open('app.json') as f:
+              cfg = json.load(f)
+          cfg['expo']['version'] = version
+          cfg['expo']['android']['versionCode'] = version_code
+          with open('app.json', 'w') as f:
+              json.dump(cfg, f, indent=2)
+          " "$VERSION" "$VERSION_CODE"
 
       - name: Expo prebuild (generate native project)
         run: npx expo prebuild --platform android --no-install
@@ -94,19 +123,25 @@ jobs:
             exit 1
           fi
 
-          # File is a valid ZIP (APK = ZIP)
+          # File is a valid ZIP (APK = ZIP) — use explicit if/raise instead of assert (#2492)
           python3 -c "
-          import zipfile, sys
+          import zipfile, os, sys
+
           z = zipfile.ZipFile('$APK')
           names = z.namelist()
+
           # Must contain AndroidManifest.xml and classes.dex
-          assert 'AndroidManifest.xml' in names, f'Missing AndroidManifest.xml, got: {names[:10]}'
-          assert any('classes.dex' in n for n in names), f'Missing classes.dex, got: {names[:10]}'
+          if 'AndroidManifest.xml' not in names:
+              sys.exit('FAILED: Missing AndroidManifest.xml, got: ' + str(names[:10]))
+          if not any('classes.dex' in n for n in names):
+              sys.exit('FAILED: Missing classes.dex, got: ' + str(names[:10]))
+
           # Check size is reasonable (>1MB for a real app, <200MB)
-          import os
-          size_mb = os.path.getsize('$APK') / (1024*1024)
-          assert 1 < size_mb < 200, f'APK size {size_mb:.1f}MB is unreasonable'
-          print(f'APK valid: {size_mb:.1f}MB, {len(names)} entries')
+          size_mb = os.path.getsize('$APK') / (1024 * 1024)
+          if not (1 < size_mb < 200):
+              sys.exit('FAILED: APK size {:.1f}MB is unreasonable'.format(size_mb))
+
+          print('APK valid: {:.1f}MB, {} entries'.format(size_mb, len(names)))
           "
 
       - uses: actions/upload-artifact@v4
@@ -134,8 +169,9 @@ jobs:
       - name: Upload APK to release
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="$REF_NAME"
           APK="release-assets/android/app-release.apk"
 
           if [ ! -f "$APK" ]; then

@@ -312,7 +312,7 @@ jobs:
           $repo = "${{ github.repository }}"
           $version = $tag.TrimStart('v')
           $releaseTitle = "VaultPilot $version"
-          $PSNativeCommandUseErrorActionPreference = $false
+          $ErrorActionPreference = "Stop"
           $apiHeaders = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept = "application/vnd.github+json"
@@ -379,36 +379,36 @@ jobs:
               throw "No release assets found in $Directory"
             }
 
-            # Track uploaded assets with directory-prefixed keys to avoid
+            # Track uploaded assets by final upload name to avoid
             # cross-directory collisions (e.g. Setup.exe from win-x86 vs win-x64)
             $uploadedKeys = @{}
 
             foreach ($asset in $assets) {
-              # Skip if already on the release (by filename)
-              if ($ExistingNames.ContainsKey($asset.Name.Trim())) {
-                Write-Host "Skipping already-released asset $Directory/$($asset.Name)"
-                continue
-              }
-              # Skip if already uploaded from another directory in this run
-              $key = "$Directory/$($asset.Name.Trim())"
-              if ($uploadedKeys.ContainsKey($key)) {
-                continue
-              }
-
               # Use directory-based channel to disambiguate duplicate filenames
               $channel = Split-Path $Directory -Leaf
               $assetName = if ($asset.Name -eq 'Setup.exe') {
                 "Setup-$channel.exe"
               } else {
-                $asset.Name
+                $asset.Name.Trim()
               }
+
+              # Skip if already on the release (by final upload filename)
+              if ($ExistingNames.ContainsKey($assetName)) {
+                Write-Host "Skipping already-released asset $Directory/$assetName"
+                continue
+              }
+              # Skip if already uploaded from another directory in this run
+              if ($uploadedKeys.ContainsKey($assetName)) {
+                continue
+              }
+
               Write-Host "Uploading $($asset.Name) as $assetName..."
               gh release upload $tag "$($asset.FullName)#$assetName" --clobber
               if ($LASTEXITCODE -ne 0) {
                 throw "Failed to upload asset $assetName"
               }
 
-              $uploadedKeys[$key] = $true
+              $uploadedKeys[$assetName] = $true
             }
           }
 

@@ -1,6 +1,10 @@
 name: Linux CLI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -9,6 +13,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Single source of truth for the Zig toolchain version + hash.
+      # Update both values together when bumping Zig (issue #2457).
+      ZIG_VERSION: "0.14.0"
+      ZIG_SHA256: "8ea3e97bd562a41d11f59e1f0148e8050d6ef6e4fbafdf1070d66e2aebfb56f7"
 
     steps:
       - name: Checkout
@@ -31,10 +40,10 @@ jobs:
         run: |
           mkdir -p "$HOME/.local/zig"
           cd "$HOME/.local/zig"
-          curl -L https://ziglang.org/download/0.14.0/zig-linux-x86_64-0.14.0.tar.xz -o zig.tar.xz
-          echo "8ea3e97bd562a41d11f59e1f0148e8050d6ef6e4fbafdf1070d66e2aebfb56f7  zig.tar.xz" | sha256sum -c -
+          curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          echo "${ZIG_SHA256}  zig.tar.xz" | sha256sum -c -
           tar -xf zig.tar.xz
-          echo "$HOME/.local/zig/zig-linux-x86_64-0.14.0" >> "$GITHUB_PATH"
+          echo "$HOME/.local/zig/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild --locked

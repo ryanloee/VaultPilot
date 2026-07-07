@@ -42,7 +42,7 @@ function Resolve-MSBuild {
     )
 
     foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) {
+        if (Test-Path -LiteralPath $candidate) {
             return $candidate
         }
     }
@@ -68,7 +68,7 @@ function Resolve-Vpk {
 function Ensure-RustTarget {
     param([string]$Target)
 
-    $installedTargets = & rustup target list --installed
+    $installedTargets = & rustup target list --installed | ForEach-Object { $_.Trim() }
     if ($installedTargets -notcontains $Target) {
         & rustup target add $Target
     }
@@ -146,7 +146,7 @@ function Remove-CurrentVersionRelease {
         [string]$Version
     )
 
-    if (-not (Test-Path $PackageDir)) {
+    if (-not (Test-Path -LiteralPath $PackageDir)) {
         return
     }
 
@@ -160,7 +160,7 @@ function Remove-CurrentVersionRelease {
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 
     $releasesFile = Join-Path $PackageDir "RELEASES-$Channel"
-    if (Test-Path $releasesFile) {
+    if (Test-Path -LiteralPath $releasesFile) {
         $remainingLines = @(Get-Content $releasesFile | Where-Object {
             $_ -notmatch " VaultPilot-$escapedVersion-$escapedChannel-(full|delta)\.nupkg "
         })
@@ -173,11 +173,12 @@ function Remove-CurrentVersionRelease {
     }
 
     $releasesJsonFile = Join-Path $PackageDir "releases.$Channel.json"
-    if (Test-Path $releasesJsonFile) {
+    if (Test-Path -LiteralPath $releasesJsonFile) {
         $releasesJson = Get-Content $releasesJsonFile -Raw | ConvertFrom-Json
         $remainingAssets = @($releasesJson.Assets | Where-Object { $_.Version -ne $Version })
         if ($remainingAssets.Count -gt 0) {
-            @{ Assets = $remainingAssets } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $releasesJsonFile
+            $releasesJson.Assets = $remainingAssets
+            $releasesJson | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $releasesJsonFile
         }
         else {
             Remove-Item -LiteralPath $releasesJsonFile -Force
@@ -185,7 +186,7 @@ function Remove-CurrentVersionRelease {
     }
 
     $assetsJsonFile = Join-Path $PackageDir "assets.$Channel.json"
-    if (Test-Path $assetsJsonFile) {
+    if (Test-Path -LiteralPath $assetsJsonFile) {
         $assetsJson = @(Get-Content $assetsJsonFile -Raw | ConvertFrom-Json)
         $remainingAssets = @($assetsJson | Where-Object {
             $_.RelativeFileName -notmatch $packageRelativePattern
@@ -199,7 +200,7 @@ function Remove-CurrentVersionRelease {
     }
 }
 
-if (-not (Test-Path $cargoToml)) {
+if (-not (Test-Path -LiteralPath $cargoToml)) {
     throw "Cargo.toml not found at $cargoToml"
 }
 
@@ -216,11 +217,11 @@ foreach ($platform in $Platforms) {
 
     $publishDir = Join-Path $artifactsRoot "publish\$($build.RuntimeId)"
     $packageDir = Join-Path $artifactsRoot "packages\$($build.Channel)"
-    if (Test-Path $publishDir) {
+    if (Test-Path -LiteralPath $publishDir) {
         Remove-Item -LiteralPath $publishDir -Recurse -Force
     }
 
-    if (-not $FetchReleaseHistory -and (Test-Path $packageDir)) {
+    if (-not $FetchReleaseHistory -and (Test-Path -LiteralPath $packageDir)) {
         Remove-Item -LiteralPath $packageDir -Recurse -Force
     }
 
@@ -232,7 +233,7 @@ foreach ($platform in $Platforms) {
     }
 
     Write-Host "Publishing self-contained WinUI application for $platform..."
-    & $msbuild $projectFile `
+    & $msbuild "`"$projectFile`"" `
         /restore `
         /t:Publish `
         /p:Configuration=Release `
@@ -240,12 +241,12 @@ foreach ($platform in $Platforms) {
         /p:RuntimeIdentifier=$($build.RuntimeId) `
         /p:SelfContained=true `
         /p:WindowsAppSDKSelfContained=true `
-        /p:PublishDir=$publishDir
+        "/p:PublishDir=`"$publishDir`""
     if ($LASTEXITCODE -ne 0) {
         throw "MSBuild publish failed for $platform."
     }
 
-    if (-not (Test-Path $publishDir)) {
+    if (-not (Test-Path -LiteralPath $publishDir)) {
         throw "Publish output directory not found for ${platform}: $publishDir"
     }
 
@@ -253,14 +254,14 @@ foreach ($platform in $Platforms) {
     & $vpk pack `
         --packId VaultPilot `
         --packVersion $resolvedVersion `
-        --packDir $publishDir `
-        --outputDir $packageDir `
+        --packDir `"$publishDir`" `
+        --outputDir `"$packageDir`" `
         --mainExe VaultPilot.WinUI.exe `
         --runtime $($build.RuntimeId) `
         --channel $($build.Channel) `
         --packTitle VaultPilot `
         --packAuthors jy `
-        --icon $iconPath
+        --icon `"$iconPath`"
     if ($LASTEXITCODE -ne 0) {
         throw "Velopack packaging failed for $platform."
     }

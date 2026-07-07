@@ -29,12 +29,15 @@ jobs:
 
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REPO_CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
-          git fetch upstream ${{ github.base_ref }}
-          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream "$BASE_REPO_CLONE_URL"
+          git fetch upstream "$BASE_REF"
+          git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -67,12 +70,15 @@ jobs:
 
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REPO_CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
-          git fetch upstream ${{ github.base_ref }}
-          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream "$BASE_REPO_CLONE_URL"
+          git fetch upstream "$BASE_REF"
+          git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -105,12 +111,15 @@ jobs:
 
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REPO_CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
-          git fetch upstream ${{ github.base_ref }}
-          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream "$BASE_REPO_CLONE_URL"
+          git fetch upstream "$BASE_REF"
+          git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -129,18 +138,6 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-      - name: Run regression tests (dedicated)
-        if: always()
-        run: |
-          set -o pipefail
-          exit_code=0
-          cargo test --workspace regression -- --format=terse 2>&1 | tee "${{ runner.temp }}/regression-results.txt" || exit_code=$?
-          echo "### Regression Test Results" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat "${{ runner.temp }}/regression-results.txt" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          exit $exit_code
-
   cargo-audit:
     name: cargo audit
     runs-on: ubuntu-latest
@@ -153,12 +150,15 @@ jobs:
 
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REPO_CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
-          git fetch upstream ${{ github.base_ref }}
-          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream "$BASE_REPO_CLONE_URL"
+          git fetch upstream "$BASE_REF"
+          git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Install cargo-audit
         run: |
@@ -186,12 +186,15 @@ jobs:
 
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REPO_CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
-          git fetch upstream ${{ github.base_ref }}
-          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream "$BASE_REPO_CLONE_URL"
+          git fetch upstream "$BASE_REF"
+          git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -205,6 +208,8 @@ jobs:
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-build-
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - run: cargo build --release
 
       - name: Upload Linux CLI artifact
@@ -228,12 +233,15 @@ jobs:
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
         shell: bash
+        env:
+          BASE_REPO_CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream ${{ github.event.pull_request.base.repo.clone_url }}
-          git fetch upstream ${{ github.base_ref }}
-          git merge --no-edit upstream/${{ github.base_ref }} || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+          git remote add upstream "$BASE_REPO_CLONE_URL"
+          git fetch upstream "$BASE_REF"
+          git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5

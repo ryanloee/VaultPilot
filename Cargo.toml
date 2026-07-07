@@ -63,3 +63,7 @@ native-tls = "0.2"
 [[bin]]
 name = "vaultpilot-cli"
 path = "src/bin/vaultpilot-cli/main.rs"
+
+[[bin]]
+name = "vaultpilot-agent"
+path = "src/bin/vaultpilot-agent.rs"

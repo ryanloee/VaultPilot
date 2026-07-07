@@ -16,17 +16,19 @@ use uuid::Uuid;
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
-    create_collection_with_context, create_subscription_with_context,
-    delete_collection_with_context, delete_note_with_context, delete_subscription_with_context,
-    export_all_notes_with_context, export_note_markdown_with_context,
-    find_related_notes_with_context, get_collections_for_note_with_context,
-    get_subscription_with_context, import_markdown_with_context, initialize_storage_with_context,
-    list_collections_with_context, list_notes_in_collection_with_context,
+    create_collection_with_context, create_project_with_context, create_subscription_with_context,
+    delete_collection_with_context, delete_note_with_context, delete_project_with_context,
+    delete_subscription_with_context, export_all_notes_with_context,
+    export_note_markdown_with_context, find_related_notes_with_context,
+    get_collections_for_note_with_context, get_project_with_context, get_subscription_with_context,
+    import_markdown_with_context, initialize_storage_with_context, list_collections_with_context,
+    list_notes_in_collection_with_context, list_projects_with_context,
     list_subscriptions_with_context, load_chat_state_async, load_note_with_context,
     load_settings_with_context, rebuild_index_with_context,
     remove_note_from_collection_with_context, save_chat_state_async, save_note_with_context,
     save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
-    update_subscription_with_context, vault_export_with_context, StorageContext,
+    update_project_with_context, update_subscription_with_context, vault_export_with_context,
+    StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
@@ -103,6 +105,12 @@ enum Commands {
     Collections {
         #[command(subcommand)]
         action: CollectionActions,
+    },
+
+    /// Manage projects for isolated knowledge spaces (#1927)
+    Project {
+        #[command(subcommand)]
+        action: ProjectActions,
     },
 
     /// Manage the search index
@@ -640,6 +648,45 @@ enum CollectionActions {
 }
 
 #[derive(Subcommand)]
+enum ProjectActions {
+    /// List all projects
+    List,
+
+    /// Create a new project
+    Create {
+        /// Project name
+        name: String,
+        /// Optional description
+        #[arg(long)]
+        description: Option<String>,
+    },
+
+    /// Delete a project (does NOT delete its notes)
+    Delete {
+        /// Project ID
+        id: String,
+    },
+
+    /// Show project details
+    Show {
+        /// Project ID
+        id: String,
+    },
+
+    /// Update project metadata
+    Update {
+        /// Project ID
+        id: String,
+        /// New name
+        #[arg(long)]
+        name: Option<String>,
+        /// New description
+        #[arg(long)]
+        description: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum SubscriptionActions {
     /// List all subscriptions
     List,
@@ -1021,6 +1068,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
         Commands::Collections { action } => {
             tokio::task::block_in_place(|| handle_collections(context, action))
+        }
+        Commands::Project { action } => {
+            tokio::task::block_in_place(|| handle_projects(context, action))
         }
         Commands::Plugins => {
             let mgr = vaultpilot_lib::plugin::PluginManager::new();
@@ -1437,6 +1487,64 @@ fn handle_collections(context: &StorageContext, action: &CollectionActions) -> R
                 "count": count,
                 "collectionId": id
             }))
+        }
+    }
+}
+
+fn handle_projects(context: &StorageContext, action: &ProjectActions) -> Result<Value> {
+    match action {
+        ProjectActions::List => {
+            let projects = list_projects_with_context(context)?;
+            let count = projects.len();
+            Ok(serde_json::json!({
+                "projects": projects,
+                "count": count
+            }))
+        }
+        ProjectActions::Create { name, description } => {
+            let desc = description.as_deref().unwrap_or("");
+            let project = create_project_with_context(context, name, desc)?;
+            Ok(serde_json::json!({
+                "project": project
+            }))
+        }
+        ProjectActions::Delete { id } => {
+            let deleted = delete_project_with_context(context, id)?;
+            Ok(serde_json::json!({
+                "deleted": deleted,
+                "id": id
+            }))
+        }
+        ProjectActions::Show { id } => {
+            let project = get_project_with_context(context, id)?;
+            match project {
+                Some(p) => Ok(serde_json::json!({ "project": p })),
+                None => Ok(serde_json::json!({ "error": "Project not found", "id": id })),
+            }
+        }
+        ProjectActions::Update {
+            id,
+            name,
+            description,
+        } => {
+            // Fetch current project first
+            let current = get_project_with_context(context, id)?;
+            let current = match current {
+                Some(p) => p,
+                None => {
+                    return Ok(serde_json::json!({
+                        "error": "Project not found",
+                        "id": id
+                    }));
+                }
+            };
+            let new_name = name.as_deref().unwrap_or(&current.name);
+            let new_desc = description.as_deref().unwrap_or(&current.description);
+            let updated = update_project_with_context(context, id, new_name, new_desc)?;
+            match updated {
+                Some(p) => Ok(serde_json::json!({ "project": p })),
+                None => Ok(serde_json::json!({ "error": "Project not found", "id": id })),
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ pub(crate) mod collections;
 pub(crate) mod instant_search;
 pub(crate) mod notes;
 pub(crate) mod pool;
+pub(crate) mod projects;
 pub(crate) mod search;
 pub(crate) mod session_export;
 mod settings;
@@ -70,6 +71,12 @@ pub use subscriptions::{
     set_subscription_enabled_with_context, update_subscription_async,
     update_subscription_next_run_with_context, update_subscription_run_with_context,
     update_subscription_with_context,
+};
+
+// Re-export projects public API (#1927).
+pub use projects::{
+    create_project_with_context, delete_project_with_context, get_project_with_context,
+    list_projects_with_context, update_project_with_context,
 };
 
 // Internal imports from search module (used by remaining functions in this file)

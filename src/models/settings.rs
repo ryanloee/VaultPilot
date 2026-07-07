@@ -89,6 +89,10 @@ pub struct AppSettings {
     /// Intelligent model routing config (#1842). Defaults to disabled.
     #[serde(default)]
     pub model_routing: ModelRoutingConfig,
+    /// Name of the active vault prompt (from `.vaultpilot/prompts/`).
+    /// When set, this prompt's content is prepended to AI system prompts (#1929).
+    #[serde(default)]
+    pub active_prompt_name: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -109,6 +113,7 @@ impl Default for AppSettings {
             context_compression: false,
             compression_threshold: default_compression_threshold(),
             model_routing: ModelRoutingConfig::default(),
+            active_prompt_name: None,
         }
     }
 }
@@ -244,6 +249,7 @@ mod tests {
             context_compression: true,
             compression_threshold: 0.75,
             model_routing: ModelRoutingConfig::default(),
+            active_prompt_name: None,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

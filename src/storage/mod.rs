@@ -879,6 +879,7 @@ mod tests {
             context_compression: true,
             compression_threshold: 0.9,
             model_routing: crate::models::ModelRoutingConfig::default(),
+            active_prompt_name: None,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

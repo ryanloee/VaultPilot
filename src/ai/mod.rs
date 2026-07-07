@@ -198,6 +198,22 @@ pub async fn suggest_batch_collections(
     Ok(assignments)
 }
 
+/// Prepend the active vault prompt content (if set) to a base system prompt.
+fn with_active_prompt(settings: &AppSettings, base_system: &str) -> String {
+    let name = match settings.active_prompt_name.as_deref() {
+        Some(n) if !n.is_empty() => n,
+        _ => return base_system.to_string(),
+    };
+    let vault_dir = std::path::Path::new(&settings.vault_dir);
+    if !vault_dir.exists() {
+        return base_system.to_string();
+    }
+    match crate::prompt_store::load_active_prompt_content(vault_dir, Some(name)) {
+        Ok(Some(prefix)) => format!("{}{}", prefix, base_system),
+        _ => base_system.to_string(),
+    }
+}
+
 #[instrument(skip(settings, question, image_paths, history, prior_tool_results))]
 pub async fn select_tool_call(
     settings: &AppSettings,
@@ -208,7 +224,7 @@ pub async fn select_tool_call(
 ) -> Result<ToolSelectionResult> {
     let system = format!(
         "{}{}",
-        prompting::tool_call_system_prompt(),
+        with_active_prompt(settings, &prompting::tool_call_system_prompt()),
         prompting::response_style_suffix(settings.response_style),
     );
     let prompt = prompting::tool_call_user_prompt(
@@ -271,18 +287,24 @@ pub async fn answer_question(
     history: &[ConversationTurn],
 ) -> Result<ChatAnswerResult> {
     let style_suffix = prompting::response_style_suffix(settings.response_style);
+    let base_system = if docs.is_empty() {
+        format!(
+            "{}{}",
+            prompting::general_chat_system_prompt(),
+            style_suffix
+        )
+    } else {
+        format!("{}{}", prompting::answer_system_prompt(), style_suffix)
+    };
+    let system = with_active_prompt(settings, &base_system);
     let (system, prompt) = if docs.is_empty() {
         (
-            format!(
-                "{}{}",
-                prompting::general_chat_system_prompt(),
-                style_suffix
-            ),
+            system,
             prompting::general_chat_user_prompt(question, history),
         )
     } else {
         (
-            format!("{}{}", prompting::answer_system_prompt(), style_suffix),
+            system,
             prompting::answer_user_prompt(question, docs, history),
         )
     };
@@ -312,7 +334,7 @@ pub async fn answer_after_tool(
 ) -> Result<ChatAnswerResult> {
     let system = format!(
         "{}{}",
-        prompting::tool_result_system_prompt(),
+        with_active_prompt(settings, &prompting::tool_result_system_prompt()),
         prompting::response_style_suffix(settings.response_style),
     );
     let prompt =

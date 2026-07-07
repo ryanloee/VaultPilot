@@ -10,6 +10,7 @@ pub mod mail;
 pub mod models;
 pub mod orchestration;
 pub mod plugin;
+pub mod prompt_store;
 pub mod prompting;
 pub mod search_rules;
 pub mod storage;

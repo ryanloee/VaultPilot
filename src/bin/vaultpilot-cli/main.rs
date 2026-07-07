@@ -331,6 +331,24 @@ enum Commands {
         #[arg(long)]
         weekly: bool,
     },
+
+    /// Manage vault prompts — system prompt templates stored as vault notes (#1929)
+    ///
+    /// Prompts are plain `.md` files under `.vaultpilot/prompts/` with YAML
+    /// frontmatter.  The active prompt's content is prepended to every AI
+    /// system prompt as custom instructions.
+    ///
+    /// Examples:
+    ///   vp prompt list                              — list all prompts
+    ///   vp prompt get <name>                        — show a prompt
+    ///   vp prompt use <name>                        — set as active prompt
+    ///   vp prompt create <name> [--desc ".."]       — create a new prompt (reads stdin)
+    ///   vp prompt delete <name>                     — remove a prompt
+    ///   vp prompt defaults                          — create built-in prompts if missing
+    Prompt {
+        #[command(subcommand)]
+        action: PromptActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -362,6 +380,47 @@ enum VoiceActions {
         #[arg(long)]
         language: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum PromptActions {
+    /// List all available vault prompts
+    List,
+
+    /// Show the full content of a named prompt
+    Get {
+        /// Name of the prompt to display
+        name: String,
+    },
+
+    /// Set the active prompt (name) or clear it by omitting name
+    Use {
+        /// Name of the prompt to activate. Omit or pass empty to clear.
+        name: Option<String>,
+    },
+
+    /// Create a new prompt from stdin, or show current active prompt name
+    Create {
+        /// Name for the new prompt
+        name: String,
+
+        /// Short description (optional)
+        #[arg(long)]
+        desc: Option<String>,
+
+        /// Optional model hint
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Delete a prompt file
+    Delete {
+        /// Name of the prompt to delete
+        name: String,
+    },
+
+    /// Create built-in default prompts if they don't already exist
+    Defaults,
 }
 
 #[derive(Subcommand)]
@@ -1082,6 +1141,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Voice { action } => handle_voice(context, action).await,
         Commands::Health { json, weekly } => {
             tokio::task::block_in_place(|| handle_health(context, *json, *weekly))
+        }
+        Commands::Prompt { action } => {
+            tokio::task::block_in_place(|| handle_prompt(context, action))
         }
     }
 }
@@ -2377,6 +2439,180 @@ async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result
             }))
         }
     }
+}
+
+// ─── Prompt handler (#1929) ──────────────────────────────────────
+
+/// Handle `vp prompt` commands — manage vault prompts.
+fn handle_prompt(context: &StorageContext, action: &PromptActions) -> Result<Value> {
+    // Resolve vault dir from context to build the prompts directory path
+    let settings = vaultpilot_lib::storage::load_settings_with_context(context)?;
+    let vault_dir = if settings.vault_dir.is_empty() {
+        // Fall back to context's default vault dir
+        let ctx = context;
+        let dir = ctx.vault_dir();
+        std::path::PathBuf::from(dir)
+    } else {
+        std::path::PathBuf::from(&settings.vault_dir)
+    };
+
+    match action {
+        PromptActions::List => {
+            let prompts = vaultpilot_lib::prompt_store::list_prompts(&vault_dir)?;
+            // Also create defaults if none exist yet
+            if prompts.is_empty() {
+                let created = vaultpilot_lib::prompt_store::create_default_prompts(&vault_dir)?;
+                if !created.is_empty() {
+                    eprintln!(
+                        "📝 Created {} default prompt(s): {}",
+                        created.len(),
+                        created.join(", ")
+                    );
+                }
+                let prompts = vaultpilot_lib::prompt_store::list_prompts(&vault_dir)?;
+                return to_json(&serde_json::json!({
+                    "count": prompts.len(),
+                    "prompts": prompts,
+                    "active": settings.active_prompt_name,
+                }));
+            }
+            to_json(&serde_json::json!({
+                "count": prompts.len(),
+                "prompts": prompts,
+                "active": settings.active_prompt_name,
+            }))
+        }
+        PromptActions::Get { name } => {
+            match vaultpilot_lib::prompt_store::get_prompt(&vault_dir, name)? {
+                Some(prompt) => {
+                    // Show full content on stderr, return JSON on stdout
+                    eprintln!("╔══════════════════════════════════════════════╗");
+                    eprintln!("║  📝 Prompt: {}", pad_str(&prompt.name, 38));
+                    eprintln!("╚══════════════════════════════════════════════╝");
+                    if !prompt.description.is_empty() {
+                        eprintln!("Description: {}", prompt.description);
+                    }
+                    if !prompt.model.is_empty() {
+                        eprintln!("Model hint:  {}", prompt.model);
+                    }
+                    eprintln!("{}", "─".repeat(50));
+                    println!("{}", prompt.content);
+                    to_json(&prompt)
+                }
+                None => Ok(serde_json::json!({
+                    "error": format!("Prompt '{}' not found", name),
+                })),
+            }
+        }
+        PromptActions::Use { name } => {
+            match name {
+                Some(n) if !n.is_empty() => {
+                    // Verify prompt exists
+                    match vaultpilot_lib::prompt_store::get_prompt(&vault_dir, n)? {
+                        Some(prompt) => {
+                            let mut settings =
+                                vaultpilot_lib::storage::load_settings_with_context(context)?;
+                            settings.active_prompt_name = Some(n.clone());
+                            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+                            eprintln!(
+                                "✅ Active prompt set to: {} — \"{}\"",
+                                prompt.name, prompt.description
+                            );
+                            Ok(serde_json::json!({
+                                "success": true,
+                                "active_prompt": n,
+                            }))
+                        }
+                        None => Ok(serde_json::json!({
+                            "error": format!("Prompt '{}' not found. Use `vp prompt list` to see available prompts.", n),
+                        })),
+                    }
+                }
+                _ => {
+                    // Clear active prompt
+                    let mut settings =
+                        vaultpilot_lib::storage::load_settings_with_context(context)?;
+                    settings.active_prompt_name = None;
+                    vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+                    eprintln!("✅ Active prompt cleared. Using default system prompts.");
+                    Ok(serde_json::json!({
+                        "success": true,
+                        "active_prompt": null,
+                    }))
+                }
+            }
+        }
+        PromptActions::Create { name, desc, model } => {
+            // Read prompt content from stdin
+            let mut content = String::new();
+            std::io::stdin()
+                .read_to_string(&mut content)
+                .map_err(|e| anyhow::anyhow!("Failed to read stdin: {e}"))?;
+
+            if content.trim().is_empty() {
+                return Ok(serde_json::json!({
+                    "error": "No input received. Pipe the prompt content via stdin: echo 'You are...' | vp prompt create <name>"
+                }));
+            }
+
+            let entry = vaultpilot_lib::prompt_store::PromptEntry {
+                name: name.clone(),
+                description: desc.clone().unwrap_or_default(),
+                model: model.clone().unwrap_or_default(),
+                content: content.trim().to_string(),
+            };
+            vaultpilot_lib::prompt_store::save_prompt(&vault_dir, &entry)?;
+            eprintln!("✅ Prompt '{}' created.", name);
+            to_json(&entry)
+        }
+        PromptActions::Delete { name } => {
+            let deleted = vaultpilot_lib::prompt_store::delete_prompt(&vault_dir, name)?;
+            if deleted {
+                // Clear active prompt if the deleted one was active
+                if settings.active_prompt_name.as_deref() == Some(name.as_str()) {
+                    let mut settings =
+                        vaultpilot_lib::storage::load_settings_with_context(context)?;
+                    settings.active_prompt_name = None;
+                    vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+                    eprintln!("✅ Prompt '{}' deleted (was active, now cleared).", name);
+                } else {
+                    eprintln!("✅ Prompt '{}' deleted.", name);
+                }
+                Ok(serde_json::json!({
+                    "success": true,
+                    "deleted": name,
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "error": format!("Prompt '{}' not found.", name),
+                }))
+            }
+        }
+        PromptActions::Defaults => {
+            let created = vaultpilot_lib::prompt_store::create_default_prompts(&vault_dir)?;
+            if created.is_empty() {
+                eprintln!("✅ Default prompts already exist — nothing to create.");
+            } else {
+                eprintln!(
+                    "📝 Created {} default prompt(s): {}",
+                    created.len(),
+                    created.join(", ")
+                );
+            }
+            Ok(serde_json::json!({
+                "created": created,
+            }))
+        }
+    }
+}
+
+/// Pad a string to a minimum width with spaces (for display formatting).
+fn pad_str(s: &str, width: usize) -> String {
+    let mut out = s.to_string();
+    if out.len() < width {
+        out.push_str(&" ".repeat(width - out.len()));
+    }
+    out
 }
 
 // ─── Health handler (#2014) ─────────────────────────────────────

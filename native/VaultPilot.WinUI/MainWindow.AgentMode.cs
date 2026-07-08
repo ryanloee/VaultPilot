@@ -308,6 +308,7 @@ public sealed partial class MainWindow : Window
 
     private async void ShowWriteApprovalDialog(string tool, string args)
     {
+        var cts = _agentCts;  // Capture reference at call time — agent may be stopped while dialog is open
         var (description, preview) = ParseWriteArgs(tool, args);
 
         var contentStack = new StackPanel { Spacing = 8 };
@@ -351,11 +352,22 @@ public sealed partial class MainWindow : Window
             ? $"已批准写入操作: {tool}"
             : $"已拒绝写入操作: {tool}");
 
+        // Check if agent was stopped while dialog was open
+        if (cts is null || !_agentModeActive)
+        {
+            AppendMessage("系统", "Agent 已停止，审批已取消。");
+            return;
+        }
+
         // Send approval decision back to backend
         try
         {
             await _backendClient.SendAsync<object>("respondToWriteApproval",
-                new { approved }, _agentCts?.Token ?? CancellationToken.None);
+                new { approved }, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Agent was stopped while sending — expected, ignore
         }
         catch (Exception ex)
         {

@@ -13,6 +13,7 @@ use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+use vaultpilot_lib::ai::actions::{execute_ai_action, AiActionRequest, AiActionType};
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
@@ -359,6 +360,28 @@ enum Commands {
         json: bool,
     },
 
+    /// Clean up messy notes with AI formatting — one-click polish for rushed,
+    /// voice-transcribed, or unstructured content (#1801)
+    ///
+    /// Reads text from a file path, or from stdin if you pass `-` or omit the argument.
+    ///
+    /// Examples:
+    ///   vp cleanup note.md                          — clean up a specific note file
+    ///   vp cleanup -                                — read from stdin
+    ///   vp cleanup                                  — read from stdin (interactive)
+    Cleanup {
+        /// Path to note file, or `-` to read from stdin. Omit to read stdin interactively.
+        path: Option<String>,
+
+        /// Model override (e.g. "gpt-4o")
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Output only the cleaned result as plain text (no JSON wrapper)
+        #[arg(long)]
+        plain: bool,
+    },
+
     /// Manage vault prompts — system prompt templates stored as vault notes (#1929)
     ///
     /// Prompts are plain `.md` files under `.vaultpilot/prompts/` with YAML
@@ -369,7 +392,7 @@ enum Commands {
     ///   vp prompt list                              — list all prompts
     ///   vp prompt get <name>                        — show a prompt
     ///   vp prompt use <name>                        — set as active prompt
-    ///   vp prompt create <name> [--desc ".."]       — create a new prompt (reads stdin)
+    ///   vp prompt create <name> [--desc "..."]       — create a new prompt (reads stdin)
     ///   vp prompt delete <name>                     — remove a prompt
     ///   vp prompt defaults                          — create built-in prompts if missing
     Prompt {
@@ -1246,6 +1269,60 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Prompt { action } => {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
+        Commands::Cleanup { path, model, plain } => {
+            handle_cleanup(context, path, model, *plain).await
+        }
+    }
+}
+
+async fn handle_cleanup(
+    context: &StorageContext,
+    path: &Option<String>,
+    model: &Option<String>,
+    plain: bool,
+) -> Result<Value> {
+    let text = match path {
+        Some(p) if p == "-" => {
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+            buf
+        }
+        Some(p) => std::fs::read_to_string(p)
+            .map_err(|e| anyhow::anyhow!("Failed to read '{}': {}", p, e))?,
+        None => {
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+            buf
+        }
+    };
+
+    if text.trim().is_empty() {
+        anyhow::bail!("Input text is empty. Provide note content to clean up.");
+    }
+
+    let settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+    let request = AiActionRequest {
+        action: AiActionType::CleanUp,
+        text,
+        target_language: None,
+        tone: None,
+        note_id: None,
+        model: model.clone(),
+    };
+    let result = execute_ai_action(&settings, &request).await;
+
+    if let Some(ref err) = result.error {
+        anyhow::bail!("AI action error: {}", err);
+    }
+
+    if plain {
+        println!("{}", result.result);
+        Ok(serde_json::json!({ "cleaned": true }))
+    } else {
+        Ok(serde_json::json!({
+            "cleaned": true,
+            "result": result.result,
+        }))
     }
 }
 

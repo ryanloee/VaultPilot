@@ -893,6 +893,7 @@ mod tests {
             active_prompt_name: None,
             session_export_enabled: false,
             session_export_path: None,
+            system_directive: String::new(),
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

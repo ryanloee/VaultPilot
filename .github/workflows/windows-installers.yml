@@ -223,6 +223,8 @@ jobs:
 
       - name: Install Linux packaging prerequisites
         run: |
+          # Remove broken Microsoft apt repos that cause update failures (#2613)
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y xz-utils dpkg-dev libssl-dev
 
@@ -303,6 +305,24 @@ jobs:
           Write-Host "linux-x64 assets:"
           Get-ChildItem release-assets/linux-x64 -File -Recurse | Sort-Object FullName | ForEach-Object { Write-Host " - $($_.FullName)" }
 
+      - name: Generate SHA256 checksums for supply chain verification (#1863)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $checksumDir = "release-assets/checksums"
+          New-Item -ItemType Directory -Force -Path $checksumDir | Out-Null
+          Get-ChildItem release-assets -Recurse -File | Where-Object {
+            $_.Extension -notin @('.sha256')
+          } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            $relative = $_.FullName.Replace($pwd.Path + "\release-assets\", "")
+            "$hash  $relative" | Out-File -Append -Encoding ascii "$checksumDir/SHA256SUMS"
+          }
+          Write-Host "=== SHA256SUMS ==="
+          Get-Content "$checksumDir/SHA256SUMS"
+          Compress-Archive -Path "$checksumDir/SHA256SUMS" -DestinationPath "$checksumDir/SHA256SUMS.zip" -Force
+          Write-Host "Checksums generated successfully"
+
       - name: Publish release assets
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -372,7 +392,8 @@ jobs:
               $_.Name -match '-full\.nupkg$' -or
               $_.Name -match '\.deb$' -or
               $_.Name -match '^releases\..+\.json$' -or
-              $_.Name -match '^RELEASES-.+$'
+              $_.Name -match '^RELEASES-.+$' -or
+              $_.Name -match '^SHA256SUMS\.zip$'
             } | Sort-Object Name
 
             if (-not $assets) {

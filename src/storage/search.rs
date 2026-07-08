@@ -106,8 +106,39 @@ pub fn search_notes_with_context(
         (notes, initial_total)
     };
 
-    // In-memory filtering (for FTS path where SQL filtering isn't applied)
+    // ── Deep/hybrid search enrichment (#1608) ──
+    // When deep_search is enabled, run semantic vector retrieval and merge
+    // semantically matched notes that weren't caught by FTS5/keyword search.
     let mut notes = notes;
+    if query.deep_search && !query.text.trim().is_empty() {
+        let fetch_limit = (limit + offset).max(50);
+        let semantic_scores =
+            query_attachment_semantic_scores(&connection, &query.text).unwrap_or_default();
+        let mut seen_ids: HashSet<String> = notes.iter().map(|n| n.id.clone()).collect();
+        let mut scored_ids: Vec<(String, i64)> = semantic_scores.into_iter().collect();
+        scored_ids.sort_by_key(|b| std::cmp::Reverse(b.1));
+        for (note_id, _score) in scored_ids {
+            if seen_ids.contains(&note_id) {
+                continue;
+            }
+            if notes.len() >= fetch_limit {
+                break;
+            }
+            if let Some(meta) = load_note_meta_by_id(&connection, &note_id)? {
+                // Apply in-memory tag/keyword filter for consistency
+                if !query.tags.is_empty() && !has_all_terms(&meta.tags, &query.tags) {
+                    continue;
+                }
+                if !query.keywords.is_empty() && !has_all_terms(&meta.keywords, &query.keywords) {
+                    continue;
+                }
+                notes.push(meta);
+                seen_ids.insert(note_id);
+            }
+        }
+    }
+
+    // In-memory filtering (for FTS path where SQL filtering isn't applied)
     if !query.tags.is_empty() && !query.text.trim().is_empty() {
         notes.retain(|note| has_all_terms(&note.tags, &query.tags));
     }

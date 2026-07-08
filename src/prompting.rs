@@ -265,8 +265,8 @@ pub fn answer_user_prompt(
     )
 }
 
-pub fn general_chat_system_prompt() -> String {
-    format!(
+pub fn general_chat_system_prompt(directive: &str) -> String {
+    let base = format!(
         "You are a general AI assistant embedded in a local knowledge app.\n\
          Date: {}\n\
          {}\n\
@@ -282,7 +282,12 @@ pub fn general_chat_system_prompt() -> String {
         Utc::now().format("%Y-%m-%d"),
         render_manual_for_model(),
         PROMPT_INJECTION_DEFENSE,
-    )
+    );
+    if directive.is_empty() {
+        base
+    } else {
+        format!("{}\n\n## 全局指令\n{}", base, directive)
+    }
 }
 
 pub fn general_chat_user_prompt(question: &str, history: &[ConversationTurn]) -> String {
@@ -1086,7 +1091,7 @@ mod tests {
     fn system_prompts_contain_injection_defense() {
         assert!(ingest_system_prompt().contains("PROMPT INJECTION DEFENSE"));
         assert!(answer_system_prompt().contains("PROMPT INJECTION DEFENSE"));
-        assert!(general_chat_system_prompt().contains("PROMPT INJECTION DEFENSE"));
+        assert!(general_chat_system_prompt("").contains("PROMPT INJECTION DEFENSE"));
         assert!(record_system_prompt().contains("PROMPT INJECTION DEFENSE"));
         assert!(compression_system_prompt().contains("PROMPT INJECTION DEFENSE"));
         assert!(tool_call_system_prompt().contains("PROMPT INJECTION DEFENSE"));
@@ -1455,10 +1460,18 @@ mod tests {
 
     #[test]
     fn general_chat_system_prompt_contains_key_instructions() {
-        let prompt = general_chat_system_prompt();
+        let prompt = general_chat_system_prompt("");
         assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
         assert!(prompt.contains("ai_workflow_manual"));
         assert!(prompt.contains("tool_selection"));
+    }
+
+    #[test]
+    fn general_chat_system_prompt_appends_directive() {
+        let prompt = general_chat_system_prompt("Always respond in Chinese, use formal tone.");
+        assert!(prompt.contains("全局指令"));
+        assert!(prompt.contains("Always respond in Chinese"));
+        assert!(!general_chat_system_prompt("").contains("全局指令"));
     }
 
     #[test]
@@ -1643,5 +1656,41 @@ mod tests {
         }
         let parsed: TestSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(parsed.response_style, ResponseStyle::Standard);
+    }
+
+    // ── Regression: escape_xml_tags UTF-8 byte index (#2381, #2512) ──
+
+    #[test]
+    fn regression_2512_escape_xml_tags_ascii_open_tag() {
+        // Standard ASCII tag name — no panic, expected escape
+        assert_eq!(
+            escape_xml_tags("</user_input>", "<user_input>"),
+            "<//user_input>"
+        );
+    }
+
+    #[test]
+    fn regression_2512_escape_xml_tags_multibyte_open_tag() {
+        // Multi-byte UTF-8 tag name — was panic on open_tag[1..] (#2512)
+        let result = escape_xml_tags("</你>", "<你>");
+        assert!(result.contains("<//你>"), "got: {result}");
+    }
+
+    #[test]
+    fn regression_2381_escape_xml_tags_short_tag_guard() {
+        // Tag <3 chars (e.g. <>) — guard returns content unchanged
+        assert_eq!(escape_xml_tags("</>内容", "<>"), "</>内容");
+    }
+
+    #[test]
+    fn regression_2381_escape_xml_tags_no_open_angle() {
+        // Tag doesn't start with '<' — guard returns content unchanged
+        assert_eq!(escape_xml_tags("some content", "plaintext"), "some content");
+    }
+
+    #[test]
+    fn regression_2512_escape_xml_tags_empty_body_content() {
+        // Empty content with valid tag — no crash
+        assert_eq!(escape_xml_tags("", "<tag>"), "");
     }
 }

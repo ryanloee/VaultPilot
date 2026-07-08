@@ -290,7 +290,7 @@ pub async fn answer_question(
     let base_system = if docs.is_empty() {
         format!(
             "{}{}",
-            prompting::general_chat_system_prompt(),
+            prompting::general_chat_system_prompt(&settings.system_directive),
             style_suffix
         )
     } else {

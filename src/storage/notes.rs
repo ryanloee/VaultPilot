@@ -1035,8 +1035,10 @@ fn import_single_markdown(
     let settings = load_settings_with_context(context)?;
     let vault_dir = PathBuf::from(&settings.vault_dir)
         .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(&settings.vault_dir));
-    let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+        .map_err(|e| anyhow::anyhow!("cannot resolve vault directory '{}': {e}", settings.vault_dir))?;
+    let canonical = file
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("cannot resolve file path '{}': {e}", file.display()))?;
     if canonical.starts_with(&vault_dir) {
         index_note_file_with_connection(connection, &canonical, &vault_dir)?;
         return Ok(true);
@@ -1284,7 +1286,9 @@ fn index_note_file_with_connection(
     path: &Path,
     vault_dir: &Path,
 ) -> Result<()> {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("cannot resolve path '{}': {e}", path.display()))?;
     let document = parse_markdown_note(&canonical, "manual")?;
     let body_hash = hash_content(&document.body);
     connection.execute_batch("SAVEPOINT sp_index_note")?;

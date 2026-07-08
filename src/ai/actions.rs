@@ -24,6 +24,8 @@ pub enum AiActionType {
     ExtractTodos,
     /// Find notes related to the given content.
     FindRelatedNotes,
+    /// Clean up messy/quick-captured notes into readable structure.
+    CleanUp,
 }
 
 impl AiActionType {
@@ -37,6 +39,7 @@ impl AiActionType {
             Self::ContinueWriting => "续写",
             Self::ExtractTodos => "提取待办",
             Self::FindRelatedNotes => "关联笔记",
+            Self::CleanUp => "整理",
         }
     }
 
@@ -50,6 +53,7 @@ impl AiActionType {
             Self::ContinueWriting => "continueWriting",
             Self::ExtractTodos => "extractTodos",
             Self::FindRelatedNotes => "findRelatedNotes",
+            Self::CleanUp => "cleanUp",
         }
     }
 
@@ -63,6 +67,7 @@ impl AiActionType {
             "continueWriting" | "continue_writing" => Some(Self::ContinueWriting),
             "extractTodos" | "extract_todos" => Some(Self::ExtractTodos),
             "findRelatedNotes" | "find_related_notes" => Some(Self::FindRelatedNotes),
+            "cleanUp" | "clean_up" => Some(Self::CleanUp),
             _ => None,
         }
     }
@@ -77,6 +82,7 @@ impl AiActionType {
             Self::ContinueWriting,
             Self::ExtractTodos,
             Self::FindRelatedNotes,
+            Self::CleanUp,
         ]
     }
 }
@@ -173,6 +179,19 @@ fn system_prompt(action: AiActionType) -> String {
              notes in the vault. Output a concise search description."
                 .to_string()
         }
+        AiActionType::CleanUp => "You are a note-formatting assistant. Your task is to clean up \
+             messy, rushed, or voice-transcribed notes into readable, \
+             well-structured text. Preserve all factual content and key \
+             information. \
+             - Fix typos and grammar where context makes the intent clear. \
+             - Organize run-on sentences into logical paragraphs. \
+             - Add bullet points or numbered lists where the content \
+               naturally has lists or enumerations. \
+             - Add headings (H2, H3) to break up long text thematically. \
+             - Remove repetitive or filler content. \
+             - Keep the original language and tone. \
+             Output only the cleaned-up text, no extra commentary."
+            .to_string(),
     }
 }
 
@@ -220,6 +239,14 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
         AiActionType::FindRelatedNotes => {
             format!(
                 "Based on the following text, generate a search query to find related notes:\n\n{}",
+                request.text
+            )
+        }
+        AiActionType::CleanUp => {
+            format!(
+                "Please clean up and reorganize the following messy note. \
+                 Fix typos, improve structure, add headings and lists where \
+                 appropriate. Preserve all content.\n\n{}",
                 request.text
             )
         }
@@ -465,5 +492,49 @@ mod tests {
         };
         let prompt = user_prompt(AiActionType::Translate, &request);
         assert!(prompt.contains("Chinese"));
+    }
+
+    #[test]
+    fn cleanup_empty_text_returns_error() {
+        let request = AiActionRequest {
+            action: AiActionType::CleanUp,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "empty text should fail validation for CleanUp"
+        );
+    }
+
+    #[test]
+    fn cleanup_user_prompt_contains_input() {
+        let request = AiActionRequest {
+            action: AiActionType::CleanUp,
+            text: "meeting today discussed roadmap Q3 priorities".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::CleanUp, &request);
+        assert!(prompt.contains("roadmap Q3"));
+        assert!(prompt.contains("clean up"));
+    }
+
+    #[test]
+    fn cleanup_system_prompt_includes_formatting_instructions() {
+        let prompt = system_prompt(AiActionType::CleanUp);
+        assert!(
+            prompt.contains("bullets")
+                || prompt.contains("headings")
+                || prompt.contains("formatting")
+                || prompt.contains("structure")
+        );
+        assert!(prompt.contains("Output only the cleaned-up text"));
     }
 }

@@ -22,6 +22,8 @@ public enum AiActionType
     ExtractTodos,
     [JsonPropertyName("findRelatedNotes")]
     FindRelatedNotes,
+    [JsonPropertyName("cleanUp")]
+    CleanUp,
 }
 
 /// <summary>

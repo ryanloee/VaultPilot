@@ -17,7 +17,7 @@ jobs:
       # Single source of truth for the Zig toolchain version + hash.
       # Update both values together when bumping Zig (issue #2457).
       ZIG_VERSION: "0.14.0"
-      ZIG_SHA256: "8ea3e97bd562a41d11f59e1f0148e8050d6ef6e4fbafdf1070d66e2aebfb56f7"
+      ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
 
     steps:
       - name: Checkout

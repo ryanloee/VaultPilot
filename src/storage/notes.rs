@@ -1035,7 +1035,12 @@ fn import_single_markdown(
     let settings = load_settings_with_context(context)?;
     let vault_dir = PathBuf::from(&settings.vault_dir)
         .canonicalize()
-        .map_err(|e| anyhow::anyhow!("cannot resolve vault directory '{}': {e}", settings.vault_dir))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "cannot resolve vault directory '{}': {e}",
+                settings.vault_dir
+            )
+        })?;
     let canonical = file
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot resolve file path '{}': {e}", file.display()))?;

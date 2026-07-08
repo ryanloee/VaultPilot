@@ -13,6 +13,7 @@ use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+use vaultpilot_lib::ai::actions::{execute_ai_action, AiActionRequest, AiActionType};
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
@@ -612,6 +613,12 @@ enum NotesActions {
         #[arg(long, default_value = "5")]
         limit: usize,
     },
+
+    /// AI-cleanup a messy note: fix typos, organize structure, add headings (#1801)
+    Cleanup {
+        /// Note ID or file path
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1038,7 +1045,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Settings { action } => {
             tokio::task::block_in_place(|| handle_settings(context, action))
         }
-        Commands::Notes { action } => tokio::task::block_in_place(|| handle_notes(context, action)),
+        Commands::Notes { action } => {
+            match action {
+                NotesActions::Cleanup { id } => handle_notes_cleanup(context, id.clone()).await?,
+                _ => tokio::task::block_in_place(|| handle_notes(context, action))?,
+            };
+            Ok(Value::Null)
+        }
         Commands::Index { action } => tokio::task::block_in_place(|| handle_index(context, action)),
         Commands::Ask {
             question,
@@ -1529,7 +1542,47 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             let results = find_related_notes_with_context(context, id, *limit)?;
             to_json(&results)
         }
+        NotesActions::Cleanup { .. } => {
+            unreachable!("Cleanup is handled in handle_command async path")
+        }
     }
+}
+
+/// AI-cleanup a note by ID: loads it, runs the CleanUp AI action, saves result.
+async fn handle_notes_cleanup(context: &StorageContext, id: String) -> Result<Value> {
+    let note = load_note_with_context(context, &id)?;
+    let original_body = note.body.clone();
+
+    let request = AiActionRequest {
+        action: AiActionType::CleanUp,
+        text: original_body,
+        target_language: None,
+        tone: None,
+        note_id: Some(id.clone()),
+        model: None,
+    };
+
+    let settings = vaultpilot_lib::storage::load_settings_with_context(context)?;
+    let result = execute_ai_action(&settings, &request).await;
+
+    if let Some(ref error) = result.error {
+        anyhow::bail!("CleanUp AI 操作失败：{}", error);
+    }
+
+    let cleaned_body = result.result;
+    let mut updated_note = note;
+    updated_note.body = cleaned_body.clone();
+    let saved = save_note_with_context(context, updated_note)?;
+
+    println!("✅ 笔记整理完成：");
+    println!("{}", cleaned_body);
+
+    Ok(serde_json::json!({
+        "id": saved.meta.id,
+        "title": saved.meta.title,
+        "body": cleaned_body,
+        "usage": result.usage,
+    }))
 }
 
 fn handle_index(context: &StorageContext, action: &IndexActions) -> Result<Value> {

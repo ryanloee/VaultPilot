@@ -28,6 +28,8 @@ public enum AiActionType
     GenerateOutline,
     [JsonPropertyName("editNote")]
     EditNote,
+    [JsonPropertyName("summarizeUrl")]
+    SummarizeUrl,
 }
 
 /// <summary>

@@ -1650,7 +1650,10 @@ mod tests {
     #[test]
     fn regression_2512_escape_xml_tags_ascii_open_tag() {
         // Standard ASCII tag name — no panic, expected escape
-        assert_eq!(escape_xml_tags("</user_input>", "<user_input>"), "<//user_input>");
+        assert_eq!(
+            escape_xml_tags("</user_input>", "<user_input>"),
+            "<//user_input>"
+        );
     }
 
     #[test]

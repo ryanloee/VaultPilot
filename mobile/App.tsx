@@ -136,16 +136,18 @@ export default function App() {
 
   if (initState === 'error') {
     return (
-      <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF', padding: 24 }}>
-        <Text style={{ fontSize: 18, fontWeight: '600', color: isDark ? '#F87171' : '#DC2626', marginBottom: 8 }}>数据库初始化失败</Text>
-        <Text style={{ fontSize: 14, color: isDark ? '#9CA3AF' : '#6B7280', textAlign: 'center', marginBottom: 16 }}>{errorMsg}</Text>
-        <TouchableOpacity
-          onPress={() => { initApp(); }}
-          style={{ paddingHorizontal: 24, paddingVertical: 12, backgroundColor: '#3B82F6', borderRadius: 8 }}
-        >
-          <Text style={{ color: '#FFF', fontWeight: '600' }}>重试</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
+      <SafeAreaProvider>
+        <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDark ? '#000' : '#FFF', padding: 24 }}>
+          <Text style={{ fontSize: 18, fontWeight: '600', color: isDark ? '#F87171' : '#DC2626', marginBottom: 8 }}>数据库初始化失败</Text>
+          <Text style={{ fontSize: 14, color: isDark ? '#9CA3AF' : '#6B7280', textAlign: 'center', marginBottom: 16 }}>{errorMsg}</Text>
+          <TouchableOpacity
+            onPress={() => { initApp(); }}
+            style={{ paddingHorizontal: 24, paddingVertical: 12, backgroundColor: '#3B82F6', borderRadius: 8 }}
+          >
+            <Text style={{ color: '#FFF', fontWeight: '600' }}>重试</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </SafeAreaProvider>
     );
   }
 

@@ -251,11 +251,15 @@ pub fn answer_user_prompt(
 ) -> String {
     format!(
         "Return strict JSON in this shape:\n\
-         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\"}}],\"noteDraft\":null}}\n\
+         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\",\"score\":0.0}}],\"noteDraft\":null}}\n\
          Rules for citation snippets:\n\
          - If a note has a SEARCH_SNIPPET field, copy it verbatim into the citation snippet.\n\
          - The SEARCH_SNIPPET uses ==text== markers to highlight matched terms; preserve these markers exactly.\n\
          - Only generate your own snippet if no SEARCH_SNIPPET is provided.\n\n\
+         - If a note has a SEARCH_SCORE field, copy it into the citation score field as a decimal (e.g. 85% = 0.85).\n\
+         - If no SEARCH_SCORE is available, omit the score field.\n\
+         - Order citations by score descending (most relevant first) when scores are available.\n\
+
          {}\n\n\
          Recent conversation:\n{}\n\n\
          {}",
@@ -610,7 +614,7 @@ pub fn tool_result_user_prompt(
 ) -> String {
     format!(
         "Return strict JSON in this shape:\n\
-         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\"}}],\"noteDraft\":null}}\n\
+         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\",\"score\":0.0}}],\"noteDraft\":null}}\n\
          Rules:\n\
          - tool_name tells you which tool already ran.\n\
          - tool_result is the factual result of that tool.\n\
@@ -643,7 +647,7 @@ pub fn multi_tool_result_user_prompt(
 ) -> String {
     format!(
         "Return strict JSON in this shape:\n\
-         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\"}}],\"noteDraft\":null}}\n\
+         {{\"answer\":\"\",\"citations\":[{{\"noteId\":\"\",\"title\":\"\",\"path\":\"\",\"snippet\":\"\",\"score\":0.0}}],\"noteDraft\":null}}\n\
          Rules:\n\
          - tool_results contains the factual outputs of the tools already executed in this turn.\n\
          - Use the tool results directly. Do not pretend another tool ran.\n\

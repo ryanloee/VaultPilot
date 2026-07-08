@@ -1244,6 +1244,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "old".into(),
+            score: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1264,6 +1265,7 @@ mod tests {
             title: "rust tips".into(),
             path: "p".into(),
             snippet: "short".into(),
+            score: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1285,6 +1287,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "original".into(),
+            score: None,
         };
         let result = enrich_citations(vec![citation], &[]);
         assert_eq!(result[0].snippet, "original");

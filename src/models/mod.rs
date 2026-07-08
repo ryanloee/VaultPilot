@@ -378,6 +378,9 @@ pub struct AnswerCitation {
     pub path: String,
     #[serde(default)]
     pub snippet: String,
+    /// Relevance score (0.0–1.0) if available from search context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -832,6 +835,7 @@ mod tests {
                         title: "Note".to_string(),
                         path: "/n.md".to_string(),
                         snippet: "snippet".to_string(),
+                        score: None,
                     }],
                     saved_note: None,
                     thinking_trace: Some(ThinkingTrace {

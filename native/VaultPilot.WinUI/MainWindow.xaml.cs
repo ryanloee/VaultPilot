@@ -239,7 +239,12 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            var models = GetModelsForProvider(_settings.Provider.BaseUrl);
+            // Use the active provider from the multi-provider list, with
+            // fallback to the legacy single Provider field for backward compat.
+            var activeProvider = _settings.Providers.Count > 0
+                ? _settings.Providers[Math.Clamp(_settings.ActiveProviderIndex, 0, _settings.Providers.Count - 1)]
+                : _settings.Provider;
+            var models = GetModelsForProvider(activeProvider.BaseUrl);
 
             var dialog = new Views.SettingsDialog(
                 _settings,

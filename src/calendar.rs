@@ -503,7 +503,119 @@ fn row_to_event(row: &rusqlite::Row) -> rusqlite::Result<CalendarEvent> {
     })
 }
 
-// ─── Meeting metadata attachment ──────────────────────────────────
+// ─── Meeting Source Card ──────────────────────────────────────────
+
+/// Structured metadata describing a calendar event attached to a note.
+/// Stored in note YAML frontmatter and used by AI for search/context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingSourceCard {
+    pub event_id: String,
+    pub title: String,
+    pub organizer: Option<String>,
+    pub attendees: Vec<String>,
+    pub calendar_source: String,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    pub location: Option<String>,
+    pub meeting_url: Option<String>,
+}
+
+impl CalendarEvent {
+    /// Convert to a [`MeetingSourceCard`] for frontmatter attachment.
+    /// The card is the persistent form; the event is the runtime form.
+    pub fn to_source_card(&self) -> MeetingSourceCard {
+        MeetingSourceCard {
+            event_id: self.provider_event_id.clone(),
+            title: self.title.clone(),
+            organizer: None, // CalendarEvent doesn't track organizer yet
+            attendees: self.attendees.clone(),
+            calendar_source: self.source.clone(),
+            start: self.start,
+            end: self.end,
+            location: self.location.clone(),
+            meeting_url: None, // could be extracted from description in future
+        }
+    }
+}
+
+/// Detect calendar events that overlap `now` (i.e. currently in progress).
+///
+/// Returns events whose `[start, end]` interval contains `now`, ordered
+/// by start time ascending.  Uses the cached event table via
+/// [`today_agenda_cached`].
+pub fn detect_current_meetings(ctx: &StorageContext, now: DateTime<Utc>) -> Vec<CalendarEvent> {
+    let agenda = today_agenda_cached(ctx, now).unwrap_or_default();
+    agenda
+        .into_iter()
+        .filter(|e| e.start <= now && e.end >= now)
+        .collect()
+}
+
+/// Parse meeting metadata from note frontmatter back into a
+/// [`MeetingSourceCard`].  Returns `None` if the note has no meeting keys.
+pub fn extract_source_card(body: &str) -> Option<MeetingSourceCard> {
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.first()? != &"---" {
+        return None;
+    }
+    let close_rel = lines.iter().skip(1).position(|l| l.trim() == "---")?;
+    let fm_lines = &lines[1..=close_rel];
+
+    fn val<'a>(k: &str, lines: &[&'a str]) -> Option<&'a str> {
+        lines.iter().find_map(|l| {
+            let l = l.trim();
+            Some(l.strip_prefix(k)?.strip_prefix(':')?.trim())
+        })
+    }
+
+    let event_id = val("meeting_event_id", fm_lines)?.to_string();
+    let title = val("meeting_title", fm_lines)?.to_string();
+    let calendar_source = val("calendar_source", fm_lines).unwrap_or("").to_string();
+    let organizer = val("meeting_organizer", fm_lines).map(|s| s.to_string());
+    let location = val("meeting_location", fm_lines).map(|s| s.to_string());
+    let meeting_url = val("meeting_url", fm_lines).map(|s| s.to_string());
+
+    // Parse attendees — look for indented list under meeting_attendees:
+    let mut attendees: Vec<String> = Vec::new();
+    let mut in_attendees = false;
+    for line in fm_lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("meeting_attendees:") && !trimmed.contains("[]") {
+            in_attendees = true;
+            continue;
+        }
+        if in_attendees {
+            if line.starts_with(' ') || line.starts_with('\t') {
+                let name = trimmed.trim_start_matches("- ").to_string();
+                if !name.is_empty() {
+                    attendees.push(name);
+                }
+            } else {
+                in_attendees = false;
+            }
+        }
+    }
+
+    let start = val("meeting_start", fm_lines)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.to_utc())?;
+    let end = val("meeting_end", fm_lines)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.to_utc())?;
+
+    Some(MeetingSourceCard {
+        event_id,
+        title,
+        organizer,
+        attendees,
+        calendar_source,
+        start,
+        end,
+        location,
+        meeting_url,
+    })
+}
 
 /// Merge calendar meeting metadata into a markdown note body as YAML
 /// frontmatter keys (`meeting_event_id`, `meeting_title`, `meeting_start`,
@@ -560,25 +672,41 @@ pub fn attach_meeting_metadata(note_body: &str, event: &CalendarEvent) -> String
     out
 }
 
-/// Build YAML key-value lines for meeting metadata.
-fn build_meeting_yaml_lines(event: &CalendarEvent) -> Vec<String> {
+/// Build YAML key-value lines for meeting metadata from a
+/// [`MeetingSourceCard`] (includes organizer, calendar_source, meeting_url).
+pub fn build_source_card_yaml(card: &MeetingSourceCard) -> Vec<String> {
     let mut lines = Vec::new();
-    lines.push(format!(
-        "meeting_event_id: {}",
-        yaml_scalar(&event.provider_event_id)
-    ));
-    lines.push(format!("meeting_title: {}", yaml_scalar(&event.title)));
-    lines.push(format!("meeting_start: \"{}\"", event.start.to_rfc3339()));
-    lines.push(format!("meeting_end: \"{}\"", event.end.to_rfc3339()));
-    if event.attendees.is_empty() {
+    lines.push(format!("meeting_event_id: {}", yaml_scalar(&card.event_id)));
+    lines.push(format!("meeting_title: {}", yaml_scalar(&card.title)));
+    if let Some(ref org) = card.organizer {
+        lines.push(format!("meeting_organizer: {}", yaml_scalar(org)));
+    }
+    if !card.calendar_source.is_empty() {
+        lines.push(format!("calendar_source: {}", yaml_scalar(&card.calendar_source)));
+    }
+    if let Some(ref loc) = card.location {
+        lines.push(format!("meeting_location: {}", yaml_scalar(loc)));
+    }
+    if let Some(ref url) = card.meeting_url {
+        lines.push(format!("meeting_url: {}", yaml_scalar(url)));
+    }
+    lines.push(format!("meeting_start: \"{}\"", card.start.to_rfc3339()));
+    lines.push(format!("meeting_end: \"{}\"", card.end.to_rfc3339()));
+    if card.attendees.is_empty() {
         lines.push("meeting_attendees: []".to_string());
     } else {
         lines.push("meeting_attendees:".to_string());
-        for a in &event.attendees {
+        for a in &card.attendees {
             lines.push(format!("  - {}", yaml_scalar(a)));
         }
     }
     lines
+}
+
+/// Build YAML key-value lines for meeting metadata from a [`CalendarEvent`].
+fn build_meeting_yaml_lines(event: &CalendarEvent) -> Vec<String> {
+    let card = event.to_source_card();
+    build_source_card_yaml(&card)
 }
 
 /// Minimal YAML scalar escaping: quote if the value contains characters

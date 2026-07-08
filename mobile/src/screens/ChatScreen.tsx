@@ -517,7 +517,7 @@ export default function ChatScreen({ navigation, route }: any) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior="height" keyboardVerticalOffset={0}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'android' ? 'padding' : 'height'}>
       {/* Header */}
       <View style={[s.header, { borderBottomColor: c.border }]}>
         <TouchableOpacity onPress={() => navigation.navigate('Sessions')} style={s.sessionsBtn}>
@@ -594,6 +594,7 @@ export default function ChatScreen({ navigation, route }: any) {
       {/* Input bar */}
       <View style={[s.inputBar, { backgroundColor: c.bg }]}>
         <TextInput
+          testID="chat-input"
           style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
           value={input}
           onChangeText={setInput}
@@ -603,16 +604,16 @@ export default function ChatScreen({ navigation, route }: any) {
           maxLength={4000}
           editable={!streaming}
           returnKeyType="send"
-          blurOnSubmit
           onSubmitEditing={send}
         />
         {streaming ? (
-          <TouchableOpacity onPress={stop} style={[s.sendBtn, { backgroundColor: '#EF4444' }]}>
+          <TouchableOpacity onPress={stop} testID="stop-btn" style={[s.sendBtn, { backgroundColor: '#EF4444' }]}>
             <Ionicons name="stop-circle-outline" size={22} color="#FFF" />
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
             onPress={send}
+            testID="send-btn"
             style={[s.sendBtn, { backgroundColor: input.trim() ? accentColor : c.border }]}
             disabled={!input.trim()}
           >

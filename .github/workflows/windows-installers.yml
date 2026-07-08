@@ -388,12 +388,12 @@ jobs:
             )
 
             $assets = Get-ChildItem $Directory -File -Recurse | Where-Object {
-              $_.Name -match 'Setup\\.exe$' -or
-              $_.Name -match '-full\\.nupkg$' -or
-              $_.Name -match '\\.deb$' -or
-              $_.Name -match '^releases\\..+\\.json$' -or
+              $_.Name -match 'Setup\.exe$' -or
+              $_.Name -match '-full\.nupkg$' -or
+              $_.Name -match '\.deb$' -or
+              $_.Name -match '^releases\..+\.json$' -or
               $_.Name -match '^RELEASES-.+$' -or
-              $_.Name -match '^SHA256SUMS\\.zip$'
+              $_.Name -match '^SHA256SUMS\.zip$'
             } | Sort-Object Name
 
             if (-not $assets) {

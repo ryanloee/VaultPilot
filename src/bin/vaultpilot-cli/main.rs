@@ -501,6 +501,19 @@ enum SettingsActions {
 
     /// Update settings from JSON on stdin
     Set,
+
+    /// Switch active provider by name or index (#1765)
+    ///
+    /// Provider names are matched case-insensitively. Index starts at 0.
+    /// Use `--list` to see available providers before switching.
+    SwitchProvider {
+        /// Provider name or index to activate
+        target: String,
+
+        /// List available providers and exit
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1320,6 +1333,73 @@ fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result
             let settings: AppSettings = serde_json::from_value(input)?;
             let saved = save_settings_with_context(context, settings)?;
             to_json(&saved)
+        }
+        SettingsActions::SwitchProvider { target, list } => {
+            if *list {
+                let settings = load_settings_with_context(context)?;
+                let providers = if !settings.providers.is_empty() {
+                    &settings.providers
+                } else {
+                    // Wrap the single legacy provider into a display list
+                    return Ok(serde_json::json!({
+                        "active": 0,
+                        "providers": [{
+                            "name": settings.provider.name,
+                            "index": 0,
+                            "model": settings.provider.model,
+                            "active": true,
+                        }],
+                        "message": "Single provider mode (legacy). Use `settings set` with a providers array to add more."
+                    }));
+                };
+                let provider_info: Vec<serde_json::Value> = providers.iter().enumerate().map(|(i, p)| {
+                    serde_json::json!({
+                        "name": p.name,
+                        "index": i,
+                        "model": p.model,
+                        "active": i == settings.active_provider_index,
+                    })
+                }).collect();
+                return Ok(serde_json::json!({
+                    "active": settings.active_provider_index,
+                    "providers": provider_info,
+                }));
+
+            }
+
+            let mut settings = load_settings_with_context(context)?;
+            if settings.providers.is_empty() {
+                anyhow::bail!("No providers configured. Use `settings set` to add providers first.");
+            }
+
+            // Try parsing target as numeric index first
+            let idx: Option<usize> = target.trim().parse().ok();
+            let idx = idx.or_else(|| {
+                let lower = target.to_lowercase();
+                settings.providers.iter().position(|p| p.name.to_lowercase() == lower)
+            });
+
+            match idx {
+                Some(i) if i < settings.providers.len() => {
+                    settings.active_provider_index = i;
+                    let saved = save_settings_with_context(context, settings)?;
+                    Ok(serde_json::json!({
+                        "active_provider_index": saved.active_provider_index,
+                        "provider_name": saved.providers[saved.active_provider_index].name,
+                        "model": saved.providers[saved.active_provider_index].model,
+                    }))
+                }
+                Some(_) => anyhow::bail!("Provider index out of range (max: {})", settings.providers.len() - 1),
+                None => {
+                    let available: Vec<String> = settings.providers.iter().enumerate().map(|(i, p)| {
+                        format!("{}: {} ({})", i, p.name, p.model)
+                    }).collect();
+                    anyhow::bail!(
+                        "Provider '{}' not found. Available providers:\n{}",
+                        target, available.join("\n")
+                    );
+                }
+            }
         }
     }
 }

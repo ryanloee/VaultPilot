@@ -2962,4 +2962,29 @@ mod pure_function_tests {
             generated_at: "now".into(),
         }
     }
+
+    // ── Regression: estimate_tokens (#2542) ─────────────────────────
+
+    #[test]
+    fn regression_2542_estimate_tokens_uses_provided_count() {
+        assert_eq!(estimate_tokens(Some(100), 400), 100);
+    }
+
+    #[test]
+    fn regression_2542_estimate_tokens_fallback_count_none() {
+        // 400 text_len / 4 = 100
+        assert_eq!(estimate_tokens(None, 400), 100);
+    }
+
+    #[test]
+    fn regression_2542_estimate_tokens_fallback_min_one() {
+        // text_len=0, max(1, 0/4)=1
+        assert_eq!(estimate_tokens(None, 0), 1);
+    }
+
+    #[test]
+    fn regression_2542_estimate_tokens_fallback_cjk() {
+        // CJK 4 bytes per char; 12 bytes / 4 = 3 tokens
+        assert_eq!(estimate_tokens(None, 12), 3);
+    }
 }

@@ -1644,4 +1644,37 @@ mod tests {
         let parsed: TestSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(parsed.response_style, ResponseStyle::Standard);
     }
+
+    // ── Regression: escape_xml_tags UTF-8 byte index (#2381, #2512) ──
+
+    #[test]
+    fn regression_2512_escape_xml_tags_ascii_open_tag() {
+        // Standard ASCII tag name — no panic, expected escape
+        assert_eq!(escape_xml_tags("</user_input>", "<user_input>"), "<//user_input>");
+    }
+
+    #[test]
+    fn regression_2512_escape_xml_tags_multibyte_open_tag() {
+        // Multi-byte UTF-8 tag name — was panic on open_tag[1..] (#2512)
+        let result = escape_xml_tags("</你>", "<你>");
+        assert!(result.contains("<//你>"), "got: {result}");
+    }
+
+    #[test]
+    fn regression_2381_escape_xml_tags_short_tag_guard() {
+        // Tag <3 chars (e.g. <>) — guard returns content unchanged
+        assert_eq!(escape_xml_tags("</>内容", "<>"), "</>内容");
+    }
+
+    #[test]
+    fn regression_2381_escape_xml_tags_no_open_angle() {
+        // Tag doesn't start with '<' — guard returns content unchanged
+        assert_eq!(escape_xml_tags("some content", "plaintext"), "some content");
+    }
+
+    #[test]
+    fn regression_2512_escape_xml_tags_empty_body_content() {
+        // Empty content with valid tag — no crash
+        assert_eq!(escape_xml_tags("", "<tag>"), "");
+    }
 }

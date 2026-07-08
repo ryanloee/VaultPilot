@@ -302,6 +302,7 @@ public sealed partial class AiCommandPalette : UserControl
         "continueWriting" => AiActionType.ContinueWriting,
         "extractTodos" => AiActionType.ExtractTodos,
         "findRelatedNotes" => AiActionType.FindRelatedNotes,
+        "cleanUp" or "clean_up" => AiActionType.CleanUp,
         _ => AiActionType.Summarize
     };
 

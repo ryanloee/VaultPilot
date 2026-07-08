@@ -705,7 +705,8 @@ public sealed class BackendClient : IAsyncDisposable
                 AiActionType.ContinueWriting => "continueWriting",
                 AiActionType.ExtractTodos => "extractTodos",
                 AiActionType.FindRelatedNotes => "findRelatedNotes",
-                _ => throw new ArgumentOutOfRangeException(nameof(action))
+                AiActionType.CleanUp => "cleanUp",
+                _ => throw new ArgumentOutOfRangeException(nameof(action)),
             },
             text,
             targetLanguage,

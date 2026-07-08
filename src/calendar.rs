@@ -565,7 +565,12 @@ pub fn extract_source_card(body: &str) -> Option<MeetingSourceCard> {
     fn val<'a>(k: &str, lines: &[&'a str]) -> Option<&'a str> {
         lines.iter().find_map(|l| {
             let l = l.trim();
-            Some(l.strip_prefix(k)?.strip_prefix(':')?.trim())
+            let v = l.strip_prefix(k)?.strip_prefix(':')?.trim();
+            let unquoted = v
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(v);
+            Some(unquoted)
         })
     }
 
@@ -682,7 +687,10 @@ pub fn build_source_card_yaml(card: &MeetingSourceCard) -> Vec<String> {
         lines.push(format!("meeting_organizer: {}", yaml_scalar(org)));
     }
     if !card.calendar_source.is_empty() {
-        lines.push(format!("calendar_source: {}", yaml_scalar(&card.calendar_source)));
+        lines.push(format!(
+            "calendar_source: {}",
+            yaml_scalar(&card.calendar_source)
+        ));
     }
     if let Some(ref loc) = card.location {
         lines.push(format!("meeting_location: {}", yaml_scalar(loc)));

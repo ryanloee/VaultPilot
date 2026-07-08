@@ -29,4 +29,5 @@ mod issue_1987_file_parsing;
 mod issue_1994_calendar;
 mod issue_1995_context_surface;
 mod issue_1996_agent_engine;
+mod issue_2643_calendar_roundtrip;
 mod issue_914_related_notes;

@@ -179,8 +179,7 @@ fn system_prompt(action: AiActionType) -> String {
              notes in the vault. Output a concise search description."
                 .to_string()
         }
-        AiActionType::CleanUp => {
-            "You are a note-formatting assistant. Your task is to clean up \
+        AiActionType::CleanUp => "You are a note-formatting assistant. Your task is to clean up \
              messy, rushed, or voice-transcribed notes into readable, \
              well-structured text. Preserve all factual content and key \
              information. \
@@ -192,8 +191,7 @@ fn system_prompt(action: AiActionType) -> String {
              - Remove repetitive or filler content. \
              - Keep the original language and tone. \
              Output only the cleaned-up text, no extra commentary."
-                .to_string()
-        }
+            .to_string(),
     }
 }
 
@@ -507,7 +505,10 @@ mod tests {
             model: None,
         };
         let result = validate_request(&request);
-        assert!(result.is_some(), "empty text should fail validation for CleanUp");
+        assert!(
+            result.is_some(),
+            "empty text should fail validation for CleanUp"
+        );
     }
 
     #[test]
@@ -528,8 +529,12 @@ mod tests {
     #[test]
     fn cleanup_system_prompt_includes_formatting_instructions() {
         let prompt = system_prompt(AiActionType::CleanUp);
-        assert!(prompt.contains("bullets") || prompt.contains("headings")
-            || prompt.contains("formatting") || prompt.contains("structure"));
+        assert!(
+            prompt.contains("bullets")
+                || prompt.contains("headings")
+                || prompt.contains("formatting")
+                || prompt.contains("structure")
+        );
         assert!(prompt.contains("Output only the cleaned-up text"));
     }
 }

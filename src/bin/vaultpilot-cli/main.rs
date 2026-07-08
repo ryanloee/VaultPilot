@@ -1352,31 +1352,39 @@ fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result
                         "message": "Single provider mode (legacy). Use `settings set` with a providers array to add more."
                     }));
                 };
-                let provider_info: Vec<serde_json::Value> = providers.iter().enumerate().map(|(i, p)| {
-                    serde_json::json!({
-                        "name": p.name,
-                        "index": i,
-                        "model": p.model,
-                        "active": i == settings.active_provider_index,
+                let provider_info: Vec<serde_json::Value> = providers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "index": i,
+                            "model": p.model,
+                            "active": i == settings.active_provider_index,
+                        })
                     })
-                }).collect();
+                    .collect();
                 return Ok(serde_json::json!({
                     "active": settings.active_provider_index,
                     "providers": provider_info,
                 }));
-
             }
 
             let mut settings = load_settings_with_context(context)?;
             if settings.providers.is_empty() {
-                anyhow::bail!("No providers configured. Use `settings set` to add providers first.");
+                anyhow::bail!(
+                    "No providers configured. Use `settings set` to add providers first."
+                );
             }
 
             // Try parsing target as numeric index first
             let idx: Option<usize> = target.trim().parse().ok();
             let idx = idx.or_else(|| {
                 let lower = target.to_lowercase();
-                settings.providers.iter().position(|p| p.name.to_lowercase() == lower)
+                settings
+                    .providers
+                    .iter()
+                    .position(|p| p.name.to_lowercase() == lower)
             });
 
             match idx {
@@ -1389,14 +1397,21 @@ fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result
                         "model": saved.providers[saved.active_provider_index].model,
                     }))
                 }
-                Some(_) => anyhow::bail!("Provider index out of range (max: {})", settings.providers.len() - 1),
+                Some(_) => anyhow::bail!(
+                    "Provider index out of range (max: {})",
+                    settings.providers.len() - 1
+                ),
                 None => {
-                    let available: Vec<String> = settings.providers.iter().enumerate().map(|(i, p)| {
-                        format!("{}: {} ({})", i, p.name, p.model)
-                    }).collect();
+                    let available: Vec<String> = settings
+                        .providers
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| format!("{}: {} ({})", i, p.name, p.model))
+                        .collect();
                     anyhow::bail!(
                         "Provider '{}' not found. Available providers:\n{}",
-                        target, available.join("\n")
+                        target,
+                        available.join("\n")
                     );
                 }
             }

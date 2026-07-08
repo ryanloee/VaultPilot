@@ -568,8 +568,8 @@ fn build_meeting_yaml_lines(event: &CalendarEvent) -> Vec<String> {
         yaml_scalar(&event.provider_event_id)
     ));
     lines.push(format!("meeting_title: {}", yaml_scalar(&event.title)));
-    lines.push(format!("meeting_start: \"{}\"", event.start.to_rfc3339()));
-    lines.push(format!("meeting_end: \"{}\"", event.end.to_rfc3339()));
+    lines.push(format!("meeting_start: {}", event.start.to_rfc3339()));
+    lines.push(format!("meeting_end: {}", event.end.to_rfc3339()));
     if event.attendees.is_empty() {
         lines.push("meeting_attendees: []".to_string());
     } else {

@@ -52,13 +52,18 @@ export function extractAutoTags(title: string, content: string, maxTags = 5): st
   const combined = `${cleanTitle} ${cleanTitle} ${cleanContent}`; // title weighted 2x
 
   // Tokenize: Latin words (3+ chars) and CJK bigrams (2 chars)
-  const rawTokens = combined.match(/[\u3000-\u9fff\u3400-\u4dbf\uac00-\ud7af]+|[a-zA-Z]{3,}/g);
+  // CJK ranges match isCJK() in rag.ts for consistency across all CJK blocks,
+  // including Japanese Hiragana/Katakana, CJK Compatibility Ideographs,
+  // and Extensions B–G (#2631).
+  const rawTokens = combined.match(
+    /[\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\u{20000}-\u{2A6DF}\u{2A700}-\u{2B73F}\u{2B740}-\u{2B81F}\u{2B820}-\u{2CEAF}\u{2CEB0}-\u{2EBEF}\u{2F800}-\u{2FA1F}]+|[a-zA-Z]{3,}/gu,
+  );
   if (!rawTokens) return [];
 
   // Expand CJK runs into bigrams for better keyword extraction
   const tokens: string[] = [];
   for (const t of rawTokens) {
-    if (/^[\u3000-\u9fff\u3400-\u4dbf\uac00-\ud7af]+$/.test(t)) {
+    if (/^[\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\u{20000}-\u{2A6DF}\u{2A700}-\u{2B73F}\u{2B740}-\u{2B81F}\u{2B820}-\u{2CEAF}\u{2CEB0}-\u{2EBEF}\u{2F800}-\u{2FA1F}]+$/u.test(t)) {
       // CJK: extract bigrams
       for (let i = 0; i <= t.length - 2; i++) {
         tokens.push(t.slice(i, i + 2));

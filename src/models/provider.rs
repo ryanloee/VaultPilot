@@ -163,6 +163,198 @@ pub fn default_timeout_ms() -> u64 {
     60_000
 }
 
+// ---------------------------------------------------------------------------
+// Known model definitions (#1862)
+// ---------------------------------------------------------------------------
+
+/// Capabilities that a model may support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCapabilities {
+    /// Whether the model supports image/video input.
+    pub vision: bool,
+    /// Whether the model supports chain-of-thought / extended reasoning.
+    pub reasoning: bool,
+    /// Whether the model supports function/tool calling.
+    pub function_calling: bool,
+    /// Whether the model supports streaming responses.
+    pub streaming: bool,
+}
+
+impl Default for ModelCapabilities {
+    fn default() -> Self {
+        Self {
+            vision: false,
+            reasoning: false,
+            function_calling: true,
+            streaming: true,
+        }
+    }
+}
+
+/// Information about a well-known model, used for preset dropdowns and
+/// capability-aware routing in the UI layer (#1862).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnownModel {
+    /// Model identifier string (e.g. "gpt-5.5", "claude-opus-4-7").
+    pub id: String,
+    /// Human-readable display name.
+    pub name: String,
+    /// The provider type this model is typically associated with.
+    pub provider: ProviderType,
+    /// Maximum context window size in tokens.
+    pub context_window: usize,
+    /// Default maximum output tokens.
+    pub max_output_tokens: u32,
+    /// Model capabilities metadata.
+    pub capabilities: ModelCapabilities,
+}
+
+/// Return a list of well-known model presets, covering the latest models
+/// from all major providers as of July 2026 (#1862).
+pub fn known_models() -> Vec<KnownModel> {
+    vec![
+        // ── OpenAI / OpenAI-compatible ──
+        KnownModel {
+            id: "gpt-5.5".into(),
+            name: "GPT-5.5".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 256_000,
+            max_output_tokens: 16384,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "gpt-5.4-mini".into(),
+            name: "GPT-5.4 Mini".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 128_000,
+            max_output_tokens: 16384,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "deepseek-v4-flash-free".into(),
+            name: "DeepSeek V4 Flash (Free)".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 128_000,
+            max_output_tokens: 8192,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "deepseek-v4".into(),
+            name: "DeepSeek V4".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 128_000,
+            max_output_tokens: 8192,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "grok-4.3".into(),
+            name: "Grok 4.3".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 131_072,
+            max_output_tokens: 8192,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        // ── Anthropic ──
+        KnownModel {
+            id: "claude-opus-4-7".into(),
+            name: "Claude Opus 4.7".into(),
+            provider: ProviderType::Anthropic,
+            context_window: 200_000,
+            max_output_tokens: 8192,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "claude-sonnet-4-6".into(),
+            name: "Claude Sonnet 4.6".into(),
+            provider: ProviderType::Anthropic,
+            context_window: 200_000,
+            max_output_tokens: 8192,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "claude-haiku-4-5".into(),
+            name: "Claude Haiku 4.5".into(),
+            provider: ProviderType::Anthropic,
+            context_window: 200_000,
+            max_output_tokens: 8192,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        // ── Google Gemini ──
+        KnownModel {
+            id: "gemini-3.5-flash".into(),
+            name: "Gemini 3.5 Flash".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 1_048_576,
+            max_output_tokens: 8192,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "gemini-3.5-pro".into(),
+            name: "Gemini 3.5 Pro".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 2_097_152,
+            max_output_tokens: 16384,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: true,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+    ]
+}
+
+/// Look up a known model by its id string.
+/// Returns `None` if the model is not in the built-in list.
+pub fn lookup_model(id: &str) -> Option<KnownModel> {
+    known_models().into_iter().find(|m| m.id == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,5 +605,109 @@ mod tests {
             ..ProviderConfig::default()
         };
         assert_eq!(provider.effective_provider_type(), ProviderType::Anthropic);
+    }
+
+    // ── known_models (#1862) ──
+
+    #[test]
+    fn known_models_contains_expected_count() {
+        let models = known_models();
+        // At least 10 well-known models: GPT-5.5, GPT-5.4 Mini, DeepSeek V4 Flash,
+        // DeepSeek V4, Grok 4.3, Claude Opus 4.7, Claude Sonnet 4.6, Claude Haiku 4.5,
+        // Gemini 3.5 Flash, Gemini 3.5 Pro
+        assert!(
+            models.len() >= 10,
+            "expected >=10 models, got {}",
+            models.len()
+        );
+    }
+
+    #[test]
+    fn known_models_has_unique_ids() {
+        let models = known_models();
+        let mut ids = std::collections::HashSet::new();
+        for m in &models {
+            assert!(ids.insert(&m.id), "duplicate model id: {}", m.id);
+        }
+    }
+
+    #[test]
+    fn known_models_all_have_valid_context_windows() {
+        for m in known_models() {
+            assert!(
+                m.context_window >= 4096,
+                "model {} has context_window {} < 4096",
+                m.id,
+                m.context_window
+            );
+        }
+    }
+
+    #[test]
+    fn known_models_all_have_positive_max_output() {
+        for m in known_models() {
+            assert!(
+                m.max_output_tokens > 0,
+                "model {} has max_output_tokens == 0",
+                m.id
+            );
+        }
+    }
+
+    #[test]
+    fn known_models_include_gpt55() {
+        let m = lookup_model("gpt-5.5").expect("gpt-5.5 not found");
+        assert_eq!(m.name, "GPT-5.5");
+        assert!(m.capabilities.vision);
+        assert!(m.capabilities.reasoning);
+        assert!(m.capabilities.function_calling);
+        assert!(m.capabilities.streaming);
+        assert_eq!(m.provider, ProviderType::OpenAi);
+    }
+
+    #[test]
+    fn known_models_include_claude_opus() {
+        let m = lookup_model("claude-opus-4-7").expect("claude-opus-4-7 not found");
+        assert_eq!(m.name, "Claude Opus 4.7");
+        assert_eq!(m.provider, ProviderType::Anthropic);
+        assert_eq!(m.context_window, 200_000);
+    }
+
+    #[test]
+    fn known_models_include_gemini_flash() {
+        let m = lookup_model("gemini-3.5-flash").expect("gemini-3.5-flash not found");
+        assert_eq!(m.name, "Gemini 3.5 Flash");
+        assert_eq!(m.context_window, 1_048_576);
+    }
+
+    #[test]
+    fn known_models_include_deepseek_flash() {
+        let m = lookup_model("deepseek-v4-flash-free").expect("deepseek-v4-flash-free not found");
+        assert_eq!(m.name, "DeepSeek V4 Flash (Free)");
+        assert!(
+            !m.capabilities.reasoning,
+            "flash-free should not have reasoning"
+        );
+    }
+
+    #[test]
+    fn lookup_model_unknown_returns_none() {
+        assert!(lookup_model("nonexistent-model-v99").is_none());
+        assert!(lookup_model("").is_none());
+    }
+
+    #[test]
+    fn known_models_haiku_no_reasoning() {
+        let m = lookup_model("claude-haiku-4-5").expect("claude-haiku-4-5 not found");
+        assert!(!m.capabilities.reasoning, "Haiku should not have reasoning");
+    }
+
+    #[test]
+    fn model_capabilities_default() {
+        let caps = ModelCapabilities::default();
+        assert!(!caps.vision);
+        assert!(!caps.reasoning);
+        assert!(caps.function_calling);
+        assert!(caps.streaming);
     }
 }

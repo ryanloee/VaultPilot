@@ -548,6 +548,22 @@ enum NotesActions {
         /// Enable deep semantic/vector search to find more relevant results (#2033)
         #[arg(long)]
         deep_search: bool,
+
+        /// Filter notes created on or after ISO-8601 datetime (e.g. "2026-01-01" or "2026-01-01T00:00:00Z")
+        #[arg(long)]
+        after: Option<String>,
+
+        /// Filter notes created on or before ISO-8601 datetime
+        #[arg(long)]
+        before: Option<String>,
+
+        /// Filter notes modified on or after ISO-8601 datetime
+        #[arg(long)]
+        modified_after: Option<String>,
+
+        /// Filter notes modified on or before ISO-8601 datetime
+        #[arg(long)]
+        modified_before: Option<String>,
     },
 
     /// Import markdown files
@@ -1343,6 +1359,10 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             keywords,
             limit,
             deep_search,
+            after,
+            before,
+            modified_after,
+            modified_before,
         } => {
             let result = search_notes_with_context(
                 context,
@@ -1352,6 +1372,10 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                     keywords: parse_comma_list(keywords),
                     limit: Some(*limit),
                     deep_search: *deep_search,
+                    created_after: after.clone(),
+                    created_before: before.clone(),
+                    modified_after: modified_after.clone(),
+                    modified_before: modified_before.clone(),
                     ..Default::default()
                 },
             )?;

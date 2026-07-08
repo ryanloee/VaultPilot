@@ -1270,7 +1270,7 @@ async fn http_chat_completions(
         let settings_arc = Arc::new(settings);
         let system_owned = format!(
             "{}{}",
-            vaultpilot_lib::prompting::general_chat_system_prompt(),
+            vaultpilot_lib::prompting::general_chat_system_prompt(""),
             vaultpilot_lib::prompting::response_style_suffix(settings_arc.response_style),
         );
         let user_prompt_owned =

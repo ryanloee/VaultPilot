@@ -265,8 +265,8 @@ pub fn answer_user_prompt(
     )
 }
 
-pub fn general_chat_system_prompt() -> String {
-    format!(
+pub fn general_chat_system_prompt(directive: &str) -> String {
+    let base = format!(
         "You are a general AI assistant embedded in a local knowledge app.\n\
          Date: {}\n\
          {}\n\
@@ -282,7 +282,12 @@ pub fn general_chat_system_prompt() -> String {
         Utc::now().format("%Y-%m-%d"),
         render_manual_for_model(),
         PROMPT_INJECTION_DEFENSE,
-    )
+    );
+    if directive.is_empty() {
+        base
+    } else {
+        format!("{}\n\n## 全局指令\n{}", base, directive)
+    }
 }
 
 pub fn general_chat_user_prompt(question: &str, history: &[ConversationTurn]) -> String {
@@ -1086,7 +1091,7 @@ mod tests {
     fn system_prompts_contain_injection_defense() {
         assert!(ingest_system_prompt().contains("PROMPT INJECTION DEFENSE"));
         assert!(answer_system_prompt().contains("PROMPT INJECTION DEFENSE"));
-        assert!(general_chat_system_prompt().contains("PROMPT INJECTION DEFENSE"));
+        assert!(general_chat_system_prompt("").contains("PROMPT INJECTION DEFENSE"));
         assert!(record_system_prompt().contains("PROMPT INJECTION DEFENSE"));
         assert!(compression_system_prompt().contains("PROMPT INJECTION DEFENSE"));
         assert!(tool_call_system_prompt().contains("PROMPT INJECTION DEFENSE"));
@@ -1455,10 +1460,18 @@ mod tests {
 
     #[test]
     fn general_chat_system_prompt_contains_key_instructions() {
-        let prompt = general_chat_system_prompt();
+        let prompt = general_chat_system_prompt("");
         assert!(prompt.contains("PROMPT INJECTION DEFENSE"));
         assert!(prompt.contains("ai_workflow_manual"));
         assert!(prompt.contains("tool_selection"));
+    }
+
+    #[test]
+    fn general_chat_system_prompt_appends_directive() {
+        let prompt = general_chat_system_prompt("Always respond in Chinese, use formal tone.");
+        assert!(prompt.contains("全局指令"));
+        assert!(prompt.contains("Always respond in Chinese"));
+        assert!(!general_chat_system_prompt("").contains("全局指令"));
     }
 
     #[test]

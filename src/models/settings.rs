@@ -101,6 +101,11 @@ pub struct AppSettings {
     /// Default: `.vaultpilot/sessions/`
     #[serde(default)]
     pub session_export_path: Option<String>,
+    /// Global system directive that is prepended to all chat system prompts (#1766).
+    /// Users can set this to define persistent AI behavior preferences (e.g. tone,
+    /// response format, domain focus) that apply across all chat sessions.
+    #[serde(default)]
+    pub system_directive: String,
 }
 
 fn default_session_export_enabled() -> bool {
@@ -128,6 +133,7 @@ impl Default for AppSettings {
             active_prompt_name: None,
             session_export_enabled: false,
             session_export_path: None,
+            system_directive: String::new(),
         }
     }
 }
@@ -266,6 +272,7 @@ mod tests {
             active_prompt_name: None,
             session_export_enabled: false,
             session_export_path: None,
+            system_directive: String::new(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

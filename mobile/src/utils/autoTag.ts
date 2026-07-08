@@ -5,6 +5,8 @@
  * Handles both CJK and Latin text.
  */
 
+import { isCJK } from './cjk';
+
 /** Common stop words to exclude from tag extraction. */
 const STOP_WORDS = new Set([
   // Chinese
@@ -51,22 +53,55 @@ export function extractAutoTags(title: string, content: string, maxTags = 5): st
   const cleanContent = stripMarkdown(content);
   const combined = `${cleanTitle} ${cleanTitle} ${cleanContent}`; // title weighted 2x
 
-  // Tokenize: Latin words (3+ chars) and CJK bigrams (2 chars)
-  const rawTokens = combined.match(/[\u3000-\u9fff\u3400-\u4dbf\uac00-\ud7af]+|[a-zA-Z]{3,}/g);
-  if (!rawTokens) return [];
-
-  // Expand CJK runs into bigrams for better keyword extraction
+  // Tokenize: split into consecutive CJK and non-CJK runs (char by char)
+  // Uses isCJK() from cjk.ts for comprehensive CJK range detection
   const tokens: string[] = [];
-  for (const t of rawTokens) {
-    if (/^[\u3000-\u9fff\u3400-\u4dbf\uac00-\ud7af]+$/.test(t)) {
-      // CJK: extract bigrams
-      for (let i = 0; i <= t.length - 2; i++) {
-        tokens.push(t.slice(i, i + 2));
-      }
+  let current = '';
+  let currentIsCJK: boolean | null = null;
+
+  for (const ch of combined) {
+    const cjk = isCJK(ch);
+    if (currentIsCJK === null) {
+      currentIsCJK = cjk;
+      current = ch;
+    } else if (cjk === currentIsCJK) {
+      current += ch;
     } else {
-      tokens.push(t);
+      if (currentIsCJK) {
+        // CJK run: extract bigrams
+        for (let i = 0; i <= current.length - 2; i++) {
+          tokens.push(current.slice(i, i + 2));
+        }
+      } else {
+        // Non-CJK run: split on whitespace and keep 3+ char Latin words
+        for (const word of current.split(/\s+/)) {
+          if (/^[a-zA-Z]{3,}$/.test(word)) {
+            tokens.push(word);
+          }
+        }
+      }
+      current = ch;
+      currentIsCJK = cjk;
     }
   }
+
+  // Don't forget the last run
+  if (current) {
+    if (currentIsCJK) {
+      for (let i = 0; i <= current.length - 2; i++) {
+        tokens.push(current.slice(i, i + 2));
+      }
+    } else {
+      for (const word of current.split(/\s+/)) {
+        if (/^[a-zA-Z]{3,}$/.test(word)) {
+          tokens.push(word);
+        }
+      }
+    }
+  }
+
+  // If nothing extracted, return empty
+  if (tokens.length === 0) return [];
 
   // Count term frequency
   const freq = new Map<string, number>();

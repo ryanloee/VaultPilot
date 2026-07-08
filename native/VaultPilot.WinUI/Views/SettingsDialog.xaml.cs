@@ -79,7 +79,7 @@ public sealed partial class SettingsDialog : ContentDialog
         if (settings.Providers.Count > 0)
         {
             _providers = new List<ProviderConfig>(settings.Providers);
-            _activeProviderIndex = Math.Min(settings.ActiveProviderIndex, _providers.Count - 1);
+            _activeProviderIndex = Math.Clamp(settings.ActiveProviderIndex, 0, _providers.Count - 1);
         }
         else
         {

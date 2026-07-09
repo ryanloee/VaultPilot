@@ -13,6 +13,7 @@ pub mod plugin;
 pub mod prompt_store;
 pub mod prompting;
 pub mod search_rules;
+pub mod skills;
 pub mod storage;
 pub mod utils;
 

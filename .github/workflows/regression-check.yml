@@ -6,8 +6,6 @@
 name: Regression Test Check
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled]

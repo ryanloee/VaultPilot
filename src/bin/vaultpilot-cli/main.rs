@@ -1770,6 +1770,7 @@ fn render_daily_template(template_name: &str, date: &chrono::NaiveDate) -> Resul
 }
 
 /// List templates available in the vault's template directory.
+#[allow(dead_code)] // helper for future template-listing UX (#2659)
 fn list_daily_templates(context: &StorageContext) -> Vec<String> {
     let templates_dir = context.vault_dir().join(".vaultpilot/templates/daily");
     let mut templates = vec![

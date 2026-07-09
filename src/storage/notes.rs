@@ -2505,7 +2505,11 @@ mod tests {
         // Double-backtick code spans should also be skipped (#2672)
         let body = "See [[Real Link]] and ``code with [[Code Link]]`` here.";
         let links = extract_wikilinks(body);
-        assert_eq!(links.len(), 1, "double-backtick code span wikilink should be skipped");
+        assert_eq!(
+            links.len(),
+            1,
+            "double-backtick code span wikilink should be skipped"
+        );
         assert_eq!(links[0].0, "Real Link");
     }
 
@@ -2514,7 +2518,11 @@ mod tests {
         // Double-backtick span containing a single backtick should not close early
         let body = "``a ` b [[wikilink]]`` and [[Real]]";
         let links = extract_wikilinks(body);
-        assert_eq!(links.len(), 1, "wikilink inside double-backtick span should be skipped");
+        assert_eq!(
+            links.len(),
+            1,
+            "wikilink inside double-backtick span should be skipped"
+        );
         assert_eq!(links[0].0, "Real");
     }
 

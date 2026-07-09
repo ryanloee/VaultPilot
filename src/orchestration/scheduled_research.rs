@@ -199,6 +199,7 @@ pub async fn run_single_subscription(
                 meta,
                 body,
                 search_snippet: None,
+                search_score: None,
             };
 
             // Step 3+4: Synchronous storage I/O wrapped in spawn_blocking

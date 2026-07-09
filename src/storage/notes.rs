@@ -1306,6 +1306,7 @@ fn import_single_markdown(
         },
         body: parsed.body,
         search_snippet: None,
+        search_score: None,
     };
     save_note_with_context(context, imported)?;
     Ok(true)
@@ -1379,6 +1380,7 @@ pub(super) fn parse_markdown_note(path: &Path, default_source: &str) -> Result<N
         },
         body: body.trim().to_string(),
         search_snippet: None,
+        search_score: None,
     })
 }
 

@@ -1123,6 +1123,7 @@ mod tests {
             meta: meta.clone(),
             body: body.to_string(),
             search_snippet: None,
+            search_score: None,
         };
         crate::storage::notes::save_note_with_context(&ctx, doc).expect("save note");
 
@@ -1148,6 +1149,7 @@ mod tests {
             meta: meta.clone(),
             body: body.to_string(),
             search_snippet: None,
+            search_score: None,
         };
         crate::storage::notes::save_note_with_context(&ctx, doc).expect("save note");
 

@@ -586,6 +586,7 @@ async fn write_index_note(
         },
         body: note_body,
         search_snippet: None,
+        search_score: None,
     };
 
     let saved = storage::save_note_async(context, note)

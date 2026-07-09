@@ -491,6 +491,7 @@ pub fn get_last_successful_run_note(
                     },
                     body: row.get::<_, String>(7)?,
                     search_snippet: None,
+                    search_score: None,
                 })
             },
         )

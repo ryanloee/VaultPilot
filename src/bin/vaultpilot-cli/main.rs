@@ -400,6 +400,16 @@ enum Commands {
         #[command(subcommand)]
         action: PromptActions,
     },
+
+    /// Generate a daily knowledge digest of recently changed notes (#1606)
+    Digest {
+        /// Hours back to look for recently modified notes (default: 24)
+        #[arg(long, default_value = "24", value_name = "HOURS")]
+        hours: u64,
+        /// Maximum notes to include (default: 10)
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1284,6 +1294,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Prompt { action } => {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
+        Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
     }
 }
 
@@ -3365,6 +3376,95 @@ fn density_emoji(score: f64) -> &'static str {
 
 // ─── Tests ────────────────────────────────────────────────────────
 
+/// Generate a daily knowledge digest (#1606).
+async fn handle_digest(context: &StorageContext, hours: u64, limit: usize) -> Result<Value> {
+    let now = chrono::Utc::now();
+    let since = (now - chrono::Duration::hours(hours as i64)).to_rfc3339();
+
+    let query = SearchQuery {
+        modified_after: Some(since),
+        limit: Some(limit),
+        ..Default::default()
+    };
+
+    let result = search_notes_with_context(context, query)?;
+    if result.notes.is_empty() {
+        return Ok(serde_json::json!({
+            "status": "ok",
+            "message": format!("No notes modified in the last {hours} hours."),
+            "recent_notes": [],
+            "count": 0,
+        }));
+    }
+
+    let mut recent_entries = Vec::new();
+    for meta in &result.notes {
+        let related = find_related_notes_for_digest(context, meta, 3).await;
+        recent_entries.push(serde_json::json!({
+            "id": meta.id,
+            "title": meta.title,
+            "tags": meta.tags,
+            "summary": meta.summary,
+            "updated_at": meta.updated_at,
+            "related_notes": related,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "window_hours": hours,
+        "recent_notes": recent_entries,
+        "count": recent_entries.len(),
+    }))
+}
+
+/// Find notes related to the given note via keyword/tag overlap.
+async fn find_related_notes_for_digest(
+    context: &StorageContext,
+    note: &vaultpilot_lib::models::NoteMeta,
+    n: usize,
+) -> Vec<Value> {
+    let mut terms = String::new();
+    for word in note.title.split_whitespace() {
+        if word.len() > 2 {
+            if !terms.is_empty() {
+                terms.push(' ');
+            }
+            terms.push_str(word);
+        }
+    }
+    for tag in &note.tags {
+        if !terms.is_empty() {
+            terms.push(' ');
+        }
+        terms.push_str(tag);
+    }
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let query = SearchQuery {
+        text: terms,
+        limit: Some(n + 1),
+        ..Default::default()
+    };
+    match search_notes_with_context(context, query) {
+        Ok(result) => result
+            .notes
+            .into_iter()
+            .filter(|m| m.id != note.id)
+            .take(n)
+            .map(|m| {
+                serde_json::json!({
+                    "id": m.id,
+                    "title": m.title,
+                    "summary": m.summary,
+                })
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::http_bridge::{
@@ -3734,5 +3834,50 @@ mod tests {
         assert!(!keywords.contains(&"Up"));
         assert!(keywords.contains(&"Quick"));
         assert!(keywords.contains(&"Sync"));
+    }
+
+    // ── Daily Digest (#1606) ──────────────────────────────────────
+
+    #[test]
+    fn digest_filters_short_words_from_title() {
+        let title = "A Quick Note on Rust";
+        let keywords: Vec<&str> = title.split_whitespace().filter(|w| w.len() > 2).collect();
+        assert!(!keywords.contains(&"A"));
+        assert!(!keywords.contains(&"on"));
+        assert!(keywords.contains(&"Quick"));
+        assert!(keywords.contains(&"Note"));
+        assert!(keywords.contains(&"Rust"));
+    }
+
+    #[test]
+    fn digest_builds_terms_from_title_and_tags() {
+        let title = "Meeting Notes";
+        let tags = vec!["meeting".to_string(), "project-alpha".to_string()];
+        let mut terms = String::new();
+        for word in title.split_whitespace() {
+            if word.len() > 2 {
+                if !terms.is_empty() {
+                    terms.push(' ');
+                }
+                terms.push_str(word);
+            }
+        }
+        for tag in &tags {
+            if !terms.is_empty() {
+                terms.push(' ');
+            }
+            terms.push_str(tag);
+        }
+        assert!(terms.contains("Meeting"));
+        assert!(terms.contains("Notes"));
+        assert!(terms.contains("meeting"));
+        assert!(terms.contains("project-alpha"));
+    }
+
+    #[test]
+    fn digest_empty_terms_for_short_title_only() {
+        let title = "Hi";
+        let keywords: Vec<&str> = title.split_whitespace().filter(|w| w.len() > 2).collect();
+        assert!(keywords.is_empty());
     }
 }

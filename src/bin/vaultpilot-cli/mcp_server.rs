@@ -685,6 +685,8 @@ async fn handle_mcp_request(
                 "notes.delete" => mcp_call_notes_delete(context, arguments).await,
                 "notes.search" => mcp_call_notes_search(context, arguments).await,
                 "notes.related" => mcp_call_notes_related(context, arguments).await,
+                "note.follow_links" => mcp_call_note_follow_links(context, arguments).await,
+                "note.backlinks" => mcp_call_note_backlinks(context, arguments).await,
                 "notes.import" => mcp_call_notes_import(context, arguments).await,
                 "index.rebuild" => mcp_call_index_rebuild(context).await,
                 "email.search" => mcp_call_email_search(context, arguments).await,
@@ -1411,6 +1413,48 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
+            "name": "note.follow_links",
+            "title": "Follow Wikilinks",
+            "description": "Parse [[wikilinks]] from a note's content and return the linked notes' titles, IDs, and summaries. Useful for exploring knowledge graph connections.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "string", "description": "Note ID to parse wikilinks from." },
+                    "limit": { "type": "integer", "default": 20, "description": "Maximum linked notes to return." }
+                },
+                "required": ["note_id"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Follow Wikilinks",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "note.backlinks",
+            "title": "Find Backlinks",
+            "description": "Find all notes that link to a given note via [[wikilinks]]. Returns the linking notes' titles, IDs, and a snippet showing the context of each link.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "string", "description": "Note ID to find backlinks for." },
+                    "limit": { "type": "integer", "default": 20, "description": "Maximum backlinks to return." }
+                },
+                "required": ["note_id"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Find Backlinks",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
             "name": "notes.import",
             "title": "Import Notes",
             "description": "Import Markdown files from local paths into the vault.",
@@ -2036,6 +2080,214 @@ async fn mcp_call_notes_related(context: &StorageContext, arguments: Value) -> V
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
+/// Parse [[wikilinks]] from a note's body and return the linked notes' metadata.
+fn parse_wikilinks(body: &str) -> Vec<String> {
+    let mut links = Vec::new();
+    let mut chars = body.char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        if ch == '[' && chars.peek().map(|&(_, c)| c) == Some('[') {
+            chars.next(); // skip second [
+            let start = i + 2;
+            let mut end = start;
+            while let Some((j, c)) = chars.next() {
+                if c == ']' && chars.peek().map(|&(_, c2)| c2) == Some(']') {
+                    chars.next(); // skip second ]
+                    end = j;
+                    break;
+                }
+                end = j + 1;
+            }
+            if end > start {
+                let link = body[start..end].trim().to_string();
+                if !link.is_empty() && !links.contains(&link) {
+                    links.push(link);
+                }
+            }
+        }
+    }
+    links
+}
+
+async fn mcp_call_note_follow_links(context: &StorageContext, arguments: Value) -> Value {
+    let note_id = match arguments.get("note_id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => {
+            return mcp_tool_error("note.follow_links requires 'note_id' parameter".to_string())
+        }
+    };
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(20)
+        .min(50) as usize;
+
+    let ctx = context.clone();
+    let nid = note_id.clone();
+    tokio::task::spawn_blocking(move || {
+        // Load the source note
+        let doc = match load_note_with_context(&ctx, &nid) {
+            Ok(d) => d,
+            Err(e) => return mcp_tool_error(sanitize_error(&format!("note not found: {e}"))),
+        };
+
+        // Parse wikilinks from body
+        let link_titles = parse_wikilinks(&doc.body);
+        if link_titles.is_empty() {
+            return mcp_tool_success(
+                format!("Note '{}' has no [[wikilinks]].", doc.meta.title),
+                serde_json::json!({ "links": [], "count": 0 }),
+            );
+        }
+
+        // Search for each linked note by title
+        let mut linked_notes: Vec<serde_json::Value> = Vec::new();
+        let mut not_found: Vec<String> = Vec::new();
+        for title in &link_titles {
+            let query = SearchQuery {
+                text: title.clone(),
+                limit: Some(1),
+                ..Default::default()
+            };
+            match search_notes_with_context(&ctx, query) {
+                Ok(result) => {
+                    if let Some(meta) = result.notes.into_iter().next() {
+                        linked_notes.push(serde_json::json!({
+                            "id": meta.id,
+                            "title": meta.title,
+                            "summary": meta.summary,
+                        }));
+                    } else {
+                        not_found.push(title.clone());
+                    }
+                }
+                Err(_) => not_found.push(title.clone()),
+            }
+            if linked_notes.len() >= limit {
+                break;
+            }
+        }
+
+        let count = linked_notes.len();
+        let summary = if not_found.is_empty() {
+            format!("Followed {count} wikilink(s) from '{}'.", doc.meta.title)
+        } else {
+            format!(
+                "Followed {count} wikilink(s) from '{}'. {} link target(s) not found.",
+                doc.meta.title,
+                not_found.len()
+            )
+        };
+
+        mcp_tool_success(
+            summary,
+            serde_json::json!({
+                "source": { "id": note_id, "title": doc.meta.title },
+                "links": linked_notes,
+                "not_found": not_found,
+                "count": count,
+            }),
+        )
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
+async fn mcp_call_note_backlinks(context: &StorageContext, arguments: Value) -> Value {
+    let note_id = match arguments.get("note_id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => return mcp_tool_error("note.backlinks requires 'note_id' parameter".to_string()),
+    };
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(20)
+        .min(50) as usize;
+
+    let ctx = context.clone();
+    let nid = note_id.clone();
+    tokio::task::spawn_blocking(move || {
+        // Load the target note to get its title for wikilink matching
+        let target_doc = match load_note_with_context(&ctx, &nid) {
+            Ok(d) => d,
+            Err(e) => return mcp_tool_error(sanitize_error(&format!("note not found: {e}"))),
+        };
+        let target_title = target_doc.meta.title.clone();
+
+        // Search all notes for ones containing [[TargetTitle]]
+        let wikilink_pattern = format!("[[{target_title}]]");
+        let query = SearchQuery {
+            text: wikilink_pattern.clone(),
+            limit: Some(limit),
+            ..Default::default()
+        };
+        let results = match search_notes_with_context(&ctx, query) {
+            Ok(r) => r,
+            Err(e) => return mcp_tool_error(sanitize_error(&format!("search failed: {e}"))),
+        };
+
+        // Also try a plain title search as fallback (some notes may use partial links)
+        let title_query = SearchQuery {
+            text: target_title.clone(),
+            limit: Some(limit),
+            ..Default::default()
+        };
+        let title_results = match search_notes_with_context(&ctx, title_query) {
+            Ok(r) => r,
+            Err(_) => results.clone(),
+        };
+
+        // Merge results, dedup by id, filter out the target note itself
+        let mut seen = std::collections::HashSet::new();
+        let mut backlinks: Vec<serde_json::Value> = Vec::new();
+
+        for meta in results.notes.into_iter().chain(title_results.notes) {
+            if meta.id == nid || seen.contains(&meta.id) {
+                continue;
+            }
+            seen.insert(meta.id.clone());
+
+            // Load body to extract snippet around the wikilink
+            let snippet = match load_note_with_context(&ctx, &meta.id) {
+                Ok(doc) => {
+                    let body_lower = doc.body.to_lowercase();
+                    let target_lower = target_title.to_lowercase();
+                    if let Some(pos) = body_lower.find(&target_lower) {
+                        let start = pos.saturating_sub(60);
+                        let end = (pos + target_title.len() + 60).min(doc.body.len());
+                        let snippet_text = doc.body[start..end].trim().to_string();
+                        format!("...{snippet_text}...")
+                    } else {
+                        meta.summary.clone()
+                    }
+                }
+                Err(_) => meta.summary.clone(),
+            };
+
+            backlinks.push(serde_json::json!({
+                "id": meta.id,
+                "title": meta.title,
+                "snippet": snippet,
+            }));
+
+            if backlinks.len() >= limit {
+                break;
+            }
+        }
+
+        let count = backlinks.len();
+        mcp_tool_success(
+            format!("Found {count} backlink(s) to '{}'.", target_title),
+            serde_json::json!({
+                "target": { "id": note_id, "title": target_title },
+                "backlinks": backlinks,
+                "count": count,
+            }),
+        )
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
 async fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
     let paths: Vec<String> = match arguments.get("paths") {
         Some(v) => match serde_json::from_value(v.clone()) {
@@ -2588,7 +2840,7 @@ mod tests {
     #[test]
     fn mcp_tools_count() {
         let tools = mcp_tools();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 18);
     }
 
     #[test]
@@ -3108,6 +3360,58 @@ mod tests {
         assert!(modes.contains(&"summary"));
         assert!(modes.contains(&"meta"));
         // tool count reflects all registered tools.
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 18);
+    }
+
+    // ── parse_wikilinks ──────────────────────────────────────────
+
+    #[test]
+    fn wikilinks_basic() {
+        let body = "See [[Note A]] and [[Note B]] for details.";
+        let links = parse_wikilinks(body);
+        assert_eq!(links, vec!["Note A", "Note B"]);
+    }
+
+    #[test]
+    fn wikilinks_dedup() {
+        let body = "[[X]] mentions [[X]] again.";
+        let links = parse_wikilinks(body);
+        assert_eq!(links, vec!["X"]);
+    }
+
+    #[test]
+    fn wikilinks_empty() {
+        let body = "No links here.";
+        let links = parse_wikilinks(body);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn wikilinks_nested_brackets() {
+        // [[foo [bar] baz]] — only inner content between first [[ and ]]
+        let body = "Link: [[foo [bar] baz]]";
+        let links = parse_wikilinks(body);
+        assert_eq!(links, vec!["foo [bar] baz"]);
+    }
+
+    #[test]
+    fn wikilinks_with_spaces() {
+        let body = "[[  Trimmed Link  ]]";
+        let links = parse_wikilinks(body);
+        assert_eq!(links, vec!["Trimmed Link"]);
+    }
+
+    #[test]
+    fn wikilinks_mixed_with_text() {
+        let body = r#"# Title
+
+Some text about [[Concept A]].
+
+## Section
+- Item 1 links to [[Concept B]]
+- Item 2 links to [[Concept A]] again
+- Item 3 links to [[Concept C]]"#;
+        let links = parse_wikilinks(body);
+        assert_eq!(links, vec!["Concept A", "Concept B", "Concept C"]);
     }
 }

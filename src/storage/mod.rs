@@ -14,6 +14,7 @@ use crate::models::{
 mod backup;
 mod chat;
 pub(crate) mod collections;
+pub(crate) mod flashcards;
 pub(crate) mod instant_search;
 pub(crate) mod notes;
 pub(crate) mod pool;
@@ -63,6 +64,12 @@ pub use collections::{
     get_collection_with_context, get_collections_for_note_with_context,
     list_collections_with_context, list_notes_in_collection_with_context,
     remove_note_from_collection_with_context,
+};
+// Re-export flashcards public API (#1912).
+pub use flashcards::{
+    create_flashcard_with_context, delete_flashcard_with_context, get_due_flashcards_with_context,
+    get_flashcard_stats_with_context, get_flashcard_with_context, list_flashcards_with_context,
+    review_flashcard_with_context, Flashcard, FlashcardStats, FlashcardWithState,
 };
 // Re-export subscriptions public API so callers see no difference.
 pub use subscriptions::{

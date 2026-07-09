@@ -283,7 +283,7 @@ fn detect_duplicate_clusters(all_notes: &[NoteMeta]) -> Vec<Vec<String>> {
     let mut visited: HashSet<String> = HashSet::new();
 
     // Phase 2: collect exact-match groups with >=2 members
-    for (_norm, ids) in title_map.iter() {
+    for ids in title_map.values() {
         if ids.len() >= 2 {
             for id in ids {
                 visited.insert(id.clone());

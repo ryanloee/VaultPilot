@@ -102,7 +102,7 @@ pub fn get_prompt(vault_dir: &Path, name: &str) -> Result<Option<PromptEntry>> {
 /// Save (create or overwrite) a prompt file.
 pub fn save_prompt(vault_dir: &Path, entry: &PromptEntry) -> Result<()> {
     let dir = ensure_prompts_dir(vault_dir)?;
-    let path = dir.join(format!("{}.md", &entry.name));
+    let path = dir.join(format!("{}.md", entry.name));
 
     let frontmatter = serde_yaml_ng::to_string(&PromptFrontmatter {
         name: Some(entry.name.clone()),
@@ -207,7 +207,7 @@ pub fn create_default_prompts(vault_dir: &Path) -> Result<Vec<String>> {
     ];
 
     for prompt in &defaults {
-        let path = dir.join(format!("{}.md", &prompt.name));
+        let path = dir.join(format!("{}.md", prompt.name));
         if !path.exists() {
             save_prompt(vault_dir, prompt)?;
             created.push(prompt.name.clone());

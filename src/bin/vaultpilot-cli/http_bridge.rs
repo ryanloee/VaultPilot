@@ -1270,7 +1270,7 @@ async fn http_chat_completions(
         let settings_arc = Arc::new(settings);
         let system_owned = format!(
             "{}{}",
-            vaultpilot_lib::prompting::general_chat_system_prompt(""),
+            vaultpilot_lib::prompting::general_chat_system_prompt(&settings_arc.system_directive),
             vaultpilot_lib::prompting::response_style_suffix(settings_arc.response_style),
         );
         let user_prompt_owned =
@@ -1619,7 +1619,7 @@ fn resolve_local_image_url(url: &str, vault_root: &Path) -> Result<String, Strin
 }
 
 fn bridge_model_id(settings: &AppSettings) -> String {
-    let underlying = settings.provider.model.trim();
+    let underlying = settings.effective_provider().model.trim();
     if underlying.is_empty() {
         "vaultpilot-chat".to_string()
     } else {

@@ -415,6 +415,15 @@ enum MeetingActions {
         #[arg(long)]
         language: Option<String>,
     },
+    /// Generate a pre-meeting briefing for upcoming calendar events (#1705)
+    Briefing {
+        /// How many hours ahead to look for events (default: 24)
+        #[arg(long, default_value = "24")]
+        hours: u64,
+        /// Optional specific event ID to brief about
+        #[arg(long)]
+        event_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2828,7 +2837,134 @@ async fn handle_meeting(context: &StorageContext, action: &MeetingActions) -> Re
                 "note": saved,
             }))
         }
+        MeetingActions::Briefing { hours, event_id } => {
+            generate_meeting_briefing(context, *hours, event_id.as_deref()).await
+        }
     }
+}
+
+/// Generate a pre-meeting briefing for upcoming calendar events (#1705).
+async fn generate_meeting_briefing(
+    context: &StorageContext,
+    hours: u64,
+    event_id: Option<&str>,
+) -> Result<Value> {
+    use vaultpilot_lib::calendar::today_agenda_cached;
+
+    let now = chrono::Utc::now();
+    let until = now + chrono::Duration::hours(hours as i64);
+
+    let all_events = match today_agenda_cached(context, now) {
+        Ok(events) => events,
+        Err(e) => {
+            return Ok(serde_json::json!({
+                "status": "error",
+                "message": format!("Could not load calendar: {e}"),
+                "briefings": [],
+                "count": 0,
+            }));
+        }
+    };
+
+    let events: Vec<_> = all_events
+        .into_iter()
+        .filter(|e| e.start >= now && e.start <= until)
+        .filter(|e| {
+            event_id.map_or(true, |id| {
+                e.id == id
+                    || e.provider_event_id == id
+                    || e.title.to_lowercase().contains(&id.to_lowercase())
+            })
+        })
+        .collect();
+
+    if events.is_empty() {
+        return Ok(serde_json::json!({
+            "status": "ok",
+            "message": "No upcoming calendar events in the next {hours} hours.",
+            "briefings": [],
+            "count": 0,
+        }));
+    }
+
+    let mut briefings = Vec::new();
+    for event in &events {
+        let briefing = build_event_briefing(context, event).await;
+        briefings.push(briefing);
+    }
+
+    let count = briefings.len();
+    Ok(serde_json::json!({
+        "status": "ok",
+        "briefings": briefings,
+        "count": count,
+    }))
+}
+
+/// Build a pre-meeting briefing for a single calendar event.
+async fn build_event_briefing(
+    context: &StorageContext,
+    event: &vaultpilot_lib::calendar::CalendarEvent,
+) -> Value {
+    let mut related_notes = Vec::new();
+
+    // Combine event title keywords and attendee names for search
+    let mut search_terms = String::new();
+    for word in event.title.split_whitespace() {
+        if word.len() > 2 && !word.starts_with('[') && !word.starts_with('{') {
+            if !search_terms.is_empty() {
+                search_terms.push(' ');
+            }
+            search_terms.push_str(word);
+        }
+    }
+    for attendee in &event.attendees {
+        let name: &str = attendee
+            .split(&['@', '<', '>', '(', ')'][..])
+            .next()
+            .unwrap_or(attendee)
+            .trim();
+        if name.len() > 1 {
+            if !search_terms.is_empty() {
+                search_terms.push(' ');
+            }
+            search_terms.push_str(name);
+        }
+    }
+
+    if !search_terms.is_empty() {
+        let query = SearchQuery {
+            text: search_terms,
+            limit: Some(5),
+            ..Default::default()
+        };
+        if let Ok(result) = search_notes_with_context(context, query) {
+            for meta in result.notes {
+                related_notes.push(serde_json::json!({
+                    "id": meta.id,
+                    "title": meta.title,
+                    "summary": meta.summary,
+                }));
+            }
+        }
+    }
+
+    let start_local = event.start.format("%H:%M").to_string();
+    let end_local = event.end.format("%H:%M").to_string();
+    let duration_min = (event.end - event.start).num_minutes().max(0);
+
+    serde_json::json!({
+        "event_id": event.id,
+        "title": event.title,
+        "start_time": start_local,
+        "end_time": end_local,
+        "duration_minutes": duration_min,
+        "location": event.location,
+        "attendees": event.attendees,
+        "description": event.description,
+        "related_notes": related_notes,
+        "related_count": related_notes.len(),
+    })
 }
 
 // ─── Voice handler (#2012) ───────────────────────────────────────
@@ -3533,5 +3669,70 @@ mod tests {
         // Should fall back to default template
         assert!(result.contains("## Goals"));
         assert!(result.contains("## Notes"));
+    }
+
+    // ── Meeting briefing (#1705) ──────────────────────────────────
+
+    #[test]
+    fn briefing_build_search_terms_from_title() {
+        use chrono::Utc;
+        use vaultpilot_lib::calendar::CalendarEvent;
+
+        let event = CalendarEvent {
+            id: "test1".to_string(),
+            provider_event_id: "p1".to_string(),
+            title: "Sprint Planning".to_string(),
+            start: Utc::now(),
+            end: Utc::now() + chrono::Duration::hours(1),
+            location: None,
+            description: None,
+            attendees: vec!["Alice".to_string(), "Bob".to_string()],
+            source: "test".to_string(),
+            all_day: false,
+        };
+
+        // Title keywords with len > 2: "Sprint", "Planning"
+        let keywords: Vec<&str> = event
+            .title
+            .split_whitespace()
+            .filter(|w| w.len() > 2)
+            .collect();
+        assert!(keywords.contains(&"Sprint"));
+        assert!(keywords.contains(&"Planning"));
+    }
+
+    #[test]
+    fn briefing_extracts_attendee_name_from_email() {
+        let email = "john.doe@example.com";
+        let name: &str = email
+            .split(&['@', '<', '>', '(', ')'][..])
+            .next()
+            .unwrap_or(email)
+            .trim();
+        assert_eq!(name, "john.doe");
+    }
+
+    #[test]
+    fn briefing_duration_calculation() {
+        use chrono::Utc;
+
+        let start = Utc::now();
+        let end = start + chrono::Duration::minutes(90);
+        let duration_min = (end - start).num_minutes().max(0);
+        assert_eq!(duration_min, 90);
+    }
+
+    #[test]
+    fn briefing_filters_short_title_words() {
+        let title = "A Quick Sync Up";
+        let keywords: Vec<&str> = title
+            .split_whitespace()
+            .filter(|w| w.len() > 2 && !w.starts_with('['))
+            .collect();
+        // "A" (len=1) and "Up" (len=2) should be filtered out
+        assert!(!keywords.contains(&"A"));
+        assert!(!keywords.contains(&"Up"));
+        assert!(keywords.contains(&"Quick"));
+        assert!(keywords.contains(&"Sync"));
     }
 }

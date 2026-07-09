@@ -381,7 +381,7 @@ pub(super) fn enrich_citations(
         .enumerate()
         .map(|(i, d)| {
             let score = if total_docs > 1 {
-                1.0 - (i as f64 / total_docs as f64) * 0.5 // 1.0 → 0.5 range
+                1.0 - (i as f64 / (total_docs - 1) as f64) * 0.5 // 1.0 → 0.5 range
             } else {
                 1.0
             };
@@ -1551,5 +1551,56 @@ mod tests {
         }];
         let result = enrich_citations(vec![citation], &docs);
         assert!((result[0].score.unwrap() - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn enrich_citations_last_doc_reaches_half_score() {
+        // #2670: with rank-based scoring (no search_score),
+        // the last doc should get exactly 0.5, not 0.5 + epsilon
+        let cit1 = AnswerCitation {
+            note_id: "n1".into(),
+            title: "First".into(),
+            path: "p1".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let cit2 = AnswerCitation {
+            note_id: "n2".into(),
+            title: "Second".into(),
+            path: "p2".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let docs = vec![
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n1".into(),
+                    ..Default::default()
+                },
+                body: "This is a longer body for the first document.".into(),
+                search_snippet: None,
+                search_score: None,
+            },
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n2".into(),
+                    ..Default::default()
+                },
+                body: "This is a longer body for the second document.".into(),
+                search_snippet: None,
+                search_score: None,
+            },
+        ];
+        let result = enrich_citations(vec![cit1, cit2], &docs);
+        let s1 = result[0].score.unwrap();
+        let s2 = result[1].score.unwrap();
+        assert!(
+            (s1 - 1.0).abs() < 0.01,
+            "first doc should get 1.0, got {s1}"
+        );
+        assert!(
+            (s2 - 0.5).abs() < 0.01,
+            "last doc should reach 0.5, got {s2}"
+        );
     }
 }

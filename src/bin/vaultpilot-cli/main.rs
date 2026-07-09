@@ -1252,6 +1252,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                     },
                     body: result.clone(),
                     search_snippet: None,
+                    search_score: None,
                 };
                 let saved = tokio::task::block_in_place(|| {
                     vaultpilot_lib::storage::save_note_with_context(context, note)
@@ -1662,6 +1663,7 @@ fn handle_daily(
                 },
                 body,
                 search_snippet: None,
+                search_score: None,
             };
             let saved = save_note_with_context(context, note)?;
             Ok(serde_json::json!({

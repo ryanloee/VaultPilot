@@ -1156,6 +1156,7 @@ fn draft_to_note_document(draft: StructuredNoteDraft) -> NoteDocument {
         },
         body: draft.body,
         search_snippet: None,
+        search_score: None,
     }
 }
 
@@ -1418,6 +1419,7 @@ mod tests {
             },
             body: String::new(),
             search_snippet: None,
+            search_score: None,
         }
     }
 

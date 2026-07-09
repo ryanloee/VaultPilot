@@ -1205,6 +1205,7 @@ pub(super) fn rank_documents(
         }
 
         if score > 0 {
+            doc.search_score = Some(score);
             ranked.push((score, doc));
         }
     }
@@ -2038,6 +2039,7 @@ mod tests {
                 "## 概述\nSD 卡接口引脚连接定义。\n## 备注\n软件层可参考 Device Tree pinctrl 配置。"
                     .to_string(),
             search_snippet: None,
+            search_score: None,
         };
 
         assert!(document_relevance_score("sd卡的引脚复用怎么做的", &doc) > 200);
@@ -2067,6 +2069,7 @@ mod tests {
             },
             body: "相关命令: wboot -w update zboot.img".to_string(),
             search_snippet: None,
+            search_score: None,
         };
 
         assert!(document_relevance_score("刷机怎么刷啊", &doc) > 180);
@@ -2200,6 +2203,7 @@ mod tests {
             },
             body: "Nothing relevant here".to_string(),
             search_snippet: None,
+            search_score: None,
         };
         assert_eq!(document_relevance_score("mmc sd卡 pinmux", &doc), 0);
     }
@@ -2411,6 +2415,7 @@ mod tests {
                     },
                     body: format!("Content for note {}", i),
                     search_snippet: None,
+                    search_score: None,
                 },
             )
             .expect("save");
@@ -2445,6 +2450,7 @@ mod tests {
                 },
                 body: "Tagged content".to_string(),
                 search_snippet: None,
+                search_score: None,
             },
         )
         .expect("save");
@@ -2483,6 +2489,7 @@ mod tests {
                 },
                 body: "content".to_string(),
                 search_snippet: None,
+                search_score: None,
             },
         )
         .expect("save");
@@ -2522,6 +2529,7 @@ mod tests {
                     },
                     body: format!("Body {i}"),
                     search_snippet: None,
+                    search_score: None,
                 },
             )
             .expect("save");
@@ -2554,6 +2562,7 @@ mod tests {
                 },
                 body: "tagged body".to_string(),
                 search_snippet: None,
+                search_score: None,
             },
         )
         .expect("save tagged");
@@ -2604,6 +2613,7 @@ mod tests {
                     },
                     body: "alpha content".into(),
                     search_snippet: None,
+                    search_score: None,
                 },
             )
             .expect("save");
@@ -2657,6 +2667,7 @@ mod tests {
                     },
                     body: "beta keyword".into(),
                     search_snippet: None,
+                    search_score: None,
                 },
             )
             .expect("save");
@@ -2899,6 +2910,7 @@ mod tests {
             },
             body: String::new(),
             search_snippet: None,
+            search_score: None,
         };
         // No matching terms in title either
         assert_eq!(document_relevance_score("mmc", &doc), 0);
@@ -2913,6 +2925,7 @@ mod tests {
             },
             body: "unrelated content".into(),
             search_snippet: None,
+            search_score: None,
         };
         let body_doc = NoteDocument {
             meta: NoteMeta {
@@ -2921,6 +2934,7 @@ mod tests {
             },
             body: "mmc configuration guide".into(),
             search_snippet: None,
+            search_score: None,
         };
         let title_score = document_relevance_score("mmc", &title_doc);
         let body_score = document_relevance_score("mmc", &body_doc);
@@ -2940,6 +2954,7 @@ mod tests {
             },
             body: "unrelated".into(),
             search_snippet: None,
+            search_score: None,
         };
         assert!(
             document_relevance_score("mmc", &doc) > 0,

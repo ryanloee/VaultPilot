@@ -729,6 +729,7 @@ fn handle_vault_write(context: &StorageContext, arguments: Value) -> Value {
         },
         body,
         search_snippet: None,
+        search_score: None,
     };
 
     match save_note_with_context(context, note) {

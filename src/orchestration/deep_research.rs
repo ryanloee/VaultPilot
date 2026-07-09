@@ -357,6 +357,7 @@ pub async fn run_deep_research(
         meta,
         body: note_body,
         search_snippet: None,
+        search_score: None,
     };
 
     emit(DeepResearchEvent::Saving {

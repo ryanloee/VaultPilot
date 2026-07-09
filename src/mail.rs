@@ -551,6 +551,7 @@ where
         },
         body: note_body,
         search_snippet: None,
+        search_score: None,
     };
 
     let saved_note = crate::storage::notes::save_note_with_context(context, note_doc)?;

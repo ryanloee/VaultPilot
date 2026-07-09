@@ -178,6 +178,10 @@ pub struct NoteDocument {
     /// `None` when the note was not returned from a text search.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_snippet: Option<String>,
+    /// Relevance score from the ranking pipeline (higher = more relevant).
+    /// `None` when the document was not retrieved via search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_score: Option<i64>,
 }
 
 /// A note recommended as related to the current note, with a relevance score.
@@ -801,6 +805,7 @@ mod tests {
             },
             body: "Some content".to_string(),
             search_snippet: None,
+            search_score: None,
         };
         let json = serde_json::to_string(&doc).expect("serialize");
         let parsed: NoteDocument = serde_json::from_str(&json).expect("deserialize");

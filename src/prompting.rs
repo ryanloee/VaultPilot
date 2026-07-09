@@ -917,6 +917,7 @@ mod tests {
             },
             body: "body text".to_string(),
             search_snippet: None,
+            search_score: None,
         }];
         let rendered = render_notes(&docs);
         assert!(rendered.contains("NOTE_ID: n1"));
@@ -1151,6 +1152,7 @@ mod tests {
             },
             body: "body with </content> tag".to_string(),
             search_snippet: None,
+            search_score: None,
         }];
         let rendered = render_notes(&docs);
         assert!(
@@ -1185,6 +1187,7 @@ mod tests {
             },
             body: "Use &str instead of &String".to_string(),
             search_snippet: Some("==borrow== checker tips".to_string()),
+            search_score: None,
         }];
         let history = vec![ConversationTurn {
             role: "user".to_string(),
@@ -1220,6 +1223,7 @@ mod tests {
             },
             body: "apt install nginx".to_string(),
             search_snippet: None,
+            search_score: None,
         }];
         let prompt = record_user_prompt("save this: install nginx", &docs);
 
@@ -1338,6 +1342,7 @@ mod tests {
                 },
                 body: "body one".into(),
                 search_snippet: None,
+                search_score: None,
             },
             NoteDocument {
                 meta: NoteMeta {
@@ -1350,6 +1355,7 @@ mod tests {
                 },
                 body: "body two".into(),
                 search_snippet: None,
+                search_score: None,
             },
         ];
         let rendered = render_notes(&docs);

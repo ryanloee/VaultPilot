@@ -1273,6 +1273,7 @@ mod tests {
             },
             body: "body text".into(),
             search_snippet: Some("FTS5 ==match== here".into()),
+            search_score: None,
         };
         let result = enrich_citations(vec![citation], &[doc]);
         assert_eq!(result[0].snippet, "FTS5 ==match== here");
@@ -1294,6 +1295,7 @@ mod tests {
             },
             body: "This body contains rust tips for beginners.".into(),
             search_snippet: None,
+            search_score: None,
         };
         let result = enrich_citations(vec![citation], &[doc]);
         // Should generate a programmatic snippet since original is < 20 chars
@@ -1435,7 +1437,7 @@ mod tests {
     // ── Citation scoring (#1704) ───────────────────────────────────
 
     #[test]
-    fn enrich_citations_populates_score_from_rank() {
+    fn enrich_citations_populates_score_from_search() {
         let citation = AnswerCitation {
             note_id: "n1".into(),
             title: "T".into(),
@@ -1443,31 +1445,21 @@ mod tests {
             snippet: "s".into(),
             score: None,
         };
-        let docs = vec![
-            NoteDocument {
-                meta: NoteMeta {
-                    id: "n1".into(),
-                    ..Default::default()
-                },
-                body: "body".into(),
-                search_snippet: None,
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                id: "n1".into(),
+                ..Default::default()
             },
-            NoteDocument {
-                meta: NoteMeta {
-                    id: "n2".into(),
-                    ..Default::default()
-                },
-                body: "This is a longer body for the second document.".into(),
-                search_snippet: None,
-            },
-        ];
+            body: "body".into(),
+            search_snippet: None,
+            search_score: Some(250),
+        }];
         let result = enrich_citations(vec![citation], &docs);
-        assert!(result[0].score.is_some());
-        assert!((result[0].score.unwrap() - 1.0).abs() < 0.01);
+        assert_eq!(result[0].score, Some(250));
     }
 
     #[test]
-    fn enrich_citations_score_decreases_with_rank() {
+    fn enrich_citations_score_reflects_search_ranking() {
         let cit1 = AnswerCitation {
             note_id: "n1".into(),
             title: "First".into(),
@@ -1490,6 +1482,7 @@ mod tests {
                 },
                 body: "This is a longer body for the first document.".into(),
                 search_snippet: None,
+                search_score: Some(300),
             },
             NoteDocument {
                 meta: NoteMeta {
@@ -1498,6 +1491,7 @@ mod tests {
                 },
                 body: "This is a longer body for the second document.".into(),
                 search_snippet: None,
+                search_score: Some(150),
             },
         ];
         let result = enrich_citations(vec![cit1, cit2], &docs);
@@ -1505,7 +1499,7 @@ mod tests {
         let s2 = result[1].score.unwrap();
         assert!(
             s1 > s2,
-            "rank 0 score {} should be > rank 1 score {}",
+            "higher search_score {} should be > lower {}",
             s1,
             s2
         );
@@ -1518,7 +1512,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "s".into(),
-            score: Some(0.42),
+            score: Some(42),
         };
         let docs = vec![NoteDocument {
             meta: NoteMeta {
@@ -1527,9 +1521,10 @@ mod tests {
             },
             body: "body".into(),
             search_snippet: None,
+            search_score: Some(999),
         }];
         let result = enrich_citations(vec![citation], &docs);
-        assert!((result[0].score.unwrap() - 0.42).abs() < 0.001);
+        assert_eq!(result[0].score, Some(42));
     }
 
     #[test]
@@ -1548,6 +1543,7 @@ mod tests {
             },
             body: "body".into(),
             search_snippet: None,
+            search_score: None,
         }];
         let result = enrich_citations(vec![citation], &docs);
         assert!((result[0].score.unwrap() - 1.0).abs() < 0.01);

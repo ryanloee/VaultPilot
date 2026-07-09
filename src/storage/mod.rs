@@ -225,6 +225,7 @@ pub fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
         meta: meta.clone(),
         body: body.to_string(),
         search_snippet: None,
+        search_score: None,
     })
 }
 
@@ -801,6 +802,7 @@ mod tests {
             },
             body: "## Test\n\nRound trip body content".to_string(),
             search_snippet: None,
+            search_score: None,
         };
 
         let saved = save_note_with_context(&ctx, note).expect("save");
@@ -826,6 +828,7 @@ mod tests {
             },
             body: "Temporary content".to_string(),
             search_snippet: None,
+            search_score: None,
         };
         let saved = save_note_with_context(&ctx, note).expect("save");
         let path = saved.meta.path.clone();
@@ -1005,6 +1008,7 @@ mod tests {
             },
             body: "Content that should survive rebuild".to_string(),
             search_snippet: None,
+            search_score: None,
         };
         save_note_with_context(&ctx, note).expect("save");
 

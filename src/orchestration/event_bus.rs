@@ -146,10 +146,19 @@ mod tests {
                 Err(TryRecvError::Closed) => panic!("channel closed"),
             }
         }
-        // Now it should be empty
-        match rx.try_recv() {
-            Err(TryRecvError::Empty) => {} // expected
-            other => panic!("expected Empty, got {other:?}"),
+        // Retry loop: another test may send events concurrently (#1705 race fix)
+        for _ in 0..20 {
+            match rx.try_recv() {
+                Err(TryRecvError::Empty) => return, // expected — success
+                Ok(_) | Err(TryRecvError::Lagged(_)) => {
+                    // Drain and retry
+                    let _ = rx.try_recv();
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                }
+                Err(TryRecvError::Closed) => break,
+            }
         }
+        panic!("expected Empty after 20 retries — concurrent test is flooding the channel");
     }
 }

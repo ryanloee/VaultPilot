@@ -2870,7 +2870,7 @@ async fn generate_meeting_briefing(
         .into_iter()
         .filter(|e| e.start >= now && e.start <= until)
         .filter(|e| {
-            event_id.map_or(true, |id| {
+            event_id.is_none_or(|id| {
                 e.id == id
                     || e.provider_event_id == id
                     || e.title.to_lowercase().contains(&id.to_lowercase())

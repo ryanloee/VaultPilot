@@ -603,6 +603,243 @@ pub fn find_related_notes_for_text_with_context(
     Ok(results)
 }
 
+// ────────────────────────────────────────────────────────
+// Wikilink graph traversal (#1829)
+// ────────────────────────────────────────────────────────
+
+/// Extract all `[[wikilink]]` targets from a note body.
+///
+/// Supports the Obsidian-style syntax:
+/// - `[[Note Title]]` — simple link
+/// - `[[Note Title|display alias]]` — link with alias
+/// - `[[#heading]]` — heading link (target = note title, alias = heading)
+/// - `[[Note Title#heading]]` — note + heading
+///
+/// Code blocks (`` ``` ``) and inline code (`` ` ``) are skipped so links
+/// inside code are not treated as graph edges.
+pub fn extract_wikilinks(body: &str) -> Vec<(String, Option<String>)> {
+    let mut results = Vec::new();
+    let mut in_code_block = false;
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
+        // Walk the line, skipping inline code spans, looking for [[…]]
+        let mut in_inline_code = false;
+        let chars_vec: Vec<char> = line.chars().collect();
+        let mut i = 0usize;
+
+        while i < chars_vec.len() {
+            match chars_vec[i] {
+                '`' => {
+                    in_inline_code = !in_inline_code;
+                    i += 1;
+                }
+                '[' if !in_inline_code && i + 1 < chars_vec.len() && chars_vec[i + 1] == '[' => {
+                    // Found [[ — extract until ]]
+                    let start = i + 2;
+                    let mut end = start;
+                    let mut found = false;
+                    while end + 1 < chars_vec.len() {
+                        if chars_vec[end] == ']' && chars_vec[end + 1] == ']' {
+                            found = true;
+                            break;
+                        }
+                        end += 1;
+                    }
+                    if found {
+                        let inner: String = chars_vec[start..end].iter().collect();
+                        let (target, alias) = parse_wikilink_inner(&inner);
+                        if !target.is_empty() {
+                            results.push((target, alias));
+                        }
+                        i = end + 2; // skip past ]]
+                    } else {
+                        i += 1;
+                    }
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+    }
+    results
+}
+
+/// Parse the inner content of a `[[…]]` wikilink into (target, alias).
+///
+/// - `[[Title]]` → `("Title", None)`
+/// - `[[Title|alias]]` → `("Title", Some("alias"))`
+/// - `[[#heading]]` → `("", Some("heading"))` (heading-only link, no note target)
+/// - `[[Title#heading]]` → `("Title", Some("heading"))`
+fn parse_wikilink_inner(inner: &str) -> (String, Option<String>) {
+    // Split on `|` first (alias separator)
+    let (main, alias_part) = if let Some(idx) = inner.find('|') {
+        (&inner[..idx], Some(inner[idx + 1..].to_string()))
+    } else {
+        (inner, None)
+    };
+
+    // Split on `#` (heading separator)
+    let (target, heading) = if let Some(idx) = main.find('#') {
+        (
+            main[..idx].trim().to_string(),
+            Some(main[idx + 1..].trim().to_string()),
+        )
+    } else {
+        (main.trim().to_string(), None)
+    };
+
+    // Combine alias and heading
+    let alias = match (alias_part, heading) {
+        (Some(a), _) if !a.is_empty() => Some(a),
+        (_, Some(h)) if !h.is_empty() => Some(h),
+        _ => None,
+    };
+
+    (target, alias)
+}
+
+/// Follow all `[[wikilinks]]` in a note and return resolved references.
+///
+/// For each wikilink target, attempts to find a note whose title matches
+/// (case-insensitive). Unresolved links are included with `note: None`
+/// so callers can display dangling links.
+///
+/// # Arguments
+/// * `context` - Storage context for database access
+/// * `note_id` - ID or path of the source note
+///
+/// # Errors
+/// Returns an error if the source note cannot be loaded.
+pub fn follow_wikilinks_with_context(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<crate::models::WikilinkRef>> {
+    let (connection, _) = open_connection(context)?;
+    let source_meta = load_note_meta_by_id(&connection, note_id)?
+        .ok_or_else(|| anyhow::Error::from(NoteNotFound(note_id.to_string())))?;
+    let source_doc = load_note_with_context(context, &source_meta.id)?;
+
+    let raw_links = extract_wikilinks(&source_doc.body);
+    if raw_links.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build a case-insensitive title → NoteMeta lookup from all notes.
+    let all_metas = list_all_note_metas(&connection)?;
+    let mut title_lookup: std::collections::HashMap<String, NoteMeta> =
+        std::collections::HashMap::with_capacity(all_metas.len());
+    for meta in &all_metas {
+        title_lookup.insert(meta.title.to_lowercase(), meta.clone());
+    }
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut results = Vec::new();
+    for (target, alias) in raw_links {
+        // Deduplicate by target (case-insensitive)
+        let key = target.to_lowercase();
+        if !seen.insert(key) {
+            continue;
+        }
+        let note = title_lookup.get(&target.to_lowercase()).cloned();
+        results.push(crate::models::WikilinkRef {
+            target,
+            alias,
+            note,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Find all notes that contain a `[[wikilink]]` pointing to the given note.
+///
+/// A backlink is any note whose body contains `[[target]]` where `target`
+/// matches the given note's title (case-insensitive). Both `[[Title]]` and
+/// `[[Title|alias]]` forms are detected; `[[Title#heading]]` also counts.
+///
+/// # Arguments
+/// * `context` - Storage context for database access
+/// * `note_id` - ID of the target note whose backlinks we want
+///
+/// # Errors
+/// Returns an error if the target note cannot be loaded.
+pub fn find_backlinks_with_context(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<crate::models::BacklinkEntry>> {
+    let (connection, _) = open_connection(context)?;
+    let target_meta = load_note_meta_by_id(&connection, note_id)?
+        .ok_or_else(|| anyhow::Error::from(NoteNotFound(note_id.to_string())))?;
+
+    if target_meta.title.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let target_title_lower = target_meta.title.to_lowercase();
+    let all_metas = list_all_note_metas(&connection)?;
+    let mut results = Vec::new();
+
+    for meta in &all_metas {
+        // Skip the note itself
+        if meta.id == target_meta.id {
+            continue;
+        }
+        // Load the note body to check for wikilinks
+        let doc = match load_note_with_context(context, &meta.id) {
+            Ok(doc) => doc,
+            Err(_) => continue, // skip notes that can't be loaded
+        };
+        let raw_links = extract_wikilinks(&doc.body);
+        for (target, _alias) in &raw_links {
+            if target.to_lowercase() == target_title_lower {
+                results.push(crate::models::BacklinkEntry {
+                    meta: meta.clone(),
+                    link_target: target.clone(),
+                });
+                break; // one backlink per note is enough
+            }
+        }
+    }
+
+    // Sort by updated_at descending (most recently modified first)
+    results.sort_by(|a, b| b.meta.updated_at.cmp(&a.meta.updated_at));
+    Ok(results)
+}
+
+/// Async wrapper for [`follow_wikilinks_with_context`].
+pub async fn follow_wikilinks_async(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<crate::models::WikilinkRef>> {
+    let ctx = context.clone();
+    let note_id = note_id.to_string();
+    tokio::task::spawn_blocking(move || follow_wikilinks_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+}
+
+/// Async wrapper for [`find_backlinks_with_context`].
+pub async fn find_backlinks_async(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<crate::models::BacklinkEntry>> {
+    let ctx = context.clone();
+    let note_id = note_id.to_string();
+    tokio::task::spawn_blocking(move || find_backlinks_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+}
+
 /// Extract key terms from a note to build a search query for related notes.
 /// Uses only title + tags for focused matching (avoids FTS5 AND-query bloat).
 pub(crate) fn build_related_query(doc: &NoteDocument) -> String {
@@ -2194,5 +2431,122 @@ mod tests {
         let mixed_cjk = "abc日本語def";
         let id_prefix: String = mixed_cjk.chars().take(8).collect();
         assert_eq!(id_prefix, "abc日本語de");
+    }
+
+    // ── Wikilink extraction tests (#1829) ──────────────────────────────
+
+    #[test]
+    fn regression_1829_extract_wikilinks_simple() {
+        let body = "See [[Note A]] and [[Note B]] for details.";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].0, "Note A");
+        assert!(links[0].1.is_none());
+        assert_eq!(links[1].0, "Note B");
+        assert!(links[1].1.is_none());
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_with_alias() {
+        let body = "See [[Note A|display text]] here.";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, "Note A");
+        assert_eq!(links[0].1.as_deref(), Some("display text"));
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_with_heading() {
+        let body = "See [[Note A#Section 1]] here.";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, "Note A");
+        assert_eq!(links[0].1.as_deref(), Some("Section 1"));
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_skips_code_blocks() {
+        let body = "Text [[Real Link]]\n\n```\n[[Code Link]]\n```\n\nMore text [[Another Real]]";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].0, "Real Link");
+        assert_eq!(links[1].0, "Another Real");
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_skips_inline_code() {
+        let body = "See [[Real Link]] and `[[Code Link]]` here.";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, "Real Link");
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_empty_body() {
+        let links = extract_wikilinks("");
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_no_links() {
+        let body = "This is just plain text with no wikilinks at all.";
+        let links = extract_wikilinks(body);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_multiple_on_same_line() {
+        let body = "Links: [[A]] [[B]] [[C]]";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 3);
+        assert_eq!(links[0].0, "A");
+        assert_eq!(links[1].0, "B");
+        assert_eq!(links[2].0, "C");
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_cjk_title() {
+        let body = "参见 [[日本語ノート]] 了解详情。";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, "日本語ノート");
+    }
+
+    #[test]
+    fn regression_1829_extract_wikilinks_heading_only() {
+        // [[#heading]] — no note target, just a heading reference
+        let body = "See [[#Introduction]] section.";
+        let links = extract_wikilinks(body);
+        // target is empty string, should not be included
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn regression_1829_parse_wikilink_inner_variants() {
+        let (t, a) = parse_wikilink_inner("Simple Title");
+        assert_eq!(t, "Simple Title");
+        assert!(a.is_none());
+
+        let (t, a) = parse_wikilink_inner("Title|Alias");
+        assert_eq!(t, "Title");
+        assert_eq!(a.as_deref(), Some("Alias"));
+
+        let (t, a) = parse_wikilink_inner("Title#Section");
+        assert_eq!(t, "Title");
+        assert_eq!(a.as_deref(), Some("Section"));
+
+        let (t, a) = parse_wikilink_inner("Title|Alias#Section");
+        assert_eq!(t, "Title");
+        // Alias is the full text after |, including any # chars
+        assert_eq!(a.as_deref(), Some("Alias#Section"));
+
+        // Standard Obsidian syntax: [[Title#heading|Alias]]
+        let (t, a) = parse_wikilink_inner("Title#heading|Alias");
+        assert_eq!(t, "Title");
+        assert_eq!(a.as_deref(), Some("Alias"));
+
+        let (t, a) = parse_wikilink_inner("#heading");
+        assert_eq!(t, "");
+        assert_eq!(a.as_deref(), Some("heading"));
     }
 }

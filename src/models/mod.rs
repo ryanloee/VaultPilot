@@ -192,6 +192,35 @@ pub struct RelatedNote {
     pub snippet: Option<String>,
 }
 
+/// A wikilink target found inside a note body — either resolved to a
+/// note (when `note` is `Some`) or unresolved (dangling link).
+///
+/// Used by the `notes.follow_links` and `notes.backlinks` MCP tools (#1829).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikilinkRef {
+    /// The raw link target text inside `[[…]]` (before any `|` alias).
+    pub target: String,
+    /// Optional display alias (`[[target|alias]]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Resolved note metadata if the target matches a note in the vault.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<NoteMeta>,
+}
+
+/// A note that links **to** a given target note (a backlink).
+///
+/// Used by the `notes.backlinks` MCP tool (#1829).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklinkEntry {
+    /// The note that contains the `[[link]]`.
+    pub meta: NoteMeta,
+    /// The raw link target text inside `[[…]]`.
+    pub link_target: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationTurn {
@@ -378,6 +407,9 @@ pub struct AnswerCitation {
     pub path: String,
     #[serde(default)]
     pub snippet: String,
+    /// Relevance score (0.0–1.0) from search ranking (#1704).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -832,6 +864,7 @@ mod tests {
                         title: "Note".to_string(),
                         path: "/n.md".to_string(),
                         snippet: "snippet".to_string(),
+                        score: None,
                     }],
                     saved_note: None,
                     thinking_trace: Some(ThinkingTrace {

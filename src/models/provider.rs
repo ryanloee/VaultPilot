@@ -346,6 +346,89 @@ pub fn known_models() -> Vec<KnownModel> {
                 streaming: true,
             },
         },
+        // ── Local / Ollama models (#1706) ──
+        //
+        // These run locally via Ollama (http://localhost:11434) using
+        // OpenAI-compatible Chat Completions API. Context windows and
+        // capabilities vary by quantisation and model variant.
+        KnownModel {
+            id: "llama3.3".into(),
+            name: "Llama 3.3 70B".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 128_000,
+            max_output_tokens: 4096,
+            capabilities: ModelCapabilities {
+                vision: false,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "llama3.2-vision".into(),
+            name: "Llama 3.2 11B Vision".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 128_000,
+            max_output_tokens: 4096,
+            capabilities: ModelCapabilities {
+                vision: true,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "gemma4".into(),
+            name: "Gemma 4 27B".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 32_768,
+            max_output_tokens: 4096,
+            capabilities: ModelCapabilities {
+                vision: false,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "mistral".into(),
+            name: "Mistral 7B".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 32_768,
+            max_output_tokens: 4096,
+            capabilities: ModelCapabilities {
+                vision: false,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "qwen2.5".into(),
+            name: "Qwen 2.5 32B".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 32_768,
+            max_output_tokens: 4096,
+            capabilities: ModelCapabilities {
+                vision: false,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
+        KnownModel {
+            id: "phi-4".into(),
+            name: "Phi-4 14B".into(),
+            provider: ProviderType::OpenAi,
+            context_window: 16_384,
+            max_output_tokens: 4096,
+            capabilities: ModelCapabilities {
+                vision: false,
+                reasoning: false,
+                function_calling: true,
+                streaming: true,
+            },
+        },
     ]
 }
 
@@ -700,6 +783,60 @@ mod tests {
     fn known_models_haiku_no_reasoning() {
         let m = lookup_model("claude-haiku-4-5").expect("claude-haiku-4-5 not found");
         assert!(!m.capabilities.reasoning, "Haiku should not have reasoning");
+    }
+
+    // ── Local/Ollama model presets (#1706) ──
+
+    #[test]
+    fn known_models_include_llama33() {
+        let m = lookup_model("llama3.3").expect("llama3.3 not found");
+        assert_eq!(m.name, "Llama 3.3 70B");
+        assert_eq!(m.provider, ProviderType::OpenAi);
+        assert_eq!(m.context_window, 128_000);
+        assert!(!m.capabilities.vision);
+    }
+
+    #[test]
+    fn known_models_include_gemma4() {
+        let m = lookup_model("gemma4").expect("gemma4 not found");
+        assert_eq!(m.name, "Gemma 4 27B");
+        assert_eq!(m.provider, ProviderType::OpenAi);
+        assert_eq!(m.context_window, 32_768);
+    }
+
+    #[test]
+    fn known_models_include_qwen25() {
+        let m = lookup_model("qwen2.5").expect("qwen2.5 not found");
+        assert_eq!(m.name, "Qwen 2.5 32B");
+        assert_eq!(m.provider, ProviderType::OpenAi);
+    }
+
+    #[test]
+    fn known_models_include_phi4() {
+        let m = lookup_model("phi-4").expect("phi-4 not found");
+        assert_eq!(m.name, "Phi-4 14B");
+        assert_eq!(m.context_window, 16_384);
+    }
+
+    #[test]
+    fn known_models_llama32_vision_has_vision() {
+        let m = lookup_model("llama3.2-vision").expect("llama3.2-vision not found");
+        assert!(m.capabilities.vision, "Llama 3.2 Vision should have vision");
+    }
+
+    #[test]
+    fn known_models_local_count_matches() {
+        let models = known_models();
+        let local: Vec<_> = models
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.id.as_str(),
+                    "llama3.3" | "llama3.2-vision" | "gemma4" | "mistral" | "qwen2.5" | "phi-4"
+                )
+            })
+            .collect();
+        assert_eq!(local.len(), 6, "expected 6 local model presets");
     }
 
     #[test]

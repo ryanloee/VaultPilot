@@ -373,10 +373,30 @@ pub(super) fn enrich_citations(
     let doc_map: std::collections::HashMap<&str, &NoteDocument> =
         docs.iter().map(|d| (d.meta.id.as_str(), d)).collect();
 
+    // Compute a simple relevance score based on doc rank (0.0–1.0).
+    // Higher-ranked docs (earlier in the list) get higher scores.
+    let total_docs = docs.len();
+    let rank_map: std::collections::HashMap<&str, f64> = docs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let score = if total_docs > 1 {
+                1.0 - (i as f64 / total_docs as f64) * 0.5 // 1.0 → 0.5 range
+            } else {
+                1.0
+            };
+            (d.meta.id.as_str(), score)
+        })
+        .collect();
+
     citations
         .into_iter()
         .map(|mut citation| {
             if let Some(doc) = doc_map.get(citation.note_id.as_str()) {
+                // Populate score from rank-based calculation (#1704)
+                if citation.score.is_none() {
+                    citation.score = rank_map.get(citation.note_id.as_str()).copied();
+                }
                 if let Some(ref fts_snippet) = doc.search_snippet {
                     if !fts_snippet.trim().is_empty() && fts_snippet.contains("==") {
                         citation.snippet = fts_snippet.clone();
@@ -1244,6 +1264,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "old".into(),
+            score: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1264,6 +1285,7 @@ mod tests {
             title: "rust tips".into(),
             path: "p".into(),
             snippet: "short".into(),
+            score: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1285,6 +1307,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "original".into(),
+            score: None,
         };
         let result = enrich_citations(vec![citation], &[]);
         assert_eq!(result[0].snippet, "original");
@@ -1407,5 +1430,126 @@ mod tests {
             }
             _ => panic!("Expected SaveNote"),
         }
+    }
+
+    // ── Citation scoring (#1704) ───────────────────────────────────
+
+    #[test]
+    fn enrich_citations_populates_score_from_rank() {
+        let citation = AnswerCitation {
+            note_id: "n1".into(),
+            title: "T".into(),
+            path: "p".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let docs = vec![
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n1".into(),
+                    ..Default::default()
+                },
+                body: "body".into(),
+                search_snippet: None,
+            },
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n2".into(),
+                    ..Default::default()
+                },
+                body: "This is a longer body for the second document.".into(),
+                search_snippet: None,
+            },
+        ];
+        let result = enrich_citations(vec![citation], &docs);
+        assert!(result[0].score.is_some());
+        assert!((result[0].score.unwrap() - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn enrich_citations_score_decreases_with_rank() {
+        let cit1 = AnswerCitation {
+            note_id: "n1".into(),
+            title: "First".into(),
+            path: "p1".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let cit2 = AnswerCitation {
+            note_id: "n2".into(),
+            title: "Second".into(),
+            path: "p2".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let docs = vec![
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n1".into(),
+                    ..Default::default()
+                },
+                body: "This is a longer body for the first document.".into(),
+                search_snippet: None,
+            },
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n2".into(),
+                    ..Default::default()
+                },
+                body: "This is a longer body for the second document.".into(),
+                search_snippet: None,
+            },
+        ];
+        let result = enrich_citations(vec![cit1, cit2], &docs);
+        let s1 = result[0].score.unwrap();
+        let s2 = result[1].score.unwrap();
+        assert!(
+            s1 > s2,
+            "rank 0 score {} should be > rank 1 score {}",
+            s1,
+            s2
+        );
+    }
+
+    #[test]
+    fn enrich_citations_preserves_existing_score() {
+        let citation = AnswerCitation {
+            note_id: "n1".into(),
+            title: "T".into(),
+            path: "p".into(),
+            snippet: "s".into(),
+            score: Some(0.42),
+        };
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                id: "n1".into(),
+                ..Default::default()
+            },
+            body: "body".into(),
+            search_snippet: None,
+        }];
+        let result = enrich_citations(vec![citation], &docs);
+        assert!((result[0].score.unwrap() - 0.42).abs() < 0.001);
+    }
+
+    #[test]
+    fn enrich_citations_single_doc_gets_full_score() {
+        let citation = AnswerCitation {
+            note_id: "n1".into(),
+            title: "T".into(),
+            path: "p".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let docs = vec![NoteDocument {
+            meta: NoteMeta {
+                id: "n1".into(),
+                ..Default::default()
+            },
+            body: "body".into(),
+            search_snippet: None,
+        }];
+        let result = enrich_citations(vec![citation], &docs);
+        assert!((result[0].score.unwrap() - 1.0).abs() < 0.01);
     }
 }

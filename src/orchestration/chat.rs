@@ -588,10 +588,15 @@ fn enrich_turn_for_compression(turn: &ChatTurn) -> String {
             .citations
             .iter()
             .map(|c| {
-                if !c.title.is_empty() {
+                let label = if !c.title.is_empty() {
                     c.title.clone()
                 } else {
                     c.path.clone()
+                };
+                if let Some(score) = c.score {
+                    format!("{} ({:.0}%)", label, (score * 100.0).round())
+                } else {
+                    label
                 }
             })
             .filter(|s| !s.is_empty())

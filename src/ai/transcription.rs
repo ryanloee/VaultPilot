@@ -446,6 +446,7 @@ pub fn create_meeting_note(
         },
         body,
         search_snippet: None,
+        search_score: None,
     };
 
     let saved = save_note_with_context(context, note)?;
@@ -537,6 +538,7 @@ pub fn create_voice_note(
         },
         body,
         search_snippet: None,
+        search_score: None,
     };
 
     let saved = save_note_with_context(context, note)?;

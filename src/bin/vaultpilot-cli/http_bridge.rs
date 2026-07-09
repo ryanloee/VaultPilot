@@ -807,6 +807,7 @@ async fn http_create_note(
         },
         body,
         search_snippet: None,
+        search_score: None,
     };
 
     let saved = save_note_async(&state.context, note).await.map_err(|e| {

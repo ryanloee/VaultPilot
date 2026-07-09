@@ -43,6 +43,7 @@ mod tests {
             },
             body: body.to_string(),
             search_snippet: None,
+            search_score: None,
         }
     }
 

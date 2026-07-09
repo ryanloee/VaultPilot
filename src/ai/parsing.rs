@@ -1244,6 +1244,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "old".into(),
+            score: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1252,6 +1253,7 @@ mod tests {
             },
             body: "body text".into(),
             search_snippet: Some("FTS5 ==match== here".into()),
+            search_score: None,
         };
         let result = enrich_citations(vec![citation], &[doc]);
         assert_eq!(result[0].snippet, "FTS5 ==match== here");
@@ -1264,6 +1266,7 @@ mod tests {
             title: "rust tips".into(),
             path: "p".into(),
             snippet: "short".into(),
+            score: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1272,6 +1275,7 @@ mod tests {
             },
             body: "This body contains rust tips for beginners.".into(),
             search_snippet: None,
+            search_score: None,
         };
         let result = enrich_citations(vec![citation], &[doc]);
         // Should generate a programmatic snippet since original is < 20 chars
@@ -1285,6 +1289,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "original".into(),
+            score: None,
         };
         let result = enrich_citations(vec![citation], &[]);
         assert_eq!(result[0].snippet, "original");

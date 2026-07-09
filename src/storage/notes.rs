@@ -633,14 +633,31 @@ pub fn extract_wikilinks(body: &str) -> Vec<(String, Option<String>)> {
 
         // Walk the line, skipping inline code spans, looking for [[…]]
         let mut in_inline_code = false;
+        let mut code_span_backticks: usize = 0; // backtick count that opened the span
         let chars_vec: Vec<char> = line.chars().collect();
         let mut i = 0usize;
 
         while i < chars_vec.len() {
             match chars_vec[i] {
                 '`' => {
-                    in_inline_code = !in_inline_code;
-                    i += 1;
+                    // Count consecutive backticks to handle both single (`)
+                    // and double (``) inline code spans correctly (#2672).
+                    let mut count = 0;
+                    while i < chars_vec.len() && chars_vec[i] == '`' {
+                        count += 1;
+                        i += 1;
+                    }
+                    if in_inline_code {
+                        // Only close when the backtick count matches the opener
+                        if count == code_span_backticks {
+                            in_inline_code = false;
+                            code_span_backticks = 0;
+                        }
+                        // else: literal backticks inside the code span
+                    } else {
+                        in_inline_code = true;
+                        code_span_backticks = count;
+                    }
                 }
                 '[' if !in_inline_code && i + 1 < chars_vec.len() && chars_vec[i + 1] == '[' => {
                     // Found [[ — extract until ]]
@@ -1306,6 +1323,7 @@ fn import_single_markdown(
         },
         body: parsed.body,
         search_snippet: None,
+        search_score: None,
     };
     save_note_with_context(context, imported)?;
     Ok(true)
@@ -1379,6 +1397,7 @@ pub(super) fn parse_markdown_note(path: &Path, default_source: &str) -> Result<N
         },
         body: body.trim().to_string(),
         search_snippet: None,
+        search_score: None,
     })
 }
 
@@ -2478,6 +2497,41 @@ mod tests {
         let body = "See [[Real Link]] and `[[Code Link]]` here.";
         let links = extract_wikilinks(body);
         assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, "Real Link");
+    }
+
+    #[test]
+    fn regression_2672_extract_wikilinks_skips_double_backtick_code() {
+        // Double-backtick code spans should also be skipped (#2672)
+        let body = "See [[Real Link]] and ``[[Code Link]]`` here.";
+        let links = extract_wikilinks(body);
+        assert_eq!(
+            links.len(),
+            1,
+            "double-backtick code span wikilink should be skipped"
+        );
+        assert_eq!(links[0].0, "Real Link");
+    }
+
+    #[test]
+    fn regression_2672_extract_wikilinks_double_backtick_with_single_inside() {
+        // Double-backtick span containing a single backtick should not close early
+        let body = "Text ``code ` snippet [[NotALink]]`` then [[Real Link]].";
+        let links = extract_wikilinks(body);
+        assert_eq!(
+            links.len(),
+            1,
+            "wikilink inside double-backtick span should be skipped"
+        );
+        assert_eq!(links[0].0, "Real Link");
+    }
+
+    #[test]
+    fn regression_2672_extract_wikilinks_mixed_backtick_spans() {
+        // Mix of single and double backtick on same line
+        let body = "`[[skip1]]` then ``[[skip2]]`` then [[Real Link]] end.";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1, "both code span wikilinks should be skipped");
         assert_eq!(links[0].0, "Real Link");
     }
 

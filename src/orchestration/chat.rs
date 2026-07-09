@@ -593,6 +593,9 @@ fn enrich_turn_for_compression(turn: &ChatTurn) -> String {
                 } else {
                     c.path.clone()
                 };
+                if label.is_empty() {
+                    return String::new();
+                }
                 if let Some(score) = c.score {
                     format!("{} ({:.0}%)", label, (score * 100.0).round())
                 } else {
@@ -797,6 +800,31 @@ mod tests {
         };
         let result = enrich_turn_for_compression(&turn);
         assert!(result.contains("[Citations: My Note]"));
+    }
+
+    #[test]
+    fn enrich_empty_label_citation_with_score_filtered() {
+        // #2671: citation with empty title + path but score present
+        // should be filtered out, not produce " (75%)"
+        let turn = ChatTurn {
+            text: "hello".into(),
+            citations: vec![AnswerCitation {
+                title: String::new(),
+                path: String::new(),
+                score: Some(0.75),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let result = enrich_turn_for_compression(&turn);
+        assert!(
+            !result.contains("(75%)"),
+            "empty-label citation with score should be filtered, got: {result}"
+        );
+        assert!(
+            !result.contains("[Citations:"),
+            "should have no citations section when all are empty, got: {result}"
+        );
     }
 
     #[test]

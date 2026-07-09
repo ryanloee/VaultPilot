@@ -125,6 +125,65 @@ pub fn delete_project_with_context(context: &StorageContext, project_id: &str) -
     }
 }
 
+/// Add a note (by path or ID) to a project's scope.
+/// Returns the updated project, or `None` if the project does not exist.
+#[instrument(skip(context))]
+pub fn add_note_to_project_with_context(
+    context: &StorageContext,
+    project_id: &str,
+    note_id: &str,
+) -> Result<Option<Project>> {
+    let dir = projects_dir(context)?;
+    let path = project_path(&dir, project_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read project file: {}", path.display()))?;
+    let mut project: Project = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse project file: {}", path.display()))?;
+
+    if !project.note_ids.iter().any(|n| n == note_id) {
+        project.note_ids.push(note_id.to_string());
+        project.updated_at = Utc::now().to_rfc3339();
+        let json = serde_json::to_string_pretty(&project)
+            .context("failed to serialize updated project")?;
+        super::atomic_write(&path, json.as_bytes())?;
+    }
+
+    Ok(Some(project))
+}
+
+/// Remove a note (by path or ID) from a project's scope.
+/// Returns the updated project, or `None` if the project does not exist.
+#[instrument(skip(context))]
+pub fn remove_note_from_project_with_context(
+    context: &StorageContext,
+    project_id: &str,
+    note_id: &str,
+) -> Result<Option<Project>> {
+    let dir = projects_dir(context)?;
+    let path = project_path(&dir, project_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read project file: {}", path.display()))?;
+    let mut project: Project = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse project file: {}", path.display()))?;
+
+    let before = project.note_ids.len();
+    project.note_ids.retain(|n| n != note_id);
+    if project.note_ids.len() != before {
+        project.updated_at = Utc::now().to_rfc3339();
+        let json = serde_json::to_string_pretty(&project)
+            .context("failed to serialize updated project")?;
+        super::atomic_write(&path, json.as_bytes())?;
+    }
+
+    Ok(Some(project))
+}
+
 /// List all projects with note counts.
 #[instrument(skip(context))]
 pub fn list_projects_with_context(context: &StorageContext) -> Result<Vec<Project>> {
@@ -318,5 +377,74 @@ mod tests {
         assert_eq!(projects[0].name, "Alpha");
         assert_eq!(projects[1].name, "Beta");
         assert_eq!(projects[2].name, "Charlie");
+    }
+
+    #[test]
+    fn test_add_note_to_project() {
+        let ctx = setup_temp_context();
+        let project = create_project_with_context(&ctx, "Notes Project", "").unwrap();
+        assert!(project.note_ids.is_empty());
+
+        // Add first note
+        let updated =
+            add_note_to_project_with_context(&ctx, &project.id, "notes/project-design.md")
+                .unwrap()
+                .expect("project should exist");
+        assert_eq!(updated.note_ids.len(), 1);
+        assert_eq!(updated.note_ids[0], "notes/project-design.md");
+
+        // Add second note
+        let updated = add_note_to_project_with_context(&ctx, &project.id, "notes/architecture.md")
+            .unwrap()
+            .expect("project should exist");
+        assert_eq!(updated.note_ids.len(), 2);
+
+        // Adding the same note again should be idempotent
+        let updated =
+            add_note_to_project_with_context(&ctx, &project.id, "notes/project-design.md")
+                .unwrap()
+                .expect("project should exist");
+        assert_eq!(
+            updated.note_ids.len(),
+            2,
+            "duplicate add should be idempotent"
+        );
+    }
+
+    #[test]
+    fn test_remove_note_from_project() {
+        let ctx = setup_temp_context();
+        let project = create_project_with_context(&ctx, "Remove Test", "").unwrap();
+        add_note_to_project_with_context(&ctx, &project.id, "a.md").unwrap();
+        add_note_to_project_with_context(&ctx, &project.id, "b.md").unwrap();
+        add_note_to_project_with_context(&ctx, &project.id, "c.md").unwrap();
+
+        let updated = remove_note_from_project_with_context(&ctx, &project.id, "b.md")
+            .unwrap()
+            .expect("project should exist");
+        assert_eq!(updated.note_ids.len(), 2);
+        assert!(!updated.note_ids.contains(&"b.md".to_string()));
+        assert!(updated.note_ids.contains(&"a.md".to_string()));
+        assert!(updated.note_ids.contains(&"c.md".to_string()));
+
+        // Removing a non-existent note should be a no-op
+        let updated = remove_note_from_project_with_context(&ctx, &project.id, "nonexistent.md")
+            .unwrap()
+            .expect("project should exist");
+        assert_eq!(updated.note_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_add_note_nonexistent_project() {
+        let ctx = setup_temp_context();
+        let result = add_note_to_project_with_context(&ctx, "fake-id", "note.md").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_remove_note_nonexistent_project() {
+        let ctx = setup_temp_context();
+        let result = remove_note_from_project_with_context(&ctx, "fake-id", "note.md").unwrap();
+        assert!(result.is_none());
     }
 }

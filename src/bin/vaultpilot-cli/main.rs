@@ -15,20 +15,20 @@ use uuid::Uuid;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    add_note_to_collection_with_context, compute_and_update_next_run,
-    create_collection_with_context, create_project_with_context, create_subscription_with_context,
-    delete_collection_with_context, delete_note_with_context, delete_project_with_context,
-    delete_subscription_with_context, export_all_notes_with_context,
+    add_note_to_collection_with_context, add_note_to_project_with_context,
+    compute_and_update_next_run, create_collection_with_context, create_project_with_context,
+    create_subscription_with_context, delete_collection_with_context, delete_note_with_context,
+    delete_project_with_context, delete_subscription_with_context, export_all_notes_with_context,
     export_note_markdown_with_context, find_related_notes_with_context,
     get_collections_for_note_with_context, get_project_with_context, get_subscription_with_context,
     import_markdown_with_context, initialize_storage_with_context, list_collections_with_context,
     list_notes_in_collection_with_context, list_projects_with_context,
     list_subscriptions_with_context, load_chat_state_async, load_note_with_context,
     load_settings_with_context, rebuild_index_with_context,
-    remove_note_from_collection_with_context, save_chat_state_async, save_note_with_context,
-    save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
-    update_project_with_context, update_subscription_with_context, vault_export_with_context,
-    StorageContext,
+    remove_note_from_collection_with_context, remove_note_from_project_with_context,
+    save_chat_state_async, save_note_with_context, save_settings_with_context,
+    search_notes_with_context, set_subscription_enabled_with_context, update_project_with_context,
+    update_subscription_with_context, vault_export_with_context, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
@@ -797,6 +797,22 @@ enum ProjectActions {
         /// New description
         #[arg(long)]
         description: Option<String>,
+    },
+
+    /// Add a note to a project's scope (#1570)
+    AddNote {
+        /// Project ID
+        id: String,
+        /// Note path or ID to add
+        note: String,
+    },
+
+    /// Remove a note from a project's scope (#1570)
+    RemoveNote {
+        /// Project ID
+        id: String,
+        /// Note path or ID to remove
+        note: String,
     },
 }
 
@@ -1951,6 +1967,20 @@ fn handle_projects(context: &StorageContext, action: &ProjectActions) -> Result<
             let new_name = name.as_deref().unwrap_or(&current.name);
             let new_desc = description.as_deref().unwrap_or(&current.description);
             let updated = update_project_with_context(context, id, new_name, new_desc)?;
+            match updated {
+                Some(p) => Ok(serde_json::json!({ "project": p })),
+                None => Ok(serde_json::json!({ "error": "Project not found", "id": id })),
+            }
+        }
+        ProjectActions::AddNote { id, note } => {
+            let updated = add_note_to_project_with_context(context, id, note)?;
+            match updated {
+                Some(p) => Ok(serde_json::json!({ "project": p })),
+                None => Ok(serde_json::json!({ "error": "Project not found", "id": id })),
+            }
+        }
+        ProjectActions::RemoveNote { id, note } => {
+            let updated = remove_note_from_project_with_context(context, id, note)?;
             match updated {
                 Some(p) => Ok(serde_json::json!({ "project": p })),
                 None => Ok(serde_json::json!({ "error": "Project not found", "id": id })),

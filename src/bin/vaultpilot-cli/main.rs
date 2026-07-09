@@ -201,6 +201,30 @@ enum Commands {
         action: VaultActions,
     },
 
+    /// Open or create today's daily note with optional template (#1843)
+    ///
+    /// Creates a structured daily note at `Daily/YYYY-MM-DD.md` using a template.
+    /// If the note already exists, returns its content.
+    ///
+    /// Examples:
+    ///   vaultpilot daily                  # today's note with default template
+    ///   vaultpilot daily --template work  # today's note with work template
+    ///   vaultpilot daily --date 2026-06-26  # specific date
+    ///   vaultpilot daily --list           # list all daily notes
+    Daily {
+        /// Template name: default, work, research, minimal
+        #[arg(long, default_value = "default")]
+        template: String,
+
+        /// Specific date (YYYY-MM-DD), defaults to today
+        #[arg(long)]
+        date: Option<String>,
+
+        /// List all daily notes instead of creating/opening one
+        #[arg(long)]
+        list: bool,
+    },
+
     /// Start an MCP stdio server for VaultPilot's built-in model chat interface
     Mcp,
 
@@ -1095,6 +1119,11 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             "message": "The MCP HTTP server is started by running `vaultpilot-cli mcp-http` directly."
         })),
         Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
+        Commands::Daily {
+            template,
+            date,
+            list,
+        } => handle_daily(context, template, date.as_deref(), *list),
         Commands::Collections { action } => {
             tokio::task::block_in_place(|| handle_collections(context, action))
         }
@@ -1548,6 +1577,202 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             to_json(&result)
         }
     }
+}
+
+/// Handle the `daily` subcommand — create/open daily notes with templates (#1843).
+fn handle_daily(
+    context: &StorageContext,
+    template: &str,
+    date_str: Option<&str>,
+    list_mode: bool,
+) -> Result<Value> {
+    use chrono::{Local, NaiveDate};
+
+    let today = Local::now().date_naive();
+    let target_date = match date_str {
+        Some(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map_err(|e| anyhow::anyhow!("invalid date '{}': {e}", s))?,
+        None => today,
+    };
+
+    // --list mode: return all daily notes
+    if list_mode {
+        let result = search_notes_with_context(
+            context,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["daily".to_string()],
+                keywords: Vec::new(),
+                limit: Some(100),
+                ..Default::default()
+            },
+        )?;
+        return Ok(serde_json::json!({
+            "daily_notes": result.notes,
+            "count": result.total,
+        }));
+    }
+
+    // Compute the note ID for this date
+    let note_id = format!("Daily/{}", target_date.format("%Y-%m-%d"));
+
+    // Try to load existing note
+    match load_note_with_context(context, &note_id) {
+        Ok(doc) => Ok(serde_json::json!({
+            "status": "existing",
+            "note_id": note_id,
+            "title": doc.meta.title,
+            "body": doc.body,
+            "created_at": doc.meta.created_at,
+            "updated_at": doc.meta.updated_at,
+        })),
+        Err(_) => {
+            // Note doesn't exist — create it from template
+            let body = render_daily_template(template, &target_date)?;
+            let note = NoteDocument {
+                meta: NoteMeta {
+                    id: note_id.clone(),
+                    title: target_date.format("%Y-%m-%d").to_string(),
+                    tags: vec!["daily".to_string()],
+                    summary: String::new(),
+                    source: String::new(),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                    ..Default::default()
+                },
+                body,
+                search_snippet: None,
+            };
+            let saved = save_note_with_context(context, note)?;
+            Ok(serde_json::json!({
+                "status": "created",
+                "note_id": note_id,
+                "title": saved.meta.title,
+                "template": template,
+            }))
+        }
+    }
+}
+
+/// Render a daily note template with variable substitution.
+fn render_daily_template(template_name: &str, date: &chrono::NaiveDate) -> Result<String> {
+    use chrono::Datelike;
+
+    let weekday = match date.weekday() {
+        chrono::Weekday::Mon => "Monday",
+        chrono::Weekday::Tue => "Tuesday",
+        chrono::Weekday::Wed => "Wednesday",
+        chrono::Weekday::Thu => "Thursday",
+        chrono::Weekday::Fri => "Friday",
+        chrono::Weekday::Sat => "Saturday",
+        chrono::Weekday::Sun => "Sunday",
+    };
+
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let date_display = date.format("%B %d, %Y").to_string();
+
+    let template = match template_name {
+        "work" => format!(
+            r#"# {date_display} ({weekday})
+
+## Today's Goals
+- [ ] 
+
+## Meetings
+<!-- Auto-filled from calendar -->
+
+## Tasks
+- [ ] 
+
+## Notes
+
+
+## End of Day Reflection
+- What went well:
+- What could improve:
+- Key takeaway:
+"#,
+        ),
+        "research" => format!(
+            r#"# {date_display} ({weekday})
+
+## Research Question
+
+
+## Reading Notes
+
+
+## Ideas
+
+
+## Connections
+<!-- Links to related notes -->
+
+## Next Steps
+- [ ] 
+"#,
+        ),
+        "minimal" => format!(
+            r#"# {date_display}
+
+"#,
+        ),
+        _ => {
+            // "default" template
+            format!(
+                r#"# {date_display} ({weekday})
+
+## Goals
+- [ ] 
+
+## Notes
+
+
+## Tasks
+- [ ] 
+
+## Journal
+
+"#,
+            )
+        }
+    };
+
+    // Variable substitution
+    let rendered = template
+        .replace("{{date}}", &date_str)
+        .replace("{{weekday}}", weekday)
+        .replace("{{date_display}}", &date_display);
+
+    Ok(rendered)
+}
+
+/// List templates available in the vault's template directory.
+fn list_daily_templates(context: &StorageContext) -> Vec<String> {
+    let templates_dir = context.vault_dir().join(".vaultpilot/templates/daily");
+    let mut templates = vec![
+        "default".to_string(),
+        "work".to_string(),
+        "research".to_string(),
+        "minimal".to_string(),
+    ];
+
+    if let Ok(entries) = std::fs::read_dir(&templates_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                    let name = name.to_string();
+                    if !templates.contains(&name) {
+                        templates.push(name);
+                    }
+                }
+            }
+        }
+    }
+
+    templates.sort();
+    templates
 }
 
 fn handle_collections(context: &StorageContext, action: &CollectionActions) -> Result<Value> {
@@ -3014,7 +3239,7 @@ mod tests {
         simplify_cli_text, strip_cli_markdown_from_chat_state, strip_markdown_wrapper_tags,
     };
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
-    use crate::{parse_batch_selector, resolve_audio_input, BatchSelector};
+    use crate::{parse_batch_selector, render_daily_template, resolve_audio_input, BatchSelector};
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
     use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
@@ -3233,5 +3458,80 @@ mod tests {
         let input = "normal text";
         let result = escape_xml_content(input);
         assert_eq!(result, "normal text");
+    }
+
+    // ── render_daily_template (#1843) ─────────────────────────────
+
+    #[test]
+    fn daily_template_default_contains_sections() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let result = render_daily_template("default", &date).unwrap();
+        assert!(result.contains("# July 09, 2026 (Thursday)"));
+        assert!(result.contains("## Goals"));
+        assert!(result.contains("## Notes"));
+        assert!(result.contains("## Tasks"));
+        assert!(result.contains("## Journal"));
+    }
+
+    #[test]
+    fn daily_template_work_contains_sections() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let result = render_daily_template("work", &date).unwrap();
+        assert!(result.contains("## Today's Goals"));
+        assert!(result.contains("## Meetings"));
+        assert!(result.contains("## Tasks"));
+        assert!(result.contains("## End of Day Reflection"));
+    }
+
+    #[test]
+    fn daily_template_research_contains_sections() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let result = render_daily_template("research", &date).unwrap();
+        assert!(result.contains("## Research Question"));
+        assert!(result.contains("## Reading Notes"));
+        assert!(result.contains("## Connections"));
+        assert!(result.contains("## Next Steps"));
+    }
+
+    #[test]
+    fn daily_template_minimal_is_minimal() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let result = render_daily_template("minimal", &date).unwrap();
+        assert!(result.contains("# July 09, 2026"));
+        // Minimal has no subsections
+        assert!(!result.contains("## "));
+    }
+
+    #[test]
+    fn daily_template_variable_substitution() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let result = render_daily_template("default", &date).unwrap();
+        // No raw variables left
+        assert!(!result.contains("{{date}}"));
+        assert!(!result.contains("{{weekday}}"));
+        assert!(!result.contains("{{date_display}}"));
+    }
+
+    #[test]
+    fn daily_template_monday_date() {
+        let monday = chrono::NaiveDate::from_ymd_opt(2026, 7, 6).unwrap();
+        let result = render_daily_template("default", &monday).unwrap();
+        assert!(result.contains("(Monday)"));
+    }
+
+    #[test]
+    fn daily_template_sunday_date() {
+        let sunday = chrono::NaiveDate::from_ymd_opt(2026, 7, 12).unwrap();
+        let result = render_daily_template("default", &sunday).unwrap();
+        assert!(result.contains("(Sunday)"));
+    }
+
+    #[test]
+    fn daily_template_invalid_returns_default() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let result = render_daily_template("nonexistent", &date).unwrap();
+        // Should fall back to default template
+        assert!(result.contains("## Goals"));
+        assert!(result.contains("## Notes"));
     }
 }

@@ -633,14 +633,31 @@ pub fn extract_wikilinks(body: &str) -> Vec<(String, Option<String>)> {
 
         // Walk the line, skipping inline code spans, looking for [[…]]
         let mut in_inline_code = false;
+        let mut code_span_backticks: usize = 0; // backtick count that opened the span
         let chars_vec: Vec<char> = line.chars().collect();
         let mut i = 0usize;
 
         while i < chars_vec.len() {
             match chars_vec[i] {
                 '`' => {
-                    in_inline_code = !in_inline_code;
-                    i += 1;
+                    // Count consecutive backticks to handle both single (`)
+                    // and double/triple backtick inline code spans (#2672).
+                    let mut count = 1usize;
+                    while i + count < chars_vec.len() && chars_vec[i + count] == '`' {
+                        count += 1;
+                    }
+                    if in_inline_code {
+                        // Only close when the backtick count matches the opener
+                        if count == code_span_backticks {
+                            in_inline_code = false;
+                            code_span_backticks = 0;
+                        }
+                        // else: literal backticks inside the code span
+                    } else {
+                        in_inline_code = true;
+                        code_span_backticks = count;
+                    }
+                    i += count;
                 }
                 '[' if !in_inline_code && i + 1 < chars_vec.len() && chars_vec[i + 1] == '[' => {
                     // Found [[ — extract until ]]
@@ -2481,6 +2498,33 @@ mod tests {
         let links = extract_wikilinks(body);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].0, "Real Link");
+    }
+
+    #[test]
+    fn regression_2672_extract_wikilinks_skips_double_backtick_code() {
+        // Double-backtick code spans should also be skipped (#2672)
+        let body = "See [[Real Link]] and ``code with [[Code Link]]`` here.";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1, "double-backtick code span wikilink should be skipped");
+        assert_eq!(links[0].0, "Real Link");
+    }
+
+    #[test]
+    fn regression_2672_extract_wikilinks_double_backtick_with_single_inside() {
+        // Double-backtick span containing a single backtick should not close early
+        let body = "``a ` b [[wikilink]]`` and [[Real]]";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1, "wikilink inside double-backtick span should be skipped");
+        assert_eq!(links[0].0, "Real");
+    }
+
+    #[test]
+    fn regression_2672_extract_wikilinks_mixed_backtick_spans() {
+        // Mix of single and double backtick on same line
+        let body = "`single [[A]]` and ``double [[B]]`` and [[Real]]";
+        let links = extract_wikilinks(body);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].0, "Real");
     }
 
     #[test]

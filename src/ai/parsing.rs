@@ -393,9 +393,13 @@ pub(super) fn enrich_citations(
         .into_iter()
         .map(|mut citation| {
             if let Some(doc) = doc_map.get(citation.note_id.as_str()) {
-                // Populate score from rank-based calculation (#1704)
+                // Populate score from search_score or rank-based calculation (#1704)
                 if citation.score.is_none() {
-                    citation.score = rank_map.get(citation.note_id.as_str()).copied();
+                    if let Some(ss) = doc.search_score {
+                        citation.score = Some(ss as f64);
+                    } else {
+                        citation.score = rank_map.get(citation.note_id.as_str()).copied();
+                    }
                 }
                 if let Some(ref fts_snippet) = doc.search_snippet {
                     if !fts_snippet.trim().is_empty() && fts_snippet.contains("==") {
@@ -1455,7 +1459,7 @@ mod tests {
             search_score: Some(250),
         }];
         let result = enrich_citations(vec![citation], &docs);
-        assert_eq!(result[0].score, Some(250));
+        assert_eq!(result[0].score, Some(250.0));
     }
 
     #[test]
@@ -1512,7 +1516,7 @@ mod tests {
             title: "T".into(),
             path: "p".into(),
             snippet: "s".into(),
-            score: Some(42),
+            score: Some(42.0),
         };
         let docs = vec![NoteDocument {
             meta: NoteMeta {
@@ -1524,7 +1528,7 @@ mod tests {
             search_score: Some(999),
         }];
         let result = enrich_citations(vec![citation], &docs);
-        assert_eq!(result[0].score, Some(42));
+        assert_eq!(result[0].score, Some(42.0));
     }
 
     #[test]

@@ -42,14 +42,16 @@ pub use instant_search::{
 pub use notes::{
     delete_note_async, delete_note_with_context, export_all_notes_async,
     export_all_notes_with_context, export_note_markdown_async, export_note_markdown_with_context,
-    find_related_notes_async, find_related_notes_for_text_with_context,
-    find_related_notes_with_context, import_markdown_async, import_markdown_with_context,
-    load_context_notes_async, load_context_notes_with_context, load_note_with_context,
-    load_recent_notes_for_overview, load_recent_notes_for_overview_async, ocr_image_text,
-    ocr_image_text_async, rebuild_index_async, rebuild_index_with_context, save_note_async,
-    save_note_with_context, save_note_with_images_async, save_note_with_images_with_context,
-    search_candidate_notes_async, search_candidate_notes_with_context, vault_export_async,
-    vault_export_with_context, NoteNotFound,
+    extract_wikilinks, find_backlinks_async, find_backlinks_with_context, find_related_notes_async,
+    find_related_notes_for_text_with_context, find_related_notes_with_context,
+    follow_wikilinks_async, follow_wikilinks_with_context, import_markdown_async,
+    import_markdown_with_context, load_context_notes_async, load_context_notes_with_context,
+    load_note_with_context, load_recent_notes_for_overview, load_recent_notes_for_overview_async,
+    ocr_image_text, ocr_image_text_async, rebuild_index_async, rebuild_index_with_context,
+    save_note_async, save_note_with_context, save_note_with_images_async,
+    save_note_with_images_with_context, search_candidate_notes_async,
+    search_candidate_notes_with_context, vault_export_async, vault_export_with_context,
+    NoteNotFound,
 };
 // Re-export list_all_note_metas from search so orchestration modules can
 // iterate the full vault without access to private modules.

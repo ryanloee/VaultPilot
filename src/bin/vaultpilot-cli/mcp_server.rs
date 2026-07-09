@@ -12,10 +12,11 @@ use axum::Json;
 
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    delete_note_with_context, find_related_notes_with_context, import_markdown_with_context,
-    load_chat_state_with_context, load_note_async, load_note_with_context,
-    rebuild_index_with_context, save_chat_state_with_context, save_note_with_context,
-    search_notes_async, search_notes_with_context, StorageContext,
+    delete_note_with_context, find_backlinks_with_context, find_related_notes_with_context,
+    follow_wikilinks_with_context, import_markdown_with_context, load_chat_state_with_context,
+    load_note_async, load_note_with_context, rebuild_index_with_context,
+    save_chat_state_with_context, save_note_with_context, search_notes_async,
+    search_notes_with_context, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, finalize_chat_with_ai_answer, prepare_chat_for_ai,
@@ -685,6 +686,8 @@ async fn handle_mcp_request(
                 "notes.delete" => mcp_call_notes_delete(context, arguments).await,
                 "notes.search" => mcp_call_notes_search(context, arguments).await,
                 "notes.related" => mcp_call_notes_related(context, arguments).await,
+                "notes.follow_links" => mcp_call_notes_follow_links(context, arguments).await,
+                "notes.backlinks" => mcp_call_notes_backlinks(context, arguments).await,
                 "notes.import" => mcp_call_notes_import(context, arguments).await,
                 "index.rebuild" => mcp_call_index_rebuild(context).await,
                 "email.search" => mcp_call_email_search(context, arguments).await,
@@ -1411,6 +1414,46 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
+            "name": "notes.follow_links",
+            "title": "Follow Wikilinks",
+            "description": "Extract all [[wikilinks]] from a note's body and resolve them to notes in the vault. Returns each link target with resolved note metadata (or null if the link is dangling). Supports [[Title]], [[Title|alias]], and [[Title#heading]] syntax.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "string", "description": "Note ID or path whose wikilinks to follow." }
+                },
+                "required": ["note_id"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Follow Wikilinks",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.backlinks",
+            "title": "Find Backlinks",
+            "description": "Find all notes that contain a [[wikilink]] pointing to the given note. A backlink is any note whose body references the target note's title via [[Title]], [[Title|alias]], or [[Title#heading]] syntax. Results are sorted by last modified (most recent first).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note_id": { "type": "string", "description": "Note ID whose backlinks to find." }
+                },
+                "required": ["note_id"],
+                "additionalProperties": false
+            },
+            "annotations": {
+                "title": "Find Backlinks",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
             "name": "notes.import",
             "title": "Import Notes",
             "description": "Import Markdown files from local paths into the vault.",
@@ -2036,6 +2079,53 @@ async fn mcp_call_notes_related(context: &StorageContext, arguments: Value) -> V
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
+async fn mcp_call_notes_follow_links(context: &StorageContext, arguments: Value) -> Value {
+    let note_id = match arguments.get("note_id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => {
+            return mcp_tool_error("notes.follow_links requires 'note_id' parameter".to_string())
+        }
+    };
+    let ctx = context.clone();
+    let note_id2 = note_id.clone();
+    tokio::task::spawn_blocking(
+        move || match follow_wikilinks_with_context(&ctx, &note_id2) {
+            Ok(results) => {
+                let count = results.len();
+                let resolved = results.iter().filter(|r| r.note.is_some()).count();
+                mcp_tool_success(
+                    format!("Found {count} wikilink(s) ({resolved} resolved)."),
+                    serde_json::to_value(&results).unwrap_or_default(),
+                )
+            }
+            Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+        },
+    )
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
+async fn mcp_call_notes_backlinks(context: &StorageContext, arguments: Value) -> Value {
+    let note_id = match arguments.get("note_id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None => return mcp_tool_error("notes.backlinks requires 'note_id' parameter".to_string()),
+    };
+    let ctx = context.clone();
+    let note_id2 = note_id.clone();
+    tokio::task::spawn_blocking(move || match find_backlinks_with_context(&ctx, &note_id2) {
+        Ok(results) => {
+            let count = results.len();
+            mcp_tool_success(
+                format!("Found {count} backlink(s)."),
+                serde_json::to_value(&results).unwrap_or_default(),
+            )
+        }
+        Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
 async fn mcp_call_notes_import(context: &StorageContext, arguments: Value) -> Value {
     let paths: Vec<String> = match arguments.get("paths") {
         Some(v) => match serde_json::from_value(v.clone()) {
@@ -2588,7 +2678,7 @@ mod tests {
     #[test]
     fn mcp_tools_count() {
         let tools = mcp_tools();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 18);
     }
 
     #[test]
@@ -3108,6 +3198,6 @@ mod tests {
         assert!(modes.contains(&"summary"));
         assert!(modes.contains(&"meta"));
         // tool count reflects all registered tools.
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 18);
     }
 }

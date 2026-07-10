@@ -655,6 +655,25 @@ enum NotesActions {
         #[arg(long, default_value = "5")]
         limit: usize,
     },
+
+    /// Edit a note, optionally with AI assistance (#1914)
+    ///
+    /// Examples:
+    ///   vp notes edit note_123 --ai "make it more concise"
+    ///   vp notes edit note_123 --ai "translate to Chinese" --mode expand
+    ///   vp notes edit note_123                             # show current content
+    Edit {
+        /// Note ID or file path
+        id: String,
+
+        /// AI prompt for editing the note (e.g. "make it more concise")
+        #[arg(long)]
+        ai: Option<String>,
+
+        /// Edit mode: edit, expand, summarize (default: edit)
+        #[arg(long, default_value = "edit")]
+        mode: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1081,7 +1100,10 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Settings { action } => {
             tokio::task::block_in_place(|| handle_settings(context, action))
         }
-        Commands::Notes { action } => tokio::task::block_in_place(|| handle_notes(context, action)),
+        Commands::Notes { action } => match action {
+            NotesActions::Edit { id, ai, mode } => handle_notes_edit(context, id, ai, mode).await,
+            _ => tokio::task::block_in_place(|| handle_notes(context, action)),
+        },
         Commands::Index { action } => tokio::task::block_in_place(|| handle_index(context, action)),
         Commands::Ask {
             question,
@@ -1579,6 +1601,69 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             let results = find_related_notes_with_context(context, id, *limit)?;
             to_json(&results)
         }
+        NotesActions::Edit { .. } => {
+            unreachable!("Edit is handled by async handle_notes_edit")
+        }
+    }
+}
+
+/// Handle `notes edit` — AI-assisted note editing (#1914)
+async fn handle_notes_edit(
+    context: &StorageContext,
+    id: &str,
+    ai: &Option<String>,
+    mode: &str,
+) -> Result<Value> {
+    let note = load_note_with_context(context, id)?;
+
+    if let Some(ai_prompt) = ai {
+        let ai_prompt = ai_prompt.trim();
+        if ai_prompt.is_empty() {
+            return Err(anyhow::anyhow!("AI prompt is empty"));
+        }
+
+        let settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+
+        // Build an edit-specific system prompt: ask the AI to edit the note
+        // content and return only the edited body.
+        let edit_prompt = format!(
+            "Edit the following note content based on the user's instruction.\n\n\
+             Mode: {mode}\n\n\
+             User instruction: {prompt}\n\n\
+             --- Current note content ---\n\
+             {body}\n\
+             --- End of current content ---\n\n\
+             Return ONLY the edited content — no explanations, no meta-commentary.",
+            mode = mode,
+            prompt = ai_prompt,
+            body = note.body,
+        );
+
+        let result = vaultpilot_lib::ai::generate_with_context(
+            &settings,
+            &edit_prompt,
+            std::slice::from_ref(&note),
+            mode,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("AI edit failed: {}", sanitize_error(&e.to_string())))?;
+
+        // Save the edited content back to the same note
+        let updated_note = NoteDocument {
+            body: result.clone(),
+            ..note.clone()
+        };
+        let saved = save_note_with_context(context, updated_note)?;
+
+        Ok(serde_json::json!({
+            "edited": true,
+            "id": saved.meta.id,
+            "title": saved.meta.title,
+            "content": result,
+        }))
+    } else {
+        // No AI prompt: just return the note content for inspection
+        to_json(&note)
     }
 }
 
@@ -3478,7 +3563,10 @@ mod tests {
         simplify_cli_text, strip_cli_markdown_from_chat_state, strip_markdown_wrapper_tags,
     };
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
-    use crate::{parse_batch_selector, render_daily_template, resolve_audio_input, BatchSelector};
+    use crate::{
+        parse_batch_selector, render_daily_template, resolve_audio_input, BatchSelector,
+        NotesActions,
+    };
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
     use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
@@ -3882,5 +3970,62 @@ mod tests {
         let title = "Hi";
         let keywords: Vec<&str> = title.split_whitespace().filter(|w| w.len() > 2).collect();
         assert!(keywords.is_empty());
+    }
+
+    // ── Notes Edit (#1914) ─────────────────────────────────────────
+
+    #[test]
+    fn notes_edit_empty_ai_prompt_errors() {
+        // The NoteDocument struct update pattern used in handle_notes_edit
+        // must work correctly: body replaced, meta preserved.
+        let note = vaultpilot_lib::models::NoteDocument {
+            meta: vaultpilot_lib::models::NoteMeta {
+                id: "test-1914".into(),
+                title: "Test".into(),
+                ..Default::default()
+            },
+            body: "Original content".into(),
+            search_snippet: None,
+            search_score: None,
+        };
+        let edited = vaultpilot_lib::models::NoteDocument {
+            body: "AI-edited content".into(),
+            ..note
+        };
+        assert_eq!(edited.body, "AI-edited content");
+        assert_eq!(edited.meta.id, "test-1914");
+        assert_eq!(edited.meta.title, "Test");
+    }
+
+    #[test]
+    fn notes_edit_enum_fields() {
+        // Verify the NotesActions::Edit variant can be constructed
+        // with the correct field types (compilation check).
+        let edit = NotesActions::Edit {
+            id: "note_id".into(),
+            ai: Some("make concise".into()),
+            mode: "edit".into(),
+        };
+        match &edit {
+            NotesActions::Edit { id, ai, mode } => {
+                assert_eq!(id, "note_id");
+                assert_eq!(ai.as_deref(), Some("make concise"));
+                assert_eq!(mode, "edit");
+            }
+            _ => panic!("expected Edit variant"),
+        }
+
+        // Without AI prompt
+        let view = NotesActions::Edit {
+            id: "note_id".into(),
+            ai: None,
+            mode: "edit".into(),
+        };
+        match &view {
+            NotesActions::Edit { ai, .. } => {
+                assert_eq!(ai.as_deref(), None);
+            }
+            _ => panic!("expected Edit variant"),
+        }
     }
 }

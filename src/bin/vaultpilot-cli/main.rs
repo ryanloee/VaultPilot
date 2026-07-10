@@ -794,6 +794,24 @@ enum NotesActions {
         #[arg(long)]
         model: Option<String>,
     },
+
+    /// Edit a note using AI (Composer #1569)
+    ///
+    /// Loads the note, sends its content + your instruction to the AI,
+    /// and returns the AI-edited version (does not auto-save).
+    /// Pipe to `notes create` or manually apply if satisfied.
+    Edit {
+        /// Note ID or file path
+        id: String,
+
+        /// Natural-language editing instruction (e.g. "make it more formal")
+        #[arg(long, short)]
+        instruction: String,
+
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1730,6 +1748,7 @@ async fn run_ai_action(
         target_language,
         tone,
         note_id,
+        instruction: None,
         model,
     };
 
@@ -2146,6 +2165,38 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
         // NotesActions::Ai is handled by handle_note_ai (async) in handle_command.
         NotesActions::Ai { .. } => {
             unreachable!("NotesActions::Ai is handled by handle_note_ai")
+        }
+        NotesActions::Edit {
+            id,
+            instruction,
+            model,
+        } => {
+            // Composer #1569: load note -> AI edit -> return suggested content
+            let note = load_note_with_context(context, id)?;
+            let request = vaultpilot_lib::ai::actions::AiActionRequest {
+                action: vaultpilot_lib::ai::actions::AiActionType::EditNote,
+                text: note.body.clone(),
+                target_language: None,
+                tone: None,
+                note_id: Some(note.meta.id.clone()),
+                instruction: Some(instruction.clone()),
+                model: model.clone(),
+            };
+            let settings = load_settings_with_context(context)?;
+            let handle = tokio::runtime::Handle::current();
+            let result = handle.block_on(vaultpilot_lib::ai::actions::execute_ai_action(
+                &settings, &request,
+            ));
+            if let Some(err) = &result.error {
+                return Err(anyhow::anyhow!("{}", err));
+            }
+            to_json(&serde_json::json!({
+                "noteId": note.meta.id,
+                "instruction": instruction,
+                "originalContent": note.body,
+                "editedContent": result.result,
+                "usage": result.usage,
+            }))
         }
     }
 }

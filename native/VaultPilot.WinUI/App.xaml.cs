@@ -102,6 +102,15 @@ public partial class App : Application
                 await _window.ShutdownAsync();
             }
         }
+        catch (Exception ex)
+        {
+            // #2688: If shutdown fails (disk I/O, dispose, etc.), the app is in
+            // a half-cleaned-up state (_exitInProgress==1, tray disposed, mutex
+            // released, handler removed). Without this catch the exception would
+            // propagate to the caller and strand the app as a phantom process.
+            Debug.WriteLine($"[VaultPilot] BeginExitForUpdate error: {ex}");
+            LogToFile("EXIT_UPDATE", ex);
+        }
         finally
         {
             // #532: Dispose tray icon so the process can exit after window closes.
@@ -112,6 +121,10 @@ public partial class App : Application
             // #563: Release single-instance mutex so the updated process can acquire it.
             try { _instanceMutex?.ReleaseMutex(); } catch { }
             try { _instanceMutex?.Dispose(); } catch { }
+
+            // #2688: Guarantee the process terminates even if shutdown threw.
+            // Mirrors the resilience pattern in ExitApplication().
+            Application.Current.Exit();
         }
     }
 

@@ -410,6 +410,32 @@ enum Commands {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
+
+    /// Generate a knowledge graph from vault wikilinks (#1913)
+    ///
+    /// Builds a node-edge graph by extracting `[[wikilink]]` references from
+    /// every note and resolving them to note titles. Output can be rendered
+    /// as DOT (Graphviz) or JSON.
+    ///
+    /// Examples:
+    ///   vp graph                          — print graph summary + DOT to stderr/stdout
+    ///   vp graph --dot                    — DOT only (pipe to graphviz)
+    ///   vp graph --json                   — JSON output
+    ///   vp graph --summary                — statistics only
+    ///   vp graph --dot | dot -Tsvg -o graph.svg
+    Graph {
+        /// Output format: dot (Graphviz DOT language)
+        #[arg(long)]
+        dot: bool,
+
+        /// Output format: JSON (machine-readable)
+        #[arg(long)]
+        json: bool,
+
+        /// Show only graph statistics (notes, links, orphans, hubs)
+        #[arg(long)]
+        summary: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1296,6 +1322,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
+        Commands::Graph { dot, json, summary } => handle_graph(context, *dot, *json, *summary),
     }
 }
 
@@ -3466,6 +3493,56 @@ async fn find_related_notes_for_digest(
             .collect(),
         Err(_) => Vec::new(),
     }
+}
+
+/// Handle the `graph` command — build and output the vault knowledge graph (#1913).
+fn handle_graph(context: &StorageContext, dot: bool, json: bool, summary: bool) -> Result<Value> {
+    use vaultpilot_lib::knowledge_graph;
+
+    let graph = knowledge_graph::build_knowledge_graph(context)?;
+
+    // Determine output mode: explicit flags take priority, default = summary + dot.
+    if json {
+        let json_str = knowledge_graph::render(&graph, knowledge_graph::GraphOutputFormat::Json)?;
+        // Print to stdout for piping
+        println!("{json_str}");
+        return Ok(serde_json::json!({
+            "format": "json",
+            "note_count": graph.note_count,
+            "edge_count": graph.edge_count,
+        }));
+    }
+
+    if dot {
+        let dot_str = knowledge_graph::render_dot(&graph);
+        println!("{dot_str}");
+        return Ok(serde_json::json!({
+            "format": "dot",
+            "note_count": graph.note_count,
+            "edge_count": graph.edge_count,
+        }));
+    }
+
+    // Default / summary: print human-readable stats to stderr, DOT to stdout.
+    let stats = knowledge_graph::graph_summary(&graph);
+    eprintln!("{stats}");
+    eprintln!();
+    eprintln!("Use --dot for Graphviz output, --json for machine-readable JSON.");
+    eprintln!("  vp graph --dot | dot -Tsvg -o graph.svg");
+
+    let result = serde_json::json!({
+        "note_count": graph.note_count,
+        "edge_count": graph.edge_count,
+        "dangling_link_count": graph.dangling_link_count,
+    });
+
+    if !summary {
+        // Also print DOT to stdout in default mode.
+        let dot_str = knowledge_graph::render_dot(&graph);
+        println!("{dot_str}");
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ pub mod context_surface;
 pub mod crypto;
 pub mod file_parsing;
 pub mod health;
+pub mod knowledge_graph;
 pub mod mail;
 pub mod models;
 pub mod orchestration;

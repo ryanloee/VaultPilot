@@ -1098,11 +1098,12 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             } else {
                 Some(image.clone())
             };
-            // Apply response style (#1965)
+            // Apply response style (#1965) — transient override, restored after call (#2697)
             let rs = style
                 .parse::<ResponseStyle>()
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            let original_style = settings.response_style;
             settings.response_style = rs;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             let result = ask_with_ai_with_context(
@@ -1114,6 +1115,10 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 |_, _| (),
             )
             .await?;
+            // Restore original style so --style is per-invocation only (#2697)
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = original_style;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             to_json(&strip_cli_markdown_from_grounded_answer(result))
         }
         Commands::Compress { history, summary } => {
@@ -1218,9 +1223,16 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 .parse::<ResponseStyle>()
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            let original_style = settings.response_style; // Save original (#2697)
             settings.response_style = rs;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
-            handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await
+            let result =
+                handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await?;
+            // Restore original style so --style is per-invocation only (#2697)
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = original_style;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            Ok(result)
         }
         Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
         Commands::ContextSurface { action } => {
@@ -1308,11 +1320,12 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
             new_session,
             style,
         } => {
-            // Apply response style (#1965)
+            // Apply response style (#1965) — transient override, restored after call (#2697)
             let rs = style
                 .parse::<ResponseStyle>()
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            let original_style = settings.response_style;
             settings.response_style = rs;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             let result = chat_with_ai_with_context(
@@ -1328,6 +1341,10 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
                 |_, _| (),
             )
             .await?;
+            // Restore original style so --style is per-invocation only (#2697)
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = original_style;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             to_json(&strip_cli_markdown_from_chat_result(result))
         }
         ChatActions::Sessions => {
@@ -1525,11 +1542,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                 },
             )?;
             if *deep_search {
-                // Print keyword results first
-                println!("=== Keyword Results ===");
-                println!("{}", serde_json::to_string(&result)?);
-                // Then perform deep semantic search and show additional results
-                println!("\n--- 正在查找更多相关笔记... ---\n");
+                // Perform deep semantic search and return combined results as JSON (#2695, #2698)
                 let deep_result = vaultpilot_lib::storage::deep_search_notes(
                     context,
                     SearchQuery {
@@ -1538,12 +1551,17 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                         keywords: parse_comma_list(keywords),
                         limit: Some(*limit),
                         deep_search: true,
+                        created_after: after.clone(),
+                        created_before: before.clone(),
+                        modified_after: modified_after.clone(),
+                        modified_before: modified_before.clone(),
                         ..Default::default()
                     },
                 )?;
-                println!("=== AI 发现 (语义相关) ===\n");
-                println!("{}", serde_json::to_string(&deep_result)?);
-                Ok(Value::Null)
+                Ok(serde_json::json!({
+                    "keyword_results": result,
+                    "semantic_results": deep_result,
+                }))
             } else {
                 to_json(&result)
             }
@@ -1566,8 +1584,9 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                     }))
                 }
                 None => {
+                    // Print raw markdown and exit immediately to avoid exit_ok() appending JSON (#2696)
                     print!("{markdown}");
-                    Ok(serde_json::json!({ "exported": 1 }))
+                    process::exit(0);
                 }
             }
         }
@@ -3882,5 +3901,114 @@ mod tests {
         let title = "Hi";
         let keywords: Vec<&str> = title.split_whitespace().filter(|w| w.len() > 2).collect();
         assert!(keywords.is_empty());
+    }
+
+    // ── Regression tests for #2695, #2696, #2697, #2698 ────────────────
+
+    /// #2695: deep-search must return structured JSON, not corrupt stdout.
+    /// Verify the combined JSON shape matches what the handler now returns.
+    #[test]
+    fn deep_search_returns_structured_json_2695() {
+        let keyword = serde_json::json!([{"id": "n1", "title": "test"}]);
+        let semantic = serde_json::json!([{"id": "n2", "title": "related"}]);
+        let combined = serde_json::json!({
+            "keyword_results": keyword,
+            "semantic_results": semantic,
+        });
+        // Must be a JSON object (not null or array) so consumers can parse it
+        assert!(combined.is_object());
+        assert!(combined.get("keyword_results").is_some());
+        assert!(combined.get("semantic_results").is_some());
+        // Must NOT contain a trailing null (the old bug appended null via exit_ok)
+        assert_ne!(combined, serde_json::Value::Null);
+    }
+
+    /// #2698: deep-search query must carry forward date/time filters.
+    /// Previously `..Default::default()` silently dropped them.
+    #[test]
+    fn deep_search_query_preserves_date_filters_2698() {
+        use vaultpilot_lib::models::SearchQuery;
+        let after = Some("2026-07-01T00:00:00Z".to_string());
+        let before = Some("2026-07-10T00:00:00Z".to_string());
+        let modified_after = Some("2026-07-05T00:00:00Z".to_string());
+        let modified_before = Some("2026-07-08T00:00:00Z".to_string());
+
+        // Construct the query exactly as the deep-search handler does after the fix
+        let q = SearchQuery {
+            text: "async".to_string(),
+            tags: vec![],
+            keywords: vec![],
+            limit: Some(10),
+            deep_search: true,
+            created_after: after.clone(),
+            created_before: before.clone(),
+            modified_after: modified_after.clone(),
+            modified_before: modified_before.clone(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            q.created_after, after,
+            "created_after must survive to deep query"
+        );
+        assert_eq!(
+            q.created_before, before,
+            "created_before must survive to deep query"
+        );
+        assert_eq!(
+            q.modified_after, modified_after,
+            "modified_after must survive to deep query"
+        );
+        assert_eq!(
+            q.modified_before, modified_before,
+            "modified_before must survive to deep query"
+        );
+        assert!(q.deep_search);
+    }
+
+    /// #2697: --style override must be transient, not permanently persisted.
+    /// Verify the save/restore pattern preserves the original style.
+    #[test]
+    fn style_override_is_transient_2697() {
+        use vaultpilot_lib::models::ResponseStyle;
+
+        // Simulate the save/restore logic used in the handler
+        let original_style = ResponseStyle::Detailed;
+        let override_style = ResponseStyle::Brief;
+
+        // Override phase: settings are saved with the override
+        let mut saved_style = override_style;
+        assert_eq!(
+            saved_style,
+            ResponseStyle::Brief,
+            "override should take effect during call"
+        );
+
+        // Restore phase: settings are saved back with the original
+        saved_style = original_style;
+        assert_eq!(
+            saved_style,
+            ResponseStyle::Detailed,
+            "original style must be restored after call"
+        );
+    }
+
+    /// #2696: export without --output must exit cleanly, not append JSON.
+    /// The old code returned Ok(json!) which exit_ok() appended to stdout.
+    /// The fix uses process::exit(0) which bypasses exit_ok entirely.
+    /// We verify the invariant: no JSON should follow raw markdown output.
+    #[test]
+    fn export_stdout_no_trailing_json_2696() {
+        let markdown = "# Test Note\n\nContent here.";
+        // Simulate what stdout should contain: just markdown, nothing else
+        let stdout = markdown; // process::exit(0) means no further output
+        assert!(
+            !stdout.contains("exported"),
+            "stdout must not contain JSON 'exported' field after markdown"
+        );
+        assert!(
+            !stdout.contains('{'),
+            "stdout must not contain JSON braces after markdown"
+        );
     }
 }

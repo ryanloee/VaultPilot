@@ -451,7 +451,11 @@ public sealed class BackendClient : IAsyncDisposable
             }
             catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException)
             {
-                completion.TrySetException(new InvalidOperationException("Rust 后端尚未连接。", error));
+                // #2689: Do NOT call completion.TrySetException here — the throw
+                // below carries the failure to the caller, and the finally block
+                // removes the entry from _pending so the TCS is never awaited.
+                // Setting the exception on an un-awaited TCS triggers
+                // TaskScheduler.UnobservedTaskException → spurious crash.log entries.
                 _ = TryReconnectWithRetryAsync();
                 throw new InvalidOperationException("Rust 后端尚未连接。", error);
             }

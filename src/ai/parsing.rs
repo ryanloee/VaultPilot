@@ -389,6 +389,15 @@ pub(super) fn enrich_citations(
         })
         .collect();
 
+    // Determine the maximum raw search_score for normalization (#2687).
+    // search_score is a composite score in the hundreds; we normalize it to
+    // 0.0–1.0 by dividing by the max so the top-ranked doc gets 1.0.
+    let max_search_score = docs
+        .iter()
+        .filter_map(|d| d.search_score)
+        .max()
+        .unwrap_or(0);
+
     citations
         .into_iter()
         .map(|mut citation| {
@@ -396,7 +405,13 @@ pub(super) fn enrich_citations(
                 // Populate score from search_score or rank-based calculation (#1704)
                 if citation.score.is_none() {
                     if let Some(ss) = doc.search_score {
-                        citation.score = Some(ss as f64);
+                        // Normalize raw search_score (hundreds) to 0.0–1.0 (#2687)
+                        citation.score = if max_search_score > 0 {
+                            Some(ss as f64 / max_search_score as f64)
+                        } else {
+                            // All scores are zero; treat as full relevance
+                            Some(1.0)
+                        };
                     } else {
                         citation.score = rank_map.get(citation.note_id.as_str()).copied();
                     }
@@ -1459,7 +1474,8 @@ mod tests {
             search_score: Some(250),
         }];
         let result = enrich_citations(vec![citation], &docs);
-        assert_eq!(result[0].score, Some(250.0));
+        // #2687: search_score is normalized to 0.0–1.0, so 250/max(250) = 1.0
+        assert!((result[0].score.unwrap() - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -1601,6 +1617,69 @@ mod tests {
         assert!(
             (s2 - 0.5).abs() < 0.01,
             "last doc should reach 0.5, got {s2}"
+        );
+    }
+
+    #[test]
+    fn enrich_citations_search_score_normalized_to_0_1_range() {
+        // #2687: raw search_score (hundreds) must be normalized to 0.0–1.0,
+        // not used directly — otherwise percentage display shows 30000%.
+        let cit1 = AnswerCitation {
+            note_id: "n1".into(),
+            title: "First".into(),
+            path: "p1".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let cit2 = AnswerCitation {
+            note_id: "n2".into(),
+            title: "Second".into(),
+            path: "p2".into(),
+            snippet: "s".into(),
+            score: None,
+        };
+        let docs = vec![
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n1".into(),
+                    ..Default::default()
+                },
+                body: "First document body text here.".into(),
+                search_snippet: None,
+                search_score: Some(300),
+            },
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "n2".into(),
+                    ..Default::default()
+                },
+                body: "Second document body text here.".into(),
+                search_snippet: None,
+                search_score: Some(150),
+            },
+        ];
+        let result = enrich_citations(vec![cit1, cit2], &docs);
+        let s1 = result[0].score.unwrap();
+        let s2 = result[1].score.unwrap();
+
+        // All scores must be within 0.0–1.0 (would fail with raw score)
+        assert!(
+            (0.0..=1.0).contains(&s1),
+            "score {s1} should be in [0.0, 1.0], not raw 300"
+        );
+        assert!(
+            (0.0..=1.0).contains(&s2),
+            "score {s2} should be in [0.0, 1.0], not raw 150"
+        );
+        // Top doc normalizes to 1.0
+        assert!(
+            (s1 - 1.0).abs() < 0.01,
+            "top doc should normalize to 1.0, got {s1}"
+        );
+        // Second doc: 150/300 = 0.5
+        assert!(
+            (s2 - 0.5).abs() < 0.01,
+            "second doc should normalize to 0.5, got {s2}"
         );
     }
 }

@@ -17,7 +17,8 @@ export type AiActionId =
   | 'explain'
   | 'continueWriting'
   | 'extractTodos'
-  | 'findRelatedNotes';
+  | 'findRelatedNotes'
+  | 'cleanUp';
 
 export interface AiActionInfo {
   id: AiActionId;
@@ -94,6 +95,12 @@ const AI_ACTIONS: AiActionInfo[] = [
     icon: 'link-outline',
     description: '找到与当前内容最相关的笔记',
   },
+  {
+    id: 'cleanUp',
+    label: '整理',
+    icon: 'sparkles-outline',
+    description: '将凌乱、速记或语音转录的笔记整理成可读的结构化文本',
+  },
 ];
 
 /** Return all available AI quick actions (immutable copy). */
@@ -124,6 +131,8 @@ function systemPrompt(action: AiActionId): string {
       return 'You are a task extraction assistant. Analyze the given text and extract all action items, tasks, to-dos, and follow-ups. Format the output as a bullet-point list with clear descriptions. If no tasks are found, state that explicitly.\nRespond in the same language as the input text.';
     case 'findRelatedNotes':
       return 'You are a knowledge base assistant. Analyze the given text and describe what topics, keywords, and concepts it covers. This description will be used for a search query to find related notes in the vault. Output a concise search description.';
+    case 'cleanUp':
+      return 'You are a note-formatting assistant. Your task is to clean up messy, rushed, or voice-transcribed notes into readable, well-structured text. Preserve all factual content and key information.\n- Fix typos and grammar where context makes the intent clear.\n- Organize run-on sentences into logical paragraphs.\n- Add bullet points or numbered lists where the content naturally has lists or enumerations.\n- Add headings (H2, H3) to break up long text thematically.\n- Remove repetitive or filler content.\n- Keep the original language and tone.\nOutput only the cleaned-up text, no extra commentary.';
   }
 }
 
@@ -147,6 +156,8 @@ function userPrompt(action: AiActionId, request: AiActionRequest): string {
       return `Extract all action items, tasks, and to-dos from the following text:\n\n${request.text}`;
     case 'findRelatedNotes':
       return `Based on the following text, generate a search query to find related notes:\n\n${request.text}`;
+    case 'cleanUp':
+      return `Please clean up and reorganize the following messy note. Fix typos, improve structure, add headings and lists where appropriate. Preserve all content.\n\n${request.text}`;
   }
 }
 

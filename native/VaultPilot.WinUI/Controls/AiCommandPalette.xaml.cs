@@ -315,6 +315,7 @@ public sealed partial class AiCommandPalette : UserControl
         "cleanUp" or "clean_up" => AiActionType.CleanUp,
         "generateOutline" or "generate_outline" => AiActionType.GenerateOutline,
         "editNote" or "edit_note" => AiActionType.EditNote,
+        "brainstorm" => AiActionType.Brainstorm,
         _ => AiActionType.Summarize
     };
 

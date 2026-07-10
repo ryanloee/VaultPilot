@@ -1403,4 +1403,84 @@ mod tests {
             "error must preserve captured stderr: {msg}"
         );
     }
+
+    /// #2746 — the drain threads must capture ALL residual data in the pipe
+    /// buffer, not just the first 4 KB. Before the fix, the `done` branch did
+    /// a single non-blocking read with a 4 KB buffer and then broke, silently
+    /// truncating any output larger than 4 KB. This test writes 20 KB of
+    /// unique marker data to both stdout and stderr and asserts every byte is
+    /// present in the response.
+    #[test]
+    #[cfg_attr(target_os = "windows", ignore)]
+    fn subprocess_drains_large_output_beyond_4kb() {
+        if find_binary(&["sh".to_string()]).is_none() {
+            eprintln!("skipping subprocess_drains_large_output_beyond_4kb: 'sh' not on PATH");
+            return;
+        }
+        let vault = temp_vault();
+        let _guard = TempGuard(vault.clone());
+
+        // Write 20 KB (5 × 4096) of line-numbered output to stdout and stderr.
+        // Each line is unique so we can verify completeness.
+        let mut engine = SubprocessEngine::new(
+            "large-out-shim",
+            vec!["sh".to_string()],
+            vec![
+                "-c".to_string(),
+                // 5000 lines × ~4 bytes/line ≈ 20 KB per stream.
+                "i=0; while [ $i -lt 5000 ]; do echo \"OUT-$i-MARKER\"; echo \"ERR-$i-MARKER\" >&2; i=$((i + 1)); done"
+                    .to_string(),
+            ],
+            false,
+            "sh shim that writes >4 KB to stdout and stderr",
+        );
+        assert!(engine.available());
+
+        let ctx = EngineContext::new(&vault);
+        let resp = engine
+            .send_prompt("ignored", &ctx)
+            .expect("large-output shim should run");
+
+        // Verify the FIRST and LAST markers are present — if truncation
+        // occurred at 4 KB, the last markers would be missing.
+        assert!(
+            resp.stdout.contains("OUT-0-MARKER"),
+            "stdout must contain first marker"
+        );
+        assert!(
+            resp.stdout.contains("OUT-4999-MARKER"),
+            "stdout must contain last marker (no 4KB truncation): got {} bytes",
+            resp.stdout.len()
+        );
+
+        // stderr is surfaced as an EngineEvent of kind Stderr.
+        let stderr: String = resp
+            .events
+            .iter()
+            .filter(|e| e.kind == EngineEventKind::Stderr)
+            .map(|e| e.message.as_str())
+            .collect::<Vec<&str>>()
+            .join("");
+        assert!(
+            stderr.contains("ERR-0-MARKER"),
+            "stderr must contain first marker"
+        );
+        assert!(
+            stderr.contains("ERR-4999-MARKER"),
+            "stderr must contain last marker (no 4KB truncation): got {} bytes",
+            stderr.len()
+        );
+
+        // Sanity: total captured output is well above the 4 KB single-read limit.
+        assert!(
+            resp.stdout.len() > 8192,
+            "stdout should be >8 KB, got {} bytes",
+            resp.stdout.len()
+        );
+        assert!(
+            stderr.len() > 8192,
+            "stderr should be >8 KB, got {} bytes",
+            stderr.len()
+        );
+    }
 }

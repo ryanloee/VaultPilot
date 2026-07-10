@@ -21,6 +21,7 @@ export type AiActionId =
   | 'cleanUp'
   | 'generateOutline'
   | 'editNote';
+  | 'brainstorm';
 
 export interface AiActionInfo {
   id: AiActionId;
@@ -116,6 +117,10 @@ const AI_ACTIONS: AiActionInfo[] = [
     label: '编辑笔记',
     icon: 'color-wand-outline',
     description: '通过自然语言指令编辑现有笔记内容（#1569）',
+    id: 'brainstorm',
+    label: '头脑风暴',
+    icon: 'bulb-outline',
+    description: '根据主题或问题生成创意想法和解决方案',
   },
 ];
 
@@ -153,6 +158,8 @@ function systemPrompt(action: AiActionId): string {
       return 'You are a knowledge-work assistant specializing in outline generation. Your task is to generate a well-structured outline for the given topic or content. The outline should use hierarchical numbering (e.g., 1, 1.1, 1.1.1) and be organized into logical sections with clear headings. Include 3-5 main sections, each with 2-4 subsections.\n- Base the outline on the provided text, expanding and structuring it into a logical document framework.\n- If the input is a topic rather than full text, generate a comprehensive outline covering the key aspects of that topic.\n- Add brief descriptions (one sentence) under each section heading explaining what that section should cover.\n- Use the same language as the input text.\nOutput only the outline in Markdown format, no extra commentary.';
     case 'editNote':
       return 'You are a note editor (Composer). Apply the given natural-language editing instruction to the provided note. Return the complete edited note. Preserve the original language and all content not explicitly modified by the instruction. Output only the edited note, no extra commentary.';
+    case 'brainstorm':
+      return 'You are a creative brainstorming assistant. Your task is to generate a diverse set of ideas, alternatives, perspectives, or solutions based on the given topic or problem description. - Think broadly and consider multiple angles. - Be specific and actionable where possible. - Organize ideas into clear categories or themes. - Include both conventional and creative approaches. Output only the brainstormed ideas, no extra commentary. Respond in the same language as the input.';
   }
 }
 
@@ -184,6 +191,8 @@ function userPrompt(action: AiActionId, request: AiActionRequest): string {
       const instruction = request.instruction || 'Improve this note.';
       return `Editing instruction: ${instruction}\n\nApply the instruction above to this note. Return the complete edited note:\n\n${request.text}`;
     }
+    case 'brainstorm':
+      return `Please brainstorm creative ideas, solutions, or perspectives based on the following topic or problem:\n\n${request.text}`;
   }
 }
 

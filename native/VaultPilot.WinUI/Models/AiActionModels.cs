@@ -30,6 +30,8 @@ public enum AiActionType
     EditNote,
     [JsonPropertyName("summarizeUrl")]
     SummarizeUrl,
+    [JsonPropertyName("brainstorm")]
+    Brainstorm,
 }
 
 /// <summary>

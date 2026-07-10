@@ -32,6 +32,8 @@ pub enum AiActionType {
     EditNote,
     /// Generate a structured summary for a URL/link note.
     SummarizeUrl,
+    /// Brainstorm creative ideas, alternatives, or solutions based on a topic.
+    Brainstorm,
 }
 
 impl AiActionType {
@@ -49,6 +51,7 @@ impl AiActionType {
             Self::GenerateOutline => "大纲生成",
             Self::EditNote => "编辑笔记",
             Self::SummarizeUrl => "链接摘要",
+            Self::Brainstorm => "头脑风暴",
         }
     }
 
@@ -66,6 +69,7 @@ impl AiActionType {
             Self::GenerateOutline => "generateOutline",
             Self::EditNote => "editNote",
             Self::SummarizeUrl => "summarizeUrl",
+            Self::Brainstorm => "brainstorm",
         }
     }
 
@@ -83,6 +87,7 @@ impl AiActionType {
             "generateOutline" | "generate_outline" | "outline" => Some(Self::GenerateOutline),
             "editNote" | "edit_note" => Some(Self::EditNote),
             "summarizeUrl" | "summarize_url" => Some(Self::SummarizeUrl),
+            "brainstorm" => Some(Self::Brainstorm),
             _ => None,
         }
     }
@@ -101,6 +106,7 @@ impl AiActionType {
             Self::GenerateOutline,
             Self::EditNote,
             Self::SummarizeUrl,
+            Self::Brainstorm,
         ]
     }
 }
@@ -239,6 +245,18 @@ fn system_prompt(action: AiActionType) -> String {
             .to_string(),
         AiActionType::SummarizeUrl => "You are a link summarization assistant. Your task is to analyze the content of a web page or article and generate a structured summary. Output a JSON object with these fields: title (the page title or concise description), key_points (an array of 3-5 key takeaways), summary (a 2-3 sentence overview), suggested_tags (2-4 relevant tags for categorization). Preserve factual accuracy. Do not hallucinate information not present in the source. Output only valid JSON, no extra commentary."
             .to_string(),
+        AiActionType::Brainstorm => {
+            "You are a creative brainstorming assistant. Your task is to generate \
+             a diverse set of ideas, alternatives, perspectives, or solutions \
+             based on the given topic or problem description. \
+             - Think broadly and consider multiple angles. \
+             - Be specific and actionable where possible. \
+             - Organize ideas into clear categories or themes. \
+             - Include both conventional and creative approaches. \
+             Output only the brainstormed ideas, no extra commentary.\n\n\
+             Respond in the same language as the input."
+                .to_string()
+        }
     }
 }
 
@@ -317,6 +335,13 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
         AiActionType::SummarizeUrl => {
             format!(
                 "Analyze the following web page content and generate a structured summary.\n\n{}",
+                request.text
+            )
+        }
+        AiActionType::Brainstorm => {
+            format!(
+                "Please brainstorm creative ideas, solutions, or perspectives \
+                 based on the following topic or problem:\n\n{}",
                 request.text
             )
         }

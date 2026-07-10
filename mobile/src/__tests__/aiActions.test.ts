@@ -19,9 +19,18 @@ jest.mock('../api/client', () => ({
 }));
 
 describe('listAiActions', () => {
-  it('returns all 7 actions', () => {
+  it('returns all 8 actions', () => {
     const actions = listAiActions();
-    expect(actions).toHaveLength(7);
+    expect(actions).toHaveLength(8);
+  });
+
+  it('includes cleanUp action (#2685)', () => {
+    const actions = listAiActions();
+    const cleanUp = actions.find(a => a.id === 'cleanUp');
+    expect(cleanUp).toBeDefined();
+    expect(cleanUp!.label).toBe('整理');
+    expect(cleanUp!.icon).toBeTruthy();
+    expect(cleanUp!.description).toBeTruthy();
   });
 
   it('each action has required fields', () => {
@@ -48,6 +57,7 @@ describe('getAiActionInfo', () => {
     expect(getAiActionInfo('summarize')?.label).toBe('总结');
     expect(getAiActionInfo('translate')?.label).toBe('翻译');
     expect(getAiActionInfo('extractTodos')?.label).toBe('提取待办');
+    expect(getAiActionInfo('cleanUp')?.label).toBe('整理');
   });
 
   it('returns undefined for unknown id', () => {

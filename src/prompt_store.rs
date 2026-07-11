@@ -241,9 +241,9 @@ fn parse_prompt_file(path: &Path) -> Result<Option<PromptEntry>> {
     let after_first = &stripped[3..].trim_start();
 
     let end_marker = after_first
-        .find("\n---")
+        .find("\n---\n")
         .map(|pos| pos + 1) // +1 for the \n
-        .or_else(|| after_first.find("\n---\n").map(|pos| pos + 1))
+        .or_else(|| after_first.find("\n---").map(|pos| pos + 1))
         .unwrap_or(0);
 
     if end_marker == 0 {
@@ -418,6 +418,32 @@ mod tests {
         // Verify they actually wrote files
         let listed = list_prompts(&dir).unwrap();
         assert_eq!(listed.len(), 4);
+
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_parse_prompt_file_yaml_with_dash_dash_dash_in_value() {
+        // Regression for #2707: YAML containing "---" in values should not truncate
+        let dir = test_dir("yaml_dash_value");
+        cleanup(&dir);
+        fs::create_dir_all(dir.join(".vaultpilot").join("prompts")).unwrap();
+        let path = dir.join(".vaultpilot").join("prompts").join("dash_val.md");
+        fs::write(
+            &path,
+            "---\nname: test\ndescription: \"uses --- marker\"\n---\nContent\n",
+        )
+        .unwrap();
+
+        let result = parse_prompt_file(&path).unwrap();
+        assert!(
+            result.is_some(),
+            "Should parse successfully despite --- in YAML value"
+        );
+        let entry = result.unwrap();
+        assert_eq!(entry.name, "test");
+        assert_eq!(entry.description, "uses --- marker");
+        assert_eq!(entry.content, "Content");
 
         cleanup(&dir);
     }

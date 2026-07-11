@@ -141,8 +141,14 @@ public sealed partial class AiCommandPalette : UserControl
         // Determine action type from the action info
         var actionType = ParseActionType(actionInfo.Id);
 
-        CancelActiveRequest();
-        _activeRequestCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        // Cancel any previous request and atomically install a new CTS.
+        // Using Interlocked.Exchange prevents the race where Dismiss()
+        // runs between CancelActiveRequest and the new assignment,
+        // seeing null and letting the new request continue after dismiss.
+        var oldCts = Interlocked.Exchange(ref _activeRequestCts,
+            new CancellationTokenSource(TimeSpan.FromSeconds(120)));
+        oldCts?.Cancel();
+        oldCts?.Dispose();
         var ct = _activeRequestCts.Token; // Capture token before any await (re-entrancy guard)
 
         try
@@ -180,7 +186,8 @@ public sealed partial class AiCommandPalette : UserControl
                     text = request.Text,
                     targetLanguage = request.TargetLanguage,
                     tone = request.Tone,
-                    noteId = request.NoteId
+                    noteId = request.NoteId,
+                    instruction = request.Instruction
                 },
                 ct);
 
@@ -306,6 +313,7 @@ public sealed partial class AiCommandPalette : UserControl
         "extractTodos" => AiActionType.ExtractTodos,
         "findRelatedNotes" => AiActionType.FindRelatedNotes,
         "cleanUp" or "clean_up" => AiActionType.CleanUp,
+        "generateOutline" or "generate_outline" => AiActionType.GenerateOutline,
         "editNote" or "edit_note" => AiActionType.EditNote,
         _ => AiActionType.Summarize
     };

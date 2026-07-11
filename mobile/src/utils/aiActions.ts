@@ -19,7 +19,8 @@ export type AiActionId =
   | 'extractTodos'
   | 'findRelatedNotes'
   | 'cleanUp'
-  | 'generateOutline';
+  | 'generateOutline'
+  | 'editNote';
 
 export interface AiActionInfo {
   id: AiActionId;
@@ -36,6 +37,8 @@ export interface AiActionRequest {
   targetLanguage?: string;
   tone?: string;
   noteId?: string;
+  /** Natural-language edit instruction for EditNote (Composer #1569). */
+  instruction?: string;
 }
 
 export interface AiActionUsage {
@@ -108,6 +111,12 @@ const AI_ACTIONS: AiActionInfo[] = [
     icon: 'list-outline',
     description: '根据主题或内容生成结构化的文档大纲',
   },
+  {
+    id: 'editNote',
+    label: '编辑笔记',
+    icon: 'color-wand-outline',
+    description: '通过自然语言指令编辑现有笔记内容（#1569）',
+  },
 ];
 
 /** Return all available AI quick actions (immutable copy). */
@@ -142,6 +151,8 @@ function systemPrompt(action: AiActionId): string {
       return 'You are a note-formatting assistant. Your task is to clean up messy, rushed, or voice-transcribed notes into readable, well-structured text. Preserve all factual content and key information.\n- Fix typos and grammar where context makes the intent clear.\n- Organize run-on sentences into logical paragraphs.\n- Add bullet points or numbered lists where the content naturally has lists or enumerations.\n- Add headings (H2, H3) to break up long text thematically.\n- Remove repetitive or filler content.\n- Keep the original language and tone.\nOutput only the cleaned-up text, no extra commentary.';
     case 'generateOutline':
       return 'You are a knowledge-work assistant specializing in outline generation. Your task is to generate a well-structured outline for the given topic or content. The outline should use hierarchical numbering (e.g., 1, 1.1, 1.1.1) and be organized into logical sections with clear headings. Include 3-5 main sections, each with 2-4 subsections.\n- Base the outline on the provided text, expanding and structuring it into a logical document framework.\n- If the input is a topic rather than full text, generate a comprehensive outline covering the key aspects of that topic.\n- Add brief descriptions (one sentence) under each section heading explaining what that section should cover.\n- Use the same language as the input text.\nOutput only the outline in Markdown format, no extra commentary.';
+    case 'editNote':
+      return 'You are a note editor (Composer). Apply the given natural-language editing instruction to the provided note. Return the complete edited note. Preserve the original language and all content not explicitly modified by the instruction. Output only the edited note, no extra commentary.';
   }
 }
 
@@ -169,6 +180,10 @@ function userPrompt(action: AiActionId, request: AiActionRequest): string {
       return `Please clean up and reorganize the following messy note. Fix typos, improve structure, add headings and lists where appropriate. Preserve all content.\n\n${request.text}`;
     case 'generateOutline':
       return `Generate a structured outline based on the following topic or content:\n\n${request.text}`;
+    case 'editNote': {
+      const instruction = request.instruction || 'Improve this note.';
+      return `Editing instruction: ${instruction}\n\nApply the instruction above to this note. Return the complete edited note:\n\n${request.text}`;
+    }
   }
 }
 

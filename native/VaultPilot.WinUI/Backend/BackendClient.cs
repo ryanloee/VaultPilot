@@ -371,11 +371,31 @@ public sealed class BackendClient : IAsyncDisposable
 
             if (Volatile.Read(ref _isDisposed) != 0) return false;
 
-            _ = StartProcessAsync();
+            // Issue #2721: properly await StartProcessAsync instead of
+            // fire-and-forget. The old code (_ = StartProcessAsync()) could
+            // silently swallow pump-setup exceptions and then check process
+            // liveness after only 500ms — insufficient for slow startup
+            // (disk I/O, env var resolution). Now we await the full startup
+            // sequence and then poll with a reasonable timeout.
+            await StartProcessAsync();
 
-            // Verify process actually started
-            await Task.Delay(500, cancellationToken);
-            return Volatile.Read(ref _process) is { HasExited: false };
+            // Poll process liveness with backoff instead of a single fixed
+            // delay. StartProcessAsync completes when pumps are wired, but
+            // the OS-level process may still be initializing its JSON-RPC
+            // server. Give it up to 3 seconds with 100ms poll intervals.
+            const int maxStartupWaitMs = 3000;
+            const int pollIntervalMs = 100;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < maxStartupWaitMs)
+            {
+                var current = Volatile.Read(ref _process);
+                if (current is { HasExited: false })
+                    return true;
+                if (current is { HasExited: true })
+                    return false; // process crashed during startup
+                await Task.Delay(pollIntervalMs, cancellationToken);
+            }
+            return false;
         }
         catch (OperationCanceledException)
         {

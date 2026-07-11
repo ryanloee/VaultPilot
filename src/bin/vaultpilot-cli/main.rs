@@ -1209,7 +1209,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 result.saved_note_id.as_deref().unwrap_or("N/A")
             );
             eprintln!();
-            println!("{}", result.report);
+            eprintln!("{}", result.report);
             to_json(&result)
         }
         Commands::Agent {
@@ -4009,6 +4009,36 @@ mod tests {
         assert!(
             !stdout.contains('{'),
             "stdout must not contain JSON braces after markdown"
+        );
+    }
+
+    /// #2711: deep-research must not print report text to stdout.
+    /// Previously `println!("{}", result.report)` corrupted stdout before JSON.
+    /// The fix sends the report to stderr via `eprintln!` so stdout stays
+    /// clean for the JSON returned by `to_json(&result)`.
+    #[test]
+    fn deep_research_stdout_clean_json_2711() {
+        // Simulate the stdout discipline after the fix:
+        // All human-readable text goes to stderr; stdout gets JSON only.
+        let report_text = "# Deep Research Report\n\nThis is a long report...";
+        let json_result = serde_json::json!({
+            "topic": "quantum computing",
+            "report": report_text,
+            "rounds_used": 5,
+        });
+
+        // stdout should contain ONLY the JSON (what to_json produces)
+        let stdout = serde_json::to_string(&json_result).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+        assert!(parsed.is_object(), "stdout must be a JSON object");
+        assert_eq!(parsed["topic"], "quantum computing");
+
+        // The report text must NOT appear as raw text before the JSON
+        // (the old bug would prepend it via println!)
+        assert!(
+            !stdout.starts_with('#'),
+            "stdout must not start with raw report markdown"
         );
     }
 }

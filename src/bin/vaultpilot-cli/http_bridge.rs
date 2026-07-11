@@ -1114,6 +1114,8 @@ struct AiActionHttpRequest {
     #[serde(default)]
     note_id: Option<String>,
     #[serde(default)]
+    instruction: Option<String>,
+    #[serde(default)]
     model: Option<String>,
 }
 
@@ -1130,6 +1132,7 @@ async fn http_ai_action(
         target_language: req.target_language,
         tone: req.tone,
         note_id: req.note_id,
+        instruction: req.instruction,
         model: req.model,
     };
     let settings = load_settings_async(&state.context).await.map_err(|e| {

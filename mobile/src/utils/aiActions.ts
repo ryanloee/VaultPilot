@@ -18,7 +18,8 @@ export type AiActionId =
   | 'continueWriting'
   | 'extractTodos'
   | 'findRelatedNotes'
-  | 'cleanUp';
+  | 'cleanUp'
+  | 'editNote';
 
 export interface AiActionInfo {
   id: AiActionId;
@@ -35,6 +36,8 @@ export interface AiActionRequest {
   targetLanguage?: string;
   tone?: string;
   noteId?: string;
+  /** Edit instruction for the EditNote (Composer) action. */
+  instruction?: string;
 }
 
 export interface AiActionUsage {
@@ -101,6 +104,12 @@ const AI_ACTIONS: AiActionInfo[] = [
     icon: 'sparkles-outline',
     description: '将凌乱、速记或语音转录的笔记整理成可读的结构化文本',
   },
+  {
+    id: 'editNote',
+    label: '编辑笔记',
+    icon: 'create-outline',
+    description: '通过自然语言指令直接编辑笔记内容',
+  },
 ];
 
 /** Return all available AI quick actions (immutable copy). */
@@ -132,8 +141,10 @@ function systemPrompt(action: AiActionId): string {
     case 'findRelatedNotes':
       return 'You are a knowledge base assistant. Analyze the given text and describe what topics, keywords, and concepts it covers. This description will be used for a search query to find related notes in the vault. Output a concise search description.';
     case 'cleanUp':
-      return 'You are a note-formatting assistant. Your task is to clean up messy, rushed, or voice-transcribed notes into readable, well-structured text. Preserve all factual content and key information.\n- Fix typos and grammar where context makes the intent clear.\n- Organize run-on sentences into logical paragraphs.\n- Add bullet points or numbered lists where the content naturally has lists or enumerations.\n- Add headings (H2, H3) to break up long text thematically.\n- Remove repetitive or filler content.\n- Keep the original language and tone.\nOutput only the cleaned-up text, no extra commentary.';
-  }
+          return 'You are a note-formatting assistant. Your task is to clean up messy, rushed, or voice-transcribed notes into readable, well-structured text. Preserve all factual content and key information.\n- Fix typos and grammar where context makes the intent clear.\n- Organize run-on sentences into logical paragraphs.\n- Add bullet points or numbered lists where the content naturally has lists or enumerations.\n- Add headings (H2, H3) to break up long text thematically.\n- Remove repetitive or filler content.\n- Keep the original language and tone.\nOutput only the cleaned-up text, no extra commentary.';
+        case 'editNote':
+          return 'You are an intelligent note editor (Composer). You receive the full text of an existing note and a natural-language editing instruction. Apply the requested change precisely, preserving all unmentioned content exactly as-is.\nRules:\n- Output the COMPLETE edited note text (not just the changed part).\n- Do not add commentary, explanations, or diff markers.\n- If the instruction references a section by position (e.g. "second paragraph"), locate it by paragraph count (paragraphs separated by blank lines).\n- Maintain the original language and markdown formatting style.\n- If the instruction is ambiguous, make a reasonable interpretation and apply it.';
+      }
 }
 
 function userPrompt(action: AiActionId, request: AiActionRequest): string {
@@ -158,6 +169,10 @@ function userPrompt(action: AiActionId, request: AiActionRequest): string {
       return `Based on the following text, generate a search query to find related notes:\n\n${request.text}`;
     case 'cleanUp':
       return `Please clean up and reorganize the following messy note. Fix typos, improve structure, add headings and lists where appropriate. Preserve all content.\n\n${request.text}`;
+    case 'editNote': {
+      const instruction = request.instruction || 'Improve the clarity and structure of this note.';
+      return `Editing instruction: ${instruction}\n\n--- NOTE TEXT START ---\n${request.text}\n--- NOTE TEXT END ---\n\nApply the editing instruction to the note above. Output the complete edited note.`;
+    }
   }
 }
 
@@ -167,6 +182,10 @@ function userPrompt(action: AiActionId, request: AiActionRequest): string {
 function validateRequest(request: AiActionRequest): string | null {
   if (!request.text.trim() && request.action !== 'findRelatedNotes') {
     return '输入文本不能为空。';
+  }
+  // EditNote requires an instruction
+  if (request.action === 'editNote' && !request.instruction?.trim()) {
+    return '编辑指令不能为空。';
   }
   return null;
 }

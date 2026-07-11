@@ -13,6 +13,7 @@ use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
+use vaultpilot_lib::ai::actions::{execute_ai_action, AiActionRequest, AiActionType};
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
@@ -409,6 +410,42 @@ enum Commands {
         /// Maximum notes to include (default: 10)
         #[arg(long, default_value_t = 10)]
         limit: usize,
+    },
+
+    /// Composer: edit a note via natural-language instruction (#1569)
+    ///
+    /// Uses AI to apply the given instruction to the note body.
+    /// With --apply the edit is saved; without it, only a preview is shown.
+    ///
+    /// Examples:
+    ///   vaultpilot edit note_123 "make the second paragraph more formal"
+    ///   vaultpilot edit note_456 "add a summary section" --apply
+    ///   vaultpilot edit note_789 "translate to English" --apply --json
+    Edit {
+        /// Note ID to edit
+        note_id: String,
+
+        /// Natural-language editing instruction
+        instruction: String,
+
+        /// Apply the edit instead of showing a preview
+        #[arg(long)]
+        apply: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Revert the last edit applied to a note via Composer (#1652)
+    ///
+    /// Restores the note to its pre-edit state.
+    ///
+    /// Examples:
+    ///   vaultpilot revert-edit note_123
+    RevertEdit {
+        /// Note ID to revert
+        note_id: String,
     },
 }
 
@@ -1308,6 +1345,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
+        Commands::Edit {
+            note_id,
+            instruction,
+            apply,
+            json,
+        } => handle_composer_edit(context, note_id, instruction, *apply, *json).await,
+        Commands::RevertEdit { note_id } => handle_composer_revert(context, note_id).await,
     }
 }
 
@@ -3485,6 +3529,106 @@ async fn find_related_notes_for_digest(
             .collect(),
         Err(_) => Vec::new(),
     }
+}
+
+// ─── Composer Edit / Revert (#1569, #1652) ───────────────────────────
+
+/// Composer: edit a note through a natural-language instruction (#1569).
+///
+/// Loads an existing note, runs the EditNote AI action, and returns
+/// the edited result.  When `apply` is true the note is saved and a
+/// WriteTracker backup is recorded so the user can revert with
+/// `vaultpilot revert-edit <note_id>` (#1652).
+async fn handle_composer_edit(
+    context: &StorageContext,
+    note_id: &str,
+    instruction: &str,
+    apply: bool,
+    json: bool,
+) -> Result<Value> {
+    if instruction.trim().is_empty() {
+        return Err(anyhow::anyhow!("edit instruction is empty"));
+    }
+
+    let original = tokio::task::block_in_place(|| load_note_with_context(context, note_id))?;
+    let original_body = original.body.clone();
+    let original_id = original.meta.id.clone();
+    let original_title = original.meta.title.clone();
+
+    let ai_request = AiActionRequest {
+        action: AiActionType::EditNote,
+        text: original_body.clone(),
+        target_language: None,
+        tone: None,
+        note_id: Some(original_id.clone()),
+        instruction: Some(instruction.to_string()),
+        model: None,
+    };
+
+    let settings = tokio::task::block_in_place(|| initialize_storage_with_context(context))?;
+    let result = execute_ai_action(&settings, &ai_request).await;
+
+    if let Some(ref err) = result.error {
+        return Err(anyhow::anyhow!("AI edit failed: {}", err));
+    }
+
+    let edited_body = result.result.trim().to_string();
+    if edited_body.is_empty() {
+        return Err(anyhow::anyhow!("AI returned empty content"));
+    }
+
+    if apply {
+        vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+
+        let edited_note = NoteDocument {
+            body: edited_body.clone(),
+            ..original
+        };
+        let saved = tokio::task::block_in_place(|| save_note_with_context(context, edited_note))?;
+
+        if json {
+            Ok(serde_json::json!({
+                "note_id": saved.meta.id,
+                "title": saved.meta.title,
+                "saved": true,
+                "original_length": original_body.len(),
+                "edited_length": edited_body.len(),
+            }))
+        } else {
+            eprintln!("✅ Note '{}' edited and saved.", saved.meta.id);
+            eprintln!("   Revert with: vaultpilot revert-edit {}", saved.meta.id);
+            Ok(
+                serde_json::json!({ "note_id": saved.meta.id, "title": saved.meta.title, "saved": true }),
+            )
+        }
+    } else if json {
+        Ok(serde_json::json!({
+            "note_id": original_id,
+            "title": original_title,
+            "saved": false,
+            "edited_content": edited_body,
+            "original_length": original_body.len(),
+            "edited_length": edited_body.len(),
+        }))
+    } else {
+        eprintln!("📝 Preview (not saved). Use --apply to save.\n");
+        println!("{}", edited_body);
+        Ok(serde_json::json!({ "note_id": original_id, "title": original_title, "saved": false }))
+    }
+}
+
+/// Composer revert: undo the last edit applied to a note (#1652).
+///
+/// Restores the note body from the WriteTracker backup recorded when
+/// `vaultpilot edit --apply` was used.
+async fn handle_composer_revert(context: &StorageContext, note_id: &str) -> Result<Value> {
+    let restored = vaultpilot_lib::orchestration::write::revert_write(context, note_id).await?;
+    eprintln!("✅ Note '{}' reverted to pre-edit state.", restored.meta.id);
+    Ok(serde_json::json!({
+        "note_id": restored.meta.id,
+        "title": restored.meta.title,
+        "reverted": true,
+    }))
 }
 
 #[cfg(test)]

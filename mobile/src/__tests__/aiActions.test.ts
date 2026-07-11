@@ -19,9 +19,9 @@ jest.mock('../api/client', () => ({
 }));
 
 describe('listAiActions', () => {
-  it('returns all 8 actions', () => {
+  it('returns all 9 actions', () => {
     const actions = listAiActions();
-    expect(actions).toHaveLength(8);
+    expect(actions).toHaveLength(9);
   });
 
   it('includes cleanUp action (#2685)', () => {
@@ -31,6 +31,15 @@ describe('listAiActions', () => {
     expect(cleanUp!.label).toBe('整理');
     expect(cleanUp!.icon).toBeTruthy();
     expect(cleanUp!.description).toBeTruthy();
+  });
+
+  it('includes editNote action (#1569)', () => {
+    const actions = listAiActions();
+    const editNote = actions.find(a => a.id === 'editNote');
+    expect(editNote).toBeDefined();
+    expect(editNote!.label).toBe('编辑笔记');
+    expect(editNote!.icon).toBeTruthy();
+    expect(editNote!.description).toBeTruthy();
   });
 
   it('each action has required fields', () => {
@@ -58,6 +67,7 @@ describe('getAiActionInfo', () => {
     expect(getAiActionInfo('translate')?.label).toBe('翻译');
     expect(getAiActionInfo('extractTodos')?.label).toBe('提取待办');
     expect(getAiActionInfo('cleanUp')?.label).toBe('整理');
+    expect(getAiActionInfo('editNote')?.label).toBe('编辑笔记');
   });
 
   it('returns undefined for unknown id', () => {

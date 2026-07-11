@@ -695,6 +695,7 @@ public sealed class BackendClient : IAsyncDisposable
         string? targetLanguage = null,
         string? tone = null,
         string? noteId = null,
+        string? instruction = null,
         string? model = null,
         CancellationToken token = default)
     {
@@ -710,12 +711,14 @@ public sealed class BackendClient : IAsyncDisposable
                 AiActionType.ExtractTodos => "extractTodos",
                 AiActionType.FindRelatedNotes => "findRelatedNotes",
                 AiActionType.CleanUp => "cleanUp",
+                AiActionType.EditNote => "editNote",
                 _ => throw new ArgumentOutOfRangeException(nameof(action)),
             },
             text,
             targetLanguage,
             tone,
             noteId,
+            instruction,
             modelOverride = model
         };
 

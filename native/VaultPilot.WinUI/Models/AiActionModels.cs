@@ -24,6 +24,8 @@ public enum AiActionType
     FindRelatedNotes,
     [JsonPropertyName("cleanUp")]
     CleanUp,
+    [JsonPropertyName("editNote")]
+    EditNote,
 }
 
 /// <summary>
@@ -50,6 +52,10 @@ public sealed record AiActionRequest
     /// <summary>Note ID for context (e.g., findRelatedNotes).</summary>
     [JsonPropertyName("noteId")]
     public string? NoteId { get; set; }
+
+    /// <summary>Edit instruction for Composer (EditNote action).</summary>
+    [JsonPropertyName("instruction")]
+    public string? Instruction { get; set; }
 
     /// <summary>Model override.</summary>
     [JsonPropertyName("model")]

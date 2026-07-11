@@ -58,6 +58,7 @@ public sealed partial class AiCommandPalette : UserControl
     {
         Visibility = Visibility.Visible;
         PaletteCard.Visibility = Visibility.Visible;
+        BackdropGrid.Visibility = Visibility.Visible;
         ResultCard.Visibility = Visibility.Collapsed;
         LoadingOverlay.Visibility = Visibility.Collapsed;
 
@@ -217,6 +218,8 @@ public sealed partial class AiCommandPalette : UserControl
     {
         ResultTitle.Text = action.Label;
         ResultTextBlock.Text = result.Result;
+        // Reset foreground in case a previous ShowError() left it red
+        ResultTextBlock.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
         InsertToChatButton.Visibility = Visibility.Visible;
         CopyResultButton.Visibility = Visibility.Visible;
 

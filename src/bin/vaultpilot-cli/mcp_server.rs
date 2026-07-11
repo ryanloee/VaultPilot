@@ -416,6 +416,7 @@ struct McpHttpState {
     context: StorageContext,
     server_state: tokio::sync::RwLock<McpServerState>,
     token: Option<String>,
+    read_only: bool,
 }
 
 pub(super) async fn run_mcp_http_server(
@@ -423,6 +424,7 @@ pub(super) async fn run_mcp_http_server(
     host: String,
     port: u16,
     token: Option<String>,
+    read_only: bool,
 ) -> Result<()> {
     use std::net::{IpAddr, SocketAddr};
 
@@ -441,6 +443,7 @@ pub(super) async fn run_mcp_http_server(
             protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         }),
         token,
+        read_only,
     });
 
     let app = axum::Router::new()
@@ -452,6 +455,12 @@ pub(super) async fn run_mcp_http_server(
 
     eprintln!("MCP HTTP server listening on {address}");
     eprintln!("  POST /mcp  — JSON-RPC endpoint");
+    if read_only {
+        eprintln!("  Mode: read-only (write tools disabled)");
+        eprintln!(
+            "  Use this endpoint for external LLM context access (Claude Desktop, Cursor, etc.)"
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(address).await?;
     axum::serve(listener, app).await?;
@@ -537,10 +546,14 @@ async fn mcp_http_handler(
                 },
                 "serverInfo": {
                     "name": "vaultpilot",
-                    "title": "VaultPilot MCP",
+                    "title": if state.read_only { "VaultPilot MCP (read-only context)" } else { "VaultPilot MCP" },
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "instructions": "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
+                "instructions": if state.read_only {
+                    "Read-only context server for external LLMs. Use notes.list, notes.get, notes.search, notes.related, notes.follow_links, notes.backlinks, notes.files, email.search, email.get, and chat.list_sessions, chat.get_state to retrieve vault content. Write operations are disabled."
+                } else {
+                    "Use chat.send to talk to VaultPilot through its built-in model. VaultPilot performs local retrieval and model calls internally; clients should treat it as a chat endpoint instead of direct note-search tooling."
+                }
             }),
         )).into_response();
     }
@@ -552,6 +565,48 @@ async fn mcp_http_handler(
             protocol_version: guard.protocol_version.clone(),
         }
     };
+
+    // ── Read-only mode intercepts ──────────────────────────────
+    if state.read_only {
+        if request.method == "tools/list" && state_snapshot.initialized {
+            let id = request.id.unwrap_or(Value::Null);
+            let tools: Vec<Value> = mcp_tools()
+                .into_iter()
+                .filter(|t| {
+                    t.get("annotations")
+                        .and_then(|a| a.get("readOnlyHint"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .collect();
+            return Json(McpResponse::ok(id, serde_json::json!({ "tools": tools })))
+                .into_response();
+        }
+        if request.method == "tools/call" {
+            let tool_name = request
+                .params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            // Check if this tool is read-only
+            let is_read_only = mcp_tools().iter().any(|t| {
+                t.get("name").and_then(Value::as_str) == Some(tool_name)
+                    && t.get("annotations")
+                        .and_then(|a| a.get("readOnlyHint"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+            });
+            if !is_read_only {
+                return Json(McpResponse::error(
+                    request.id.unwrap_or(Value::Null),
+                    -32601,
+                    format!("read-only mode: tool '{tool_name}' is not available"),
+                    None,
+                ))
+                .into_response();
+            }
+        }
+    }
 
     match handle_mcp_request(&state.context, &state_snapshot, request).await {
         Some(resp) => Json(resp).into_response(),

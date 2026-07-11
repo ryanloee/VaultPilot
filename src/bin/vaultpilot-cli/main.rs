@@ -241,6 +241,10 @@ enum Commands {
         /// Require this bearer token for authentication
         #[arg(long)]
         token: Option<String>,
+
+        /// Read-only mode: only expose idempotent/read-only tools for external LLM context access
+        #[arg(long)]
+        read_only: bool,
     },
 
     /// List registered plugins
@@ -1011,7 +1015,12 @@ fn main() {
     };
 
     let mcp_http_target = match &cli.command {
-        Commands::McpHttp { host, port, token } => Some((host.clone(), *port, token.clone())),
+        Commands::McpHttp {
+            host,
+            port,
+            token,
+            read_only,
+        } => Some((host.clone(), *port, token.clone(), *read_only)),
         _ => None,
     };
 
@@ -1033,8 +1042,10 @@ fn main() {
         return;
     }
 
-    if let Some((host, port, token)) = mcp_http_target {
-        if let Err(err) = runtime.block_on(run_mcp_http_server(context, host, port, token)) {
+    if let Some((host, port, token, read_only)) = mcp_http_target {
+        if let Err(err) =
+            runtime.block_on(run_mcp_http_server(context, host, port, token, read_only))
+        {
             eprintln!("MCP HTTP server failed: {err}");
             process::exit(1);
         }

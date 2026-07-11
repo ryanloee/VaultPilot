@@ -168,7 +168,7 @@ describe('Settings Import (#1222)', () => {
     expect(mockAsyncStorage.setItem).toHaveBeenCalled();
   });
 
-  it('should NOT overwrite SecureStore when all keys are empty to preserve existing keys (#2264)', async () => {
+  it('should MERGE with existing SecureStore keys rather than overwrite (#2264, #2713)', async () => {
     const exportNoKeys = JSON.stringify({
       version: 1,
       exportedAt: new Date().toISOString(),
@@ -183,11 +183,16 @@ describe('Settings Import (#1222)', () => {
     mockAsyncStorage.setItem.mockResolvedValue(undefined);
     await importSettings(exportNoKeys);
 
-    // Should NOT overwrite SecureStore when all keys are empty (fix #2264)
-    // Preserves existing keys that are already in SecureStore
-    expect(mockSecureStore.setItemAsync).not.toHaveBeenCalledWith(
+    // #2713: importSettings merges imported keys with existing SecureStore keys.
+    // Since beforeEach seeds SecureStore with {OpenAI, Anthropic}, the merged
+    // result should still contain those existing keys — none should be lost.
+    expect(mockSecureStore.setItemAsync).toHaveBeenCalledWith(
       'vaultpilot_provider_keys',
-      expect.any(String)
+      expect.stringContaining('OpenAI')
+    );
+    expect(mockSecureStore.setItemAsync).toHaveBeenCalledWith(
+      'vaultpilot_provider_keys',
+      expect.stringContaining('Anthropic')
     );
   });
 
@@ -207,9 +212,12 @@ describe('Settings Import (#1222)', () => {
     mockSecureStore.setItemAsync.mockResolvedValue(undefined);
     await importSettings(exportWithKeys);
 
+    // #2713: importSettings now merges with existing SecureStore keys.
+    // beforeEach seeds SecureStore with {OpenAI, Anthropic}, so the merged
+    // result includes both existing keys plus the imported Provider1 key.
     expect(mockSecureStore.setItemAsync).toHaveBeenCalledWith(
       'vaultpilot_provider_keys',
-      JSON.stringify({ Provider1: 'sk-real' })
+      JSON.stringify({ OpenAI: '***', Anthropic: '***', Provider1: 'sk-real' })
     );
   });
 });

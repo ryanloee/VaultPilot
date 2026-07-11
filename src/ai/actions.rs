@@ -26,6 +26,8 @@ pub enum AiActionType {
     FindRelatedNotes,
     /// Clean up messy/quick-captured notes into readable structure.
     CleanUp,
+    /// Composer: edit an existing note via natural-language instruction (#1569).
+    EditNote,
 }
 
 impl AiActionType {
@@ -40,6 +42,7 @@ impl AiActionType {
             Self::ExtractTodos => "提取待办",
             Self::FindRelatedNotes => "关联笔记",
             Self::CleanUp => "整理",
+            Self::EditNote => "编辑笔记",
         }
     }
 
@@ -54,6 +57,7 @@ impl AiActionType {
             Self::ExtractTodos => "extractTodos",
             Self::FindRelatedNotes => "findRelatedNotes",
             Self::CleanUp => "cleanUp",
+            Self::EditNote => "editNote",
         }
     }
 
@@ -68,6 +72,7 @@ impl AiActionType {
             "extractTodos" | "extract_todos" => Some(Self::ExtractTodos),
             "findRelatedNotes" | "find_related_notes" => Some(Self::FindRelatedNotes),
             "cleanUp" | "clean_up" => Some(Self::CleanUp),
+            "editNote" | "edit_note" => Some(Self::EditNote),
             _ => None,
         }
     }
@@ -83,6 +88,7 @@ impl AiActionType {
             Self::ExtractTodos,
             Self::FindRelatedNotes,
             Self::CleanUp,
+            Self::EditNote,
         ]
     }
 }
@@ -107,6 +113,9 @@ pub struct AiActionRequest {
     /// Optional parameter: note ID for context (e.g., find_related_notes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note_id: Option<String>,
+    /// Composer: natural-language edit instruction for EditNote (#1569).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
     /// Optional model override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -192,6 +201,14 @@ fn system_prompt(action: AiActionType) -> String {
              - Keep the original language and tone. \
              Output only the cleaned-up text, no extra commentary."
             .to_string(),
+        AiActionType::EditNote => "You are a note editing assistant (Composer). Apply the user's \
+             editing instruction to the given note text. Return the COMPLETE \
+             edited note — not a diff, not a fragment, but the full text with \
+             the requested changes applied. Preserve all content that the \
+             instruction does not explicitly modify. Maintain the original \
+             Markdown structure, headings, and formatting style.\n\
+             Respond in the same language as the input text."
+            .to_string(),
     }
 }
 
@@ -248,6 +265,17 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
                  Fix typos, improve structure, add headings and lists where \
                  appropriate. Preserve all content.\n\n{}",
                 request.text
+            )
+        }
+        AiActionType::EditNote => {
+            let instruction = request
+                .instruction
+                .as_deref()
+                .unwrap_or("Improve this note.");
+            format!(
+                "Editing instruction: {}\n\nApply the instruction above to this note. \
+                 Return the complete edited note:\n\n{}",
+                instruction, request.text
             )
         }
     }
@@ -374,6 +402,7 @@ mod tests {
             target_language: None,
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         let result = validate_request(&request);
@@ -389,6 +418,7 @@ mod tests {
             target_language: None,
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         let result = validate_request(&request);
@@ -406,6 +436,7 @@ mod tests {
             target_language: None,
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         assert!(
@@ -422,6 +453,7 @@ mod tests {
             target_language: None,
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         // find_related_notes is exempt from the text requirement
@@ -460,6 +492,7 @@ mod tests {
             target_language: None,
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         let prompt = user_prompt(AiActionType::Summarize, &request);
@@ -474,6 +507,7 @@ mod tests {
             target_language: None,
             tone: Some("vivid".to_string()),
             note_id: None,
+            instruction: None,
             model: None,
         };
         let prompt = user_prompt(AiActionType::Rewrite, &request);
@@ -488,6 +522,7 @@ mod tests {
             target_language: Some("Chinese".to_string()),
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         let prompt = user_prompt(AiActionType::Translate, &request);
@@ -502,6 +537,7 @@ mod tests {
             target_language: None,
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         let result = validate_request(&request);
@@ -519,6 +555,7 @@ mod tests {
             target_language: None,
             tone: None,
             note_id: None,
+            instruction: None,
             model: None,
         };
         let prompt = user_prompt(AiActionType::CleanUp, &request);
@@ -536,5 +573,98 @@ mod tests {
                 || prompt.contains("structure")
         );
         assert!(prompt.contains("Output only the cleaned-up text"));
+    }
+
+    // ── Composer / EditNote tests (#1569) ────────────────────────────────
+
+    #[test]
+    fn edit_note_label_and_id_are_consistent() {
+        assert_eq!(AiActionType::EditNote.label(), "编辑笔记");
+        assert_eq!(AiActionType::EditNote.id(), "editNote");
+        assert_eq!(
+            AiActionType::from_id("editNote"),
+            Some(AiActionType::EditNote)
+        );
+        assert_eq!(
+            AiActionType::from_id("edit_note"),
+            Some(AiActionType::EditNote)
+        );
+    }
+
+    #[test]
+    fn edit_note_is_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::EditNote),
+            "EditNote must be in the all() list"
+        );
+    }
+
+    #[test]
+    fn edit_note_system_prompt_instructs_complete_return() {
+        let prompt = system_prompt(AiActionType::EditNote);
+        assert!(
+            prompt.contains("COMPLETE"),
+            "must instruct to return complete note"
+        );
+        assert!(prompt.contains("Composer"), "must identify as Composer");
+    }
+
+    #[test]
+    fn edit_note_user_prompt_includes_instruction_and_text() {
+        let request = AiActionRequest {
+            action: AiActionType::EditNote,
+            text: "# My Note\n\nThis is the original content.".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("Make it more formal".to_string()),
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::EditNote, &request);
+        assert!(
+            prompt.contains("Make it more formal"),
+            "user prompt must include the instruction"
+        );
+        assert!(
+            prompt.contains("original content"),
+            "user prompt must include the note text"
+        );
+    }
+
+    #[test]
+    fn edit_note_user_prompt_defaults_instruction_when_none() {
+        let request = AiActionRequest {
+            action: AiActionType::EditNote,
+            text: "Some text".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::EditNote, &request);
+        assert!(
+            !prompt.is_empty(),
+            "should still produce a prompt with default instruction"
+        );
+    }
+
+    #[test]
+    fn edit_note_validates_non_empty_text() {
+        let request = AiActionRequest {
+            action: AiActionType::EditNote,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("Edit this".to_string()),
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "empty text should fail validation for EditNote"
+        );
     }
 }

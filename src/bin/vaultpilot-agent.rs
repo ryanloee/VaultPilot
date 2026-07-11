@@ -535,6 +535,7 @@ async fn handle_request(
                 target_language: params.target_language,
                 tone: params.tone,
                 note_id: params.note_id,
+                instruction: params.instruction,
                 model: params.model_override,
             };
             let settings = initialize_storage_async(context)
@@ -680,6 +681,8 @@ struct ExecuteAiActionParams {
     tone: Option<String>,
     #[serde(default)]
     note_id: Option<String>,
+    #[serde(default)]
+    instruction: Option<String>,
     #[serde(default)]
     model_override: Option<String>,
 }

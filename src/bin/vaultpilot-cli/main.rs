@@ -722,6 +722,42 @@ enum NotesActions {
         #[arg(long, default_value = "5")]
         limit: usize,
     },
+
+    /// Apply an AI quick-action to a note's content inline (#1914)
+    ///
+    /// Loads the note, runs a named AI action (summarize, translate, rewrite,
+    /// explain, extract_todos, etc.) on its body, and optionally appends the
+    /// result to the note in an `:::ai` block.
+    ///
+    /// Examples:
+    ///   vp note ai note_123 --action summarize
+    ///   vp note ai note_123 --action translate --language English
+    ///   vp note ai note_123 --action extract_todos --append
+    Ai {
+        /// Note ID or file path
+        id: String,
+
+        /// AI action to apply (summarize, translate, rewrite, explain,
+        /// extract_todos, clean_up, generate_outline, continue_writing)
+        #[arg(long)]
+        action: String,
+
+        /// Target language for translate action
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Target tone for rewrite action (formal, concise, vivid)
+        #[arg(long)]
+        tone: Option<String>,
+
+        /// Append the AI result to the note body in an `:::ai` block
+        #[arg(long)]
+        append: bool,
+
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1187,7 +1223,15 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Settings { action } => {
             tokio::task::block_in_place(|| handle_settings(context, action))
         }
-        Commands::Notes { action } => tokio::task::block_in_place(|| handle_notes(context, action)),
+        Commands::Notes { action } => {
+            // The Ai action requires async (calls execute_ai_action), so
+            // intercept it here. All other note actions stay sync (#1914).
+            if matches!(action, NotesActions::Ai { .. }) {
+                handle_note_ai(context, action).await
+            } else {
+                tokio::task::block_in_place(|| handle_notes(context, action))
+            }
+        }
         Commands::Index { action } => tokio::task::block_in_place(|| handle_index(context, action)),
         Commands::Ask {
             question,
@@ -1791,6 +1835,108 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             let results = find_related_notes_with_context(context, id, *limit)?;
             to_json(&results)
         }
+        // NotesActions::Ai is handled by handle_note_ai (async) in handle_command.
+        NotesActions::Ai { .. } => {
+            unreachable!("NotesActions::Ai is handled by handle_note_ai")
+        }
+    }
+}
+
+/// Handle `vp note ai <id> --action <action>` (#1914: in-document AI interaction).
+///
+/// Loads a note, applies a named AI quick-action to its content, and
+/// optionally appends the result to the note body in an `:::ai` block.
+async fn handle_note_ai(context: &StorageContext, action: &NotesActions) -> Result<Value> {
+    let NotesActions::Ai {
+        id,
+        action: action_str,
+        language,
+        tone,
+        append,
+        model,
+    } = action
+    else {
+        return Err(anyhow::anyhow!("expected NotesActions::Ai"));
+    };
+
+    let ai_action = vaultpilot_lib::ai::AiActionType::from_id(action_str).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown AI action '{}'. Available: summarize, translate, rewrite, explain, \
+                 continueWriting, extractTodos, findRelatedNotes, cleanUp, generateOutline",
+            action_str
+        )
+    })?;
+
+    let note = load_note_with_context(context, id)?;
+    let original_body = note.body.clone();
+    let note_id = note.meta.id.clone();
+    let note_title = note.meta.title.clone();
+
+    let ai_request = vaultpilot_lib::ai::AiActionRequest {
+        action: ai_action,
+        text: original_body.clone(),
+        target_language: language.clone(),
+        tone: tone.clone(),
+        note_id: Some(note_id.clone()),
+        instruction: None,
+        model: model.clone(),
+    };
+
+    let settings = load_settings_with_context(context)?;
+    let result = vaultpilot_lib::ai::execute_ai_action(&settings, &ai_request).await;
+
+    if let Some(ref err) = result.error {
+        return Err(anyhow::anyhow!(
+            "AI action '{}' failed: {}",
+            action_str,
+            err
+        ));
+    }
+
+    let ai_output = result.result.trim().to_string();
+    if ai_output.is_empty() {
+        return Err(anyhow::anyhow!("AI returned empty content"));
+    }
+
+    if *append {
+        // Append the AI result in an `:::ai` block (issue #1914 — AI block type)
+        let updated_body = format!(
+            "{original_body}\n\n:::ai-{action_label}\n{ai_output}\n:::\n",
+            action_label = ai_action.id()
+        );
+
+        let updated_note = NoteDocument {
+            body: updated_body,
+            ..note
+        };
+        let saved = save_note_with_context(context, updated_note)?;
+
+        eprintln!(
+            "✅ AI '{}' result appended to note '{}'.",
+            ai_action.label(),
+            saved.meta.id
+        );
+        Ok(serde_json::json!({
+            "note_id": saved.meta.id,
+            "title": saved.meta.title,
+            "action": ai_action.id(),
+            "appended": true,
+            "result_preview": ai_output.chars().take(200).collect::<String>(),
+        }))
+    } else {
+        // Preview only — print the AI result
+        eprintln!(
+            "🤖 AI {} — preview (use --append to add to note):\n",
+            ai_action.label()
+        );
+        eprintln!("{ai_output}");
+        Ok(serde_json::json!({
+            "note_id": note_id,
+            "title": note_title,
+            "action": ai_action.id(),
+            "appended": false,
+            "result": ai_output,
+        }))
     }
 }
 
@@ -4377,5 +4523,56 @@ mod tests {
             !stdout.starts_with('#'),
             "stdout must not start with raw report markdown"
         );
+    }
+
+    // ── #1914: note ai sub-command ──────────────────────────────────
+
+    /// Verify that the AiActionType enum supports all actions mentioned
+    /// in the `note ai` help text (#1914).
+    #[test]
+    fn note_ai_all_actions_parseable_1914() {
+        let valid_actions = [
+            "summarize",
+            "translate",
+            "rewrite",
+            "explain",
+            "continueWriting",
+            "extractTodos",
+            "findRelatedNotes",
+            "cleanUp",
+            "generateOutline",
+        ];
+        for action_id in &valid_actions {
+            assert!(
+                vaultpilot_lib::ai::AiActionType::from_id(action_id).is_some(),
+                "action '{}' should be parseable",
+                action_id
+            );
+        }
+    }
+
+    /// Verify that unknown actions are rejected (#1914).
+    #[test]
+    fn note_ai_unknown_action_rejected_1914() {
+        assert!(vaultpilot_lib::ai::AiActionType::from_id("nonexistent").is_none());
+        assert!(vaultpilot_lib::ai::AiActionType::from_id("").is_none());
+    }
+
+    /// Verify the `:::ai` block format used by `--append` (#1914).
+    #[test]
+    fn note_ai_append_block_format_1914() {
+        let original_body = "Original note content";
+        let ai_output = "Summary: The note is about content.";
+        let action_id = "summarize";
+
+        let updated_body = format!("{original_body}\n\n:::ai-{action_id}\n{ai_output}\n:::\n",);
+
+        assert!(updated_body.starts_with("Original note content"));
+        assert!(updated_body.contains(":::ai-summarize"));
+        assert!(updated_body.contains("Summary: The note is about content."));
+        assert!(updated_body.ends_with(":::\n"));
+        let block_start = updated_body.find(":::ai-summarize").unwrap();
+        let block_end = updated_body.rfind(":::").unwrap();
+        assert!(block_start < block_end, "block delimiters must be ordered");
     }
 }

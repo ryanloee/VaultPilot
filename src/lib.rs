@@ -8,6 +8,7 @@ pub mod diff;
 pub mod file_parsing;
 pub mod flashcards;
 pub mod health;
+pub mod knowledge_graph;
 pub mod mail;
 pub mod models;
 pub mod orchestration;

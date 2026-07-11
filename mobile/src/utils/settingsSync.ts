@@ -112,7 +112,19 @@ export async function importSettings(json: string): Promise<{ providersImported:
   // Save API keys to SecureStore FIRST — if this fails we must not overwrite
   // the existing provider list with empty keys, otherwise keys are lost.
   // Store as Record<string, string> matching what saveProviderKeysSecure uses.
-  const keys: Record<string, string> = {};
+  //
+  // #2713: Merge extant keys before overwriting SecureStore.
+  // SecureStore.setItemAsync is a full replace — if the device already
+  // has keys for providers A,B,C and the import only contains A,B,
+  // a straight replace would permanently erase C's key.
+  let existingKeys: Record<string, string> = {};
+  try {
+    const raw = await SecureStore.getItemAsync(SECURE_KEYS_ID);
+    existingKeys = raw ? JSON.parse(raw) : {};
+  } catch {
+    // corrupt / missing — start fresh
+  }
+  const keys: Record<string, string> = { ...existingKeys };
   for (const p of data.providers) {
     if (p.apiKey) keys[p.name] = p.apiKey;
   }

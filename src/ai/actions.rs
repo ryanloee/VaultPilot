@@ -26,6 +26,8 @@ pub enum AiActionType {
     FindRelatedNotes,
     /// Clean up messy/quick-captured notes into readable structure.
     CleanUp,
+    /// Generate a structured outline for a topic or based on existing notes.
+    GenerateOutline,
     /// Composer: edit an existing note via natural-language instruction (#1569).
     EditNote,
 }
@@ -42,6 +44,7 @@ impl AiActionType {
             Self::ExtractTodos => "提取待办",
             Self::FindRelatedNotes => "关联笔记",
             Self::CleanUp => "整理",
+            Self::GenerateOutline => "大纲生成",
             Self::EditNote => "编辑笔记",
         }
     }
@@ -57,6 +60,7 @@ impl AiActionType {
             Self::ExtractTodos => "extractTodos",
             Self::FindRelatedNotes => "findRelatedNotes",
             Self::CleanUp => "cleanUp",
+            Self::GenerateOutline => "generateOutline",
             Self::EditNote => "editNote",
         }
     }
@@ -72,6 +76,7 @@ impl AiActionType {
             "extractTodos" | "extract_todos" => Some(Self::ExtractTodos),
             "findRelatedNotes" | "find_related_notes" => Some(Self::FindRelatedNotes),
             "cleanUp" | "clean_up" => Some(Self::CleanUp),
+            "generateOutline" | "generate_outline" | "outline" => Some(Self::GenerateOutline),
             "editNote" | "edit_note" => Some(Self::EditNote),
             _ => None,
         }
@@ -88,6 +93,7 @@ impl AiActionType {
             Self::ExtractTodos,
             Self::FindRelatedNotes,
             Self::CleanUp,
+            Self::GenerateOutline,
             Self::EditNote,
         ]
     }
@@ -201,6 +207,22 @@ fn system_prompt(action: AiActionType) -> String {
              - Keep the original language and tone. \
              Output only the cleaned-up text, no extra commentary."
             .to_string(),
+        AiActionType::GenerateOutline => {
+            "You are a knowledge-work assistant specializing in outline generation. \
+             Your task is to generate a well-structured outline for the given topic \
+             or content. The outline should use hierarchical numbering (e.g., 1, 1.1, \
+             1.1.1) and be organized into logical sections with clear headings. \
+             Include 3-5 main sections, each with 2-4 subsections. \
+             - Base the outline on the provided text, expanding and structuring it \
+               into a logical document framework. \
+             - If the input is a topic rather than full text, generate a comprehensive \
+               outline covering the key aspects of that topic. \
+             - Add brief descriptions (one sentence) under each section heading \
+               explaining what that section should cover. \
+             - Use the same language as the input text. \
+             Output only the outline in Markdown format, no extra commentary."
+                .to_string()
+        }
         AiActionType::EditNote => "You are a note editing assistant (Composer). Apply the user's \
              editing instruction to the given note text. Return the COMPLETE \
              edited note — not a diff, not a fragment, but the full text with \
@@ -264,6 +286,12 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
                 "Please clean up and reorganize the following messy note. \
                  Fix typos, improve structure, add headings and lists where \
                  appropriate. Preserve all content.\n\n{}",
+                request.text
+            )
+        }
+        AiActionType::GenerateOutline => {
+            format!(
+                "Generate a structured outline based on the following topic or content:\n\n{}",
                 request.text
             )
         }
@@ -575,7 +603,78 @@ mod tests {
         assert!(prompt.contains("Output only the cleaned-up text"));
     }
 
-    // ── Composer / EditNote tests (#1569) ────────────────────────────────
+    // ── GenerateOutline tests (#1830) ────────────────────────────────
+
+    #[test]
+    fn generate_outline_roundtrip() {
+        assert_eq!(
+            AiActionType::from_id("generateOutline"),
+            Some(AiActionType::GenerateOutline)
+        );
+        assert_eq!(
+            AiActionType::from_id("outline"),
+            Some(AiActionType::GenerateOutline)
+        );
+        assert_eq!(
+            AiActionType::from_id("generate_outline"),
+            Some(AiActionType::GenerateOutline)
+        );
+        assert_eq!(AiActionType::GenerateOutline.id(), "generateOutline");
+        assert_eq!(AiActionType::GenerateOutline.label(), "大纲生成");
+    }
+
+    #[test]
+    fn generate_outline_in_all_actions() {
+        let actions = AiActionType::all();
+        assert!(
+            actions.contains(&AiActionType::GenerateOutline),
+            "GenerateOutline should be in all() list"
+        );
+    }
+
+    #[test]
+    fn generate_outline_system_prompt_not_empty() {
+        let prompt = system_prompt(AiActionType::GenerateOutline);
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("outline"));
+        assert!(prompt.contains("Markdown"));
+    }
+
+    #[test]
+    fn generate_outline_user_prompt_contains_input() {
+        let request = AiActionRequest {
+            action: AiActionType::GenerateOutline,
+            text: "项目管理最佳实践".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::GenerateOutline, &request);
+        assert!(prompt.contains("项目管理最佳实践"));
+        assert!(prompt.contains("outline"));
+    }
+
+    #[test]
+    fn generate_outline_empty_text_returns_error() {
+        let request = AiActionRequest {
+            action: AiActionType::GenerateOutline,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "empty text should fail validation for GenerateOutline"
+        );
+    }
+
+    // ── Composer / EditNote tests (#1569) ────────────────────────────
 
     #[test]
     fn edit_note_label_and_id_are_consistent() {

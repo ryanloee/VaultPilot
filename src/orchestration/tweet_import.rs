@@ -27,30 +27,28 @@ use anyhow::{Context, Result};
 /// domains, or input with no tweet URL.
 pub fn detect_tweet_url(text: &str) -> Option<String> {
     // Find the first occurrence of /status/ marker.
-    let (start_idx, marker) = text
-        .match_indices("/status/")
-        .find_map(|(idx, m)| {
-            // Verify the URL domain (twitter.com / x.com / mobile.twitter.com)
-            let before = &text[..idx];
-            // Check if any of the allowed domains appear right before the marker
-            let url_start = before
-                .rfind("https://twitter.com")
-                .or(before.rfind("https://x.com"))
-                .or(before.rfind("https://mobile.twitter.com"))
-                .or(before.rfind("twitter.com"))
-                .or(before.rfind("x.com"))
-                .or(before.rfind("mobile.twitter.com"));
-            let has_known_domain = url_start.is_some()
+    let (start_idx, marker) = text.match_indices("/status/").find_map(|(idx, m)| {
+        // Verify the URL domain (twitter.com / x.com / mobile.twitter.com)
+        let before = &text[..idx];
+        // Check if any of the allowed domains appear right before the marker
+        let url_start = before
+            .rfind("https://twitter.com")
+            .or(before.rfind("https://x.com"))
+            .or(before.rfind("https://mobile.twitter.com"))
+            .or(before.rfind("twitter.com"))
+            .or(before.rfind("x.com"))
+            .or(before.rfind("mobile.twitter.com"));
+        let has_known_domain = url_start.is_some()
                 // Also check if the URL starts right at the beginning or after whitespace
                 || before.is_empty()
                 || before.ends_with(char::is_whitespace)
                 || before.ends_with('(');
-            if has_known_domain {
-                Some((idx, m))
-            } else {
-                None
-            }
-        })?;
+        if has_known_domain {
+            Some((idx, m))
+        } else {
+            None
+        }
+    })?;
 
     // Walk backwards from the marker to find the start of the URL.
     let text_before = &text[..start_idx];
@@ -61,7 +59,8 @@ pub fn detect_tweet_url(text: &str) -> Option<String> {
             // No protocol — the URL may be bare (e.g. "x.com/...").  Use the
             // domain start as the URL start.  Find "twitter.com", "x.com", or
             // "mobile.twitter.com" nearest to the marker.
-            text_before.rfind("twitter.com")
+            text_before
+                .rfind("twitter.com")
                 .or(text_before.rfind("x.com"))
                 .or(text_before.rfind("mobile.twitter.com"))
         });
@@ -71,7 +70,7 @@ pub fn detect_tweet_url(text: &str) -> Option<String> {
         Some(pos) if text[pos..].starts_with("https://") || text[pos..].starts_with("http://") => {
             (pos, false)
         }
-        Some(pos) => (pos, true), // found domain but no protocol
+        Some(pos) => (pos, true),  // found domain but no protocol
         None => (start_idx, true), // marker itself is the start
     };
 
@@ -127,10 +126,7 @@ async fn fetch_tweet_context_inner(url: &str) -> Result<String> {
         return Ok(String::new());
     }
 
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .context("failed to parse oEmbed JSON")?;
+    let body: serde_json::Value = resp.json().await.context("failed to parse oEmbed JSON")?;
 
     let author_name = body["author_name"].as_str().unwrap_or("unknown");
     let author_url = body["author_url"].as_str().unwrap_or("");
@@ -217,7 +213,10 @@ mod tests {
     #[test]
     fn test_detect_standard_twitter_url() {
         let url = detect_tweet_url("https://twitter.com/user/status/123456789");
-        assert_eq!(url.as_deref(), Some("https://twitter.com/user/status/123456789"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://twitter.com/user/status/123456789")
+        );
     }
 
     #[test]
@@ -229,7 +228,10 @@ mod tests {
     #[test]
     fn test_detect_mobile_twitter_url() {
         let url = detect_tweet_url("https://mobile.twitter.com/user/status/123456789");
-        assert_eq!(url.as_deref(), Some("https://mobile.twitter.com/user/status/123456789"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://mobile.twitter.com/user/status/123456789")
+        );
     }
 
     #[test]
@@ -242,7 +244,10 @@ mod tests {
     fn test_detect_url_with_query_params() {
         let text = "Check this: https://twitter.com/user/status/123?lang=en";
         let url = detect_tweet_url(text);
-        assert_eq!(url.as_deref(), Some("https://twitter.com/user/status/123?lang=en"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://twitter.com/user/status/123?lang=en")
+        );
     }
 
     #[test]
@@ -256,7 +261,10 @@ mod tests {
     fn test_detect_url_with_fragment() {
         let text = "https://twitter.com/u/status/1#my-fragment";
         let url = detect_tweet_url(text);
-        assert_eq!(url.as_deref(), Some("https://twitter.com/u/status/1#my-fragment"));
+        assert_eq!(
+            url.as_deref(),
+            Some("https://twitter.com/u/status/1#my-fragment")
+        );
     }
 
     #[test]
@@ -338,10 +346,7 @@ mod tests {
 
     #[test]
     fn test_extract_handle_from_url() {
-        assert_eq!(
-            extract_handle("https://twitter.com/NASA", "NASA"),
-            "@NASA"
-        );
+        assert_eq!(extract_handle("https://twitter.com/NASA", "NASA"), "@NASA");
     }
 
     #[test]
@@ -354,10 +359,7 @@ mod tests {
 
     #[test]
     fn test_extract_handle_with_trailing_slash() {
-        assert_eq!(
-            extract_handle("https://twitter.com/user/", "User"),
-            "@user"
-        );
+        assert_eq!(extract_handle("https://twitter.com/user/", "User"), "@user");
     }
 
     #[test]
@@ -383,6 +385,9 @@ mod tests {
     #[test]
     fn test_urlencoding_special_chars() {
         assert_eq!(urlencoding("a b"), "a%20b");
-        assert_eq!(urlencoding("https://x.com/user/status/1"), "https%3A%2F%2Fx.com%2Fuser%2Fstatus%2F1");
+        assert_eq!(
+            urlencoding("https://x.com/user/status/1"),
+            "https%3A%2F%2Fx.com%2Fuser%2Fstatus%2F1"
+        );
     }
 }

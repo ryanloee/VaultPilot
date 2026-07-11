@@ -33,13 +33,13 @@ describe('listAiActions', () => {
     expect(cleanUp!.description).toBeTruthy();
   });
 
-  it('includes editNote action (#1569)', () => {
+  it('includes generateOutline action (#1830)', () => {
     const actions = listAiActions();
-    const editNote = actions.find(a => a.id === 'editNote');
-    expect(editNote).toBeDefined();
-    expect(editNote!.label).toBe('编辑笔记');
-    expect(editNote!.icon).toBeTruthy();
-    expect(editNote!.description).toBeTruthy();
+    const outline = actions.find(a => a.id === 'generateOutline');
+    expect(outline).toBeDefined();
+    expect(outline!.label).toBe('大纲生成');
+    expect(outline!.icon).toBeTruthy();
+    expect(outline!.description).toBeTruthy();
   });
 
   it('each action has required fields', () => {
@@ -67,7 +67,7 @@ describe('getAiActionInfo', () => {
     expect(getAiActionInfo('translate')?.label).toBe('翻译');
     expect(getAiActionInfo('extractTodos')?.label).toBe('提取待办');
     expect(getAiActionInfo('cleanUp')?.label).toBe('整理');
-    expect(getAiActionInfo('editNote')?.label).toBe('编辑笔记');
+    expect(getAiActionInfo('generateOutline')?.label).toBe('大纲生成');
   });
 
   it('returns undefined for unknown id', () => {

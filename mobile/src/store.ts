@@ -46,21 +46,41 @@ async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void
     keys[p.name] = p.apiKey;
   }
   const prevPromise = keySavePromise;
+  let secureStoreFailed = false;
+  let asyncStorageFailed = false;
   const savePromise = prevPromise.then(async () => {
     try {
       await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
     } catch (e) {
       console.warn('[SecureStore] Failed to save provider keys:', e);
+      secureStoreFailed = true;
     }
     // Always write fallback to AsyncStorage (survives APK updates: #2394)
     try {
-      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
       await AsyncStorage.setItem(ASYNC_FALLBACK_KEYS_ID, obfuscate(JSON.stringify(keys)));
     } catch (e) {
-      console.warn('[AsyncStorage] Failed to save fallback provider keys:', e);
+      console.error('[AsyncStorage] Failed to save fallback provider keys:', e);
+      asyncStorageFailed = true;
+    }
+    // #2712: If BOTH SecureStore and AsyncStorage fallback fail, throw so callers
+    // can detect the failure. If only SecureStore fails but AsyncStorage succeeds,
+    // we survive (keys are in fallback, will be re-promoted on next load).
+    if (secureStoreFailed && asyncStorageFailed) {
+      throw new Error(
+        '[VaultPilot] Critical: provider keys could not be saved to either SecureStore or AsyncStorage fallback — ' +
+        'API key changes will be lost on next restart.'
+      );
+    }
+    if (secureStoreFailed && !asyncStorageFailed) {
+      console.warn('[VaultPilot] SecureStore write failed but AsyncStorage fallback succeeded. ' +
+        'Keys will be re-promoted to SecureStore on next load.');
     }
   });
-  keySavePromise = savePromise.then(() => {}, () => {});
+  // Don't swallow errors — let them propagate to callers (#2712)
+  keySavePromise = savePromise.then(
+    () => {},
+    (err) => { console.error('[VaultPilot] Provider key save failed:', err); }
+  );
   await savePromise;
 }
 
@@ -77,7 +97,6 @@ async function loadProviderKeysSecure(): Promise<Record<string, string> | null> 
     }
     // SecureStore empty — try AsyncStorage fallback (survives APK updates: #2394)
     try {
-      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
       const fallback = await AsyncStorage.getItem(ASYNC_FALLBACK_KEYS_ID);
       if (fallback) {
         const keys = JSON.parse(deobfuscate(fallback)) as Record<string, string>;

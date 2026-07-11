@@ -371,9 +371,12 @@ public sealed class BackendClient : IAsyncDisposable
 
             if (Volatile.Read(ref _isDisposed) != 0) return false;
 
-            _ = StartProcessAsync();
+            // Await process launch — StartProcessAsync handles pump setup,
+            // process startup, and orphan check; fire-and-forget would race
+            // the 500ms health check below (issue #2721).
+            await StartProcessAsync();
 
-            // Verify process actually started
+            // Verify process actually started and pump tasks were set up
             await Task.Delay(500, cancellationToken);
             return Volatile.Read(ref _process) is { HasExited: false };
         }

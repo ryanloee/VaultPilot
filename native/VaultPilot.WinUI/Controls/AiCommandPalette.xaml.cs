@@ -141,9 +141,11 @@ public sealed partial class AiCommandPalette : UserControl
         // Determine action type from the action info
         var actionType = ParseActionType(actionInfo.Id);
 
-        CancelActiveRequest();
-        _activeRequestCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-        var ct = _activeRequestCts.Token; // Capture token before any await (re-entrancy guard)
+        // Atomic cancel-and-replace: swap old CTS for new one (timeout 120s),
+        // preventing Dismiss race (issue #2720).
+        var newCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        CancelActiveRequest(newCts);
+        var ct = newCts.Token; // Capture token before any await (re-entrancy guard)
 
         try
         {
@@ -284,11 +286,15 @@ public sealed partial class AiCommandPalette : UserControl
     }
 
     /// <summary>
-    /// Cancel any active AI request.
+    /// Cancel any active AI request and optionally replace with a new CTS.
+    /// The cancel-and-replace is atomic with respect to Dismiss(), preventing
+    /// the race where Dismiss sees null (old was exchanged out by ExecuteAction's
+    /// CancelActiveRequest) and does nothing while ExecuteAction then sets a new
+    /// CTS — so the operation continues despite the palette being dismissed.
     /// </summary>
-    private void CancelActiveRequest()
+    private void CancelActiveRequest(CancellationTokenSource? replacement = null)
     {
-        var old = Interlocked.Exchange(ref _activeRequestCts, null);
+        var old = Interlocked.Exchange(ref _activeRequestCts, replacement);
         old?.Cancel();
         old?.Dispose();
     }

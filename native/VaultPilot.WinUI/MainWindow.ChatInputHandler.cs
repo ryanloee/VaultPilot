@@ -336,12 +336,15 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public void CancelActiveRequest()
     {
-        var cts = Interlocked.Exchange(ref _activeRequestCts, null);
+        // #2732: Only cancel, don't dispose or null out _activeRequestCts.
+        // The inner finally block in ExecuteAiRequestAsync is the sole owner
+        // of disposal. If we exchange-and-dispose here, we race with the
+        // finally block: it sees null and skips disposal, leaking the CTS.
+        var cts = Volatile.Read(ref _activeRequestCts);
         if (cts != null)
         {
             try { cts.Cancel(); }
             catch (ObjectDisposedException) { }
-            cts.Dispose();
         }
     }
 }

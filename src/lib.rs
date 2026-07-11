@@ -4,6 +4,7 @@ pub mod ai;
 pub mod calendar;
 pub mod context_surface;
 pub mod crypto;
+pub mod diff;
 pub mod file_parsing;
 pub mod flashcards;
 pub mod health;

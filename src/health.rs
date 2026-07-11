@@ -136,34 +136,31 @@ fn load_all_note_metas(conn: &rusqlite::Connection, total: usize) -> Result<Vec<
 /// Returns `true` if the note body (from `note_fts`) contains wiki-style links
 /// (`[[...]]`) or markdown links / URLs.
 fn body_has_links(conn: &rusqlite::Connection, note_id: &str) -> Result<bool> {
-    let body: Option<String> = conn
-        .query_row(
-            "SELECT body FROM note_fts WHERE note_id = ?1",
-            [note_id],
-            |row| row.get(0),
-        )
-        .ok();
-    match body {
-        Some(b) => {
-            let trimmed = b.trim();
-            if trimmed.is_empty() {
-                return Ok(false);
-            }
-            // Check for wiki-links [[...]]
-            if trimmed.contains("[[") && trimmed.contains("]]") {
-                return Ok(true);
-            }
-            // Check for markdown links [...](...) — only look for URLs in parentheses
-            if trimmed.contains("http://")
-                || trimmed.contains("https://")
-                || trimmed.contains("ftp://")
-            {
-                return Ok(true);
-            }
-            Ok(false)
+    let body: String = match conn.query_row(
+        "SELECT body FROM note_fts WHERE note_id = ?1",
+        [note_id],
+        |row| row.get(0),
+    ) {
+        Ok(b) => b,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false), // no FTS entry
+        Err(e) => {
+            tracing::warn!(error = %e, note_id = note_id, "failed to query note_fts for link check");
+            return Err(e.into());
         }
-        None => Ok(false),
+    };
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
     }
+    // Check for wiki-links [[...]]
+    if trimmed.contains("[[") && trimmed.contains("]]") {
+        return Ok(true);
+    }
+    // Check for markdown links [...](...) — only look for URLs in parentheses
+    if trimmed.contains("http://") || trimmed.contains("https://") || trimmed.contains("ftp://") {
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// Find notes that have no tags and no wiki-links / URLs in their body.
@@ -172,7 +169,7 @@ fn find_orphan_notes(conn: &rusqlite::Connection, all_notes: &[NoteMeta]) -> Res
     let mut orphans = Vec::new();
     for note in all_notes {
         let has_tags = !note.tags.is_empty();
-        let has_links = body_has_links(conn, &note.id).unwrap_or(false);
+        let has_links = body_has_links(conn, &note.id)?;
         if !has_tags && !has_links {
             orphans.push(note.clone());
         }
@@ -203,7 +200,7 @@ fn calculate_knowledge_density(
     let sample_size = all_notes.len().min(200);
     let mut linked_count = 0usize;
     for note in all_notes.iter().take(sample_size) {
-        if body_has_links(conn, &note.id).unwrap_or(false) {
+        if body_has_links(conn, &note.id)? {
             linked_count += 1;
         }
     }
@@ -683,5 +680,111 @@ mod tests {
         let n3 = metas.iter().find(|m| m.id == "n3").unwrap();
         assert_eq!(n3.tags, vec!["rust"]);
         assert_eq!(n3.keywords, vec!["dev"]);
+    }
+
+    #[test]
+    fn body_has_links_no_fts_table_returns_error_2714() {
+        // Regression for #2714: querying a non-existent note_fts table must NOT
+        // silently return Ok(false). It should return an Err so the caller knows
+        // something is wrong with the database schema.
+        let conn = Connection::open_in_memory().unwrap();
+        // No note_fts table created — query should error, not be swallowed as false
+        let result = body_has_links(&conn, "n1");
+        assert!(
+            result.is_err(),
+            "body_has_links must propagate DB errors, not silently return false (#2714)"
+        );
+    }
+
+    #[test]
+    fn body_has_links_no_row_returns_false_2714() {
+        // Regression for #2714: when the note exists in the DB but has no FTS
+        // entry (QueryReturnedNoRows), that's a legitimate "no links" result.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // No rows — should be Ok(false), not an error
+        assert!(
+            !body_has_links(&conn, "nonexistent").unwrap(),
+            "QueryReturnedNoRows should yield Ok(false), not an error"
+        );
+    }
+
+    #[test]
+    fn body_has_links_detects_wiki_links_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n1", "See [[other-note]] for details"],
+        )
+        .unwrap();
+        assert!(body_has_links(&conn, "n1").unwrap());
+    }
+
+    #[test]
+    fn body_has_links_detects_urls_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n2", "Check https://example.com"],
+        )
+        .unwrap();
+        assert!(body_has_links(&conn, "n2").unwrap());
+    }
+
+    #[test]
+    fn body_has_links_plain_text_no_links_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n3", "Just plain text with no links at all"],
+        )
+        .unwrap();
+        assert!(!body_has_links(&conn, "n3").unwrap());
+    }
+
+    #[test]
+    fn body_has_links_empty_body_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n4", "   "],
+        )
+        .unwrap();
+        assert!(!body_has_links(&conn, "n4").unwrap());
     }
 }

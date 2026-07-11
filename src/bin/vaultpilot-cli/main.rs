@@ -1285,6 +1285,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             let settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
             let result = run_deep_research(&settings, context, topic, research_tier, |event| {
                 let detail = match &event {
+                    DeepResearchEvent::VaultContext { detail, .. } => detail.clone(),
                     DeepResearchEvent::Planning { detail } => detail.clone(),
                     DeepResearchEvent::Searching {
                         round,

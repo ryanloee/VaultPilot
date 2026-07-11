@@ -447,7 +447,7 @@ enum Commands {
         limit: usize,
     },
 
-/// Generate a knowledge graph from vault wikilinks (#1913)
+    /// Generate a knowledge graph from vault wikilinks (#1913)
     ///
     /// Builds a node-edge graph by extracting `[[wikilink]]` references from
     /// every note and resolving them to note titles. Output can be rendered
@@ -476,6 +476,7 @@ enum Commands {
     Flashcard {
         #[command(subcommand)]
         action: FlashcardActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1494,9 +1495,10 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
-Commands::Graph { dot, json, summary } => handle_graph(context, *dot, *json, *summary),
+        Commands::Graph { dot, json, summary } => handle_graph(context, *dot, *json, *summary),
         Commands::Flashcard { action } => {
             tokio::task::block_in_place(|| handle_flashcard(context, action))
+        }
     }
 }
 

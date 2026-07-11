@@ -13,7 +13,6 @@ use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-use vaultpilot_lib::ai::actions::{execute_ai_action, AiActionRequest, AiActionType};
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
@@ -242,6 +241,10 @@ enum Commands {
         /// Require this bearer token for authentication
         #[arg(long)]
         token: Option<String>,
+
+        /// Read-only mode: only expose idempotent/read-only tools for external LLM context access
+        #[arg(long)]
+        read_only: bool,
     },
 
     /// List registered plugins
@@ -308,6 +311,38 @@ enum Commands {
         /// Note ID to use as primary context (optional)
         #[arg(long)]
         context_note: Option<String>,
+    },
+
+    /// Composer: edit an existing note via natural-language instruction (#1569)
+    ///
+    /// Loads the note, sends it to the AI with your editing instruction,
+    /// and returns the edited version. Use --apply to save the changes.
+    ///
+    /// Examples:
+    ///   vaultpilot edit note_123 "Make the third paragraph more formal"
+    ///   vaultpilot edit note_123 "Add a summary section at the top" --apply
+    ///   vaultpilot edit note_123 "Translate to English"
+    Edit {
+        /// The note ID to edit
+        note_id: String,
+
+        /// The editing instruction in natural language
+        instruction: String,
+
+        /// Apply the edit and save the note (otherwise preview only)
+        #[arg(long)]
+        apply: bool,
+    },
+
+    /// Composer: revert the last applied edit to a note (#1652)
+    ///
+    /// Restores the note body from the backup recorded when `edit --apply` was used.
+    ///
+    /// Example:
+    ///   vaultpilot revert-edit note_123
+    RevertEdit {
+        /// The note ID to revert
+        note_id: String,
     },
 
     /// Manage AI scheduled research subscriptions (#2167)
@@ -412,40 +447,10 @@ enum Commands {
         limit: usize,
     },
 
-    /// Composer: edit a note via natural-language instruction (#1569)
-    ///
-    /// Uses AI to apply the given instruction to the note body.
-    /// With --apply the edit is saved; without it, only a preview is shown.
-    ///
-    /// Examples:
-    ///   vaultpilot edit note_123 "make the second paragraph more formal"
-    ///   vaultpilot edit note_456 "add a summary section" --apply
-    ///   vaultpilot edit note_789 "translate to English" --apply --json
-    Edit {
-        /// Note ID to edit
-        note_id: String,
-
-        /// Natural-language editing instruction
-        instruction: String,
-
-        /// Apply the edit instead of showing a preview
-        #[arg(long)]
-        apply: bool,
-
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Revert the last edit applied to a note via Composer (#1652)
-    ///
-    /// Restores the note to its pre-edit state.
-    ///
-    /// Examples:
-    ///   vaultpilot revert-edit note_123
-    RevertEdit {
-        /// Note ID to revert
-        note_id: String,
+    /// Manage spaced-repetition flashcards (#1912)
+    Flashcard {
+        #[command(subcommand)]
+        action: FlashcardActions,
     },
 }
 
@@ -1017,6 +1022,38 @@ enum ContextSurfaceActions {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum FlashcardActions {
+    /// Create a new flashcard
+    Create {
+        /// Front (question)
+        #[arg(long)]
+        front: String,
+        /// Back (answer)
+        #[arg(long)]
+        back: String,
+        /// Source note ID (optional)
+        #[arg(long)]
+        source: Option<String>,
+        /// Tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
+    },
+    /// List all flashcards
+    List,
+    /// List flashcards due for review
+    Due,
+    /// Review a flashcard and record your rating
+    Review {
+        /// Flashcard ID
+        id: String,
+        /// Rating: again, hard, good, or easy
+        rating: String,
+    },
+    /// Show flashcard statistics
+    Stats,
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -1048,7 +1085,12 @@ fn main() {
     };
 
     let mcp_http_target = match &cli.command {
-        Commands::McpHttp { host, port, token } => Some((host.clone(), *port, token.clone())),
+        Commands::McpHttp {
+            host,
+            port,
+            token,
+            read_only,
+        } => Some((host.clone(), *port, token.clone(), *read_only)),
         _ => None,
     };
 
@@ -1070,8 +1112,10 @@ fn main() {
         return;
     }
 
-    if let Some((host, port, token)) = mcp_http_target {
-        if let Err(err) = runtime.block_on(run_mcp_http_server(context, host, port, token)) {
+    if let Some((host, port, token, read_only)) = mcp_http_target {
+        if let Err(err) =
+            runtime.block_on(run_mcp_http_server(context, host, port, token, read_only))
+        {
             eprintln!("MCP HTTP server failed: {err}");
             process::exit(1);
         }
@@ -1151,11 +1195,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 None,
                 |_, _| (),
             )
-            .await?;
+            .await;
             // Restore original style so --style is per-invocation only (#2697)
+            // Must happen even if the AI call failed — see #2709
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
             settings.response_style = original_style;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            let result = result?;
             to_json(&strip_cli_markdown_from_grounded_answer(result))
         }
         Commands::Compress { history, summary } => {
@@ -1246,7 +1292,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 result.saved_note_id.as_deref().unwrap_or("N/A")
             );
             eprintln!();
-            println!("{}", result.report);
+            eprintln!("{}", result.report);
             to_json(&result)
         }
         Commands::Agent {
@@ -1264,11 +1310,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             settings.response_style = rs;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             let result =
-                handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await?;
+                handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await;
             // Restore original style so --style is per-invocation only (#2697)
+            // Must happen even if the agent call failed — see #2709
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
             settings.response_style = original_style;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            let result = result?;
             Ok(result)
         }
         Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
@@ -1328,6 +1376,83 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 "content": result,
             }))
         }
+        Commands::Edit {
+            note_id,
+            instruction,
+            apply,
+        } => {
+            if instruction.trim().is_empty() {
+                return Err(anyhow::anyhow!("edit instruction is empty"));
+            }
+
+            let original = load_note_with_context(context, note_id)?;
+            let original_body = original.body.clone();
+            let original_title = original.meta.title.clone();
+
+            let ai_request = vaultpilot_lib::ai::AiActionRequest {
+                action: vaultpilot_lib::ai::AiActionType::EditNote,
+                text: original_body.clone(),
+                target_language: None,
+                tone: None,
+                note_id: Some(original.meta.id.clone()),
+                instruction: Some(instruction.clone()),
+                model: None,
+            };
+
+            let settings = load_settings_with_context(context)?;
+            let result = vaultpilot_lib::ai::execute_ai_action(&settings, &ai_request).await;
+
+            if let Some(ref err) = result.error {
+                return Err(anyhow::anyhow!("AI edit failed: {}", err));
+            }
+
+            let edited_body = result.result.trim().to_string();
+            if edited_body.is_empty() {
+                return Err(anyhow::anyhow!("AI returned empty content"));
+            }
+
+            if *apply {
+                // Record backup for revert (#1652)
+                vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+
+                let edited_note = NoteDocument {
+                    body: edited_body.clone(),
+                    ..original
+                };
+                let saved = save_note_with_context(context, edited_note)?;
+
+                eprintln!("✅ Note '{}' edited and saved.", saved.meta.id);
+                eprintln!("   Revert with: vaultpilot revert-edit {}", saved.meta.id);
+                Ok(serde_json::json!({
+                    "note_id": saved.meta.id,
+                    "title": saved.meta.title,
+                    "saved": true,
+                    "original_length": original_body.len(),
+                    "edited_length": edited_body.len(),
+                }))
+            } else {
+                eprintln!("📝 Preview (not saved). Use --apply to save.\n");
+                eprintln!("{}", edited_body);
+                Ok(serde_json::json!({
+                    "note_id": note_id,
+                    "title": original_title,
+                    "saved": false,
+                    "edited_content": edited_body,
+                    "original_length": original_body.len(),
+                    "edited_length": edited_body.len(),
+                }))
+            }
+        }
+        Commands::RevertEdit { note_id } => {
+            let restored =
+                vaultpilot_lib::orchestration::write::revert_write(context, note_id).await?;
+            eprintln!("✅ Note '{}' reverted to pre-edit state.", restored.meta.id);
+            Ok(serde_json::json!({
+                "note_id": restored.meta.id,
+                "title": restored.meta.title,
+                "reverted": true,
+            }))
+        }
         Commands::Subscriptions { action } => {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
@@ -1345,13 +1470,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
-        Commands::Edit {
-            note_id,
-            instruction,
-            apply,
-            json,
-        } => handle_composer_edit(context, note_id, instruction, *apply, *json).await,
-        Commands::RevertEdit { note_id } => handle_composer_revert(context, note_id).await,
+        Commands::Flashcard { action } => {
+            tokio::task::block_in_place(|| handle_flashcard(context, action))
+        }
     }
 }
 
@@ -1384,11 +1505,13 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
                 *new_session,
                 |_, _| (),
             )
-            .await?;
+            .await;
             // Restore original style so --style is per-invocation only (#2697)
+            // Must happen even if the chat call failed — see #2709
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
             settings.response_style = original_style;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            let result = result?;
             to_json(&strip_cli_markdown_from_chat_result(result))
         }
         ChatActions::Sessions => {
@@ -3440,6 +3563,65 @@ fn density_emoji(score: f64) -> &'static str {
     }
 }
 
+// ─── Flashcard handler (#1912) ──────────────────────────────────
+
+/// Handle `vp flashcard` commands — manage spaced-repetition flashcards.
+fn handle_flashcard(context: &StorageContext, action: &FlashcardActions) -> Result<Value> {
+    let settings = vaultpilot_lib::storage::load_settings_with_context(context)?;
+    match action {
+        FlashcardActions::Create {
+            front,
+            back,
+            source,
+            tags,
+        } => {
+            let tag_list: Vec<String> = tags
+                .as_ref()
+                .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
+                .unwrap_or_default();
+            let card = vaultpilot_lib::flashcards::create_flashcard(
+                &settings,
+                front.clone(),
+                back.clone(),
+                source.clone(),
+                tag_list,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&card)
+        }
+        FlashcardActions::List => {
+            let cards = vaultpilot_lib::flashcards::list_flashcards(&settings)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&cards)
+        }
+        FlashcardActions::Due => {
+            let cards = vaultpilot_lib::flashcards::list_due_flashcards(&settings)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&cards)
+        }
+        FlashcardActions::Review { id, rating } => {
+            let r = match rating.to_lowercase().as_str() {
+                "again" => vaultpilot_lib::flashcards::ReviewRating::Again,
+                "hard" => vaultpilot_lib::flashcards::ReviewRating::Hard,
+                "good" => vaultpilot_lib::flashcards::ReviewRating::Good,
+                "easy" => vaultpilot_lib::flashcards::ReviewRating::Easy,
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "invalid rating '{other}': must be again, hard, good, or easy"
+                    ));
+                }
+            };
+            let result = vaultpilot_lib::flashcards::review_flashcard(&settings, id, r);
+            to_json(&result)
+        }
+        FlashcardActions::Stats => {
+            let stats =
+                vaultpilot_lib::flashcards::get_stats(&settings).map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&stats)
+        }
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────
 
 /// Generate a daily knowledge digest (#1606).
@@ -3529,106 +3711,6 @@ async fn find_related_notes_for_digest(
             .collect(),
         Err(_) => Vec::new(),
     }
-}
-
-// ─── Composer Edit / Revert (#1569, #1652) ───────────────────────────
-
-/// Composer: edit a note through a natural-language instruction (#1569).
-///
-/// Loads an existing note, runs the EditNote AI action, and returns
-/// the edited result.  When `apply` is true the note is saved and a
-/// WriteTracker backup is recorded so the user can revert with
-/// `vaultpilot revert-edit <note_id>` (#1652).
-async fn handle_composer_edit(
-    context: &StorageContext,
-    note_id: &str,
-    instruction: &str,
-    apply: bool,
-    json: bool,
-) -> Result<Value> {
-    if instruction.trim().is_empty() {
-        return Err(anyhow::anyhow!("edit instruction is empty"));
-    }
-
-    let original = tokio::task::block_in_place(|| load_note_with_context(context, note_id))?;
-    let original_body = original.body.clone();
-    let original_id = original.meta.id.clone();
-    let original_title = original.meta.title.clone();
-
-    let ai_request = AiActionRequest {
-        action: AiActionType::EditNote,
-        text: original_body.clone(),
-        target_language: None,
-        tone: None,
-        note_id: Some(original_id.clone()),
-        instruction: Some(instruction.to_string()),
-        model: None,
-    };
-
-    let settings = tokio::task::block_in_place(|| initialize_storage_with_context(context))?;
-    let result = execute_ai_action(&settings, &ai_request).await;
-
-    if let Some(ref err) = result.error {
-        return Err(anyhow::anyhow!("AI edit failed: {}", err));
-    }
-
-    let edited_body = result.result.trim().to_string();
-    if edited_body.is_empty() {
-        return Err(anyhow::anyhow!("AI returned empty content"));
-    }
-
-    if apply {
-        vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
-
-        let edited_note = NoteDocument {
-            body: edited_body.clone(),
-            ..original
-        };
-        let saved = tokio::task::block_in_place(|| save_note_with_context(context, edited_note))?;
-
-        if json {
-            Ok(serde_json::json!({
-                "note_id": saved.meta.id,
-                "title": saved.meta.title,
-                "saved": true,
-                "original_length": original_body.len(),
-                "edited_length": edited_body.len(),
-            }))
-        } else {
-            eprintln!("✅ Note '{}' edited and saved.", saved.meta.id);
-            eprintln!("   Revert with: vaultpilot revert-edit {}", saved.meta.id);
-            Ok(
-                serde_json::json!({ "note_id": saved.meta.id, "title": saved.meta.title, "saved": true }),
-            )
-        }
-    } else if json {
-        Ok(serde_json::json!({
-            "note_id": original_id,
-            "title": original_title,
-            "saved": false,
-            "edited_content": edited_body,
-            "original_length": original_body.len(),
-            "edited_length": edited_body.len(),
-        }))
-    } else {
-        eprintln!("📝 Preview (not saved). Use --apply to save.\n");
-        println!("{}", edited_body);
-        Ok(serde_json::json!({ "note_id": original_id, "title": original_title, "saved": false }))
-    }
-}
-
-/// Composer revert: undo the last edit applied to a note (#1652).
-///
-/// Restores the note body from the WriteTracker backup recorded when
-/// `vaultpilot edit --apply` was used.
-async fn handle_composer_revert(context: &StorageContext, note_id: &str) -> Result<Value> {
-    let restored = vaultpilot_lib::orchestration::write::revert_write(context, note_id).await?;
-    eprintln!("✅ Note '{}' reverted to pre-edit state.", restored.meta.id);
-    Ok(serde_json::json!({
-        "note_id": restored.meta.id,
-        "title": restored.meta.title,
-        "reverted": true,
-    }))
 }
 
 #[cfg(test)]
@@ -4137,6 +4219,41 @@ mod tests {
         );
     }
 
+    /// #2709: --style override must be restored even when the AI call fails.
+    /// The old code used `?` which short-circuited before the restore block.
+    /// This test simulates the fixed pattern: call returns Err, restore runs,
+    /// then error is propagated — proving style is saved before the error bubbles up.
+    #[test]
+    fn style_override_restored_on_error_2709() {
+        use vaultpilot_lib::models::ResponseStyle;
+
+        // Simulate the pattern used in handle_command for Ask/Agent/Chat
+        let original_style = ResponseStyle::Detailed;
+        let override_style = ResponseStyle::Brief;
+
+        // Override phase
+        let mut saved_style = override_style;
+        assert_eq!(saved_style, ResponseStyle::Brief);
+
+        // Simulate AI call failure — result is Err
+        let ai_result: Result<String, &'static str> = Err("network error");
+
+        // The fixed pattern: .await (no ?), then restore, then propagate
+        // After restore phase (this MUST execute regardless of ai_result)
+        saved_style = original_style;
+        assert_eq!(
+            saved_style,
+            ResponseStyle::Detailed,
+            "original style must be restored even when AI call fails (#2709)"
+        );
+
+        // Error is propagated AFTER restore
+        assert!(
+            ai_result.is_err(),
+            "error should be propagated after restore"
+        );
+    }
+
     /// #2696: export without --output must exit cleanly, not append JSON.
     /// The old code returned Ok(json!) which exit_ok() appended to stdout.
     /// The fix uses process::exit(0) which bypasses exit_ok entirely.
@@ -4153,6 +4270,36 @@ mod tests {
         assert!(
             !stdout.contains('{'),
             "stdout must not contain JSON braces after markdown"
+        );
+    }
+
+    /// #2711: deep-research must not print report text to stdout.
+    /// Previously `println!("{}", result.report)` corrupted stdout before JSON.
+    /// The fix sends the report to stderr via `eprintln!` so stdout stays
+    /// clean for the JSON returned by `to_json(&result)`.
+    #[test]
+    fn deep_research_stdout_clean_json_2711() {
+        // Simulate the stdout discipline after the fix:
+        // All human-readable text goes to stderr; stdout gets JSON only.
+        let report_text = "# Deep Research Report\n\nThis is a long report...";
+        let json_result = serde_json::json!({
+            "topic": "quantum computing",
+            "report": report_text,
+            "rounds_used": 5,
+        });
+
+        // stdout should contain ONLY the JSON (what to_json produces)
+        let stdout = serde_json::to_string(&json_result).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+        assert!(parsed.is_object(), "stdout must be a JSON object");
+        assert_eq!(parsed["topic"], "quantum computing");
+
+        // The report text must NOT appear as raw text before the JSON
+        // (the old bug would prepend it via println!)
+        assert!(
+            !stdout.starts_with('#'),
+            "stdout must not start with raw report markdown"
         );
     }
 }

@@ -16,6 +16,7 @@ use crate::ai;
 
 use super::ask::ask_with_ai_with_context;
 use super::compress::compress_chat_history_with_context;
+use super::tweet_import::{detect_tweet_url, fetch_tweet_context};
 
 /// Default compression threshold (80% of the model context window) used when
 /// automatic compression is enabled but the configured value is unusable (#1928).
@@ -240,6 +241,14 @@ pub async fn build_effective_question(question: &str, image_paths: &[String]) ->
     } else {
         question.trim().to_string()
     };
+
+    // Detect tweet/X URLs and fetch content via oEmbed API (#1864)
+    if let Some(tweet_url) = detect_tweet_url(&prompt) {
+        let tweet_context = fetch_tweet_context(&tweet_url).await;
+        if !tweet_context.is_empty() {
+            prompt.push_str(&tweet_context);
+        }
+    }
 
     if image_paths.is_empty() || prompt.contains(OCR_SECTION_HEADER) {
         return prompt;

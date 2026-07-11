@@ -7,6 +7,7 @@ pub mod event_bus;
 pub mod scheduled_research;
 pub mod serendipity;
 pub mod table;
+pub mod tweet_import;
 pub mod write;
 
 // Re-export the main public API functions for backward compatibility

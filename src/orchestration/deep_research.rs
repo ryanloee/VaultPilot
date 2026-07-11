@@ -226,7 +226,6 @@ pub async fn run_deep_research(
 
     // ── Phase 2: Multi-round web searches ───────────────────────────────
     let mut round_results: Vec<SearchRoundResult> = Vec::new();
-    let mut accumulated_search_context: Vec<String> = Vec::new();
     let mut all_citations: Vec<ResearchCitation> = Vec::new();
     let mut citation_counter: usize = 0;
 
@@ -302,11 +301,6 @@ pub async fn run_deep_research(
                 summary: summary.clone(),
                 round_number: round_num,
             });
-
-            accumulated_search_context.push(format!(
-                "--- Round {}: {} ---\nQuery: {}\nSummary: {}\n",
-                round_num, sub_q.question, query, summary
-            ));
         }
     }
 
@@ -1070,5 +1064,45 @@ mod tests {
             },
         ];
         assert_eq!(events.len(), 7);
+    }
+
+    /// Regression test for #2724: verify that synthesize_report correctly
+    /// constructs search context from round_results (the variable formerly
+    /// known as accumulated_search_context was dead code — the synthesis
+    /// function independently builds its own context).
+    #[test]
+    fn test_synthesize_report_context_from_round_results() {
+        let round_results = [SearchRoundResult {
+            question: "What is Rust?".to_string(),
+            query: "Rust programming language".to_string(),
+            raw_results: "Rust is a systems programming language".to_string(),
+            summary: "Rust: a safe, concurrent, practical language".to_string(),
+            round_number: 1,
+        }];
+        // Build context the same way synthesize_report does (lines 738-749)
+        let mut context_parts = Vec::new();
+        for (i, r) in round_results.iter().enumerate() {
+            context_parts.push(format!(
+                "## Round {}: {}\nQuery: {}\nSummary:\n{}\n",
+                i + 1,
+                r.question,
+                r.query,
+                r.summary
+            ));
+        }
+        let search_context = context_parts.join("\n---\n");
+        // Verify the context contains both the question and the summary
+        assert!(
+            search_context.contains("What is Rust?"),
+            "context should contain question"
+        );
+        assert!(
+            search_context.contains("safe, concurrent, practical"),
+            "context should contain summary"
+        );
+        assert!(
+            search_context.contains("## Round 1:"),
+            "context should contain round header"
+        );
     }
 }

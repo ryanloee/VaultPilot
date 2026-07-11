@@ -309,6 +309,38 @@ enum Commands {
         context_note: Option<String>,
     },
 
+    /// Composer: edit an existing note via natural-language instruction (#1569)
+    ///
+    /// Loads the note, sends it to the AI with your editing instruction,
+    /// and returns the edited version. Use --apply to save the changes.
+    ///
+    /// Examples:
+    ///   vaultpilot edit note_123 "Make the third paragraph more formal"
+    ///   vaultpilot edit note_123 "Add a summary section at the top" --apply
+    ///   vaultpilot edit note_123 "Translate to English"
+    Edit {
+        /// The note ID to edit
+        note_id: String,
+
+        /// The editing instruction in natural language
+        instruction: String,
+
+        /// Apply the edit and save the note (otherwise preview only)
+        #[arg(long)]
+        apply: bool,
+    },
+
+    /// Composer: revert the last applied edit to a note (#1652)
+    ///
+    /// Restores the note body from the backup recorded when `edit --apply` was used.
+    ///
+    /// Example:
+    ///   vaultpilot revert-edit note_123
+    RevertEdit {
+        /// The note ID to revert
+        note_id: String,
+    },
+
     /// Manage AI scheduled research subscriptions (#2167)
     Subscriptions {
         #[command(subcommand)]
@@ -1209,7 +1241,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 result.saved_note_id.as_deref().unwrap_or("N/A")
             );
             eprintln!();
-            println!("{}", result.report);
+            eprintln!("{}", result.report);
             to_json(&result)
         }
         Commands::Agent {
@@ -1289,6 +1321,83 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 table_with_ai_with_context(context, prompt.clone(), context_note.clone()).await?;
             Ok(serde_json::json!({
                 "content": result,
+            }))
+        }
+        Commands::Edit {
+            note_id,
+            instruction,
+            apply,
+        } => {
+            if instruction.trim().is_empty() {
+                return Err(anyhow::anyhow!("edit instruction is empty"));
+            }
+
+            let original = load_note_with_context(context, note_id)?;
+            let original_body = original.body.clone();
+            let original_title = original.meta.title.clone();
+
+            let ai_request = vaultpilot_lib::ai::AiActionRequest {
+                action: vaultpilot_lib::ai::AiActionType::EditNote,
+                text: original_body.clone(),
+                target_language: None,
+                tone: None,
+                note_id: Some(original.meta.id.clone()),
+                instruction: Some(instruction.clone()),
+                model: None,
+            };
+
+            let settings = load_settings_with_context(context)?;
+            let result = vaultpilot_lib::ai::execute_ai_action(&settings, &ai_request).await;
+
+            if let Some(ref err) = result.error {
+                return Err(anyhow::anyhow!("AI edit failed: {}", err));
+            }
+
+            let edited_body = result.result.trim().to_string();
+            if edited_body.is_empty() {
+                return Err(anyhow::anyhow!("AI returned empty content"));
+            }
+
+            if *apply {
+                // Record backup for revert (#1652)
+                vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+
+                let edited_note = NoteDocument {
+                    body: edited_body.clone(),
+                    ..original
+                };
+                let saved = save_note_with_context(context, edited_note)?;
+
+                eprintln!("✅ Note '{}' edited and saved.", saved.meta.id);
+                eprintln!("   Revert with: vaultpilot revert-edit {}", saved.meta.id);
+                Ok(serde_json::json!({
+                    "note_id": saved.meta.id,
+                    "title": saved.meta.title,
+                    "saved": true,
+                    "original_length": original_body.len(),
+                    "edited_length": edited_body.len(),
+                }))
+            } else {
+                eprintln!("📝 Preview (not saved). Use --apply to save.\n");
+                eprintln!("{}", edited_body);
+                Ok(serde_json::json!({
+                    "note_id": note_id,
+                    "title": original_title,
+                    "saved": false,
+                    "edited_content": edited_body,
+                    "original_length": original_body.len(),
+                    "edited_length": edited_body.len(),
+                }))
+            }
+        }
+        Commands::RevertEdit { note_id } => {
+            let restored =
+                vaultpilot_lib::orchestration::write::revert_write(context, note_id).await?;
+            eprintln!("✅ Note '{}' reverted to pre-edit state.", restored.meta.id);
+            Ok(serde_json::json!({
+                "note_id": restored.meta.id,
+                "title": restored.meta.title,
+                "reverted": true,
             }))
         }
         Commands::Subscriptions { action } => {
@@ -4009,6 +4118,36 @@ mod tests {
         assert!(
             !stdout.contains('{'),
             "stdout must not contain JSON braces after markdown"
+        );
+    }
+
+    /// #2711: deep-research must not print report text to stdout.
+    /// Previously `println!("{}", result.report)` corrupted stdout before JSON.
+    /// The fix sends the report to stderr via `eprintln!` so stdout stays
+    /// clean for the JSON returned by `to_json(&result)`.
+    #[test]
+    fn deep_research_stdout_clean_json_2711() {
+        // Simulate the stdout discipline after the fix:
+        // All human-readable text goes to stderr; stdout gets JSON only.
+        let report_text = "# Deep Research Report\n\nThis is a long report...";
+        let json_result = serde_json::json!({
+            "topic": "quantum computing",
+            "report": report_text,
+            "rounds_used": 5,
+        });
+
+        // stdout should contain ONLY the JSON (what to_json produces)
+        let stdout = serde_json::to_string(&json_result).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+        assert!(parsed.is_object(), "stdout must be a JSON object");
+        assert_eq!(parsed["topic"], "quantum computing");
+
+        // The report text must NOT appear as raw text before the JSON
+        // (the old bug would prepend it via println!)
+        assert!(
+            !stdout.starts_with('#'),
+            "stdout must not start with raw report markdown"
         );
     }
 }

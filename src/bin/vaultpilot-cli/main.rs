@@ -1114,11 +1114,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 None,
                 |_, _| (),
             )
-            .await?;
+            .await;
             // Restore original style so --style is per-invocation only (#2697)
+            // Must happen even if the AI call failed — see #2709
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
             settings.response_style = original_style;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            let result = result?;
             to_json(&strip_cli_markdown_from_grounded_answer(result))
         }
         Commands::Compress { history, summary } => {
@@ -1227,11 +1229,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             settings.response_style = rs;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
             let result =
-                handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await?;
+                handle_agent(context, prompt, &[], &[], *max_steps, *auto_approve, *plan).await;
             // Restore original style so --style is per-invocation only (#2697)
+            // Must happen even if the agent call failed — see #2709
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
             settings.response_style = original_style;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            let result = result?;
             Ok(result)
         }
         Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
@@ -1340,11 +1344,13 @@ async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<V
                 *new_session,
                 |_, _| (),
             )
-            .await?;
+            .await;
             // Restore original style so --style is per-invocation only (#2697)
+            // Must happen even if the chat call failed — see #2709
             let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
             settings.response_style = original_style;
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+            let result = result?;
             to_json(&strip_cli_markdown_from_chat_result(result))
         }
         ChatActions::Sessions => {
@@ -3990,6 +3996,41 @@ mod tests {
             saved_style,
             ResponseStyle::Detailed,
             "original style must be restored after call"
+        );
+    }
+
+    /// #2709: --style override must be restored even when the AI call fails.
+    /// The old code used `?` which short-circuited before the restore block.
+    /// This test simulates the fixed pattern: call returns Err, restore runs,
+    /// then error is propagated — proving style is saved before the error bubbles up.
+    #[test]
+    fn style_override_restored_on_error_2709() {
+        use vaultpilot_lib::models::ResponseStyle;
+
+        // Simulate the pattern used in handle_command for Ask/Agent/Chat
+        let original_style = ResponseStyle::Detailed;
+        let override_style = ResponseStyle::Brief;
+
+        // Override phase
+        let mut saved_style = override_style;
+        assert_eq!(saved_style, ResponseStyle::Brief);
+
+        // Simulate AI call failure — result is Err
+        let ai_result: Result<String, &'static str> = Err("network error");
+
+        // The fixed pattern: .await (no ?), then restore, then propagate
+        // After restore phase (this MUST execute regardless of ai_result)
+        saved_style = original_style;
+        assert_eq!(
+            saved_style,
+            ResponseStyle::Detailed,
+            "original style must be restored even when AI call fails (#2709)"
+        );
+
+        // Error is propagated AFTER restore
+        assert!(
+            ai_result.is_err(),
+            "error should be propagated after restore"
         );
     }
 

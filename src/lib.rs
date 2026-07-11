@@ -5,6 +5,7 @@ pub mod calendar;
 pub mod context_surface;
 pub mod crypto;
 pub mod file_parsing;
+pub mod flashcards;
 pub mod health;
 pub mod mail;
 pub mod models;

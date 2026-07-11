@@ -442,6 +442,12 @@ enum Commands {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
+
+    /// Manage spaced-repetition flashcards (#1912)
+    Flashcard {
+        #[command(subcommand)]
+        action: FlashcardActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1012,6 +1018,38 @@ enum ContextSurfaceActions {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum FlashcardActions {
+    /// Create a new flashcard
+    Create {
+        /// Front (question)
+        #[arg(long)]
+        front: String,
+        /// Back (answer)
+        #[arg(long)]
+        back: String,
+        /// Source note ID (optional)
+        #[arg(long)]
+        source: Option<String>,
+        /// Tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
+    },
+    /// List all flashcards
+    List,
+    /// List flashcards due for review
+    Due,
+    /// Review a flashcard and record your rating
+    Review {
+        /// Flashcard ID
+        id: String,
+        /// Rating: again, hard, good, or easy
+        rating: String,
+    },
+    /// Show flashcard statistics
+    Stats,
+}
+
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
@@ -1421,6 +1459,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
+        Commands::Flashcard { action } => {
+            tokio::task::block_in_place(|| handle_flashcard(context, action))
+        }
     }
 }
 
@@ -3508,6 +3549,65 @@ fn density_emoji(score: f64) -> &'static str {
         "🟡"
     } else {
         "🔴"
+    }
+}
+
+// ─── Flashcard handler (#1912) ──────────────────────────────────
+
+/// Handle `vp flashcard` commands — manage spaced-repetition flashcards.
+fn handle_flashcard(context: &StorageContext, action: &FlashcardActions) -> Result<Value> {
+    let settings = vaultpilot_lib::storage::load_settings_with_context(context)?;
+    match action {
+        FlashcardActions::Create {
+            front,
+            back,
+            source,
+            tags,
+        } => {
+            let tag_list: Vec<String> = tags
+                .as_ref()
+                .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
+                .unwrap_or_default();
+            let card = vaultpilot_lib::flashcards::create_flashcard(
+                &settings,
+                front.clone(),
+                back.clone(),
+                source.clone(),
+                tag_list,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&card)
+        }
+        FlashcardActions::List => {
+            let cards = vaultpilot_lib::flashcards::list_flashcards(&settings)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&cards)
+        }
+        FlashcardActions::Due => {
+            let cards = vaultpilot_lib::flashcards::list_due_flashcards(&settings)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&cards)
+        }
+        FlashcardActions::Review { id, rating } => {
+            let r = match rating.to_lowercase().as_str() {
+                "again" => vaultpilot_lib::flashcards::ReviewRating::Again,
+                "hard" => vaultpilot_lib::flashcards::ReviewRating::Hard,
+                "good" => vaultpilot_lib::flashcards::ReviewRating::Good,
+                "easy" => vaultpilot_lib::flashcards::ReviewRating::Easy,
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "invalid rating '{other}': must be again, hard, good, or easy"
+                    ));
+                }
+            };
+            let result = vaultpilot_lib::flashcards::review_flashcard(&settings, id, r);
+            to_json(&result)
+        }
+        FlashcardActions::Stats => {
+            let stats =
+                vaultpilot_lib::flashcards::get_stats(&settings).map_err(|e| anyhow::anyhow!(e))?;
+            to_json(&stats)
+        }
     }
 }
 

@@ -19,9 +19,18 @@ jest.mock('../api/client', () => ({
 }));
 
 describe('listAiActions', () => {
-  it('returns all 9 actions', () => {
+  it('returns all 10 actions', () => {
     const actions = listAiActions();
-    expect(actions).toHaveLength(9);
+    expect(actions).toHaveLength(10);
+  });
+
+  it('includes editNote action (#1569)', () => {
+    const actions = listAiActions();
+    const editNote = actions.find(a => a.id === 'editNote');
+    expect(editNote).toBeDefined();
+    expect(editNote!.label).toBe('编辑笔记');
+    expect(editNote!.icon).toBeTruthy();
+    expect(editNote!.description).toBeTruthy();
   });
 
   it('includes cleanUp action (#2685)', () => {

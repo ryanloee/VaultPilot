@@ -30,6 +30,8 @@ pub enum AiActionType {
     GenerateOutline,
     /// Composer: edit an existing note via natural-language instruction (#1569).
     EditNote,
+    /// Generate a structured summary for a URL/link note.
+    SummarizeUrl,
 }
 
 impl AiActionType {
@@ -46,6 +48,7 @@ impl AiActionType {
             Self::CleanUp => "整理",
             Self::GenerateOutline => "大纲生成",
             Self::EditNote => "编辑笔记",
+            Self::SummarizeUrl => "链接摘要",
         }
     }
 
@@ -62,6 +65,7 @@ impl AiActionType {
             Self::CleanUp => "cleanUp",
             Self::GenerateOutline => "generateOutline",
             Self::EditNote => "editNote",
+            Self::SummarizeUrl => "summarizeUrl",
         }
     }
 
@@ -78,6 +82,7 @@ impl AiActionType {
             "cleanUp" | "clean_up" => Some(Self::CleanUp),
             "generateOutline" | "generate_outline" | "outline" => Some(Self::GenerateOutline),
             "editNote" | "edit_note" => Some(Self::EditNote),
+            "summarizeUrl" | "summarize_url" => Some(Self::SummarizeUrl),
             _ => None,
         }
     }
@@ -95,6 +100,7 @@ impl AiActionType {
             Self::CleanUp,
             Self::GenerateOutline,
             Self::EditNote,
+            Self::SummarizeUrl,
         ]
     }
 }
@@ -231,6 +237,8 @@ fn system_prompt(action: AiActionType) -> String {
              Markdown structure, headings, and formatting style.\n\
              Respond in the same language as the input text."
             .to_string(),
+        AiActionType::SummarizeUrl => "You are a link summarization assistant. Your task is to analyze the content of a web page or article and generate a structured summary. Output a JSON object with these fields: title (the page title or concise description), key_points (an array of 3-5 key takeaways), summary (a 2-3 sentence overview), suggested_tags (2-4 relevant tags for categorization). Preserve factual accuracy. Do not hallucinate information not present in the source. Output only valid JSON, no extra commentary."
+            .to_string(),
     }
 }
 
@@ -304,6 +312,12 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
                 "Editing instruction: {}\n\nApply the instruction above to this note. \
                  Return the complete edited note:\n\n{}",
                 instruction, request.text
+            )
+        }
+        AiActionType::SummarizeUrl => {
+            format!(
+                "Analyze the following web page content and generate a structured summary.\n\n{}",
+                request.text
             )
         }
     }

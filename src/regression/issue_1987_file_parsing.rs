@@ -141,25 +141,27 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    // ── pdf honest stub ───────────────────────────────────────────
+    // ── pdf parser (real extraction + stub fallback) ──────────────
 
     #[test]
-    fn regression_1987_parse_pdf_is_an_honest_stub() {
+    fn regression_1987_parse_pdf_with_real_extraction() {
+        // Fake PDF header won't extract — triggers stub fallback.
         let (dir, path) = write_tmp_bytes("doc.pdf", b"%PDF-1.4\n%not really parsed\n");
         let parsed = parse_file(&path).expect("parse pdf");
 
         assert_eq!(parsed.parser_used, "pdf");
         assert!(
-            parsed.needs_native_parser,
-            "PDF must be flagged as needing a native backend"
+            !parsed.needs_native_parser,
+            "PDF is now handled in pure Rust by pdf-extract"
         );
-        assert!(parsed.text.is_empty(), "PDF must not fake-extract any text");
+        // Fake bytes won't extract — bail-out produces empty text with fallback note.
+        assert!(parsed.text.is_empty(), "corrupt PDF produces empty text");
         assert!(
             parsed.metadata["note"]
                 .as_str()
                 .expect("note str")
-                .contains("native backend"),
-            "metadata must explain why no text was extracted"
+                .contains("PDF text extraction failed"),
+            "metadata must explain why extraction failed"
         );
 
         let _ = fs::remove_dir_all(&dir);

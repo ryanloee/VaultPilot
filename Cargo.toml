@@ -59,6 +59,7 @@ cron = "0.17"
 imap = "3.0.0-alpha.15"
 mailparse = "0.16"
 native-tls = "0.2"
+pdf-extract = "0.9"
 
 [[bin]]
 name = "vaultpilot-cli"

@@ -148,7 +148,10 @@ export function extractKeywords(text: string): string[] {
 
   // Add Latin tokens (>=2 chars, not stop words)
   for (const token of rawTokens) {
-    if (!isCJK(token[0]) && token.length >= 2) {
+    // Pass the whole token to isCJK(): it decodes via codePointAt(0), so this
+    // correctly classifies astral-plane CJK (U+20000+, e.g. 𠀀) whose UTF-16
+    // token[0] is merely a surrogate. See #2741.
+    if (!isCJK(token) && token.length >= 2) {
       allTerms.add(token);
     }
   }
@@ -160,7 +163,9 @@ export function extractKeywords(text: string): string[] {
 
   // Also add raw CJK tokens that are >= 2 chars and not stop words
   for (const token of rawTokens) {
-    if (isCJK(token[0]) && token.length >= 2 && !stopWords.has(token)) {
+    // Pass the whole token to isCJK() so astral-plane CJK (U+20000+) is not
+    // misclassified as Latin via its surrogate token[0]. See #2741.
+    if (isCJK(token) && token.length >= 2 && !stopWords.has(token)) {
       allTerms.add(token);
     }
   }

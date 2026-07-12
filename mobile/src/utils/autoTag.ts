@@ -7,6 +7,17 @@
 
 import { isCJK } from './cjk';
 
+/**
+ * A character is part of a CJK *word* run when it is CJK but NOT a CJK
+ * Symbol/Punctuation (U+3000–U+303F). Full-width punctuation (。、！？…)
+ * must terminate a CJK run so it is not merged into spurious bigrams like
+ * "记。" / "好。", which would otherwise be offered as auto-tag suggestions.
+ * See #2742.
+ */
+function isCjkRunChar(ch: string): boolean {
+  return isCJK(ch) && !(ch >= '　' && ch <= '〿');
+}
+
 /** Common stop words to exclude from tag extraction. */
 const STOP_WORDS = new Set([
   // Chinese
@@ -60,7 +71,7 @@ export function extractAutoTags(title: string, content: string, maxTags = 5): st
   let currentIsCJK: boolean | null = null;
 
   for (const ch of combined) {
-    const cjk = isCJK(ch);
+    const cjk = isCjkRunChar(ch);
     if (currentIsCJK === null) {
       currentIsCJK = cjk;
       current = ch;

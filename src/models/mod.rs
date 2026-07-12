@@ -1,3 +1,4 @@
+pub mod mcp_client;
 pub mod provider;
 pub mod settings;
 

@@ -13,6 +13,7 @@ pub mod knowledge_graph;
 pub mod mail;
 pub mod models;
 pub mod orchestration;
+pub mod people_index;
 pub mod plugin;
 pub mod prompt_store;
 pub mod prompting;

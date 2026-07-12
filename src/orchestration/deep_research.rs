@@ -2,10 +2,15 @@
 //!
 //! This module implements a multi-round research capability where:
 //! 1. The user enters a research topic
-//! 2. The AI internally plans a research outline (list of sub-questions)
-//! 3. Multi-round web searches are executed for each sub-question
-//! 4. Results are synthesized into a structured report with citations
-//! 5. The report is auto-saved as a vault note
+//! 2. Vault notes related to the topic are surfaced and injected into planning
+//! 3. The AI internally plans a research outline (list of sub-questions)
+//! 4. Multi-round searches execute — vault notes + web results combined (#1631)
+//! 5. Results are synthesized into a structured report with citations
+//! 6. The report is auto-saved as a vault note
+//!
+//! Vault-aware (#1631): the planning phase and each search round now include
+//! relevant vault notes alongside web search results, giving the AI access to
+//! the user's existing knowledge base.
 //!
 //! Two tiers are supported:
 //! - **Fast**  (3–5 rounds, ~30s target)
@@ -22,7 +27,10 @@ use crate::ai::client::send_request_with_temperature;
 use crate::ai::parsing::extract_json;
 use crate::ai::RequestUsage;
 use crate::models::{AppSettings, NoteDocument, NoteMeta};
-use crate::storage::{save_note_with_context, StorageContext};
+use crate::storage::{
+    find_related_notes_for_text_with_context, load_note_with_context, save_note_with_context,
+    StorageContext,
+};
 
 // ── Tier configuration ───────────────────────────────────────────────────
 
@@ -147,6 +155,12 @@ pub struct ResearchResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "stage", rename_all = "snake_case")]
 pub enum DeepResearchEvent {
+    /// Surfacing vault notes relevant to the topic (#1631).
+    VaultContext {
+        /// Number of vault notes found related to the topic.
+        count: usize,
+        detail: String,
+    },
     /// Planning the research outline.
     Planning { detail: String },
     /// A sub-question is being researched.
@@ -201,12 +215,39 @@ pub async fn run_deep_research(
         return Err(anyhow!("research topic cannot be empty"));
     }
 
+    // ── Phase 0: Search vault for existing knowledge (#1631) ────────────
+    let vault_context = match vault_search(context, &topic, 8) {
+        Ok(vc) => {
+            let count = if vc.is_empty() {
+                0
+            } else {
+                vc.lines()
+                    .filter(|l| l.starts_with("--- vault note"))
+                    .count()
+            };
+            emit(DeepResearchEvent::VaultContext {
+                count,
+                detail: if count > 0 {
+                    format!("Found {} vault notes related to \"{}\"", count, topic)
+                } else {
+                    format!("No existing vault notes found for \"{}\"", topic)
+                },
+            });
+            vc
+        }
+        Err(e) => {
+            tracing::warn!("vault search failed during deep research: {}", e);
+            String::new()
+        }
+    };
+
     emit(DeepResearchEvent::Planning {
         detail: format!("Planning research outline for: {}", topic),
     });
 
-    // ── Phase 1: Plan the research outline ──────────────────────────────
-    let (plan, plan_usage) = generate_research_plan(settings, &topic, &tier).await?;
+    // ── Phase 1: Plan the research outline (vault-aware) ────────────────
+    let (plan, plan_usage) =
+        generate_research_plan(settings, &topic, &tier, &vault_context).await?;
     let mut total_usage = plan_usage;
     let total_rounds = plan.sub_questions.len();
     if total_rounds == 0 {
@@ -224,7 +265,7 @@ pub async fn run_deep_research(
         ),
     });
 
-    // ── Phase 2: Multi-round web searches ───────────────────────────────
+    // ── Phase 2: Multi-round searches (vault + web, #1631) ──────────────
     let mut round_results: Vec<SearchRoundResult> = Vec::new();
     let mut all_citations: Vec<ResearchCitation> = Vec::new();
     let mut citation_counter: usize = 0;
@@ -254,13 +295,32 @@ pub async fn run_deep_research(
                 query: query.clone(),
             });
 
+            // Execute vault search for this sub-question (sync, #1631)
+            let vault_results = match vault_search(context, query, 3) {
+                Ok(vr) => vr,
+                Err(e) => {
+                    tracing::warn!("vault search failed for query '{}': {}", query, e);
+                    String::new()
+                }
+            };
+
             // Execute web search
-            let raw_results = match web_search(settings, query).await {
+            let raw_web = match web_search(settings, query).await {
                 Ok(results) => results,
                 Err(e) => {
                     tracing::warn!("web search failed for query '{}': {}", query, e);
                     format!("[Search failed: {}]", crate::sanitize_error(&e.to_string()))
                 }
+            };
+
+            // Combine vault + web results into unified raw results
+            let raw_results = if !vault_results.is_empty() {
+                format!(
+                    "=== VAULT NOTES (existing knowledge) ===\n{}\n\n=== WEB RESULTS ===\n{}",
+                    vault_results, raw_web
+                )
+            } else {
+                raw_web
             };
 
             let result_preview = raw_results.chars().take(200).collect::<String>();
@@ -383,11 +443,48 @@ pub async fn run_deep_research(
 
 // ── Phase 1: Planning ────────────────────────────────────────────────────
 
+/// Search vault notes related to a query. Returns formatted text suitable for
+/// injecting into AI prompts (title, summary, body snippet for each note).
+/// This is a synchronous operation (SQLite queries).
+fn vault_search(context: &StorageContext, query: &str, limit: usize) -> Result<String> {
+    let related = find_related_notes_for_text_with_context(context, query, limit)?;
+    if related.is_empty() {
+        return Ok(String::new());
+    }
+    let mut parts = Vec::with_capacity(related.len());
+    for rn in &related {
+        let body_preview = match load_note_with_context(context, &rn.meta.id) {
+            Ok(doc) => {
+                let preview: String = doc.body.chars().take(300).collect();
+                if preview.len() < doc.body.len() {
+                    format!("{}…", preview)
+                } else {
+                    preview
+                }
+            }
+            Err(_) => String::from("(body unavailable)"),
+        };
+        let tag_str = if rn.meta.tags.is_empty() {
+            String::new()
+        } else {
+            format!(" [tags: {}]", rn.meta.tags.join(", "))
+        };
+        parts.push(format!(
+            "--- vault note: {} (score: {}){} ---\\nSummary: {}\\nBody preview:\\n{}",
+            rn.meta.title, rn.score, tag_str, rn.meta.summary, body_preview
+        ));
+    }
+    Ok(parts.join("\\n\\n"))
+}
+
 /// Generate a research outline by asking the AI to decompose the topic.
+/// vault_context contains formatted results from a vault search injected
+/// to help the AI plan more relevant sub-questions (#1631).
 async fn generate_research_plan(
     settings: &AppSettings,
     topic: &str,
     _tier: &DeepResearchTier,
+    vault_context: &str,
 ) -> Result<(ResearchPlan, RequestUsage)> {
     let system = "\
 You are a research planning assistant. Your task is to decompose a research topic \
@@ -402,8 +499,19 @@ Rules:
 
 Return ONLY valid JSON with no markdown fences or extra text.";
 
+    let vault_block = if vault_context.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\\nRelevant notes from the user's vault (existing knowledge):\\n{vault}\\n\\n\
+             Use this vault knowledge to inform your research plan — \
+             focus on areas NOT already covered by vault notes.",
+            vault = vault_context
+        )
+    };
+
     let user_prompt = format!(
-        r#"Research topic: "{topic}"
+        r#"Research topic: "{topic}"{vault_block}
 
 Generate a research plan. Return JSON in this exact schema (all fields required):
 {{
@@ -421,8 +529,10 @@ Generate a research plan. Return JSON in this exact schema (all fields required)
 Focus on producing sub-questions that are:
 1. Answerable via web search
 2. Cover different dimensions of the topic (background, current state, controversies, future outlook, etc.)
-3. Logically ordered from foundational to advanced"#,
-        topic = topic
+3. Logically ordered from foundational to advanced
+4. Complement (don't duplicate) the vault knowledge already available"#,
+        topic = topic,
+        vault_block = vault_block
     );
 
     let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.2)
@@ -751,7 +861,8 @@ async fn synthesize_report(
 
     let system = format!(
         "\
-You are a research report writer. You have conducted multi-round web research on a topic. \
+You are a research report writer. You have conducted multi-round research on a topic \
+using both the user's vault notes (existing knowledge) and web searches. \
 Your task is to synthesize the findings into a well-structured, comprehensive research report.
 
 Rules:
@@ -884,6 +995,7 @@ fn merge_usage(current: RequestUsage, next: RequestUsage) -> RequestUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::delete_note_with_context;
 
     #[test]
     fn test_deep_research_tier_default() {
@@ -1037,6 +1149,10 @@ mod tests {
     #[test]
     fn test_deep_research_event_variants() {
         let events = [
+            DeepResearchEvent::VaultContext {
+                count: 3,
+                detail: "Found 3 vault notes".into(),
+            },
             DeepResearchEvent::Planning {
                 detail: "planning".into(),
             },
@@ -1063,7 +1179,58 @@ mod tests {
                 message: "err".into(),
             },
         ];
-        assert_eq!(events.len(), 7);
+        assert_eq!(events.len(), 8);
+    }
+
+    // ── Vault-aware deep research tests (#1631) ──────────────────
+
+    #[test]
+    fn test_vault_search_formatting() {
+        // Test that vault_search returns properly formatted output
+        // by mocking a context with notes
+        let ctx = StorageContext::for_test(&std::env::temp_dir().join(format!(
+            "vaultpilot-test-dr-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        )));
+        crate::storage::initialize_storage_with_context(&ctx).unwrap();
+
+        // Create a test note first
+        let note = NoteDocument {
+            meta: NoteMeta {
+                title: "Rust Async Patterns".to_string(),
+                summary: "Overview of async patterns".to_string(),
+                tags: vec!["rust".to_string(), "async".to_string()],
+                ..Default::default()
+            },
+            body: "Tokio is the most popular async runtime for Rust. \
+                   It provides a multi-threaded work-stealing scheduler."
+                .to_string(),
+            search_snippet: None,
+            search_score: None,
+        };
+        let saved = save_note_with_context(&ctx, note).unwrap();
+        let result = vault_search(&ctx, "Rust async", 3).unwrap();
+        // Should contain our saved note
+        assert!(!result.is_empty(), "vault search should return results");
+        assert!(
+            result.contains("Rust Async Patterns"),
+            "should contain note title: {}",
+            result
+        );
+
+        // Clean up
+        delete_note_with_context(&ctx, &saved.meta.id).unwrap();
+    }
+
+    #[test]
+    fn test_vault_search_empty_vault() {
+        let ctx = StorageContext::for_test(&std::env::temp_dir().join(format!(
+            "vaultpilot-test-dr-empty-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        )));
+        crate::storage::initialize_storage_with_context(&ctx).unwrap();
+        let result = vault_search(&ctx, "nonexistent topic xyz", 5).unwrap();
+        assert!(result.is_empty(), "empty vault should return empty result");
     }
 
     /// Regression test for #2724: verify that synthesize_report correctly

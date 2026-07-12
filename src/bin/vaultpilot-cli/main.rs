@@ -380,6 +380,23 @@ enum Commands {
         action: MailActions,
     },
 
+    /// People-aware context — index vault notes by person (#1807 Phase 1)
+    ///
+    /// Builds an in-memory reverse index mapping canonical person names to the
+    /// notes they appear in (via frontmatter `participants` / `attendees` /
+    /// `people` / `with` keys and `@mentions` in the body).  Alias resolution
+    /// uses a plain `aliases.json` file under `.vaultpilot/`.
+    ///
+    /// Examples:
+    ///   vp people                  — list all people + note counts
+    ///   vp people notes-for 王明   — show notes involving 王明
+    ///   vp people aliases          — show alias map
+    ///   vp people alias set 老王=王明 — add an alias
+    People {
+        #[command(subcommand)]
+        action: PeopleActions,
+    },
+
     /// Self-Organizing Vault — auto-analyze, link, and categorize notes (#2176)
     ///
     /// Run real-time (Layer 1) keyword extraction, duplicate detection, and
@@ -1142,6 +1159,33 @@ enum MailActions {
     },
 }
 
+/// Sub-commands for the `vp people` command (#1807 Phase 1).
+#[derive(Subcommand)]
+enum PeopleActions {
+    /// List all people known to the index (alphabetical with note counts)
+    List,
+
+    /// Show notes involving a specific person, newest first
+    NotesFor {
+        /// Person name (resolved through alias map)
+        name: String,
+    },
+
+    /// Show the current alias map
+    Aliases,
+
+    /// Add or modify an alias entry
+    Alias {
+        /// Alias definition in \"alias=canonical\" format (e.g. 老王=王明)
+        #[arg(long)]
+        set: Option<String>,
+
+        /// Remove an alias entry
+        #[arg(long)]
+        remove: Option<String>,
+    },
+}
+
 /// Sub-commands for the `vp organize` command (#2176).
 #[derive(Subcommand)]
 enum OrganizeActions {
@@ -1744,6 +1788,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
         Commands::Mail { action } => handle_mail(context, action).await,
+        Commands::People { action } => {
+            tokio::task::block_in_place(|| handle_people(context, action))
+        }
         Commands::Organize { action } => handle_organize(context, action).await,
         Commands::Meeting { action } => handle_meeting(context, action).await,
         Commands::Voice { action } => handle_voice(context, action).await,
@@ -5261,6 +5308,221 @@ async fn handle_skill(context: &StorageContext, action: &SkillActions) -> Result
             .await?;
 
             to_json(&strip_cli_markdown_from_grounded_answer(result))
+        }
+    }
+}
+
+/// Build a [`PeopleIndex`] by iterating every vault note, extracting
+/// people from frontmatter keys and `@mentions`, and recording them.
+fn build_people_index(
+    context: &StorageContext,
+) -> Result<vaultpilot_lib::people_index::PeopleIndex> {
+    use vaultpilot_lib::models::SearchQuery;
+    use vaultpilot_lib::people_index::{NoteRef, PeopleIndex};
+    use vaultpilot_lib::storage::{load_note_with_context, search_notes_with_context};
+
+    let aliases = load_alias_map(context)?;
+    let mut idx = PeopleIndex::new(aliases);
+
+    let all = search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            limit: Some(5000),
+            ..Default::default()
+        },
+    )?;
+
+    for meta in &all.notes {
+        let doc = match load_note_with_context(context, &meta.id) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let (frontmatter, body) = split_frontmatter(&doc.body);
+        idx.add_note(
+            NoteRef::new(&meta.id)
+                .with_title(&meta.title)
+                .with_timestamp(&meta.updated_at),
+            frontmatter.as_deref(),
+            body,
+        );
+    }
+
+    Ok(idx)
+}
+
+/// Split YAML frontmatter (delimited by `---`) from the body.
+/// Returns `(frontmatter, body)` where frontmatter is `Some(...)`
+/// if the note starts with `---`.
+fn split_frontmatter(raw: &str) -> (Option<String>, &str) {
+    let stripped = raw.trim_start();
+    if !stripped.starts_with("---") {
+        return (None, stripped);
+    }
+    let after_first = &stripped[3..].trim_start();
+    let end_marker = after_first
+        .find("\n---\n")
+        .map(|p| p + 1)
+        .or_else(|| after_first.find("\n---").map(|p| p + 1))
+        .unwrap_or(0);
+    if end_marker == 0 {
+        return (None, stripped);
+    }
+    let yaml = &after_first[..end_marker];
+    let body = after_first[end_marker + 4..].trim();
+    (Some(yaml.to_string()), body)
+}
+
+/// Load alias map from `.vaultpilot/aliases.json`, creating it if missing.
+fn load_alias_map(
+    context: &StorageContext,
+) -> Result<vaultpilot_lib::people_index::PersonAliasMap> {
+    use vaultpilot_lib::people_index::PersonAliasMap;
+    let vault_dir = context.vault_dir();
+    let path = vault_dir.join(".vaultpilot").join("aliases.json");
+    if path.exists() {
+        let raw = std::fs::read_to_string(&path)?;
+        let pairs: Vec<(String, String)> = serde_json::from_str(&raw).unwrap_or_default();
+        let mut map = PersonAliasMap::new();
+        for (alias, canonical) in &pairs {
+            map.add_alias(alias, canonical);
+        }
+        Ok(map)
+    } else {
+        Ok(PersonAliasMap::new())
+    }
+}
+
+/// Handle `vp people` sub-commands.
+fn handle_people(context: &StorageContext, action: &PeopleActions) -> Result<Value> {
+    match action {
+        PeopleActions::List => {
+            let idx = build_people_index(context)?;
+            let people: Vec<serde_json::Value> = idx
+                .people()
+                .into_iter()
+                .map(|p| {
+                    let count = idx.notes_for(&p).len();
+                    serde_json::json!({ "name": p, "note_count": count })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "people": people,
+                "total_people": idx.len(),
+                "source": "vault frontmatter + @mentions"
+            }))
+        }
+        PeopleActions::NotesFor { name } => {
+            let idx = build_people_index(context)?;
+            let notes = idx.notes_for(name);
+            let notes_json: Vec<serde_json::Value> = notes
+                .iter()
+                .map(|n| {
+                    serde_json::json!({
+                        "id": n.id,
+                        "title": n.title,
+                        "timestamp": n.timestamp,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "person": name,
+                "notes": notes_json,
+                "count": notes_json.len(),
+            }))
+        }
+        PeopleActions::Aliases => {
+            // Directly read the JSON file; PersonAliasMap doesn't expose iterator yet.
+            let vault_dir = context.vault_dir();
+            let path = vault_dir.join(".vaultpilot").join("aliases.json");
+            let aliases: serde_json::Value = if path.exists() {
+                let raw = std::fs::read_to_string(&path).unwrap_or_default();
+                serde_json::from_str(&raw).unwrap_or(serde_json::json!([]))
+            } else {
+                serde_json::json!([])
+            };
+            Ok(serde_json::json!({
+                "aliases": aliases,
+                "file": path.to_string_lossy(),
+            }))
+        }
+        PeopleActions::Alias { set, remove } => {
+            // Alias management — Phase 2. For now report the current state.
+            if let Some(definition) = set {
+                let parts: Vec<&str> = definition.splitn(2, '=').collect();
+                if parts.len() != 2 {
+                    return Err(anyhow::anyhow!(
+                        "alias format: --set alias=canonical (e.g. --set 老王=王明)"
+                    ));
+                }
+                let alias = parts[0].trim();
+                let canonical = parts[1].trim();
+                if alias.is_empty() || canonical.is_empty() {
+                    return Err(anyhow::anyhow!("alias and canonical must be non-empty"));
+                }
+                // Regenerate aliases.json
+                let vault_dir = context.vault_dir();
+                let dir = vault_dir.join(".vaultpilot");
+                std::fs::create_dir_all(&dir)?;
+                let path = dir.join("aliases.json");
+                let mut pairs: Vec<(String, String)> = if path.exists() {
+                    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+                    serde_json::from_str(&raw).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                // Replace existing or append
+                if let Some(existing) = pairs.iter_mut().find(|(a, _)| a == alias) {
+                    existing.1 = canonical.to_string();
+                } else {
+                    pairs.push((alias.to_string(), canonical.to_string()));
+                }
+                let json = serde_json::to_string_pretty(&pairs)?;
+                std::fs::write(&path, json)?;
+                return Ok(serde_json::json!({
+                    "status": "ok",
+                    "alias": alias,
+                    "canonical": canonical,
+                }));
+            }
+            if let Some(alias) = remove {
+                let vault_dir = context.vault_dir();
+                let path = vault_dir.join(".vaultpilot").join("aliases.json");
+                let mut pairs: Vec<(String, String)> = if path.exists() {
+                    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+                    serde_json::from_str(&raw).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let before = pairs.len();
+                pairs.retain(|(a, _)| a != alias);
+                if pairs.len() == before {
+                    return Ok(serde_json::json!({
+                        "status": "not_found",
+                        "alias": alias,
+                    }));
+                }
+                let json = serde_json::to_string_pretty(&pairs)?;
+                std::fs::write(&path, json)?;
+                return Ok(serde_json::json!({
+                    "status": "ok",
+                    "alias": alias,
+                    "removed": true,
+                }));
+            }
+            // No --set or --remove → show current
+            let vault_dir = context.vault_dir();
+            let path = vault_dir.join(".vaultpilot").join("aliases.json");
+            let aliases: serde_json::Value = if path.exists() {
+                let raw = std::fs::read_to_string(&path).unwrap_or_default();
+                serde_json::from_str(&raw).unwrap_or(serde_json::json!([]))
+            } else {
+                serde_json::json!([])
+            };
+            Ok(serde_json::json!({
+                "aliases": aliases,
+                "hint": "Use --set alias=canonical to add, --remove alias to delete",
+            }))
         }
     }
 }

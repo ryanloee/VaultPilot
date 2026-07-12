@@ -309,6 +309,106 @@ pub fn is_encrypted(value: &str) -> bool {
     value.starts_with(ENCRYPTED_PREFIX)
 }
 
+// ── User-passphrase vault encryption (issue #1887) ────────────────────────
+//
+// The machine-bound [`encrypt_secret`] above binds the key to a specific host,
+// which is ideal for API keys but useless for *portable* vault content: a user
+// who moves their vault to another machine (or restores a backup) can no longer
+// decrypt it.  Issue #1887 (Vault content end-to-end encryption) requires the
+// key to be derived from a **user master passphrase** instead, so the encrypted
+// bytes are self-contained and travel with the vault.
+//
+// Scheme: `ENC:v2:<base64(salt[16] || nonce[12] || ciphertext)>`
+//   - salt is random per payload, so two encryptions of the same plaintext
+//     with the same passphrase produce different ciphertexts (prevents
+//     replay / equality inference across notes).
+//   - key = PBKDF2-HMAC-SHA256(passphrase, salt, PBKDF2_ITERATIONS)
+//   - payload is AES-256-GCM sealed under that key with a random 12-byte nonce.
+
+/// Prefix that identifies a vault payload encrypted with a user passphrase
+/// by this module (distinct from the machine-bound [`ENCRYPTED_PREFIX`]).
+pub const PASSPHRASE_PREFIX: &str = "ENC:v2:";
+
+/// Salt length (bytes) for passphrase-derived vault encryption.
+const VAULT_SALT_LEN: usize = 16;
+
+/// Encrypt `plaintext` under a user-supplied `passphrase`.
+///
+/// The result is fully self-describing (carries its own random salt + nonce)
+/// and decodable on any host given the correct passphrase, which is the
+/// foundation for issue #1887's portable vault-level encryption.
+pub fn encrypt_with_passphrase(plaintext: &str, passphrase: &str) -> Result<String> {
+    // Use a v4 UUID (16 random bytes) as the per-payload salt.  `uuid` with
+    // the `v4` feature is already a workspace dependency, so no new crate is
+    // needed; this keeps the salt generation aligned with the existing
+    // randomness source used elsewhere in the crate.
+    let salt = *uuid::Uuid::new_v4().as_bytes();
+
+    let key = pbkdf2_hmac_sha256(passphrase.as_bytes(), &salt, PBKDF2_ITERATIONS);
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| anyhow!("failed to create AES-256-GCM cipher: {e}"))?;
+
+    let nonce = Nonce::generate();
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext.as_bytes())
+        .map_err(|e| anyhow!("AES-GCM vault encryption failed: {e}"))?;
+
+    let mut payload = Vec::with_capacity(VAULT_SALT_LEN + 12 + ciphertext.len());
+    payload.extend_from_slice(&salt);
+    payload.extend_from_slice(&nonce[..]);
+    payload.extend_from_slice(&ciphertext);
+
+    Ok(format!("{}{}", PASSPHRASE_PREFIX, B64.encode(payload)))
+}
+
+/// Decrypt a value produced by [`encrypt_with_passphrase`] using `passphrase`.
+///
+/// Returns `Err` if the value is not passphrase-encrypted or if the passphrase
+/// is wrong (AES-GCM authentication fails).  The latter is indistinguishable
+/// from corruption, which is the desired property for vault encryption.
+pub fn decrypt_with_passphrase(value: &str, passphrase: &str) -> Result<String> {
+    if !value.starts_with(PASSPHRASE_PREFIX) {
+        return Err(anyhow!(
+            "value is not passphrase-encrypted (missing '{}' prefix)",
+            PASSPHRASE_PREFIX
+        ));
+    }
+
+    let b64_part = &value[PASSPHRASE_PREFIX.len()..];
+    let decoded = B64
+        .decode(b64_part)
+        .map_err(|e| anyhow!("ENC:v2: value is not valid base64: {e}"))?;
+
+    if decoded.len() < VAULT_SALT_LEN + 12 {
+        return Err(anyhow!(
+            "ENC:v2: payload too short ({} bytes, need >= {})",
+            decoded.len(),
+            VAULT_SALT_LEN + 12
+        ));
+    }
+
+    let (salt, rest) = decoded.split_at(VAULT_SALT_LEN);
+    let (nonce_bytes, ciphertext) = rest.split_at(12);
+
+    let key = pbkdf2_hmac_sha256(passphrase.as_bytes(), salt, PBKDF2_ITERATIONS);
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| anyhow!("failed to create AES-256-GCM cipher: {e}"))?;
+    let nonce = Nonce::try_from(nonce_bytes).map_err(|e| anyhow!("invalid nonce: {e}"))?;
+
+    let plaintext = cipher.decrypt(&nonce, ciphertext).map_err(|_| {
+        anyhow!("vault decryption failed — wrong passphrase or corrupted ciphertext")
+    })?;
+
+    String::from_utf8(plaintext)
+        .map_err(|e| anyhow!("decrypted vault content is not valid UTF-8: {e}"))
+}
+
+/// Returns `true` if `value` is encrypted with a user passphrase
+/// (vs. the machine-bound [`is_encrypted`] form).
+pub fn is_passphrase_encrypted(value: &str) -> bool {
+    value.starts_with(PASSPHRASE_PREFIX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

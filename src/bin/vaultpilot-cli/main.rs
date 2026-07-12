@@ -195,6 +195,25 @@ enum Commands {
         summary: Option<String>,
     },
 
+    /// Open or create today's daily note (#1843)
+    ///
+    /// Creates a daily note at daily-notes/YYYY-MM-DD.md with a structured
+    /// template if it doesn't already exist. Prints the note path and status.
+    ///
+    /// Examples:
+    ///   vp daily                                    — create default daily note
+    ///   vp daily --template minimal                 — minimal template
+    ///   vp daily --dry-run                          — just show the path
+    Daily {
+        /// Template style: default, minimal, or research
+        #[arg(long, default_value = "default")]
+        template: String,
+
+        /// Only print the file path, don't create or modify
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Manage the vault (export, backup)
     Vault {
         #[command(subcommand)]
@@ -1294,6 +1313,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::McpHttp { .. } => Ok(serde_json::json!({
             "message": "The MCP HTTP server is started by running `vaultpilot-cli mcp-http` directly."
         })),
+        Commands::Daily { template, dry_run } => {
+            tokio::task::block_in_place(|| handle_daily(context, template, *dry_run))
+        }
         Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
         Commands::Daily {
             template,
@@ -1545,6 +1567,73 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_flashcard(context, action))
         }
     }
+}
+
+/// Create or open today's daily note (#1843)
+fn handle_daily(context: &StorageContext, template: &str, dry_run: bool) -> Result<Value> {
+    let vault_dir = context.vault_dir().to_path_buf();
+    let today = Utc::now();
+    let date_str = today.format("%Y-%m-%d").to_string();
+    let weekday = today.format("%A").to_string();
+
+    let daily_dir = vault_dir.join("daily-notes");
+    let note_path = daily_dir.join(format!("{}.md", date_str));
+
+    if dry_run {
+        return Ok(serde_json::json!({
+            "path": note_path.to_string_lossy(),
+            "date": date_str,
+            "exists": note_path.exists(),
+            "dry_run": true,
+        }));
+    }
+
+    let created = if !note_path.exists() {
+        std::fs::create_dir_all(&daily_dir)?;
+        let body = match template {
+            "minimal" => format!("# {date_str} ({weekday})\n"),
+            "research" => format!(
+                "{date_str} ({weekday}) — Research Log
+
+## Question
+
+## Findings
+
+## Sources
+
+## Next Steps
+"
+            ),
+            _ => format!(
+                "# Daily Notes - {date_str} ({weekday})
+
+## Goals
+
+-
+
+## Notes
+
+
+## Tasks
+
+- [ ]
+
+## Reflections
+"
+            ),
+        };
+        std::fs::write(&note_path, body)?;
+        true
+    } else {
+        false
+    };
+
+    Ok(serde_json::json!({
+        "path": note_path.to_string_lossy(),
+        "date": date_str,
+        "weekday": weekday,
+        "created": created,
+    }))
 }
 
 async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<Value> {

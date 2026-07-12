@@ -21,6 +21,7 @@ use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, compute_and_update_next_run,
     create_collection_with_context, create_project_with_context, create_subscription_with_context,
     delete_collection_with_context, delete_note_with_context, delete_project_with_context,
+    add_note_to_project_with_context, remove_note_from_project_with_context,
     delete_subscription_with_context, export_all_notes_with_context,
     export_note_markdown_with_context, find_related_notes_with_context,
     get_collections_for_note_with_context, get_project_with_context, get_subscription_with_context,
@@ -468,6 +469,22 @@ enum Commands {
         /// Maximum notes to include (default: 10)
         #[arg(long, default_value_t = 10)]
         limit: usize,
+    },
+
+    /// Run built-in knowledge-work skills (#1830)
+    ///
+    /// Skills are pre-configured task templates (summarize, weekly-review,
+    /// outline, concept-map, etc.) that produce structured prompts fed into
+    /// the AI pipeline with vault context.
+    ///
+    /// Examples:
+    ///   vp skill list                              — list all skills
+    ///   vp skill show summarize                    — show skill details
+    ///   vp skill run summarize "Rust async"        — run a skill with input
+    ///   vp skill run weekly-review                 — run a skill without input
+    Skill {
+        #[command(subcommand)]
+        action: SkillActions,
     },
 
     /// Generate a knowledge graph from vault wikilinks (#1913)
@@ -963,6 +980,22 @@ enum ProjectActions {
         /// Optional description
         #[arg(long)]
         description: Option<String>,
+    },
+
+    /// Add a note to a project's scope (#1570)
+    AddNote {
+        /// Project ID
+        id: String,
+        /// Note path or ID to add
+        note: String,
+    },
+
+    /// Remove a note from a project's scope (#1570)
+    RemoveNote {
+        /// Project ID
+        id: String,
+        /// Note path or ID to remove
+        note: String,
     },
 
     /// Delete a project (does NOT delete its notes)
@@ -1721,6 +1754,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
+        Commands::Skill { action } => handle_skill(context, action).await,
         Commands::Graph { dot, json, summary } => handle_graph(context, *dot, *json, *summary),
         Commands::Flashcard { action } => {
             tokio::task::block_in_place(|| handle_flashcard(context, action))
@@ -2725,6 +2759,20 @@ fn handle_projects(context: &StorageContext, action: &ProjectActions) -> Result<
             Ok(serde_json::json!({
                 "project": project
             }))
+        }
+        ProjectActions::AddNote { id, note } => {
+            let updated = add_note_to_project_with_context(context, id, note)?;
+            match updated {
+                Some(p) => Ok(serde_json::json!({ "project": p })),
+                None => Ok(serde_json::json!({ "error": "Project not found", "id": id })),
+            }
+        }
+        ProjectActions::RemoveNote { id, note } => {
+            let updated = remove_note_from_project_with_context(context, id, note)?;
+            match updated {
+                Some(p) => Ok(serde_json::json!({ "project": p })),
+                None => Ok(serde_json::json!({ "error": "Project not found", "id": id })),
+            }
         }
         ProjectActions::Delete { id } => {
             let deleted = delete_project_with_context(context, id)?;
@@ -5070,5 +5118,120 @@ mod tests {
         let block_start = updated_body.find(":::ai-summarize").unwrap();
         let block_end = updated_body.rfind(":::").unwrap();
         assert!(block_start < block_end, "block delimiters must be ordered");
+    }
+}
+
+#[derive(Subcommand)]
+enum SkillActions {
+    /// List all available built-in skills
+    List,
+
+    /// Show details of a specific skill
+    Show {
+        /// Skill id (e.g. "summarize", "weekly-review")
+        id: String,
+    },
+
+    /// Execute a skill — runs the AI pipeline with vault context
+    Run {
+        /// Skill id to execute
+        id: String,
+
+        /// Input for the skill (topic, note path, etc.). Omit for skills
+        /// that don't require input (e.g. weekly-review).
+        input: Option<String>,
+
+        /// Response style: brief, standard, or detailed
+        #[arg(long, default_value = "standard")]
+        style: String,
+    },
+}
+
+// ─── Knowledge Skills (#1830) ──────────────────────────────────────
+
+/// Handle built-in knowledge-work skill commands.
+async fn handle_skill(context: &StorageContext, action: &SkillActions) -> Result<Value> {
+    match action {
+        SkillActions::List => {
+            let skills = vaultpilot_lib::skills::builtin_skills();
+            let mut rows: Vec<Value> = Vec::new();
+            for skill in skills {
+                rows.push(serde_json::json!({
+                    "id": skill.id,
+                    "title": skill.title,
+                    "description": skill.description,
+                    "category": skill.category.label(),
+                    "requires_input": skill.requires_input,
+                }));
+            }
+            Ok(serde_json::json!({
+                "status": "ok",
+                "count": rows.len(),
+                "skills": rows,
+            }))
+        }
+        SkillActions::Show { id } => {
+            let skill = vaultpilot_lib::skills::find_skill(id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "skill '{}' not found. Run 'vp skill list' to see available skills.",
+                    id
+                )
+            })?;
+            Ok(serde_json::json!({
+                "status": "ok",
+                "skill": {
+                    "id": skill.id,
+                    "title": skill.title,
+                    "description": skill.description,
+                    "category": skill.category.label(),
+                    "requires_input": skill.requires_input,
+                    "prompt_template": skill.prompt_template,
+                }
+            }))
+        }
+        SkillActions::Run { id, input, style } => {
+            let skill = vaultpilot_lib::skills::find_skill(id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "skill '{}' not found. Run 'vp skill list' to see available skills.",
+                    id
+                )
+            })?;
+
+            // Validate input requirement
+            if skill.requires_input {
+                let provided = input.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
+                if provided.is_none() {
+                    return Err(anyhow::anyhow!(
+                        "skill '{}' requires input. Provide a topic or note path.\nExample: vp skill run {} \"your topic\"",
+                        skill.id,
+                        skill.id
+                    ));
+                }
+            }
+
+            // Build the final prompt
+            let prompt = skill.build_prompt(input.as_deref());
+
+            // Apply response style
+            let rs = style
+                .parse::<ResponseStyle>()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = rs;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+
+            // Run through the ask pipeline (vault-grounded AI)
+            let result = ask_with_ai_with_context(
+                context,
+                prompt,
+                None, // no history
+                None, // no images
+                None, // no model override
+                |_, _| (),
+            )
+            .await?;
+
+            to_json(&strip_cli_markdown_from_grounded_answer(result))
+        }
     }
 }

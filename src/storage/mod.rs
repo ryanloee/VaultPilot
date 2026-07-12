@@ -84,8 +84,9 @@ pub use subscriptions::{
 
 // Re-export projects public API (#1927).
 pub use projects::{
-    create_project_with_context, delete_project_with_context, get_project_with_context,
-    list_projects_with_context, update_project_with_context,
+    add_note_to_project_with_context, create_project_with_context, delete_project_with_context,
+    get_project_with_context, list_projects_with_context, remove_note_from_project_with_context,
+    update_project_with_context,
 };
 
 // Internal imports from search module (used by remaining functions in this file)

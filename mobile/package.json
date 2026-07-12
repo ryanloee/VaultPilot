@@ -19,7 +19,7 @@
     "expo-sqlite": "^56.0.5",
     "expo-status-bar": "~57.0.0",
     "react": "19.2.7",
-    "react-native": "0.85.3",
+    "react-native": "0.86.0",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "^4.25.2",
     "zustand": "^5.0.14"

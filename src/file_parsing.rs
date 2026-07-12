@@ -109,9 +109,9 @@ fn mime_hint_for(ext: &str) -> String {
 }
 
 /// Formats whose contents we cannot decode in pure Rust and therefore defer to
-/// a native backend.
+/// a native backend.  PDF is now handled by `pdf-extract` — removed from this list.
 fn is_native_format(ext: &str) -> bool {
-    matches!(ext, "pdf" | "docx" | "xlsx" | "pptx" | "epub")
+    matches!(ext, "docx" | "xlsx" | "pptx" | "epub")
 }
 
 /// SHA-256 hex digest of `bytes` (content-addressing for the parse cache).
@@ -335,25 +335,77 @@ impl FileParser for CsvParser {
     }
 }
 
-/// Honest stub for PDF.  Detects the format, reports its size, but does not
-/// extract text — that requires a native backend (pdfium/poppler).
+/// PDF parser backed by `pdf-extract` (#1571 Phase 1).
+///
+/// Reads the file bytes and extracts plain text via `pdf_extract::extract_text_from_mem`.
+/// Falls back to the honest stub on extraction failure (malformed/corrupt PDFs).
 pub struct PdfParser;
 
 impl FileParser for PdfParser {
     fn parse(&self, path: &Path) -> Result<ParsedFile> {
         let ext = extension_of(path);
-        let byte_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let bytes =
+            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+        let byte_size = bytes.len() as u64;
+
+        let (text, metadata) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pdf_extract::extract_text_from_mem(&bytes)
+        })) {
+            Ok(Ok(extracted)) => {
+                let line_count = extracted.lines().count();
+                (
+                    extracted,
+                    serde_json::json!({
+                        "line_count": line_count,
+                        "parser_backend": "pdf-extract",
+                    }),
+                )
+            }
+            Ok(Err(output_err)) => {
+                let msg = format!("pdf-extract error: {output_err}");
+                tracing::warn!(
+                    "pdf-extract failed for {}: {msg}; returning empty stub",
+                    path.display()
+                );
+                (
+                    String::new(),
+                    serde_json::json!({
+                        "note": format!("PDF text extraction failed: {msg}"),
+                        "parser_backend": "pdf-extract(stub-fallback)",
+                    }),
+                )
+            }
+            Err(panic_payload) => {
+                let msg = if let Some(s) = panic_payload.downcast_ref::<String>() {
+                    format!("pdf-extract panic: {s}")
+                } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                    format!("pdf-extract panic: {s}")
+                } else {
+                    "pdf-extract panic (unknown)".to_string()
+                };
+                tracing::warn!(
+                    "pdf-extract panicked for {}: {msg}; returning empty stub",
+                    path.display()
+                );
+                (
+                    String::new(),
+                    serde_json::json!({
+                        "note": format!("PDF text extraction failed: {msg}"),
+                        "parser_backend": "pdf-extract(stub-fallback)",
+                    }),
+                )
+            }
+        };
+
         Ok(ParsedFile {
             path: path_string(path),
             extension: ext.clone(),
             mime_hint: mime_hint_for(&ext),
-            text: String::new(),
+            text,
             byte_size,
-            metadata: serde_json::json!({
-                "note": "PDF text extraction requires a native backend (pdfium/poppler); not available in this build.",
-            }),
+            metadata,
             parser_used: "pdf".to_string(),
-            needs_native_parser: true,
+            needs_native_parser: false,
         })
     }
 

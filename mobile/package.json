@@ -15,7 +15,7 @@
     "expo-intent-launcher": "~56.0.4",
     "expo-secure-store": "~57.0.0",
     "expo-speech-recognition": "^56.0.1",
-    "expo-splash-screen": "~56.0.10",
+    "expo-splash-screen": "~57.0.2",
     "expo-sqlite": "^56.0.5",
     "expo-status-bar": "~56.0.4",
     "react": "19.2.7",

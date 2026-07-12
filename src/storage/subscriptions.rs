@@ -209,7 +209,7 @@ pub fn update_subscription_with_context(
     target_collection: &str,
 ) -> Result<bool> {
     let (connection, _) = open_connection(context)?;
-    let rows = connection.execute(
+    let _rows = connection.execute(
         r#"
         UPDATE subscriptions
         SET name = ?1, schedule = ?2, prompt = ?3,

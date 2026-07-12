@@ -178,14 +178,50 @@ describe('setApiSettings', () => {
     expect(useAppStore.getState().apiBase).toBe('https://opencode.ai/zen/v1'); // unchanged
   });
 
-  it('does NOT back-write to active provider (one-directional sync, #2551)', () => {
+  it('syncs apiKey to active provider when explicitly set (#2736)', () => {
+    const p = { name: 'A', apiBase: 'https://a.com', apiKey: 'old-key', model: 'm', apiFormat: 'openai' as const };
+    useAppStore.getState().addProvider(p);
+    useAppStore.getState().setApiSettings({ apiKey: 'new-key' });
+    // Flat field is updated
+    expect(useAppStore.getState().apiKey).toBe('new-key');
+    // Active provider is also updated -> no data loss on provider switch (#2736)
+    expect(useAppStore.getState().providers[0].apiKey).toBe('new-key');
+  });
+
+  it('syncs model to active provider when explicitly set (#2736)', () => {
     const p = { name: 'A', apiBase: 'https://a.com', apiKey: 'k', model: 'm', apiFormat: 'openai' as const };
     useAppStore.getState().addProvider(p);
-    useAppStore.getState().setApiSettings({ model: 'new-model' });
-    // Flat field is updated (legacy compat)
-    expect(useAppStore.getState().model).toBe('new-model');
-    // Provider is NOT mutated — one-directional contract (provider → flat, not flat → provider)
+    useAppStore.getState().setApiSettings({ model: 'gpt-4' });
+    expect(useAppStore.getState().model).toBe('gpt-4');
+    expect(useAppStore.getState().providers[0].model).toBe('gpt-4');
+  });
+
+  it('does NOT overwrite provider when no fields are passed (empty patch)', () => {
+    const p = { name: 'A', apiBase: 'https://a.com', apiKey: 'k', model: 'm', apiFormat: 'openai' as const };
+    useAppStore.getState().addProvider(p);
+    useAppStore.getState().setApiSettings({});
+    // Provider should remain untouched — no stale flat-field overwrite (#2551)
     expect(useAppStore.getState().providers[0].model).toBe('m');
+    expect(useAppStore.getState().providers[0].apiKey).toBe('k');
+  });
+
+  it('apiKey survives provider switch (#2736 — full scenario)', () => {
+    // Two providers
+    const pA = { name: 'A', apiBase: 'https://a.com', apiKey: 'key-a', model: 'm-a', apiFormat: 'openai' as const };
+    const pB = { name: 'B', apiBase: 'https://b.com', apiKey: 'key-b', model: 'm-b', apiFormat: 'openai' as const };
+    useAppStore.getState().addProvider(pA);
+    useAppStore.getState().addProvider(pB);
+    // Switch to provider B, then back to A
+    useAppStore.getState().setActiveProvider(1);
+    expect(useAppStore.getState().apiKey).toBe('key-b');
+    // Change key via setApiSettings
+    useAppStore.getState().setApiSettings({ apiKey: 'new-key-b' });
+    expect(useAppStore.getState().apiKey).toBe('new-key-b');
+    // Switch to A, then back to B — key should survive
+    useAppStore.getState().setActiveProvider(0);
+    expect(useAppStore.getState().apiKey).toBe('key-a');
+    useAppStore.getState().setActiveProvider(1);
+    expect(useAppStore.getState().apiKey).toBe('new-key-b');
   });
 
   it('removeProvider with out-of-bounds index is a safe no-op (#2549)', () => {

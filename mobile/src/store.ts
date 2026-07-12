@@ -266,11 +266,32 @@ export const useAppStore = create<AppState>()(
       model: 'deepseek-v4-flash-free',
       apiFormat: 'openai' as ApiFormat,
       setApiSettings: async (s) => {
-        // Legacy compatibility shim: only update flat fields, do NOT back-write
-        // into the active provider. The documented contract is one-directional
-        // (provider → legacy fields via syncLegacyFields), not bidirectional.
-        // Back-writing overwrote provider config with stale flat-field values (#2551).
-        set((state) => mergeApiSettings(state, s));
+        let updatedProviders: ProviderConfig[] | undefined;
+        set((state) => {
+          const merged = mergeApiSettings(state, s);
+          const result: Partial<AppState> = { ...merged };
+          // Sync explicitly-provided fields to active provider to prevent
+          // data loss on provider switch (#2736). Only fields explicitly
+          // passed in `s` are synced, avoiding stale flat-field overwrite (#2551).
+          if (state.providers.length > 0) {
+            const idx = clampProviderIndex(state.activeProviderIndex, state.providers.length);
+            if (idx >= 0) {
+              const providerPatch: Partial<ProviderConfig> = {};
+              if (s.apiKey !== undefined) providerPatch.apiKey = s.apiKey;
+              if (s.apiBase !== undefined) providerPatch.apiBase = s.apiBase;
+              if (s.model !== undefined) providerPatch.model = s.model;
+              if (s.apiFormat !== undefined) providerPatch.apiFormat = s.apiFormat;
+              if (Object.keys(providerPatch).length > 0) {
+                const providers = [...state.providers];
+                providers[idx] = { ...providers[idx], ...providerPatch };
+                result.providers = providers;
+                updatedProviders = providers;
+              }
+            }
+          }
+          return result;
+        });
+        if (updatedProviders) await saveProviderKeysSecure(updatedProviders);
       },
 
       providers: [],

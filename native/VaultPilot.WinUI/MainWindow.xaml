@@ -15,7 +15,6 @@
             <KeyboardAccelerator Key="P" Modifiers="Control,Shift" Invoked="OnAiCommandPaletteAccelerator" />
             <KeyboardAccelerator Key="Q" Modifiers="Control,Shift" Invoked="OnQuickAskAccelerator" />
             <KeyboardAccelerator Key="Escape" Invoked="OnEscapeAccelerator" />
-            <KeyboardAccelerator Key="P" Modifiers="Control,Shift" Invoked="OnCommandPaletteAccelerator" />
         </Grid.KeyboardAccelerators>
 
         <Grid.RowDefinitions>

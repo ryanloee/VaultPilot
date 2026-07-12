@@ -707,7 +707,7 @@ public sealed class BackendClient : IAsyncDisposable
     // ─── AI Action methods (#2188) ──────────────────────────────────
 
     /// <summary>
-    /// Execute an AI quick action (summarize, translate, explain, etc.) via the backend.
+    /// Execute an AI quick action (summarize, translate, explain, edit, etc.) via the backend.
     /// </summary>
     public async Task<AiActionResult> ExecuteAiActionAsync(
         AiActionType action,
@@ -717,6 +717,7 @@ public sealed class BackendClient : IAsyncDisposable
         string? noteId = null,
         string? instruction = null,
         string? model = null,
+        string? instruction = null,
         CancellationToken token = default)
     {
         var parameters = new

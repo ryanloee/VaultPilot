@@ -440,20 +440,29 @@ impl SubprocessEngine {
                     let mut tmp = [0u8; 4096];
                     loop {
                         if done.load(Ordering::Acquire) {
-                            // One last non-blocking read so data sitting in the
-                            // pipe buffer is captured even when grandchildren
-                            // hold the write end open (#2440).
-                            match s.read(&mut tmp) {
-                                Ok(0) => {}
-                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                                Err(ref e)
-                                    if e.kind() == std::io::ErrorKind::WouldBlock
-                                        || e.kind() == std::io::ErrorKind::Interrupted => {}
-                                Err(ref e) => {
-                                    tracing::warn!(
-                                        "[agent_engine] stdout final drain \
-                                         read failed: {e}"
-                                    );
+                            // #2746 — drain ALL residual data in the pipe
+                            // buffer. A single 4 KB read cannot capture bursts
+                            // larger than 4 KB (e.g. normal-exit burst or
+                            // grandchild residual #2440). Loop until WouldBlock
+                            // or EOF — safe because the FD is non-blocking
+                            // (#2541) so this never hangs.
+                            loop {
+                                match s.read(&mut tmp) {
+                                    Ok(0) => break,
+                                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                    Err(ref e)
+                                        if e.kind() == std::io::ErrorKind::WouldBlock
+                                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                                    {
+                                        break;
+                                    }
+                                    Err(ref e) => {
+                                        tracing::warn!(
+                                            "[agent_engine] stdout final drain \
+                                             read failed: {e}"
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                             break;
@@ -503,20 +512,29 @@ impl SubprocessEngine {
                     let mut tmp = [0u8; 4096];
                     loop {
                         if done.load(Ordering::Acquire) {
-                            // One last non-blocking read so data sitting in the
-                            // pipe buffer is captured even when grandchildren
-                            // hold the write end open (#2440).
-                            match s.read(&mut tmp) {
-                                Ok(0) => {}
-                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                                Err(ref e)
-                                    if e.kind() == std::io::ErrorKind::WouldBlock
-                                        || e.kind() == std::io::ErrorKind::Interrupted => {}
-                                Err(ref e) => {
-                                    tracing::warn!(
-                                        "[agent_engine] stderr final drain \
-                                         read failed: {e}"
-                                    );
+                            // #2746 — drain ALL residual data in the pipe
+                            // buffer. A single 4 KB read cannot capture bursts
+                            // larger than 4 KB (e.g. normal-exit burst or
+                            // grandchild residual #2440). Loop until WouldBlock
+                            // or EOF — safe because the FD is non-blocking
+                            // (#2541) so this never hangs.
+                            loop {
+                                match s.read(&mut tmp) {
+                                    Ok(0) => break,
+                                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                    Err(ref e)
+                                        if e.kind() == std::io::ErrorKind::WouldBlock
+                                            || e.kind() == std::io::ErrorKind::Interrupted =>
+                                    {
+                                        break;
+                                    }
+                                    Err(ref e) => {
+                                        tracing::warn!(
+                                            "[agent_engine] stderr final drain \
+                                             read failed: {e}"
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                             break;

@@ -25,6 +25,7 @@ mod issue_1342_agent_loop;
 mod issue_1354_agent_expect;
 mod issue_1358_write_approval;
 mod issue_1359_agent_integration;
+mod issue_1887_vault_encryption;
 mod issue_1987_file_parsing;
 mod issue_1994_calendar;
 mod issue_1995_context_surface;

@@ -13,7 +13,7 @@
     "expo-file-system": "~56.0.8",
     "expo-haptics": "~56.0.3",
     "expo-intent-launcher": "~56.0.4",
-    "expo-secure-store": "~56.0.4",
+    "expo-secure-store": "~57.0.0",
     "expo-speech-recognition": "^56.0.1",
     "expo-splash-screen": "~56.0.10",
     "expo-sqlite": "^56.0.5",

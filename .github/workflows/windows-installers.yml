@@ -189,14 +189,6 @@ jobs:
             -GitHubToken "$env:GITHUB_TOKEN" `
             -FetchReleaseHistory:$fetchReleaseHistory
 
-      - name: Set publish directory
-        shell: powershell
-        run: |
-          $arch = "${{ matrix.platform }}"
-          $dir = if ($arch -eq "x64") { "win-x64" } else { "win-x86" }
-          "publishDir=artifacts/velopack/publish/$dir" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
-        id: publish-dir
-
       # Smoke test skipped — the CI runner (windows-2022) has WinAppSDK
       # pre-installed which conflicts with the self-contained bundle,
       # causing a false-positive 0xC000027B crash on startup.

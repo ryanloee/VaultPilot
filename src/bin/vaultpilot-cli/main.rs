@@ -695,7 +695,11 @@ enum NotesActions {
     },
 
     /// Create or update a note (JSON on stdin)
-    Create,
+    Create {
+        /// Auto-detect current meeting from calendar and attach source card
+        #[arg(long)]
+        meeting: bool,
+    },
 
     /// Delete a note by ID
     Delete {
@@ -2104,9 +2108,38 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             let note = load_note_with_context(context, id)?;
             to_json(&note)
         }
-        NotesActions::Create => {
+        NotesActions::Create { meeting } => {
             let input = read_stdin_json()?;
-            let note: NoteDocument = serde_json::from_value(input)?;
+            let mut note: NoteDocument = serde_json::from_value(input)?;
+
+            // Auto-detect current meeting from calendar and attach source card
+            if *meeting {
+                let now = chrono::Utc::now();
+                let meetings =
+                    vaultpilot_lib::calendar::detect_current_meetings(context, now);
+                if let Some(event) = meetings.first() {
+                    let card: vaultpilot_lib::calendar::MeetingSourceCard =
+                        event.to_source_card();
+                    let yaml_lines =
+                        vaultpilot_lib::calendar::build_source_card_yaml(&card);
+                    let mut meeting_yaml = String::from("---\n");
+                    for line in &yaml_lines {
+                        meeting_yaml.push_str(line);
+                        meeting_yaml.push('\n');
+                    }
+                    meeting_yaml.push_str("---\n\n");
+                    note.body = meeting_yaml + &note.body;
+                    // Log which meeting was attached
+                    eprintln!(
+                        "[meeting] attached source card for '{}' ({} attendee(s))",
+                        card.title,
+                        card.attendees.len()
+                    );
+                } else {
+                    eprintln!("[meeting] no current meeting found — skipping source card");
+                }
+            }
+
             let saved = save_note_with_context(context, note)?;
             to_json(&saved)
         }

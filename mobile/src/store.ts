@@ -77,6 +77,10 @@ async function saveProviderKeysSecure(providers: ProviderConfig[]): Promise<void
     }
   });
   // Don't swallow errors — let them propagate to callers (#2712)
+  // #2771: keySavePromise resolves on error by design — the queue is for
+  // serialization, not failure propagation. The error propagates to the
+  // direct caller via await savePromise below. Future saves chain onto a
+  // resolved keySavePromise and proceed independently (correct behavior).
   keySavePromise = savePromise.then(
     () => {},
     (err) => { console.error('[VaultPilot] Provider key save failed:', err); }

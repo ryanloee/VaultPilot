@@ -20,7 +20,7 @@ export type AiActionId =
   | 'findRelatedNotes'
   | 'cleanUp'
   | 'generateOutline'
-  | 'editNote';
+  | 'editNote'
   | 'brainstorm';
 
 export interface AiActionInfo {
@@ -117,6 +117,8 @@ const AI_ACTIONS: AiActionInfo[] = [
     label: '编辑笔记',
     icon: 'color-wand-outline',
     description: '通过自然语言指令编辑现有笔记内容（#1569）',
+  },
+  {
     id: 'brainstorm',
     label: '头脑风暴',
     icon: 'bulb-outline',

@@ -139,6 +139,12 @@ pub struct ToolProxy {
     tool_call_count: AtomicU64,
     session_start: Instant,
     audit_log: Mutex<Vec<AgentAuditEntry>>,
+    /// Optional real-time subscriber for tool-call events. When set, every
+    /// allowed/denied call is forwarded to this sink the moment it is decided
+    /// (in addition to being appended to the post-hoc `audit_log`). This powers
+    /// the live "tool call transparency" panel (#1905) without changing
+    /// existing callers — `None` keeps the prior behavior.
+    event_sink: Option<Arc<dyn Fn(AgentAuditEntry) + Send + Sync>>,
 }
 
 impl ToolProxy {
@@ -149,7 +155,29 @@ impl ToolProxy {
             tool_call_count: AtomicU64::new(0),
             session_start: Instant::now(),
             audit_log: Mutex::new(Vec::new()),
+            event_sink: None,
         }
+    }
+
+    /// Attach a real-time subscriber that receives an [`AgentAuditEntry`] for
+    /// every tool call the moment it is allowed or denied. Intended for UI
+    /// transparency panels (#1905). Safe to call once before any `check_tool_call`.
+    pub fn with_event_sink(mut self, sink: Arc<dyn Fn(AgentAuditEntry) + Send + Sync>) -> Self {
+        self.event_sink = Some(sink);
+        self
+    }
+
+    /// Emit a tool-call event to the attached sink (if any) and record it in
+    /// the audit log. Centralizes entry construction so the live stream and the
+    /// post-hoc log never diverge.
+    fn record(&self, entry: AgentAuditEntry) {
+        if let Some(sink) = &self.event_sink {
+            sink(entry.clone());
+        }
+        self.audit_log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(entry);
     }
 
     /// Validate a tool call before execution. Returns `Ok(ToolProxyResult)`
@@ -441,10 +469,7 @@ impl ToolProxy {
             reason: "ok".into(),
         };
         info!(tool = tool, "agent tool call allowed");
-        self.audit_log
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(entry);
+        self.record(entry);
         ToolProxyResult {
             allowed: true,
             reason: "ok".into(),
@@ -460,10 +485,7 @@ impl ToolProxy {
             reason: reason.to_string(),
         };
         warn!(tool = tool, reason = reason, "agent tool call denied");
-        self.audit_log
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(entry);
+        self.record(entry);
         ToolProxyResult {
             allowed: false,
             reason: reason.to_string(),
@@ -2212,6 +2234,45 @@ mod tests {
         assert_eq!(log.len(), 2);
         assert!(log[0].allowed);
         assert!(!log[1].allowed);
+    }
+
+    #[test]
+    fn event_sink_receives_live_tool_call_events() {
+        // #1905 — the transparency panel needs a real-time stream of tool calls,
+        // not just the post-hoc audit log. Verify `with_event_sink` forwards an
+        // `AgentAuditEntry` the moment each call is allowed/denied.
+        let (tmp, config) = setup();
+        let _guard = TestGuard(tmp.clone());
+
+        let events: Arc<Mutex<Vec<AgentAuditEntry>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let proxy = ToolProxy::new(config.clone(), &tmp).with_event_sink(Arc::new(move |e| {
+            sink.lock().unwrap().push(e);
+        }));
+
+        proxy
+            .check_tool_call("search_notes", r#"{"query":"x"}"#)
+            .unwrap();
+        proxy
+            .check_tool_call("save_note", r#"{"path":"y.md"}"#)
+            .unwrap();
+
+        let captured = events.lock().unwrap();
+        assert_eq!(captured.len(), 2, "sink should receive one event per call");
+        assert!(captured[0].allowed);
+        assert_eq!(captured[0].tool, "search_notes");
+        assert!(!captured[1].allowed);
+        assert_eq!(captured[1].tool, "save_note");
+        // Live stream must mirror the post-hoc audit log.
+        assert_eq!(captured.len(), proxy.audit_log().len());
+        drop(captured);
+
+        // Without a sink, behavior is unchanged (no panic, log still recorded).
+        let proxy2 = ToolProxy::new(config, &tmp);
+        proxy2
+            .check_tool_call("search_notes", r#"{"query":"z"}"#)
+            .unwrap();
+        assert_eq!(proxy2.audit_log().len(), 1);
     }
 
     #[test]

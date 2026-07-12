@@ -31,10 +31,6 @@ use vaultpilot_lib::storage::{
     remove_note_from_collection_with_context, save_chat_state_async, save_note_with_context,
     save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
     update_project_with_context, update_subscription_with_context, vault_export_with_context,
-    save_settings_with_context, search_notes_with_context, vault_export_with_context,
-    create_subscription_with_context, delete_subscription_with_context,
-    get_subscription_with_context, set_subscription_enabled_with_context,
-    update_subscription_with_context,
     StorageContext,
 };
 use vaultpilot_lib::{
@@ -1296,21 +1292,6 @@ enum AiSubcommand {
 
     /// List all available AI quick actions with their IDs and labels
     ListActions,
-        #[arg(long)]
-        name: Option<String>,
-        /// New cron schedule expression (e.g. "0 9 * * 1")
-        #[arg(long)]
-        schedule: Option<String>,
-        /// New AI prompt template
-        #[arg(long)]
-        prompt: Option<String>,
-        /// New comma-separated allowed tools
-        #[arg(long)]
-        tools: Option<String>,
-        /// New target collection name
-        #[arg(long)]
-        target_collection: Option<String>,
-    },
 }
 
 // ─── Main ─────────────────────────────────────────────────────────
@@ -2957,7 +2938,7 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
             tools,
             target_collection,
         } => {
-            // Load existing subscription to merge partial updates
+            // Load existing subscription to fill in unchanged fields
             let existing = get_subscription_with_context(context, id)?
                 .ok_or_else(|| anyhow::anyhow!("subscription not found: {id}"))?;
 
@@ -2968,15 +2949,6 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
             let new_target = target_collection
                 .clone()
                 .unwrap_or(existing.target_collection);
-            // Load existing subscription to fill in unchanged fields
-            let existing = get_subscription_with_context(context, id)?
-                .ok_or_else(|| anyhow::anyhow!("subscription not found: {id}"))?;
-
-            let new_name = name.clone().unwrap_or(existing.name);
-            let new_schedule = schedule.clone().unwrap_or(existing.schedule);
-            let new_prompt = prompt.clone().unwrap_or(existing.prompt);
-            let new_tools = tools.clone().unwrap_or(existing.tools);
-            let new_target = target_collection.clone().unwrap_or(existing.target_collection);
 
             let updated = update_subscription_with_context(
                 context,
@@ -2996,12 +2968,6 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
                 let _ = compute_and_update_next_run(context, id, &new_schedule);
             }
 
-            let sub = get_subscription_with_context(context, id)?
-                .ok_or_else(|| anyhow::anyhow!("subscription not found after update: {id}"))?;
-                anyhow::bail!("failed to update subscription: {id}");
-            }
-
-            // Return the updated subscription
             let sub = get_subscription_with_context(context, id)?.unwrap();
             Ok(serde_json::json!({
                 "updated": true,

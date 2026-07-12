@@ -24,6 +24,8 @@ public enum AiActionType
     FindRelatedNotes,
     [JsonPropertyName("cleanUp")]
     CleanUp,
+    [JsonPropertyName("generateOutline")]
+    GenerateOutline,
     [JsonPropertyName("editNote")]
     EditNote,
 }

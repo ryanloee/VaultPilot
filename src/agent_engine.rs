@@ -284,6 +284,39 @@ pub struct SubprocessEngine {
 ///
 /// Returns an error if `fcntl` fails, so callers can abort the subprocess
 /// upfront rather than risk a permanent thread hang (#2541).
+/// #2746 — Final drain of a non-blocking pipe once the child has exited.
+///
+/// When `drain_done` is set the child (and any grandchildren still holding the
+/// write end, see #2440) may have left more than a single 4 KB buffer worth of
+/// data in the pipe. A single fixed-size read would silently drop the tail. Loop
+/// until EOF or `WouldBlock`/`Interrupted` so the entire residual buffer is
+/// captured. This never hangs because the FD is non-blocking (#2541).
+///
+/// `label` is used only for diagnostics (e.g. "stdout" / "stderr").
+pub(crate) fn drain_nonblocking_remaining<R: std::io::Read>(
+    label: &str,
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+) {
+    let mut tmp = [0u8; 4096];
+    loop {
+        match reader.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                break;
+            }
+            Err(ref e) => {
+                tracing::warn!("[agent_engine] {label} final drain read failed: {e}");
+                break;
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 fn make_nonblocking<T: std::os::unix::io::AsRawFd>(handle: &T) -> Result<()> {
     let fd = handle.as_raw_fd();
@@ -446,25 +479,7 @@ impl SubprocessEngine {
                             // grandchild residual #2440). Loop until WouldBlock
                             // or EOF — safe because the FD is non-blocking
                             // (#2541) so this never hangs.
-                            loop {
-                                match s.read(&mut tmp) {
-                                    Ok(0) => break,
-                                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                                    Err(ref e)
-                                        if e.kind() == std::io::ErrorKind::WouldBlock
-                                            || e.kind() == std::io::ErrorKind::Interrupted =>
-                                    {
-                                        break;
-                                    }
-                                    Err(ref e) => {
-                                        tracing::warn!(
-                                            "[agent_engine] stdout final drain \
-                                             read failed: {e}"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
+                            drain_nonblocking_remaining("stdout", &mut s, &mut buf);
                             break;
                         }
                         match s.read(&mut tmp) {
@@ -518,25 +533,7 @@ impl SubprocessEngine {
                             // grandchild residual #2440). Loop until WouldBlock
                             // or EOF — safe because the FD is non-blocking
                             // (#2541) so this never hangs.
-                            loop {
-                                match s.read(&mut tmp) {
-                                    Ok(0) => break,
-                                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                                    Err(ref e)
-                                        if e.kind() == std::io::ErrorKind::WouldBlock
-                                            || e.kind() == std::io::ErrorKind::Interrupted =>
-                                    {
-                                        break;
-                                    }
-                                    Err(ref e) => {
-                                        tracing::warn!(
-                                            "[agent_engine] stderr final drain \
-                                             read failed: {e}"
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
+                            drain_nonblocking_remaining("stderr", &mut s, &mut buf);
                             break;
                         }
                         match s.read(&mut tmp) {

@@ -2,6 +2,7 @@ pub mod agent;
 pub mod agent_engine;
 pub mod ai;
 pub mod calendar;
+pub mod capability_registry;
 pub mod context_surface;
 pub mod crypto;
 pub mod diff;

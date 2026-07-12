@@ -2968,7 +2968,7 @@ fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) 
                 let _ = compute_and_update_next_run(context, id, &new_schedule);
             }
 
-let sub = get_subscription_with_context(context, id)?
+            let sub = get_subscription_with_context(context, id)?
                 .ok_or_else(|| anyhow::anyhow!("subscription not found after update: {id}"))?;
             Ok(serde_json::json!({
                 "updated": true,

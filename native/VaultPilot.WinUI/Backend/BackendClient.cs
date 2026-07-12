@@ -717,7 +717,6 @@ public sealed class BackendClient : IAsyncDisposable
         string? noteId = null,
         string? instruction = null,
         string? model = null,
-        string? instruction = null,
         CancellationToken token = default)
     {
         var parameters = new

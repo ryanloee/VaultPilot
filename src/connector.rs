@@ -395,6 +395,302 @@ impl Connector for WebhookConnector {
     }
 }
 
+// ── GitHub Connector (Phase 2) ─────────────────────────────────
+//
+// See <https://docs.github.com/en/rest> for the API reference.
+
+/// A connector for GitHub repository operations — issue/PR reading,
+/// notification fetching, and issue search.
+///
+/// Uses a GitHub personal access token (PAT) stored in
+/// `GITHUB_TOKEN` env var or passed via secrets.  Calls the GitHub
+/// REST API through `reqwest`.
+#[derive(Debug, Clone)]
+pub struct GitHubConnector {
+    /// Owner/repo slug (e.g. "ryanloee/VaultPilot").
+    repo: String,
+    /// Default GitHub API base (https://api.github.com).
+    api_base: String,
+    /// Maximum items per page for list/search endpoints.
+    per_page: usize,
+}
+
+impl GitHubConnector {
+    /// Create a new GitHub connector for a repository.
+    pub fn new(repo: impl Into<String>) -> Self {
+        Self {
+            repo: repo.into(),
+            api_base: "https://api.github.com".into(),
+            per_page: 30,
+        }
+    }
+
+    /// Set a custom API base (e.g. for GitHub Enterprise Server).
+    pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
+        self.api_base = base.into();
+        self
+    }
+
+    /// Set the max items per page for list / search endpoints.
+    pub fn with_per_page(mut self, n: usize) -> Self {
+        self.per_page = n;
+        self
+    }
+
+    /// Extract a GitHub token from secrets, falling back to the
+    /// `GITHUB_TOKEN` environment variable.
+    fn get_token(&self, secrets: &HashMap<String, String>) -> Option<String> {
+        secrets
+            .get("GITHUB_TOKEN")
+            .cloned()
+            .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+    }
+
+    /// Make an authenticated GET request to the GitHub REST API.
+    fn gh_get(&self, path: &str, token: &str) -> Result<Value> {
+        let url = format!("{}{}", self.api_base, path);
+        let token = token.to_string();
+        let path = path.to_string();
+
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            anyhow::anyhow!("no tokio runtime — GitHubConnector requires async context")
+        })?;
+
+        handle.block_on(async { gh_get_async(url, token, path).await })
+    }
+
+    /// Fetch issues from the configured repository.
+    fn list_issues(
+        &self,
+        state: &str,
+        labels: Option<&str>,
+        token: &str,
+        page: usize,
+    ) -> Result<Value> {
+        let path = format!(
+            "/repos/{}/issues?state={}&per_page={}&page={}",
+            self.repo, state, self.per_page, page
+        );
+        let final_path = if let Some(labels_str) = labels {
+            format!("{path}&labels={labels_str}")
+        } else {
+            path
+        };
+        self.gh_get(&final_path, token)
+    }
+
+    /// Fetch a single issue (or PR) by number.
+    fn get_issue(&self, number: u64, token: &str) -> Result<Value> {
+        let path = format!("/repos/{}/issues/{number}", self.repo);
+        self.gh_get(&path, token)
+    }
+
+    /// Fetch current user notifications.
+    fn list_notifications(&self, token: &str, page: usize) -> Result<Value> {
+        let path = format!("/notifications?per_page={}&page={}", self.per_page, page);
+        self.gh_get(&path, token)
+    }
+
+    /// Search GitHub issues globally by keywords.
+    fn search_issues(&self, query: &str, token: &str) -> Result<Value> {
+        let encoded = urlencoding_hack(query);
+        let path = format!("/search/issues?q={encoded}&per_page={}", self.per_page);
+        self.gh_get(&path, token)
+    }
+}
+
+impl Connector for GitHubConnector {
+    fn name(&self) -> &str {
+        &self.repo
+    }
+
+    fn auth_flow(&self) -> AuthFlow {
+        AuthFlow::ApiKey {
+            key_name: "GITHUB_TOKEN".into(),
+            source: TokenSource::Env,
+        }
+    }
+
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![
+            Capability {
+                name: "list_issues".into(),
+                description: format!(
+                    "List open/closed issues in repository {} with optional label filter",
+                    self.repo
+                ),
+                access: AccessLevel::Read,
+            },
+            Capability {
+                name: "get_issue".into(),
+                description: format!(
+                    "Fetch a single issue or pull request by number from {}",
+                    self.repo
+                ),
+                access: AccessLevel::Read,
+            },
+            Capability {
+                name: "list_notifications".into(),
+                description: "Read current GitHub notifications for the authenticated user".into(),
+                access: AccessLevel::Read,
+            },
+            Capability {
+                name: "search_issues".into(),
+                description: "Search GitHub issues globally by keywords".into(),
+                access: AccessLevel::Search,
+            },
+        ]
+    }
+
+    fn execute(
+        &self,
+        action: &Action,
+        secrets: &HashMap<String, String>,
+    ) -> Result<ConnectorResponse> {
+        let token = self
+            .get_token(secrets)
+            .ok_or_else(|| anyhow::anyhow!("GITHUB_TOKEN not set"))?;
+
+        match action.name.as_str() {
+            "list_issues" => {
+                let state = action
+                    .payload
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("open");
+                let labels = action.payload.get("labels").and_then(Value::as_str);
+                let page = action
+                    .payload
+                    .get("page")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as usize;
+
+                let data = self.list_issues(state, labels, &token, page)?;
+                let count = data.as_array().map(|a| a.len()).unwrap_or(0);
+                Ok(ConnectorResponse {
+                    success: true,
+                    summary: format!(
+                        "listed {count} {state} issues in {} (page {page})",
+                        self.repo
+                    ),
+                    data: Some(data),
+                })
+            }
+            "get_issue" => {
+                let number = action
+                    .payload
+                    .get("number")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| anyhow::anyhow!("'get_issue' requires 'number' parameter"))?;
+
+                let data = self.get_issue(number, &token)?;
+                let title = data
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("(no title)");
+                let gh_state = data
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+
+                Ok(ConnectorResponse {
+                    success: true,
+                    summary: format!("issue #{number} in {}: {title} [{gh_state}]", self.repo),
+                    data: Some(data),
+                })
+            }
+            "list_notifications" => {
+                let page = action
+                    .payload
+                    .get("page")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as usize;
+
+                let data = self.list_notifications(&token, page)?;
+                let count = data.as_array().map(|a| a.len()).unwrap_or(0);
+                Ok(ConnectorResponse {
+                    success: true,
+                    summary: format!("listed {count} notifications (page {page})"),
+                    data: Some(data),
+                })
+            }
+            "search_issues" => {
+                let query = action
+                    .payload
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("'search_issues' requires 'query' parameter"))?;
+
+                let data = self.search_issues(query, &token)?;
+                let total = data
+                    .get("total_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                Ok(ConnectorResponse {
+                    success: true,
+                    summary: format!("found {total} issues matching \"{query}\""),
+                    data: Some(data),
+                })
+            }
+            other => Err(anyhow::anyhow!(
+                "GitHub connector '{}': unknown action '{}'",
+                self.repo,
+                other
+            )),
+        }
+    }
+}
+
+/// Perform a single GitHub REST API GET call on the tokio runtime.
+async fn gh_get_async(url: String, token: String, path: String) -> Result<Value> {
+    use anyhow::Context;
+
+    let response = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", "VaultPilot-GitHubConnector/1.0")
+        .send()
+        .await
+        .with_context(|| format!("GitHub API request failed: GET {url}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "GitHub API returned {status} for {path}: {body}"
+        ));
+    }
+
+    response
+        .json::<Value>()
+        .await
+        .with_context(|| format!("failed to parse GitHub API response for {path}"))
+}
+
+/// Minimal percent-encoding for GitHub search query parameters.
+fn urlencoding_hack(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b' ' => out.push_str("%20"),
+            b'"' => out.push_str("%22"),
+            b'#' => out.push_str("%23"),
+            b'%' => out.push_str("%25"),
+            b'&' => out.push_str("%26"),
+            _ => {
+                if b.is_ascii_graphic() && *b != b'\\' {
+                    out.push(*b as char);
+                } else {
+                    out.push_str(&format!("%{:02X}", b));
+                }
+            }
+        }
+    }
+    out
+}
+
 // ── Registry integration helpers ───────────────────────────────
 
 /// Register a connector as an MCP server capability in the registry.
@@ -569,5 +865,85 @@ mod tests {
             }
             _ => panic!("expected McpServer capability"),
         }
+    }
+
+    // ── GitHubConnector tests (unit, no network) ──
+
+    #[test]
+    fn github_connector_basics() {
+        let gh = GitHubConnector::new("test-user/test-repo");
+        assert_eq!(gh.name(), "test-user/test-repo");
+        let flow = gh.auth_flow();
+        match flow {
+            AuthFlow::ApiKey {
+                ref key_name,
+                ref source,
+            } => {
+                assert_eq!(key_name, "GITHUB_TOKEN");
+                assert_eq!(*source, TokenSource::Env);
+            }
+            _ => panic!("expected ApiKey, got {flow:?}"),
+        }
+        let caps = gh.capabilities();
+        assert_eq!(caps.len(), 4);
+        assert!(caps.iter().any(|c| c.name == "list_issues"));
+        assert!(caps.iter().any(|c| c.name == "get_issue"));
+        assert!(caps.iter().any(|c| c.name == "list_notifications"));
+        assert!(caps.iter().any(|c| c.name == "search_issues"));
+    }
+
+    #[test]
+    fn github_connector_missing_token() {
+        let gh = GitHubConnector::new("test-user/test-repo");
+        let action = Action {
+            name: "list_issues".into(),
+            payload: serde_json::json!({}),
+        };
+        let secrets = HashMap::new();
+        std::env::remove_var("GITHUB_TOKEN");
+        let err = gh.execute(&action, &secrets).unwrap_err();
+        assert!(err.to_string().contains("GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn github_get_issue_missing_number() {
+        let mut secrets = HashMap::new();
+        secrets.insert("GITHUB_TOKEN".into(), "fake-token".into());
+        let gh = GitHubConnector::new("test-user/test-repo");
+        let action = Action {
+            name: "get_issue".into(),
+            payload: serde_json::json!({}),
+        };
+        let err = gh.execute(&action, &secrets).unwrap_err();
+        assert!(err.to_string().contains("'number'"));
+    }
+
+    #[test]
+    fn github_search_issues_missing_query() {
+        let mut secrets = HashMap::new();
+        secrets.insert("GITHUB_TOKEN".into(), "fake-token".into());
+        let gh = GitHubConnector::new("test-user/test-repo");
+        let action = Action {
+            name: "search_issues".into(),
+            payload: serde_json::json!({}),
+        };
+        let err = gh.execute(&action, &secrets).unwrap_err();
+        assert!(err.to_string().contains("'query'"));
+    }
+
+    // ── urlencoding_hack tests ──
+
+    #[test]
+    fn urlencoding_hack_basic() {
+        assert_eq!(urlencoding_hack("hello world"), "hello%20world");
+        assert_eq!(urlencoding_hack("foo&bar"), "foo%26bar");
+        assert_eq!(urlencoding_hack("is:issue"), "is:issue");
+        assert_eq!(urlencoding_hack(""), "");
+    }
+
+    #[test]
+    fn urlencoding_hack_preserves_ascii() {
+        let input = "abcXYZ123-._~:+/@!$'()*,;=?";
+        assert_eq!(urlencoding_hack(input), input);
     }
 }

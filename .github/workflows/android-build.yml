@@ -144,7 +144,7 @@ jobs:
           print('APK valid: {:.1f}MB, {} entries'.format(size_mb, len(names)))
           "
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vaultpilot-android-${{ github.sha }}
           path: mobile/android/app/build/outputs/apk/release/app-release.apk

@@ -46,6 +46,8 @@ export const TextInput = (props: any) => {
     onChange: props.onChange,
   }, props.children);
 };
+export const useColorScheme = () => 'light';
+export const StatusBar = createComponent('StatusBar');
 export const FlatList = require('react').forwardRef((props: any, ref: any) => {
   const React = require('react');
   return React.createElement('FlatList', { ...props, ref }, props.children);

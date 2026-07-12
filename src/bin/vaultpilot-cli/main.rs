@@ -482,6 +482,19 @@ enum Commands {
         #[command(subcommand)]
         action: FlashcardActions,
     },
+    /// Manage flashcards and run FSRS spaced repetition reviews (#1912)
+    ///
+    /// Examples:
+    ///   vp review add "What is Rust?" --back "A systems language"
+    ///   vp review list
+    ///   vp review due
+    ///   vp review stats
+    ///   vp review answer <id> --rating good
+    ///   vp review delete <id>
+    Review {
+        #[command(subcommand)]
+        action: FlashcardActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -762,6 +775,81 @@ enum NotesActions {
         /// Optional model override
         #[arg(long)]
         model: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum FlashcardActions {
+    // --- FSRS branch variants (#1912) ---
+    /// Create a new flashcard
+    Add {
+        /// The question / front of the card
+        front: String,
+        /// The answer / back of the card
+        #[arg(long)]
+        back: String,
+        /// Comma-separated tags (e.g. "rust,programming")
+        #[arg(long, default_value = "")]
+        tags: String,
+        /// Source note ID for traceability
+        #[arg(long, default_value = "")]
+        note_id: String,
+    },
+
+    // --- main variants (#1913-era flashcards) ---
+    /// Create a new flashcard
+    Create {
+        /// Front (question)
+        #[arg(long)]
+        front: String,
+        /// Back (answer)
+        #[arg(long)]
+        back: String,
+        /// Source note ID (optional)
+        #[arg(long)]
+        source: Option<String>,
+        /// Tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
+    },
+
+    /// List all flashcards
+    List {
+        /// Filter by tag (substring match)
+        #[arg(long)]
+        tag: Option<String>,
+        /// Maximum results
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+
+    /// Show flashcards that are due for review
+    Due,
+
+    /// Show collection statistics
+    Stats,
+
+    /// Review a flashcard and record your rating (main)
+    Review {
+        /// Flashcard ID
+        id: String,
+        /// Rating: again, hard, good, or easy
+        rating: String,
+    },
+
+    /// Answer / review a flashcard with a rating (FSRS)
+    Answer {
+        /// Flashcard ID
+        id: String,
+        /// Rating: again (1), hard (2), good (3), easy (4)
+        #[arg(long, default_value = "good")]
+        rating: String,
+    },
+
+    /// Delete a flashcard by ID
+    Delete {
+        /// Flashcard ID
+        id: String,
     },
 }
 
@@ -1086,38 +1174,6 @@ enum ContextSurfaceActions {
         #[arg(long, default_value_t = 5)]
         limit: usize,
     },
-}
-
-#[derive(Subcommand, Debug)]
-enum FlashcardActions {
-    /// Create a new flashcard
-    Create {
-        /// Front (question)
-        #[arg(long)]
-        front: String,
-        /// Back (answer)
-        #[arg(long)]
-        back: String,
-        /// Source note ID (optional)
-        #[arg(long)]
-        source: Option<String>,
-        /// Tags (comma-separated)
-        #[arg(long)]
-        tags: Option<String>,
-    },
-    /// List all flashcards
-    List,
-    /// List flashcards due for review
-    Due,
-    /// Review a flashcard and record your rating
-    Review {
-        /// Flashcard ID
-        id: String,
-        /// Rating: again, hard, good, or easy
-        rating: String,
-    },
-    /// Show flashcard statistics
-    Stats,
 }
 
 // ─── Main ─────────────────────────────────────────────────────────
@@ -1549,6 +1605,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Graph { dot, json, summary } => handle_graph(context, *dot, *json, *summary),
         Commands::Flashcard { action } => {
             tokio::task::block_in_place(|| handle_flashcard(context, action))
+        }
+        Commands::Review { action } => {
+            tokio::task::block_in_place(|| handle_review(context, action))
         }
     }
 }
@@ -2230,6 +2289,127 @@ fn handle_collections(context: &StorageContext, action: &CollectionActions) -> R
                 "collectionId": id
             }))
         }
+    }
+}
+
+fn handle_review(context: &StorageContext, action: &FlashcardActions) -> Result<Value> {
+    use vaultpilot_lib::fsrs::{self, Rating};
+    use vaultpilot_lib::storage::{
+        create_flashcard_with_context, delete_flashcard_with_context,
+        get_due_flashcards_with_context, get_flashcard_stats_with_context,
+        get_flashcard_with_context, list_flashcards_with_context, review_flashcard_with_context,
+        FlashcardWithState,
+    };
+
+    match action {
+        FlashcardActions::Add {
+            front,
+            back,
+            tags,
+            note_id,
+        } => {
+            let card = create_flashcard_with_context(context, front, back, note_id, tags)?;
+            Ok(serde_json::json!({
+                "created": true,
+                "id": card.id,
+                "front": card.front,
+                "back": card.back,
+                "tags": card.tags,
+            }))
+        }
+        FlashcardActions::List { tag, limit } => {
+            let cards = list_flashcards_with_context(context, tag.as_deref(), *limit)?;
+            let cards_json: Vec<Value> = cards
+                .iter()
+                .map(|c| {
+                    let state = fsrs::parse_scheduling_or_default(&c.scheduling);
+                    serde_json::json!({
+                        "id": c.id,
+                        "front": c.front,
+                        "back": c.back,
+                        "tags": c.tags,
+                        "state": state.state.as_str(),
+                        "reps": state.reps,
+                        "lapses": state.lapses,
+                        "stability": (state.stability * 100.0).round() / 100.0,
+                        "difficulty": (state.difficulty * 100.0).round() / 100.0,
+                        "due": state.due,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "cards": cards_json,
+                "count": cards_json.len(),
+            }))
+        }
+        FlashcardActions::Due => {
+            let due = get_due_flashcards_with_context(context)?;
+            let cards_json: Vec<Value> = due
+                .iter()
+                .map(|fc: &FlashcardWithState| {
+                    serde_json::json!({
+                        "id": fc.card.id,
+                        "front": fc.card.front,
+                        "back": fc.card.back,
+                        "state": fc.card_state().as_str(),
+                        "reps": fc.reps(),
+                        "lapses": fc.lapses(),
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "due_cards": cards_json,
+                "count": cards_json.len(),
+            }))
+        }
+        FlashcardActions::Stats => {
+            let stats = get_flashcard_stats_with_context(context)?;
+            Ok(serde_json::json!(stats))
+        }
+        FlashcardActions::Answer { id, rating } => {
+            let r = Rating::from_input(rating).ok_or_else(|| {
+                anyhow::anyhow!("Invalid rating '{rating}'. Use: again, hard, good, easy (or 1-4)")
+            })?;
+
+            // Get pre-review state for display
+            let prev = get_flashcard_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("flashcard not found: {id}"))?;
+            let prev_state = fsrs::parse_scheduling(&prev.scheduling);
+
+            let updated = review_flashcard_with_context(context, id, r)?;
+            let new_state = fsrs::parse_scheduling(&updated.scheduling);
+
+            // Calculate interval change
+            let interval_display = if let (Some(ps), Some(ns)) = (prev_state, new_state) {
+                serde_json::json!({
+                    "previous_interval_days": (ps.scheduled_days * 100.0).round() / 100.0,
+                    "next_interval_days": (ns.scheduled_days * 100.0).round() / 100.0,
+                    "next_due": ns.due,
+                    "next_state": ns.state.as_str(),
+                    "stability": (ns.stability * 100.0).round() / 100.0,
+                    "difficulty": (ns.difficulty * 100.0).round() / 100.0,
+                    "reps": ns.reps,
+                    "lapses": ns.lapses,
+                })
+            } else {
+                serde_json::json!({})
+            };
+
+            Ok(serde_json::json!({
+                "reviewed": true,
+                "id": id,
+                "rating": r.label(),
+                "interval": interval_display,
+            }))
+        }
+        FlashcardActions::Delete { id } => {
+            let deleted = delete_flashcard_with_context(context, id)?;
+            Ok(serde_json::json!({
+                "deleted": deleted,
+                "id": id,
+            }))
+        }
+        _ => Err(anyhow::anyhow!("unsupported review action for this command")),
     }
 }
 
@@ -3778,7 +3958,7 @@ fn handle_flashcard(context: &StorageContext, action: &FlashcardActions) -> Resu
             .map_err(|e| anyhow::anyhow!(e))?;
             to_json(&card)
         }
-        FlashcardActions::List => {
+        FlashcardActions::List { .. } => {
             let cards = vaultpilot_lib::flashcards::list_flashcards(&settings)
                 .map_err(|e| anyhow::anyhow!(e))?;
             to_json(&cards)
@@ -3808,6 +3988,7 @@ fn handle_flashcard(context: &StorageContext, action: &FlashcardActions) -> Resu
                 vaultpilot_lib::flashcards::get_stats(&settings).map_err(|e| anyhow::anyhow!(e))?;
             to_json(&stats)
         }
+        _ => Err(anyhow::anyhow!("unsupported flashcard action for this command")),
     }
 }
 

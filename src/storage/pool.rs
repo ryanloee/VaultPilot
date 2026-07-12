@@ -211,6 +211,21 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        -- Flashcards for FSRS spaced repetition (#1912)
+        CREATE TABLE IF NOT EXISTS flashcards (
+            id TEXT PRIMARY KEY,
+            front TEXT NOT NULL,
+            back TEXT NOT NULL,
+            note_id TEXT NOT NULL DEFAULT '',
+            tags TEXT NOT NULL DEFAULT '',
+            scheduling TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_flashcards_tags ON flashcards(tags);
+        CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at DESC);
         "#,
     )?;
 

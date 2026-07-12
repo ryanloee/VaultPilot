@@ -7,6 +7,7 @@ pub mod crypto;
 pub mod diff;
 pub mod file_parsing;
 pub mod flashcards;
+pub mod fsrs;
 pub mod health;
 pub mod knowledge_graph;
 pub mod mail;

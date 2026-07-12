@@ -682,7 +682,10 @@ pub fn build_source_card_yaml(card: &MeetingSourceCard) -> Vec<String> {
         lines.push(format!("meeting_organizer: {}", yaml_scalar(org)));
     }
     if !card.calendar_source.is_empty() {
-        lines.push(format!("calendar_source: {}", yaml_scalar(&card.calendar_source)));
+        lines.push(format!(
+            "calendar_source: {}",
+            yaml_scalar(&card.calendar_source)
+        ));
     }
     if let Some(ref loc) = card.location {
         lines.push(format!("meeting_location: {}", yaml_scalar(loc)));

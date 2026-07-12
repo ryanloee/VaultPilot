@@ -1755,26 +1755,97 @@ async fn run_ai_action(
 async fn handle_ai(context: &StorageContext, action: &AiSubcommand) -> Result<Value> {
     match action {
         AiSubcommand::Summarize { text, model } => {
-            run_ai_action(context, AiActionType::Summarize, text.clone(), None, None, None, model.clone()).await
+            run_ai_action(
+                context,
+                AiActionType::Summarize,
+                text.clone(),
+                None,
+                None,
+                None,
+                model.clone(),
+            )
+            .await
         }
         AiSubcommand::Rewrite { text, tone, model } => {
-            run_ai_action(context, AiActionType::Rewrite, text.clone(), None, tone.clone(), None, model.clone()).await
+            run_ai_action(
+                context,
+                AiActionType::Rewrite,
+                text.clone(),
+                None,
+                tone.clone(),
+                None,
+                model.clone(),
+            )
+            .await
         }
-        AiSubcommand::Translate { text, language, model } => {
-            run_ai_action(context, AiActionType::Translate, text.clone(), language.clone(), None, None, model.clone()).await
+        AiSubcommand::Translate {
+            text,
+            language,
+            model,
+        } => {
+            run_ai_action(
+                context,
+                AiActionType::Translate,
+                text.clone(),
+                language.clone(),
+                None,
+                None,
+                model.clone(),
+            )
+            .await
         }
         AiSubcommand::Explain { text, model } => {
-            run_ai_action(context, AiActionType::Explain, text.clone(), None, None, None, model.clone()).await
+            run_ai_action(
+                context,
+                AiActionType::Explain,
+                text.clone(),
+                None,
+                None,
+                None,
+                model.clone(),
+            )
+            .await
         }
         AiSubcommand::ContinueWriting { text, model } => {
-            run_ai_action(context, AiActionType::ContinueWriting, text.clone(), None, None, None, model.clone()).await
+            run_ai_action(
+                context,
+                AiActionType::ContinueWriting,
+                text.clone(),
+                None,
+                None,
+                None,
+                model.clone(),
+            )
+            .await
         }
         AiSubcommand::ExtractTodos { text, model } => {
-            run_ai_action(context, AiActionType::ExtractTodos, text.clone(), None, None, None, model.clone()).await
+            run_ai_action(
+                context,
+                AiActionType::ExtractTodos,
+                text.clone(),
+                None,
+                None,
+                None,
+                model.clone(),
+            )
+            .await
         }
-        AiSubcommand::FindRelatedNotes { text, note_id, model } => {
+        AiSubcommand::FindRelatedNotes {
+            text,
+            note_id,
+            model,
+        } => {
             let input_text = text.clone().unwrap_or_default();
-            run_ai_action(context, AiActionType::FindRelatedNotes, input_text, None, None, note_id.clone(), model.clone()).await
+            run_ai_action(
+                context,
+                AiActionType::FindRelatedNotes,
+                input_text,
+                None,
+                None,
+                note_id.clone(),
+                model.clone(),
+            )
+            .await
         }
         AiSubcommand::ListActions => {
             let actions = list_ai_actions();
@@ -2580,7 +2651,9 @@ fn handle_review(context: &StorageContext, action: &FlashcardActions) -> Result<
                 "id": id,
             }))
         }
-        _ => Err(anyhow::anyhow!("unsupported review action for this command")),
+        _ => Err(anyhow::anyhow!(
+            "unsupported review action for this command"
+        )),
     }
 }
 
@@ -4159,7 +4232,9 @@ fn handle_flashcard(context: &StorageContext, action: &FlashcardActions) -> Resu
                 vaultpilot_lib::flashcards::get_stats(&settings).map_err(|e| anyhow::anyhow!(e))?;
             to_json(&stats)
         }
-        _ => Err(anyhow::anyhow!("unsupported flashcard action for this command")),
+        _ => Err(anyhow::anyhow!(
+            "unsupported flashcard action for this command"
+        )),
     }
 }
 

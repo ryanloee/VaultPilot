@@ -19,9 +19,9 @@ jest.mock('../api/client', () => ({
 }));
 
 describe('listAiActions', () => {
-  it('returns all 10 actions', () => {
+  it('returns all 11 actions', () => {
     const actions = listAiActions();
-    expect(actions).toHaveLength(10);
+    expect(actions).toHaveLength(11);
   });
 
   it('includes editNote action (#1569)', () => {
@@ -51,6 +51,15 @@ describe('listAiActions', () => {
     expect(outline!.description).toBeTruthy();
   });
 
+  it('includes brainstorm action (#2620)', () => {
+    const actions = listAiActions();
+    const brainstorm = actions.find(a => a.id === 'brainstorm');
+    expect(brainstorm).toBeDefined();
+    expect(brainstorm!.label).toBe('头脑风暴');
+    expect(brainstorm!.icon).toBeTruthy();
+    expect(brainstorm!.description).toBeTruthy();
+  });
+
   it('each action has required fields', () => {
     for (const action of listAiActions()) {
       expect(action.id).toBeTruthy();
@@ -77,6 +86,8 @@ describe('getAiActionInfo', () => {
     expect(getAiActionInfo('extractTodos')?.label).toBe('提取待办');
     expect(getAiActionInfo('cleanUp')?.label).toBe('整理');
     expect(getAiActionInfo('generateOutline')?.label).toBe('大纲生成');
+    expect(getAiActionInfo('editNote')?.label).toBe('编辑笔记');
+    expect(getAiActionInfo('brainstorm')?.label).toBe('头脑风暴');
   });
 
   it('returns undefined for unknown id', () => {

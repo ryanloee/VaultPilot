@@ -209,7 +209,7 @@ pub fn update_subscription_with_context(
     target_collection: &str,
 ) -> Result<bool> {
     let (connection, _) = open_connection(context)?;
-    let rows = connection.execute(
+    let _rows = connection.execute(
         r#"
         UPDATE subscriptions
         SET name = ?1, schedule = ?2, prompt = ?3,
@@ -690,22 +690,6 @@ mod tests {
         assert_eq!(updated.target_collection, "Market Monitor");
         // Fields not updated should remain
         assert_eq!(updated.run_count, 0);
-    fn test_update_subscription_updates_fields() {
-        let (_temp, ctx) = setup_temp_context();
-        initialize_storage_with_context(&ctx).unwrap();
-
-        let sub = create_subscription_with_context(&ctx, "Original", "0 0 * * *", "orig prompt", "", "orig-collection").unwrap();
-
-        assert!(update_subscription_with_context(&ctx, &sub.id, "Updated Name", "0 */6 * * *", "new prompt", "web_search", "new-collection").unwrap());
-
-        let updated = get_subscription_with_context(&ctx, &sub.id).unwrap().unwrap();
-        assert_eq!(updated.name, "Updated Name");
-        assert_eq!(updated.schedule, "0 */6 * * *");
-        assert_eq!(updated.prompt, "new prompt");
-        assert_eq!(updated.tools, "web_search");
-        assert_eq!(updated.target_collection, "new-collection");
-        // Original should be false (update_* functions set updated_at but don't touch enabled)
-        assert!(updated.enabled);
     }
 
     #[test]
@@ -724,12 +708,5 @@ mod tests {
         )
         .unwrap();
         assert!(!result);
-    fn test_update_subscription_bogus_id_returns_false() {
-        let (_temp, ctx) = setup_temp_context();
-        initialize_storage_with_context(&ctx).unwrap();
-
-        let result = update_subscription_with_context(&ctx, "bogus-id", "N/A", "0 0 * * *", "test", "", "");
-        assert!(result.is_ok());
-        assert!(!result.unwrap());
     }
 }

@@ -56,7 +56,9 @@ export function parseInline(text: string): InlineElement[] {
     }
 
     // Link [text](url)
-    const linkMatch = remaining.match(/^(.*?)\[([^\]]+)\]\(([^)]+)\)(.*)$/);
+    // Handle URLs with balanced parentheses (e.g. Wikipedia disambiguation links)
+    // Uses [^()] to stop at both parens, then (?:\([^()]*\)[^()]*)* for balanced single-level parens
+    const linkMatch = remaining.match(/^(.*?)\[([^\]]+)\]\(([^()]*(?:\([^()]*\)[^()]*)*)\)(.*)$/);
     if (linkMatch) {
       if (linkMatch[1]) elements.push(...parsePlain(linkMatch[1]));
       elements.push({ type: 'link', text: linkMatch[2], url: linkMatch[3] });

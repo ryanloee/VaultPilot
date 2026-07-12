@@ -163,4 +163,38 @@ describe('parseInline', () => {
       'text', 'code', 'text', 'bold', 'text', 'italic', 'text', 'link',
     ]);
   });
+
+  // Regression: #2735 — URLs with parentheses (e.g. Wikipedia disambiguation)
+  it('parses link with parentheses in URL', () => {
+    const result = parseInline('[Wikipedia](https://en.wikipedia.org/wiki/ABC_(disambiguation))');
+    expect(result).toEqual([
+      { type: 'link', text: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/ABC_(disambiguation)' },
+    ]);
+  });
+
+  it('parses link with parens URL surrounded by text', () => {
+    const result = parseInline('see [page](https://example.com/page_(2)) for details');
+    expect(result).toEqual([
+      { type: 'text', text: 'see ' },
+      { type: 'link', text: 'page', url: 'https://example.com/page_(2)' },
+      { type: 'text', text: ' for details' },
+    ]);
+  });
+
+  it('parses regular link after parens-link', () => {
+    // Ensure the rest of the parser still works after a parens URL
+    const result = parseInline('[A](url(a)) and [B](url_b)');
+    expect(result).toEqual([
+      { type: 'link', text: 'A', url: 'url(a)' },
+      { type: 'text', text: ' and ' },
+      { type: 'link', text: 'B', url: 'url_b' },
+    ]);
+  });
+
+  it('parses link with multiple balanced parens in URL', () => {
+    const result = parseInline('[multi](https://example.com/a(b)c(d)e)');
+    expect(result).toEqual([
+      { type: 'link', text: 'multi', url: 'https://example.com/a(b)c(d)e' },
+    ]);
+  });
 });

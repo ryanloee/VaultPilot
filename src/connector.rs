@@ -426,6 +426,321 @@ pub fn register_as_mcp(
     );
 }
 
+// ── GitHub Connector (Phase 2) ───────────────────────────────
+
+/// A fully-described outbound HTTP request built by a connector.
+///
+/// Pure data so it can be inspected in tests (dry-run) and dispatched by an
+/// async executor in production without the trait method itself being async.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitHubRequest {
+    /// HTTP method (GET/POST/...).
+    pub method: String,
+    /// Fully-qualified request URL.
+    pub url: String,
+    /// `Accept` header value.
+    pub accept: String,
+    /// Optional JSON request body (for writes).
+    pub body: Option<String>,
+}
+
+/// A summarized GitHub issue record parsed from a REST API response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueSummary {
+    /// Issue/pull-request number.
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Issue state (`open` / `closed`).
+    pub state: String,
+    /// Author login.
+    pub author: String,
+}
+
+/// GitHub connector — reads/writes issues and PRs via the GitHub REST API.
+///
+/// Phase 2 of #1841. Implements the [`Connector`] trait on top of the
+/// existing foundation. Authentication uses a personal access token supplied
+/// through `secrets` under the key `github_token`.
+///
+/// The connector is built around *pure* request construction
+/// ([`GitHubConnector::build_request`]) and parsing
+/// ([`GitHubConnector::parse_issue`]) so the logic is fully unit-testable
+/// without network access. In `dry_run` mode [`Connector::execute`] returns
+/// the constructed request as `data` instead of performing the HTTP call.
+#[derive(Debug, Clone)]
+pub struct GitHubConnector {
+    /// Connector identifier (e.g. "github-vaultpilot").
+    id: String,
+    /// Repository owner.
+    owner: String,
+    /// Repository name.
+    repo: String,
+    /// When `true`, `execute` returns the built request instead of sending it.
+    dry_run: bool,
+}
+
+impl GitHubConnector {
+    /// Create a new GitHub connector for `owner/repo`.
+    pub fn new(id: impl Into<String>, owner: impl Into<String>, repo: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            owner: owner.into(),
+            repo: repo.into(),
+            dry_run: false,
+        }
+    }
+
+    /// Enable dry-run mode (offline request construction, no network).
+    pub fn with_dry_run(mut self, dry: bool) -> Self {
+        self.dry_run = dry;
+        self
+    }
+
+    /// Build the REST API URL for a given endpoint path (e.g. `"issues"`).
+    pub fn api_url(&self, path: &str) -> String {
+        format!(
+            "https://api.github.com/repos/{}/{}/{}",
+            self.owner,
+            self.repo,
+            path.trim_start_matches('/')
+        )
+    }
+
+    /// Serialize an issue-creation payload (pure, testable).
+    pub fn build_create_issue_body(
+        &self,
+        title: &str,
+        body: Option<&str>,
+        labels: &[String],
+    ) -> Value {
+        let mut m = serde_json::Map::new();
+        m.insert("title".into(), Value::String(title.to_string()));
+        if let Some(b) = body {
+            m.insert("body".into(), Value::String(b.to_string()));
+        }
+        if !labels.is_empty() {
+            m.insert(
+                "labels".into(),
+                Value::Array(labels.iter().cloned().map(Value::String).collect()),
+            );
+        }
+        Value::Object(m)
+    }
+
+    /// Parse a GitHub issue JSON object into an [`IssueSummary`] (pure, testable).
+    pub fn parse_issue(&self, issue_json: &Value) -> Result<IssueSummary> {
+        let number = issue_json
+            .get("number")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow::anyhow!("github issue missing 'number'"))?;
+        let title = issue_json
+            .get("title")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("github issue missing 'title'"))?
+            .to_string();
+        let state = issue_json
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("open")
+            .to_string();
+        let author = issue_json
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        Ok(IssueSummary {
+            number,
+            title,
+            state,
+            author,
+        })
+    }
+
+    /// Build the outbound request for a given action (pure, testable).
+    ///
+    /// Returns an error if the required `github_token` secret is missing or
+    /// the action payload is malformed.
+    pub fn build_request(
+        &self,
+        action: &Action,
+        secrets: &HashMap<String, String>,
+    ) -> Result<GitHubRequest> {
+        // Validate auth up-front so callers get a clear error before building.
+        let _token = secrets.get("github_token").ok_or_else(|| {
+            anyhow::anyhow!(
+                "github connector '{}' requires 'github_token' in secrets",
+                self.id
+            )
+        })?;
+
+        match action.name.as_str() {
+            "list_issues" => Ok(GitHubRequest {
+                method: "GET".into(),
+                url: self.api_url("issues?state=open&per_page=50"),
+                accept: "application/vnd.github+json".into(),
+                body: None,
+            }),
+            "get_issue" => {
+                let number = action
+                    .payload
+                    .get("number")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| anyhow::anyhow!("get_issue requires 'number' (u64)"))?;
+                Ok(GitHubRequest {
+                    method: "GET".into(),
+                    url: self.api_url(&format!("issues/{number}")),
+                    accept: "application/vnd.github+json".into(),
+                    body: None,
+                })
+            }
+            "create_issue" => {
+                let title = action
+                    .payload
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("create_issue requires 'title' (string)"))?;
+                let body = action.payload.get("body").and_then(Value::as_str);
+                let labels: Vec<String> = action
+                    .payload
+                    .get("labels")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let payload = self.build_create_issue_body(title, body, &labels);
+                Ok(GitHubRequest {
+                    method: "POST".into(),
+                    url: self.api_url("issues"),
+                    accept: "application/vnd.github+json".into(),
+                    body: Some(serde_json::to_string(&payload)?),
+                })
+            }
+            other => Err(anyhow::anyhow!(
+                "github connector '{}': unknown action '{}'",
+                self.id,
+                other
+            )),
+        }
+    }
+
+    /// Register this connector as an MCP server capability in the
+    /// [`CapabilityRegistry`](crate::capability_registry::CapabilityRegistry),
+    /// mirroring [`register_as_mcp`]. The `http_url` is the local endpoint the
+    /// connector's bridge listens on.
+    pub fn register(
+        &self,
+        registry: &mut crate::capability_registry::CapabilityRegistry,
+        http_url: &str,
+    ) {
+        let description = format!(
+            "Read/write issues in {}/{} via GitHub REST API",
+            self.owner, self.repo
+        );
+        register_as_mcp(
+            registry,
+            self.name(),
+            "GitHub Connector",
+            &description,
+            http_url,
+        );
+    }
+
+    /// Perform the actual HTTP request (async). Used by `execute` in live mode.
+    async fn send(&self, req: &GitHubRequest, token: &str) -> Result<ConnectorResponse> {
+        let client = reqwest::Client::new();
+        let method: reqwest::Method = req
+            .method
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid HTTP method '{}': {e}", req.method))?;
+        let mut builder = client
+            .request(method, &req.url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", &req.accept)
+            .header("User-Agent", "VaultPilot-Connector")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if let Some(b) = &req.body {
+            builder = builder
+                .header("Content-Type", "application/json")
+                .body(b.clone());
+        }
+        let resp = builder.send().await?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        Ok(ConnectorResponse {
+            success: status.is_success(),
+            summary: format!("github {} {} -> HTTP {}", req.method, req.url, status),
+            data: Some(serde_json::json!({ "status": status.as_u16(), "body": text })),
+        })
+    }
+}
+
+impl Connector for GitHubConnector {
+    fn name(&self) -> &str {
+        &self.id
+    }
+
+    fn auth_flow(&self) -> AuthFlow {
+        AuthFlow::ApiKey {
+            key_name: "github_token".into(),
+            source: TokenSource::Config,
+        }
+    }
+
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![
+            Capability {
+                name: "list_issues".into(),
+                description: format!("List open issues in {}/{}", self.owner, self.repo),
+                access: AccessLevel::Read,
+            },
+            Capability {
+                name: "get_issue".into(),
+                description: format!(
+                    "Get a single issue by number in {}/{}",
+                    self.owner, self.repo
+                ),
+                access: AccessLevel::Read,
+            },
+            Capability {
+                name: "create_issue".into(),
+                description: format!("Create a new issue in {}/{}", self.owner, self.repo),
+                access: AccessLevel::Write,
+            },
+        ]
+    }
+
+    fn execute(
+        &self,
+        action: &Action,
+        secrets: &HashMap<String, String>,
+    ) -> Result<ConnectorResponse> {
+        let req = self.build_request(action, secrets)?;
+        if self.dry_run {
+            return Ok(ConnectorResponse {
+                success: true,
+                summary: format!("dry-run {} {}", req.method, req.url),
+                data: Some(serde_json::json!({
+                    "method": req.method,
+                    "url": req.url,
+                    "accept": req.accept,
+                    "body": req.body,
+                })),
+            });
+        }
+        let token = secrets.get("github_token").cloned().unwrap_or_default();
+        // The trait method is synchronous; spin a dedicated runtime for the
+        // single network call so callers don't need to be inside an async ctx.
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(self.send(&req, &token))
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -558,6 +873,257 @@ mod tests {
         assert!(registry.capabilities.contains_key("gh-connector"));
         let cap = &registry.capabilities["gh-connector"];
         match cap {
+            crate::capability_registry::Capability::McpServer {
+                name, transport, ..
+            } => {
+                assert_eq!(name, "GitHub Connector");
+                assert!(matches!(
+                    transport,
+                    crate::capability_registry::McpTransport::Http { .. }
+                ));
+            }
+            _ => panic!("expected McpServer capability"),
+        }
+    }
+
+    // ── GitHubConnector tests (Phase 2, #1841) ──
+
+    #[test]
+    fn github_connector_basics() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        assert_eq!(gh.name(), "gh-vp");
+        let caps = gh.capabilities();
+        assert_eq!(caps.len(), 3);
+        assert_eq!(caps[0].name, "list_issues");
+        assert_eq!(caps[0].access, AccessLevel::Read);
+        assert_eq!(caps[1].name, "get_issue");
+        assert_eq!(caps[2].name, "create_issue");
+        assert_eq!(caps[2].access, AccessLevel::Write);
+    }
+
+    #[test]
+    fn github_auth_flow_uses_token() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        match gh.auth_flow() {
+            AuthFlow::ApiKey { key_name, source } => {
+                assert_eq!(key_name, "github_token");
+                assert_eq!(source, TokenSource::Config);
+            }
+            other => panic!("expected ApiKey auth flow, got {other:?}"),
+        }
+        // Without the token, validation must fail.
+        let secrets = HashMap::new();
+        assert!(gh.validate(&secrets).is_err());
+        let mut with_token = HashMap::new();
+        with_token.insert("github_token".to_string(), "ghp_xxx".to_string());
+        assert!(gh.validate(&with_token).is_ok());
+    }
+
+    #[test]
+    fn github_api_url() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        assert_eq!(
+            gh.api_url("issues"),
+            "https://api.github.com/repos/ryanloee/VaultPilot/issues"
+        );
+        // Leading slash is tolerated.
+        assert_eq!(
+            gh.api_url("/issues/5"),
+            "https://api.github.com/repos/ryanloee/VaultPilot/issues/5"
+        );
+    }
+
+    #[test]
+    fn github_build_create_issue_body() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let labels = vec!["bug".to_string(), "priority".to_string()];
+        let body = gh.build_create_issue_body("Hello", Some("world"), &labels);
+        assert_eq!(body["title"], "Hello");
+        assert_eq!(body["body"], "world");
+        assert_eq!(body["labels"][0], "bug");
+        assert_eq!(body["labels"][1], "priority");
+    }
+
+    #[test]
+    fn github_build_create_issue_body_no_labels() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let body = gh.build_create_issue_body("Title", None, &[]);
+        assert_eq!(body["title"], "Title");
+        assert!(body.get("body").is_none());
+        assert!(body.get("labels").is_none());
+    }
+
+    #[test]
+    fn github_parse_issue() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let json = serde_json::json!({
+            "number": 42,
+            "title": "Fix the thing",
+            "state": "open",
+            "user": { "login": "octocat" }
+        });
+        let summary = gh.parse_issue(&json).unwrap();
+        assert_eq!(
+            summary,
+            IssueSummary {
+                number: 42,
+                title: "Fix the thing".into(),
+                state: "open".into(),
+                author: "octocat".into()
+            }
+        );
+    }
+
+    #[test]
+    fn github_parse_issue_defaults() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        // Missing user -> "unknown"; missing state -> "open".
+        let json = serde_json::json!({ "number": 7, "title": "x" });
+        let summary = gh.parse_issue(&json).unwrap();
+        assert_eq!(summary.state, "open");
+        assert_eq!(summary.author, "unknown");
+    }
+
+    #[test]
+    fn github_parse_issue_missing_number() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let json = serde_json::json!({ "title": "no number" });
+        assert!(gh.parse_issue(&json).is_err());
+    }
+
+    #[test]
+    fn github_build_request_missing_token() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let action = Action {
+            name: "list_issues".into(),
+            payload: serde_json::json!({}),
+        };
+        let secrets = HashMap::new();
+        assert!(gh.build_request(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn github_build_request_list_issues() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let mut secrets = HashMap::new();
+        secrets.insert("github_token".to_string(), "ghp_xxx".to_string());
+        let action = Action {
+            name: "list_issues".into(),
+            payload: serde_json::json!({}),
+        };
+        let req = gh.build_request(&action, &secrets).unwrap();
+        assert_eq!(req.method, "GET");
+        assert_eq!(
+            req.url,
+            "https://api.github.com/repos/ryanloee/VaultPilot/issues?state=open&per_page=50"
+        );
+        assert!(req.body.is_none());
+    }
+
+    #[test]
+    fn github_build_request_get_issue() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let mut secrets = HashMap::new();
+        secrets.insert("github_token".to_string(), "ghp_xxx".to_string());
+        let action = Action {
+            name: "get_issue".into(),
+            payload: serde_json::json!({ "number": 123 }),
+        };
+        let req = gh.build_request(&action, &secrets).unwrap();
+        assert_eq!(req.method, "GET");
+        assert_eq!(
+            req.url,
+            "https://api.github.com/repos/ryanloee/VaultPilot/issues/123"
+        );
+    }
+
+    #[test]
+    fn github_build_request_get_issue_missing_number() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let mut secrets = HashMap::new();
+        secrets.insert("github_token".to_string(), "ghp_xxx".to_string());
+        let action = Action {
+            name: "get_issue".into(),
+            payload: serde_json::json!({}),
+        };
+        assert!(gh.build_request(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn github_build_request_create_issue() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let mut secrets = HashMap::new();
+        secrets.insert("github_token".to_string(), "ghp_xxx".to_string());
+        let action = Action {
+            name: "create_issue".into(),
+            payload: serde_json::json!({
+                "title": "New bug",
+                "body": "repro steps",
+                "labels": ["bug", "p1"]
+            }),
+        };
+        let req = gh.build_request(&action, &secrets).unwrap();
+        assert_eq!(req.method, "POST");
+        assert_eq!(
+            req.url,
+            "https://api.github.com/repos/ryanloee/VaultPilot/issues"
+        );
+        let parsed: Value = serde_json::from_str(req.body.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["title"], "New bug");
+        assert_eq!(parsed["body"], "repro steps");
+        assert_eq!(parsed["labels"][1], "p1");
+    }
+
+    #[test]
+    fn github_build_request_unknown_action() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let mut secrets = HashMap::new();
+        secrets.insert("github_token".to_string(), "ghp_xxx".to_string());
+        let action = Action {
+            name: "delete_repo".into(),
+            payload: serde_json::json!({}),
+        };
+        assert!(gh.build_request(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn github_dry_run_execute_returns_request() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot").with_dry_run(true);
+        let mut secrets = HashMap::new();
+        secrets.insert("github_token".to_string(), "ghp_xxx".to_string());
+        let action = Action {
+            name: "list_issues".into(),
+            payload: serde_json::json!({}),
+        };
+        let resp = gh.execute(&action, &secrets).unwrap();
+        assert!(resp.success);
+        assert!(resp.summary.contains("dry-run"));
+        assert_eq!(resp.data.as_ref().unwrap()["method"], "GET");
+        assert_eq!(
+            resp.data.as_ref().unwrap()["url"],
+            "https://api.github.com/repos/ryanloee/VaultPilot/issues?state=open&per_page=50"
+        );
+    }
+
+    #[test]
+    fn github_execute_missing_token_errors() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let secrets = HashMap::new();
+        let action = Action {
+            name: "list_issues".into(),
+            payload: serde_json::json!({}),
+        };
+        // No dry-run and no token -> build_request fails before any network.
+        assert!(gh.execute(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn github_register_creates_mcp_capability() {
+        let gh = GitHubConnector::new("gh-vp", "ryanloee", "VaultPilot");
+        let mut registry = crate::capability_registry::CapabilityRegistry::default();
+        gh.register(&mut registry, "http://localhost:8091");
+        assert!(registry.capabilities.contains_key("gh-vp"));
+        match &registry.capabilities["gh-vp"] {
             crate::capability_registry::Capability::McpServer {
                 name, transport, ..
             } => {

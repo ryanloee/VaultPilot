@@ -6,7 +6,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json::Value;
@@ -16,6 +16,7 @@ use uuid::Uuid;
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
+use vaultpilot_lib::diff::{compute_diff, render_colored_diff, render_unified_diff};
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     add_note_to_collection_with_context, add_note_to_project_with_context,
@@ -351,6 +352,26 @@ enum Commands {
     RevertEdit {
         /// The note ID to revert
         note_id: String,
+    },
+
+    /// Compute and display a line-level diff between two notes (#2804 Phase 1)
+    ///
+    /// Uses the built-in Myers diff algorithm to compare note bodies.
+    /// Output is a unified diff (patch format) by default, or colored diff
+    /// for terminal display with --color.
+    ///
+    /// Examples:
+    ///   vp diff note_abc note_xyz              — unified diff for two notes
+    ///   vp diff note_abc note_xyz --color      — ANSI-colored terminal diff
+    Diff {
+        /// First note ID
+        note_a: String,
+        /// Second note ID
+        note_b: String,
+
+        /// Render with ANSI colors for terminal display
+        #[arg(long)]
+        color: bool,
     },
 
     /// Run AI quick actions on text (summarize, rewrite, translate, explain, etc.)
@@ -1831,6 +1852,11 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 "reverted": true,
             }))
         }
+        Commands::Diff {
+            note_a,
+            note_b,
+            color,
+        } => handle_diff(context, note_a, note_b, *color),
         Commands::Ai { action } => handle_ai(context, action).await,
         Commands::Subscriptions { action } => {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
@@ -3019,6 +3045,44 @@ async fn handle_mail(context: &StorageContext, action: &MailActions) -> Result<V
             to_json(&result)
         }
     }
+}
+
+fn handle_diff(context: &StorageContext, note_a: &str, note_b: &str, color: bool) -> Result<Value> {
+    let doc_a = load_note_with_context(context, note_a)
+        .with_context(|| format!("failed to load note: {note_a}"))?;
+    let doc_b = load_note_with_context(context, note_b)
+        .with_context(|| format!("failed to load note: {note_b}"))?;
+
+    let diff_result = compute_diff(&doc_a.body, &doc_b.body, 3);
+
+    if diff_result.is_empty() {
+        return Ok(serde_json::json!({
+            "note_a": doc_a.meta.title,
+            "note_b": doc_b.meta.title,
+            "identical": true,
+            "diff": ""
+        }));
+    }
+
+    let diff_text = if color {
+        render_colored_diff(&diff_result)
+    } else {
+        render_unified_diff(
+            &diff_result,
+            &format!("a/{} ({})", note_a, doc_a.meta.title),
+            &format!("b/{} ({})", note_b, doc_b.meta.title),
+        )
+    };
+
+    Ok(serde_json::json!({
+        "note_a": doc_a.meta.title,
+        "note_b": doc_b.meta.title,
+        "identical": false,
+        "additions": diff_result.additions,
+        "deletions": diff_result.deletions,
+        "hunks": diff_result.hunks.len(),
+        "diff": diff_text
+    }))
 }
 
 fn handle_subscriptions(context: &StorageContext, action: &SubscriptionActions) -> Result<Value> {

@@ -32,4 +32,5 @@ mod issue_1994_calendar;
 mod issue_1995_context_surface;
 mod issue_1996_agent_engine;
 mod issue_2746_drain_truncation;
+mod issue_2804_diff_cli;
 mod issue_914_related_notes;

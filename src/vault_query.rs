@@ -268,17 +268,26 @@ fn tokenize(src: &str) -> Result<Vec<Tok>> {
             continue;
         }
         // operators / punctuation
-        let two = src[src.find(c).unwrap()..]
-            .chars()
-            .take(2)
-            .collect::<String>();
-        match two.as_str() {
-            ">=" | "<=" | "!=" | "<>" => {
-                toks.push(Tok::Op(two));
-                chars.next();
-                chars.next();
+        // Look ahead from the CURRENT cursor (peekable iterator), never via
+        // `src.find(c)` — that would jump to the first occurrence of `c`
+        // anywhere in the source and wrongly read a two-char window from the
+        // wrong position, splitting valid two-char operators (<= >= != <>) into
+        // two single-char tokens whenever the leading char appears earlier.
+        // `chars.clone().nth(1)` peeks the char AFTER the current cursor without
+        // consuming anything from `chars` (index 0 is the current char `c`).
+        let next = chars.clone().nth(1);
+        let two = match (c, next) {
+            ('<', Some('=')) | ('>', Some('=')) | ('!', Some('=')) | ('<', Some('>')) => {
+                format!("{c}{}", next.unwrap())
             }
-            _ => match c {
+            _ => String::new(),
+        };
+        if !two.is_empty() {
+            toks.push(Tok::Op(two));
+            chars.next();
+            chars.next();
+        } else {
+            match c {
                 '=' | '>' | '<' | '*' => {
                     toks.push(Tok::Op(c.to_string()));
                     chars.next();
@@ -296,7 +305,7 @@ fn tokenize(src: &str) -> Result<Vec<Tok>> {
                     chars.next();
                 }
                 other => return Err(anyhow!("unexpected character: {other}")),
-            },
+            }
         }
     }
     Ok(toks)
@@ -838,5 +847,48 @@ mod tests {
     #[test]
     fn rejects_unknown_trailing_tokens() {
         assert!(parse_query(r#"SELECT * WHERE status = "x" GARBAGE"#).is_err());
+    }
+
+    #[test]
+    fn two_char_operators_not_split_regression_2776() {
+        // Regression #2776: a two-char operator (<= >= != <>) appearing after an
+        // earlier single-char occurrence of its leading char must still be
+        // tokenized as ONE Op token, not split into two single-char tokens.
+        // The buggy tokenizer used `src.find(c)`, which jumped to the *first*
+        // occurrence of the leading char anywhere in the source and read the
+        // two-char window from the wrong position.
+        let toks = tokenize("a < b AND c <= d").expect("tokenize failed");
+        assert!(
+            toks.iter().any(|t| matches!(t, Tok::Op(o) if o == "<=")),
+            "expected a single `<=` Op token; `<=` was split"
+        );
+        assert!(
+            !toks.iter().any(|t| matches!(t, Tok::Op(o) if o == "=")),
+            "found a stray standalone `=` — `<=` was split into `<` and `=`"
+        );
+
+        let toks = tokenize("x > y AND z >= w").expect("tokenize failed");
+        assert!(
+            toks.iter().any(|t| matches!(t, Tok::Op(o) if o == ">=")),
+            "expected a single `>=` Op token; `>=` was split"
+        );
+
+        let toks = tokenize("m < n OR o <> p").expect("tokenize failed");
+        assert!(
+            toks.iter().any(|t| matches!(t, Tok::Op(o) if o == "<>")),
+            "expected a single `<>` Op token; `<>` was split"
+        );
+
+        // `!=` is preserved even though `=` appears earlier.
+        let toks = tokenize("p = q AND r != s").expect("tokenize failed");
+        assert!(
+            toks.iter().any(|t| matches!(t, Tok::Op(o) if o == "!=")),
+            "expected a single `!=` Op token"
+        );
+
+        // End-to-end: a query with both a single and a two-char operator parses
+        // and filters correctly (a.md priority 3 and c.md priority 5 qualify).
+        let q = parse_query(r#"SELECT * WHERE priority >= 3 AND status != "x""#).unwrap();
+        assert_eq!(query_records(&sample_records(), &q).len(), 2);
     }
 }

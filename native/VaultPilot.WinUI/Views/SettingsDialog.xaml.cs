@@ -26,11 +26,6 @@ public sealed partial class SettingsDialog : ContentDialog
     private List<ProviderConfig> _providers = new();
     private int _activeProviderIndex;
 
-    /// <summary>
-    /// Tracks whether any provider field was modified since the dialog opened.
-    /// Used to decide whether to validate provider fields on save.
-    /// </summary>
-    private bool _providerFieldsDirty;
 
     /// <summary>
     /// The updated settings after successful validation, or null if the user cancelled.
@@ -65,7 +60,6 @@ public sealed partial class SettingsDialog : ContentDialog
 
         LoadSettings(settings, models, nextWakeText, versionText);
         WireUpButtons();
-        WireUpProviderDirtyTracking();
     }
 
     // ──────────────────────────────────────────────
@@ -147,9 +141,6 @@ public sealed partial class SettingsDialog : ContentDialog
         // Provider type
         var ptype = (p.ProviderType ?? "openai").ToLowerInvariant();
         ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1 : 0;
-
-        // Clear dirty flag after loading fields (loading != user editing)
-        _providerFieldsDirty = false;
     }
 
     private void RefreshProviderList()
@@ -180,39 +171,89 @@ public sealed partial class SettingsDialog : ContentDialog
         };
     }
 
-    /// <summary>
-    /// Wires TextChanged / PasswordChanged / SelectionChanged on provider fields
-    /// so we know if the user actually edited anything. This avoids rejecting a
-    /// save when the user only changed wake word settings.
-    /// </summary>
-    private void WireUpProviderDirtyTracking()
-    {
-        ApiKeyBox.PasswordChanged += (_, _) => _providerFieldsDirty = true;
-        BaseUrlBox.TextChanged += (_, _) => _providerFieldsDirty = true;
-        ModelBox.TextChanged += (_, _) => _providerFieldsDirty = true;
-        TimeoutBox.TextChanged += (_, _) => _providerFieldsDirty = true;
-        ContextWindowBox.TextChanged += (_, _) => _providerFieldsDirty = true;
-        ProviderNameBox.TextChanged += (_, _) => _providerFieldsDirty = true;
-        ProviderTypeBox.SelectionChanged += (_, _) => _providerFieldsDirty = true;
-    }
-
     // ──────────────────────────────────────────────
     //  Provider list management
     // ──────────────────────────────────────────────
 
+    /// <summary>
+    /// Pure, stateless validation + construction of a ProviderConfig from raw
+    /// field strings. Shared by OnPrimaryButtonClick (save validation) and
+    /// SaveCurrentProviderFields (per-switch persistence) so the rules never
+    /// drift. Returns false (config null) when any field is invalid.
+    /// Fixes #2781: provider validation must not be bypassed by a dirty flag,
+    /// and illegal values typed before switching providers must not be written
+    /// into _providers (where they survived into saved settings).
+    /// </summary>
+    public static bool TryBuildProviderConfig(
+        string? apiKey,
+        string? baseUrl,
+        string? model,
+        string? timeoutText,
+        string? contextWindowText,
+        uint? existingMaxOutputTokens,
+        bool isAnthropic,
+        string? name,
+        out ProviderConfig? config)
+    {
+        config = null;
+
+        var trimmedApiKey = (apiKey ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(trimmedApiKey)) return false;
+
+        var trimmedBaseUrl = (baseUrl ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(trimmedBaseUrl)) return false;
+        if (!Uri.TryCreate(trimmedBaseUrl, UriKind.Absolute, out var parsedUri)
+            || (parsedUri.Scheme != "http" && parsedUri.Scheme != "https")) return false;
+
+        var trimmedModel = (model ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(trimmedModel)) return false;
+
+        if (!ulong.TryParse((timeoutText ?? string.Empty).Trim(), out var timeoutMs)
+            || timeoutMs < 1_000) return false;
+        if (timeoutMs > 300_000) return false;
+
+        ulong? contextWindowTokens = null;
+        var trimmedContextWindow = (contextWindowText ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(trimmedContextWindow))
+        {
+            if (!ulong.TryParse(trimmedContextWindow, out var parsedContextWindow)) return false;
+            if (parsedContextWindow > 2_000_000) return false;
+            contextWindowTokens = parsedContextWindow;
+        }
+
+        var ptype = isAnthropic ? "anthropic" : "openai";
+        config = new ProviderConfig(
+            trimmedApiKey,
+            trimmedBaseUrl,
+            trimmedModel,
+            timeoutMs,
+            contextWindowTokens,
+            existingMaxOutputTokens,
+            ptype,
+            (name ?? string.Empty).Trim());
+        return true;
+    }
+
     private void SaveCurrentProviderFields()
     {
         if (_activeProviderIndex < 0 || _activeProviderIndex >= _providers.Count) return;
-        var ptype = ProviderTypeBox.SelectedIndex == 1 ? "anthropic" : "openai";
-        _providers[_activeProviderIndex] = new ProviderConfig(
-            ApiKeyBox.Password.Trim(),
-            BaseUrlBox.Text.Trim(),
-            ModelBox.Text.Trim(),
-            ulong.TryParse(TimeoutBox.Text.Trim(), out var t) ? t : 60000,
-            ulong.TryParse(ContextWindowBox.Text.Trim(), out var cw) ? cw : null,
-            _providers[_activeProviderIndex].MaxOutputTokens,
-            ptype,
-            ProviderNameBox.Text.Trim());
+        // Only persist when the current fields are valid. Previously an illegal
+        // value typed before switching providers was written into _providers and
+        // survived into the saved settings even if the active provider validated.
+        // (#2781)
+        if (TryBuildProviderConfig(
+                ApiKeyBox.Password,
+                BaseUrlBox.Text,
+                ModelBox.Text,
+                TimeoutBox.Text,
+                ContextWindowBox.Text,
+                _providers[_activeProviderIndex].MaxOutputTokens,
+                ProviderTypeBox.SelectedIndex == 1,
+                ProviderNameBox.Text,
+                out var cfg))
+        {
+            _providers[_activeProviderIndex] = cfg!;
+        }
     }
 
     private void OnProviderSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -340,9 +381,9 @@ public sealed partial class SettingsDialog : ContentDialog
             // Track the first error element so we can scroll to it
             UIElement? firstErrorElement = null;
 
-            // ── 1. Provider validation (only if user actually changed something) ──
+            // ── 1. Provider validation (always runs; controls hold the current
+            //        values, so an unchanged/legal config validates cleanly — #2781) ──
             bool providerValid = true;
-            if (_providerFieldsDirty)
             {
                 var trimmedApiKey = ApiKeyBox.Password.Trim();
                 if (string.IsNullOrEmpty(trimmedApiKey))

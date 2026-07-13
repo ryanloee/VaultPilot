@@ -719,6 +719,139 @@ pub fn query_records(records: &[Record], query: &Query) -> Vec<HashMap<String, Q
         .collect()
 }
 
+// ── Output formatters (#2813) ────────────────────────────────────────────────
+
+/// Format query result rows as CSV with header row.
+/// Values containing commas, quotes, or newlines are properly escaped.
+pub fn format_rows_csv(rows: &[HashMap<String, QValue>]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    // Collect ordered columns from first row
+    let columns: Vec<&String> = rows[0].keys().collect();
+    let header: Vec<String> = columns.iter().map(|c| csv_escape(c)).collect();
+    let mut out = header.join(",");
+    out.push('\n');
+    for row in rows {
+        let line: Vec<String> = columns
+            .iter()
+            .map(|c| {
+                let v = row.get(*c).cloned().unwrap_or(QValue::Null);
+                csv_escape(&v.to_string())
+            })
+            .collect();
+        out.push_str(&line.join(","));
+        out.push('\n');
+    }
+    out
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Format query result rows as a Markdown table (GFM-compatible).
+pub fn format_rows_md_table(rows: &[HashMap<String, QValue>]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let columns: Vec<&String> = rows[0].keys().collect();
+    let header: Vec<String> = columns.iter().map(|c| c.to_string()).collect();
+    let separator: Vec<String> = columns.iter().map(|_| "---".to_string()).collect();
+    let mut out = format!(
+        "| {} |\n| {} |\n",
+        header.join(" | "),
+        separator.join(" | ")
+    );
+    for row in rows {
+        let cells: Vec<String> = columns
+            .iter()
+            .map(|c| {
+                let v = row.get(*c).cloned().unwrap_or(QValue::Null);
+                md_escape(&v.to_string())
+            })
+            .collect();
+        out.push_str(&format!("| {} |\n", cells.join(" | ")));
+    }
+    out
+}
+
+fn md_escape(s: &str) -> String {
+    s.replace('|', "\\|").replace('\n', " ")
+}
+
+/// Format query result rows as JSON (array of objects).
+pub fn format_rows_json(rows: &[HashMap<String, QValue>]) -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let obj: serde_json::Map<String, serde_json::Value> = row
+                .iter()
+                .map(|(k, v)| {
+                    let jv = match v {
+                        QValue::Null => serde_json::Value::Null,
+                        QValue::Bool(b) => serde_json::Value::Bool(*b),
+                        QValue::Number(n) => serde_json::json!(*n),
+                        QValue::Date(d) => serde_json::Value::String(d.to_string()),
+                        QValue::Text(t) => serde_json::Value::String(t.clone()),
+                        QValue::List(items) => {
+                            let arr: Vec<serde_json::Value> = items
+                                .iter()
+                                .map(|i| match i {
+                                    QValue::Null => serde_json::Value::Null,
+                                    QValue::Bool(b) => serde_json::Value::Bool(*b),
+                                    QValue::Number(n) => serde_json::json!(*n),
+                                    QValue::Date(d) => serde_json::Value::String(d.to_string()),
+                                    QValue::Text(t) => serde_json::Value::String(t.clone()),
+                                    QValue::List(_) => serde_json::Value::String(i.to_string()),
+                                })
+                                .collect();
+                            serde_json::Value::Array(arr)
+                        }
+                    };
+                    (k.clone(), jv)
+                })
+                .collect();
+            serde_json::Value::Object(obj)
+        })
+        .collect();
+    serde_json::Value::Array(arr)
+}
+
+/// Load all vault notes as `Record`s for querying (#2813).
+///
+/// Reads every note file, extracts frontmatter YAML, and converts to a
+/// [`Record`] via [`record_from_yaml`].  Notes without frontmatter produce
+/// Records with just `$path`.
+pub fn build_records_from_vault(
+    context: &crate::storage::StorageContext,
+) -> anyhow::Result<Vec<Record>> {
+    use crate::models::SearchQuery;
+    use crate::storage;
+    let result = storage::search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            limit: None, // load ALL notes for querying
+            ..Default::default()
+        },
+    )?;
+    let mut records = Vec::with_capacity(result.notes.len());
+    for meta in &result.notes {
+        let doc = storage::load_note_body_from_meta(meta)?;
+        let (frontmatter_yaml, _body) = storage::notes::split_frontmatter_yaml(&doc.body)?;
+        let rec = record_from_yaml(&meta.path, &frontmatter_yaml);
+        records.push(rec);
+    }
+    Ok(records)
+}
+
 // ── Bridging helpers ───────────────────────────────────────────────────────
 
 fn yaml_to_qvalue(v: &Yaml) -> QValue {

@@ -1009,6 +1009,28 @@ enum VaultActions {
         #[arg(long, short)]
         output: PathBuf,
     },
+
+    /// Query vault notes with SQL-like syntax (#2813).
+    ///
+    /// Runs a structured query (SELECT … WHERE … ORDER BY … LIMIT …) against
+    /// all vault notes' frontmatter properties.  Supports CSV, Markdown table,
+    /// and JSON output formats.
+    ///
+    /// Examples:
+    ///   vaultpilot vault query "SELECT * WHERE status = 'active'"
+    ///   vaultpilot vault query "SELECT $path, title WHERE tags CONTAINS 'rust'" --format csv --output results.csv
+    Query {
+        /// The SQL-like query string (SELECT … WHERE … ORDER BY … LIMIT …)
+        query: String,
+
+        /// Output format: table (default, ascii terminal table), csv, md-table, or json
+        #[arg(long, default_value = "table")]
+        format: String,
+
+        /// Write output to file instead of stdout
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2501,6 +2523,58 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             let result = vault_export_with_context(context, output)?;
             to_json(&result)
         }
+        VaultActions::Query {
+            query,
+            format,
+            output,
+        } => handle_vault_query(context, query, format, output.as_deref()),
+    }
+}
+
+/// Handle the `vault query` subcommand — execute a SQL-like query against
+/// vault note frontmatter and format the results (#2813).
+fn handle_vault_query(
+    context: &StorageContext,
+    query_str: &str,
+    format: &str,
+    output: Option<&std::path::Path>,
+) -> Result<Value> {
+    use vaultpilot_lib::vault_query::{
+        build_records_from_vault, format_rows_csv, format_rows_json, format_rows_md_table,
+        parse_query, query_records,
+    };
+
+    let records = build_records_from_vault(context)?;
+    let query = parse_query(query_str)?;
+    let rows = query_records(&records, &query);
+
+    let result_str = match format {
+        "csv" => format_rows_csv(&rows),
+        "md-table" | "md" | "markdown" => format_rows_md_table(&rows),
+        "json" => serde_json::to_string_pretty(&format_rows_json(&rows))?,
+        _ => {
+            // Default: JSON for machine consumption (existing CLI pattern)
+            return serde_json::to_value(serde_json::json!({
+                "query": query_str,
+                "match_count": rows.len(),
+                "total_records": records.len(),
+                "rows": format_rows_json(&rows),
+            }))
+            .map_err(|e| anyhow::anyhow!("{e}"));
+        }
+    };
+
+    if let Some(path) = output {
+        std::fs::write(path, &result_str)
+            .with_context(|| format!("failed to write output to {}", path.display()))?;
+        to_json(&serde_json::json!({
+            "written_to": path.display().to_string(),
+            "match_count": rows.len(),
+            "format": format,
+        }))
+    } else {
+        // Return the formatted text directly as a JSON string value
+        to_json(&result_str)
     }
 }
 

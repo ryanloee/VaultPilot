@@ -557,6 +557,20 @@ enum Commands {
         #[command(subcommand)]
         action: ConnectorActions,
     },
+
+    /// Extract text content from a PDF file (#1767 CLI part)
+    ///
+    /// Uses the built-in pdf-extract backend to parse PDF bytes and output
+    /// plain text. Malformed or encrypted PDFs produce a best-effort result
+    /// with a warning.
+    ///
+    /// Examples:
+    ///   vp pdf extract document.pdf          — extract text to stdout
+    ///   vp pdf extract document.pdf --json   — structured JSON output
+    Pdf {
+        #[command(subcommand)]
+        action: PdfActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -607,6 +621,18 @@ enum ConnectorActions {
     Info {
         /// Connector type identifier: webhook, github, slack, email
         connector_type: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PdfActions {
+    /// Extract text content from a PDF file
+    Extract {
+        /// Path to the PDF file
+        path: String,
+        /// Output as structured JSON (includes metadata)
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1835,6 +1861,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_review(context, action))
         }
         Commands::Connector { action } => handle_connector(action),
+        Commands::Pdf { action } => handle_pdf(action),
     }
 }
 
@@ -5608,6 +5635,53 @@ fn handle_connector(action: &ConnectorActions) -> Result<Value> {
                 }).collect::<Vec<_>>(),
                 "usage": info.usage,
             }))
+        }
+    }
+}
+
+/// Handle PDF extraction commands (#1767 CLI part).
+///
+/// Wraps the existing [`file_parsing::PdfParser`] to extract text from a PDF
+/// file. Malformed or encrypted PDFs produce a best-effort result with metadata
+/// about the extraction quality.
+fn handle_pdf(action: &PdfActions) -> Result<Value> {
+    use std::path::Path;
+    use vaultpilot_lib::file_parsing::{FileParser, PdfParser};
+
+    match action {
+        PdfActions::Extract { path, json } => {
+            let pdf_path = Path::new(path);
+            if !pdf_path.exists() {
+                return Err(anyhow::anyhow!(
+                    "PDF file not found: {}",
+                    pdf_path.display()
+                ));
+            }
+
+            let parser = PdfParser;
+            let parsed = parser.parse(pdf_path)?;
+
+            if *json {
+                Ok(serde_json::json!({
+                    "path": parsed.path,
+                    "extension": parsed.extension,
+                    "mime_hint": parsed.mime_hint,
+                    "byte_size": parsed.byte_size,
+                    "text": parsed.text,
+                    "metadata": parsed.metadata,
+                    "parser_used": parsed.parser_used,
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "status": "ok",
+                    "text": parsed.text,
+                    "metadata": {
+                        "byte_size": parsed.byte_size,
+                        "lines": parsed.metadata.get("line_count"),
+                        "parser_backend": parsed.metadata.get("parser_backend"),
+                    },
+                }))
+            }
         }
     }
 }

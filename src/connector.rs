@@ -1214,6 +1214,94 @@ async fn slack_dispatch(req: SlackRequest, token: String) -> Result<ConnectorRes
     Ok(response)
 }
 
+// ── Connector Catalog (CLI/UI discovery, #1841 Phase 1 step 3) ──
+
+/// Static metadata about a built-in connector type for CLI/UI discovery.
+///
+/// The catalog is a *catalogue* of connector blueprints — it does not
+/// represent live, configured connector instances. Tools (CLI, WinUI,
+/// Android) use it to present available integration options to the user.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectorInfo {
+    /// Connector type identifier (e.g. `"webhook"`, `"github"`, `"slack"`).
+    pub connector_type: String,
+    /// Human-readable display name.
+    pub label: String,
+    /// Phase number from the #1841 roadmap (1 = framework, 2 = presets).
+    pub phase: u8,
+    /// Authentication flow summary.
+    pub auth: String,
+    /// Capabilities as `(name, access_level)` pairs.
+    pub capabilities: Vec<(String, String)>,
+    /// Example usage snippet for documentation.
+    pub usage: String,
+}
+
+/// Return a catalog of all built-in connector types (#1841).
+///
+/// Each entry describes a connector blueprint: its type, authentication
+/// requirements, capabilities, and usage example. The catalog is used by
+/// the `vp connector list` / `vp connector info <type>` CLI commands and
+/// can be surfaced in UI clients.
+pub fn connector_catalog() -> Vec<ConnectorInfo> {
+    vec![
+        ConnectorInfo {
+            connector_type: "webhook".into(),
+            label: "Webhook Connector".into(),
+            phase: 1,
+            auth: "HMAC-SHA256 shared secret (file-based)".into(),
+            capabilities: vec![
+                ("webhook_receive".into(), "write".into()),
+                ("webhook_list_recent".into(), "read".into()),
+            ],
+            usage: r#"WebhookConnector::new("slack-incoming", "Slack", "/path/to/secret")"#.into(),
+        },
+        ConnectorInfo {
+            connector_type: "github".into(),
+            label: "GitHub Connector".into(),
+            phase: 2,
+            auth: "API key — github_token in secrets/config".into(),
+            capabilities: vec![
+                ("list_issues".into(), "read".into()),
+                ("get_issue".into(), "read".into()),
+                ("create_issue".into(), "write".into()),
+            ],
+            usage: r#"GitHubConnector::new("gh-vp", "owner", "repo")"#.into(),
+        },
+        ConnectorInfo {
+            connector_type: "slack".into(),
+            label: "Slack Connector".into(),
+            phase: 2,
+            auth: "API key — slack_token in secrets/config".into(),
+            capabilities: vec![
+                ("post_message".into(), "write".into()),
+                ("list_messages".into(), "read".into()),
+            ],
+            usage: r#"SlackConnector::new("slack-vp", "C0123ABCD")"#.into(),
+        },
+        ConnectorInfo {
+            connector_type: "email".into(),
+            label: "Email (IMAP) Connector".into(),
+            phase: 2,
+            auth: "IMAP credentials (encrypted on disk)".into(),
+            capabilities: vec![
+                ("mail sync".into(), "read".into()),
+                ("mail search".into(), "search".into()),
+            ],
+            usage: "vp mail add <name> --host imap.gmail.com --username you@example.com".into(),
+        },
+    ]
+}
+
+/// Look up a single connector type by its identifier.
+///
+/// Returns `None` if `connector_type` does not match any catalog entry.
+pub fn find_connector_info(connector_type: &str) -> Option<ConnectorInfo> {
+    connector_catalog()
+        .into_iter()
+        .find(|c| c.connector_type == connector_type)
+}
+
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2119,5 +2207,72 @@ mod tests {
         };
         let resp = rt.block_on(async { sl.execute(&action, &secrets).unwrap() });
         assert!(resp.success);
+    }
+
+    // ── Catalog tests (#1841 Phase 1 step 3) ──
+
+    #[test]
+    fn catalog_contains_all_connector_types() {
+        let catalog = connector_catalog();
+        let types: Vec<&str> = catalog.iter().map(|c| c.connector_type.as_str()).collect();
+        assert!(types.contains(&"webhook"), "missing webhook");
+        assert!(types.contains(&"github"), "missing github");
+        assert!(types.contains(&"slack"), "missing slack");
+        assert!(types.contains(&"email"), "missing email");
+        assert!(catalog.len() >= 4);
+    }
+
+    #[test]
+    fn catalog_entries_have_capabilities() {
+        for info in connector_catalog() {
+            assert!(
+                !info.capabilities.is_empty(),
+                "connector '{}' has no capabilities",
+                info.connector_type
+            );
+            assert!(
+                !info.label.is_empty(),
+                "connector '{}' has empty label",
+                info.connector_type
+            );
+            assert!(
+                !info.auth.is_empty(),
+                "connector '{}' has empty auth",
+                info.connector_type
+            );
+            assert!(
+                !info.usage.is_empty(),
+                "connector '{}' has empty usage",
+                info.connector_type
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_phase_numbers_are_valid() {
+        for info in connector_catalog() {
+            assert!(
+                info.phase == 1 || info.phase == 2,
+                "connector '{}' has unexpected phase {}",
+                info.connector_type,
+                info.phase
+            );
+        }
+    }
+
+    #[test]
+    fn find_connector_info_returns_correct_entry() {
+        let info = find_connector_info("github").expect("github should be in catalog");
+        assert_eq!(info.connector_type, "github");
+        assert_eq!(info.label, "GitHub Connector");
+        assert!(info
+            .capabilities
+            .iter()
+            .any(|(name, _)| name == "create_issue"));
+    }
+
+    #[test]
+    fn find_connector_info_returns_none_for_unknown() {
+        assert!(find_connector_info("nonexistent").is_none());
     }
 }

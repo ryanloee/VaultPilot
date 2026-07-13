@@ -546,6 +546,17 @@ enum Commands {
         #[command(subcommand)]
         action: FlashcardActions,
     },
+
+    /// Manage external service connectors — view available connector types and
+    /// capabilities (#1841 Phase 1 step 3).
+    ///
+    /// Examples:
+    ///   vp connector list           — list all available connector types
+    ///   vp connector info github    — show details for a specific connector
+    Connector {
+        #[command(subcommand)]
+        action: ConnectorActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -585,6 +596,17 @@ enum VoiceActions {
         /// Optional language code (e.g. "en", "zh")
         #[arg(long)]
         language: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConnectorActions {
+    /// List all available connector types with their capabilities
+    List,
+    /// Show detailed information for a specific connector type
+    Info {
+        /// Connector type identifier: webhook, github, slack, email
+        connector_type: String,
     },
 }
 
@@ -1812,6 +1834,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Review { action } => {
             tokio::task::block_in_place(|| handle_review(context, action))
         }
+        Commands::Connector { action } => handle_connector(action),
     }
 }
 
@@ -5522,6 +5545,68 @@ fn handle_people(context: &StorageContext, action: &PeopleActions) -> Result<Val
             Ok(serde_json::json!({
                 "aliases": aliases,
                 "hint": "Use --set alias=canonical to add, --remove alias to delete",
+            }))
+        }
+    }
+}
+
+/// Handle connector subcommands — list available connector types and their
+/// capabilities (#1841 Phase 1 step 3).
+///
+/// This is a **synchronous** handler (no I/O, no AI calls) so it doesn't need
+/// to go through `block_in_place`. The catalog is pure in-memory data.
+fn handle_connector(action: &ConnectorActions) -> Result<Value> {
+    use vaultpilot_lib::connector::connector_catalog;
+
+    match action {
+        ConnectorActions::List => {
+            let catalog = connector_catalog();
+            let entries: Vec<Value> = catalog
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "type": c.connector_type,
+                        "label": c.label,
+                        "phase": c.phase,
+                        "auth": c.auth,
+                        "capabilities": c.capabilities.iter().map(|(name, access)| {
+                            serde_json::json!({"name": name, "access": access})
+                        }).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+
+            Ok(serde_json::json!({
+                "connectors": entries,
+                "total": entries.len(),
+            }))
+        }
+        ConnectorActions::Info { connector_type } => {
+            let catalog = connector_catalog();
+            let info = catalog
+                .iter()
+                .find(|c| c.connector_type == *connector_type)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unknown connector type '{}'. Available: {}",
+                        connector_type,
+                        catalog
+                            .iter()
+                            .map(|c| c.connector_type.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
+
+            Ok(serde_json::json!({
+                "type": info.connector_type,
+                "label": info.label,
+                "phase": info.phase,
+                "auth": info.auth,
+                "capabilities": info.capabilities.iter().map(|(name, access)| {
+                    serde_json::json!({"name": name, "access": access})
+                }).collect::<Vec<_>>(),
+                "usage": info.usage,
             }))
         }
     }

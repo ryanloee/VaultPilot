@@ -308,7 +308,6 @@ public sealed partial class MainWindow : Window
 
     private async void ShowWriteApprovalDialog(string tool, string args)
     {
-        var cts = _agentCts;  // Capture reference at call time — agent may be stopped while dialog is open
         var (description, preview) = ParseWriteArgs(tool, args);
 
         var contentStack = new StackPanel { Spacing = 8 };
@@ -352,7 +351,13 @@ public sealed partial class MainWindow : Window
             ? $"已批准写入操作: {tool}"
             : $"已拒绝写入操作: {tool}");
 
-        // Check if agent was stopped while dialog was open
+        // #2784: Capture the CURRENT agent CTS *live*, after the dialog closes —
+        // do NOT capture it at dialog-open time. If the agent is stopped or
+        // restarted while the dialog is open, StartAgentMode/StopAgentMode rotate
+        // _agentCts (the old one is disposed). Sending the approval with a stale,
+        // disposed CancellationTokenSource throws OperationCanceledException and
+        // the response is silently lost. Re-reading here uses the live token.
+        var cts = _agentCts;
         if (cts is null || !_agentModeActive)
         {
             AppendMessage("系统", "Agent 已停止，审批已取消。");

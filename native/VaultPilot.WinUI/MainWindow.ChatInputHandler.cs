@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using VaultPilot.WinUI.Controls;
 using VaultPilot.WinUI.Models;
 using Microsoft.UI.Input;

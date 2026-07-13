@@ -50,11 +50,16 @@ function processLatexSegments(text: string, textColor: string, accentColor: stri
   return nodes.length > 0 ? nodes : [<Text key="empty">{text}</Text>];
 }
 
-/** Lightweight markdown renderer — handles headers, bold, italic, code, lists, links, LaTeX, [[wikilinks]], auto-detected note refs. */
+/** Lightweight markdown renderer — handles headers, bold, italic, code, lists, links, LaTeX, [[wikilinks]], auto-detected note refs.
+ *
+ * Supports ```mermaid code fences: renders them as a labelled diagram container
+ * with a chart icon instead of a plain code block (#2805).
+ */
 const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap }: Props) {
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let inCodeBlock = false;
+  let codeLang: string | null = null;
   let codeLines: string[] = [];
   let codeKey = 0;
 
@@ -64,17 +69,39 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     // Fenced code block
     if (line.trimStart().startsWith('```')) {
       if (inCodeBlock) {
-        elements.push(
-          <View key={`code-${codeKey++}`} style={[styles.codeBlock, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6' }]}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <Text style={{ color: textColor, fontSize: 13, fontFamily: 'monospace' }}>{codeLines.join('\n')}</Text>
-            </ScrollView>
-          </View>
-        );
+        const joined = codeLines.join('\n');
+        // #2805: mermaid diagrams get a special diagram card instead of raw code block
+        if (codeLang === 'mermaid') {
+          elements.push(
+            <View key={`mermaid-${codeKey++}`} style={[styles.mermaidCard, { borderColor: accentColor, backgroundColor: isDark ? '#1a1a2e' : '#f0f4ff' }]}>
+              <View style={styles.mermaidHeader}>
+                <Icon name="analytics-outline" size={14} color={accentColor} />
+                <Text style={[styles.mermaidLabel, { color: accentColor }]}>Mermaid Diagram</Text>
+              </View>
+              <View style={[styles.mermaidBody, { backgroundColor: isDark ? '#111122' : '#e8edf8' }]}>
+                <Text style={{ color: textColor, fontSize: 12, fontFamily: 'monospace', opacity: isDark ? 0.85 : 1 }}>
+                  {joined}
+                </Text>
+              </View>
+            </View>
+          );
+        } else {
+          elements.push(
+            <View key={`code-${codeKey++}`} style={[styles.codeBlock, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6' }]}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <Text style={{ color: textColor, fontSize: 13, fontFamily: 'monospace' }}>{joined}</Text>
+              </ScrollView>
+            </View>
+          );
+        }
         codeLines = [];
+        codeLang = null;
         inCodeBlock = false;
       } else {
         inCodeBlock = true;
+        // Extract language hint: ```mermaid, ```rust, ```python, etc.
+        const langHint = line.trimStart().slice(3).trim();
+        codeLang = langHint || null;
       }
       continue;
     }
@@ -145,15 +172,32 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     }
   }
 
-  // Handle unclosed code blocks (e.g. stream interrupted, truncated output)
+  // Handle unclosed code blocks / mermaid diagrams (e.g. stream interrupted, truncated output)
   if (inCodeBlock && codeLines.length > 0) {
-    elements.push(
-      <View key={`code-${codeKey++}`} style={[styles.codeBlock, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6' }]}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <Text style={{ color: textColor, fontSize: 13, fontFamily: 'monospace' }}>{codeLines.join('\n')}</Text>
-        </ScrollView>
-      </View>
-    );
+    const joined = codeLines.join('\n');
+    if (codeLang === 'mermaid') {
+      elements.push(
+        <View key={`mermaid-${codeKey++}`} style={[styles.mermaidCard, { borderColor: accentColor, backgroundColor: isDark ? '#1a1a2e' : '#f0f4ff' }]}>
+          <View style={styles.mermaidHeader}>
+            <Icon name="analytics-outline" size={14} color={accentColor} />
+            <Text style={[styles.mermaidLabel, { color: accentColor }]}>Mermaid Diagram</Text>
+          </View>
+          <View style={[styles.mermaidBody, { backgroundColor: isDark ? '#111122' : '#e8edf8' }]}>
+            <Text style={{ color: textColor, fontSize: 12, fontFamily: 'monospace', opacity: isDark ? 0.85 : 1 }}>
+              {joined}
+            </Text>
+          </View>
+        </View>
+      );
+    } else {
+      elements.push(
+        <View key={`code-${codeKey++}`} style={[styles.codeBlock, { backgroundColor: isDark ? '#1e1e1e' : '#f3f4f6' }]}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <Text style={{ color: textColor, fontSize: 13, fontFamily: 'monospace' }}>{joined}</Text>
+          </ScrollView>
+        </View>
+      );
+    }
   }
 
   return <>{elements}</>;
@@ -325,6 +369,33 @@ const styles = StyleSheet.create({
   codeInline: { paddingHorizontal: 4, borderRadius: 3, fontSize: 14, fontFamily: 'monospace' },
   hr: { height: 1, marginVertical: 8 },
   mathBlock: { backgroundColor: 'rgba(128,128,128,0.08)', borderRadius: 6, padding: 8, marginVertical: 6 },
+  // #2805: Mermaid diagram card
+  mermaidCard: {
+    borderRadius: 8,
+    borderWidth: 1.5,
+    marginVertical: 8,
+    overflow: 'hidden',
+  },
+  mermaidHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(128,128,128,0.2)',
+  },
+  mermaidLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  mermaidBody: {
+    padding: 12,
+    borderRadius: 6,
+    margin: 8,
+  },
   wikilinkTouch: {
     flexDirection: 'row',
     alignItems: 'center',

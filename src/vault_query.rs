@@ -46,6 +46,10 @@ pub enum QValue {
     Number(f64),
     Bool(bool),
     Date(NaiveDate),
+    /// A YAML sequence (list) value — used for frontmatter array properties
+    /// like `tags: [rust, ai, notes]`.  CONTAINS on a List does exact,
+    /// case-insensitive element matching rather than substring matching.
+    List(Vec<QValue>),
 }
 
 impl QValue {
@@ -58,6 +62,7 @@ impl QValue {
             QValue::Number(_) => 2,
             QValue::Date(_) => 3,
             QValue::Text(_) => 4,
+            QValue::List(_) => 5,
         }
     }
 
@@ -69,6 +74,11 @@ impl QValue {
             QValue::Number(n) => format!("{n:.10}"),
             QValue::Date(d) => d.to_string(),
             QValue::Text(t) => t.clone(),
+            QValue::List(items) => items
+                .iter()
+                .map(|v| v.as_sort_key())
+                .collect::<Vec<_>>()
+                .join(", "),
         }
     }
 }
@@ -81,6 +91,10 @@ impl std::fmt::Display for QValue {
             QValue::Number(n) => write!(f, "{n}"),
             QValue::Date(d) => write!(f, "{}", d.format("%Y-%m-%d")),
             QValue::Text(t) => write!(f, "{t}"),
+            QValue::List(items) => {
+                let parts: Vec<String> = items.iter().map(|v| v.to_string()).collect();
+                write!(f, "[{}]", parts.join(", "))
+            }
         }
     }
 }
@@ -561,6 +575,16 @@ fn coerce_eq(a: &QValue, b: &QValue) -> bool {
         (QValue::Number(x), QValue::Number(y)) => x == y,
         (QValue::Date(x), QValue::Date(y)) => x == y,
         (QValue::Text(x), QValue::Text(y)) => x == y,
+        // List equality: same length, pairwise equal.
+        (QValue::List(x), QValue::List(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| coerce_eq(a, b))
+        }
+        // Scalar vs List equality: check if any element equals the scalar.
+        (scalar, QValue::List(items)) | (QValue::List(items), scalar)
+            if !matches!(scalar, QValue::List(_)) =>
+        {
+            items.iter().any(|item| coerce_eq(item, scalar))
+        }
         // Number vs numeric Text: compare numerically for usability.
         (QValue::Number(x), QValue::Text(y)) | (QValue::Text(y), QValue::Number(x)) => y
             .parse::<f64>()
@@ -581,6 +605,11 @@ fn cmp_ord(a: &QValue, b: &QValue) -> std::cmp::Ordering {
         (QValue::Date(x), QValue::Date(y)) => x.cmp(y),
         (QValue::Bool(x), QValue::Bool(y)) => x.cmp(y),
         (QValue::Text(x), QValue::Text(y)) => x.cmp(y),
+        (QValue::List(x), QValue::List(y)) => {
+            let xk: Vec<String> = x.iter().map(|v| v.as_sort_key()).collect();
+            let yk: Vec<String> = y.iter().map(|v| v.as_sort_key()).collect();
+            xk.cmp(&yk)
+        }
         (QValue::Null, QValue::Null) => std::cmp::Ordering::Equal,
         _ => a.as_sort_key().cmp(&b.as_sort_key()),
     }
@@ -597,6 +626,23 @@ fn eval_cond(cond: &Condition, rec: &Record) -> bool {
                 CmpOp::Contains => match (&left, &right) {
                     (QValue::Text(l), QValue::Text(r)) => {
                         l.to_lowercase().contains(&r.to_lowercase())
+                    }
+                    // CONTAINS on a List: exact, case-insensitive element match
+                    // (not substring). Fixes #2800.
+                    (QValue::List(items), QValue::Text(r)) => {
+                        let r_lower = r.to_lowercase();
+                        items.iter().any(|item| match item {
+                            QValue::Text(t) => t.to_lowercase() == r_lower,
+                            other => other.to_string().to_lowercase() == r_lower,
+                        })
+                    }
+                    // Text CONTAINS List — check if text matches any list element.
+                    (QValue::Text(l), QValue::List(items)) => {
+                        let l_lower = l.to_lowercase();
+                        items.iter().any(|item| match item {
+                            QValue::Text(t) => t.to_lowercase() == l_lower,
+                            other => other.to_string().to_lowercase() == l_lower,
+                        })
                     }
                     _ => false,
                 },
@@ -688,8 +734,11 @@ fn yaml_to_qvalue(v: &Yaml) -> QValue {
                 QValue::Text(s.clone())
             }
         }
-        // Sequences / mappings are stored as Text for now (Bases relations/lists
-        // can be refined later without breaking the engine).
+        // YAML sequences are now stored as QValue::List for proper CONTAINS
+        // semantics (exact element match). Fixes #2800.
+        Yaml::Sequence(seq) => QValue::List(seq.iter().map(yaml_to_qvalue).collect()),
+        // Mappings are still stored as Text (Bases relations can be refined
+        // later without breaking the engine).
         other => QValue::Text(serde_yaml_ng::to_string(other).unwrap_or_default()),
     }
 }
@@ -806,6 +855,101 @@ mod tests {
         let rows = query_records(&sample_records(), &q);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get("$path"), Some(&QValue::Text("c.md".into())));
+    }
+
+    #[test]
+    fn contains_list_exact_match_regression_2800() {
+        // Regression #2800: CONTAINS on a YAML list property must do exact
+        // element matching, not substring matching.
+        let records = vec![
+            rec("note1.md").with_prop(
+                "tags",
+                QValue::List(vec![
+                    QValue::Text("rust".into()),
+                    QValue::Text("ai".into()),
+                    QValue::Text("notes".into()),
+                ]),
+            ),
+            rec("note2.md").with_prop(
+                "tags",
+                QValue::List(vec![
+                    QValue::Text("mobile".into()),
+                    QValue::Text("react".into()),
+                ]),
+            ),
+        ];
+
+        // Exact match: "rust" should match note1
+        let q = parse_query(r#"SELECT * WHERE tags CONTAINS "rust""#).unwrap();
+        let rows = query_records(&records, &q);
+        assert_eq!(rows.len(), 1, "exact match 'rust' should hit note1 only");
+        assert_eq!(rows[0].get("$path"), Some(&QValue::Text("note1.md".into())));
+
+        // Substring non-match: "rus" must NOT match (only "rust" exists)
+        let q = parse_query(r#"SELECT * WHERE tags CONTAINS "rus""#).unwrap();
+        let rows = query_records(&records, &q);
+        assert_eq!(rows.len(), 0, "substring 'rus' must not match 'rust'");
+
+        // Substring non-match: "note" must NOT match (only "notes" exists)
+        let q = parse_query(r#"SELECT * WHERE tags CONTAINS "note""#).unwrap();
+        let rows = query_records(&records, &q);
+        assert_eq!(rows.len(), 0, "substring 'note' must not match 'notes'");
+
+        // Substring non-match: "a" must NOT match (only "ai" exists)
+        let q = parse_query(r#"SELECT * WHERE tags CONTAINS "a""#).unwrap();
+        let rows = query_records(&records, &q);
+        assert_eq!(rows.len(), 0, "substring 'a' must not match 'ai'");
+
+        // Case-insensitive exact match: "RUST" should match note1
+        let q = parse_query(r#"SELECT * WHERE tags CONTAINS "RUST""#).unwrap();
+        let rows = query_records(&records, &q);
+        assert_eq!(rows.len(), 1, "case-insensitive 'RUST' should match 'rust'");
+    }
+
+    #[test]
+    fn contains_list_via_yaml_frontmatter_2800() {
+        // Integration test: YAML frontmatter list → QValue::List → CONTAINS
+        let mut m = serde_yaml_ng::Mapping::new();
+        m.insert(
+            Yaml::String("tags".into()),
+            Yaml::Sequence(vec![
+                Yaml::String("rust".into()),
+                Yaml::String("ai".into()),
+                Yaml::String("notes".into()),
+            ]),
+        );
+        let record = record_from_yaml("x.md", &m);
+        assert_eq!(
+            record.props.get("tags"),
+            Some(&QValue::List(vec![
+                QValue::Text("rust".into()),
+                QValue::Text("ai".into()),
+                QValue::Text("notes".into()),
+            ]))
+        );
+
+        let q = parse_query(r#"SELECT * WHERE tags CONTAINS "rust""#).unwrap();
+        let rows = query_records(&[record], &q);
+        assert_eq!(rows.len(), 1);
+
+        // Substring should NOT match
+        let q = parse_query(r#"SELECT * WHERE tags CONTAINS "rus""#).unwrap();
+        let rows = query_records(
+            &[record_from_yaml("x.md", &{
+                let mut m = serde_yaml_ng::Mapping::new();
+                m.insert(
+                    Yaml::String("tags".into()),
+                    Yaml::Sequence(vec![
+                        Yaml::String("rust".into()),
+                        Yaml::String("ai".into()),
+                        Yaml::String("notes".into()),
+                    ]),
+                );
+                m
+            })],
+            &q,
+        );
+        assert_eq!(rows.len(), 0);
     }
 
     #[test]

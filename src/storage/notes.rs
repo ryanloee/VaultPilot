@@ -1093,6 +1093,50 @@ pub(super) fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     Err(anyhow!("invalid frontmatter"))
 }
 
+/// Like [`split_frontmatter`] but returns the raw YAML `Mapping` instead of
+/// a typed `Frontmatter` struct.  Used by the vault query engine (#2813) to
+/// preserve arbitrary user-defined frontmatter keys that don't appear in the
+/// fixed `Frontmatter` struct.
+pub(crate) fn split_frontmatter_yaml(content: &str) -> Result<(serde_yaml_ng::Mapping, &str)> {
+    // #847: Strip UTF-8 BOM
+    let content = content.trim_start_matches('\u{feff}');
+    if !content.starts_with("---\n") {
+        return Ok((serde_yaml_ng::Mapping::new(), content));
+    }
+    let inner = &content[4..];
+    if let Some(end_index) = inner.find("\n---\n") {
+        let yaml_str = &inner[..end_index];
+        let body = &inner[end_index + 5..];
+        let mapping =
+            serde_yaml_ng::from_str::<serde_yaml_ng::Mapping>(yaml_str).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Failed to parse frontmatter YAML for query");
+                serde_yaml_ng::Mapping::new()
+            });
+        return Ok((mapping, body));
+    }
+    if let Some(end_index) = inner.find("\n---") {
+        if end_index + 4 == inner.len() {
+            let yaml_str = &inner[..end_index];
+            let mapping = serde_yaml_ng::from_str::<serde_yaml_ng::Mapping>(yaml_str)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to parse frontmatter YAML for query");
+                    serde_yaml_ng::Mapping::new()
+                });
+            return Ok((mapping, ""));
+        }
+    }
+    if inner.starts_with("---\n")
+        || inner.starts_with("---\r\n")
+        || inner == "---"
+        || inner == "---\r"
+    {
+        let body_start = inner.find('\n').map(|i| i + 1).unwrap_or(inner.len());
+        let body = &inner[body_start..];
+        return Ok((serde_yaml_ng::Mapping::new(), body));
+    }
+    Err(anyhow!("invalid frontmatter"))
+}
+
 fn build_note_path(vault_dir: &str, title: &str, created_at: &str, id: &str) -> PathBuf {
     let created = DateTime::parse_from_rfc3339(created_at)
         .map(|value| value.with_timezone(&Utc))

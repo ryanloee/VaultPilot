@@ -378,10 +378,34 @@ public sealed partial class NotesView : UserControl
         {
             RelatedNotesLoading.IsActive = false;
             RelatedNotesLoading.Visibility = Visibility.Collapsed;
-            // Hide the panel itself so cancellation doesn't leave an empty
-            // ghost panel visible (#2288)
-            RelatedNotesPanel.Visibility = Visibility.Collapsed;
+            // Keep the panel visible only when the load completed and produced
+            // at least one entry (a real related note, or the "no related notes"
+            // placeholder). Cancellation or empty results collapse it.
+            // Previously the panel was collapsed unconditionally here, hiding
+            // successfully loaded results and breaking the feature (#2780).
+            if (!ShouldKeepRelatedNotesPanelVisible(
+                    cancellationToken.IsCancellationRequested,
+                    RelatedNotesList.ItemsSource))
+            {
+                RelatedNotesPanel.Visibility = Visibility.Collapsed;
+            }
         }
+    }
+
+    /// <summary>
+    /// Determines whether the related-notes panel should remain visible after a
+    /// load attempt. It stays visible only when the load was not cancelled and
+    /// at least one entry was produced (a real related note, or the
+    /// "no related notes" placeholder). Fixes #2780 where the panel was
+    /// collapsed unconditionally in the load's finally block, hiding
+    /// successfully loaded results and making the feature unusable.
+    /// </summary>
+    public static bool ShouldKeepRelatedNotesPanelVisible(
+        bool isCancellationRequested,
+        object? itemsSource)
+    {
+        if (isCancellationRequested) return false;
+        return itemsSource is IList<RelatedNoteItem> { Count: > 0 };
     }
 
     private void ClearRelatedNotes()

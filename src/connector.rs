@@ -741,6 +741,267 @@ impl Connector for GitHubConnector {
     }
 }
 
+// ── Slack Connector (Phase 2) ──────────────────────────────
+
+/// A summarized Slack message parsed from a `conversations.history` response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlackMessage {
+    /// Message timestamp (unique ID within a channel), e.g. "1699000000.000100".
+    pub ts: String,
+    /// Author user ID (e.g. "U123") or bot id when posted by a bot.
+    pub user: String,
+    /// Message text (may be empty for e.g. file uploads).
+    pub text: String,
+    /// Parent thread timestamp if this message belongs to a thread.
+    pub thread_ts: Option<String>,
+}
+
+/// A fully-described outbound HTTP request built by the Slack connector.
+///
+/// Pure data so it can be inspected in tests (dry-run) and dispatched by an
+/// async executor in production without the trait method itself being async.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlackRequest {
+    /// HTTP method (GET/POST/...).
+    pub method: String,
+    /// Fully-qualified request URL.
+    pub url: String,
+    /// `Accept` header value.
+    pub accept: String,
+    /// Optional JSON request body (for writes).
+    pub body: Option<String>,
+}
+
+/// Slack connector — reads channel history and posts messages via the
+/// Slack Web API.
+///
+/// Phase 2 of #1841. Implements the [`Connector`] trait on top of the
+/// existing foundation, mirroring [`GitHubConnector`]. Authentication uses a
+/// bot/user token (xoxb-/xoxp-) supplied through `secrets` under the key
+/// `slack_token`.
+///
+/// All request construction ([`SlackConnector::build_request`]) and parsing
+/// ([`SlackConnector::parse_message`]) is pure and unit-testable without
+/// network access. In `dry_run` mode [`Connector::execute`] returns the
+/// constructed request as `data` instead of performing the HTTP call.
+#[derive(Debug, Clone)]
+pub struct SlackConnector {
+    /// Connector identifier (e.g. "slack-vaultpilot").
+    id: String,
+    /// Target channel ID (e.g. "C0123ABCD").
+    channel: String,
+    /// When `true`, `execute` returns the built request instead of sending it.
+    dry_run: bool,
+}
+
+impl SlackConnector {
+    /// Create a new Slack connector for a given channel.
+    pub fn new(id: impl Into<String>, channel: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            channel: channel.into(),
+            dry_run: false,
+        }
+    }
+
+    /// Enable dry-run mode (offline request construction, no network).
+    pub fn with_dry_run(mut self, dry: bool) -> Self {
+        self.dry_run = dry;
+        self
+    }
+
+    /// Build the Web API URL for a given method (e.g. `chat.postMessage`).
+    pub fn api_url(&self, method: &str) -> String {
+        format!("https://slack.com/api/{}", method.trim_start_matches('/'))
+    }
+
+    /// Parse a single Slack message object into a [`SlackMessage`] (pure, testable).
+    ///
+    /// Falls back to `bot_id` when `user` is absent (bot-posted messages), and
+    /// to `"unknown"` if neither is present, so history parsing never panics.
+    pub fn parse_message(&self, msg: &Value) -> Result<SlackMessage> {
+        let ts = msg
+            .get("ts")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("slack message missing 'ts'"))?
+            .to_string();
+        let user = msg
+            .get("user")
+            .or_else(|| msg.get("bot_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let text = msg
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let thread_ts = msg
+            .get("thread_ts")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Ok(SlackMessage {
+            ts,
+            user,
+            text,
+            thread_ts,
+        })
+    }
+
+    /// Build the outbound request for a given action (pure, testable).
+    ///
+    /// Returns an error if the required `slack_token` secret is missing or the
+    /// action payload is malformed.
+    pub fn build_request(
+        &self,
+        action: &Action,
+        secrets: &HashMap<String, String>,
+    ) -> Result<SlackRequest> {
+        let _token = secrets.get("slack_token").ok_or_else(|| {
+            anyhow::anyhow!(
+                "slack connector '{}' requires 'slack_token' in secrets",
+                self.id
+            )
+        })?;
+
+        match action.name.as_str() {
+            "list_messages" => Ok(SlackRequest {
+                method: "GET".into(),
+                url: self.api_url(&format!(
+                    "conversations.history?channel={}&limit=50",
+                    self.channel
+                )),
+                accept: "application/json".into(),
+                body: None,
+            }),
+            "post_message" => {
+                let text = action
+                    .payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("post_message requires 'text' (string)"))?
+                    .to_string();
+                let payload = serde_json::json!({
+                    "channel": self.channel,
+                    "text": text,
+                });
+                Ok(SlackRequest {
+                    method: "POST".into(),
+                    url: self.api_url("chat.postMessage"),
+                    accept: "application/json".into(),
+                    body: Some(serde_json::to_string(&payload)?),
+                })
+            }
+            other => Err(anyhow::anyhow!(
+                "slack connector '{}': unknown action '{}'",
+                self.id,
+                other
+            )),
+        }
+    }
+
+    /// Register this connector as an MCP server capability in the
+    /// [`CapabilityRegistry`], mirroring [`register_as_mcp`]. The `http_url`
+    /// is the local endpoint the connector's bridge listens on.
+    pub fn register(
+        &self,
+        registry: &mut crate::capability_registry::CapabilityRegistry,
+        http_url: &str,
+    ) {
+        let description = format!(
+            "Read/post messages in Slack channel {} via Slack Web API",
+            self.channel
+        );
+        register_as_mcp(
+            registry,
+            self.name(),
+            "Slack Connector",
+            &description,
+            http_url,
+        );
+    }
+
+    /// Perform the actual HTTP request (async). Used by `execute` in live mode.
+    async fn send(&self, req: &SlackRequest, token: &str) -> Result<ConnectorResponse> {
+        let client = reqwest::Client::new();
+        let method: reqwest::Method = req
+            .method
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid HTTP method '{}': {e}", req.method))?;
+        let mut builder = client
+            .request(method, &req.url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", &req.accept)
+            .header("User-Agent", "VaultPilot-Connector");
+        if let Some(b) = &req.body {
+            builder = builder
+                .header("Content-Type", "application/json")
+                .body(b.clone());
+        }
+        let resp = builder.send().await?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        Ok(ConnectorResponse {
+            success: status.is_success(),
+            summary: format!("slack {} {} -> HTTP {}", req.method, req.url, status),
+            data: Some(serde_json::json!({ "status": status.as_u16(), "body": text })),
+        })
+    }
+}
+
+impl Connector for SlackConnector {
+    fn name(&self) -> &str {
+        &self.id
+    }
+
+    fn auth_flow(&self) -> AuthFlow {
+        AuthFlow::ApiKey {
+            key_name: "slack_token".into(),
+            source: TokenSource::Config,
+        }
+    }
+
+    fn capabilities(&self) -> Vec<Capability> {
+        vec![
+            Capability {
+                name: "list_messages".into(),
+                description: format!("List recent messages in Slack channel {}", self.channel),
+                access: AccessLevel::Read,
+            },
+            Capability {
+                name: "post_message".into(),
+                description: format!("Post a message to Slack channel {}", self.channel),
+                access: AccessLevel::Write,
+            },
+        ]
+    }
+
+    fn execute(
+        &self,
+        action: &Action,
+        secrets: &HashMap<String, String>,
+    ) -> Result<ConnectorResponse> {
+        let req = self.build_request(action, secrets)?;
+        if self.dry_run {
+            return Ok(ConnectorResponse {
+                success: true,
+                summary: format!("dry-run {} {}", req.method, req.url),
+                data: Some(serde_json::json!({
+                    "method": req.method,
+                    "url": req.url,
+                    "accept": req.accept,
+                    "body": req.body,
+                })),
+            });
+        }
+        let token = secrets.get("slack_token").cloned().unwrap_or_default();
+        // The trait method is synchronous; spin a dedicated runtime for the
+        // single network call so callers don't need to be inside an async ctx.
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(self.send(&req, &token))
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1128,6 +1389,215 @@ mod tests {
                 name, transport, ..
             } => {
                 assert_eq!(name, "GitHub Connector");
+                assert!(matches!(
+                    transport,
+                    crate::capability_registry::McpTransport::Http { .. }
+                ));
+            }
+            _ => panic!("expected McpServer capability"),
+        }
+    }
+
+    // ── SlackConnector tests (Phase 2, #1841) ──
+
+    #[test]
+    fn slack_connector_basics() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        assert_eq!(sl.name(), "slack-vp");
+        let caps = sl.capabilities();
+        assert_eq!(caps.len(), 2);
+        assert_eq!(caps[0].name, "list_messages");
+        assert_eq!(caps[0].access, AccessLevel::Read);
+        assert_eq!(caps[1].name, "post_message");
+        assert_eq!(caps[1].access, AccessLevel::Write);
+    }
+
+    #[test]
+    fn slack_auth_flow_uses_token() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        match sl.auth_flow() {
+            AuthFlow::ApiKey { key_name, source } => {
+                assert_eq!(key_name, "slack_token");
+                assert_eq!(source, TokenSource::Config);
+            }
+            other => panic!("expected ApiKey auth flow, got {other:?}"),
+        }
+        // Without the token, validation must fail.
+        let secrets = HashMap::new();
+        assert!(sl.validate(&secrets).is_err());
+        let mut with_token = HashMap::new();
+        with_token.insert("slack_token".to_string(), "xoxb-xxx".to_string());
+        assert!(sl.validate(&with_token).is_ok());
+    }
+
+    #[test]
+    fn slack_api_url() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        assert_eq!(
+            sl.api_url("chat.postMessage"),
+            "https://slack.com/api/chat.postMessage"
+        );
+        // Leading slash is tolerated.
+        assert_eq!(
+            sl.api_url("/conversations.history"),
+            "https://slack.com/api/conversations.history"
+        );
+    }
+
+    #[test]
+    fn slack_parse_message() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let json = serde_json::json!({
+            "ts": "1699000000.000100",
+            "user": "U123",
+            "text": "hello world",
+            "thread_ts": "1699000000.000000"
+        });
+        let msg = sl.parse_message(&json).unwrap();
+        assert_eq!(
+            msg,
+            SlackMessage {
+                ts: "1699000000.000100".into(),
+                user: "U123".into(),
+                text: "hello world".into(),
+                thread_ts: Some("1699000000.000000".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn slack_parse_message_bot_fallback() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        // Bot-posted messages lack `user` but carry `bot_id`.
+        let json = serde_json::json!({
+            "ts": "1699000000.000200",
+            "bot_id": "B456",
+            "text": "bot says hi"
+        });
+        let msg = sl.parse_message(&json).unwrap();
+        assert_eq!(msg.user, "B456");
+        assert_eq!(msg.thread_ts, None);
+    }
+
+    #[test]
+    fn slack_parse_message_missing_ts() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let json = serde_json::json!({ "user": "U123", "text": "no ts" });
+        assert!(sl.parse_message(&json).is_err());
+    }
+
+    #[test]
+    fn slack_build_request_missing_token() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let action = Action {
+            name: "list_messages".into(),
+            payload: serde_json::json!({}),
+        };
+        let secrets = HashMap::new();
+        assert!(sl.build_request(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn slack_build_request_list_messages() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let mut secrets = HashMap::new();
+        secrets.insert("slack_token".to_string(), "xoxb-xxx".to_string());
+        let action = Action {
+            name: "list_messages".into(),
+            payload: serde_json::json!({}),
+        };
+        let req = sl.build_request(&action, &secrets).unwrap();
+        assert_eq!(req.method, "GET");
+        assert_eq!(
+            req.url,
+            "https://slack.com/api/conversations.history?channel=C0123ABCD&limit=50"
+        );
+        assert!(req.body.is_none());
+    }
+
+    #[test]
+    fn slack_build_request_post_message() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let mut secrets = HashMap::new();
+        secrets.insert("slack_token".to_string(), "xoxb-xxx".to_string());
+        let action = Action {
+            name: "post_message".into(),
+            payload: serde_json::json!({ "text": "ping the channel" }),
+        };
+        let req = sl.build_request(&action, &secrets).unwrap();
+        assert_eq!(req.method, "POST");
+        assert_eq!(req.url, "https://slack.com/api/chat.postMessage");
+        let parsed: Value = serde_json::from_str(req.body.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["channel"], "C0123ABCD");
+        assert_eq!(parsed["text"], "ping the channel");
+    }
+
+    #[test]
+    fn slack_build_request_post_missing_text() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let mut secrets = HashMap::new();
+        secrets.insert("slack_token".to_string(), "xoxb-xxx".to_string());
+        let action = Action {
+            name: "post_message".into(),
+            payload: serde_json::json!({}),
+        };
+        assert!(sl.build_request(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn slack_build_request_unknown_action() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let mut secrets = HashMap::new();
+        secrets.insert("slack_token".to_string(), "xoxb-xxx".to_string());
+        let action = Action {
+            name: "delete_everything".into(),
+            payload: serde_json::json!({}),
+        };
+        assert!(sl.build_request(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn slack_dry_run_execute_returns_request() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD").with_dry_run(true);
+        let mut secrets = HashMap::new();
+        secrets.insert("slack_token".to_string(), "xoxb-xxx".to_string());
+        let action = Action {
+            name: "list_messages".into(),
+            payload: serde_json::json!({}),
+        };
+        let resp = sl.execute(&action, &secrets).unwrap();
+        assert!(resp.success);
+        assert!(resp.summary.contains("dry-run"));
+        assert_eq!(resp.data.as_ref().unwrap()["method"], "GET");
+        assert_eq!(
+            resp.data.as_ref().unwrap()["url"],
+            "https://slack.com/api/conversations.history?channel=C0123ABCD&limit=50"
+        );
+    }
+
+    #[test]
+    fn slack_execute_missing_token_errors() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let secrets = HashMap::new();
+        let action = Action {
+            name: "list_messages".into(),
+            payload: serde_json::json!({}),
+        };
+        // No dry-run and no token -> build_request fails before any network.
+        assert!(sl.execute(&action, &secrets).is_err());
+    }
+
+    #[test]
+    fn slack_register_creates_mcp_capability() {
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD");
+        let mut registry = crate::capability_registry::CapabilityRegistry::default();
+        sl.register(&mut registry, "http://localhost:8092");
+        assert!(registry.capabilities.contains_key("slack-vp"));
+        match &registry.capabilities["slack-vp"] {
+            crate::capability_registry::Capability::McpServer {
+                name, transport, ..
+            } => {
+                assert_eq!(name, "Slack Connector");
                 assert!(matches!(
                     transport,
                     crate::capability_registry::McpTransport::Http { .. }

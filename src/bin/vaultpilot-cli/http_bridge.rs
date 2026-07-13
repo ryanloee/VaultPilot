@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
+use axum::body::Body;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::sse::{Event, Sse};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
@@ -102,6 +103,8 @@ pub(super) async fn run_http_bridge(
         // AI Action Palette (#2188)
         .route("/api/ai/actions", get(http_list_ai_actions))
         .route("/api/ai/action", post(http_ai_action))
+        // Vault file serving (#1767) — serve PDF/images from vault directory
+        .route("/api/vault/files/{*path}", get(http_serve_vault_file))
         // #790: Rate limiter placed before body limit and timeout so
         // rate-limited requests are rejected immediately without reading
         // the body or consuming timeout budget. In Axum .layer() ordering,
@@ -1196,6 +1199,89 @@ async fn http_vault_health(
         openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Serialization failed")
     })?;
     Ok(Json(value))
+}
+
+/// GET /api/vault/files/{*path} — Serve a file (PDF / image) from inside the
+/// vault so the desktop/mobile UI can embed a preview via `![[file.pdf]]` and
+/// similar wikilink syntax (#1767).
+///
+/// Security: the requested path is resolved against the configured vault root
+/// and is **only** served when the canonicalized path stays within the vault
+/// root. Path-traversal attempts (`../`, symlinks pointing outside the vault,
+/// absolute paths) are rejected with 404 and never leak a file outside the
+/// vault. The file must also physically exist (we never enumerate or confirm
+/// the presence of anything outside the vault).
+async fn http_serve_vault_file(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(rel): AxumPath<String>,
+) -> Result<Response, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    let settings = load_settings_async(&state.context).await.map_err(|e| {
+        tracing::warn!("http_serve_vault_file: failed to load settings: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load settings")
+    })?;
+
+    let vault_root = PathBuf::from(&settings.vault_dir);
+    let Some(real) = resolve_vault_file_path(&vault_root, &rel) else {
+        return Err(openai_error(StatusCode::NOT_FOUND, "File not found"));
+    };
+
+    let bytes = tokio::fs::read(&real).await.map_err(|e| {
+        // A race between resolve and read (file deleted) or a permission
+        // problem: report a generic 404 so we never leak the reason.
+        tracing::warn!("http_serve_vault_file: failed to read {real:?}: {e}");
+        openai_error(StatusCode::NOT_FOUND, "File not found")
+    })?;
+
+    let content_type = vault_file_content_type(&real);
+    let body = Body::from(bytes);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        // `inline` lets the browser/WebView render the PDF/image in-place
+        // instead of forcing a download.
+        .header(header::CONTENT_DISPOSITION, "inline")
+        .body(body)
+        .map_err(|e| {
+            tracing::warn!("http_serve_vault_file: failed to build response: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serve file")
+        })
+}
+
+/// Resolve `rel` against `vault_root`, guaranteeing the result stays inside the
+/// vault. Returns `None` when the file does not exist or the resolved path
+/// escapes the vault root (traversal / out-of-vault symlink).
+fn resolve_vault_file_path(vault_root: &Path, rel: &str) -> Option<PathBuf> {
+    let candidate = vault_root.join(rel);
+    let canon_root = vault_root.canonicalize().ok()?;
+    let canon = candidate.canonicalize().ok()?;
+    // `Path::starts_with` is component-based, so `/vault` will NOT match
+    // `/vault-stolen` — a naive string prefix check would be wrong here.
+    canon.starts_with(&canon_root).then_some(canon)
+}
+
+/// Map a file extension to a safe `Content-Type` for in-vault previews.
+/// Unknown types fall back to `application/octet-stream` so we never claim a
+/// specific format we cannot honor.
+fn vault_file_content_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("pdf") => "application/pdf",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("bmp") => "image/bmp",
+        Some("tiff") | Some("tif") => "image/tiff",
+        _ => "application/octet-stream",
+    }
 }
 
 async fn http_models(
@@ -2293,5 +2379,93 @@ mod tests {
         let inner = anyhow::Error::from(NoteNotFound("wrapped-id".to_string()));
         let outer = inner.context("failed during sync");
         assert_eq!(classify_note_load_error(&outer), StatusCode::NOT_FOUND);
+    }
+    #[test]
+    fn vault_file_resolve_accepts_inside_vault() {
+        // Unique per-test dir so parallel tests don't clobber each other.
+        let tmp = std::env::temp_dir().join(format!("vp_test_vault_in_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(tmp.join("docs"));
+        let _ = std::fs::write(tmp.join("docs/report.pdf"), b"%PDF-1.4");
+        let _ = std::fs::write(tmp.join("note.md"), b"hello");
+
+        // Normal nested path resolves to a canonical path inside the vault.
+        let got = resolve_vault_file_path(&tmp, "docs/report.pdf");
+        assert!(got.is_some());
+        let p = got.unwrap();
+        assert!(p.starts_with(tmp.canonicalize().unwrap()));
+        assert!(p.ends_with("report.pdf"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn vault_file_resolve_blocks_dotdot_traversal() {
+        let tmp = std::env::temp_dir().join(format!("vp_test_vault_dot_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        // A sibling directory OUTSIDE the vault that must never be served.
+        let outside = std::env::temp_dir().join(format!("vp_test_outside_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&outside);
+        let _ = std::fs::write(outside.join("secret.pdf"), b"%PDF-1.4 secret");
+
+        // `../<outside>/secret.pdf` is a real file but lives outside the vault.
+        let rel = format!(
+            "../{}/secret.pdf",
+            outside.file_name().unwrap().to_str().unwrap()
+        );
+        assert!(
+            resolve_vault_file_path(&tmp, &rel).is_none(),
+            "path traversal must be rejected even when the target file exists"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn vault_file_resolve_rejects_absolute_path() {
+        let tmp = std::env::temp_dir().join(format!("vp_test_vault_abs_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // An absolute path pointing at a system file must never resolve.
+        assert!(resolve_vault_file_path(&tmp, "/etc/passwd").is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn vault_file_resolve_rejects_missing_file() {
+        let tmp = std::env::temp_dir().join(format!("vp_test_vault_miss_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Non-existent file inside the vault must not resolve (no leak of
+        // presence/absence).
+        assert!(resolve_vault_file_path(&tmp, "does-not-exist.pdf").is_none());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn vault_file_content_type_mapping() {
+        let cases = [
+            ("a.pdf", "application/pdf"),
+            ("a.PDF", "application/pdf"),
+            ("a.png", "image/png"),
+            ("a.jpeg", "image/jpeg"),
+            ("a.jpg", "image/jpeg"),
+            ("a.gif", "image/gif"),
+            ("a.webp", "image/webp"),
+            ("a.svg", "image/svg+xml"),
+            ("a.bmp", "image/bmp"),
+            ("a.tiff", "image/tiff"),
+            ("a.unknown", "application/octet-stream"),
+            ("a", "application/octet-stream"),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                vault_file_content_type(Path::new(name)),
+                expected,
+                "content-type for {name}"
+            );
+        }
     }
 }

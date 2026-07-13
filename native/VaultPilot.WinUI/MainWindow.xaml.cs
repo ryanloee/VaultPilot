@@ -685,9 +685,10 @@ public sealed partial class MainWindow : Window
 
         // Cancel Agent mode to prevent ObjectDisposedException from
         // ExecuteAgentRequestAsync accessing disposed _backendClient (#2304)
+        // #2822: Only Cancel, don't Dispose — consistent with CancelActiveRequest pattern (#2732).
+        // Dispose is the sole responsibility of the CTS owner's finally block.
         var agentCts = Interlocked.Exchange(ref _agentCts, null);
         agentCts?.Cancel();
-        agentCts?.Dispose();
 
         RemoveThinkingIndicator();
         StopAutoWakeTimer();

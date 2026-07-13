@@ -199,6 +199,16 @@ pub fn list_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>
     Ok(result.notes)
 }
 
+/// List ALL note metadata without any limit — needed for vault-wide queries (#2813).
+///
+/// Unlike [`list_notes_with_context`] which caps at 50, this returns every note in the
+/// vault so the query engine can operate on the full dataset.
+#[instrument(skip(context))]
+pub fn list_all_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>> {
+    let (connection, _) = pool::open_connection(context)?;
+    list_all_note_metas(&connection)
+}
+
 /// Returns `true` if the notes table contains at least one row.
 ///
 /// This is much cheaper than [`list_notes_with_context`] which loads full

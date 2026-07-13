@@ -3,7 +3,7 @@ mod markdown_utils;
 mod mcp_server;
 
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use anyhow::{Context, Result};
@@ -25,15 +25,16 @@ use vaultpilot_lib::storage::{
     delete_project_with_context, delete_subscription_with_context, export_all_notes_with_context,
     export_note_markdown_with_context, find_related_notes_with_context,
     get_collections_for_note_with_context, get_project_with_context, get_subscription_with_context,
-    import_markdown_with_context, initialize_storage_with_context, list_collections_with_context,
-    list_notes_in_collection_with_context, list_projects_with_context,
-    list_subscriptions_with_context, load_chat_state_async, load_note_with_context,
-    load_settings_with_context, rebuild_index_with_context,
+    import_markdown_with_context, initialize_storage_with_context, list_all_notes_with_context,
+    list_collections_with_context, list_notes_in_collection_with_context,
+    list_projects_with_context, list_subscriptions_with_context, load_chat_state_async,
+    load_note_with_context, load_settings_with_context, rebuild_index_with_context,
     remove_note_from_collection_with_context, remove_note_from_project_with_context,
     save_chat_state_async, save_note_with_context, save_settings_with_context,
     search_notes_with_context, set_subscription_enabled_with_context, update_project_with_context,
     update_subscription_with_context, vault_export_with_context, StorageContext,
 };
+use vaultpilot_lib::vault_query::{parse_query, query_records, record_from_yaml, QValue};
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
     generate_serendipity, run_all_due_subscriptions, run_deep_research, run_single_subscription,
@@ -1009,6 +1010,38 @@ enum VaultActions {
         #[arg(long, short)]
         output: PathBuf,
     },
+    /// Query vault notes with structured SQL-like syntax and export results (#2813)
+    ///
+    /// Examples:
+    ///   vp vault query "SELECT * WHERE status = 'active'"
+    ///   vp vault query "SELECT title, priority WHERE project CONTAINS 'vault' ORDER BY priority DESC"
+    ///   vp vault query "SELECT *" --format csv --output results.csv
+    ///   vp vault query "SELECT * WHERE tags CONTAINS 'rust'" --format md-table
+    Query {
+        /// SQL-like query string (SELECT ... WHERE ... ORDER BY ... LIMIT ...)
+        query: String,
+
+        /// Output format for query results
+        #[arg(long, default_value = "table")]
+        format: QueryFormat,
+
+        /// Write results to a file instead of stdout
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+}
+
+/// Output format for vault query results (#2813)
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum QueryFormat {
+    /// Pretty-printed terminal table (default)
+    Table,
+    /// CSV with header row — compatible with spreadsheet apps
+    Csv,
+    /// Markdown table — pasteable directly into notes
+    MdTable,
+    /// JSON array of objects — machine-readable
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -2501,7 +2534,292 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             let result = vault_export_with_context(context, output)?;
             to_json(&result)
         }
+        VaultActions::Query {
+            query,
+            format,
+            output,
+        } => handle_vault_query(context, query, format, output.as_deref()),
     }
+}
+
+/// Execute a structured vault query and format the results (#2813).
+///
+/// Loads all notes from the vault, extracts frontmatter properties as a generic
+/// YAML mapping so that arbitrary user-defined properties are captured, converts
+/// them to [`vault_query::Record`]s, runs the query, and formats the output in
+/// table / CSV / Markdown-table / JSON.
+fn handle_vault_query(
+    context: &StorageContext,
+    query_str: &str,
+    format: &QueryFormat,
+    output_path: Option<&Path>,
+) -> Result<Value> {
+    use std::fs;
+
+    let q = parse_query(query_str).with_context(|| format!("invalid query syntax: {query_str}"))?;
+
+    // Load all notes and build Records from their frontmatter.
+    let metas = list_all_notes_with_context(context)?;
+    let mut records: Vec<vaultpilot_lib::vault_query::Record> = Vec::with_capacity(metas.len());
+    let mut skipped = 0usize;
+
+    for meta in &metas {
+        // Read the raw file to get frontmatter as generic YAML mapping (#2813).
+        // load_note_body_from_meta strips frontmatter, but we need the raw YAML
+        // to capture arbitrary user-defined properties.
+        let raw = std::fs::read_to_string(&meta.path)
+            .with_context(|| format!("failed to read {}", meta.path))?;
+        let content = raw.replace("\r\n", "\n");
+        let content = content.trim_start_matches('\u{feff}');
+        if let Some(yaml_block) = extract_frontmatter_yaml_block(content) {
+            match serde_yaml_ng::from_str::<serde_yaml_ng::Mapping>(&yaml_block) {
+                Ok(mapping) => {
+                    records.push(record_from_yaml(&meta.path, &mapping));
+                }
+                Err(_) => {
+                    // Parse failed — create a minimal record so the note still
+                    // appears in query results (with $path at least).
+                    let mut rec = vaultpilot_lib::vault_query::Record::new(&meta.path);
+                    if !meta.title.is_empty() {
+                        rec.props
+                            .insert("title".to_string(), QValue::Text(meta.title.clone()));
+                    }
+                    records.push(rec);
+                    skipped += 1;
+                }
+            }
+        } else {
+            // No frontmatter block — still include the note so it can be
+            // queried by $path / title.
+            let mut rec = vaultpilot_lib::vault_query::Record::new(&meta.path);
+            if !meta.title.is_empty() {
+                rec.props
+                    .insert("title".to_string(), QValue::Text(meta.title.clone()));
+            }
+            records.push(rec);
+        }
+    }
+
+    if skipped > 0 {
+        eprintln!("[vault-query] skipped {skipped} notes with unparseable frontmatter");
+    }
+
+    let rows = query_records(&records, &q);
+
+    // Determine columns: use SELECT fields if present, otherwise collect all
+    // unique keys from results (sorted for stable output).
+    let columns: Vec<String> = match &q.select {
+        Some(fields) => {
+            let mut cols = vec!["$path".to_string()];
+            cols.extend(fields.iter().cloned());
+            cols
+        }
+        None => {
+            let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            keys.insert("$path".to_string());
+            for row in &rows {
+                for k in row.keys() {
+                    keys.insert(k.clone());
+                }
+            }
+            keys.into_iter().collect()
+        }
+    };
+
+    let formatted = match format {
+        QueryFormat::Table => format_as_table(&columns, &rows),
+        QueryFormat::Csv => format_as_csv(&columns, &rows),
+        QueryFormat::MdTable => format_as_md_table(&columns, &rows),
+        QueryFormat::Json => {
+            let json_rows: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|row| {
+                    let mut map = serde_json::Map::new();
+                    for col in &columns {
+                        let val = row.get(col).map(|v| v.to_string()).unwrap_or_default();
+                        map.insert(col.clone(), serde_json::Value::String(val));
+                    }
+                    serde_json::Value::Object(map)
+                })
+                .collect();
+            serde_json::to_string_pretty(&json_rows)?
+        }
+    };
+
+    // Write output
+    if let Some(path) = output_path {
+        fs::write(path, &formatted)
+            .with_context(|| format!("failed to write output to {}", path.display()))?;
+        to_json(&serde_json::json!({
+            "output": path.display().to_string(),
+            "rows": rows.len(),
+            "format": format!("{format:?}").to_lowercase(),
+        }))
+    } else {
+        // Print to stdout for piping / redirection
+        println!("{formatted}");
+        to_json(&serde_json::json!({
+            "rows": rows.len(),
+            "format": format!("{format:?}").to_lowercase(),
+        }))
+    }
+}
+
+/// Extract the raw YAML string from a frontmatter block (`---\n...\n---`).
+fn extract_frontmatter_yaml_block(content: &str) -> Option<String> {
+    if !content.starts_with("---\n") {
+        return None;
+    }
+    let inner = &content[4..];
+    // Standard delimiter followed by newline.
+    if let Some(end) = inner.find("\n---\n") {
+        return Some(inner[..end].to_string());
+    }
+    // File ends with "\n---" (no trailing newline).
+    if let Some(end) = inner.find("\n---") {
+        if end + 4 == inner.len() {
+            return Some(inner[..end].to_string());
+        }
+    }
+    // Empty frontmatter case: "---\n---\nBody"
+    if inner.starts_with("---\n") || inner == "---" {
+        return Some(String::new());
+    }
+    None
+}
+
+/// Render query results as a terminal-friendly aligned table.
+fn format_as_table(
+    columns: &[String],
+    rows: &[std::collections::HashMap<String, QValue>],
+) -> String {
+    if rows.is_empty() {
+        return "(no results)\n".to_string();
+    }
+
+    // Measure column widths
+    let mut widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+    for row in rows {
+        for (i, col) in columns.iter().enumerate() {
+            let val_len = row.get(col).map(|v| v.to_string().len()).unwrap_or(0);
+            if val_len > widths[i] {
+                widths[i] = val_len;
+            }
+        }
+    }
+
+    let mut out = String::new();
+
+    // Header row
+    for (i, col) in columns.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(&format!("{:width$}", col, width = widths[i]));
+    }
+    out.push('\n');
+
+    // Separator
+    for (i, w) in widths.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(&"-".repeat(*w));
+    }
+    out.push('\n');
+
+    // Data rows
+    for row in rows {
+        for (i, col) in columns.iter().enumerate() {
+            if i > 0 {
+                out.push_str("  ");
+            }
+            let val = row.get(col).map(|v| v.to_string()).unwrap_or_default();
+            out.push_str(&format!("{:width$}", val, width = widths[i]));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Render query results as CSV with header row (#2813).
+///
+/// Values containing commas, double-quotes, or newlines are properly escaped
+/// per RFC 4180.
+fn format_as_csv(columns: &[String], rows: &[std::collections::HashMap<String, QValue>]) -> String {
+    let mut out = String::new();
+
+    // Header
+    out.push_str(&csv_line(columns));
+    out.push('\n');
+
+    // Data
+    for row in rows {
+        let vals: Vec<String> = columns
+            .iter()
+            .map(|c| row.get(c).map(|v| v.to_string()).unwrap_or_default())
+            .collect();
+        out.push_str(&csv_line(&vals));
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Escape and join a row for CSV output (RFC 4180).
+fn csv_line(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|v| {
+            if v.contains(',') || v.contains('"') || v.contains('\n') {
+                format!("\"{}\"", v.replace('"', "\"\""))
+            } else {
+                v.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Render query results as a GitHub-flavored Markdown table (#2813).
+fn format_as_md_table(
+    columns: &[String],
+    rows: &[std::collections::HashMap<String, QValue>],
+) -> String {
+    if rows.is_empty() {
+        return "*No results*\n".to_string();
+    }
+
+    let mut out = String::new();
+
+    // Header
+    out.push('|');
+    for col in columns {
+        out.push_str(&format!(" {} |", col));
+    }
+    out.push('\n');
+
+    // Separator
+    out.push('|');
+    for _ in columns {
+        out.push_str("---|");
+    }
+    out.push('\n');
+
+    // Data
+    for row in rows {
+        out.push('|');
+        for col in columns {
+            let val = row.get(col).map(|v| v.to_string()).unwrap_or_default();
+            // Escape pipe characters in values to preserve table structure.
+            let escaped = val.replace('|', "\\|");
+            out.push_str(&format!(" {} |", escaped));
+        }
+        out.push('\n');
+    }
+
+    out
 }
 
 /// Handle the `daily` subcommand — create/open daily notes with templates (#1843).

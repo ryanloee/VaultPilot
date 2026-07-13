@@ -60,7 +60,16 @@ public sealed partial class MainWindow
             Interlocked.Exchange(ref _updateCheckStarted, 0); // #542: Allow retry on transient failure
             _updateDownloadPercent = -1;
             LogStartup($"Update check failed: {error}");
-            UpdateStatusBar("warning", "\u66f4\u65b0\u68c0\u67e5\u5931\u8d25", LocalizeError(error.Message));
+            UpdateStatusBar("warning", "更新检查失败", LocalizeError(error.Message));
+        }
+        finally
+        {
+            // #2783: Reset the re-entrance guard on EVERY exit path — including
+            // the early `return`s inside the try block. Previously only the catch
+            // branch reset it, so a successful check (or "already up to date")
+            // left _updateCheckStarted == 1 forever, making the manual
+            // "检查更新" button a silent no-op. Idempotent with the catch above.
+            Interlocked.Exchange(ref _updateCheckStarted, 0);
         }
     }
 

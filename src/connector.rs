@@ -323,8 +323,6 @@ impl WebhookConnector {
         Ok(content.trim().to_string())
     }
 
-
-
     /// Compute the HMAC-SHA256 hex signature for `payload` using the on-disk
     /// shared secret. Inverse of [`WebhookConnector::verify_signature`].
     fn compute_signature(&self, payload: &str) -> Result<String> {
@@ -474,25 +472,57 @@ impl Connector for WebhookConnector {
                 // secret the webhook is open (unsigned payloads accepted).
                 // Verify against the raw body when available (issue #2794);
                 // otherwise fall back to the canonical re-serialization.
+                //
+                // Security gate (#2795): the old `secret_configured()` used
+                // `unwrap_or(false)`, which collapsed TWO distinct states into
+                // "open": (a) no/empty secret file (intentionally open) and
+                // (b) a secret file that EXISTS but is transiently unreadable
+                // (permission change, IO error, rotation race). State (b) MUST
+                // fail **closed** — otherwise an attacker who induces a read
+                // failure (or deploys with restrictive file perms) bypasses
+                // signature verification entirely. We therefore read the file
+                // here and reject on any error that is NOT "not found".
                 let signed_str = self.signing_body(&action.payload)?;
-                if self.secret_configured() {
-                    match action.payload.get("_signature").and_then(Value::as_str) {
-                        Some(sig) => {
-                            if !self.verify_signature(&signed_str, sig)? {
+                match std::fs::read_to_string(&self.secret_path) {
+                    // Non-empty secret present → signature mandatory.
+                    Ok(s) if !s.trim().is_empty() => {
+                        match action.payload.get("_signature").and_then(Value::as_str) {
+                            Some(sig) => {
+                                if !self.verify_signature(&signed_str, sig)? {
+                                    return Ok(ConnectorResponse {
+                                        success: false,
+                                        summary: "HMAC signature verification failed".into(),
+                                        data: None,
+                                    });
+                                }
+                            }
+                            None => {
                                 return Ok(ConnectorResponse {
                                     success: false,
-                                    summary: "HMAC signature verification failed".into(),
+                                    summary: "HMAC signature required but missing".into(),
                                     data: None,
                                 });
                             }
                         }
-                        None => {
-                            return Ok(ConnectorResponse {
-                                success: false,
-                                summary: "HMAC signature required but missing".into(),
-                                data: None,
-                            });
-                        }
+                    }
+                    // Missing secret file (NotFound) → genuinely open webhook.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // unsigned payloads accepted
+                    }
+                    // Empty secret file → genuinely open webhook.
+                    Ok(_) => {
+                        // unsigned payloads accepted
+                    }
+                    // Secret file present but unreadable → FAIL CLOSED (#2795).
+                    Err(e) => {
+                        return Ok(ConnectorResponse {
+                            success: false,
+                            summary: format!(
+                                "webhook '{}' secret unavailable (rejecting unsigned payload): {e}",
+                                self.id
+                            ),
+                            data: None,
+                        });
                     }
                 }
 
@@ -1830,7 +1860,10 @@ mod tests {
 
     #[test]
     fn webhook_rejects_unsigned_when_secret_configured() {
-        let path = std::env::temp_dir().join("vp_wh_secret_test_2789a").to_string_lossy().into_owned();
+        let path = std::env::temp_dir()
+            .join("vp_wh_secret_test_2789a")
+            .to_string_lossy()
+            .into_owned();
         std::fs::write(&path, "super-secret-hmac-key").unwrap();
         let wh = WebhookConnector::new("wh-sec", "Sec", path.as_str());
         let action = Action {
@@ -1852,7 +1885,10 @@ mod tests {
 
     #[test]
     fn webhook_accepts_valid_signature() {
-        let path = std::env::temp_dir().join("vp_wh_secret_test_2789b").to_string_lossy().into_owned();
+        let path = std::env::temp_dir()
+            .join("vp_wh_secret_test_2789b")
+            .to_string_lossy()
+            .into_owned();
         std::fs::write(&path, "super-secret-hmac-key").unwrap();
         let wh = WebhookConnector::new("wh-sec", "Sec", path.as_str());
         let payload = serde_json::json!({"text": "hi"});
@@ -1871,7 +1907,10 @@ mod tests {
 
     #[test]
     fn webhook_rejects_bad_signature() {
-        let path = std::env::temp_dir().join("vp_wh_secret_test_2789c").to_string_lossy().into_owned();
+        let path = std::env::temp_dir()
+            .join("vp_wh_secret_test_2789c")
+            .to_string_lossy()
+            .into_owned();
         std::fs::write(&path, "super-secret-hmac-key").unwrap();
         let wh = WebhookConnector::new("wh-sec", "Sec", path.as_str());
         let action = Action {
@@ -1891,7 +1930,10 @@ mod tests {
         // it sent — which may have a non-canonical key order. Re-serializing a
         // parsed Value reorders keys, so the signature would never match and
         // every legitimately-signed webhook would be rejected (#2794).
-        let path = std::env::temp_dir().join("vp_wh_secret_test_2794").to_string_lossy().into_owned();
+        let path = std::env::temp_dir()
+            .join("vp_wh_secret_test_2794")
+            .to_string_lossy()
+            .into_owned();
         std::fs::write(&path, "raw-body-secret").unwrap();
         let wh = WebhookConnector::new("wh-raw", "Raw", path.as_str());
 
@@ -1945,6 +1987,51 @@ mod tests {
         );
     }
 
+    // ── Regression: #2795 — secret read error MUST fail CLOSED, not open ──
+    #[test]
+    fn webhook_fails_closed_on_secret_read_error() {
+        // A secret file that EXISTS but cannot be read must NOT collapse into
+        // "open". We simulate an unreadable-but-present secret by pointing the
+        // secret path at a directory: `read_to_string` errors, but the error
+        // kind is NOT `NotFound`, so the gate must reject unsigned payloads
+        // instead of silently accepting them (the old `unwrap_or(false)` bug).
+        let dir = std::env::temp_dir().join("vp_wh_secret_dir_2795");
+        let _ = std::fs::create_dir_all(&dir);
+        let dir_path = dir.to_string_lossy().into_owned();
+        let wh = WebhookConnector::new("wh-closed", "Closed", dir_path.as_str());
+
+        // An unsigned payload must be REJECTED (fail closed).
+        let action = Action {
+            name: "webhook_receive".into(),
+            payload: serde_json::json!({"text": "hi"}),
+        };
+        let resp = wh.execute(&action, &HashMap::new()).unwrap();
+        assert!(
+            !resp.success,
+            "secret read error must fail CLOSED, not accept unsigned payload"
+        );
+        assert!(
+            resp.summary.contains("secret unavailable"),
+            "rejection should explain the secret was unavailable (got: {})",
+            resp.summary
+        );
+
+        // A forged signature must ALSO be rejected (no signature verification
+        // must ever run against an unreadable secret).
+        let mut forged = serde_json::json!({"text": "hi"});
+        forged["_signature"] = serde_json::Value::String("deadbeef".into());
+        let action2 = Action {
+            name: "webhook_receive".into(),
+            payload: forged,
+        };
+        let resp2 = wh.execute(&action2, &HashMap::new()).unwrap();
+        assert!(
+            !resp2.success,
+            "forged signature must be rejected when secret is unreadable"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── Regression: #2790 — WebhookConnector::validate file-based auth ──
 
     #[test]
@@ -1953,7 +2040,10 @@ mod tests {
         let wh = WebhookConnector::new("wh-v", "V", "/tmp/vp_wh_nonexistent_2790");
         assert!(wh.validate(&HashMap::new()).is_err());
         // Present secret file -> validate passes.
-        let path = std::env::temp_dir().join("vp_wh_secret_2790").to_string_lossy().into_owned();
+        let path = std::env::temp_dir()
+            .join("vp_wh_secret_2790")
+            .to_string_lossy()
+            .into_owned();
         std::fs::write(&path, "hunter2").unwrap();
         let wh2 = WebhookConnector::new("wh-v", "V", path.as_str());
         assert!(wh2.validate(&HashMap::new()).is_ok());
@@ -1962,7 +2052,10 @@ mod tests {
 
     #[test]
     fn webhook_validate_empty_secret_fails() {
-        let path = std::env::temp_dir().join("vp_wh_empty_2790").to_string_lossy().into_owned();
+        let path = std::env::temp_dir()
+            .join("vp_wh_empty_2790")
+            .to_string_lossy()
+            .into_owned();
         std::fs::write(&path, "").unwrap();
         let wh = WebhookConnector::new("wh-v", "V", path.as_str());
         assert!(wh.validate(&HashMap::new()).is_err());

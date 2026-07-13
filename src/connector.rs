@@ -200,19 +200,62 @@ pub trait Connector: Send + Sync {
 /// private Tokio runtime**. A thread that is not part of any existing runtime
 /// can freely `block_on` its own runtime, so the panic can never occur — no
 /// matter whether the caller is sync or async.
+/// Maximum wall-clock time a single connector I/O dispatch may take before it
+/// is aborted and reported as an error (issue #2793). Without this bound an
+/// unresponsive external service would block the private I/O thread forever,
+/// permanently hanging the calling agent.
+const CONNECTOR_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Drive an async connector I/O future to completion on a fresh private thread
+/// + runtime, aborting if it exceeds [`CONNECTOR_IO_TIMEOUT`] (issue #2793).
 fn run_connector_io_owned<F, Fut, T>(make_future: F) -> Result<T>
 where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<T>> + Send + 'static,
     T: Send + 'static,
 {
-    let join = std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new()
+    run_connector_io_owned_timeout(make_future, CONNECTOR_IO_TIMEOUT)
+}
+
+/// Like [`run_connector_io_owned`] but with an explicit timeout — used by
+/// tests to exercise the hang guard without waiting the full 30s.
+///
+/// The I/O future runs on a dedicated OS thread owning a private runtime
+/// (issue #2791). Its result is sent over a channel and the caller waits on
+/// that channel with [`std::sync::mpsc::Receiver::recv_timeout`] — so a
+/// hung external service can never block the caller forever (issue #2793).
+/// The per-request reqwest client timeout normally makes the future complete
+/// well within `timeout`; this channel backstop covers any residual hang.
+fn run_connector_io_owned_timeout<F, Fut, T>(
+    make_future: F,
+    timeout: std::time::Duration,
+) -> Result<T>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel::<Result<T>>();
+    let worker = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
             .map_err(|e| anyhow::anyhow!("connector: failed to build runtime: {e}"))?;
-        rt.block_on(make_future())
+        let result = rt.block_on(make_future());
+        let _ = tx.send(result);
+        Ok::<(), anyhow::Error>(())
     });
-    join.join()
-        .map_err(|_| anyhow::anyhow!("connector: I/O thread panicked"))?
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(anyhow::anyhow!(
+            "connector: I/O timed out after {}s",
+            timeout.as_secs()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = worker.join();
+            Err(anyhow::anyhow!("connector: I/O thread panicked"))
+        }
+    }
 }
 
 /// Canonical body used for HMAC signing: the payload with the `_signature`
@@ -338,6 +381,24 @@ impl WebhookConnector {
         use subtle::ConstantTimeEq;
         Ok(expected.as_bytes().ct_eq(signature.as_bytes()).into())
     }
+
+    /// Build the canonical signing string for an incoming `webhook_receive`
+    /// action (issue #2794).
+    ///
+    /// When the caller supplies the original raw request body under the
+    /// `_raw_body` field, we verify against those **exact bytes** — because
+    /// that is what the external sender (Slack, GitHub, …) signed. Re-serializing
+    /// a parsed JSON `Value` reorders keys / alters whitespace / re-escapes
+    /// unicode, so an HMAC computed over the raw bytes would never match the
+    /// re-serialized form, rejecting every legitimately-signed webhook. The
+    /// `_raw_body` path fixes that. When `_raw_body` is absent we fall back to
+    /// the legacy canonical re-serialization for backward compatibility.
+    fn signing_body(&self, payload: &Value) -> Result<String> {
+        if let Some(raw) = payload.get("_raw_body").and_then(Value::as_str) {
+            return Ok(raw.to_string());
+        }
+        webhook_signing_body(payload)
+    }
 }
 
 impl Connector for WebhookConnector {
@@ -417,7 +478,9 @@ impl Connector for WebhookConnector {
                 // When a shared secret is configured, the HMAC signature is
                 // MANDATORY and must match (see #2789). Without a configured
                 // secret the webhook is open (unsigned payloads accepted).
-                let signed_str = webhook_signing_body(&action.payload)?;
+                // Verify against the raw body when available (issue #2794);
+                // otherwise fall back to the canonical re-serialization.
+                let signed_str = self.signing_body(&action.payload)?;
                 if self.secret_configured() {
                     match action.payload.get("_signature").and_then(Value::as_str) {
                         Some(sig) => {
@@ -802,7 +865,10 @@ impl Connector for GitHubConnector {
 /// Perform the actual GitHub REST API request (async). Owned params so it can
 /// be driven on a private runtime without borrowing `&self` (issue #2791).
 async fn github_dispatch(req: GitHubRequest, token: String) -> Result<ConnectorResponse> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(CONNECTOR_IO_TIMEOUT)
+        .build()
+        .map_err(|e| anyhow::anyhow!("connector: failed to build http client: {e}"))?;
     let method: reqwest::Method = req
         .method
         .parse()
@@ -1098,7 +1164,10 @@ fn slack_response_to_connector_response(status: u16, body: &str) -> ConnectorRes
 /// Perform the actual Slack Web API request (async). Owned params so it can
 /// be driven on a private runtime without borrowing `&self` (issue #2791).
 async fn slack_dispatch(req: SlackRequest, token: String) -> Result<ConnectorResponse> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(CONNECTOR_IO_TIMEOUT)
+        .build()
+        .map_err(|e| anyhow::anyhow!("connector: failed to build http client: {e}"))?;
     let method: reqwest::Method = req
         .method
         .parse()
@@ -1820,6 +1889,53 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    // ── Regression: #2794 — HMAC must verify the RAW body, not re-serialized JSON ──
+
+    #[test]
+    fn webhook_verifies_raw_body_not_reserialized() {
+        // An external sender (Slack/GitHub) signs the EXACT raw request bytes
+        // it sent — which may have a non-canonical key order. Re-serializing a
+        // parsed Value reorders keys, so the signature would never match and
+        // every legitimately-signed webhook would be rejected (#2794).
+        let path = "/tmp/vp_wh_secret_test_2794";
+        std::fs::write(path, "raw-body-secret").unwrap();
+        let wh = WebhookConnector::new("wh-raw", "Raw", path);
+
+        // Raw body with non-canonical ordering (b before a).
+        let raw = r#"{"b":2,"a":1,"text":"hi"}"#;
+        let sig = wh.compute_signature(raw).unwrap();
+
+        // Caller passes the exact raw bytes under `_raw_body` + the signature.
+        let mut payload = serde_json::json!({});
+        payload["_raw_body"] = serde_json::Value::String(raw.to_string());
+        payload["_signature"] = serde_json::Value::String(sig.clone());
+        let action = Action {
+            name: "webhook_receive".into(),
+            payload,
+        };
+        let resp = wh.execute(&action, &HashMap::new()).unwrap();
+        assert!(
+            resp.success,
+            "raw-body signature must verify (got: {})",
+            resp.summary
+        );
+
+        // Sanity: without `_raw_body` we fall back to canonical re-serialization,
+        // which must NOT match the raw signature (this is the old bug).
+        let mut canonical = serde_json::json!({"b":2,"a":1,"text":"hi"});
+        canonical["_signature"] = serde_json::Value::String(sig.clone());
+        let action2 = Action {
+            name: "webhook_receive".into(),
+            payload: canonical,
+        };
+        let resp2 = wh.execute(&action2, &HashMap::new()).unwrap();
+        assert!(
+            !resp2.success,
+            "canonical re-serialization must NOT match the raw signature"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn webhook_open_when_no_secret() {
         // No secret file configured -> unsigned payloads are accepted (open).
@@ -1865,6 +1981,28 @@ mod tests {
     fn run_connector_io_owned_works_sync() {
         let v: u32 = run_connector_io_owned(|| async { Ok(7u32) }).unwrap();
         assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn run_connector_io_owned_times_out_instead_of_hanging() {
+        // Regression for #2793: a future that would hang forever (blocks far
+        // longer than the timeout) must return an error quickly rather than
+        // block the caller indefinitely.
+        let start = std::time::Instant::now();
+        let res: Result<()> = run_connector_io_owned_timeout(
+            || async {
+                // Block the worker thread (not a timer — avoids needing a
+                // Tokio time driver inside the private runtime).
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                Ok(())
+            },
+            std::time::Duration::from_millis(50),
+        );
+        assert!(res.is_err(), "hung I/O must be aborted with an error");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "I/O timeout must not block the caller for long"
+        );
     }
 
     #[test]

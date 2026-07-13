@@ -190,9 +190,11 @@ impl AppSettings {
             }
         }
 
-        // Validate api_key is non-empty.
+        // Validate api_key is non-empty for providers that require authentication.
+        // Ollama runs locally and does not need an API key (#2798).
         let ep = self.effective_provider();
-        if ep.api_key.trim().is_empty() {
+        let provider_type = ep.effective_provider_type();
+        if provider_type.requires_api_key() && ep.api_key.trim().is_empty() {
             errors.push("provider.api_key is empty; an API key is required".to_string());
         }
 

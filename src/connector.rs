@@ -323,13 +323,7 @@ impl WebhookConnector {
         Ok(content.trim().to_string())
     }
 
-    /// Whether a non-empty HMAC shared secret is configured on disk.
-    ///
-    /// When this returns `true`, incoming payloads MUST carry a valid
-    /// signature (see `execute` / #2789). When `false`, the webhook is open.
-    fn secret_configured(&self) -> bool {
-        self.load_secret().map(|s| !s.is_empty()).unwrap_or(false)
-    }
+
 
     /// Compute the HMAC-SHA256 hex signature for `payload` using the on-disk
     /// shared secret. Inverse of [`WebhookConnector::verify_signature`].
@@ -1836,9 +1830,9 @@ mod tests {
 
     #[test]
     fn webhook_rejects_unsigned_when_secret_configured() {
-        let path = "/tmp/vp_wh_secret_test_2789a";
-        std::fs::write(path, "super-secret-hmac-key").unwrap();
-        let wh = WebhookConnector::new("wh-sec", "Sec", path);
+        let path = std::env::temp_dir().join("vp_wh_secret_test_2789a").to_string_lossy().into_owned();
+        std::fs::write(&path, "super-secret-hmac-key").unwrap();
+        let wh = WebhookConnector::new("wh-sec", "Sec", path.as_str());
         let action = Action {
             name: "webhook_receive".into(),
             payload: serde_json::json!({"text": "hi"}),
@@ -1853,14 +1847,14 @@ mod tests {
             "unexpected summary: {}",
             resp.summary
         );
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn webhook_accepts_valid_signature() {
-        let path = "/tmp/vp_wh_secret_test_2789b";
-        std::fs::write(path, "super-secret-hmac-key").unwrap();
-        let wh = WebhookConnector::new("wh-sec", "Sec", path);
+        let path = std::env::temp_dir().join("vp_wh_secret_test_2789b").to_string_lossy().into_owned();
+        std::fs::write(&path, "super-secret-hmac-key").unwrap();
+        let wh = WebhookConnector::new("wh-sec", "Sec", path.as_str());
         let payload = serde_json::json!({"text": "hi"});
         let signed_str = webhook_signing_body(&payload).unwrap();
         let sig = wh.compute_signature(&signed_str).unwrap();
@@ -1872,21 +1866,21 @@ mod tests {
         };
         let resp = wh.execute(&action, &HashMap::new()).unwrap();
         assert!(resp.success, "valid signature must be accepted");
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn webhook_rejects_bad_signature() {
-        let path = "/tmp/vp_wh_secret_test_2789c";
-        std::fs::write(path, "super-secret-hmac-key").unwrap();
-        let wh = WebhookConnector::new("wh-sec", "Sec", path);
+        let path = std::env::temp_dir().join("vp_wh_secret_test_2789c").to_string_lossy().into_owned();
+        std::fs::write(&path, "super-secret-hmac-key").unwrap();
+        let wh = WebhookConnector::new("wh-sec", "Sec", path.as_str());
         let action = Action {
             name: "webhook_receive".into(),
             payload: serde_json::json!({"text": "hi", "_signature": "deadbeef"}),
         };
         let resp = wh.execute(&action, &HashMap::new()).unwrap();
         assert!(!resp.success, "tampered signature must be rejected");
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     // ── Regression: #2794 — HMAC must verify the RAW body, not re-serialized JSON ──
@@ -1897,9 +1891,9 @@ mod tests {
         // it sent — which may have a non-canonical key order. Re-serializing a
         // parsed Value reorders keys, so the signature would never match and
         // every legitimately-signed webhook would be rejected (#2794).
-        let path = "/tmp/vp_wh_secret_test_2794";
-        std::fs::write(path, "raw-body-secret").unwrap();
-        let wh = WebhookConnector::new("wh-raw", "Raw", path);
+        let path = std::env::temp_dir().join("vp_wh_secret_test_2794").to_string_lossy().into_owned();
+        std::fs::write(&path, "raw-body-secret").unwrap();
+        let wh = WebhookConnector::new("wh-raw", "Raw", path.as_str());
 
         // Raw body with non-canonical ordering (b before a).
         let raw = r#"{"b":2,"a":1,"text":"hi"}"#;
@@ -1933,7 +1927,7 @@ mod tests {
             !resp2.success,
             "canonical re-serialization must NOT match the raw signature"
         );
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1959,20 +1953,20 @@ mod tests {
         let wh = WebhookConnector::new("wh-v", "V", "/tmp/vp_wh_nonexistent_2790");
         assert!(wh.validate(&HashMap::new()).is_err());
         // Present secret file -> validate passes.
-        let path = "/tmp/vp_wh_secret_2790";
-        std::fs::write(path, "hunter2").unwrap();
-        let wh2 = WebhookConnector::new("wh-v", "V", path);
+        let path = std::env::temp_dir().join("vp_wh_secret_2790").to_string_lossy().into_owned();
+        std::fs::write(&path, "hunter2").unwrap();
+        let wh2 = WebhookConnector::new("wh-v", "V", path.as_str());
         assert!(wh2.validate(&HashMap::new()).is_ok());
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn webhook_validate_empty_secret_fails() {
-        let path = "/tmp/vp_wh_empty_2790";
-        std::fs::write(path, "").unwrap();
-        let wh = WebhookConnector::new("wh-v", "V", path);
+        let path = std::env::temp_dir().join("vp_wh_empty_2790").to_string_lossy().into_owned();
+        std::fs::write(&path, "").unwrap();
+        let wh = WebhookConnector::new("wh-v", "V", path.as_str());
         assert!(wh.validate(&HashMap::new()).is_err());
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     // ── Regression: #2791 — execute must not panic inside a runtime ──

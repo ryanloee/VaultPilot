@@ -76,6 +76,10 @@ pub(super) fn get_or_build_client(
                     .context("invalid API key for Bearer auth")?,
             );
         }
+        ProviderType::Ollama => {
+            // Ollama runs locally and does not require authentication (#2798).
+            // No auth headers are added.
+        }
     }
 
     let mut builder = reqwest::Client::builder()
@@ -244,12 +248,15 @@ pub(crate) async fn send_request_with_temperature(
             base_provider
         }
     };
-    if provider.api_key.trim().is_empty() {
+
+    let provider_type = provider.effective_provider_type();
+
+    if provider_type.requires_api_key() && provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
     }
 
-    let provider_type = provider.effective_provider_type();
-    let resolved_addrs = validate_base_url(&provider.base_url).await?;
+    let resolved_addrs =
+        validate_base_url(&provider.base_url, provider_type.allows_local_endpoint()).await?;
     let client = get_or_build_client(
         &provider.api_key,
         provider.request_timeout_ms,
@@ -276,7 +283,7 @@ pub(crate) async fn send_request_with_temperature(
             };
             serde_json::to_vec(&payload)?.into()
         }
-        crate::models::ProviderType::OpenAi => {
+        crate::models::ProviderType::OpenAi | crate::models::ProviderType::Ollama => {
             let messages =
                 build_openai_messages(&provider.model, system, prompt, image_paths).await?;
             let max_output = resolve_max_output_tokens(&provider.model, provider.max_output_tokens);
@@ -364,7 +371,7 @@ pub(crate) async fn send_request_with_temperature(
                         .filter(|message| !message.trim().is_empty())
                         .unwrap_or(text.clone())
                 }
-                crate::models::ProviderType::OpenAi => {
+                crate::models::ProviderType::OpenAi | crate::models::ProviderType::Ollama => {
                     serde_json::from_str::<OpenAiResponse>(&text)
                         .ok()
                         .and_then(|value| value.error.map(|error| error.message))
@@ -424,7 +431,7 @@ pub(crate) async fn send_request_with_temperature(
                 );
                 (joined, usage)
             }
-            crate::models::ProviderType::OpenAi => {
+            crate::models::ProviderType::OpenAi | crate::models::ProviderType::Ollama => {
                 let parsed: OpenAiResponse =
                     serde_json::from_str(&text).context("failed to parse API response")?;
                 let joined = parsed
@@ -489,12 +496,15 @@ pub async fn send_request_streaming<'a>(
         }
         None => base_provider,
     };
-    if provider.api_key.trim().is_empty() {
+
+    let provider_type = provider.effective_provider_type();
+
+    if provider_type.requires_api_key() && provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
     }
 
-    let provider_type = provider.effective_provider_type();
-    let resolved_addrs = validate_base_url(&provider.base_url).await?;
+    let resolved_addrs =
+        validate_base_url(&provider.base_url, provider_type.allows_local_endpoint()).await?;
     let client = get_or_build_client(
         &provider.api_key,
         provider.request_timeout_ms,
@@ -521,7 +531,7 @@ pub async fn send_request_streaming<'a>(
             };
             serde_json::to_vec(&payload)?.into()
         }
-        crate::models::ProviderType::OpenAi => {
+        crate::models::ProviderType::OpenAi | crate::models::ProviderType::Ollama => {
             let messages =
                 build_openai_messages(&provider.model, system, prompt, image_paths).await?;
             let max_output = resolve_max_output_tokens(&provider.model, provider.max_output_tokens);
@@ -663,7 +673,8 @@ pub async fn send_request_streaming<'a>(
 
                     // Parse SSE data based on provider type
                     match provider_type {
-                        crate::models::ProviderType::OpenAi => {
+                        crate::models::ProviderType::OpenAi
+                        | crate::models::ProviderType::Ollama => {
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                                 if let Some(text) =
                                     parsed["choices"][0]["delta"]["content"].as_str()
@@ -789,7 +800,8 @@ pub async fn send_request_streaming<'a>(
                         return Ok((accumulated, usage));
                     }
                     match provider_type {
-                        crate::models::ProviderType::OpenAi => {
+                        crate::models::ProviderType::OpenAi
+                        | crate::models::ProviderType::Ollama => {
                             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                                 // Extract text delta
                                 if let Some(text) =
@@ -1081,12 +1093,17 @@ pub(super) fn detect_image_media_type(path: &str) -> Result<&'static str> {
 /// 1. URL must parse as valid HTTP or HTTPS.
 /// 2. Host must be present.
 /// 3. Rejects RFC 1918 / loopback / link-local addresses (SSRF protection)
-///    unless `VAULTPILOT_ALLOW_LOCAL_ENDPOINT` env var is set.
+///    unless `allow_local` is `true` or `VAULTPILOT_ALLOW_LOCAL_ENDPOINT`
+///    env var is set.  `allow_local` should be `true` for providers that
+///    are expected to run on localhost (e.g. Ollama, #2798).
 ///
 /// Returns a list of `(hostname, SocketAddr)` pairs that were verified to be
 /// non-private. These can be passed to `reqwest::ClientBuilder::resolve()` to
 /// pin DNS and prevent rebinding attacks (TOCTOU fix, #503).
-pub(super) async fn validate_base_url(base_url: &str) -> Result<Vec<(String, SocketAddr)>> {
+pub(super) async fn validate_base_url(
+    base_url: &str,
+    allow_local: bool,
+) -> Result<Vec<(String, SocketAddr)>> {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("base_url is empty"));
@@ -1114,9 +1131,10 @@ pub(super) async fn validate_base_url(base_url: &str) -> Result<Vec<(String, Soc
         .host_str()
         .ok_or_else(|| anyhow!("base_url has no host component"))?;
 
-    // Allow explicit opt-in to local/private endpoints via env var.
+    // Allow explicit opt-in to local/private endpoints via env var, or via
+    // the `allow_local` parameter (set by Ollama provider type, #2798).
     // Still resolve DNS for pinning even when local endpoints are allowed.
-    let allow_local = std::env::var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT").is_ok();
+    let allow_local = allow_local || std::env::var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT").is_ok();
     if allow_local && (host_str == "localhost" || host_str.parse::<IpAddr>().is_ok()) {
         return Ok(Vec::new());
     }
@@ -1245,7 +1263,8 @@ pub(super) fn normalize_endpoint(
                 format!("{trimmed}/v1/messages")
             }
         }
-        ProviderType::OpenAi => {
+        ProviderType::OpenAi | ProviderType::Ollama => {
+            // Ollama uses the same OpenAI Chat Completions API (#2798).
             if trimmed.ends_with("/v1/chat/completions") {
                 trimmed.to_string()
             } else if trimmed.ends_with("/v1") {

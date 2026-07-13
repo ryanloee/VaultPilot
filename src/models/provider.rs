@@ -9,20 +9,39 @@ pub enum ProviderType {
     Anthropic,
     /// OpenAI-compatible Chat Completions API (Bearer token, /v1/chat/completions endpoint).
     OpenAi,
+    /// Local Ollama instance — uses OpenAI-compatible API at /v1/chat/completions
+    /// but requires no API key and allows localhost endpoints (#2798).
+    Ollama,
 }
 
 impl ProviderType {
     /// Auto-detect provider type from the base URL.
     ///
-    /// URLs containing "anthropic" → Anthropic; everything else → OpenAI
-    /// (since OpenAI-compatible is the most common generic format).
+    /// URLs containing "anthropic" → Anthropic; "ollama" or ":11434" → Ollama;
+    /// everything else → OpenAI (since OpenAI-compatible is the most common
+    /// generic format).
     pub fn from_base_url(base_url: &str) -> Self {
         let lower = base_url.to_ascii_lowercase();
         if lower.contains("anthropic") {
             Self::Anthropic
+        } else if lower.contains("ollama") || lower.contains(":11434") {
+            Self::Ollama
         } else {
             Self::OpenAi
         }
+    }
+
+    /// Whether this provider type requires a non-empty API key.
+    /// Ollama runs locally and does not need authentication (#2798).
+    pub fn requires_api_key(&self) -> bool {
+        !matches!(self, Self::Ollama)
+    }
+
+    /// Whether this provider type is allowed to use localhost / private-IP
+    /// endpoints without requiring `VAULTPILOT_ALLOW_LOCAL_ENDPOINT`.
+    /// Ollama runs on `http://localhost:11434` by default (#2798).
+    pub fn allows_local_endpoint(&self) -> bool {
+        matches!(self, Self::Ollama)
     }
 }
 
@@ -346,15 +365,15 @@ pub fn known_models() -> Vec<KnownModel> {
                 streaming: true,
             },
         },
-        // ── Local / Ollama models (#1706) ──
+        // ── Local / Ollama models (#1706, #2798) ──
         //
         // These run locally via Ollama (http://localhost:11434) using
         // OpenAI-compatible Chat Completions API. Context windows and
         // capabilities vary by quantisation and model variant.
         KnownModel {
             id: "llama3.3".into(),
-            name: "Llama 3.3 70B".into(),
-            provider: ProviderType::OpenAi,
+            name: "Llama 3.3 70B (Ollama)".into(),
+            provider: ProviderType::Ollama,
             context_window: 128_000,
             max_output_tokens: 4096,
             capabilities: ModelCapabilities {
@@ -366,8 +385,8 @@ pub fn known_models() -> Vec<KnownModel> {
         },
         KnownModel {
             id: "llama3.2-vision".into(),
-            name: "Llama 3.2 11B Vision".into(),
-            provider: ProviderType::OpenAi,
+            name: "Llama 3.2 11B Vision (Ollama)".into(),
+            provider: ProviderType::Ollama,
             context_window: 128_000,
             max_output_tokens: 4096,
             capabilities: ModelCapabilities {
@@ -379,8 +398,8 @@ pub fn known_models() -> Vec<KnownModel> {
         },
         KnownModel {
             id: "gemma4".into(),
-            name: "Gemma 4 27B".into(),
-            provider: ProviderType::OpenAi,
+            name: "Gemma 4 27B (Ollama)".into(),
+            provider: ProviderType::Ollama,
             context_window: 32_768,
             max_output_tokens: 4096,
             capabilities: ModelCapabilities {
@@ -392,8 +411,8 @@ pub fn known_models() -> Vec<KnownModel> {
         },
         KnownModel {
             id: "mistral".into(),
-            name: "Mistral 7B".into(),
-            provider: ProviderType::OpenAi,
+            name: "Mistral 7B (Ollama)".into(),
+            provider: ProviderType::Ollama,
             context_window: 32_768,
             max_output_tokens: 4096,
             capabilities: ModelCapabilities {
@@ -405,8 +424,8 @@ pub fn known_models() -> Vec<KnownModel> {
         },
         KnownModel {
             id: "qwen2.5".into(),
-            name: "Qwen 2.5 32B".into(),
-            provider: ProviderType::OpenAi,
+            name: "Qwen 2.5 32B (Ollama)".into(),
+            provider: ProviderType::Ollama,
             context_window: 32_768,
             max_output_tokens: 4096,
             capabilities: ModelCapabilities {
@@ -418,8 +437,8 @@ pub fn known_models() -> Vec<KnownModel> {
         },
         KnownModel {
             id: "phi-4".into(),
-            name: "Phi-4 14B".into(),
-            provider: ProviderType::OpenAi,
+            name: "Phi-4 14B (Ollama)".into(),
+            provider: ProviderType::Ollama,
             context_window: 16_384,
             max_output_tokens: 4096,
             capabilities: ModelCapabilities {
@@ -790,8 +809,8 @@ mod tests {
     #[test]
     fn known_models_include_llama33() {
         let m = lookup_model("llama3.3").expect("llama3.3 not found");
-        assert_eq!(m.name, "Llama 3.3 70B");
-        assert_eq!(m.provider, ProviderType::OpenAi);
+        assert_eq!(m.name, "Llama 3.3 70B (Ollama)");
+        assert_eq!(m.provider, ProviderType::Ollama);
         assert_eq!(m.context_window, 128_000);
         assert!(!m.capabilities.vision);
     }
@@ -799,22 +818,22 @@ mod tests {
     #[test]
     fn known_models_include_gemma4() {
         let m = lookup_model("gemma4").expect("gemma4 not found");
-        assert_eq!(m.name, "Gemma 4 27B");
-        assert_eq!(m.provider, ProviderType::OpenAi);
+        assert_eq!(m.name, "Gemma 4 27B (Ollama)");
+        assert_eq!(m.provider, ProviderType::Ollama);
         assert_eq!(m.context_window, 32_768);
     }
 
     #[test]
     fn known_models_include_qwen25() {
         let m = lookup_model("qwen2.5").expect("qwen2.5 not found");
-        assert_eq!(m.name, "Qwen 2.5 32B");
-        assert_eq!(m.provider, ProviderType::OpenAi);
+        assert_eq!(m.name, "Qwen 2.5 32B (Ollama)");
+        assert_eq!(m.provider, ProviderType::Ollama);
     }
 
     #[test]
     fn known_models_include_phi4() {
         let m = lookup_model("phi-4").expect("phi-4 not found");
-        assert_eq!(m.name, "Phi-4 14B");
+        assert_eq!(m.name, "Phi-4 14B (Ollama)");
         assert_eq!(m.context_window, 16_384);
     }
 

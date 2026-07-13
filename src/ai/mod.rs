@@ -935,7 +935,7 @@ mod tests {
     #[tokio::test]
     async fn validate_base_url_accepts_https() {
         assert!(
-            super::client::validate_base_url("https://api.anthropic.com/v1")
+            super::client::validate_base_url("https://api.anthropic.com/v1", false)
                 .await
                 .is_ok()
         );
@@ -943,23 +943,29 @@ mod tests {
 
     #[tokio::test]
     async fn validate_base_url_rejects_empty() {
-        assert!(super::client::validate_base_url("").await.is_err());
-        assert!(super::client::validate_base_url("   ").await.is_err());
+        assert!(super::client::validate_base_url("", false).await.is_err());
+        assert!(super::client::validate_base_url("   ", false)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn validate_base_url_rejects_invalid_url() {
-        assert!(super::client::validate_base_url("not a url").await.is_err());
+        assert!(super::client::validate_base_url("not a url", false)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn validate_base_url_rejects_non_http_scheme() {
-        assert!(super::client::validate_base_url("ftp://example.com")
+        assert!(super::client::validate_base_url("ftp://example.com", false)
             .await
             .is_err());
-        assert!(super::client::validate_base_url("file:///etc/passwd")
-            .await
-            .is_err());
+        assert!(
+            super::client::validate_base_url("file:///etc/passwd", false)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -972,7 +978,7 @@ mod tests {
             std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
             let rt = tokio::runtime::Runtime::new().unwrap();
             assert!(rt
-                .block_on(validate_base_url("http://localhost:8080"))
+                .block_on(validate_base_url("http://localhost:8080", false))
                 .is_err());
         }
 
@@ -982,7 +988,7 @@ mod tests {
             std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
             let rt = tokio::runtime::Runtime::new().unwrap();
             assert!(rt
-                .block_on(validate_base_url("http://localhost:8080"))
+                .block_on(validate_base_url("http://localhost:8080", false))
                 .is_ok());
         }
 
@@ -1001,16 +1007,16 @@ mod tests {
         std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
         let rt = tokio::runtime::Runtime::new().unwrap();
         assert!(rt
-            .block_on(validate_base_url("http://192.168.1.1/api"))
+            .block_on(validate_base_url("http://192.168.1.1/api", false))
             .is_err());
         assert!(rt
-            .block_on(validate_base_url("http://10.0.0.1/api"))
+            .block_on(validate_base_url("http://10.0.0.1/api", false))
             .is_err());
         assert!(rt
-            .block_on(validate_base_url("http://172.16.0.1/api"))
+            .block_on(validate_base_url("http://172.16.0.1/api", false))
             .is_err());
         assert!(rt
-            .block_on(validate_base_url("http://127.0.0.1/api"))
+            .block_on(validate_base_url("http://127.0.0.1/api", false))
             .is_err());
     }
 

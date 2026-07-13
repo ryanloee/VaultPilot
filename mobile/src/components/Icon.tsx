@@ -14,7 +14,8 @@ export type IconName =
   | 'error' | 'star' | 'clipboard' | 'globe' | 'pencil'
   | 'sun' | 'moon' | 'refresh' | 'export' | 'import'
   | 'chevron-right' | 'chevron-down' | 'arrow-back'
-  | 'settings' | 'chatbubble' | 'add-circle';
+  | 'settings' | 'chatbubble' | 'add-circle'
+  | 'analytics-outline';
 
 const ICON_MAP: Record<IconName, keyof typeof Ionicons.glyphMap> = {
   'menu': 'menu',
@@ -56,6 +57,7 @@ const ICON_MAP: Record<IconName, keyof typeof Ionicons.glyphMap> = {
   'settings': 'settings-outline',
   'chatbubble': 'chatbubble-outline',
   'add-circle': 'add-circle-outline',
+  'analytics-outline': 'analytics-outline',
 };
 
 interface IconProps {

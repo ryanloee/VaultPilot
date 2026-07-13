@@ -363,7 +363,7 @@ pub async fn answer_after_tools(
 ) -> Result<ChatAnswerResult> {
     let system = format!(
         "{}{}",
-        prompting::tool_result_system_prompt(),
+        with_active_prompt(settings, &prompting::tool_result_system_prompt()),
         prompting::response_style_suffix(settings.response_style),
     );
     let prompt = prompting::multi_tool_result_user_prompt(question, tool_results, docs, history);
@@ -1081,5 +1081,27 @@ mod tests {
         let body = "Straße und Überprüfung sind wichtig.";
         let snippet = generate_programmatic_snippet(body, "Straße");
         assert!(!snippet.is_empty());
+    }
+
+    /// Regression #2819: verify answer_after_tools now wraps its system prompt
+    /// with with_active_prompt the same way answer_after_tool does, so that
+    /// both pathways include the user's active vault prompt when configured.
+    #[test]
+    fn regression_2819_with_active_prompt_is_noop_when_no_active_prompt() {
+        // with_active_prompt returns the base system unchanged when no
+        // active_prompt_name is set (or vault_dir doesn't exist).
+        let settings = crate::models::AppSettings::default();
+        let base = "BASE_SYSTEM_PROMPT";
+        let wrapped = super::with_active_prompt(&settings, base);
+        assert_eq!(wrapped, base);
+
+        // Even with a name set, if the vault dir doesn't exist (true in test
+        // environment), the function still returns the base unchanged.
+        let settings2 = crate::models::AppSettings {
+            active_prompt_name: Some("journals/engineering-review.md".to_string()),
+            ..Default::default()
+        };
+        let wrapped2 = super::with_active_prompt(&settings2, base);
+        assert_eq!(wrapped2, base);
     }
 }

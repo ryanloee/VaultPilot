@@ -184,6 +184,48 @@ pub trait Connector: Send + Sync {
     }
 }
 
+// ── Shared execution helpers ──────────────────────────────────
+
+/// Drive an async connector I/O future to completion from a *synchronous*
+/// [`Connector::execute`] body without ever panicking.
+///
+/// # Background (issue #2791)
+/// The original code did `tokio::runtime::Runtime::new()?.block_on(fut)` on the
+/// caller's thread. That panics with *"Cannot block the current thread from
+/// within a runtime"* whenever `execute` is invoked from a task already running
+/// on a Tokio runtime (the MCP bridge / agent event loop).
+///
+/// # Fix
+/// We always run the future on a **brand-new OS thread** that owns a **fresh,
+/// private Tokio runtime**. A thread that is not part of any existing runtime
+/// can freely `block_on` its own runtime, so the panic can never occur — no
+/// matter whether the caller is sync or async.
+fn run_connector_io_owned<F, Fut, T>(make_future: F) -> Result<T>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    let join = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| anyhow::anyhow!("connector: failed to build runtime: {e}"))?;
+        rt.block_on(make_future())
+    });
+    join.join()
+        .map_err(|_| anyhow::anyhow!("connector: I/O thread panicked"))?
+}
+
+/// Canonical body used for HMAC signing: the payload with the `_signature`
+/// field removed (a signature must never cover itself). Returns a stable JSON
+/// serialization so sender and receiver compute identical signatures.
+fn webhook_signing_body(payload: &Value) -> Result<String> {
+    let mut body = payload.clone();
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("_signature");
+    }
+    serde_json::to_string(&body).map_err(Into::into)
+}
+
 // ── Webhook Connector (Phase 1) ───────────────────────────────
 
 /// A generic HTTP webhook connector.
@@ -238,8 +280,17 @@ impl WebhookConnector {
         Ok(content.trim().to_string())
     }
 
-    /// Verify an HMAC-SHA256 signature (constant-time).
-    fn verify_signature(&self, payload: &str, signature: &str) -> Result<bool> {
+    /// Whether a non-empty HMAC shared secret is configured on disk.
+    ///
+    /// When this returns `true`, incoming payloads MUST carry a valid
+    /// signature (see `execute` / #2789). When `false`, the webhook is open.
+    fn secret_configured(&self) -> bool {
+        self.load_secret().map(|s| !s.is_empty()).unwrap_or(false)
+    }
+
+    /// Compute the HMAC-SHA256 hex signature for `payload` using the on-disk
+    /// shared secret. Inverse of [`WebhookConnector::verify_signature`].
+    fn compute_signature(&self, payload: &str) -> Result<String> {
         use sha2::Digest;
         let secret = self.load_secret()?;
 
@@ -277,8 +328,12 @@ impl WebhookConnector {
         let tag = outer.finalize();
 
         // Hex-encode the tag manually
-        let expected: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+        Ok(tag.iter().map(|b| format!("{b:02x}")).collect())
+    }
 
+    /// Verify an HMAC-SHA256 signature (constant-time).
+    fn verify_signature(&self, payload: &str, signature: &str) -> Result<bool> {
+        let expected = self.compute_signature(payload)?;
         // Constant-time comparison
         use subtle::ConstantTimeEq;
         Ok(expected.as_bytes().ct_eq(signature.as_bytes()).into())
@@ -320,6 +375,23 @@ impl Connector for WebhookConnector {
         ]
     }
 
+    fn validate(&self, _secrets: &HashMap<String, String>) -> Result<()> {
+        // Webhook auth is file-based (HMAC shared secret on disk), not the
+        // `ApiKey`-in-`secrets` model the trait default assumes. The default
+        // implementation would require a `{id}_webhook_secret` key that is
+        // never populated for file-based auth, so validate could never pass
+        // (issue #2790). Here we validate against the on-disk secret instead.
+        match self.load_secret() {
+            Ok(s) if !s.is_empty() => Ok(()),
+            Ok(_) => Err(anyhow::anyhow!(
+                "webhook '{}': secret file '{}' is empty",
+                self.id,
+                self.secret_path
+            )),
+            Err(e) => Err(anyhow::anyhow!("webhook '{}' not ready: {e}", self.id)),
+        }
+    }
+
     fn execute(
         &self,
         action: &Action,
@@ -342,14 +414,28 @@ impl Connector for WebhookConnector {
                     });
                 }
 
-                // Verify signature if present
-                if let Some(sig) = action.payload.get("_signature").and_then(Value::as_str) {
-                    if !self.verify_signature(&payload_str, sig)? {
-                        return Ok(ConnectorResponse {
-                            success: false,
-                            summary: "HMAC signature verification failed".into(),
-                            data: None,
-                        });
+                // When a shared secret is configured, the HMAC signature is
+                // MANDATORY and must match (see #2789). Without a configured
+                // secret the webhook is open (unsigned payloads accepted).
+                let signed_str = webhook_signing_body(&action.payload)?;
+                if self.secret_configured() {
+                    match action.payload.get("_signature").and_then(Value::as_str) {
+                        Some(sig) => {
+                            if !self.verify_signature(&signed_str, sig)? {
+                                return Ok(ConnectorResponse {
+                                    success: false,
+                                    summary: "HMAC signature verification failed".into(),
+                                    data: None,
+                                });
+                            }
+                        }
+                        None => {
+                            return Ok(ConnectorResponse {
+                                success: false,
+                                summary: "HMAC signature required but missing".into(),
+                                data: None,
+                            });
+                        }
                     }
                 }
 
@@ -651,33 +737,6 @@ impl GitHubConnector {
         );
     }
 
-    /// Perform the actual HTTP request (async). Used by `execute` in live mode.
-    async fn send(&self, req: &GitHubRequest, token: &str) -> Result<ConnectorResponse> {
-        let client = reqwest::Client::new();
-        let method: reqwest::Method = req
-            .method
-            .parse()
-            .map_err(|e| anyhow::anyhow!("invalid HTTP method '{}': {e}", req.method))?;
-        let mut builder = client
-            .request(method, &req.url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Accept", &req.accept)
-            .header("User-Agent", "VaultPilot-Connector")
-            .header("X-GitHub-Api-Version", "2022-11-28");
-        if let Some(b) = &req.body {
-            builder = builder
-                .header("Content-Type", "application/json")
-                .body(b.clone());
-        }
-        let resp = builder.send().await?;
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        Ok(ConnectorResponse {
-            success: status.is_success(),
-            summary: format!("github {} {} -> HTTP {}", req.method, req.url, status),
-            data: Some(serde_json::json!({ "status": status.as_u16(), "body": text })),
-        })
-    }
 }
 
 impl Connector for GitHubConnector {
@@ -734,11 +793,40 @@ impl Connector for GitHubConnector {
             });
         }
         let token = secrets.get("github_token").cloned().unwrap_or_default();
-        // The trait method is synchronous; spin a dedicated runtime for the
-        // single network call so callers don't need to be inside an async ctx.
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(self.send(&req, &token))
+        // The trait method is synchronous. Drive the async HTTP call on a
+        // private thread+runtime so it never panics when called from an async
+        // context (issue #2791).
+        run_connector_io_owned(move || github_dispatch(req, token))
     }
+}
+
+/// Perform the actual GitHub REST API request (async). Owned params so it can
+/// be driven on a private runtime without borrowing `&self` (issue #2791).
+async fn github_dispatch(req: GitHubRequest, token: String) -> Result<ConnectorResponse> {
+    let client = reqwest::Client::new();
+    let method: reqwest::Method = req
+        .method
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid HTTP method '{}': {e}", req.method))?;
+    let mut builder = client
+        .request(method, &req.url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", &req.accept)
+        .header("User-Agent", "VaultPilot-Connector")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+    if let Some(b) = &req.body {
+        builder = builder
+            .header("Content-Type", "application/json")
+            .body(b.clone());
+    }
+    let resp = builder.send().await?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    Ok(ConnectorResponse {
+        success: status.is_success(),
+        summary: format!("github {} {} -> HTTP {}", req.method, req.url, status),
+        data: Some(serde_json::json!({ "status": status.as_u16(), "body": text })),
+    })
 }
 
 // ── Slack Connector (Phase 2) ──────────────────────────────
@@ -921,32 +1009,6 @@ impl SlackConnector {
         );
     }
 
-    /// Perform the actual HTTP request (async). Used by `execute` in live mode.
-    async fn send(&self, req: &SlackRequest, token: &str) -> Result<ConnectorResponse> {
-        let client = reqwest::Client::new();
-        let method: reqwest::Method = req
-            .method
-            .parse()
-            .map_err(|e| anyhow::anyhow!("invalid HTTP method '{}': {e}", req.method))?;
-        let mut builder = client
-            .request(method, &req.url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Accept", &req.accept)
-            .header("User-Agent", "VaultPilot-Connector");
-        if let Some(b) = &req.body {
-            builder = builder
-                .header("Content-Type", "application/json")
-                .body(b.clone());
-        }
-        let resp = builder.send().await?;
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        Ok(ConnectorResponse {
-            success: status.is_success(),
-            summary: format!("slack {} {} -> HTTP {}", req.method, req.url, status),
-            data: Some(serde_json::json!({ "status": status.as_u16(), "body": text })),
-        })
-    }
 }
 
 impl Connector for SlackConnector {
@@ -995,11 +1057,70 @@ impl Connector for SlackConnector {
             });
         }
         let token = secrets.get("slack_token").cloned().unwrap_or_default();
-        // The trait method is synchronous; spin a dedicated runtime for the
-        // single network call so callers don't need to be inside an async ctx.
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(self.send(&req, &token))
+        // The trait method is synchronous. Drive the async HTTP call on a
+        // private thread+runtime so it never panics when called from an async
+        // context (issue #2791).
+        run_connector_io_owned(move || slack_dispatch(req, token))
     }
+}
+
+/// Map a Slack Web API HTTP response to a [`ConnectorResponse`].
+///
+/// Slack returns **HTTP 200** even for API-level failures via the
+/// `{"ok": false, "error": "..."}` envelope, so a 2xx status alone is NOT
+/// success. We inspect the `ok` field and surface `error` (issue #2788).
+/// Pure + unit-testable (no network).
+fn slack_response_to_connector_response(status: u16, body: &str) -> ConnectorResponse {
+    let parsed: Option<Value> = serde_json::from_str(body).ok();
+    let ok = parsed
+        .as_ref()
+        .and_then(|v| v.get("ok").and_then(Value::as_bool))
+        .unwrap_or_else(|| (200..300).contains(&status));
+    let error = if ok {
+        None
+    } else {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get("error").and_then(Value::as_str))
+            .map(str::to_string)
+    };
+    let success = ok && (200..300).contains(&status);
+    ConnectorResponse {
+        success,
+        summary: format!("slack -> HTTP {} (ok={}, error={:?})", status, ok, error),
+        data: Some(serde_json::json!({
+            "status": status,
+            "ok": ok,
+            "error": error,
+            "body": body
+        })),
+    }
+}
+
+/// Perform the actual Slack Web API request (async). Owned params so it can
+/// be driven on a private runtime without borrowing `&self` (issue #2791).
+async fn slack_dispatch(req: SlackRequest, token: String) -> Result<ConnectorResponse> {
+    let client = reqwest::Client::new();
+    let method: reqwest::Method = req
+        .method
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid HTTP method '{}': {e}", req.method))?;
+    let mut builder = client
+        .request(method, &req.url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", &req.accept)
+        .header("User-Agent", "VaultPilot-Connector");
+    if let Some(b) = &req.body {
+        builder = builder
+            .header("Content-Type", "application/json")
+            .body(b.clone());
+    }
+    let resp = builder.send().await?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let mut response = slack_response_to_connector_response(status.as_u16(), &text);
+    response.summary = format!("slack {} {} -> HTTP {}", req.method, req.url, status);
+    Ok(response)
 }
 
 // ── Tests ──────────────────────────────────────────────────────
@@ -1113,12 +1234,12 @@ mod tests {
 
     #[test]
     fn validate_missing_api_key() {
-        let wh = WebhookConnector::new("test-wh", "Test", "/tmp/test-secret");
+        // Webhook auth is file-based: validate checks the secret file on disk,
+        // not `secrets`. A missing secret file must fail validation (#2790).
+        let wh = WebhookConnector::new("test-wh", "Test", "/tmp/vp_wh_missing_secret_2790");
         let secrets = HashMap::new();
         let result = wh.validate(&secrets);
-        // Should fail because we don't set the env var or secrets
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("requires API key"));
     }
 
     #[test]
@@ -1605,5 +1726,175 @@ mod tests {
             }
             _ => panic!("expected McpServer capability"),
         }
+    }
+
+    // ── Regression: #2788 — Slack reports success on API errors ──
+
+    #[test]
+    fn slack_response_ok_false_is_failure() {
+        // Slack returns HTTP 200 with {"ok":false} for API failures; that must
+        // be surfaced as a failure, not success.
+        let resp =
+            slack_response_to_connector_response(200, r#"{"ok":false,"error":"invalid_auth"}"#);
+        assert!(!resp.success, "ok:false must not be reported as success");
+        assert_eq!(resp.data.as_ref().unwrap()["ok"], false);
+        assert_eq!(resp.data.as_ref().unwrap()["error"], "invalid_auth");
+    }
+
+    #[test]
+    fn slack_response_ok_true_is_success() {
+        let resp = slack_response_to_connector_response(200, r#"{"ok":true,"ts":"123.45"}"#);
+        assert!(resp.success);
+        assert_eq!(resp.data.as_ref().unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn slack_response_http_error_is_failure() {
+        let resp =
+            slack_response_to_connector_response(429, r#"{"ok":false,"error":"rate_limited"}"#);
+        assert!(!resp.success);
+        assert_eq!(resp.data.as_ref().unwrap()["error"], "rate_limited");
+    }
+
+    #[test]
+    fn slack_response_non_json_falls_back_to_http_status() {
+        // Unparseable body: fall back to HTTP status semantics.
+        let ok = slack_response_to_connector_response(200, "not json");
+        assert!(ok.success);
+        let bad = slack_response_to_connector_response(500, "not json");
+        assert!(!bad.success);
+    }
+
+    // ── Regression: #2789 — webhook must reject unsigned payloads ──
+
+    #[test]
+    fn webhook_rejects_unsigned_when_secret_configured() {
+        let path = "/tmp/vp_wh_secret_test_2789a";
+        std::fs::write(path, "super-secret-hmac-key").unwrap();
+        let wh = WebhookConnector::new("wh-sec", "Sec", path);
+        let action = Action {
+            name: "webhook_receive".into(),
+            payload: serde_json::json!({"text": "hi"}),
+        };
+        let resp = wh.execute(&action, &HashMap::new()).unwrap();
+        assert!(
+            !resp.success,
+            "unsigned payload must be rejected when secret configured"
+        );
+        assert!(
+            resp.summary.contains("required") || resp.summary.contains("signature"),
+            "unexpected summary: {}",
+            resp.summary
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn webhook_accepts_valid_signature() {
+        let path = "/tmp/vp_wh_secret_test_2789b";
+        std::fs::write(path, "super-secret-hmac-key").unwrap();
+        let wh = WebhookConnector::new("wh-sec", "Sec", path);
+        let payload = serde_json::json!({"text": "hi"});
+        let signed_str = webhook_signing_body(&payload).unwrap();
+        let sig = wh.compute_signature(&signed_str).unwrap();
+        let mut full = payload.clone();
+        full["_signature"] = serde_json::json!(sig);
+        let action = Action {
+            name: "webhook_receive".into(),
+            payload: full,
+        };
+        let resp = wh.execute(&action, &HashMap::new()).unwrap();
+        assert!(resp.success, "valid signature must be accepted");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn webhook_rejects_bad_signature() {
+        let path = "/tmp/vp_wh_secret_test_2789c";
+        std::fs::write(path, "super-secret-hmac-key").unwrap();
+        let wh = WebhookConnector::new("wh-sec", "Sec", path);
+        let action = Action {
+            name: "webhook_receive".into(),
+            payload: serde_json::json!({"text": "hi", "_signature": "deadbeef"}),
+        };
+        let resp = wh.execute(&action, &HashMap::new()).unwrap();
+        assert!(!resp.success, "tampered signature must be rejected");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn webhook_open_when_no_secret() {
+        // No secret file configured -> unsigned payloads are accepted (open).
+        let wh = WebhookConnector::new("wh-open", "Open", "/tmp/vp_wh_missing_2789");
+        let action = Action {
+            name: "webhook_receive".into(),
+            payload: serde_json::json!({"text": "hi"}),
+        };
+        let resp = wh.execute(&action, &HashMap::new()).unwrap();
+        assert!(
+            resp.success,
+            "open webhook (no secret) should accept unsigned"
+        );
+    }
+
+    // ── Regression: #2790 — WebhookConnector::validate file-based auth ──
+
+    #[test]
+    fn webhook_validate_requires_secret_file() {
+        // Missing secret file -> validate fails (file-based auth).
+        let wh = WebhookConnector::new("wh-v", "V", "/tmp/vp_wh_nonexistent_2790");
+        assert!(wh.validate(&HashMap::new()).is_err());
+        // Present secret file -> validate passes.
+        let path = "/tmp/vp_wh_secret_2790";
+        std::fs::write(path, "hunter2").unwrap();
+        let wh2 = WebhookConnector::new("wh-v", "V", path);
+        assert!(wh2.validate(&HashMap::new()).is_ok());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn webhook_validate_empty_secret_fails() {
+        let path = "/tmp/vp_wh_empty_2790";
+        std::fs::write(path, "").unwrap();
+        let wh = WebhookConnector::new("wh-v", "V", path);
+        assert!(wh.validate(&HashMap::new()).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    // ── Regression: #2791 — execute must not panic inside a runtime ──
+
+    #[test]
+    fn run_connector_io_owned_works_sync() {
+        let v: u32 = run_connector_io_owned(|| async { Ok(7u32) }).unwrap();
+        assert_eq!(v, 7);
+    }
+
+    #[test]
+    fn run_connector_io_owned_works_in_async_context() {
+        // The live caller (MCP bridge / agent loop) runs on a Tokio runtime.
+        // The old Runtime::new().block_on() panicked here; the new helper must
+        // not — simulate a current runtime with a manual one.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .build()
+            .expect("build runtime");
+        let v: u32 = rt.block_on(async { run_connector_io_owned(|| async { Ok(42u32) }).unwrap() });
+        assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn slack_execute_dry_run_in_async_context() {
+        // execute() now funnels through run_connector_io_owned even in async.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .build()
+            .expect("build runtime");
+        let sl = SlackConnector::new("slack-vp", "C0123ABCD").with_dry_run(true);
+        let mut secrets = HashMap::new();
+        secrets.insert("slack_token".to_string(), "xoxb-test".to_string());
+        let action = Action {
+            name: "post_message".into(),
+            payload: serde_json::json!({"text": "hi"}),
+        };
+        let resp = rt.block_on(async { sl.execute(&action, &secrets).unwrap() });
+        assert!(resp.success);
     }
 }

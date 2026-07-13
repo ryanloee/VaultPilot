@@ -205,11 +205,21 @@ public sealed partial class MainWindow : Window
         var savedNote = _lastAiAnswer.SavedNote;
         AppendMessage("系统", $"已保存笔记：{savedNote.Title}");
         ScrollToLatest();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
-        _noteCount = notes?.Count ?? 0;
-        RefreshVaultSummary();
-        InvalidateNoteTitleCache();
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var notes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token);
+            _noteCount = notes?.Count ?? 0;
+            RefreshVaultSummary();
+            InvalidateNoteTitleCache();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[VaultPilot] listNotes after save failed: {ex.Message}");
+            // Note was saved successfully (user already saw confirmation),
+            // vault summary/note count may be stale until next refresh.
+            // Don't propagate — the save succeeded, this is just a cache update.
+        }
 
         RestoreIdleStatus("知识已记录", $"已保存为笔记：{savedNote.Title}");
     }

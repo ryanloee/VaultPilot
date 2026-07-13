@@ -115,7 +115,7 @@ public partial class App : Application
         {
             // #532: Dispose tray icon so the process can exit after window closes.
             // Without this, WaitExitThenApplyUpdates never sees the process exit.
-            _trayIcon?.Dispose();
+            try { _trayIcon?.Dispose(); } catch { }
             _trayIcon = null;
 
             // #563: Release single-instance mutex so the updated process can acquire it.

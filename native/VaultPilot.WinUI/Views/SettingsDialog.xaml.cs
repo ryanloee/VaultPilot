@@ -502,21 +502,28 @@ public sealed partial class SettingsDialog : ContentDialog
             }
 
             // ── 4. Build settings from validated fields ──
-            // Always write current provider fields back to the list (harmless if unchanged).
-            var trimmedApiKey2 = ApiKeyBox.Password.Trim();
-            var trimmedBaseUrl2 = BaseUrlBox.Text.Trim();
-            var trimmedModel2 = ModelBox.Text.Trim();
-            var timeoutMs2 = ulong.TryParse(TimeoutBox.Text.Trim(), out var t2) ? t2 : 60000;
-            ulong? contextWindowTokens2 = null;
-            if (ulong.TryParse(ContextWindowBox.Text.Trim(), out var cw2))
-                contextWindowTokens2 = cw2;
-            var ptype = ProviderTypeBox.SelectedIndex == 1 ? "anthropic" : "openai";
+            // #2823: Use TryBuildProviderConfig instead of duplicating its validation/construction logic.
+            // This ensures validation and construction never drift apart.
+            if (!TryBuildProviderConfig(
+                    ApiKeyBox.Password,
+                    BaseUrlBox.Text,
+                    ModelBox.Text,
+                    TimeoutBox.Text,
+                    ContextWindowBox.Text,
+                    _providers[_activeProviderIndex].MaxOutputTokens,
+                    ProviderTypeBox.SelectedIndex == 1,
+                    ProviderNameBox.Text,
+                    out var cfg))
+            {
+                // Should not reach here — validation above already checked all fields.
+                // Fallback: keep the current config unchanged.
+                ErrorInfoBar.Message = "提供商构建失败（内部错误），当前配置未保存。";
+                ErrorInfoBar.IsOpen = true;
+                args.Cancel = true;
+                return;
+            }
 
-            _providers[_activeProviderIndex] = new ProviderConfig(
-                trimmedApiKey2, trimmedBaseUrl2, trimmedModel2,
-                timeoutMs2, contextWindowTokens2,
-                _providers[_activeProviderIndex].MaxOutputTokens,
-                ptype, ProviderNameBox.Text.Trim());
+            _providers[_activeProviderIndex] = cfg!;
 
             var autoWakeModel = (AutoWakeModelBox.Text ?? string.Empty).Trim();
 

@@ -736,7 +736,6 @@ impl GitHubConnector {
             http_url,
         );
     }
-
 }
 
 impl Connector for GitHubConnector {
@@ -1008,7 +1007,6 @@ impl SlackConnector {
             http_url,
         );
     }
-
 }
 
 impl Connector for SlackConnector {

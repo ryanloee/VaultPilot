@@ -255,7 +255,11 @@ fn markdown_table_format() {
     assert!(md.contains("| $path |"), "missing header");
     assert!(md.contains("| title |"), "missing title column");
     assert!(md.contains("---|"), "missing separator");
-    assert_eq!(md.lines().count(), 5, "header + separator + 3 data rows = 5 lines");
+    assert_eq!(
+        md.lines().count(),
+        5,
+        "header + separator + 3 data rows = 5 lines"
+    );
 }
 
 #[test]

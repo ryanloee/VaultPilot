@@ -769,17 +769,53 @@ mod tests {
 
         assert_eq!(ctx.paths.default_vault_dir, vault_dir);
         assert_eq!(ctx.paths.vault_dir_override, Some(vault_dir.clone()));
+        // The secret-bearing settings + local chat state now live OUTSIDE the
+        // synced vault (device-local OS config dir), so the machine-bound key
+        // is never shared across devices (issue #2831).
+        let cli_state_dir =
+            StorageContext::cli_config_root().join(StorageContext::vault_namespace(&vault_dir));
+        assert_eq!(ctx.paths.settings_path, cli_state_dir.join("settings.json"));
         assert_eq!(
-            ctx.paths.settings_path,
-            vault_dir.join(".vaultpilot").join("settings.json")
+            ctx.paths.chat_state_path,
+            cli_state_dir.join("chat-state.json")
         );
+        // The regenerable knowledge index stays inside the vault.
         assert_eq!(
             ctx.paths.database_path,
             vault_dir.join(".vaultpilot").join("knowledge-index.sqlite")
         );
-        assert_eq!(
-            ctx.paths.chat_state_path,
-            vault_dir.join(".vaultpilot").join("chat-state.json")
+    }
+
+    #[test]
+    fn for_cli_keeps_secret_outside_synced_vault_issue_2831() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-cli-secret-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let vault_dir = temp.join("vault");
+        fs::create_dir_all(&vault_dir).unwrap();
+
+        let ctx = StorageContext::for_cli(Some(vault_dir.clone())).expect("cli context");
+
+        // settings.json must NOT be placed under <vault>/.vaultpilot — otherwise
+        // the machine-bound encrypted API key would sync with the vault and fail
+        // to decrypt on a second device.
+        assert!(
+            !ctx.paths.settings_path.starts_with(&vault_dir),
+            "settings.json must not live inside the synced vault: {:?}",
+            ctx.paths.settings_path
+        );
+        // Migration must relocate any pre-existing in-vault settings file.
+        let legacy = vault_dir.join(".vaultpilot").join("settings.json");
+        fs::write(&legacy, r#"{"providers":[]}"#).unwrap();
+        let ctx2 = StorageContext::for_cli(Some(vault_dir.clone())).expect("cli context");
+        assert!(
+            ctx2.paths.settings_path.exists(),
+            "migrated settings.json should exist"
+        );
+        assert!(
+            !legacy.exists() || ctx2.paths.settings_path == legacy,
+            "legacy in-vault settings.json should be migrated out"
         );
     }
 

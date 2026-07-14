@@ -179,16 +179,12 @@ public sealed partial class AiCommandPalette : UserControl
                 request.NoteId = ContextNoteId;
             }
 
+            // Serialize the AiActionRequest directly instead of a manually-constructed
+            // anonymous object. The record type already carries proper [JsonPropertyName]
+            // annotations for all fields including Instruction (which is null for
+            // non-EditNote actions and set when UI support is added). (#2862, #2863)
             var result = await Backend.SendAsync<AiActionResult>(
-                "executeAiAction", new
-                {
-                    action = actionInfo.Id,
-                    text = request.Text,
-                    targetLanguage = request.TargetLanguage,
-                    tone = request.Tone,
-                    noteId = request.NoteId,
-                    instruction = request.Instruction
-                },
+                "executeAiAction", request,
                 ct);
 
             _lastResult = result;

@@ -160,11 +160,11 @@ fn render_body_html(text: &str) -> String {
         let trimmed = line.trim();
 
         // ── 代码块 fence ──
-        if trimmed.starts_with("```") {
+        if let Some(rest) = trimmed.strip_prefix("```") {
             if !in_code_block {
                 // 打开代码块
                 in_code_block = true;
-                code_lang = trimmed[3..].trim().to_string();
+                code_lang = rest.trim().to_string();
                 code_content.clear();
                 code_fence_count = 1;
                 // 不输出开始标记
@@ -226,13 +226,11 @@ fn render_body_html(text: &str) -> String {
         }
 
         // ── 引用块 ──
-        if trimmed.starts_with("> ") || trimmed.starts_with('>') {
+        if let Some(quoted) = trimmed
+            .strip_prefix("> ")
+            .or_else(|| trimmed.strip_prefix('>'))
+        {
             close_paragraph(&mut out, &mut in_paragraph);
-            let quoted = if trimmed.starts_with("> ") {
-                &trimmed[2..]
-            } else {
-                &trimmed[1..]
-            };
             out.push_str(&format!(
                 "<blockquote><p>{}</p></blockquote>\n",
                 inline_format(quoted)
@@ -270,31 +268,33 @@ fn close_paragraph(out: &mut String, in_paragraph: &mut bool) {
 // ── 行级格式化 ──
 
 fn detect_heading(line: &str) -> Option<String> {
-    if line.starts_with("###### ") {
-        Some(format!("<h6>{}</h6>\n", inline_format(&line[7..])))
-    } else if line.starts_with("##### ") {
-        Some(format!("<h5>{}</h5>\n", inline_format(&line[6..])))
-    } else if line.starts_with("#### ") {
-        Some(format!("<h4>{}</h4>\n", inline_format(&line[5..])))
-    } else if line.starts_with("### ") {
-        Some(format!("<h3>{}</h3>\n", inline_format(&line[4..])))
-    } else if line.starts_with("## ") {
-        Some(format!("<h2>{}</h2>\n", inline_format(&line[3..])))
-    } else if line.starts_with("# ") {
-        Some(format!("<h1>{}</h1>\n", inline_format(&line[2..])))
+    let (level, content) = if let Some(rest) = line.strip_prefix("###### ") {
+        (6, rest)
+    } else if let Some(rest) = line.strip_prefix("##### ") {
+        (5, rest)
+    } else if let Some(rest) = line.strip_prefix("#### ") {
+        (4, rest)
+    } else if let Some(rest) = line.strip_prefix("### ") {
+        (3, rest)
+    } else if let Some(rest) = line.strip_prefix("## ") {
+        (2, rest)
+    } else if let Some(rest) = line.strip_prefix("# ") {
+        (1, rest)
     } else {
-        None
-    }
+        return None;
+    };
+    Some(format!(
+        "<h{level}>{content}</h{level}>\n",
+        level = level,
+        content = inline_format(content)
+    ))
 }
 
 fn detect_unordered_list(line: &str) -> Option<String> {
-    if line.starts_with("- ") {
-        Some(inline_format(&line[2..]))
-    } else if line.starts_with("* ") {
-        Some(inline_format(&line[2..]))
-    } else {
-        None
-    }
+    let content = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))?;
+    Some(inline_format(content))
 }
 
 /// 行内格式化：**粗体**、*斜体*、`代码`、[[wikilinks]]、URL。

@@ -362,7 +362,9 @@ fn inline_format(text: &str) -> String {
             continue;
         }
 
-        out.push(chars[i]);
+        // 普通正文文本：必须转义，否则字面 `<` `>` `&` `"` 会注入到
+        // 生成的 HTML 中（存储型 XSS，见 #2830）。
+        out.push_str(&html_escape(&chars[i].to_string()));
         i += 1;
     }
     out
@@ -610,6 +612,40 @@ mod tests {
             result.contains("href=\"https://example.com\""),
             "expected URL href: {}",
             result
+        );
+    }
+
+    #[test]
+    fn inline_format_plain_text_escaped() {
+        // #2830: 普通正文文本必须被 HTML 转义，否则字面 < > & " 会注入生成的
+        // HTML（存储型 XSS）。
+        let result = inline_format("a < b & c > d \"e\"");
+        assert!(result.contains("&lt;"), "expected escaped '<': {}", result);
+        assert!(result.contains("&amp;"), "expected escaped '&': {}", result);
+        assert!(result.contains("&gt;"), "expected escaped '>': {}", result);
+        assert!(
+            result.contains("&quot;"),
+            "expected escaped '\"': {}",
+            result
+        );
+        // 确保没有原始的危险字符泄漏到输出
+        assert!(!result.contains("< b"), "unescaped '<' leaked: {}", result);
+    }
+
+    #[test]
+    fn render_body_html_escapes_script_injection() {
+        // #2830: 整篇正文（含段落）中的 <script> 必须被转义，不能原样输出。
+        let md = "# My Notes\n\nHello <script>alert('xss')</script> world";
+        let html = render_body_html(md);
+        assert!(
+            html.contains("&lt;script&gt;"),
+            "script not escaped: {}",
+            html
+        );
+        assert!(
+            !html.contains("<script>alert"),
+            "raw <script> leaked into output: {}",
+            html
         );
     }
 

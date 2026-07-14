@@ -375,6 +375,7 @@ export const useAppStore = create<AppState>()(
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (state) => ({
         themeMode: state.themeMode,
+        isDark: state.isDark,
         accentColor: state.accentColor,
         apiBase: state.apiBase,
         // apiKey excluded — stored in SecureStore instead

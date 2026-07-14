@@ -358,10 +358,12 @@ export async function updateNote(id: string, title: string, content: string, opt
 
 export async function deleteNote(id: string): Promise<void> {
   const db = await getDb();
-  await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
+    // Queue delete for offline sync push (#2433)
+    await queuePendingSync(id, 'delete');
+  });
   invalidateNoteTitleCache();
-  // Queue delete for offline sync push (#2433)
-  await queuePendingSync(id, 'delete');
 }
 
 /**

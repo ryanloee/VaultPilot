@@ -269,7 +269,7 @@ async function doSync(
 
       const localNote = localMap.get(meta.id);
       if (localNote) {
-        await updateNote(meta.id, title, content, { skipQueue: true });
+        await updateNote(meta.id, title, content, { skipQueue: true, is_template: noteData.meta.is_template ?? 0 });
         updated++;
       } else {
         await createNote(title, content, meta.id, { skipQueue: true, is_template: noteData.meta.is_template ?? 0 });

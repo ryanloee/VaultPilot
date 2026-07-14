@@ -258,7 +258,8 @@ describe('updateNote', () => {
     expect(sql).toContain('UPDATE notes SET title');
     expect(params[0]).toBe('New Title');
     expect(params[1]).toBe('New Body');
-    expect(params[2]).toBe('n1');
+    expect(params[2]).toBeNull(); // is_template defaults to null → keep current
+    expect(params[3]).toBe('n1');
   });
 });
 

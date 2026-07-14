@@ -345,11 +345,11 @@ export async function getNote(id: string): Promise<DbNote | null> {
   return db.getFirstAsync<DbNote>('SELECT * FROM notes WHERE id = ?', [id]);
 }
 
-export async function updateNote(id: string, title: string, content: string, options?: { skipQueue?: boolean }): Promise<void> {
+export async function updateNote(id: string, title: string, content: string, options?: { skipQueue?: boolean; is_template?: number }): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    'UPDATE notes SET title = ?, content = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?',
-    [title, content, id]
+    'UPDATE notes SET title = ?, content = ?, is_template = COALESCE(?, is_template), updated_at = strftime(\'%s\',\'now\') WHERE id = ?',
+    [title, content, options?.is_template ?? null, id]
   );
   invalidateNoteTitleCache();
   // Queue note for offline sync push (#2372)

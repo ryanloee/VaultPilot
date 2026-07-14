@@ -149,6 +149,7 @@ fn render_body_html(text: &str) -> String {
     let mut code_content = String::new();
     let mut code_fence_count = 0u32;
     let mut in_paragraph = false;
+    let mut in_list = false;
 
     for line in text.lines() {
         let trimmed = line.trim();
@@ -157,6 +158,7 @@ fn render_body_html(text: &str) -> String {
         if let Some(rest) = trimmed.strip_prefix("```") {
             if !in_code_block {
                 // 打开代码块
+                close_list(&mut out, &mut in_list);
                 in_code_block = true;
                 code_lang = rest.trim().to_string();
                 code_content.clear();
@@ -168,6 +170,7 @@ fn render_body_html(text: &str) -> String {
                 // 检查是否真的是关闭 fence（周围没有更多 fences）
                 if trimmed == "```" {
                     close_paragraph(&mut out, &mut in_paragraph);
+                    close_list(&mut out, &mut in_list);
                     out.push_str(&render_code_block(&code_lang, &code_content));
                     in_code_block = false;
                     code_lang.clear();
@@ -195,12 +198,14 @@ fn render_body_html(text: &str) -> String {
         // ── 空行 → 关闭段落 ──
         if trimmed.is_empty() {
             close_paragraph(&mut out, &mut in_paragraph);
+            close_list(&mut out, &mut in_list);
             continue;
         }
 
         // ── 标题 ──
         if let Some(heading) = detect_heading(trimmed) {
             close_paragraph(&mut out, &mut in_paragraph);
+            close_list(&mut out, &mut in_list);
             out.push_str(&heading);
             continue;
         }
@@ -208,14 +213,19 @@ fn render_body_html(text: &str) -> String {
         // ── 水平分割线 ──
         if trimmed == "---" || trimmed == "***" || trimmed == "___" {
             close_paragraph(&mut out, &mut in_paragraph);
+            close_list(&mut out, &mut in_list);
             out.push_str("<hr>\n");
             continue;
         }
 
-        // ── 无序列表 ──
+        // ── 无序列表（连续条目合并为同一个 <ul>，#2837） ──
         if let Some(item) = detect_unordered_list(trimmed) {
             close_paragraph(&mut out, &mut in_paragraph);
-            out.push_str(&format!("<ul>\n<li>{}</li>\n</ul>\n", item));
+            if !in_list {
+                out.push_str("<ul>\n");
+                in_list = true;
+            }
+            out.push_str(&format!("<li>{}</li>\n", item));
             continue;
         }
 
@@ -225,6 +235,7 @@ fn render_body_html(text: &str) -> String {
             .or_else(|| trimmed.strip_prefix('>'))
         {
             close_paragraph(&mut out, &mut in_paragraph);
+            close_list(&mut out, &mut in_list);
             out.push_str(&format!(
                 "<blockquote><p>{}</p></blockquote>\n",
                 inline_format(quoted)
@@ -234,6 +245,7 @@ fn render_body_html(text: &str) -> String {
 
         // ── 普通段落行 ──
         if !in_paragraph {
+            close_list(&mut out, &mut in_list);
             in_paragraph = true;
             out.push_str("<p>");
         } else {
@@ -248,6 +260,7 @@ fn render_body_html(text: &str) -> String {
         out.push_str(&render_code_block(&code_lang, &code_content));
     }
 
+    close_list(&mut out, &mut in_list);
     close_paragraph(&mut out, &mut in_paragraph);
     out
 }
@@ -257,6 +270,22 @@ fn close_paragraph(out: &mut String, in_paragraph: &mut bool) {
         out.push_str("</p>\n");
         *in_paragraph = false;
     }
+}
+
+fn close_list(out: &mut String, in_list: &mut bool) {
+    if *in_list {
+        out.push_str("</ul>\n");
+        *in_list = false;
+    }
+}
+
+/// 将 char 索引（基于 text.chars() 的位置）转换为 text 的字节索引。
+/// URL 切分时必须用 byte 索引切 &str，否则非 ASCII 前缀会 panic（#2836）。
+fn char_idx_to_byte(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(text.len())
 }
 
 // ── 行级格式化 ──
@@ -347,19 +376,29 @@ fn inline_format(text: &str) -> String {
         }
 
         // URL (heuristic: starts with http)
-        if chars[i] == 'h' && i + 6 < len && text[i..].starts_with("http") {
-            let url_end = text[i..]
-                .find(|c: char| c.is_whitespace())
-                .map(|p| i + p)
-                .unwrap_or(len);
-            let url = &text[i..url_end];
-            out.push_str(&format!(
-                r#"<a href="{}" target="_blank" rel="noopener">{}</a>"#,
-                html_escape(url),
-                html_escape(url)
-            ));
-            i = url_end;
-            continue;
+        // 注意：i 是 char 索引（基于 chars Vec），必须用 byte 索引切 text，
+        // 否则非 ASCII 前缀会 panic 或误切字符串（#2836）。
+        if chars[i] == 'h' && i + 4 < len {
+            let is_http = chars[i] == 'h'
+                && chars[i + 1] == 't'
+                && chars[i + 2] == 't'
+                && chars[i + 3] == 'p';
+            if is_http {
+                let byte_i = char_idx_to_byte(text, i);
+                let byte_end = text[byte_i..]
+                    .find(|c: char| c.is_whitespace())
+                    .map(|p| byte_i + p)
+                    .unwrap_or(text.len());
+                let url = &text[byte_i..byte_end];
+                out.push_str(&format!(
+                    r#"<a href="{}" target="_blank" rel="noopener">{}</a>"#,
+                    html_escape(url),
+                    html_escape(url)
+                ));
+                // 把 i 推进到 URL 结尾对应的 char 索引
+                i = text[..byte_end].chars().count();
+                continue;
+            }
         }
 
         // 普通正文文本：必须转义，否则字面 `<` `>` `&` `"` 会注入到
@@ -616,6 +655,29 @@ mod tests {
     }
 
     #[test]
+    fn inline_format_url_after_nonascii() {
+        // #2836: 非 ASCII 前缀（中文）后出现 URL，不能把 char 索引当 byte 索引切字符串
+        let result = inline_format("参考 链接 https://example.com 查看");
+        assert!(
+            result.contains("href=\"https://example.com\""),
+            "expected URL autolink: {}",
+            result
+        );
+        assert!(result.contains("参考"), "prefix lost: {}", result);
+    }
+
+    #[test]
+    fn inline_format_url_multibyte_prefix_no_panic() {
+        // #2836: 多字节前缀导致 text[i..] byte 切片越界 panic
+        let result = inline_format("你好世界 https://rust-lang.org 官网");
+        assert!(
+            result.contains("href=\"https://rust-lang.org\""),
+            "expected autolink: {}",
+            result
+        );
+    }
+
+    #[test]
     fn inline_format_plain_text_escaped() {
         // #2830: 普通正文文本必须被 HTML 转义，否则字面 < > & " 会注入生成的
         // HTML（存储型 XSS）。
@@ -671,6 +733,40 @@ mod tests {
     fn detect_unordered_list_star() {
         let result = detect_unordered_list("* star item").unwrap();
         assert_eq!(result, "star item");
+    }
+
+    #[test]
+    fn render_body_html_merges_consecutive_list_items() {
+        // #2837: 连续的无序列表条目应合并为同一个 <ul>
+        let md = "- one\n- two\n- three";
+        let html = render_body_html(md);
+        let ul_count = html.matches("<ul>").count();
+        assert_eq!(ul_count, 1, "expected single <ul>, got: {}", html);
+        assert!(html.contains("<li>one</li>"), "missing item one: {}", html);
+        assert!(html.contains("<li>two</li>"), "missing item two: {}", html);
+        assert!(
+            html.contains("<li>three</li>"),
+            "missing item three: {}",
+            html
+        );
+        assert!(html.contains("</ul>"), "missing closing </ul>: {}", html);
+    }
+
+    #[test]
+    fn render_body_html_closes_list_on_blank_line() {
+        // #2837: 列表后空行应关闭 <ul>
+        let md = "- item\n\nparagraph";
+        let html = render_body_html(md);
+        assert!(
+            html.contains("<ul>\n<li>item</li>\n</ul>"),
+            "list not closed: {}",
+            html
+        );
+        assert!(
+            html.contains("<p>paragraph</p>"),
+            "paragraph missing: {}",
+            html
+        );
     }
 
     #[test]

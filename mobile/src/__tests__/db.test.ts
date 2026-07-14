@@ -264,17 +264,33 @@ describe('updateNote', () => {
 });
 
 describe('deleteNote', () => {
-  it('deletes note by id and queues delete sync', async () => {
+  it('deletes note by id and queues delete sync in a transaction', async () => {
     const db = await freshDb();
     await db.deleteNote('n1');
-    // First call: DELETE FROM notes
+    // Transaction wrapper should have been called
+    expect(mockDb.withTransactionAsync).toHaveBeenCalled();
+    // First inner call: DELETE FROM notes
     const [delSql, delParams] = mockDb.runAsync.mock.calls[0];
     expect(delSql).toContain('DELETE FROM notes');
     expect(delParams).toEqual(['n1']);
-    // Second call: INSERT INTO pending_syncs with delete action (#2433)
+    // Second inner call: INSERT INTO pending_syncs with delete action (#2433)
     const [syncSql, syncParams] = mockDb.runAsync.mock.calls[1];
     expect(syncSql).toContain('INSERT INTO pending_syncs');
     expect(syncParams).toEqual(['n1', 'delete']);
+  });
+
+  it('does not queue pending sync if delete fails inside transaction', async () => {
+    const db = await freshDb();
+    // Make the DELETE fail (runAsync first call throws)
+    mockDb.runAsync.mockRejectedValueOnce(new Error('SQLITE_ERROR: constraint failed'));
+    await expect(db.deleteNote('n1')).rejects.toThrow('SQLITE_ERROR');
+    // Queue should NOT have been called (transaction aborted)
+    // Only one runAsync call — the DELETE
+    expect(mockDb.runAsync).toHaveBeenCalledTimes(1);
+    // No INSERT into pending_syncs
+    const calls = mockDb.runAsync.mock.calls as [string, any[]][];
+    const syncCalls = calls.filter(([sql]: [string, any[]]) => sql.includes('pending_syncs'));
+    expect(syncCalls).toHaveLength(0);
   });
 });
 

@@ -32,7 +32,7 @@ use vaultpilot_lib::storage::{
     remove_note_from_collection_with_context, remove_note_from_project_with_context,
     save_chat_state_async, save_note_with_context, save_settings_with_context,
     search_notes_with_context, set_subscription_enabled_with_context, update_project_with_context,
-    update_subscription_with_context, vault_export_with_context, StorageContext,
+    update_subscription_with_context, vault_export_with_context, NoteNotFound, StorageContext,
 };
 use vaultpilot_lib::vault_query::{parse_query, query_records, record_from_yaml, QValue};
 use vaultpilot_lib::{
@@ -2920,7 +2920,8 @@ fn handle_capture(
             doc.meta.updated_at = chrono::Utc::now().to_rfc3339();
             (doc, true)
         }
-        Err(_) => {
+        Err(ref e) if e.downcast_ref::<NoteNotFound>().is_some() => {
+            // Note genuinely doesn't exist — create a new one.
             let (title, tags) = if target == "daily" {
                 (
                     now.format("%Y-%m-%d").to_string(),
@@ -2948,6 +2949,9 @@ fn handle_capture(
             };
             (note, false)
         }
+        // IO/parse errors must propagate — silently creating a duplicate note
+        // would violate the "append to today's journal" contract (#2850).
+        Err(e) => return Err(e),
     };
 
     let saved = save_note_with_context(context, note)?;

@@ -2647,4 +2647,28 @@ mod tests {
         assert_eq!(t, "");
         assert_eq!(a.as_deref(), Some("heading"));
     }
+
+    // ── Regression test for #2850 ─────────────────────────────────
+
+    #[test]
+    fn regression_2850_note_not_found_downcast_succeeds() {
+        // Regression test for #2850: NoteNotFound must be detectable via
+        // `downcast_ref::<NoteNotFound>()` so that callers like
+        // `handle_capture` can distinguish "note doesn't exist" from IO/parse
+        // errors. Without this, a transient IO failure would silently create
+        // a duplicate note instead of propagating the error.
+        let err: anyhow::Error = anyhow::Error::from(NoteNotFound("missing".to_string()));
+
+        assert!(
+            err.downcast_ref::<NoteNotFound>().is_some(),
+            "NoteNotFound must be downcastable from anyhow::Error"
+        );
+
+        // A generic error must NOT downcast to NoteNotFound.
+        let other_err: anyhow::Error = anyhow::anyhow!("database locked");
+        assert!(
+            other_err.downcast_ref::<NoteNotFound>().is_none(),
+            "non-NoteNotFound errors must not match the downcast"
+        );
+    }
 }

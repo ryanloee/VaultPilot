@@ -118,13 +118,79 @@ impl StorageContext {
         })
     }
 
+    /// OS-level config root used to keep per-vault CLI state (which holds the
+    /// machine-bound encrypted API key) *outside* the synced vault.
+    ///
+    /// Storing the secret inside `<vault>/.vaultpilot/` meant it travelled with
+    /// the vault across devices (git / Syncthing / Obsidian Sync / Dropbox) and
+    /// could no longer be decrypted on the second machine (#2831). Keeping it in
+    /// the OS config dir keeps the secret device-local while the vault (notes,
+    /// prompts, capabilities, sessions) still syncs normally.
+    pub(crate) fn cli_config_root() -> PathBuf {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
+            .unwrap_or_else(std::env::temp_dir)
+            .join("vaultpilot")
+            .join("cli-vaults")
+    }
+
+    /// Stable per-vault namespace so each vault keeps its own local CLI state
+    /// (preserving multi-vault support) without leaking the secret into sync.
+    pub(crate) fn vault_namespace(vault_dir: &std::path::Path) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut s = DefaultHasher::new();
+        // Use the lexical path (not canonicalize) so the namespace is stable
+        // even before the vault directory exists.
+        vault_dir.to_string_lossy().hash(&mut s);
+        format!("{:x}", s.finish())
+    }
+
+    /// One-time migration: move pre-#2831 in-vault `.vaultpilot` state files
+    /// (which carried the machine-bound secret) to the device-local config dir.
+    fn migrate_legacy_cli_state(vault_dir: &std::path::Path, target_dir: &std::path::Path) {
+        let legacy = vault_dir.join(".vaultpilot");
+        for name in ["settings.json", "chat-state.json"] {
+            let src = legacy.join(name);
+            let dst = target_dir.join(name);
+            if src.exists() && !dst.exists() {
+                match fs::rename(&src, &dst) {
+                    Ok(()) => {}
+                    // rename() fails across filesystems (e.g. vault on a
+                    // different mount than the OS config dir) — fall back to a
+                    // copy and then delete the source so the secret leaves sync.
+                    Err(e) => {
+                        tracing::warn!(
+                            "cli(#2831): rename of {name} failed ({e}); copying instead"
+                        );
+                        if fs::copy(&src, &dst).is_ok() {
+                            let _ = fs::remove_file(&src);
+                        }
+                    }
+                }
+            }
+        }
+        // Best-effort cleanup of the now-empty legacy directory.
+        if legacy.exists() {
+            let _ = fs::remove_dir(&legacy);
+        }
+    }
+
     pub fn for_cli(vault_dir_override: Option<PathBuf>) -> Result<Self> {
         let mut ctx = Self::for_sidecar()?;
         if let Some(vault_dir) = vault_dir_override {
-            let cli_state_dir = vault_dir.join(".vaultpilot");
+            let cli_state_dir = Self::cli_config_root().join(Self::vault_namespace(&vault_dir));
+            fs::create_dir_all(&cli_state_dir)?;
+            // Migrate any pre-#2831 in-vault state so existing CLI users keep
+            // their settings after the secret leaves the synced vault.
+            Self::migrate_legacy_cli_state(&vault_dir, &cli_state_dir);
+            // The secret + local conversation state live device-local (do NOT
+            // sync), while the regenerable knowledge index stays in the vault.
             ctx.paths.settings_path = cli_state_dir.join("settings.json");
-            ctx.paths.database_path = cli_state_dir.join("knowledge-index.sqlite");
             ctx.paths.chat_state_path = cli_state_dir.join("chat-state.json");
+            ctx.paths.database_path = vault_dir.join(".vaultpilot").join("knowledge-index.sqlite");
             ctx.paths.default_vault_dir = vault_dir.clone();
             ctx.paths.vault_dir_override = Some(vault_dir);
             // Rebuild the pool for the new database path

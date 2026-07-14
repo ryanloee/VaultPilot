@@ -356,12 +356,18 @@ fn inline_format(text: &str) -> String {
             }
         }
 
-        // `code`
+        // `code`, ``code with ` backticks``, ```code `` double```, etc.
         if chars[i] == '`' {
-            if let Some(end) = find_closing(&chars, i + 1, "`") {
-                let inner: String = chars[i + 1..end].iter().collect();
+            // Count opening backtick(s)
+            let mut tick_count = 1usize;
+            while i + tick_count < len && chars[i + tick_count] == '`' {
+                tick_count += 1;
+            }
+            let closing: String = "`".repeat(tick_count);
+            if let Some(end) = find_closing(&chars, i + tick_count, &closing) {
+                let inner: String = chars[i + tick_count..end].iter().collect();
                 out.push_str(&format!("<code>{}</code>", html_escape(&inner)));
-                i = end + 1;
+                i = end + tick_count;
                 continue;
             }
         }
@@ -632,6 +638,33 @@ mod tests {
 
     #[test]
     fn inline_format_code() {
+        assert_eq!(
+            inline_format("use `cargo` build"),
+            "use <code>cargo</code> build"
+        );
+    }
+
+    #[test]
+    fn inline_format_code_double_backtick_with_inner_backtick() {
+        // #2873: double backticks should handle literal backticks inside code
+        assert_eq!(
+            inline_format("``Use `code` here``"),
+            "<code>Use `code` here</code>"
+        );
+    }
+
+    #[test]
+    fn inline_format_code_triple_backtick_with_double_inner() {
+        // #2873: triple backticks should handle double backticks inside
+        assert_eq!(
+            inline_format("```Use ``code`` here```"),
+            "<code>Use ``code`` here</code>"
+        );
+    }
+
+    #[test]
+    fn inline_format_code_single_backtick_unaffected() {
+        // Single backtick code spans must still work
         assert_eq!(
             inline_format("use `cargo` build"),
             "use <code>cargo</code> build"

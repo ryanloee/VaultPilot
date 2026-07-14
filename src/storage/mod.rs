@@ -143,33 +143,33 @@ pub(super) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 const MAX_NOTE_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct Frontmatter {
+pub(crate) struct Frontmatter {
     #[serde(default)]
-    id: String,
+    pub(crate) id: String,
     #[serde(default)]
-    title: String,
+    pub(crate) title: String,
     #[serde(default)]
-    summary: String,
+    pub(crate) summary: String,
     #[serde(default)]
-    tags: Vec<String>,
+    pub(crate) tags: Vec<String>,
     #[serde(default)]
-    keywords: Vec<String>,
+    pub(crate) keywords: Vec<String>,
     #[serde(default)]
-    platform: String,
+    pub(crate) platform: String,
     #[serde(default)]
-    board: String,
+    pub(crate) board: String,
     #[serde(default)]
-    kernel: String,
+    pub(crate) kernel: String,
     #[serde(default)]
-    status: String,
+    pub(crate) status: String,
     #[serde(default)]
-    created_at: String,
+    pub(crate) created_at: String,
     #[serde(default)]
-    updated_at: String,
+    pub(crate) updated_at: String,
     #[serde(default)]
-    source: String,
+    pub(crate) source: String,
     #[serde(default)]
-    collections: Vec<String>,
+    pub(crate) collections: Vec<String>,
 }
 
 #[instrument(skip(context))]

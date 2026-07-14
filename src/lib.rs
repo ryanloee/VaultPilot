@@ -24,6 +24,7 @@ pub mod skills;
 pub mod storage;
 pub mod utils;
 pub mod vault_query;
+pub mod web_publish;
 
 pub use orchestration::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,

@@ -426,22 +426,73 @@ pub fn compute_and_update_next_run(
         cron_expr.to_string()
     };
 
-    let next_iso = match cron::Schedule::from_str(&full_expr) {
+    match cron::Schedule::from_str(&full_expr) {
         Ok(schedule) => match schedule.upcoming(Utc).next() {
-            Some(dt) => dt.to_rfc3339(),
+            Some(dt) => {
+                let next_iso = dt.to_rfc3339();
+                update_subscription_next_run_with_context(context, id, &next_iso)?;
+                Ok(next_iso)
+            }
             None => {
+                // No future trigger times (e.g. a past-only expression such as
+                // "Feb 30"). Park the subscription far in the future and record
+                // an error so `list_due_subscriptions_with_context` does not
+                // re-select it on every scheduling cycle (its SQL treats an
+                // empty `next_run_at` as always due). See issue #2843.
                 tracing::warn!(id = %id, expr = %cron_expr, "cron schedule produced no future times");
-                String::new()
+                let parked = park_subscription_with_error(
+                    context,
+                    id,
+                    "cron expression produces no future trigger times",
+                )?;
+                Ok(parked)
             }
         },
         Err(e) => {
+            // Invalid cron: do NOT leave `next_run_at` empty (that would make the
+            // subscription perpetually "due" and re-execute every cycle). Park it
+            // and record the parse error instead. See issue #2843.
             tracing::warn!(id = %id, expr = %cron_expr, error = %e, "invalid cron expression");
-            String::new()
+            let parked = park_subscription_with_error(
+                context,
+                id,
+                &format!("invalid cron expression: {e}"),
+            )?;
+            Ok(parked)
         }
-    };
+    }
+}
 
-    update_subscription_next_run_with_context(context, id, &next_iso)?;
-    Ok(next_iso)
+/// Park a subscription that can no longer be scheduled (invalid or exhausted
+/// cron expression) by setting `next_run_at` to a far-future timestamp and
+/// recording an error status. This prevents
+/// `list_due_subscriptions_with_context` from re-selecting it every cycle:
+/// its SQL condition `next_run_at = '' OR next_run_at <= ?1` would otherwise
+/// treat an empty `next_run_at` as always due, causing infinite re-execution
+/// (#2843). A non-empty far-future value defeats that condition until the user
+/// fixes the expression.
+fn park_subscription_with_error(
+    context: &StorageContext,
+    id: &str,
+    error_msg: &str,
+) -> Result<String> {
+    let (connection, _) = open_connection(context)?;
+    let now = Utc::now();
+    let parked_iso = (now + chrono::Duration::days(365)).to_rfc3339();
+    connection
+        .execute(
+            r#"
+            UPDATE subscriptions
+            SET next_run_at = ?1,
+                last_status = 'error',
+                last_error = ?2,
+                updated_at = ?3
+            WHERE id = ?4
+            "#,
+            params![parked_iso, error_msg, now.to_rfc3339(), id],
+        )
+        .with_context(|| format!("failed to park subscription '{id}'"))?;
+    Ok(parked_iso)
 }
 
 /// Get the last successful run's result note for cross-run context.
@@ -608,6 +659,78 @@ mod tests {
         assert_eq!(updated2.run_count, 2);
         assert_eq!(updated2.last_status, "failed");
         assert_eq!(updated2.last_error, "timeout");
+    }
+
+    #[test]
+    fn test_compute_next_run_invalid_cron_parked_not_due() {
+        // Regression test for #2843: an invalid cron expression must NOT leave
+        // `next_run_at` empty (which the `list_due` SQL treats as always due,
+        // causing infinite re-execution). Instead it should be parked with a
+        // far-future timestamp and an error status.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).unwrap();
+
+        let sub =
+            create_subscription_with_context(&ctx, "Bad Cron", "0 9 * * 1", "test prompt", "", "")
+                .unwrap();
+
+        let next = compute_and_update_next_run(&ctx, &sub.id, "not a cron").unwrap();
+        assert!(!next.is_empty(), "next_run_at must not be empty");
+        // Parked value must be strictly in the future so list_due won't select it.
+        assert!(
+            next > Utc::now().to_rfc3339(),
+            "parked next_run_at must be in the future, got {next}"
+        );
+
+        let updated = get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.last_status, "error");
+        assert!(
+            updated.last_error.contains("invalid cron expression"),
+            "last_error should record the cron parse failure, got '{}'",
+            updated.last_error
+        );
+
+        // list_due must NOT return the parked subscription.
+        let due = list_due_subscriptions_with_context(&ctx).unwrap();
+        assert!(
+            !due.iter().any(|s| s.id == sub.id),
+            "parked subscription must not be returned as due"
+        );
+    }
+
+    #[test]
+    fn test_compute_next_run_no_future_times_parked() {
+        // Regression test for #2843: a cron expression that parses but yields
+        // no future trigger times (e.g. Feb 30) must also be parked, not left
+        // empty.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).unwrap();
+
+        let sub = create_subscription_with_context(
+            &ctx,
+            "Exhausted Cron",
+            "0 0 30 2 *",
+            "test prompt",
+            "",
+            "",
+        )
+        .unwrap();
+
+        let next = compute_and_update_next_run(&ctx, &sub.id, "0 0 30 2 *").unwrap();
+        assert!(!next.is_empty());
+        assert!(next > Utc::now().to_rfc3339());
+
+        let updated = get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.last_status, "error");
+        assert!(
+            updated.last_error.contains("no future trigger times"),
+            "got '{}'",
+            updated.last_error
+        );
     }
 
     #[test]

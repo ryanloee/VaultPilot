@@ -28,6 +28,28 @@ pub struct AgentTriggerRule {
     pub action: TriggerAction,
     /// Whether this rule is active. Disabled rules are kept but skipped.
     pub enabled: bool,
+    /// Prompt text for the `Custom` action. Only meaningful when
+    /// `action == TriggerAction::Custom`; stored on the rule because the
+    /// `TriggerAction` enum variants are unit-like. Omitted from serialized
+    /// output when `None` for backward compatibility (#2842).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_prompt: Option<String>,
+}
+
+impl AgentTriggerRule {
+    /// The prompt text that should be executed for this rule.
+    ///
+    /// For `TriggerAction::Custom` this is `custom_prompt` (required). For all
+    /// other actions the predefined task template is used and this returns
+    /// `None`. Returns `None` for a `Custom` rule that has no prompt text set,
+    /// which callers should treat as a configuration error rather than running
+    /// an empty action (#2842).
+    pub fn effective_prompt(&self) -> Option<&str> {
+        match &self.action {
+            TriggerAction::Custom => self.custom_prompt.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// Trigger source: either a cron schedule or a vault event.
@@ -168,9 +190,74 @@ mod tests {
             },
             action: TriggerAction::DailyReview,
             enabled: true,
+            custom_prompt: None,
         };
         let json = serde_json::to_string(&rule).unwrap();
         let parsed: AgentTriggerRule = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, rule);
+    }
+
+    #[test]
+    fn agent_trigger_rule_custom_prompt_roundtrip() {
+        // Regression test for #2842: a `Custom` trigger must be able to carry
+        // its prompt text, and the field must round-trip through JSON while
+        // remaining backward compatible (absent field deserializes to None).
+        let rule = AgentTriggerRule {
+            id: "custom-1".into(),
+            label: "Custom Task".into(),
+            trigger: TriggerKind::Cron {
+                expression: "0 8 * * *".into(),
+            },
+            action: TriggerAction::Custom,
+            enabled: true,
+            custom_prompt: Some("Summarize the meeting notes for {{date}}".into()),
+        };
+
+        // The prompt is reachable via effective_prompt for Custom actions.
+        assert_eq!(
+            rule.effective_prompt(),
+            Some("Summarize the meeting notes for {{date}}")
+        );
+
+        let json = serde_json::to_string(&rule).unwrap();
+        assert!(json.contains("Summarize the meeting notes for {{date}}"));
+
+        let parsed: AgentTriggerRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, rule);
+        assert_eq!(
+            parsed.effective_prompt(),
+            Some("Summarize the meeting notes for {{date}}")
+        );
+
+        // Non-custom actions must not surface a custom prompt.
+        let daily = AgentTriggerRule {
+            id: "daily-1".into(),
+            label: "Daily".into(),
+            trigger: TriggerKind::Cron {
+                expression: "0 8 * * *".into(),
+            },
+            action: TriggerAction::DailyReview,
+            enabled: true,
+            custom_prompt: None,
+        };
+        assert_eq!(daily.effective_prompt(), None);
+    }
+
+    #[test]
+    fn agent_trigger_rule_backward_compat_missing_custom_prompt() {
+        // A previously-persisted rule without the custom_prompt field (written
+        // before #2842) must still deserialize, defaulting to None (#2842).
+        let json = r#"{
+            "id": "legacy-1",
+            "label": "Legacy Custom",
+            "trigger": {"type": "cron", "expression": "0 8 * * *"},
+            "action": "custom",
+            "enabled": true
+        }"#;
+        let parsed: AgentTriggerRule = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.action, TriggerAction::Custom);
+        assert_eq!(parsed.custom_prompt, None);
+        // A Custom rule without a prompt is a configuration error, not a silent no-op.
+        assert_eq!(parsed.effective_prompt(), None);
     }
 }

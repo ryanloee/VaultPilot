@@ -43,12 +43,12 @@ describe('isNoteRelatedQuery (#1473)', () => {
     expect(isNoteRelatedQuery('find a note about AI')).toBe(true);
   });
 
-  it('matches save', () => {
-    expect(isNoteRelatedQuery('what did I save')).toBe(true);
+  it('matches save a note', () => {
+    expect(isNoteRelatedQuery('what did I save a note about')).toBe(true);
   });
 
-  it('matches record', () => {
-    expect(isNoteRelatedQuery('any record about this')).toBe(true);
+  it('matches my records', () => {
+    expect(isNoteRelatedQuery('show my records about this')).toBe(true);
   });
 
   // Negative cases

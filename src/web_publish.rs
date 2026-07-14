@@ -63,14 +63,8 @@ fn resolve_note_path(vault_dir: &Path, input: &str) -> Result<PathBuf> {
 
 /// 从路径生成 URL-safe slug（去掉扩展名、替换特殊字符）。
 fn slugify(raw: &str) -> String {
-    let name = raw
-        .rsplit('/')
-        .next()
-        .unwrap_or(raw);
-    let stem = name
-        .rsplit_once('.')
-        .map(|(s, _ext)| s)
-        .unwrap_or(name);
+    let name = raw.rsplit('/').next().unwrap_or(raw);
+    let stem = name.rsplit_once('.').map(|(s, _ext)| s).unwrap_or(name);
     stem.chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '-' || c == '_' {
@@ -268,26 +262,23 @@ fn close_paragraph(out: &mut String, in_paragraph: &mut bool) {
 // ── 行级格式化 ──
 
 fn detect_heading(line: &str) -> Option<String> {
-    let (level, content) = if let Some(rest) = line.strip_prefix("###### ") {
-        (6, rest)
-    } else if let Some(rest) = line.strip_prefix("##### ") {
-        (5, rest)
-    } else if let Some(rest) = line.strip_prefix("#### ") {
-        (4, rest)
-    } else if let Some(rest) = line.strip_prefix("### ") {
-        (3, rest)
-    } else if let Some(rest) = line.strip_prefix("## ") {
-        (2, rest)
-    } else if let Some(rest) = line.strip_prefix("# ") {
-        (1, rest)
-    } else {
-        return None;
-    };
-    Some(format!(
-        "<h{level}>{content}</h{level}>\n",
-        level = level,
-        content = inline_format(content)
-    ))
+    for (prefix, level) in [
+        ("###### ", 6),
+        ("##### ", 5),
+        ("#### ", 4),
+        ("### ", 3),
+        ("## ", 2),
+        ("# ", 1),
+    ] {
+        if let Some(content) = line.strip_prefix(prefix) {
+            return Some(format!(
+                "<h{level}>{content}</h{level}>\n",
+                level = level,
+                content = inline_format(content)
+            ));
+        }
+    }
+    None
 }
 
 fn detect_unordered_list(line: &str) -> Option<String> {

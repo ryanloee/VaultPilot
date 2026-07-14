@@ -15,6 +15,11 @@ public sealed partial class MainWindow : Window
     // ── Chat constants ──
     private const double ContextCompressionThreshold = 0.95;
     private const int RecentTurnsAfterCompression = 8;
+    // #2834: hard cap on retained in-memory turns per session. Context
+    // compression prunes old turns only when the projected token count nears
+    // the model's context window; with a large window a very long session could
+    // otherwise accumulate unbounded turns (and their attachments) in memory.
+    private const int MaxTurnsPerSession = 512;
     private const ulong ImageAttachmentTokenEstimate = 1200;
     private const string MarkdownOpenTag = "<vp-markdown>";
     private const string MarkdownCloseTag = "</vp-markdown>";
@@ -360,6 +365,13 @@ public sealed partial class MainWindow : Window
             var turns = new List<ChatTurn>(session.Turns.Count + 1);
             turns.AddRange(session.Turns);
             turns.Add(turn);
+            // #2834: bound in-memory history so memory cannot grow without limit
+            // in a long-lived session (compression handles summarization; this is
+            // a safety net that keeps only the most recent turns).
+            if (turns.Count > MaxTurnsPerSession)
+            {
+                turns.RemoveRange(0, turns.Count - MaxTurnsPerSession);
+            }
             var title = session.Title == "新对话" && role == "user"
                 ? BuildSessionTitle(text)
                 : session.Title;

@@ -195,13 +195,13 @@ export function looksLikeSmallTalk(text: string): boolean {
     '再见', 'bye', '拜拜', '晚安',
   ];
   // If user mentions notes/records, never treat as small talk
-  if (/笔记|记录|保存|记了|记过|note|save|record/i.test(lower)) return false;
+  if (/笔记|记录|保存|记了|记过|\bnotes?\b|save (a )?note|\bnote (this|that) down\b|my notes|my records/i.test(lower)) return false;
   return greetings.some(g => lower === g || lower === g + '!' || lower === g + '。');
 }
 
 /** Check if user message explicitly asks about notes/records. */
 export function isNoteRelatedQuery(text: string): boolean {
-  return /笔记|记录|保存|记了|记过|知识库|notes?|save|record/i.test(text);
+  return /笔记|记录|保存|记了|记过|知识库|\bnotes?\b|save (a )?note|\bnote (this|that) down\b|my notes|my records/i.test(text);
 }
 
 /**

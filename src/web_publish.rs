@@ -62,10 +62,21 @@ fn resolve_note_path(vault_dir: &Path, input: &str) -> Result<PathBuf> {
 }
 
 /// 从路径生成 URL-safe slug（去掉扩展名、替换特殊字符）。
+///
+/// 使用完整相对路径（而非仅文件名）生成 slug，确保不同目录下的同名笔记
+/// 映射到不同的输出目录（#2854）。
 fn slugify(raw: &str) -> String {
-    let name = raw.rsplit('/').next().unwrap_or(raw);
-    let stem = name.rsplit_once('.').map(|(s, _ext)| s).unwrap_or(name);
-    stem.chars()
+    // 去掉可选的 vault: 前缀
+    let stripped = raw.strip_prefix("vault:").unwrap_or(raw);
+    // 去掉文件扩展名
+    let noext = stripped
+        .rsplit_once('.')
+        .map(|(s, _ext)| s)
+        .unwrap_or(stripped);
+    // 将目录分隔符替换为连字符，保留目录层级信息
+    noext
+        .replace('/', "-")
+        .chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '-' || c == '_' {
                 c
@@ -579,9 +590,18 @@ mod tests {
 
     #[test]
     fn slugify_basic() {
-        assert_eq!(slugify("notes/rust-tips.md"), "rust-tips");
-        assert_eq!(slugify("Daily/2026-07-14.md"), "2026-07-14");
-        assert_eq!(slugify("deep/nested/path/to/file.md"), "file");
+        // 普通文件 — 只有文件名
+        assert_eq!(slugify("notes/rust-tips.md"), "notes-rust-tips");
+        assert_eq!(slugify("Daily/2026-07-14.md"), "daily-2026-07-14");
+        // 深层嵌套路径 — 保留完整目录层级
+        assert_eq!(
+            slugify("deep/nested/path/to/file.md"),
+            "deep-nested-path-to-file"
+        );
+        // vault: 前缀
+        assert_eq!(slugify("vault:projects/notes.md"), "projects-notes");
+        // 无扩展名
+        assert_eq!(slugify("noext/readme"), "noext-readme");
     }
 
     #[test]

@@ -857,6 +857,167 @@ pub async fn find_backlinks_async(
         .map_err(|e| anyhow::anyhow!("join error: {e}"))?
 }
 
+/// Find all notes that mention the given note's **title as plain text**
+/// (not wrapped in `[[ ]]` wikilinks).
+///
+/// This surfaces latent connections the user hasn't formalised into wikilinks —
+/// e.g. if note B is titled "Machine Learning" and note A says "I've been
+/// studying Machine Learning lately" (without `[[Machine Learning]]`), note A
+/// is an unlinked mention of note B.
+///
+/// Matching rules:
+/// - Case-insensitive whole-word match.
+/// - Skips fenced code blocks and inline code (same as `extract_wikilinks`).
+/// - Skips frontmatter (YAML between `---` fences).
+/// - Titles shorter than 3 characters are ignored (too many false positives).
+/// - Notes that already link to the target via `[[wikilink]]` are excluded
+///   (those are backlinks, not unlinked mentions).
+pub fn find_unlinked_mentions_with_context(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<crate::models::UnlinkedMention>> {
+    let (connection, _) = open_connection(context)?;
+    let target_meta = load_note_meta_by_id(&connection, note_id)?
+        .ok_or_else(|| anyhow::Error::from(NoteNotFound(note_id.to_string())))?;
+
+    let title = target_meta.title.trim();
+    if title.len() < 3 {
+        return Ok(Vec::new());
+    }
+
+    let title_lower = title.to_lowercase();
+    let all_metas = list_all_note_metas(&connection)?;
+    let mut results = Vec::new();
+
+    for meta in &all_metas {
+        if meta.id == target_meta.id {
+            continue;
+        }
+        let doc = match load_note_with_context(context, &meta.id) {
+            Ok(doc) => doc,
+            Err(_) => continue,
+        };
+
+        let raw_links = extract_wikilinks(&doc.body);
+        let already_linked = raw_links
+            .iter()
+            .any(|(target, _)| target.to_lowercase() == title_lower);
+        if already_linked {
+            continue;
+        }
+
+        if body_mentions_title(&doc.body, &title_lower) {
+            results.push(crate::models::UnlinkedMention {
+                meta: meta.clone(),
+                matched_title: title.to_string(),
+            });
+        }
+    }
+
+    results.sort_by(|a, b| b.meta.updated_at.cmp(&a.meta.updated_at));
+    Ok(results)
+}
+
+/// Check whether a note body mentions `title_lower` as plain text (case-insensitive
+/// whole-word match), excluding code blocks, inline code, and frontmatter.
+pub(crate) fn body_mentions_title(body: &str, title_lower: &str) -> bool {
+    let mut in_code_block = false;
+    let mut in_frontmatter = false;
+    let mut frontmatter_seen = false;
+
+    for line in body.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "---" {
+            if !frontmatter_seen {
+                frontmatter_seen = true;
+                in_frontmatter = true;
+                continue;
+            } else if in_frontmatter {
+                in_frontmatter = false;
+                continue;
+            }
+        }
+        if in_frontmatter {
+            continue;
+        }
+
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
+        let cleaned = strip_inline_code(line);
+        if contains_whole_word(&cleaned.to_lowercase(), title_lower) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Remove inline code spans (`` `…` ``) from a line.
+fn strip_inline_code(line: &str) -> String {
+    let mut result = String::with_capacity(line.len());
+    let mut in_code = false;
+    for ch in line.chars() {
+        if ch == '`' {
+            in_code = !in_code;
+            result.push(' ');
+        } else if in_code {
+            result.push(' ');
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Check whether `haystack` contains `needle` as a whole word.
+fn contains_whole_word(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+
+    let needle_bytes = needle.as_bytes();
+    let h_bytes = haystack.as_bytes();
+    let n_len = needle_bytes.len();
+
+    let mut i = 0usize;
+    while i + n_len <= h_bytes.len() {
+        if &h_bytes[i..i + n_len] == needle_bytes {
+            let left_ok = i == 0 || !is_word_char(h_bytes[i - 1]);
+            let right_idx = i + n_len;
+            let right_ok = right_idx >= h_bytes.len() || !is_word_char(h_bytes[right_idx]);
+            if left_ok && right_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Whether a byte is an ASCII alphanumeric or underscore (word character).
+fn is_word_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Async wrapper for [`find_unlinked_mentions_with_context`].
+pub async fn find_unlinked_mentions_async(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<crate::models::UnlinkedMention>> {
+    let ctx = context.clone();
+    let note_id = note_id.to_string();
+    tokio::task::spawn_blocking(move || find_unlinked_mentions_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow::anyhow!("join error: {e}"))?
+}
+
 /// Extract key terms from a note to build a search query for related notes.
 /// Uses only title + tags for focused matching (avoids FTS5 AND-query bloat).
 pub(crate) fn build_related_query(doc: &NoteDocument) -> String {
@@ -2670,5 +2831,48 @@ mod tests {
             other_err.downcast_ref::<NoteNotFound>().is_none(),
             "non-NoteNotFound errors must not match the downcast"
         );
+    }
+
+    // ── Regression tests for unlinked mentions (#2832) ─────────────────
+
+    #[test]
+    fn regression_2832_strip_inline_code_preserves_boundaries() {
+        let input = "Hello `world` here";
+        let cleaned = strip_inline_code(input);
+        // `world` → 7 spaces (2 backticks + 5 chars), plus original spaces.
+        assert_eq!(cleaned, "Hello         here");
+    }
+
+    #[test]
+    fn regression_2832_contains_whole_word_basic() {
+        assert!(contains_whole_word(
+            "i love machine learning",
+            "machine learning"
+        ));
+        assert!(!contains_whole_word("machinelearning", "machine learning"));
+    }
+
+    #[test]
+    fn regression_2832_contains_whole_word_boundary() {
+        assert!(contains_whole_word("(rust) is great", "rust"));
+        assert!(!contains_whole_word("rustacean", "rust"));
+    }
+
+    #[test]
+    fn regression_2832_body_mentions_title_basic() {
+        let body = "I've been studying Machine Learning lately.\n```\nMachine Learning code\n```\nNot in code.";
+        assert!(body_mentions_title(body, "machine learning"));
+    }
+
+    #[test]
+    fn regression_2832_body_mentions_title_skips_frontmatter() {
+        let body = "---\ntitle: Machine Learning\n---\n\nThis is about Machine Learning indeed.";
+        assert!(body_mentions_title(body, "machine learning"));
+    }
+
+    #[test]
+    fn regression_2832_body_mentions_title_inline_code_skipped() {
+        let body = "Run `Machine Learning` from the CLI.";
+        assert!(!body_mentions_title(body, "machine learning"));
     }
 }

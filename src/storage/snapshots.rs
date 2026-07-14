@@ -304,7 +304,11 @@ mod tests {
         let saved = save_note_with_context(&ctx, v3).unwrap();
 
         let snapshots = list_snapshots_for_note(&ctx, &saved.meta.id).unwrap();
-        assert_eq!(snapshots.len(), 2, "two updates should create two snapshots");
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "two updates should create two snapshots"
+        );
         assert!(
             snapshots[0].body.contains("v2 body"),
             "latest snapshot = prior version"

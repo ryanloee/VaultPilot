@@ -12,16 +12,12 @@
  * version as `expo` and keep package-lock.json in sync.
  *
  * This guard reads package.json / package-lock.json directly (no RN runtime),
- * so it runs under the plain `node` jest environment.
+ * so it runs under the plain `node` jest environment. The JSON files are
+ * imported directly rather than via fs/path so the test type-checks without
+ * pulling in @types/node (tsconfig restricts `types` to ["jest"]).
  */
-import fs from 'fs';
-import path from 'path';
-
-const MOBILE_ROOT = path.resolve(__dirname, '../../../');
-
-function readJson(rel: string): any {
-  return JSON.parse(fs.readFileSync(path.join(MOBILE_ROOT, rel), 'utf8'));
-}
+import pkg from '../../../package.json';
+import lock from '../../../package-lock.json';
 
 /** Extract the leading major version from a semver range like "~57.0.4". */
 function major(range: string): number {
@@ -41,8 +37,7 @@ function major(range: string): number {
 const ALLOWED_LAGGING = new Set<string>(['expo-speech-recognition']);
 
 describe('issue #2839 — expo SDK module alignment', () => {
-  const pkg = readJson('package.json');
-  const deps: Record<string, string> = pkg.dependencies ?? {};
+  const deps: Record<string, string> = (pkg as any).dependencies ?? {};
   const expoMajor = major(deps['expo']);
 
   it('expo core is pinned to a known SDK major', () => {
@@ -70,8 +65,7 @@ describe('issue #2839 — expo SDK module alignment', () => {
   });
 
   it('package-lock.json resolves the fixed modules to the expo major', () => {
-    const lock = readJson('package-lock.json');
-    const pkgs = lock.packages ?? {};
+    const pkgs = (lock as any).packages ?? {};
     for (const name of ['expo-file-system', 'expo-intent-launcher', 'expo-sqlite']) {
       const entry = pkgs[`node_modules/${name}`];
       expect(entry).toBeDefined();

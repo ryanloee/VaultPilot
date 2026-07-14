@@ -3,8 +3,6 @@
 //! Subscriptions are recurring AI-powered research tasks stored in the
 //! `subscriptions` SQLite table.
 
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};

@@ -1043,7 +1043,7 @@ if ($null -ne $result -and $null -ne $result.Text) {
 // Helper functions
 // ────────────────────────────────────────────────────────
 
-pub(super) fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
+pub(crate) fn split_frontmatter(content: &str) -> Result<(Frontmatter, &str)> {
     // #847: Strip UTF-8 BOM that Windows editors (e.g. Notepad) may prepend.
     // Without this, files with BOM have their frontmatter silently ignored.
     let content = content.trim_start_matches('\u{feff}');
@@ -1180,7 +1180,7 @@ fn collect_markdown_files(paths: &[String]) -> Vec<PathBuf> {
     files
 }
 
-fn detect_title(body: &str, path: &Path) -> String {
+pub(crate) fn detect_title(body: &str, path: &Path) -> String {
     for line in body.lines() {
         let trimmed = line.trim();
         if let Some(title) = trimmed.strip_prefix("# ") {

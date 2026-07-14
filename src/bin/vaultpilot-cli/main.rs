@@ -375,6 +375,25 @@ enum Commands {
         color: bool,
     },
 
+    /// Publish a Markdown note as a self-contained HTML page (#2811 MVP)
+    ///
+    /// Converts a vault markdown note to a standalone HTML page with inline
+    /// CSS, rendering YAML frontmatter metadata, headings, code blocks,
+    /// wikilinks, and basic formatting.
+    ///
+    /// Examples:
+    ///   vp publish notes/my-note.md              — publish to default output dir
+    ///   vp publish notes/my-note.md --out /tmp   — publish to custom dir
+    Publish {
+        /// Path to the note file. Accepts vault: prefix for vault-relative
+        /// paths, absolute paths, or relative (assumed vault-relative).
+        path: String,
+
+        /// Output directory (default: ~/.vaultpilot/published)
+        #[arg(long)]
+        out: Option<String>,
+    },
+
     /// Run AI quick actions on text (summarize, rewrite, translate, explain, etc.)
     ///
     /// These actions are part of the global AI command palette feature (#2188).
@@ -1890,6 +1909,22 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             note_b,
             color,
         } => handle_diff(context, note_a, note_b, *color),
+        Commands::Publish { path, out } => {
+            let vault_dir = context.vault_dir().to_path_buf();
+            let output_root = match out {
+                Some(p) => PathBuf::from(p),
+                None => {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                    PathBuf::from(home).join(".vaultpilot/published")
+                }
+            };
+            let out_file =
+                vaultpilot_lib::web_publish::publish_note(&vault_dir, path, &output_root)?;
+            Ok(serde_json::json!({
+                "status": "published",
+                "path": out_file.display().to_string()
+            }))
+        }
         Commands::Ai { action } => handle_ai(context, action).await,
         Commands::Subscriptions { action } => {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))

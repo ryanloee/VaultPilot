@@ -670,15 +670,9 @@ mod tests {
         let (_temp, ctx) = setup_temp_context();
         initialize_storage_with_context(&ctx).unwrap();
 
-        let sub = create_subscription_with_context(
-            &ctx,
-            "Bad Cron",
-            "0 9 * * 1",
-            "test prompt",
-            "",
-            "",
-        )
-        .unwrap();
+        let sub =
+            create_subscription_with_context(&ctx, "Bad Cron", "0 9 * * 1", "test prompt", "", "")
+                .unwrap();
 
         let next = compute_and_update_next_run(&ctx, &sub.id, "not a cron").unwrap();
         assert!(!next.is_empty(), "next_run_at must not be empty");

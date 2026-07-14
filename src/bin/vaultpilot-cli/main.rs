@@ -235,6 +235,30 @@ enum Commands {
         dry_run: bool,
     },
 
+    /// Quick-capture a one-line note into today's daily note or the inbox (#2833)
+    ///
+    /// Zero-friction "think it, log it" text capture: appends a timestamped
+    /// bullet under a capture section, creating the target note (and section)
+    /// if needed, then triggers incremental indexing. Ideal for global hotkeys
+    /// or shell shortcuts on the desktop.
+    ///
+    /// Examples:
+    ///   vaultpilot capture "buy milk"
+    ///   vaultpilot capture "idea: graph view" --target inbox
+    ///   vaultpilot capture "call Bob" --section "Todos"
+    Capture {
+        /// The text to capture (quote multi-word input)
+        text: String,
+
+        /// Where to append: "daily" (today's daily note) or "inbox" (Inbox.md)
+        #[arg(long, default_value = "daily")]
+        target: String,
+
+        /// Section heading to append the entry under (created if missing)
+        #[arg(long, default_value = "Quick Capture")]
+        section: String,
+    },
+
     /// Start an MCP stdio server for VaultPilot's built-in model chat interface
     Mcp,
 
@@ -1681,6 +1705,11 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             list,
             dry_run,
         } => handle_daily(context, template, date.as_deref(), *list, *dry_run),
+        Commands::Capture {
+            text,
+            target,
+            section,
+        } => handle_capture(context, text, target, section),
         Commands::Collections { action } => {
             tokio::task::block_in_place(|| handle_collections(context, action))
         }
@@ -2854,6 +2883,131 @@ fn format_as_md_table(
         out.push('\n');
     }
 
+    out
+}
+
+/// Handle the `capture` subcommand — zero-friction quick text capture (#2833).
+///
+/// Appends a timestamped bullet under a capture section of today's daily note
+/// (`Daily/YYYY-MM-DD`) or the inbox note (`Inbox`), creating the note and the
+/// section when they do not exist. Saving through `save_note_with_context`
+/// triggers incremental indexing so the captured text is immediately
+/// searchable.
+fn handle_capture(
+    context: &StorageContext,
+    text: &str,
+    target: &str,
+    section: &str,
+) -> Result<Value> {
+    use chrono::Local;
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("capture text is empty");
+    }
+
+    let now = Local::now();
+    let note_id = match target {
+        "daily" => format!("Daily/{}", now.format("%Y-%m-%d")),
+        "inbox" => "Inbox".to_string(),
+        other => anyhow::bail!("unknown capture target '{other}': expected 'daily' or 'inbox'"),
+    };
+    let timestamp = now.format("%H:%M").to_string();
+
+    let (note, existed) = match load_note_with_context(context, &note_id) {
+        Ok(mut doc) => {
+            doc.body = append_capture_entry(&doc.body, section, &timestamp, trimmed);
+            doc.meta.updated_at = chrono::Utc::now().to_rfc3339();
+            (doc, true)
+        }
+        Err(_) => {
+            let (title, tags) = if target == "daily" {
+                (
+                    now.format("%Y-%m-%d").to_string(),
+                    vec!["daily".to_string()],
+                )
+            } else {
+                ("Inbox".to_string(), vec!["inbox".to_string()])
+            };
+            let body = append_capture_entry("", section, &timestamp, trimmed);
+            let now_rfc = chrono::Utc::now().to_rfc3339();
+            let note = NoteDocument {
+                meta: NoteMeta {
+                    id: note_id.clone(),
+                    title,
+                    tags,
+                    summary: String::new(),
+                    source: String::new(),
+                    created_at: now_rfc.clone(),
+                    updated_at: now_rfc,
+                    ..Default::default()
+                },
+                body,
+                search_snippet: None,
+                search_score: None,
+            };
+            (note, false)
+        }
+    };
+
+    let saved = save_note_with_context(context, note)?;
+    Ok(serde_json::json!({
+        "status": if existed { "appended" } else { "created" },
+        "note_id": note_id,
+        "target": target,
+        "section": section,
+        "timestamp": timestamp,
+        "captured": trimmed,
+        "title": saved.meta.title,
+    }))
+}
+
+/// Append a timestamped bullet under `section` in a Markdown note body.
+///
+/// If the `## <section>` heading is absent it is created at the end of the note
+/// (separated from existing content by a blank line). If it exists, the bullet
+/// is inserted after the last non-blank line of that section, before any
+/// following heading. Pure and deterministic so it can be unit-tested.
+fn append_capture_entry(body: &str, section: &str, timestamp: &str, text: &str) -> String {
+    let bullet = format!("- {timestamp} {text}");
+    let heading = format!("## {section}");
+    let mut lines: Vec<String> = body.lines().map(|s| s.to_string()).collect();
+
+    match lines.iter().position(|l| l.trim() == heading) {
+        None => {
+            if !lines.is_empty() {
+                while lines.last().is_some_and(|s| s.trim().is_empty()) {
+                    lines.pop();
+                }
+                if !lines.is_empty() {
+                    lines.push(String::new());
+                }
+            }
+            lines.push(heading);
+            lines.push(bullet);
+        }
+        Some(head_idx) => {
+            // Locate the end of this section: the next "## " heading, or EOF.
+            let mut end = lines.len();
+            for (offset, line) in lines.iter().enumerate().skip(head_idx + 1) {
+                if line.starts_with("## ") {
+                    end = offset;
+                    break;
+                }
+            }
+            // Insert right after the last non-blank line within the section.
+            let mut insert_at = head_idx + 1;
+            for (offset, line) in lines.iter().enumerate().take(end).skip(head_idx + 1) {
+                if !line.trim().is_empty() {
+                    insert_at = offset + 1;
+                }
+            }
+            lines.insert(insert_at, bullet);
+        }
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
     out
 }
 
@@ -5032,10 +5186,62 @@ mod tests {
         simplify_cli_text, strip_cli_markdown_from_chat_state, strip_markdown_wrapper_tags,
     };
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
-    use crate::{parse_batch_selector, render_daily_template, resolve_audio_input, BatchSelector};
+    use crate::{
+        append_capture_entry, parse_batch_selector, render_daily_template, resolve_audio_input,
+        BatchSelector,
+    };
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
     use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
+
+    // ── append_capture_entry — quick capture (#2833) ───────────────
+
+    #[test]
+    fn capture_creates_section_in_empty_body() {
+        let out = append_capture_entry("", "Quick Capture", "10:30", "buy milk");
+        assert_eq!(out, "## Quick Capture\n- 10:30 buy milk\n");
+    }
+
+    #[test]
+    fn capture_appends_new_section_to_existing_body() {
+        let body = "# 2026-07-14\n\n## Notes\nsome note\n";
+        let out = append_capture_entry(body, "Quick Capture", "09:05", "idea");
+        assert_eq!(
+            out,
+            "# 2026-07-14\n\n## Notes\nsome note\n\n## Quick Capture\n- 09:05 idea\n"
+        );
+    }
+
+    #[test]
+    fn capture_appends_into_existing_section() {
+        let body = "## Quick Capture\n- 08:00 first\n";
+        let out = append_capture_entry(body, "Quick Capture", "08:30", "second");
+        assert_eq!(out, "## Quick Capture\n- 08:00 first\n- 08:30 second\n");
+    }
+
+    #[test]
+    fn capture_inserts_before_following_heading() {
+        let body = "## Quick Capture\n- 08:00 first\n\n## Notes\nfoo\n";
+        let out = append_capture_entry(body, "Quick Capture", "08:30", "second");
+        assert_eq!(
+            out,
+            "## Quick Capture\n- 08:00 first\n- 08:30 second\n\n## Notes\nfoo\n"
+        );
+    }
+
+    #[test]
+    fn capture_handles_empty_section_body() {
+        // Heading exists but has no entries yet.
+        let body = "## Quick Capture\n";
+        let out = append_capture_entry(body, "Quick Capture", "12:00", "note");
+        assert_eq!(out, "## Quick Capture\n- 12:00 note\n");
+    }
+
+    #[test]
+    fn capture_preserves_unicode_text() {
+        let out = append_capture_entry("", "速记", "07:07", "买牛奶 🥛");
+        assert_eq!(out, "## 速记\n- 07:07 买牛奶 🥛\n");
+    }
 
     // ── parse_batch_selector (#2013) ───────────────────────────────
 

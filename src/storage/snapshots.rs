@@ -180,15 +180,19 @@ pub fn restore_snapshot(
     }
 
     // Deserialise the frontmatter and reconstruct the NoteDocument.
-    let mut restored: NoteDocument = serde_json::from_str(&snapshot.frontmatter)
+    // Note: frontmatter stores NoteMeta JSON (not NoteDocument), so we deserialize
+    // as NoteMeta first, then construct the NoteDocument with the stored body.
+    let meta: crate::models::NoteMeta = serde_json::from_str(&snapshot.frontmatter)
         .with_context(|| "failed to deserialise snapshot frontmatter")?;
-    restored.body = snapshot.body;
-
-    // Record a snapshot of the current state *before* overwriting, so the
-    // restore is reversible.
-    record_snapshot_before_save(context, note_id, "user")?;
+    let restored = crate::models::NoteDocument {
+        meta,
+        body: snapshot.body.clone(),
+        ..Default::default()
+    };
 
     // Save the restored note — this will index it into the DB and FTS.
+    // Note: save_note_with_images_with_context internally calls record_snapshot_before_save,
+    // so we don't need to record a pre-restore snapshot here explicitly.
     let saved = super::notes::save_note_with_images_with_context(context, restored, &[])?;
 
     Ok(saved)

@@ -158,7 +158,6 @@ fn render_body_html(text: &str) -> String {
     let mut in_code_block = false;
     let mut code_lang = String::new();
     let mut code_content = String::new();
-    let mut code_fence_count = 0u32;
     let mut in_paragraph = false;
     let mut in_list = false;
 
@@ -173,22 +172,17 @@ fn render_body_html(text: &str) -> String {
                 in_code_block = true;
                 code_lang = rest.trim().to_string();
                 code_content.clear();
-                code_fence_count = 1;
                 // 不输出开始标记
                 continue;
-            } else if code_fence_count == 1 {
-                // 关闭代码块（第一个 lone fence 线，在块内暂停后）
-                // 检查是否真的是关闭 fence（周围没有更多 fences）
-                if trimmed == "```" {
-                    close_paragraph(&mut out, &mut in_paragraph);
-                    close_list(&mut out, &mut in_list);
-                    out.push_str(&render_code_block(&code_lang, &code_content));
-                    in_code_block = false;
-                    code_lang.clear();
-                    code_content.clear();
-                    code_fence_count = 0;
-                    continue;
-                }
+            } else if trimmed == "```" {
+                // 关闭代码块
+                close_paragraph(&mut out, &mut in_paragraph);
+                close_list(&mut out, &mut in_list);
+                out.push_str(&render_code_block(&code_lang, &code_content));
+                in_code_block = false;
+                code_lang.clear();
+                code_content.clear();
+                continue;
             }
         }
 
@@ -197,12 +191,6 @@ fn render_body_html(text: &str) -> String {
                 code_content.push('\n');
             }
             code_content.push_str(line);
-            // 检测 fence 计数 —— 连续的 ``` 线可能形成 fence 序列
-            if trimmed == "```" {
-                code_fence_count += 1;
-            } else {
-                code_fence_count = 0;
-            }
             continue;
         }
 
@@ -804,6 +792,11 @@ mod tests {
         assert!(html.contains("class=\"code-block\""));
         assert!(html.contains("fn main()"));
         assert!(html.contains("rust"));
+        // Verify the closing fence is NOT captured in rendered content
+        assert!(
+            !html.contains("```"),
+            "closing fence should not appear in output"
+        );
     }
 
     #[test]

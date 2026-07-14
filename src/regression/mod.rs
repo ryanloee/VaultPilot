@@ -34,4 +34,5 @@ mod issue_1996_agent_engine;
 mod issue_2746_drain_truncation;
 mod issue_2804_diff_cli;
 mod issue_2813_query_export;
+mod issue_2826_api_key_secure_storage;
 mod issue_914_related_notes;

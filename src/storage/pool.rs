@@ -76,6 +76,13 @@ impl StorageContext {
             .unwrap_or(&self.paths.default_vault_dir)
     }
 
+    /// Returns the path of the on-disk `settings.json` file. Exposed so that
+    /// regression/callers can inspect the persisted bytes (e.g. to assert a
+    /// secret is never written in plaintext, issue #2826).
+    pub fn settings_path(&self) -> &std::path::Path {
+        &self.paths.settings_path
+    }
+
     pub fn for_sidecar() -> Result<Self> {
         let config_root = std::env::var_os("APPDATA")
             .map(PathBuf::from)

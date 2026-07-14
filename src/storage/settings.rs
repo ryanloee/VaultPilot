@@ -297,6 +297,28 @@ pub fn save_settings_with_context(
         }
     }
 
+    // Security contract (#2826): never persist a plaintext API key to disk.
+    // The loops above encrypt every non-empty key, so by this point each key
+    // must be either empty or already carry the `ENC:v1:` prefix. If a
+    // non-empty key escaped encryption (e.g. a future refactor that writes
+    // settings before the encrypt step runs), refuse the save instead of
+    // leaking the secret in plaintext inside settings.json.
+    if !settings.provider.api_key.is_empty()
+        && !crate::crypto::is_encrypted(&settings.provider.api_key)
+    {
+        return Err(anyhow::anyhow!(
+            "refusing to persist plaintext provider API key (#2826); encrypt before saving"
+        ));
+    }
+    for p in &settings.providers {
+        if !p.api_key.is_empty() && !crate::crypto::is_encrypted(&p.api_key) {
+            return Err(anyhow::anyhow!(
+                "refusing to persist plaintext API key for provider '{}' (#2826); encrypt before saving",
+                p.name
+            ));
+        }
+    }
+
     let content = serde_json::to_string_pretty(&settings)?;
     atomic_write(&paths.settings_path, content.as_bytes())
         .with_context(|| format!("failed to write {}", paths.settings_path.display()))?;

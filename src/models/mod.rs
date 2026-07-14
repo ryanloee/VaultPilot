@@ -226,6 +226,20 @@ pub struct BacklinkEntry {
     pub link_target: String,
 }
 
+/// An unlinked mention: a note whose title appears as **plain text** in another
+/// note's body (not wrapped in `[[ ]]` wikilinks).
+///
+/// Used by the `notes.unlinked_mentions` MCP tool and the Graph View (#2832) to
+/// surface latent connections the user hasn't formalised into wikilinks yet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlinkedMention {
+    /// The note that contains the text mention (source).
+    pub meta: NoteMeta,
+    /// The matched title text as it appears in the body.
+    pub matched_title: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationTurn {

@@ -138,14 +138,19 @@ impl StorageContext {
 
     /// Stable per-vault namespace so each vault keeps its own local CLI state
     /// (preserving multi-vault support) without leaking the secret into sync.
+    ///
+    /// Uses SHA-256 (not `DefaultHasher`) so the namespace is stable across
+    /// Rust releases — `DefaultHasher`'s algorithm is unspecified and may
+    /// change between versions, silently orphaning the persisted API key
+    /// directory (#2851).
     pub(crate) fn vault_namespace(vault_dir: &std::path::Path) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut s = DefaultHasher::new();
-        // Use the lexical path (not canonicalize) so the namespace is stable
-        // even before the vault directory exists.
-        vault_dir.to_string_lossy().hash(&mut s);
-        format!("{:x}", s.finish())
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(vault_dir.to_string_lossy().as_bytes());
+        let digest = hasher.finalize();
+        // 16 bytes → 32 hex chars (128 bits of entropy, more than enough for
+        // a directory name).
+        digest[..16].iter().map(|b| format!("{b:02x}")).collect()
     }
 
     /// One-time migration: move pre-#2831 in-vault `.vaultpilot` state files
@@ -180,7 +185,12 @@ impl StorageContext {
 
     pub fn for_cli(vault_dir_override: Option<PathBuf>) -> Result<Self> {
         let mut ctx = Self::for_sidecar()?;
-        if let Some(vault_dir) = vault_dir_override {
+        if let Some(raw_vault_dir) = vault_dir_override {
+            // Canonicalize existing directories so that different path spellings
+            // (~/vault vs /home/user/vault, relative vs absolute) map to the same
+            // namespace. Fall back to the lexical path if the dir doesn't exist
+            // yet (e.g. `vp init` on a fresh vault).
+            let vault_dir = raw_vault_dir.canonicalize().unwrap_or(raw_vault_dir);
             let cli_state_dir = Self::cli_config_root().join(Self::vault_namespace(&vault_dir));
             fs::create_dir_all(&cli_state_dir)?;
             // Migrate any pre-#2831 in-vault state so existing CLI users keep
@@ -577,5 +587,47 @@ mod tests {
 
         ensure_attachment_columns(&conn).unwrap();
         ensure_attachment_columns(&conn).unwrap();
+    }
+
+    // ── Regression test for #2851 ─────────────────────────────────
+
+    #[test]
+    fn vault_namespace_is_deterministic_and_stable() {
+        // Regression test for #2851: vault_namespace must use a stable hash
+        // (SHA-256) so the same vault path always maps to the same namespace,
+        // even across Rust releases. DefaultHasher's algorithm is unspecified.
+        use std::path::Path;
+
+        let p1 = Path::new("/home/user/myvault");
+        let p2 = Path::new("/home/user/myvault");
+        let p3 = Path::new("/home/user/othervault");
+
+        // Same path → same namespace (deterministic).
+        let ns1 = StorageContext::vault_namespace(p1);
+        let ns2 = StorageContext::vault_namespace(p2);
+        assert_eq!(ns1, ns2, "same path must produce same namespace");
+
+        // Different path → different namespace.
+        let ns3 = StorageContext::vault_namespace(p3);
+        assert_ne!(
+            ns1, ns3,
+            "different paths must produce different namespaces"
+        );
+
+        // Must be a valid hex string (SHA-256 output).
+        assert!(
+            ns1.chars().all(|c| c.is_ascii_hexdigit()),
+            "namespace must be hex, got: {ns1}"
+        );
+        assert_eq!(ns1.len(), 32, "namespace should be 32 hex chars (16 bytes)");
+
+        // Must NOT match the old DefaultHasher output format (which used
+        // format!("{:x}", u64)). The old format was up to 16 hex chars;
+        // SHA-256 truncation gives 32.
+        assert_ne!(
+            ns1.len(),
+            16,
+            "must not produce old DefaultHasher-length output"
+        );
     }
 }

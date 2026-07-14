@@ -198,6 +198,10 @@ pub fn set_subscription_enabled_with_context(
 /// Update subscription editable fields (name, schedule, prompt, tools, target_collection).
 /// Update all mutable fields of an existing subscription by ID.
 /// Returns `true` if a row was updated.
+///
+/// When the schedule changes, `last_status` and `next_run_at` are reset so the
+/// scheduler re-evaluates the new cron expression on the next cycle instead of
+/// permanently excluding an error-parked subscription (#2852).
 #[instrument(skip(context))]
 pub fn update_subscription_with_context(
     context: &StorageContext,
@@ -209,31 +213,42 @@ pub fn update_subscription_with_context(
     target_collection: &str,
 ) -> Result<bool> {
     let (connection, _) = open_connection(context)?;
-    let _rows = connection.execute(
-        r#"
-        UPDATE subscriptions
-        SET name = ?1, schedule = ?2, prompt = ?3,
-            tools = ?4, target_collection = ?5,
-            updated_at = ?6
-        WHERE id = ?7
-        "#,
-        params![
-            name,
-            schedule,
-            prompt,
-            tools,
-            target_collection,
-            Utc::now().to_rfc3339(),
-            id
-        ],
-    )?;
     let now = Utc::now().to_rfc3339();
-    let rows = connection
-        .execute(
-            "UPDATE subscriptions SET name = ?1, schedule = ?2, prompt = ?3, tools = ?4, target_collection = ?5, updated_at = ?6 WHERE id = ?7",
-            params![name, schedule, prompt, tools, target_collection, now, id],
+
+    // Fetch the current schedule so we only reset error-park state when the
+    // cron expression actually changed.
+    let old_schedule: Option<String> = connection
+        .query_row(
+            "SELECT schedule FROM subscriptions WHERE id = ?1",
+            [id],
+            |row| row.get(0),
         )
-        .with_context(|| format!("failed to update subscription '{id}'"))?;
+        .optional()?;
+
+    let schedule_changed = old_schedule.as_deref() != Some(schedule);
+
+    let rows = if schedule_changed {
+        connection
+            .execute(
+                r#"
+            UPDATE subscriptions
+            SET name = ?1, schedule = ?2, prompt = ?3,
+                tools = ?4, target_collection = ?5,
+                last_status = '', last_error = '', next_run_at = '',
+                updated_at = ?6
+            WHERE id = ?7
+            "#,
+                params![name, schedule, prompt, tools, target_collection, now, id],
+            )
+            .with_context(|| format!("failed to update subscription '{id}'"))?
+    } else {
+        connection
+            .execute(
+                "UPDATE subscriptions SET name = ?1, schedule = ?2, prompt = ?3, tools = ?4, target_collection = ?5, updated_at = ?6 WHERE id = ?7",
+                params![name, schedule, prompt, tools, target_collection, now, id],
+            )
+            .with_context(|| format!("failed to update subscription '{id}'"))?
+    };
     Ok(rows > 0)
 }
 
@@ -241,11 +256,15 @@ pub fn update_subscription_with_context(
 ///
 /// A subscription is "due" when:
 /// - It is enabled, AND
-/// - Its `next_run_at` is empty (never run) OR `next_run_at <= now`.
+/// - Its `next_run_at` is empty (never run) OR `next_run_at <= now`, AND
+/// - Its `last_status` is not `'error'` (parked subscriptions with invalid
+///   cron expressions are skipped to avoid wasting LLM calls every 365 days).
 ///
 /// This enables cron-based scheduling: after each run, `next_run_at` is
 /// updated to the next future time, so the subscription won't be due again
-/// until that time arrives.
+/// until that time arrives. Error-parked subscriptions are excluded so the
+/// scheduler does not re-evaluate a known-bad cron expression each cycle
+/// (#2852).
 #[instrument(skip(context))]
 pub fn list_due_subscriptions_with_context(
     context: &StorageContext,
@@ -261,6 +280,7 @@ pub fn list_due_subscriptions_with_context(
         FROM subscriptions
         WHERE enabled = 1
           AND (next_run_at = '' OR next_run_at <= ?1)
+          AND COALESCE(last_status, '') != 'error'
         ORDER BY created_at ASC
         "#,
     )?;
@@ -831,5 +851,123 @@ mod tests {
         )
         .unwrap();
         assert!(!result);
+    }
+
+    // ── Regression tests for #2852 ────────────────────────────────
+
+    #[test]
+    fn test_parked_error_subscription_not_due_after_365_days() {
+        // Regression test for #2852: even when the parked subscription's 365-day
+        // timer expires, it must NOT be re-selected by list_due because the
+        // `COALESCE(last_status, '') != 'error'` filter prevents it.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).unwrap();
+
+        let sub = create_subscription_with_context(&ctx, "Bad Cron", "0 9 * * 1", "test", "", "")
+            .unwrap();
+        // Park it with an invalid cron expression.
+        compute_and_update_next_run(&ctx, &sub.id, "not a cron").unwrap();
+
+        // Verify it's parked.
+        let updated = get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.last_status, "error");
+
+        // Simulate 365 days passing: set next_run_at to a past timestamp.
+        {
+            let (conn, _) = open_connection(&ctx).unwrap();
+            conn.execute(
+                "UPDATE subscriptions SET next_run_at = ?1 WHERE id = ?2",
+                params!["2020-01-01T00:00:00Z", &sub.id],
+            )
+            .unwrap();
+        }
+
+        // list_due must NOT return it despite next_run_at being in the past.
+        let due = list_due_subscriptions_with_context(&ctx).unwrap();
+        assert!(
+            !due.iter().any(|s| s.id == sub.id),
+            "error-parked subscription must not be re-selected even after 365-day expiry (#2852)"
+        );
+    }
+
+    #[test]
+    fn test_update_schedule_resets_error_status() {
+        // Regression test for #2852: fixing the cron expression via
+        // `update_subscription_with_context` should reset `last_status` and
+        // `next_run_at` so the subscription is picked up by the scheduler again.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).unwrap();
+
+        let sub = create_subscription_with_context(&ctx, "Bad Cron", "0 9 * * 1", "test", "", "")
+            .unwrap();
+        // Park it.
+        compute_and_update_next_run(&ctx, &sub.id, "not a cron").unwrap();
+
+        let parked = get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(parked.last_status, "error");
+        assert!(!parked.next_run_at.is_empty());
+
+        // Fix the cron via update (change the schedule).
+        update_subscription_with_context(&ctx, &sub.id, "Fixed Cron", "0 0 * * *", "test", "", "")
+            .unwrap();
+
+        let fixed = get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            fixed.last_status, "",
+            "last_status should be reset when schedule changes"
+        );
+        assert_eq!(
+            fixed.next_run_at, "",
+            "next_run_at should be reset when schedule changes"
+        );
+
+        // Now it should be picked up by list_due again.
+        let due = list_due_subscriptions_with_context(&ctx).unwrap();
+        assert!(
+            due.iter().any(|s| s.id == sub.id),
+            "fixed subscription should be due again after schedule change"
+        );
+    }
+
+    #[test]
+    fn test_update_same_schedule_does_not_reset_status() {
+        // Regression test for #2852: updating with the same schedule must NOT
+        // reset last_status — only an actual schedule change should.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).unwrap();
+
+        let sub =
+            create_subscription_with_context(&ctx, "Sub", "0 9 * * 1", "test", "", "").unwrap();
+        // Park it.
+        compute_and_update_next_run(&ctx, &sub.id, "not a cron").unwrap();
+        assert_eq!(
+            get_subscription_with_context(&ctx, &sub.id)
+                .unwrap()
+                .unwrap()
+                .last_status,
+            "error"
+        );
+
+        // Update with the SAME schedule but different name.
+        update_subscription_with_context(&ctx, &sub.id, "New Name", "0 9 * * 1", "test", "", "")
+            .unwrap();
+
+        let updated = get_subscription_with_context(&ctx, &sub.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            updated.last_status, "error",
+            "same schedule should NOT reset error status"
+        );
+        assert_eq!(
+            updated.name, "New Name",
+            "non-schedule fields should be updated"
+        );
     }
 }

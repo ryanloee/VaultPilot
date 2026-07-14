@@ -22,6 +22,7 @@ pub(crate) mod projects;
 pub(crate) mod search;
 pub(crate) mod session_export;
 mod settings;
+pub(crate) mod snapshots;
 pub(crate) mod subscriptions;
 
 // Re-export StorageContext so callers see no difference.
@@ -105,6 +106,11 @@ pub use subscriptions::{
     set_subscription_enabled_with_context, update_subscription_async,
     update_subscription_next_run_with_context, update_subscription_run_with_context,
     update_subscription_with_context,
+};
+// Re-export snapshots public API (#2855).
+pub use snapshots::{
+    count_snapshots, get_snapshot, list_snapshots_for_note, record_snapshot_before_save,
+    restore_snapshot, NoteSnapshot,
 };
 
 // Re-export projects public API (#1927).

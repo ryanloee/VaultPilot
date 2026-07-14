@@ -309,6 +309,19 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_flashcards_tags ON flashcards(tags);
         CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at DESC);
+
+        -- Note snapshots for persistent edit history (#2855)
+        CREATE TABLE IF NOT EXISTS note_snapshots (
+            id          TEXT PRIMARY KEY,
+            note_id     TEXT NOT NULL,
+            body        TEXT NOT NULL,
+            frontmatter TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'user',
+            created_at  TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_note_snapshots_note
+            ON note_snapshots(note_id, created_at DESC);
         "#,
     )?;
 

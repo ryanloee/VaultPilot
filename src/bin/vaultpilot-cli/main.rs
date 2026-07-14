@@ -949,7 +949,7 @@ enum NotesActions {
     ///
     /// Loads the note, sends its content + your instruction to the AI,
     /// and returns the AI-edited version (does not auto-save).
-    /// Pipe to `notes create` or manually apply if satisfied.
+    /// AI-edit a note's content (#1914)
     Edit {
         /// Note ID or file path
         id: String,
@@ -961,6 +961,32 @@ enum NotesActions {
         /// Optional model override
         #[arg(long)]
         model: Option<String>,
+    },
+
+    /// Show snapshot history for a note (#2855)
+    History {
+        /// Note ID or file path
+        id: String,
+    },
+
+    /// Restore a note from a snapshot (#2855)
+    Restore {
+        /// Note ID
+        id: String,
+
+        /// Snapshot ID to restore
+        #[arg(long)]
+        snapshot: String,
+    },
+
+    /// Show diff between current note and a snapshot (#2855)
+    Diff {
+        /// Note ID
+        id: String,
+
+        /// Snapshot ID to compare against
+        #[arg(long)]
+        snapshot: String,
     },
 }
 
@@ -2481,6 +2507,26 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                 "editedContent": result.result,
                 "usage": result.usage,
             }))
+        }
+        NotesActions::History { id } => {
+            // Look up note by ID/path first to resolve the canonical note ID.
+            let note = load_note_with_context(context, id)?;
+            let snapshots =
+                vaultpilot_lib::storage::list_snapshots_for_note(context, &note.meta.id)?;
+            to_json(&snapshots)
+        }
+        NotesActions::Restore { id, snapshot } => {
+            let note = load_note_with_context(context, id)?;
+            let restored =
+                vaultpilot_lib::storage::restore_snapshot(context, &note.meta.id, snapshot)?;
+            to_json(&restored)
+        }
+        NotesActions::Diff { id, snapshot } => {
+            let note = load_note_with_context(context, id)?;
+            let snap = vaultpilot_lib::storage::get_snapshot(context, snapshot)?
+                .ok_or_else(|| anyhow::anyhow!("snapshot '{snapshot}' not found"))?;
+            let diff = vaultpilot_lib::diff::compute_diff(&snap.body, &note.body, 3);
+            to_json(&diff)
         }
     }
 }

@@ -188,6 +188,70 @@ pub struct Query {
     pub filter: Condition,
     pub order_by: Option<(String, Direction)>,
     pub limit: Option<usize>,
+    /// Row-level computed columns (Formulas — #2921).
+    /// Each formula has a name (output column) and an expression evaluated
+    /// per row against that row's properties.
+    pub formulas: Vec<Formula>,
+}
+
+/// A named computed-column formula (#2921).
+#[derive(Debug, Clone)]
+pub struct Formula {
+    pub name: String,
+    pub expr: FormulaExpr,
+}
+
+/// Expression AST for row-level computed columns (#2921).
+///
+/// Supports:
+/// - Arithmetic: `col + col`, `col * 3`, `(col1 + col2) / 2`
+/// - String: `concat(a, sep, b)`, `upper(s)`, `lower(s)`
+/// - Conditional: `if(cond, then, else)`
+/// - Date diff: `datediff(end, start)`, `dateadd(date, days)`
+/// - Column references resolve to the row's property value
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormulaExpr {
+    /// Numeric literal: `42`, `3.14`.
+    Number(f64),
+    /// String literal: `"hello"`.
+    Text(String),
+    /// Date literal: `2026-07-16`.
+    Date(NaiveDate),
+    /// Column reference (bareword): `priority`, `status`, `due`.
+    Column(String),
+    /// Unary minus: `-expr`.
+    Neg(Box<FormulaExpr>),
+    /// Arithmetic: `lhs op rhs`.
+    Add(Box<FormulaExpr>, Box<FormulaExpr>),
+    Sub(Box<FormulaExpr>, Box<FormulaExpr>),
+    Mul(Box<FormulaExpr>, Box<FormulaExpr>),
+    Div(Box<FormulaExpr>, Box<FormulaExpr>),
+    /// String concatenation: `concat(s1, sep, s2)`.
+    Concat {
+        left: Box<FormulaExpr>,
+        sep: Box<FormulaExpr>,
+        right: Box<FormulaExpr>,
+    },
+    /// Uppercase: `upper(s)`.
+    Upper(Box<FormulaExpr>),
+    /// Lowercase: `lower(s)`.
+    Lower(Box<FormulaExpr>),
+    /// Conditional: `if(cond, then, else)`.
+    If {
+        cond: Box<FormulaExpr>,
+        then_branch: Box<FormulaExpr>,
+        else_branch: Box<FormulaExpr>,
+    },
+    /// Date difference in days: `datediff(end, start)`.
+    DateDiff {
+        end: Box<FormulaExpr>,
+        start: Box<FormulaExpr>,
+    },
+    /// Date addition: `dateadd(date, days)`.
+    DateAdd {
+        date: Box<FormulaExpr>,
+        days: Box<FormulaExpr>,
+    },
 }
 
 impl Default for Query {
@@ -197,8 +261,479 @@ impl Default for Query {
             filter: Condition::True,
             order_by: None,
             limit: None,
+            formulas: Vec::new(),
         }
     }
+}
+
+// ── Formula Parser ─────────────────────────────────────────────────────────
+
+/// Tokens for the formula mini-language (#2921).
+#[derive(Debug, Clone, PartialEq)]
+enum FTok {
+    Id(String),
+    Num(f64),
+    Str(String),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
+    Comma,
+}
+
+fn is_f_ident_start(c: char) -> bool {
+    c.is_alphabetic() || c == '_'
+}
+fn is_f_ident_cont(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-' || c == '.'
+}
+
+fn ftokenize(src: &str) -> Result<Vec<FTok>> {
+    let mut chars = src.chars().peekable();
+    let mut toks = Vec::new();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            let quote = c;
+            chars.next();
+            let mut s = String::new();
+            while let Some(ch) = chars.next() {
+                if ch == quote {
+                    break;
+                }
+                if ch == '\\' {
+                    if let Some(next) = chars.next() {
+                        s.push(next);
+                    }
+                    continue;
+                }
+                s.push(ch);
+            }
+            toks.push(FTok::Str(s));
+            continue;
+        }
+        if c.is_ascii_digit()
+            || (c == '.' && chars.clone().nth(1).is_some_and(|n| n.is_ascii_digit()))
+        {
+            let mut s = String::new();
+            while let Some(&n) = chars.peek() {
+                if n.is_ascii_digit() || n == '.' {
+                    s.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            let num: f64 = s.parse().map_err(|_| anyhow!("invalid number: {s}"))?;
+            toks.push(FTok::Num(num));
+            continue;
+        }
+        if is_f_ident_start(c) {
+            let mut s = String::new();
+            while let Some(&n) = chars.peek() {
+                if is_f_ident_cont(n) {
+                    s.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            // Try ISO date: 2026-07-16
+            if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                // Only if it looks like a date (4 digits - 2 digits - 2 digits)
+                if s.len() == 10 && s.chars().filter(|c| *c == '-').count() == 2 {
+                    toks.push(FTok::Str(s));
+                    continue;
+                }
+                let _ = d; // ignore
+            }
+            toks.push(FTok::Id(s));
+            continue;
+        }
+        match c {
+            '+' => {
+                toks.push(FTok::Plus);
+                chars.next();
+            }
+            '-' => {
+                toks.push(FTok::Minus);
+                chars.next();
+            }
+            '*' => {
+                toks.push(FTok::Star);
+                chars.next();
+            }
+            '/' => {
+                toks.push(FTok::Slash);
+                chars.next();
+            }
+            '(' => {
+                toks.push(FTok::LParen);
+                chars.next();
+            }
+            ')' => {
+                toks.push(FTok::RParen);
+                chars.next();
+            }
+            ',' => {
+                toks.push(FTok::Comma);
+                chars.next();
+            }
+            other => return Err(anyhow!("unexpected character in formula: {other}")),
+        }
+    }
+    Ok(toks)
+}
+
+struct FPars {
+    toks: Vec<FTok>,
+    pos: usize,
+}
+
+impl FPars {
+    fn new(toks: Vec<FTok>) -> Self {
+        FPars { toks, pos: 0 }
+    }
+
+    fn peek(&self) -> Option<&FTok> {
+        self.toks.get(self.pos)
+    }
+
+    fn next(&mut self) -> Option<FTok> {
+        let t = self.toks.get(self.pos).cloned();
+        if t.is_some() {
+            self.pos += 1;
+        }
+        t
+    }
+
+    fn expect_rparen(&mut self) -> Result<()> {
+        match self.next() {
+            Some(FTok::RParen) => Ok(()),
+            other => Err(anyhow!("expected ), found {other:?}")),
+        }
+    }
+
+    fn expect_comma(&mut self) -> Result<()> {
+        match self.next() {
+            Some(FTok::Comma) => Ok(()),
+            other => Err(anyhow!("expected comma, found {other:?}")),
+        }
+    }
+
+    /// Parse a complete formula expression string into a [`FormulaExpr`].
+    fn parse_expr(&mut self) -> Result<FormulaExpr> {
+        let expr = self.parse_addsub()?;
+        if self.pos != self.toks.len() {
+            return Err(anyhow!(
+                "unexpected trailing tokens in formula at position {}",
+                self.pos
+            ));
+        }
+        Ok(expr)
+    }
+
+    /// addsub ::= muldiv (('+' | '-') muldiv)*
+    fn parse_addsub(&mut self) -> Result<FormulaExpr> {
+        let mut left = self.parse_muldiv()?;
+        loop {
+            match self.peek() {
+                Some(FTok::Plus) => {
+                    self.next();
+                    let right = self.parse_muldiv()?;
+                    left = FormulaExpr::Add(Box::new(left), Box::new(right));
+                }
+                Some(FTok::Minus) => {
+                    self.next();
+                    let right = self.parse_muldiv()?;
+                    left = FormulaExpr::Sub(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    /// muldiv ::= unary (('*' | '/') unary)*
+    fn parse_muldiv(&mut self) -> Result<FormulaExpr> {
+        let mut left = self.parse_unary()?;
+        loop {
+            match self.peek() {
+                Some(FTok::Star) => {
+                    self.next();
+                    let right = self.parse_unary()?;
+                    left = FormulaExpr::Mul(Box::new(left), Box::new(right));
+                }
+                Some(FTok::Slash) => {
+                    self.next();
+                    let right = self.parse_unary()?;
+                    left = FormulaExpr::Div(Box::new(left), Box::new(right));
+                }
+                _ => break,
+            }
+        }
+        Ok(left)
+    }
+
+    /// unary ::= `-` term | term
+    fn parse_unary(&mut self) -> Result<FormulaExpr> {
+        if matches!(self.peek(), Some(FTok::Minus)) {
+            self.next();
+            let expr = self.parse_unary()?;
+            return Ok(FormulaExpr::Neg(Box::new(expr)));
+        }
+        self.parse_term()
+    }
+
+    /// term ::= NUMBER | STRING | ID | '(' expr ')' | ID '(' args... ')'
+    fn parse_term(&mut self) -> Result<FormulaExpr> {
+        match self.next() {
+            Some(FTok::Num(n)) => Ok(FormulaExpr::Number(n)),
+            Some(FTok::Str(s)) => {
+                // Try to parse as ISO date if it looks like one.
+                if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                    if s.len() == 10 && s.chars().filter(|c| *c == '-').count() == 2 {
+                        return Ok(FormulaExpr::Date(d));
+                    }
+                }
+                Ok(FormulaExpr::Text(s))
+            }
+            Some(FTok::Id(name)) => {
+                // Peek ahead for '(' to distinguish column ref from function call.
+                if matches!(self.peek(), Some(FTok::LParen)) {
+                    self.next(); // consume '('
+                    self.parse_function(name)
+                } else {
+                    Ok(FormulaExpr::Column(name))
+                }
+            }
+            Some(FTok::LParen) => {
+                let inner = self.parse_addsub()?;
+                self.expect_rparen()?;
+                Ok(inner)
+            }
+            other => Err(anyhow!("expected value, found {other:?}")),
+        }
+    }
+
+    fn parse_function(&mut self, name: String) -> Result<FormulaExpr> {
+        let lower = name.to_ascii_lowercase();
+        match lower.as_str() {
+            "concat" => {
+                let left = self.parse_addsub()?;
+                self.expect_comma()?;
+                let sep = self.parse_addsub()?;
+                self.expect_comma()?;
+                let right = self.parse_addsub()?;
+                self.expect_rparen()?;
+                Ok(FormulaExpr::Concat {
+                    left: Box::new(left),
+                    sep: Box::new(sep),
+                    right: Box::new(right),
+                })
+            }
+            "upper" => {
+                let expr = self.parse_addsub()?;
+                self.expect_rparen()?;
+                Ok(FormulaExpr::Upper(Box::new(expr)))
+            }
+            "lower" => {
+                let expr = self.parse_addsub()?;
+                self.expect_rparen()?;
+                Ok(FormulaExpr::Lower(Box::new(expr)))
+            }
+            "if" => {
+                let cond = self.parse_addsub()?;
+                self.expect_comma()?;
+                let then_branch = self.parse_addsub()?;
+                self.expect_comma()?;
+                let else_branch = self.parse_addsub()?;
+                self.expect_rparen()?;
+                Ok(FormulaExpr::If {
+                    cond: Box::new(cond),
+                    then_branch: Box::new(then_branch),
+                    else_branch: Box::new(else_branch),
+                })
+            }
+            "datediff" => {
+                let end = self.parse_addsub()?;
+                self.expect_comma()?;
+                let start = self.parse_addsub()?;
+                self.expect_rparen()?;
+                Ok(FormulaExpr::DateDiff {
+                    end: Box::new(end),
+                    start: Box::new(start),
+                })
+            }
+            "dateadd" => {
+                let date = self.parse_addsub()?;
+                self.expect_comma()?;
+                let days = self.parse_addsub()?;
+                self.expect_rparen()?;
+                Ok(FormulaExpr::DateAdd {
+                    date: Box::new(date),
+                    days: Box::new(days),
+                })
+            }
+            _ => Err(anyhow!(
+                "unknown function: {name}. Supported: concat, upper, lower, if, datediff, dateadd"
+            )),
+        }
+    }
+}
+
+/// Parse a formula expression string into a [`FormulaExpr`].
+pub fn parse_formula_expr(src: &str) -> Result<FormulaExpr> {
+    let toks = ftokenize(src)?;
+    if toks.is_empty() {
+        return Err(anyhow!("empty formula expression"));
+    }
+    let mut parser = FPars::new(toks);
+    parser.parse_expr()
+}
+
+/// Parse a `--formula name=expr` spec string into a [`Formula`].
+pub fn parse_formula_spec(spec: &str) -> Result<Formula> {
+    let eq = spec
+        .find('=')
+        .ok_or_else(|| anyhow!("invalid formula spec (expected NAME=expr): {spec}"))?;
+    let name = spec[..eq].trim().to_string();
+    let expr_str = spec[eq + 1..].trim();
+    if name.is_empty() {
+        anyhow::bail!("empty formula name in spec: {spec}");
+    }
+    if expr_str.is_empty() {
+        anyhow::bail!("empty formula expression in spec: {spec}");
+    }
+    let expr = parse_formula_expr(expr_str)?;
+    Ok(Formula { name, expr })
+}
+
+// ── Formula Evaluation ──────────────────────────────────────────────────────
+
+/// Evaluate a [`FormulaExpr`] against a row's properties, producing a [`QValue`].
+///
+/// Column references resolve to the row's `props` map (or `Null` if absent).
+/// The result is a typed [`QValue`] suitable for display, sorting, CSV export,
+/// and downstream aggregations.
+fn eval_formula(expr: &FormulaExpr, props: &HashMap<String, QValue>) -> QValue {
+    match expr {
+        FormulaExpr::Number(n) => QValue::Number(*n),
+        FormulaExpr::Text(s) => QValue::Text(s.clone()),
+        FormulaExpr::Date(d) => QValue::Date(*d),
+        FormulaExpr::Column(name) => props.get(name).cloned().unwrap_or(QValue::Null),
+        FormulaExpr::Neg(inner) => match eval_formula(inner, props) {
+            QValue::Number(n) => QValue::Number(-n),
+            _ => QValue::Null,
+        },
+        FormulaExpr::Add(l, r) => {
+            let lv = eval_formula(l, props);
+            let rv = eval_formula(r, props);
+            match (lv, rv) {
+                (QValue::Number(a), QValue::Number(b)) => QValue::Number(a + b),
+                (QValue::Text(a), QValue::Text(b)) => QValue::Text(format!("{a}{b}")),
+                (QValue::Number(a), QValue::Text(b)) => QValue::Text(format!("{a}{b}")),
+                (QValue::Text(a), QValue::Number(b)) => QValue::Text(format!("{a}{b}")),
+                _ => QValue::Null,
+            }
+        }
+        FormulaExpr::Sub(l, r) => {
+            let lv = eval_formula(l, props);
+            let rv = eval_formula(r, props);
+            match (lv, rv) {
+                (QValue::Number(a), QValue::Number(b)) => QValue::Number(a - b),
+                // Date difference: `due - start` → days.
+                (QValue::Date(a), QValue::Date(b)) => QValue::Number((a - b).num_days() as f64),
+                _ => QValue::Null,
+            }
+        }
+        FormulaExpr::Mul(l, r) => {
+            let lv = to_f64(&eval_formula(l, props));
+            let rv = to_f64(&eval_formula(r, props));
+            match (lv, rv) {
+                (Some(a), Some(b)) => QValue::Number(a * b),
+                _ => QValue::Null,
+            }
+        }
+        FormulaExpr::Div(l, r) => {
+            let lv = to_f64(&eval_formula(l, props));
+            let rv = to_f64(&eval_formula(r, props));
+            match (lv, rv) {
+                (Some(a), Some(b)) if b != 0.0 => QValue::Number(a / b),
+                _ => QValue::Null,
+            }
+        }
+        FormulaExpr::Concat { left, sep, right } => {
+            let ls = eval_formula(left, props).to_string();
+            let ss = eval_formula(sep, props).to_string();
+            let rs = eval_formula(right, props).to_string();
+            QValue::Text(format!("{ls}{ss}{rs}"))
+        }
+        FormulaExpr::Upper(inner) => {
+            let s = eval_formula(inner, props).to_string();
+            QValue::Text(s.to_uppercase())
+        }
+        FormulaExpr::Lower(inner) => {
+            let s = eval_formula(inner, props).to_string();
+            QValue::Text(s.to_lowercase())
+        }
+        FormulaExpr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            let cv = eval_formula(cond, props);
+            let truthy = match &cv {
+                QValue::Bool(true) => true,
+                QValue::Number(n) if *n != 0.0 => true,
+                QValue::Text(s) if !s.is_empty() => true,
+                _ => false,
+            };
+            if truthy {
+                eval_formula(then_branch, props)
+            } else {
+                eval_formula(else_branch, props)
+            }
+        }
+        FormulaExpr::DateDiff { end, start } => {
+            let ev = to_date(&eval_formula(end, props));
+            let sv = to_date(&eval_formula(start, props));
+            match (ev, sv) {
+                (Some(e), Some(s)) => QValue::Number((e - s).num_days() as f64),
+                _ => QValue::Null,
+            }
+        }
+        FormulaExpr::DateAdd { date, days } => {
+            let dv = to_date(&eval_formula(date, props));
+            let nd = to_f64(&eval_formula(days, props));
+            match (dv, nd) {
+                (Some(d), Some(n)) => {
+                    let delta =
+                        chrono::Duration::try_days(n as i64).unwrap_or(chrono::Duration::zero());
+                    match d.checked_add_signed(delta) {
+                        Some(new_date) => QValue::Date(new_date),
+                        None => QValue::Null,
+                    }
+                }
+                _ => QValue::Null,
+            }
+        }
+    }
+}
+
+/// Apply all formulas to a single row, returning a map of formula_name → QValue.
+fn evaluate_formulas(
+    formulas: &[Formula],
+    props: &HashMap<String, QValue>,
+) -> HashMap<String, QValue> {
+    let mut results = HashMap::new();
+    for f in formulas {
+        results.insert(f.name.clone(), eval_formula(&f.expr, props));
+    }
+    results
 }
 
 // ── Tokenizer ─────────────────────────────────────────────────────────────
@@ -402,6 +937,7 @@ impl Parser {
             filter,
             order_by,
             limit,
+            formulas: Vec::new(),
         })
     }
 
@@ -677,29 +1213,72 @@ fn eval_cond(cond: &Condition, rec: &Record) -> bool {
 ///
 /// Each returned row is a property map. The synthetic `$path` column is always
 /// included so callers can locate the source note.
+///
+/// When `query.formulas` is non-empty, computed formula columns are appended
+/// to every result row (#2921). Formulas are evaluated against the row's
+/// **original** properties (before projection), so formulas work even when
+/// the source column is omitted from SELECT.
 pub fn query_records(records: &[Record], query: &Query) -> Vec<HashMap<String, QValue>> {
     let mut matched: Vec<&Record> = records
         .iter()
         .filter(|r| eval_cond(&query.filter, r))
         .collect();
 
+    // When formulas reference columns, we sort after formula evaluation so
+    // formulas that depend on order-sensitive data are correctly placed.
+    // Pre-evaluate formula-only sorting key: if ORDER BY targets a formula
+    // column, evaluate formulas *before* sorting.
+    let order_field_is_formula = query
+        .order_by
+        .as_ref()
+        .map(|(f, _)| query.formulas.iter().any(|fm| fm.name == *f))
+        .unwrap_or(false);
+
+    // Pre-compute formula values if ORDER BY references a formula column.
+    let mut pre_formula_values: Vec<HashMap<String, QValue>> = Vec::new();
+    if order_field_is_formula && !query.formulas.is_empty() {
+        pre_formula_values = matched
+            .iter()
+            .map(|r| evaluate_formulas(&query.formulas, &r.props))
+            .collect();
+    }
+
     if let Some((field, dir)) = &query.order_by {
-        matched.sort_by(|a, b| {
-            let c = cmp_ord(&get_prop(a, field), &get_prop(b, field));
-            match dir {
-                Direction::Asc => c,
-                Direction::Desc => c.reverse(),
-            }
-        });
+        if order_field_is_formula {
+            // Sort using pre-computed formula values.
+            let fvals = &pre_formula_values;
+            let mut indexed: Vec<(usize, &Record)> =
+                matched.iter().enumerate().map(|(i, r)| (i, *r)).collect();
+            indexed.sort_by(|(ia, _a), (ib, _b)| {
+                let va = fvals[*ia].get(field).cloned().unwrap_or(QValue::Null);
+                let vb = fvals[*ib].get(field).cloned().unwrap_or(QValue::Null);
+                let c = cmp_ord(&va, &vb);
+                match dir {
+                    Direction::Asc => c,
+                    Direction::Desc => c.reverse(),
+                }
+            });
+            matched = indexed.into_iter().map(|(_, r)| r).collect();
+        } else {
+            matched.sort_by(|a, b| {
+                let c = cmp_ord(&get_prop(a, field), &get_prop(b, field));
+                match dir {
+                    Direction::Asc => c,
+                    Direction::Desc => c.reverse(),
+                }
+            });
+        }
     }
 
     if let Some(limit) = query.limit {
         matched.truncate(limit);
     }
 
+    let has_formulas = !query.formulas.is_empty();
     matched
         .into_iter()
-        .map(|r| {
+        .enumerate()
+        .map(|(i, r)| {
             let mut row: HashMap<String, QValue> = HashMap::new();
             row.insert("$path".to_string(), QValue::Text(r.path.clone()));
             match &query.select {
@@ -712,6 +1291,17 @@ pub fn query_records(records: &[Record], query: &Query) -> Vec<HashMap<String, Q
                     for f in fields {
                         row.insert(f.clone(), get_prop(r, f));
                     }
+                }
+            }
+            // Append formula columns (#2921).
+            if has_formulas {
+                let formula_vals = if order_field_is_formula {
+                    pre_formula_values[i].clone()
+                } else {
+                    evaluate_formulas(&query.formulas, &r.props)
+                };
+                for (name, value) in formula_vals {
+                    row.insert(name, value);
                 }
             }
             row

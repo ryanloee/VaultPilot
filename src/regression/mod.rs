@@ -36,4 +36,6 @@ mod issue_2804_diff_cli;
 mod issue_2813_query_export;
 mod issue_2825_integration_combos;
 mod issue_2826_api_key_secure_storage;
+mod issue_2859_mirror;
+mod issue_2884_mirror_state;
 mod issue_914_related_notes;

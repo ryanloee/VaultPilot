@@ -83,6 +83,11 @@ pub use notes::{
 // Re-export list_all_note_metas from search so orchestration modules can
 // iterate the full vault without access to private modules.
 pub(crate) use search::list_all_note_metas;
+// #2859: re-export change-detection helper used by `vp mirror --watch`.
+pub use notes::list_note_ids_with_timestamps;
+// #2859: re-export filename sanitizer so `vp mirror --watch` computes the same
+// filenames as the batch exporter.
+pub use notes::sanitize_id_for_filename;
 // Re-export collections public API so callers see no difference.
 pub use collections::{
     add_note_to_collection_with_context, count_notes_in_collection_with_context,

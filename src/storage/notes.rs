@@ -1398,9 +1398,11 @@ fn sanitize_filename(title: &str) -> String {
 }
 
 /// Sanitize a note ID for safe use in file/ZIP entry names (#901, #2149).
-/// Strips path traversal characters (`.`, `/`, `\`) to prevent Zip Slip attacks.
+/// Strips path traversal characters (`.`, `/`, `\\`) to prevent Zip Slip attacks.
 /// Uses the full ID (not truncated) to guarantee uniqueness across export files.
-fn sanitize_id_for_filename(id: &str) -> String {
+/// Public so the `vp mirror` CLI can compute the same filenames as the batch
+/// exporter without duplicating the sanitization logic (#2859).
+pub fn sanitize_id_for_filename(id: &str) -> String {
     id.chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect()
@@ -1630,9 +1632,14 @@ fn compose_markdown(meta: &NoteMeta, body: &str) -> Result<String> {
         collections: meta.collections.clone(),
     };
     let yaml = serde_yaml_ng::to_string(&frontmatter)?;
+    // #2859: Embed a stable ID anchor so the note identity survives
+    // renames / moves / tool-level edits. Compatible with Logseq DB's
+    // Markdown Mirror convention.
+    let id_anchor = format!("<!-- vaultpilot-note-id: {} -->\n", meta.id);
     Ok(format!(
-        "---\n{}---\n\n{}\n",
+        "---\n{}---\n\n{}{}\n",
         yaml,
+        id_anchor,
         ensure_summary_section(body, &meta.summary)
     ))
 }
@@ -2077,6 +2084,15 @@ pub async fn export_all_notes_async(
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }
 
+/// List note IDs with their last-updated timestamps (#2859).
+/// Used by `vp mirror --watch` to detect changed/deleted notes
+/// without re-exporting the full vault each cycle.
+pub fn list_note_ids_with_timestamps(context: &StorageContext) -> Result<Vec<(String, String)>> {
+    let (connection, _) = open_connection(context)?;
+    let metas = list_all_note_metas(&connection)?;
+    Ok(metas.into_iter().map(|m| (m.id, m.updated_at)).collect())
+}
+
 /// Spawn-blocking wrapper for [`rebuild_index_with_context`].
 pub async fn rebuild_index_async(ctx: &StorageContext) -> Result<super::IndexStats> {
     let ctx = ctx.clone();
@@ -2199,6 +2215,68 @@ mod tests {
         assert!(body.contains("Body here"));
     }
 
+    // #2859: change-detection helper for `vp mirror --watch`.
+    fn mirror_test_context() -> StorageContext {
+        let dir = std::env::temp_dir().join(format!("vp-mirror-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let ctx = StorageContext::for_test(&dir);
+        super::super::initialize_storage_with_context(&ctx).expect("init storage");
+        ctx
+    }
+
+    // #2859: list_note_ids_with_timestamps reflects the live vault, including
+    // the updated_at timestamp used by `vp mirror --watch` to detect changes.
+    #[test]
+    fn list_note_ids_with_timestamps_reflects_vault() {
+        let ctx = mirror_test_context();
+        // Initially empty.
+        let before = list_note_ids_with_timestamps(&ctx).expect("list");
+        assert!(before.is_empty(), "expected no notes initially");
+
+        let mut note = NoteDocument::default();
+        note.meta.id = "note-2859-a".to_string();
+        note.meta.title = "Mirror Test A".to_string();
+        note.body = "hello world".to_string();
+        save_note_with_context(&ctx, note).expect("save");
+
+        let after = list_note_ids_with_timestamps(&ctx).expect("list");
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].0, "note-2859-a");
+        assert!(
+            !after[0].1.is_empty(),
+            "updated_at should be populated for an exported note"
+        );
+    }
+
+    // #2859: editing a note advances its updated_at so the watch loop re-exports it.
+    #[test]
+    fn list_note_ids_with_timestamps_updates_on_edit() {
+        let ctx = mirror_test_context();
+        let mut note = NoteDocument::default();
+        note.meta.id = "note-2859-b".to_string();
+        note.meta.title = "Mirror Test B".to_string();
+        note.body = "v1".to_string();
+        save_note_with_context(&ctx, note).expect("save");
+
+        let ts1 = list_note_ids_with_timestamps(&ctx).expect("list")[0]
+            .1
+            .clone();
+
+        // Edit the note -> updated_at should change so the watcher re-exports.
+        let mut note2 = NoteDocument::default();
+        note2.meta.id = "note-2859-b".to_string();
+        note2.meta.title = "Mirror Test B".to_string();
+        note2.body = "v2 edited content".to_string();
+        save_note_with_context(&ctx, note2).expect("save");
+
+        let second = list_note_ids_with_timestamps(&ctx).expect("list");
+        assert_eq!(second.len(), 1);
+        assert_ne!(
+            ts1, second[0].1,
+            "updated_at should advance after an edit so the watcher re-exports"
+        );
+    }
+
     #[test]
     fn split_frontmatter_malformed_returns_err() {
         let content = "---\nid: test\nno closing delimiter";
@@ -2288,6 +2366,22 @@ mod tests {
         assert_eq!(result.matches("## 摘要").count(), 1);
     }
 
+    // #2859: Stable ID anchor survives renames / moves
+    #[test]
+    fn compose_markdown_injects_stable_id_anchor() {
+        let meta = NoteMeta {
+            id: "note_abc123".to_string(),
+            title: "Any Title".to_string(),
+            ..Default::default()
+        };
+        let result = compose_markdown(&meta, "body text").expect("compose");
+        assert!(
+            result.contains("<!-- vaultpilot-note-id: note_abc123 -->"),
+            "expected stable ID anchor; got:\n{}",
+            result
+        );
+    }
+
     #[test]
     fn summary_ignores_headings_and_limits_length() {
         let body = "# 标题\n\n第一段现象说明。\n\n第二段补充。\n";
@@ -2321,7 +2415,9 @@ mod tests {
         assert_eq!(frontmatter.id, "abc");
         assert_eq!(frontmatter.title, "MMC timeout");
         assert_eq!(frontmatter.tags, vec!["kernel".to_string()]);
-        assert_eq!(parsed_body.trim(), body);
+        // #2859: compose_markdown now injects a stable ID anchor before the body
+        let expected_body = format!("<!-- vaultpilot-note-id: abc -->\n{body}");
+        assert_eq!(parsed_body.trim(), expected_body.as_str());
     }
 
     #[test]

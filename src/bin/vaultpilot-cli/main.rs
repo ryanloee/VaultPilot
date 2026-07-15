@@ -26,13 +26,14 @@ use vaultpilot_lib::storage::{
     export_note_markdown_with_context, find_related_notes_with_context,
     get_collections_for_note_with_context, get_project_with_context, get_subscription_with_context,
     import_markdown_with_context, initialize_storage_with_context, list_all_notes_with_context,
-    list_collections_with_context, list_notes_in_collection_with_context,
+    list_collections_with_context, list_note_ids_with_timestamps, list_notes_in_collection_with_context,
     list_projects_with_context, list_subscriptions_with_context, load_chat_state_async,
     load_note_with_context, load_settings_with_context, rebuild_index_with_context,
     remove_note_from_collection_with_context, remove_note_from_project_with_context,
-    save_chat_state_async, save_note_with_context, save_settings_with_context,
-    search_notes_with_context, set_subscription_enabled_with_context, update_project_with_context,
-    update_subscription_with_context, vault_export_with_context, NoteNotFound, StorageContext,
+    sanitize_id_for_filename, save_chat_state_async, save_note_with_context,
+    save_settings_with_context, search_notes_with_context, set_subscription_enabled_with_context,
+    update_project_with_context, update_subscription_with_context, vault_export_with_context,
+    NoteNotFound, StorageContext,
 };
 use vaultpilot_lib::vault_query::{parse_query, query_records, record_from_yaml, QValue};
 use vaultpilot_lib::{
@@ -635,6 +636,24 @@ enum Commands {
     Pdf {
         #[command(subcommand)]
         action: PdfActions,
+    },
+
+    /// Mirror vault notes as Markdown files on disk (#2859)
+    ///
+    /// Exports every note in the vault to a local directory as `.md` files
+    /// with YAML frontmatter and stable ID anchors. This makes the vault
+    /// browsable with external tools (grep, git, VS Code, Obsidian).
+    ///
+    /// Examples:
+    ///   vp mirror ./mirror-out            — one-shot export all notes
+    ///   vp mirror ./mirror-out --watch    — continuously mirror changes
+    Mirror {
+        /// Target directory for mirrored Markdown files
+        output_dir: String,
+
+        /// Watch for note changes and keep mirrored files in sync
+        #[arg(long)]
+        watch: bool,
     },
 }
 
@@ -2011,6 +2030,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Connector { action } => handle_connector(action),
         Commands::Pdf { action } => handle_pdf(action),
+        Commands::Mirror { output_dir, watch } => {
+            tokio::task::block_in_place(|| handle_mirror(context, output_dir, *watch))
+        }
     }
 }
 
@@ -6357,4 +6379,218 @@ fn handle_pdf(action: &PdfActions) -> Result<Value> {
             }
         }
     }
+}
+
+/// Internal state for `vp mirror --watch` (#2859): maps note id -> on-disk
+/// filename + last-seen `updated_at` so changes can be detected incrementally
+/// instead of re-exporting the whole vault every poll cycle.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct MirrorStateEntry {
+    /// Final on-disk filename (`<title>-<id>.md`).
+    filename: String,
+    /// Note `updated_at` timestamp captured at the last successful export.
+    updated_at: String,
+}
+
+/// Handle `vp mirror` — export vault notes as Markdown files (#2859).
+fn handle_mirror(
+    context: &vaultpilot_lib::storage::StorageContext,
+    output_dir: &str,
+    watch: bool,
+) -> Result<serde_json::Value> {
+    use std::collections::HashMap;
+    use std::path::Path;
+
+    let target = Path::new(output_dir);
+    if !target.exists() {
+        std::fs::create_dir_all(target)
+            .with_context(|| format!("failed to create mirror directory: {}", target.display()))?;
+    }
+
+    // Initial one-shot export (also seeds the watch state on first run).
+    let result = export_all_notes_with_context(context, target)?;
+
+    if watch {
+        eprintln!(
+            "👁️  Watching {} for vault changes (Ctrl+C to stop).",
+            target.display()
+        );
+        // Seed the change-tracking state from the export we just performed.
+        let mut state: HashMap<String, MirrorStateEntry> = mirror_scan_state(context, target)?;
+        let state_path = target.join(".vp-mirror-state.json");
+        write_mirror_state(&state_path, &state)?;
+
+        // Poll loop: detect and apply note changes every few seconds.
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+        loop {
+            std::thread::sleep(POLL_INTERVAL);
+            match mirror_poll_once(context, target, &mut state) {
+                Ok(changed) => {
+                    if changed {
+                        write_mirror_state(&state_path, &state)?;
+                    }
+                }
+                Err(e) => eprintln!("⚠️  mirror poll error: {e}"),
+            }
+        }
+    } else {
+        eprintln!(
+            "✅ Mirror complete: {} notes exported to {}.",
+            result.exported,
+            target.display()
+        );
+        if !result.errors.is_empty() {
+            eprintln!("⚠️  {} errors during export:", result.errors.len());
+            for err in &result.errors {
+                eprintln!("   - {err}");
+            }
+        }
+    }
+
+    to_json(&result)
+}
+
+/// Scan the mirror directory and build the initial change-tracking state by
+/// reading the stable ID anchor (`<!-- vaultpilot-note-id: XXX -->`) embedded
+/// in each exported `.md` file, then populate `updated_at` from the vault so
+/// the first poll cycle does not needlessly re-export every note (#2859).
+fn mirror_scan_state(
+    context: &vaultpilot_lib::storage::StorageContext,
+    output_dir: &Path,
+) -> Result<std::collections::HashMap<String, MirrorStateEntry>> {
+    use std::collections::HashMap;
+    let mut state: HashMap<String, MirrorStateEntry> = HashMap::new();
+    for entry in std::fs::read_dir(output_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)?;
+        if let Some(id) = extract_note_id_anchor(&content) {
+            let filename = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            state.insert(
+                id,
+                MirrorStateEntry {
+                    filename,
+                    updated_at: String::new(),
+                },
+            );
+        }
+    }
+    // Populate updated_at from the live vault.
+    for (id, updated_at) in list_note_ids_with_timestamps(context)? {
+        if let Some(entry) = state.get_mut(&id) {
+            entry.updated_at = updated_at;
+        }
+    }
+    Ok(state)
+}
+
+/// Extract the stable note id from the `<!-- vaultpilot-note-id: XXX -->`
+/// anchor embedded in a mirrored Markdown file (#2859).
+fn extract_note_id_anchor(content: &str) -> Option<String> {
+    const MARKER: &str = "<!-- vaultpilot-note-id: ";
+    let start = content.find(MARKER)?;
+    let rest = &content[start + MARKER.len()..];
+    let end = rest.find(" -->")?;
+    let id = rest[..end].trim();
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+/// Run one watch cycle: re-detect changed / new / deleted notes and update the
+/// mirror directory accordingly. Returns `true` if any change was applied
+/// (so the caller knows to persist the state file) (#2859).
+fn mirror_poll_once(
+    context: &vaultpilot_lib::storage::StorageContext,
+    output_dir: &Path,
+    state: &mut std::collections::HashMap<String, MirrorStateEntry>,
+) -> Result<bool> {
+    use std::collections::HashMap;
+    let current = list_note_ids_with_timestamps(context)?;
+    let current_ids: HashMap<&str, &str> = current
+        .iter()
+        .map(|(id, ts)| (id.as_str(), ts.as_str()))
+        .collect();
+
+    let mut changed = false;
+
+    // Detect new / updated notes.
+    for (id, updated_at) in &current {
+        let needs_export = match state.get(id) {
+            None => true,
+            Some(entry) => entry.updated_at != *updated_at,
+        };
+        if !needs_export {
+            continue;
+        }
+        match export_note_markdown_with_context(context, id) {
+            Ok((markdown, title_filename)) => {
+                let safe_id = sanitize_id_for_filename(id);
+                let final_filename = format!("{title_filename}-{safe_id}.md");
+                // Title may have changed -> remove the stale file first.
+                if let Some(old) = state.get(id) {
+                    if old.filename != final_filename {
+                        let old_path = output_dir.join(&old.filename);
+                        if old_path.exists() {
+                            let _ = std::fs::remove_file(&old_path);
+                            eprintln!("✏️  Renamed mirror: {} → {final_filename}", old.filename);
+                        }
+                    }
+                }
+                let path = output_dir.join(&final_filename);
+                std::fs::write(&path, markdown)
+                    .with_context(|| format!("failed to write mirror file: {}", path.display()))?;
+                state.insert(
+                    id.clone(),
+                    MirrorStateEntry {
+                        filename: final_filename,
+                        updated_at: updated_at.clone(),
+                    },
+                );
+                changed = true;
+            }
+            Err(e) => eprintln!("⚠️  Failed to export note {id}: {e}"),
+        }
+    }
+
+    // Detect deleted notes -> remove their mirror files.
+    let deleted: Vec<String> = state
+        .keys()
+        .filter(|id| !current_ids.contains_key(id.as_str()))
+        .cloned()
+        .collect();
+    for id in &deleted {
+        if let Some(entry) = state.remove(id) {
+            let path = output_dir.join(&entry.filename);
+            if path.exists() {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    eprintln!("⚠️  Failed to remove deleted mirror {id}: {e}");
+                } else {
+                    eprintln!("🗑️  Removed mirror for deleted note: {}", entry.filename);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    Ok(changed)
+}
+
+/// Persist the mirror watch state to a hidden JSON file (#2859).
+fn write_mirror_state(
+    state_path: &Path,
+    state: &std::collections::HashMap<String, MirrorStateEntry>,
+) -> Result<()> {
+    let file = std::fs::File::create(state_path)
+        .with_context(|| format!("failed to create mirror state: {}", state_path.display()))?;
+    serde_json::to_writer_pretty(file, state)?;
+    Ok(())
 }

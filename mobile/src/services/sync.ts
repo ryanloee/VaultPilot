@@ -36,6 +36,32 @@ export interface SyncProgress {
 
 export type SyncProgressCallback = (progress: SyncProgress) => void;
 
+/**
+ * Derive the mobile `folder` value from a server note `path` (#2893).
+ * The server path encodes the vault-relative location, e.g. "work/meeting.md".
+ * The folder is the directory portion ("work"); a note at the vault root
+ * ("meeting.md") has an empty folder. Handles both '/' and '\' separators.
+ */
+export function deriveFolderFromPath(path: string | undefined | null): string {
+  if (!path) return '';
+  const normalized = path.replace(/\\/g, '/');
+  const idx = normalized.lastIndexOf('/');
+  return idx >= 0 ? normalized.substring(0, idx) : '';
+}
+
+/**
+ * Parse a server RFC3339 `updated_at` string into a unix-seconds integer
+ * for the local SQLite `updated_at` column (#2893). Returns `undefined`
+ * when the value is missing or unparseable, letting the caller fall back
+ * to "now".
+ */
+export function parseServerTimestamp(updatedAt: string | undefined | null): number | undefined {
+  if (!updatedAt) return undefined;
+  const parsed = Date.parse(updatedAt);
+  if (Number.isNaN(parsed)) return undefined;
+  return Math.floor(parsed / 1000);
+}
+
 export async function getServerConfig(): Promise<{ url: string; token: string }> {
   const [url, token] = await Promise.all([
     AsyncStorage.getItem(SERVER_URL_KEY),
@@ -260,19 +286,33 @@ async function doSync(
       }
 
       const noteData = await noteRes.json() as {
-        meta: { id: string; title: string; tags?: string[]; is_template?: number };
+        meta: { id: string; title: string; tags?: string[]; is_template?: number; path?: string; updated_at?: string };
         body: string;
       };
 
       const title = noteData.meta.title ?? meta.title ?? 'Untitled';
       const content = noteData.body ?? '';
 
+      // Propagate server folder + real edit time into the local note (#2893).
+      const folder = deriveFolderFromPath(noteData.meta.path);
+      const updatedAt = parseServerTimestamp(noteData.meta.updated_at);
+
       const localNote = localMap.get(meta.id);
       if (localNote) {
-        await updateNote(meta.id, title, content, { skipQueue: true, is_template: noteData.meta.is_template ?? 0 });
+        await updateNote(meta.id, title, content, {
+          skipQueue: true,
+          is_template: noteData.meta.is_template ?? 0,
+          folder,
+          updated_at: updatedAt,
+        });
         updated++;
       } else {
-        await createNote(title, content, meta.id, { skipQueue: true, is_template: noteData.meta.is_template ?? 0 });
+        await createNote(title, content, meta.id, {
+          skipQueue: true,
+          is_template: noteData.meta.is_template ?? 0,
+          folder,
+          updated_at: updatedAt,
+        });
         imported++;
       }
       // Sync tags from server to local database (#2477)

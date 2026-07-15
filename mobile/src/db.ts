@@ -328,13 +328,22 @@ export interface DbNote {
   is_template?: number; // #2154 — 0 (regular note) or 1 (template). Optional for legacy rows pre-migration.
 }
 
-export async function createNote(title = '无标题', content = '', id?: string, options?: { skipQueue?: boolean; is_template?: number }): Promise<string> {
+export async function createNote(
+  title = '无标题',
+  content = '',
+  id?: string,
+  options?: { skipQueue?: boolean; is_template?: number; folder?: string; updated_at?: number },
+): Promise<string> {
   const db = await getDb();
   const noteId = id ?? uuid();
   const isTemplate = options?.is_template ?? 0;
+  // folder defaults to '' (vault root) when not provided.
+  // updated_at falls back to "now" when the caller does not supply a server timestamp (#2893).
+  const folder = options?.folder ?? '';
+  const updatedAt = options?.updated_at ?? null;
   await db.runAsync(
-    'INSERT INTO notes (id, title, content, is_template) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, content = excluded.content, is_template = excluded.is_template, updated_at = strftime(\'%s\',\'now\')',
-    [noteId, title, content, isTemplate]);
+    'INSERT INTO notes (id, title, content, is_template, folder, updated_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime(\'%s\',\'now\'))) ON CONFLICT(id) DO UPDATE SET title = excluded.title, content = excluded.content, is_template = excluded.is_template, folder = excluded.folder, updated_at = COALESCE(excluded.updated_at, strftime(\'%s\',\'now\'))',
+    [noteId, title, content, isTemplate, folder, updatedAt]);
   invalidateNoteTitleCache();
   if (!options?.skipQueue) await queuePendingSync(noteId);
   return noteId;
@@ -345,11 +354,21 @@ export async function getNote(id: string): Promise<DbNote | null> {
   return db.getFirstAsync<DbNote>('SELECT * FROM notes WHERE id = ?', [id]);
 }
 
-export async function updateNote(id: string, title: string, content: string, options?: { skipQueue?: boolean; is_template?: number }): Promise<void> {
+export async function updateNote(
+  id: string,
+  title: string,
+  content: string,
+  options?: { skipQueue?: boolean; is_template?: number; folder?: string; updated_at?: number },
+): Promise<void> {
   const db = await getDb();
+  const isTemplate = options?.is_template ?? null;
+  // folder: '' (vault root) is a valid value, so fall back to '' rather than null (#2893).
+  // updated_at falls back to "now" when no server timestamp is supplied.
+  const folder = options?.folder ?? '';
+  const updatedAt = options?.updated_at ?? null;
   await db.runAsync(
-    'UPDATE notes SET title = ?, content = ?, is_template = COALESCE(?, is_template), updated_at = strftime(\'%s\',\'now\') WHERE id = ?',
-    [title, content, options?.is_template ?? null, id]
+    'UPDATE notes SET title = ?, content = ?, is_template = COALESCE(?, is_template), folder = ?, updated_at = COALESCE(?, strftime(\'%s\',\'now\')) WHERE id = ?',
+    [title, content, isTemplate, folder, updatedAt, id]
   );
   invalidateNoteTitleCache();
   // Queue note for offline sync push (#2372)

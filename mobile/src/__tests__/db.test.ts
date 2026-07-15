@@ -259,7 +259,9 @@ describe('updateNote', () => {
     expect(params[0]).toBe('New Title');
     expect(params[1]).toBe('New Body');
     expect(params[2]).toBeNull(); // is_template defaults to null → keep current
-    expect(params[3]).toBe('n1');
+    expect(params[3]).toBe(''); // folder defaults to '' (vault root) — #2893
+    expect(params[4]).toBeNull(); // updated_at defaults to null → COALESCE to now — #2893
+    expect(params[5]).toBe('n1');
   });
 });
 

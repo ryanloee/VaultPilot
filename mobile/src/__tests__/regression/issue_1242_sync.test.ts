@@ -162,7 +162,7 @@ describe('syncNotesFromServer', () => {
     expect(result.updated).toBe(0);
     expect(result.skipped).toBe(0);
     expect(result.errors).toBe(0);
-    expect(mockCreateNote).toHaveBeenCalledWith('Test Note', 'Note content here', 'note-1', { is_template: 0, skipQueue: true });
+    expect(mockCreateNote).toHaveBeenCalledWith('Test Note', 'Note content here', 'note-1', { is_template: 0, skipQueue: true, folder: '', updated_at: undefined });
     expect(mockUpdateNote).not.toHaveBeenCalled();
   });
 
@@ -239,7 +239,7 @@ describe('syncNotesFromServer', () => {
     const result = await syncNotesFromServer();
     expect(result.updated).toBe(1);
     expect(result.imported).toBe(0);
-    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content', { skipQueue: true, is_template: 0 });
+    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content', { skipQueue: true, is_template: 0, folder: '', updated_at: undefined });
   });
 
   it('counts errors when note detail fetch fails', async () => {

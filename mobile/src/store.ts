@@ -126,6 +126,11 @@ interface AppState {
   setAccentColor: (color: string) => void;
   setIsDark: (dark: boolean) => void;
 
+  // Focus / reading mode (#2894): when on, hide AI command palette entry,
+  // assistant floating button and context suggestion panels for immersive writing.
+  focusMode: boolean;
+  setFocusMode: (focus: boolean) => void;
+
   // Legacy flat fields (kept for client.ts backward compat, synced from active provider)
   apiBase: string;
   apiKey: string;
@@ -209,6 +214,17 @@ export function sanitizeForPersistence(providers: ProviderConfig[]): ProviderCon
   return providers.map(p => ({ ...p, apiKey: '' }));
 }
 
+/**
+ * Filter AI toolbar actions out of a toolbar config when focus mode is on (#2894).
+ * Keeps all non-AI formatting actions (bold, italic, code, heading, list, link).
+ * Exported as a pure helper so the hiding behavior is unit-testable without
+ * rendering the full editor screen.
+ */
+export function filterFocusModeToolbar<T extends { action?: string }>(items: T[], focusMode: boolean): T[] {
+  if (!focusMode) return items;
+  return items.filter(it => it.action !== 'aiWrite' && it.action !== 'aiCmd');
+}
+
 /** Restore API keys into providers from SecureStore keys map. */
 export function restoreProviderKeys(providers: ProviderConfig[], keys: Record<string, string>): ProviderConfig[] {
   return providers.map(p => ({ ...p, apiKey: keys[p.name] ?? '' }));
@@ -264,6 +280,8 @@ export const useAppStore = create<AppState>()(
       setThemeMode: (themeMode) => set({ themeMode }),
       setAccentColor: (accentColor) => set({ accentColor }),
       setIsDark: (isDark) => set({ isDark }),
+      focusMode: false,
+      setFocusMode: (focusMode) => set({ focusMode }),
 
       apiBase: 'https://opencode.ai/zen/v1',
       apiKey: '',
@@ -377,6 +395,7 @@ export const useAppStore = create<AppState>()(
         themeMode: state.themeMode,
         isDark: state.isDark,
         accentColor: state.accentColor,
+        focusMode: state.focusMode,
         apiBase: state.apiBase,
         // apiKey excluded — stored in SecureStore instead
         model: state.model,

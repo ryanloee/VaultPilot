@@ -247,7 +247,10 @@ fn eval_concat_with_space_separator() {
         ..Default::default()
     };
     let rows = query_records(&[rec], &q);
-    assert_eq!(rows[0].get("full"), Some(&QValue::Text("Alice Smith".into())));
+    assert_eq!(
+        rows[0].get("full"),
+        Some(&QValue::Text("Alice Smith".into()))
+    );
 }
 
 #[test]
@@ -269,10 +272,7 @@ fn eval_upper_lower() {
     };
     let rows = query_records(&[rec], &q);
     assert_eq!(rows[0].get("up"), Some(&QValue::Text("VAULTPILOT".into())));
-    assert_eq!(
-        rows[0].get("low"),
-        Some(&QValue::Text("vaultpilot".into()))
-    );
+    assert_eq!(rows[0].get("low"), Some(&QValue::Text("vaultpilot".into())));
 }
 
 #[test]
@@ -390,9 +390,7 @@ fn eval_dateadd() {
     let rows = query_records(&[rec], &q);
     assert_eq!(
         rows[0].get("deadline"),
-        Some(&QValue::Date(
-            NaiveDate::from_ymd_opt(2026, 7, 31).unwrap()
-        ))
+        Some(&QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 31).unwrap()))
     );
 }
 
@@ -430,7 +428,10 @@ fn formula_works_when_source_col_omitted_from_select() {
     assert!(rows[0].contains_key("$path"));
     assert_eq!(rows[0].get("x"), Some(&QValue::Number(3.0)));
     assert_eq!(rows[0].get("sum"), Some(&QValue::Number(8.0)));
-    assert!(!rows[0].contains_key("y"), "y should not appear when omitted");
+    assert!(
+        !rows[0].contains_key("y"),
+        "y should not appear when omitted"
+    );
 }
 
 // ── Integration: ORDER BY formula column ────────────────────────────────────
@@ -538,10 +539,7 @@ fn formula_add_number_and_text_concat() {
         ..Default::default()
     };
     let rows = query_records(&[r.clone()], &q);
-    assert_eq!(
-        rows[0].get("label"),
-        Some(&QValue::Text("42 items".into()))
-    );
+    assert_eq!(rows[0].get("label"), Some(&QValue::Text("42 items".into())));
 }
 
 #[test]
@@ -556,8 +554,5 @@ fn formula_text_plus_number() {
         ..Default::default()
     };
     let rows = query_records(&[rec], &q);
-    assert_eq!(
-        rows[0].get("version"),
-        Some(&QValue::Text("v2".into()))
-    );
+    assert_eq!(rows[0].get("version"), Some(&QValue::Text("v2".into())));
 }

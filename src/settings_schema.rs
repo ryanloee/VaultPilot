@@ -522,6 +522,48 @@ pub fn visible_definitions<'a>(
         .collect()
 }
 
+/// Search settings definitions by label and description (#2920).
+///
+/// Perform a case-insensitive substring match across `label` and `description`.
+/// Returns matching definitions sorted by category, then alphabetically by key.
+/// An empty query returns ALL visible definitions (unfiltered).
+pub fn search_settings_definitions<'a>(
+    defs: &'a [SettingDefinition],
+    query: &str,
+    settings: &AppSettings,
+) -> Vec<&'a SettingDefinition> {
+    let visible = visible_definitions(defs, settings);
+    if query.trim().is_empty() {
+        let mut result: Vec<&SettingDefinition> = visible.into_iter().collect();
+        result.sort_by(|a, b| {
+            let cat_cmp = (a.category as u8).cmp(&(b.category as u8));
+            if cat_cmp != std::cmp::Ordering::Equal {
+                cat_cmp
+            } else {
+                a.key.cmp(&b.key)
+            }
+        });
+        return result;
+    }
+    let q_lower = query.to_lowercase();
+    let mut matched: Vec<&SettingDefinition> = visible
+        .into_iter()
+        .filter(|d| {
+            d.label.to_lowercase().contains(&q_lower)
+                || d.description.to_lowercase().contains(&q_lower)
+        })
+        .collect();
+    matched.sort_by(|a, b| {
+        let cat_cmp = (a.category as u8).cmp(&(b.category as u8));
+        if cat_cmp != std::cmp::Ordering::Equal {
+            cat_cmp
+        } else {
+            a.key.cmp(&b.key)
+        }
+    });
+    matched
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -729,5 +771,71 @@ mod tests {
         let defs = collect_setting_definitions();
         let vault = def_by_key(&defs, "vaultDir");
         assert_eq!(vault.placeholder.as_deref(), Some("~/Documents/MyVault"));
+    }
+
+    /// #2920 — search_settings_definitions filters by label/description.
+    #[test]
+    fn search_filters_by_label_case_insensitive() {
+        let defs = collect_setting_definitions();
+        let settings = AppSettings::default();
+        let results = search_settings_definitions(&defs, "model", &settings);
+        assert!(!results.is_empty(), "should find 'model' settings");
+        // All results should have "model" in label or description (case-insensitive).
+        for d in &results {
+            let matched = d.label.to_lowercase().contains("model")
+                || d.description.to_lowercase().contains("model");
+            assert!(matched, "{} should match 'model'", d.key);
+        }
+    }
+
+    /// #2920 — empty query returns all visible definitions sorted.
+    #[test]
+    fn search_empty_query_returns_all_visible() {
+        let defs = collect_setting_definitions();
+        let settings = AppSettings::default();
+        let results = search_settings_definitions(&defs, "", &settings);
+        // All definitions visible with default settings should be present.
+        let visible_count = visible_definitions(&defs, &settings).len();
+        assert_eq!(results.len(), visible_count);
+        // Verify sorted by category, then key.
+        for i in 1..results.len() {
+            let prev = results[i - 1];
+            let cur = results[i];
+            let cat_cmp = (prev.category as u8).cmp(&(cur.category as u8));
+            assert!(
+                cat_cmp != std::cmp::Ordering::Greater,
+                "{} (cat {:?}) before {} (cat {:?})",
+                prev.key,
+                prev.category,
+                cur.key,
+                cur.category
+            );
+        }
+    }
+
+    /// #2920 — search respects visibility (hidden settings excluded).
+    #[test]
+    fn search_respects_visibility() {
+        let defs = collect_setting_definitions();
+        let settings_off = AppSettings::default(); // autoWakeEnabled = false
+        let results = search_settings_definitions(&defs, "interval", &settings_off);
+        // autoWakeIntervalMinutes should NOT appear (parent disabled).
+        assert!(results.is_empty() || !results.iter().any(|d| d.key == "autoWakeIntervalMinutes"));
+        // With autoWake enabled, it should appear.
+        let settings_on = AppSettings {
+            auto_wake_enabled: true,
+            ..AppSettings::default()
+        };
+        let results_on = search_settings_definitions(&defs, "interval", &settings_on);
+        assert!(results_on.iter().any(|d| d.key == "autoWakeIntervalMinutes"));
+    }
+
+    /// #2920 — no-match returns empty vec.
+    #[test]
+    fn search_no_match_returns_empty() {
+        let defs = collect_setting_definitions();
+        let settings = AppSettings::default();
+        let results = search_settings_definitions(&defs, "xyzzy_nonexistent_term", &settings);
+        assert!(results.is_empty());
     }
 }

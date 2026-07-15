@@ -29,12 +29,20 @@ export interface ProviderConfig {
 const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
 const ASYNC_FALLBACK_KEYS_ID = 'vaultpilot_provider_keys_backup';
 
-/** Minimal obfuscation for AsyncStorage fallback — not crypto, just prevents casual reading. */
+/** Minimal obfuscation for AsyncStorage fallback — not crypto, just prevents casual reading.
+ *  Uses TextEncoder/TextDecoder for UTF-8 ↔ binary conversion instead of the
+ *  deprecated escape()/unescape() which were removed from ECMAScript in ES3. */
 function obfuscate(s: string): string {
-  return btoa(unescape(encodeURIComponent(s)));
+  const bytes = new TextEncoder().encode(s);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
 }
 function deobfuscate(s: string): string {
-  return decodeURIComponent(escape(atob(s)));
+  const binary = atob(s);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
 }
 
 // Write queue to serialize SecureStore writes and prevent race conditions (#2519)

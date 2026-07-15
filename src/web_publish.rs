@@ -35,7 +35,7 @@ pub fn publish_note(
 
     // 输出目录命名：使用 note_rel_path 的 stem
     let slug = slugify(note_rel_path);
-    let out_dir = output_root.join(&slug);
+    let out_dir = output_root.join(disk_dir_name(&slug));
     fs::create_dir_all(&out_dir)
         .with_context(|| format!("failed to create output dir {}", out_dir.display()))?;
 
@@ -92,6 +92,30 @@ fn slugify(raw: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_string()
+}
+
+/// 将 slug 映射为磁盘上的目录名，保证在**大小写不敏感**的文件系统
+/// （Windows / 默认 macOS）上不会发生折叠冲突 (#2888)。
+///
+/// `slugify` 保留大小写，因此 `Foo/Note.md` → `Foo-Note`、`foo/note.md` → `foo-note`
+/// 是两个不同的 slug；但在大小写不敏感的 FS 上 `Foo-Note` 与 `foo-note` 指向
+/// 同一个目录，后发布的笔记会静默覆盖先发布的。
+///
+/// 策略：全小写 slug（最常见情形）保持原样，向后兼容既有 URL；只要 slug 含有
+/// 大写字母，就追加一个基于**区分大小写**字节的短哈希后缀。这样：
+///   - 唯一不带后缀的名字就是规范的全小写形式；
+///   - 任何含大写的 slug 都带有其精确字节的哈希，永不与全小写形式或彼此折叠冲突；
+///   - 相同路径始终得到相同目录名（幂等）。
+fn disk_dir_name(slug: &str) -> String {
+    let lower = slug.to_lowercase();
+    if slug == lower {
+        return slug.to_string();
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    slug.hash(&mut hasher);
+    // 取哈希低 32 位，8 位十六进制，足够避免碰撞且保持目录名简短。
+    format!("{}-{:08x}", slug, (hasher.finish() as u32))
 }
 
 // ── Markdown → HTML 渲染（纯 Rust） ─────────────────────────────
@@ -643,6 +667,26 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&vault);
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn regression_2888_disk_dir_name_case_insensitive_unique() {
+        // On case-insensitive filesystems (Windows / default macOS) two slugs
+        // that differ only by case fold to the same directory, silently
+        // overwriting each other (#2888). `disk_dir_name` must return names
+        // that stay distinct after case-folding.
+        let a = disk_dir_name(&slugify("Foo/Note.md")); // "Foo-Note" (+hash)
+        let b = disk_dir_name(&slugify("foo/note.md")); // "foo-note"
+        assert_ne!(
+            a.to_lowercase(),
+            b.to_lowercase(),
+            "case-distinct slugs must map to case-insensitively distinct disk dirs"
+        );
+        // All-lowercase slugs stay untouched (backward-compatible URLs).
+        assert_eq!(disk_dir_name("foo-note"), "foo-note");
+        assert_eq!(disk_dir_name("notes-rust-tips"), "notes-rust-tips");
+        // Deterministic / idempotent for the same input.
+        assert_eq!(disk_dir_name("Foo-Note"), disk_dir_name("Foo-Note"));
     }
 
     #[test]

@@ -35,8 +35,8 @@ use vaultpilot_lib::storage::{
     update_subscription_with_context, vault_export_with_context, NoteNotFound, StorageContext,
 };
 use vaultpilot_lib::vault_query::{
-    agg_function_from_str, format_summaries, parse_query, query_records, record_from_yaml,
-    summarize_records, AggFunction, QValue,
+    agg_function_from_str, format_summaries, parse_formula_spec, parse_query, query_records,
+    record_from_yaml, summarize_records, AggFunction, QValue,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
@@ -1143,6 +1143,23 @@ enum VaultActions {
         /// When set, query results are followed by column summary statistics.
         #[arg(long = "summarize", short = 's', value_name = "COL=funcs")]
         summarize: Vec<String>,
+
+        /// Formula/computed column specs (#2921). Each formula adds a new
+        /// column derived from existing properties, evaluated per row.
+        ///
+        /// Syntax: NAME=expression
+        ///
+        /// Examples:
+        ///   --formula duration="end - start"
+        ///   --formula full_name="concat(first_name, ' ', last_name)"
+        ///   --formula score="priority * 2 + if(status == 'done', 10, 0)"
+        ///   --formula days_open="datediff(today, created)"
+        ///
+        /// Supported functions: concat(left, sep, right), upper(s), lower(s),
+        /// if(cond, then, else), datediff(end, start), dateadd(date, days).
+        /// Can be specified multiple times for multiple computed columns.
+        #[arg(long = "formula", short = 'F', value_name = "NAME=expr")]
+        formula: Vec<String>,
     },
 }
 
@@ -2724,6 +2741,7 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             output,
             group_by,
             summarize,
+            formula,
         } => handle_vault_query(
             context,
             query,
@@ -2731,6 +2749,7 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             output.as_deref(),
             group_by.as_deref(),
             summarize,
+            formula,
         ),
     }
 }
@@ -2748,10 +2767,23 @@ fn handle_vault_query(
     output_path: Option<&Path>,
     group_by: Option<&str>,
     summarize_specs: &[String],
+    formula_specs: &[String],
 ) -> Result<Value> {
     use std::fs;
 
-    let q = parse_query(query_str).with_context(|| format!("invalid query syntax: {query_str}"))?;
+    let mut q =
+        parse_query(query_str).with_context(|| format!("invalid query syntax: {query_str}"))?;
+
+    // Parse --formula specs (#2921)
+    let mut formula_parse_errors: Vec<String> = Vec::new();
+    if !formula_specs.is_empty() {
+        for spec in formula_specs {
+            match parse_formula_spec(spec) {
+                Ok(formula) => q.formulas.push(formula),
+                Err(e) => formula_parse_errors.push(format!("{spec}: {e}")),
+            }
+        }
+    }
 
     // Load all notes and build Records from their frontmatter.
     let metas = list_all_notes_with_context(context)?;

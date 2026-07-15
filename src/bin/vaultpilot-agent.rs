@@ -17,11 +17,14 @@ use vaultpilot_lib::agent::{
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
-use vaultpilot_lib::models::{AppSettings, ChatState, ConversationSummary, ConversationTurn};
+use vaultpilot_lib::models::{
+    AppSettings, ChatState, ConversationSummary, ConversationTurn, NoteDocument,
+};
 use vaultpilot_lib::storage::{
-    create_subscription_async, delete_subscription_async, find_related_notes_async,
-    get_subscription_async, import_markdown_async, initialize_storage_async, list_notes_async,
-    list_subscriptions_async, load_chat_state_async, rebuild_index_async, save_chat_state_async,
+    create_subscription_async, delete_note_async, delete_subscription_async,
+    find_related_notes_async, get_subscription_async, import_markdown_async,
+    initialize_storage_async, list_notes_async, list_subscriptions_async, load_chat_state_async,
+    load_note_async, rebuild_index_async, save_chat_state_async, save_note_async,
     save_settings_async, set_subscription_enabled_with_context, update_subscription_async,
     StorageContext,
 };
@@ -393,6 +396,18 @@ async fn handle_request(
             serialize_result(save_chat_state_async(context, &params.state).await)
         }
         "listNotes" => serialize_result(list_notes_async(context).await),
+        "loadNote" => {
+            let params: IdParams = parse_params(&request.params)?;
+            serialize_result(load_note_async(context, &params.id).await)
+        }
+        "saveNote" => {
+            let params: SaveNoteParams = parse_params(&request.params)?;
+            serialize_result(save_note_async(context, params.note).await)
+        }
+        "deleteNote" => {
+            let params: IdParams = parse_params(&request.params)?;
+            serialize_result(delete_note_async(context, &params.id).await)
+        }
         "findRelatedNotes" => {
             let params: IdWithLimitParams = parse_params(&request.params)?;
             serialize_result(
@@ -714,6 +729,12 @@ struct IdWithLimitParams {
     id: String,
     #[serde(default)]
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveNoteParams {
+    note: NoteDocument,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1317,5 +1338,43 @@ mod tests {
             sanitized.contains("invalid UTF-8 in request"),
             "sanitized message should retain the key information: {sanitized}"
         );
+    }
+
+    #[test]
+    fn load_note_params_deserializes() {
+        let json = json!({ "id": "req-load", "method": "loadNote", "params": { "id": "note-123" } });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        let params: IdParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.id, "note-123");
+    }
+
+    #[test]
+    fn delete_note_params_deserializes() {
+        let json = json!({ "id": "req-del", "method": "deleteNote", "params": { "id": "note-456" } });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        let params: IdParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.id, "note-456");
+    }
+
+    #[test]
+    fn save_note_params_deserializes() {
+        let json = json!({
+            "id": "req-save",
+            "method": "saveNote",
+            "params": {
+                "note": {
+                    "meta": {
+                        "id": "note-789",
+                        "title": "Test Note"
+                    },
+                    "body": "Hello world"
+                }
+            }
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        let params: SaveNoteParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.note.meta.id, "note-789");
+        assert_eq!(params.note.meta.title, "Test Note");
+        assert_eq!(params.note.body, "Hello world");
     }
 }

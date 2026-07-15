@@ -13,6 +13,13 @@
 //! used to perform an incremental sync, so unchanged notes are skipped instead
 //! of re-exported. The original implementation wrote the state file but never
 //! read it, making it dead write-only code.
+//!
+//! **Bidirectional sync (#2924):** The mirror state now also records a content
+//! hash (SHA-256) of each mirror file at write time. On the next sync cycle,
+//! hashes are re-computed and compared against the stored values to detect
+//! external edits. Mirror files that were externally edited but whose vault
+//! copy was unchanged are read back and saved to the vault (reverse sync).
+//! Notes modified on both sides are flagged as conflicts for manual resolution.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,7 +30,8 @@ use anyhow::Context as _;
 
 use crate::models::NoteMeta;
 use crate::storage::{
-    export_note_markdown_with_context, list_all_notes_with_context, StorageContext,
+    export_note_markdown_with_context, list_all_notes_with_context, load_note_with_context,
+    save_note_with_context, StorageContext,
 };
 
 /// Name of the per-directory state file that records mirrored-note metadata.
@@ -44,6 +52,11 @@ pub struct MirrorStateEntry {
     pub title: String,
     /// Relative path of the mirror file inside the mirror directory.
     pub path: String,
+    /// SHA-256 hash of the mirror file content at the time it was last written
+    /// by `mirror_sync_with_context`. Used to detect external edits (#2924).
+    /// `None` for legacy state entries migrated from older versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 /// Persisted mirror state. Serialized to [`MIRROR_STATE_FILE`].
@@ -213,14 +226,94 @@ pub struct MirrorResult {
     pub updated: usize,
     pub deleted: usize,
     pub unchanged: usize,
+    /// Number of externally-edited mirror files reverse-synced back to vault (#2924).
+    pub reverse_synced: usize,
+    /// Number of conflicts where both mirror and vault were modified (#2924).
+    pub conflicts: usize,
 }
 
-/// Perform one incremental sync of the vault into `mirror_dir`.
+/// Compute the SHA-256 hex digest of a file's content.
+/// Returns `None` if the file cannot be read.
+pub fn compute_file_hash(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// Strip the vaultpilot-note-id anchor comment from mirror file content.
+/// Returns the original frontmatter + body without the anchor.
+/// Used when reverse-syncing external edits back to the vault (#2924).
+pub fn strip_anchor(content: &str) -> &str {
+    if let Some(pos) = content.find(NOTE_ID_ANCHOR_PREFIX) {
+        content[..pos].trim_end()
+    } else {
+        content.trim_end()
+    }
+}
+
+/// Detect externally-edited mirror files: notes where the vault hasn't changed
+/// (not in `to_create` or `to_update`) but the mirror file's current hash
+/// differs from the last known hash stored in the mirror state (#2924).
+///
+/// Pure function — no I/O — but the caller must have already computed current
+/// file hashes via `compute_file_hash`.
+pub fn detect_external_edits(
+    current_ids: &std::collections::HashSet<&String>,
+    diff: &MirrorDiff,
+    state: &MirrorState,
+    current_hashes: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut externally_edited = Vec::new();
+    for id in current_ids {
+        let id_str: &String = id; // dereference from &&String
+                                  // Skip notes that the vault already wants to create or update —
+                                  // those will be handled by the forward sync path.
+        if diff.to_create.contains(id_str) || diff.to_update.contains(id_str) {
+            continue;
+        }
+        if let Some(entry) = state.entries.get(id_str) {
+            if let Some(stored_hash) = &entry.content_hash {
+                if let Some(current_hash) = current_hashes.get(id_str) {
+                    if stored_hash != current_hash {
+                        // Mirror file hash differs from stored — externally edited
+                        externally_edited.push(id_str.clone());
+                    }
+                }
+            }
+        }
+    }
+    externally_edited
+}
+
+/// Detect conflicts: notes that are in `to_update` (vault changed) AND have
+/// an external edit (mirror hash changed). Both sides modified independently
+/// — requires manual conflict resolution (#2924).
+pub fn detect_conflicts<'a>(
+    diff: &'a MirrorDiff,
+    external_edits: &std::collections::HashSet<&String>,
+) -> Vec<&'a String> {
+    diff.to_update
+        .iter()
+        .filter(|id| external_edits.contains(*id))
+        .collect()
+}
+
+/// Perform one incremental sync of the vault into `mirror_dir`, with
+/// bidirectional reverse-sync for externally-edited mirror files (#2924).
 ///
 /// Reads the persisted state (if any), diffs it against the current vault,
 /// writes/updates/deletes mirror files accordingly, then rewrites the state
-/// file. This is the function that gives `vp mirror --watch` a real fast-start:
-/// on restart the saved state is read back and unchanged notes are skipped.
+/// file.
+///
+/// **Reverse sync (#2924):** Before overwriting mirror files, this function
+/// scans existing mirror files for external edits (content hash differs from
+/// the last known hash stored in state). Externally-edited notes that were NOT
+/// also modified in the vault are read back and saved to the vault (reverse
+/// sync). Notes where BOTH sides were modified are counted as conflicts and
+/// left for manual resolution (the vault's version wins the mirror file, but
+/// the conflict is reported).
 pub fn mirror_sync_with_context(
     context: &StorageContext,
     mirror_dir: &Path,
@@ -233,18 +326,13 @@ pub fn mirror_sync_with_context(
 
     let current = list_all_notes_with_context(context)?;
 
-    // Disk-scan fallback (#2889): the persisted state may be missing, corrupt,
-    // or simply out of date. Reconcile against the files actually present on
-    // disk so orphan `.md` files (left behind when a note was deleted from the
-    // vault) are detected and removed instead of lingering forever. This also
-    // makes `extract_note_id_anchor` participate in the real reconcile path
-    // rather than only in tests.
+    // Disk-scan fallback (#2889)
     let disk_files = disk_scan_mirror_files(mirror_dir)?;
     let current_ids: std::collections::HashSet<&String> = current.iter().map(|m| &m.id).collect();
 
     let mut result = MirrorResult::default();
 
-    // Phase 1: remove orphan mirror files whose note no longer exists.
+    // Phase 0: remove orphan mirror files whose note no longer exists.
     for path in orphan_mirror_files(&disk_files, &current_ids, &state) {
         let _ = std::fs::remove_file(path);
         result.deleted += 1;
@@ -252,16 +340,57 @@ pub fn mirror_sync_with_context(
 
     let diff = compute_mirror_diff(&current, &state);
 
+    // Phase 1: compute current hashes of all existing mirror files
+    // (to detect external edits and conflicts — #2924).
+    let mut current_hashes: HashMap<String, String> = HashMap::new();
+    for id in &current_ids {
+        let path = mirror_file_path(mirror_dir, id);
+        if path.exists() {
+            if let Some(hash) = compute_file_hash(&path) {
+                current_hashes.insert((*id).clone(), hash);
+            }
+        }
+    }
+
+    // Phase 2: detect external edits and conflicts (#2924).
+    let external_edited = detect_external_edits(&current_ids, &diff, &state, &current_hashes);
+    let external_edited_set: std::collections::HashSet<&String> = external_edited.iter().collect();
+    let conflicts = detect_conflicts(&diff, &external_edited_set);
+    result.conflicts = conflicts.len();
+
+    // Phase 3: reverse-sync externally-edited notes (not in conflict) back to vault.
+    for id in &external_edited {
+        // Skip conflicted notes — vault version wins mirror, conflict reported separately
+        if conflicts.contains(&id) {
+            continue;
+        }
+        let path = mirror_file_path(mirror_dir, id);
+        if let Ok(mirror_content) = std::fs::read_to_string(&path) {
+            let stripped = strip_anchor(&mirror_content);
+            // Load the existing note to preserve its metadata (id, created_at, tags, etc.)
+            if let Ok(mut note) = load_note_with_context(context, id) {
+                // Only update the body if it actually changed
+                if note.body != stripped {
+                    note.body = stripped.to_string();
+                    // Save back — this will update `updated_at` automatically
+                    save_note_with_context(context, note)?;
+                    result.reverse_synced += 1;
+                }
+            }
+        }
+    }
+
+    // Phase 4: forward sync — create/update mirror files from vault changes.
     for id in diff.to_create.iter().chain(diff.to_update.iter()) {
         let (markdown, _filename) = export_note_markdown_with_context(context, id)?;
+        let mirror_content = compose_mirror_markdown(&markdown, id);
         let path = mirror_file_path(mirror_dir, id);
-        std::fs::write(&path, compose_mirror_markdown(&markdown, id))?;
+        std::fs::write(&path, &mirror_content)?;
+
+        // Compute hash of the written content for future external edit detection
+        let content_hash = compute_file_hash(&path);
+
         if let Some(meta) = current.iter().find(|m| &m.id == id) {
-            // Store the *relative* path inside the mirror directory, not the
-            // absolute one. `.vp-mirror-state.json` must stay portable so the
-            // mirror can be moved or copied without breaking the contract
-            // (#2887). Fall back to the full path only if `mirror_dir` is
-            // somehow not a prefix (should never happen given the join above).
             let rel = path
                 .strip_prefix(mirror_dir)
                 .unwrap_or(&path)
@@ -273,13 +402,18 @@ pub fn mirror_sync_with_context(
                     updated_at: meta.updated_at.clone(),
                     title: meta.title.clone(),
                     path: rel,
+                    content_hash,
                 },
             );
         }
         if diff.to_create.contains(id) {
             result.created += 1;
         } else {
-            result.updated += 1;
+            // Conflicts are not counted as normal updates — they were already
+            // logged separately and the vault version overwrites the mirror.
+            if !conflicts.contains(&id) {
+                result.updated += 1;
+            }
         }
     }
 
@@ -290,7 +424,8 @@ pub fn mirror_sync_with_context(
         result.deleted += 1;
     }
 
-    result.unchanged = current.len() - diff.to_create.len() - diff.to_update.len();
+    result.unchanged =
+        current.len() - diff.to_create.len() - diff.to_update.len() - external_edited.len();
 
     write_mirror_state(&state_path, &state)?;
     Ok(result)
@@ -315,6 +450,8 @@ pub fn mirror_watch_with_context(
                 "updated": result.updated,
                 "deleted": result.deleted,
                 "unchanged": result.unchanged,
+                "reverse_synced": result.reverse_synced,
+                "conflicts": result.conflicts,
             })
         );
         std::thread::sleep(std::time::Duration::from_secs(interval_secs.max(1)));

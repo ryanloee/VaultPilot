@@ -211,7 +211,7 @@ mod tests {
         let _ = fs::remove_file(mirror.join(MIRROR_STATE_FILE));
 
         // Second sync — must not panic despite backflow phase
-        let r2 = mirror_sync_with_context(&ctx, &mirror).expect("second sync");
+        let _r2 = mirror_sync_with_context(&ctx, &mirror).expect("second sync");
         assert!(!mirror.join("A.md").exists(), "orphan cleaned up");
         assert!(mirror.join("B.md").exists(), "B still present");
 

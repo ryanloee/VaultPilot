@@ -1131,7 +1131,11 @@ enum VaultActions {
         #[arg(long, short)]
         output: Option<PathBuf>,
 
-        /// Column summarization spec: "column=func1,func2,..." (#2909)
+        /// Column to group by for Kanban output (e.g. "status", "priority", "category")
+        #[arg(long)]
+        group_by: Option<String>,
+
+        /// Column summarization specs (e.g. priority=sum,avg,min,max or status=count,unique)
         ///
         /// Supported functions: count, sum, avg, min, max, unique, empty, filled,
         /// checked, unchecked, earliest, latest, range.
@@ -1153,6 +1157,8 @@ enum QueryFormat {
     MdTable,
     /// JSON array of objects — machine-readable
     Json,
+    /// Kanban board — grouped by a column value, rendered as Markdown sections
+    Kanban,
 }
 
 #[derive(Subcommand)]
@@ -2716,8 +2722,16 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             query,
             format,
             output,
+            group_by,
             summarize,
-        } => handle_vault_query(context, query, format, output.as_deref(), summarize),
+        } => handle_vault_query(
+            context,
+            query,
+            format,
+            output.as_deref(),
+            group_by.as_deref(),
+            summarize,
+        ),
     }
 }
 
@@ -2726,12 +2740,13 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
 /// Loads all notes from the vault, extracts frontmatter properties as a generic
 /// YAML mapping so that arbitrary user-defined properties are captured, converts
 /// them to [`vault_query::Record`]s, runs the query, and formats the output in
-/// table / CSV / Markdown-table / JSON.
+/// table / CSV / Markdown-table / JSON / Kanban board.
 fn handle_vault_query(
     context: &StorageContext,
     query_str: &str,
     format: &QueryFormat,
     output_path: Option<&Path>,
+    group_by: Option<&str>,
     summarize_specs: &[String],
 ) -> Result<Value> {
     use std::fs;
@@ -2824,6 +2839,7 @@ fn handle_vault_query(
                 .collect();
             serde_json::to_string_pretty(&json_rows)?
         }
+        QueryFormat::Kanban => format_as_kanban(&columns, &rows, group_by.unwrap_or("status")),
     };
 
     // Parse summarization specs if provided (#2909)
@@ -3043,6 +3059,106 @@ fn format_as_md_table(
             // Escape pipe characters in values to preserve table structure.
             let escaped = val.replace('|', "\\|");
             out.push_str(&format!(" {} |", escaped));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Render query results as a Markdown kanban board grouped by a column (#2914).
+///
+/// Each unique value of `group_by` becomes a section (column):
+/// ```text
+/// ## Active (3)
+/// - **Note Title** — priority: High, tags: rust
+/// - **Quick Capture** — priority: Medium
+///
+/// ## Done (5)
+/// - **Completed Task**
+/// ```
+///
+/// Notes without the group_by property (or with null value) are grouped
+/// under `## 未分类 (N)`.
+fn format_as_kanban(
+    columns: &[String],
+    rows: &[std::collections::HashMap<String, QValue>],
+    group_by: &str,
+) -> String {
+    if rows.is_empty() {
+        return "*No results*\n".to_string();
+    }
+
+    // Determine a display title for each row.
+    let note_title = |row: &std::collections::HashMap<String, QValue>| -> String {
+        if let Some(QValue::Text(t)) = row.get("title") {
+            if !t.is_empty() {
+                return t.clone();
+            }
+        }
+        // Fall back to $path with filename extracted.
+        row.get("$path")
+            .map(|v| {
+                let p = v.to_string();
+                if let Some(filename) = p.rsplit('/').next() {
+                    filename.to_string()
+                } else {
+                    p
+                }
+            })
+            .unwrap_or_else(|| "(untitled)".to_string())
+    };
+
+    // Determine which non-group_by, non-$path columns to show as metadata.
+    let meta_cols: Vec<&String> = columns
+        .iter()
+        .filter(|c| *c != "$path" && *c != group_by && *c != "title")
+        .collect();
+
+    // Group rows by the group_by column value.
+    let mut groups: std::collections::BTreeMap<
+        String,
+        Vec<&std::collections::HashMap<String, QValue>>,
+    > = std::collections::BTreeMap::new();
+
+    for row in rows {
+        let key = match row.get(group_by) {
+            Some(QValue::Text(t)) if !t.is_empty() => t.clone(),
+            Some(QValue::Number(n)) => format!("{n}"),
+            Some(QValue::Bool(b)) => b.to_string(),
+            Some(_) => "未分类".to_string(),
+            None => "未分类".to_string(),
+        };
+        groups.entry(key).or_default().push(row);
+    }
+
+    // Build kanban output.
+    let mut out = String::new();
+    out.push_str(&format!("# Kanban Board — grouped by {group_by}\n\n"));
+
+    for (group_name, group_rows) in &groups {
+        out.push_str(&format!("## {} ({})\n", group_name, group_rows.len()));
+        for row in group_rows {
+            let title = note_title(row);
+            // Build metadata suffix from non-group columns.
+            let meta_parts: Vec<String> = meta_cols
+                .iter()
+                .filter_map(|col| {
+                    let val = row.get(*col)?;
+                    let s = val.to_string();
+                    if s.is_empty() || s == "null" {
+                        None
+                    } else {
+                        Some(format!("{}: {}", col, s))
+                    }
+                })
+                .collect();
+
+            if meta_parts.is_empty() {
+                out.push_str(&format!("- **{title}**\n"));
+            } else {
+                out.push_str(&format!("- **{title}** — {}\n", meta_parts.join(", ")));
+            }
         }
         out.push('\n');
     }
@@ -5365,12 +5481,13 @@ mod tests {
     };
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
     use crate::{
-        append_capture_entry, parse_batch_selector, render_daily_template, resolve_audio_input,
-        BatchSelector,
+        append_capture_entry, format_as_kanban, parse_batch_selector, render_daily_template,
+        resolve_audio_input, BatchSelector,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
     use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
+    use vaultpilot_lib::vault_query::QValue;
 
     // ── append_capture_entry — quick capture (#2833) ───────────────
 
@@ -6045,6 +6162,109 @@ mod tests {
         let block_start = updated_body.find(":::ai-summarize").unwrap();
         let block_end = updated_body.rfind(":::").unwrap();
         assert!(block_start < block_end, "block delimiters must be ordered");
+    }
+
+    // ── format_as_kanban — Kanban board output (#2914) ─────────────
+
+    #[test]
+    fn kanban_groups_by_status_column() {
+        let cols = vec![
+            "$path".to_string(),
+            "title".to_string(),
+            "status".to_string(),
+            "priority".to_string(),
+        ];
+        use std::collections::HashMap;
+        let row1 = HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("notes/plan.md".to_string()),
+            ),
+            (
+                "title".to_string(),
+                QValue::Text("Project Plan".to_string()),
+            ),
+            ("status".to_string(), QValue::Text("active".to_string())),
+            ("priority".to_string(), QValue::Text("high".to_string())),
+        ]);
+        let row2 = HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("notes/ideas.md".to_string()),
+            ),
+            ("title".to_string(), QValue::Text("Quick Ideas".to_string())),
+            ("status".to_string(), QValue::Text("active".to_string())),
+            ("priority".to_string(), QValue::Text("medium".to_string())),
+        ]);
+        let row3 = HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("notes/done.md".to_string()),
+            ),
+            (
+                "title".to_string(),
+                QValue::Text("Completed Task".to_string()),
+            ),
+            ("status".to_string(), QValue::Text("done".to_string())),
+            ("priority".to_string(), QValue::Text("low".to_string())),
+        ]);
+        let rows = vec![row1, row2, row3];
+
+        let result = format_as_kanban(&cols, &rows, "status");
+        assert!(result.contains("## active (2)"));
+        assert!(result.contains("## done (1)"));
+        assert!(result.contains("**Project Plan**"));
+        assert!(result.contains("**Completed Task**"));
+        assert!(result.contains("priority: high"));
+        assert!(result.contains("priority: low"));
+        // Title and status should NOT appear as metadata
+        assert!(!result.contains("title:"));
+        assert!(!result.contains("status:"));
+    }
+
+    #[test]
+    fn kanban_uses_path_when_no_title() {
+        let cols = vec!["$path".to_string(), "status".to_string()];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("vault/untitled.md".to_string()),
+            ),
+            ("status".to_string(), QValue::Text("inbox".to_string())),
+        ])];
+
+        let result = format_as_kanban(&cols, &rows, "status");
+        assert!(result.contains("## inbox (1)"));
+        assert!(result.contains("untitled.md"));
+    }
+
+    #[test]
+    fn kanban_groups_null_into_uncategorized() {
+        let cols = vec!["$path".to_string(), "status".to_string()];
+        use std::collections::HashMap;
+        let rows = vec![
+            HashMap::from([
+                ("$path".to_string(), QValue::Text("notes/a.md".to_string())),
+                ("status".to_string(), QValue::Text("active".to_string())),
+            ]),
+            HashMap::from([
+                ("$path".to_string(), QValue::Text("notes/b.md".to_string())),
+                // no "status" key
+            ]),
+        ];
+
+        let result = format_as_kanban(&cols, &rows, "status");
+        assert!(result.contains("## active (1)"));
+        assert!(result.contains("## 未分类 (1)"));
+    }
+
+    #[test]
+    fn kanban_handles_empty_rows() {
+        let cols = vec!["$path".to_string(), "status".to_string()];
+        let rows = vec![];
+        let result = format_as_kanban(&cols, &rows, "status");
+        assert_eq!(result, "*No results*\n");
     }
 }
 

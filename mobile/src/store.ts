@@ -353,6 +353,11 @@ export const useAppStore = create<AppState>()(
             update.apiKey = active.apiKey;
             update.model = active.model;
             update.apiFormat = active.apiFormat;
+          } else {
+            update.apiBase = '';
+            update.apiKey = '';
+            update.model = '';
+            update.apiFormat = 'openai';
           }
           return update;
         });

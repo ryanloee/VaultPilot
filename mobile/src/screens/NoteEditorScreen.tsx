@@ -9,7 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors, filterFocusModeToolbar } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
-import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
+import { getNote, createNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
 import { chat, ChatMessage, parseSSEStream } from '../api/client';
 import AiActionPalette from '../components/ai/AiActionPalette';
 
@@ -44,6 +44,16 @@ export default function NoteEditorScreen({ route, navigation }: any) {
     let cancelled = false;
     (async () => {
       try {
+        // #2915 — Handle widget deep link vaultpilot://note/new:
+        // create a fresh note instead of trying to load non-existent id "new".
+        if (noteId === 'new') {
+          const newId = await createNote();
+          if (cancelled) return;
+          // Navigate replace so back button doesn't return to a broken "new" route
+          navigation.setParams({ noteId: newId });
+          setLoading(false);
+          return;
+        }
         const note = await getNote(noteId);
         if (cancelled) return;
         if (note) {

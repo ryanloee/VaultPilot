@@ -827,7 +827,9 @@ mod tests {
             ..AppSettings::default()
         };
         let results_on = search_settings_definitions(&defs, "interval", &settings_on);
-        assert!(results_on.iter().any(|d| d.key == "autoWakeIntervalMinutes"));
+        assert!(results_on
+            .iter()
+            .any(|d| d.key == "autoWakeIntervalMinutes"));
     }
 
     /// #2920 — no-match returns empty vec.

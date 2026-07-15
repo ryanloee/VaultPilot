@@ -154,6 +154,58 @@ pub fn mirror_file_path(mirror_dir: &Path, note_id: &str) -> PathBuf {
     mirror_dir.join(format!("{note_id}.md"))
 }
 
+/// Scan `mirror_dir` for existing mirror `.md` files (excluding the state
+/// file) and return a map from each file's embedded note id — extracted via
+/// [`extract_note_id_anchor`] — to its on-disk path.
+///
+/// This is the disk-scan fallback that makes [`extract_note_id_anchor`] part
+/// of the real reconcile path instead of dead test-only code. It is used by
+/// [`mirror_sync_with_context`] to detect and remove orphan mirror files left
+/// behind when a note has been deleted from the vault but its `.md` lingers on
+/// disk (#2889).
+pub fn disk_scan_mirror_files(mirror_dir: &Path) -> anyhow::Result<HashMap<String, PathBuf>> {
+    let mut map = HashMap::new();
+    let entries = std::fs::read_dir(mirror_dir)
+        .with_context(|| format!("failed to read mirror directory {}", mirror_dir.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // Skip the state file and anything that is not a mirror `.md` file.
+        if name == MIRROR_STATE_FILE || !name.ends_with(".md") {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)?;
+        if let Some(id) = extract_note_id_anchor(&content) {
+            map.insert(id, path);
+        }
+    }
+    Ok(map)
+}
+
+/// Identify orphan mirror files: present on disk but whose note no longer
+/// exists in the vault (`current_ids`) and is not recorded in the persisted
+/// `state`. These files should be removed during reconcile (#2889).
+///
+/// Pure function — no I/O — so it is trivially testable and keeps the
+/// reconcile policy decoupled from filesystem access.
+pub fn orphan_mirror_files<'a>(
+    disk_files: &'a HashMap<String, PathBuf>,
+    current_ids: &std::collections::HashSet<&String>,
+    state: &MirrorState,
+) -> Vec<&'a PathBuf> {
+    disk_files
+        .iter()
+        .filter(|(id, _)| !current_ids.contains(id) && !state.entries.contains_key(*id))
+        .map(|(_, path)| path)
+        .collect()
+}
+
 /// Result of a single sync cycle.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct MirrorResult {
@@ -180,9 +232,25 @@ pub fn mirror_sync_with_context(
     let mut state = read_mirror_state(&state_path).unwrap_or_default();
 
     let current = list_all_notes_with_context(context)?;
-    let diff = compute_mirror_diff(&current, &state);
+
+    // Disk-scan fallback (#2889): the persisted state may be missing, corrupt,
+    // or simply out of date. Reconcile against the files actually present on
+    // disk so orphan `.md` files (left behind when a note was deleted from the
+    // vault) are detected and removed instead of lingering forever. This also
+    // makes `extract_note_id_anchor` participate in the real reconcile path
+    // rather than only in tests.
+    let disk_files = disk_scan_mirror_files(mirror_dir)?;
+    let current_ids: std::collections::HashSet<&String> = current.iter().map(|m| &m.id).collect();
 
     let mut result = MirrorResult::default();
+
+    // Phase 1: remove orphan mirror files whose note no longer exists.
+    for path in orphan_mirror_files(&disk_files, &current_ids, &state) {
+        let _ = std::fs::remove_file(path);
+        result.deleted += 1;
+    }
+
+    let diff = compute_mirror_diff(&current, &state);
 
     for id in diff.to_create.iter().chain(diff.to_update.iter()) {
         let (markdown, _filename) = export_note_markdown_with_context(context, id)?;

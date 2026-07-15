@@ -39,4 +39,5 @@ mod issue_2826_api_key_secure_storage;
 mod issue_2859_mirror;
 mod issue_2884_mirror_state;
 mod issue_2887_mirror_relative_path;
+mod issue_2889_mirror_orphan;
 mod issue_914_related_notes;

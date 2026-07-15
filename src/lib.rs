@@ -13,6 +13,7 @@ pub mod fsrs;
 pub mod health;
 pub mod knowledge_graph;
 pub mod mail;
+pub mod mirror;
 pub mod models;
 pub mod orchestration;
 pub mod people_index;

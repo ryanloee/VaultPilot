@@ -106,6 +106,30 @@ enum Commands {
         action: NotesActions,
     },
 
+    /// Mirror the SQLite vault to Markdown files on disk in real time (#2859)
+    ///
+    /// Each note is projected to `<dir>/<note_id>.md` with its frontmatter and
+    /// body, plus a stable `<!-- vaultpilot-note-id: <id> -->` anchor. A
+    /// `.vp-mirror-state.json` file records each note's `updated_at` so re-runs
+    /// (including `vp mirror --watch` restarts) sync incrementally instead of
+    /// re-exporting the whole vault (#2884).
+    ///
+    /// Without `--watch` a single incremental export is performed and the
+    /// process exits. With `--watch` it re-syncs every `--interval` seconds.
+    Mirror {
+        /// Output directory for the Markdown mirror
+        #[arg(long, default_value = ".vaultpilot-mirror")]
+        dir: PathBuf,
+
+        /// Watch mode: continuously sync on an interval (default is one-shot)
+        #[arg(long)]
+        watch: bool,
+
+        /// Polling interval in seconds for --watch mode
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
+    },
+
     /// Manage collections for multi-grouping notes (#2042)
     Collections {
         #[command(subcommand)]
@@ -1661,6 +1685,27 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             } else {
                 tokio::task::block_in_place(|| handle_notes(context, action))
             }
+        }
+        Commands::Mirror {
+            dir,
+            watch,
+            interval,
+        } => {
+            tokio::task::block_in_place(|| -> Result<Value> {
+                if *watch {
+                    vaultpilot_lib::mirror::mirror_watch_with_context(context, dir, *interval)?;
+                    Ok(Value::Null) // unreachable: watch loops until terminated
+                } else {
+                    let result = vaultpilot_lib::mirror::mirror_sync_with_context(context, dir)?;
+                    Ok(serde_json::json!({
+                        "event": "mirror_sync",
+                        "created": result.created,
+                        "updated": result.updated,
+                        "deleted": result.deleted,
+                        "unchanged": result.unchanged,
+                    }))
+                }
+            })
         }
         Commands::Index { action } => tokio::task::block_in_place(|| handle_index(context, action)),
         Commands::Ask {

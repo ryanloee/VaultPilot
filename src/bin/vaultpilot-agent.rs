@@ -1342,7 +1342,8 @@ mod tests {
 
     #[test]
     fn load_note_params_deserializes() {
-        let json = json!({ "id": "req-load", "method": "loadNote", "params": { "id": "note-123" } });
+        let json =
+            json!({ "id": "req-load", "method": "loadNote", "params": { "id": "note-123" } });
         let request: AgentRequest = serde_json::from_value(json).unwrap();
         let params: IdParams = serde_json::from_value(request.params).unwrap();
         assert_eq!(params.id, "note-123");
@@ -1350,7 +1351,8 @@ mod tests {
 
     #[test]
     fn delete_note_params_deserializes() {
-        let json = json!({ "id": "req-del", "method": "deleteNote", "params": { "id": "note-456" } });
+        let json =
+            json!({ "id": "req-del", "method": "deleteNote", "params": { "id": "note-456" } });
         let request: AgentRequest = serde_json::from_value(json).unwrap();
         let params: IdParams = serde_json::from_value(request.params).unwrap();
         assert_eq!(params.id, "note-456");

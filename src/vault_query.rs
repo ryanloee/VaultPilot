@@ -721,14 +721,48 @@ pub fn query_records(records: &[Record], query: &Query) -> Vec<HashMap<String, Q
 
 // ── Output formatters (#2813) ────────────────────────────────────────────────
 
+/// Collect a deterministic, stable column ordering across all rows (#2913).
+///
+/// Previously the CSV/Markdown formatters pulled columns from `rows[0].keys()`,
+/// which iterates a `HashMap` in a **non-deterministic** order — so the same
+/// `SELECT *` query could emit differently-ordered output between runs, breaking
+/// downstream CSV consumers (pandas, Excel imports, etc.). This helper gathers
+/// the union of keys from *every* row, then sorts them so output is stable:
+///
+/// - The synthetic `$path` column is always emitted first.
+/// - All other columns follow in lexicographic (alphabetical) order.
+///
+/// Callers that need to preserve an explicit field order (e.g. a hand-written
+/// `SELECT col1, col2`) should pass their own `columns` slice — as the CLI's
+/// `format_as_csv` does — rather than relying on this union-based ordering.
+fn collect_ordered_columns(rows: &[HashMap<String, QValue>]) -> Vec<String> {
+    let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for row in rows {
+        for k in row.keys() {
+            keys.insert(k.clone());
+        }
+    }
+    let mut columns: Vec<String> = keys.into_iter().collect();
+    // Move the synthetic `$path` column to the front for readability and so it
+    // never shifts position when other properties are added or removed.
+    if let Some(pos) = columns.iter().position(|c| c == "$path") {
+        let path = columns.remove(pos);
+        columns.insert(0, path);
+    }
+    columns
+}
+
 /// Format query result rows as CSV with header row.
 /// Values containing commas, quotes, or newlines are properly escaped.
+///
+/// Column order is deterministic (`$path` first, then alphabetical) regardless
+/// of `HashMap` iteration order (#2913).
 pub fn format_rows_csv(rows: &[HashMap<String, QValue>]) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    // Collect ordered columns from first row
-    let columns: Vec<&String> = rows[0].keys().collect();
+    // Deterministic column order: `$path` first, then alphabetical (#2913).
+    let columns = collect_ordered_columns(rows);
     let header: Vec<String> = columns.iter().map(|c| csv_escape(c)).collect();
     let mut out = header.join(",");
     out.push('\n');
@@ -736,7 +770,7 @@ pub fn format_rows_csv(rows: &[HashMap<String, QValue>]) -> String {
         let line: Vec<String> = columns
             .iter()
             .map(|c| {
-                let v = row.get(*c).cloned().unwrap_or(QValue::Null);
+                let v = row.get(c).cloned().unwrap_or(QValue::Null);
                 csv_escape(&v.to_string())
             })
             .collect();
@@ -755,11 +789,15 @@ fn csv_escape(s: &str) -> String {
 }
 
 /// Format query result rows as a Markdown table (GFM-compatible).
+///
+/// Column order is deterministic (`$path` first, then alphabetical) regardless
+/// of `HashMap` iteration order (#2913).
 pub fn format_rows_md_table(rows: &[HashMap<String, QValue>]) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    let columns: Vec<&String> = rows[0].keys().collect();
+    // Deterministic column order: `$path` first, then alphabetical (#2913).
+    let columns = collect_ordered_columns(rows);
     let header: Vec<String> = columns.iter().map(|c| c.to_string()).collect();
     let separator: Vec<String> = columns.iter().map(|_| "---".to_string()).collect();
     let mut out = format!(
@@ -771,7 +809,7 @@ pub fn format_rows_md_table(rows: &[HashMap<String, QValue>]) -> String {
         let cells: Vec<String> = columns
             .iter()
             .map(|c| {
-                let v = row.get(*c).cloned().unwrap_or(QValue::Null);
+                let v = row.get(c).cloned().unwrap_or(QValue::Null);
                 md_escape(&v.to_string())
             })
             .collect();
@@ -785,6 +823,10 @@ fn md_escape(s: &str) -> String {
 }
 
 /// Format query result rows as JSON (array of objects).
+///
+/// Object key order is deterministic: `serde_json::Map` is backed by a
+/// `BTreeMap` (the `preserve_order` feature is not enabled), so keys are
+/// serialized in sorted order regardless of `HashMap` iteration order (#2913).
 pub fn format_rows_json(rows: &[HashMap<String, QValue>]) -> serde_json::Value {
     let arr: Vec<serde_json::Value> = rows
         .iter()

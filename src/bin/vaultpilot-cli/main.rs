@@ -616,6 +616,11 @@ enum Commands {
         /// Show only graph statistics (notes, links, orphans, hubs)
         #[arg(long)]
         summary: bool,
+
+        /// Include unlinked-mention (plain-text) edges as dashed links (#2832).
+        /// By default only resolved `[[wikilink]]` edges are shown.
+        #[arg(long)]
+        mentions: bool,
     },
     /// Manage spaced-repetition flashcards (#1912)
     Flashcard {
@@ -2047,7 +2052,12 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
         Commands::Skill { action } => handle_skill(context, action).await,
-        Commands::Graph { dot, json, summary } => handle_graph(context, *dot, *json, *summary),
+        Commands::Graph {
+            dot,
+            json,
+            summary,
+            mentions,
+        } => handle_graph(context, *dot, *json, *summary, *mentions),
         Commands::Flashcard { action } => {
             tokio::task::block_in_place(|| handle_flashcard(context, action))
         }
@@ -5222,10 +5232,20 @@ async fn find_related_notes_for_digest(
 }
 
 /// Handle the `graph` command — build and output the vault knowledge graph (#1913).
-fn handle_graph(context: &StorageContext, dot: bool, json: bool, summary: bool) -> Result<Value> {
+fn handle_graph(
+    context: &StorageContext,
+    dot: bool,
+    json: bool,
+    summary: bool,
+    mentions: bool,
+) -> Result<Value> {
     use vaultpilot_lib::knowledge_graph;
 
-    let graph = knowledge_graph::build_knowledge_graph(context)?;
+    let graph = if mentions {
+        knowledge_graph::build_knowledge_graph_with_mentions(context)?
+    } else {
+        knowledge_graph::build_knowledge_graph(context)?
+    };
 
     // Determine output mode: explicit flags take priority, default = summary + dot.
     if json {

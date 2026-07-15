@@ -35,15 +35,32 @@ pub struct GraphNode {
     pub out_degree: usize,
 }
 
-/// A directed edge from source note → target note (via wikilink).
+/// The provenance of a graph edge, so UI clients can distinguish formal
+/// `[[wikilink]]` connections from latent plain-text mentions (#2832).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GraphEdgeKind {
+    /// Resolved `[[wikilink]]` between two notes.
+    #[default]
+    Wikilink,
+    /// Plain-text mention of a note's title without a `[[…]]` wrapper
+    /// (an "unlinked mention" / 未链接提及). Surfaces latent connections
+    /// the user hasn't formalised into wikilinks yet (#2832).
+    Mention,
+}
+
+/// A directed edge from source note → target note.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GraphEdge {
     /// Source note ID.
     pub source: String,
     /// Target note ID (resolved wikilink target).
     pub target: String,
-    /// Raw wikilink text (may differ from target title if aliased).
+    /// Raw edge text — the wikilink target or the mentioned title.
     pub label: String,
+    /// Provenance of the edge: a formal wikilink or a plain-text mention.
+    #[serde(default)]
+    pub kind: GraphEdgeKind,
 }
 
 /// Complete knowledge graph: all nodes + edges.
@@ -81,9 +98,35 @@ pub enum GraphOutputFormat {
 /// # Errors
 /// Returns an error if the database cannot be opened or a note body cannot
 /// be loaded.
+/// Build a knowledge graph from the vault using only resolved `[[wikilink]]`
+/// edges. This preserves the original (#1913) behaviour.
+///
+/// See [`build_knowledge_graph_with_mentions`] for a variant that also
+/// includes latent plain-text "unlinked mention" edges (#2832).
 pub fn build_knowledge_graph(context: &StorageContext) -> Result<KnowledgeGraph> {
+    build_knowledge_graph_impl(context, false)
+}
+
+/// Build a knowledge graph that **additionally** includes unlinked-mention
+/// edges (#2832): a note whose body mentions another note's title as plain
+/// text (case-insensitive whole-word, outside code blocks/frontmatter) but
+/// does not `[[wikilink]]` to it. These surface latent connections the user
+/// hasn't formalised yet and are rendered as dashed edges in DOT output.
+pub fn build_knowledge_graph_with_mentions(context: &StorageContext) -> Result<KnowledgeGraph> {
+    build_knowledge_graph_impl(context, true)
+}
+
+/// Core graph builder. When `include_mentions` is true, plain-text mention
+/// edges are added on top of the resolved wikilink edges.
+fn build_knowledge_graph_impl(
+    context: &StorageContext,
+    include_mentions: bool,
+) -> Result<KnowledgeGraph> {
     let (connection, _) = storage::pool::open_connection(context)?;
     let all_metas = storage::list_all_note_metas(&connection)?;
+
+    // Collected (id, title, body) for unlinked-mention detection.
+    let mut loaded_notes: Vec<(String, String, String)> = Vec::new();
 
     // Build case-insensitive title → NoteMeta lookup.
     let mut title_index: HashMap<String, &NoteMeta> = HashMap::with_capacity(all_metas.len());
@@ -110,6 +153,9 @@ pub fn build_knowledge_graph(context: &StorageContext) -> Result<KnowledgeGraph>
             Ok(doc) => doc,
             Err(_) => continue, // skip notes that can't be loaded
         };
+
+        // Keep body for unlinked-mention detection.
+        loaded_notes.push((meta.id.clone(), meta.title.clone(), doc.body.clone()));
 
         let raw_links = storage::notes::extract_wikilinks(&doc.body);
         if raw_links.is_empty() {
@@ -155,11 +201,22 @@ pub fn build_knowledge_graph(context: &StorageContext) -> Result<KnowledgeGraph>
                         source: source_id.clone(),
                         target: target_meta.id.clone(),
                         label: wl.target.clone(),
+                        kind: GraphEdgeKind::Wikilink,
                     });
                     *in_degree.entry(target_meta.id.clone()).or_default() += 1;
                     *out_degree.entry(source_id.clone()).or_default() += 1;
                 }
             }
+        }
+    }
+
+    // Optionally add unlinked-mention (soft) edges on top of wikilinks.
+    if include_mentions {
+        let mention_edges = detect_unlinked_mention_edges(&loaded_notes, &edge_set);
+        for me in mention_edges {
+            *in_degree.entry(me.target.clone()).or_default() += 1;
+            *out_degree.entry(me.source.clone()).or_default() += 1;
+            edges.push(me);
         }
     }
 
@@ -184,6 +241,55 @@ pub fn build_knowledge_graph(context: &StorageContext) -> Result<KnowledgeGraph>
         edge_count,
         dangling_link_count,
     })
+}
+
+/// Detect latent "unlinked mention" edges among a set of notes.
+///
+/// For every ordered pair of distinct notes `(source, target)`, if `source`'s
+/// body mentions `target`'s title as plain text (case-insensitive whole-word,
+/// outside code blocks and frontmatter) **and** the pair is not already a
+/// resolved wikilink (i.e. present in `exclude`), a soft `Mention` edge is
+/// produced.
+///
+/// This is a pure, database-free function so it can be unit-tested directly
+/// and reused by the graph builder and the `notes.unlinked_mentions` tool
+/// (#2832).
+pub fn detect_unlinked_mention_edges(
+    notes: &[(String, String, String)],
+    exclude: &BTreeSet<(String, String)>,
+) -> Vec<GraphEdge> {
+    let mut edges: Vec<GraphEdge> = Vec::new();
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+
+    for (src_id, _src_title, src_body) in notes {
+        for (tgt_id, tgt_title, _tgt_body) in notes {
+            if src_id == tgt_id {
+                continue;
+            }
+            let tgt_title_trimmed = tgt_title.trim();
+            if tgt_title_trimmed.len() < 3 {
+                // Titles shorter than 3 chars produce too many false positives.
+                continue;
+            }
+            let tgt_lower = tgt_title_trimmed.to_lowercase();
+            if crate::storage::notes::body_mentions_title(src_body, &tgt_lower) {
+                let key = (src_id.clone(), tgt_id.clone());
+                if exclude.contains(&key) {
+                    continue;
+                }
+                if seen.insert(key) {
+                    edges.push(GraphEdge {
+                        source: src_id.clone(),
+                        target: tgt_id.clone(),
+                        label: tgt_title_trimmed.to_string(),
+                        kind: GraphEdgeKind::Mention,
+                    });
+                }
+            }
+        }
+    }
+
+    edges
 }
 
 /// Render the knowledge graph as DOT language for Graphviz.
@@ -236,11 +342,19 @@ pub fn render_dot(graph: &KnowledgeGraph) -> String {
 
     // Edges
     for edge in &graph.edges {
+        // Unlinked mentions are rendered dashed so the UI can distinguish
+        // formal `[[wikilinks]]` from latent plain-text mentions (#2832).
+        let style = if edge.kind == GraphEdgeKind::Mention {
+            ", style=dashed, color=gray"
+        } else {
+            ""
+        };
         out.push_str(&format!(
-            "    \"{}\" -> \"{}\" [label=\"{}\"];\n",
+            "    \"{}\" -> \"{}\" [label=\"{}\"{}];\n",
             dot_escape(&edge.source),
             dot_escape(&edge.target),
             dot_escape(&edge.label),
+            style,
         ));
     }
 
@@ -342,6 +456,7 @@ mod tests {
                 source: "n1".into(),
                 target: "n2".into(),
                 label: "Advanced".into(),
+                kind: GraphEdgeKind::Wikilink,
             }],
             note_count: 2,
             edge_count: 1,
@@ -444,6 +559,7 @@ mod tests {
                 source: "n1".into(),
                 target: "n2".into(),
                 label: "B".into(),
+                kind: GraphEdgeKind::Wikilink,
             }],
             note_count: 3,
             edge_count: 1,
@@ -492,6 +608,97 @@ mod tests {
         };
         let dot = render_dot(&graph);
         assert!(dot.contains(r#"tags="rust, async""#));
+    }
+
+    #[test]
+    fn test_detect_unlinked_mention_edges() {
+        // (id, title, body)
+        let notes: Vec<(String, String, String)> = vec![
+            (
+                "a".into(),
+                "Rust".into(),
+                "I love Rust and systems programming.".into(),
+            ),
+            (
+                "b".into(),
+                "Python".into(),
+                "Rust is faster than Python for this task.".into(),
+            ),
+            ("c".into(), "Go".into(), "Nothing interesting here.".into()),
+        ];
+        // "b" mentions "Rust" in prose → one soft edge b -> a.
+        let edges = detect_unlinked_mention_edges(&notes, &BTreeSet::new());
+        assert_eq!(edges.len(), 1, "expected exactly one mention edge");
+        assert_eq!(edges[0].source, "b");
+        assert_eq!(edges[0].target, "a");
+        assert_eq!(edges[0].kind, GraphEdgeKind::Mention);
+    }
+
+    #[test]
+    fn test_detect_unlinked_mention_excludes_wikilinks() {
+        let notes: Vec<(String, String, String)> = vec![
+            ("a".into(), "Rust".into(), "body a".into()),
+            (
+                "b".into(),
+                "Python".into(),
+                "See [[Rust]] and also mention Rust again.".into(),
+            ),
+        ];
+        // b already wikilinks to a → excluded from mention edges.
+        let mut exclude = BTreeSet::new();
+        exclude.insert(("b".into(), "a".into()));
+        let edges = detect_unlinked_mention_edges(&notes, &exclude);
+        assert!(edges.is_empty(), "wikilinked pair must be excluded");
+    }
+
+    #[test]
+    fn test_detect_unlinked_mention_skips_short_titles() {
+        let notes: Vec<(String, String, String)> = vec![
+            ("a".into(), "Go".into(), "body a".into()),
+            ("b".into(), "Rust".into(), "mentions Go here".into()),
+        ];
+        // "Go" is 2 chars → ignored, no edge.
+        let edges = detect_unlinked_mention_edges(&notes, &BTreeSet::new());
+        assert!(
+            edges.is_empty(),
+            "titles shorter than 3 chars must be ignored"
+        );
+    }
+
+    #[test]
+    fn test_render_dot_mention_dashed() {
+        let graph = KnowledgeGraph {
+            nodes: vec![
+                GraphNode {
+                    id: "a".into(),
+                    title: "Rust".into(),
+                    tags: vec![],
+                    in_degree: 1,
+                    out_degree: 0,
+                },
+                GraphNode {
+                    id: "b".into(),
+                    title: "Python".into(),
+                    tags: vec![],
+                    in_degree: 0,
+                    out_degree: 1,
+                },
+            ],
+            edges: vec![GraphEdge {
+                source: "b".into(),
+                target: "a".into(),
+                label: "Rust".into(),
+                kind: GraphEdgeKind::Mention,
+            }],
+            note_count: 2,
+            edge_count: 1,
+            dangling_link_count: 0,
+        };
+        let dot = render_dot(&graph);
+        assert!(
+            dot.contains("style=dashed"),
+            "mention edge must render dashed"
+        );
     }
 
     #[test]

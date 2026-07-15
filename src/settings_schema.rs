@@ -145,6 +145,11 @@ struct DefBuilder {
     setting_type: SettingType,
     placeholder: Option<&'static str>,
     visible_when: Option<SettingVisibility>,
+    /// Optional override for the derived default. When set, this value is used
+    /// instead of looking up the key in `AppSettings::default()`. Useful for
+    /// `Option` fields where `None` serialises as `null` but the schema expects
+    /// a concrete default (e.g. Number: 0, Text: \"\").
+    default_override: Option<Value>,
 }
 
 impl DefBuilder {
@@ -163,6 +168,7 @@ impl DefBuilder {
             setting_type,
             placeholder: None,
             visible_when: None,
+            default_override: None,
         }
     }
 
@@ -176,8 +182,18 @@ impl DefBuilder {
         self
     }
 
+    /// Override the derived default value. When not called, the default is
+    /// automatically derived from `AppSettings::default()` by looking up the
+    /// dot-separated key path.
+    fn default_value(mut self, v: Value) -> Self {
+        self.default_override = Some(v);
+        self
+    }
+
     fn build(self, defaults: &AppSettings) -> SettingDefinition {
-        let default = get_field_value(defaults, self.key).unwrap_or(Value::Null);
+        let default = self
+            .default_override
+            .unwrap_or_else(|| get_field_value(defaults, self.key).unwrap_or(Value::Null));
         SettingDefinition {
             key: self.key.to_string(),
             label: self.label.to_string(),
@@ -289,6 +305,7 @@ pub fn collect_setting_definitions() -> Vec<SettingDefinition> {
                 step: Some(512.0)
             }
         )
+        .default_value(serde_json::json!(0))
         .build(&defaults),
         def!(
             "activeProviderIndex",
@@ -399,6 +416,7 @@ pub fn collect_setting_definitions() -> Vec<SettingDefinition> {
             SettingType::Text
         )
         .visible_when(truthy("modelRouting.enabled"))
+        .default_value(serde_json::json!(""))
         .build(&defaults),
         def!(
             "modelRouting.complexTaskModel",
@@ -408,6 +426,7 @@ pub fn collect_setting_definitions() -> Vec<SettingDefinition> {
             SettingType::Text
         )
         .visible_when(truthy("modelRouting.enabled"))
+        .default_value(serde_json::json!(""))
         .build(&defaults),
         def!(
             "modelRouting.codeTaskModel",
@@ -417,6 +436,7 @@ pub fn collect_setting_definitions() -> Vec<SettingDefinition> {
             SettingType::Text
         )
         .visible_when(truthy("modelRouting.enabled"))
+        .default_value(serde_json::json!(""))
         .build(&defaults),
         // ----- Sessions -----
         def!(
@@ -435,6 +455,7 @@ pub fn collect_setting_definitions() -> Vec<SettingDefinition> {
             SettingType::Text
         )
         .visible_when(truthy("sessionExportEnabled"))
+        .default_value(serde_json::json!(""))
         .build(&defaults),
     ]
 }
@@ -577,6 +598,25 @@ mod tests {
                     options
                 );
             }
+        }
+    }
+
+    /// Regression: every definition's derived default must pass validate_value.
+    /// This catches Option fields that serialise as `null` but are typed
+    /// Number/Text/Select — the frontend would fail to set the default back.
+    /// Fix: use `.default_value(...)` on the definition to provide a valid default.
+    #[test]
+    fn every_default_passes_validate_value() {
+        let defs = collect_setting_definitions();
+        for def in &defs {
+            let result = validate_value(def, &def.default);
+            assert!(
+                result.is_ok(),
+                "Default for '{}' ({:?}) fails validate_value: {}",
+                def.key,
+                def.default,
+                result.unwrap_err()
+            );
         }
     }
 

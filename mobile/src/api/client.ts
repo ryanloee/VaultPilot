@@ -569,52 +569,58 @@ export async function chatWithReconnect(
 
 // ── Health Check ──────────────────────────────────────────
 export async function checkApi(params?: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal }): Promise<{ ok: boolean; error?: string }> {
-  const settings = (params ?? await getSettings()) as { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal };
-    const apiKey = settings.apiKey ?? '';
-    const signal = settings.signal;
-    const apiBase = settings.apiBase ?? '';
-    const format = settings.apiFormat ?? 'openai';
-    if (!apiKey) return { ok: false, error: '未配置 API Key' };
+  // Avoid unsafe type assertion: when params is not provided, getSettings()
+  // does not return signal or model fields. Use params for caller-provided
+  // fields and fall back to getSettings() for stored settings (#2927).
+  const provided = params;
+  const stored = provided ? undefined : await getSettings();
+  const apiKey = provided?.apiKey ?? stored?.apiKey ?? '';
+  const signal = provided?.signal;
+  const apiBase = provided?.apiBase ?? stored?.apiBase ?? '';
+  const format = provided?.apiFormat ?? stored?.apiFormat ?? 'openai';
+  const model = provided?.model ?? stored?.model;
 
-    // Hermes-compatible timeout: AbortSignal.timeout() / AbortSignal.any() are
-    // unavailable on React Native Hermes (Hermes 0.12 / RN 0.73). Use setTimeout +
-    // a manual AbortController instead to combine timeout and user signal (#2329).
-    const timeoutController = new AbortController();
-    const timer = setTimeout(() => timeoutController.abort(), CHECK_API_TIMEOUT_MS);
-    const onUserAbort = () => timeoutController.abort(signal?.reason);
-    if (signal) {
-      if (signal.aborted) timeoutController.abort(signal.reason);
-      else signal.addEventListener('abort', onUserAbort, { once: true });
-    }
-    const effectiveSignal = timeoutController.signal;
+  if (!apiKey) return { ok: false, error: '未配置 API Key' };
 
-    try {
-      if (format === 'anthropic') {
-        // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
-        const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
-        const res = await fetch(`${base}/v1/messages`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({ model: settings.model ?? 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
-          signal: effectiveSignal,
-        });
-        // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error
-        return { ok: res.ok || res.status === 400, error: res.ok || res.status === 400 ? undefined : `HTTP ${res.status}` };
-      }
+  // Hermes-compatible timeout: AbortSignal.timeout() / AbortSignal.any() are
+  // unavailable on React Native Hermes (Hermes 0.12 / RN 0.73). Use setTimeout +
+  // a manual AbortController instead to combine timeout and user signal (#2329).
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), CHECK_API_TIMEOUT_MS);
+  const onUserAbort = () => timeoutController.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) timeoutController.abort(signal.reason);
+    else signal.addEventListener('abort', onUserAbort, { once: true });
+  }
+  const effectiveSignal = timeoutController.signal;
 
-      const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
+  try {
+    if (format === 'anthropic') {
+      // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
+      const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
+      const res = await fetch(`${base}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({ model: model ?? 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
         signal: effectiveSignal,
       });
-      return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
-    } catch (e: unknown) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    } finally {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onUserAbort);
+      // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error
+      return { ok: res.ok || res.status === 400, error: res.ok || res.status === 400 ? undefined : `HTTP ${res.status}` };
     }
+
+    const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: effectiveSignal,
+    });
+    return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onUserAbort);
+  }
 }

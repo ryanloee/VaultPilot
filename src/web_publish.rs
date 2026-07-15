@@ -65,6 +65,11 @@ fn resolve_note_path(vault_dir: &Path, input: &str) -> Result<PathBuf> {
 ///
 /// 使用完整相对路径（而非仅文件名）生成 slug，确保不同目录下的同名笔记
 /// 映射到不同的输出目录（#2854）。
+///
+/// **不**对结果做无条件 `.to_lowercase()`：小写折叠会让仅大小写不同的相对路径
+/// （如 `Foo/Note.md` 与 `foo/note.md`）映射到同一个 slug，导致后发布的笔记
+/// 静默覆盖先发布的 (#2888)。大小写在 slug 中保留，两篇笔记因此落到不同的
+/// 输出目录。
 fn slugify(raw: &str) -> String {
     // 去掉可选的 vault: 前缀
     let stripped = raw.strip_prefix("vault:").unwrap_or(raw);
@@ -86,7 +91,7 @@ fn slugify(raw: &str) -> String {
         })
         .collect::<String>()
         .trim_matches('-')
-        .to_lowercase()
+        .to_string()
 }
 
 // ── Markdown → HTML 渲染（纯 Rust） ─────────────────────────────
@@ -586,7 +591,7 @@ mod tests {
     fn slugify_basic() {
         // 普通文件 — 只有文件名
         assert_eq!(slugify("notes/rust-tips.md"), "notes-rust-tips");
-        assert_eq!(slugify("Daily/2026-07-14.md"), "daily-2026-07-14");
+        assert_eq!(slugify("Daily/2026-07-14.md"), "Daily-2026-07-14");
         // 深层嵌套路径 — 保留完整目录层级
         assert_eq!(
             slugify("deep/nested/path/to/file.md"),
@@ -596,6 +601,48 @@ mod tests {
         assert_eq!(slugify("vault:projects/notes.md"), "projects-notes");
         // 无扩展名
         assert_eq!(slugify("noext/readme"), "noext-readme");
+    }
+
+    #[test]
+    fn regression_2888_case_distinct_paths_produce_distinct_slugs() {
+        // The original bug: an unconditional `.to_lowercase()` folded
+        // `Foo/Note.md` and `foo/note.md` into the *same* slug, so publishing
+        // the second note silently overwrote the first (#2888).
+        assert_eq!(slugify("Foo/Note.md"), "Foo-Note");
+        assert_eq!(slugify("foo/note.md"), "foo-note");
+        assert_ne!(
+            slugify("Foo/Note.md"),
+            slugify("foo/note.md"),
+            "case-distinct relative paths must map to distinct slugs"
+        );
+    }
+
+    #[test]
+    fn regression_2888_publish_case_distinct_notes_does_not_overwrite() {
+        let vault = std::env::temp_dir().join(format!("vp_2888_vault_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vault);
+        let _ = std::fs::create_dir_all(vault.join("Foo"));
+        let _ = std::fs::create_dir_all(vault.join("foo"));
+        std::fs::write(vault.join("Foo/Note.md"), "# Note A\n\ncontent A\n").unwrap();
+        std::fs::write(vault.join("foo/note.md"), "# Note B\n\ncontent B\n").unwrap();
+
+        let out = std::env::temp_dir().join(format!("vp_2888_out_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+
+        let f_a = publish_note(&vault, "Foo/Note.md", &out).expect("publish A");
+        let f_b = publish_note(&vault, "foo/note.md", &out).expect("publish B");
+
+        assert_ne!(
+            f_a, f_b,
+            "two case-distinct notes must not map to the same output file"
+        );
+        let a = std::fs::read_to_string(&f_a).expect("read A output");
+        let b = std::fs::read_to_string(&f_b).expect("read B output");
+        assert!(a.contains("content A"), "note A output must be intact");
+        assert!(b.contains("content B"), "note B output must be intact");
+
+        let _ = std::fs::remove_dir_all(&vault);
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     #[test]

@@ -9,8 +9,6 @@
 //! - **Fail-closed**: any sandbox violation terminates the agent immediately.
 //! - **Auditable**: every tool call is logged for security review.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1940,9 +1938,13 @@ fn slugify(title: &str) -> String {
     }
     let cleaned = slug.trim_matches('-').to_string();
     if cleaned.is_empty() {
-        let mut hasher = DefaultHasher::new();
-        title.hash(&mut hasher);
-        format!("note-{:08x}", hasher.finish())
+        // Use SHA-256 (not DefaultHasher) so the fallback name is stable
+        // across Rust releases. DefaultHasher's algorithm is unspecified and
+        // may change between compiler versions. (#2901, ref #2851)
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(title.as_bytes());
+        let hex = format!("{:016x}", u64::from_be_bytes(hash[..8].try_into().unwrap()));
+        format!("note-{}", hex)
     } else {
         cleaned
     }
@@ -2456,6 +2458,25 @@ mod pure_function_tests {
         // Empty/special-char-only inputs now produce a hash-based fallback
         assert!(slugify("").starts_with("note-"));
         assert!(slugify("---").starts_with("note-"));
+    }
+
+    #[test]
+    fn slugify_fallback_is_deterministic() {
+        // Regression test for #2901: the fallback hash must be stable across
+        // Rust builds (SHA-256, not DefaultHasher).
+        let a = slugify("");
+        let b = slugify("---");
+        let c = slugify("!!!");
+        assert!(a.starts_with("note-"), "should start with note-: {a}");
+        assert!(b.starts_with("note-"), "should start with note-: {b}");
+        assert!(c.starts_with("note-"), "should start with note-: {c}");
+        // Same input always produces same output (deterministic hash)
+        assert_eq!(slugify(""), slugify(""), "empty string must be deterministic");
+        assert_eq!(slugify("---"), slugify("---"), "special chars must be deterministic");
+        assert_eq!(slugify("!!!"), slugify("!!!"), "exclamation must be deterministic");
+        // Different inputs produce different fallbacks (collision check)
+        assert_ne!(a, b, "different inputs should produce different hashes");
+        assert_ne!(b, c, "different inputs should produce different hashes");
     }
 
     #[test]

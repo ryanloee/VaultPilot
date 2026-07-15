@@ -2471,9 +2471,21 @@ mod pure_function_tests {
         assert!(b.starts_with("note-"), "should start with note-: {b}");
         assert!(c.starts_with("note-"), "should start with note-: {c}");
         // Same input always produces same output (deterministic hash)
-        assert_eq!(slugify(""), slugify(""), "empty string must be deterministic");
-        assert_eq!(slugify("---"), slugify("---"), "special chars must be deterministic");
-        assert_eq!(slugify("!!!"), slugify("!!!"), "exclamation must be deterministic");
+        assert_eq!(
+            slugify(""),
+            slugify(""),
+            "empty string must be deterministic"
+        );
+        assert_eq!(
+            slugify("---"),
+            slugify("---"),
+            "special chars must be deterministic"
+        );
+        assert_eq!(
+            slugify("!!!"),
+            slugify("!!!"),
+            "exclamation must be deterministic"
+        );
         // Different inputs produce different fallbacks (collision check)
         assert_ne!(a, b, "different inputs should produce different hashes");
         assert_ne!(b, c, "different inputs should produce different hashes");

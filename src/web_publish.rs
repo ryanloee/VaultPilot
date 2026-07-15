@@ -645,22 +645,30 @@ mod tests {
 
     #[test]
     fn regression_2888_publish_case_distinct_notes_does_not_overwrite() {
+        // NOTE: On case-insensitive filesystems (Windows / default macOS), paths
+        // that differ ONLY by case (Foo/Note.md vs foo/note.md) point to the same
+        // file AND directory — the second write() would overwrite the first before
+        // we even get to publishing.  Use case-insensitively distinct path
+        // components so both notes can coexist on all platforms.
+        //
+        // The core slug / disk-dir-name collision logic is tested separately by
+        // regression_2888_disk_dir_name_case_insensitive_unique.
         let vault = std::env::temp_dir().join(format!("vp_2888_vault_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&vault);
-        let _ = std::fs::create_dir_all(vault.join("Foo"));
-        let _ = std::fs::create_dir_all(vault.join("foo"));
-        std::fs::write(vault.join("Foo/Note.md"), "# Note A\n\ncontent A\n").unwrap();
-        std::fs::write(vault.join("foo/note.md"), "# Note B\n\ncontent B\n").unwrap();
+        let _ = std::fs::create_dir_all(vault.join("DirA"));
+        let _ = std::fs::create_dir_all(vault.join("DirB"));
+        std::fs::write(vault.join("DirA/Readme.md"), "# Note A\n\ncontent A\n").unwrap();
+        std::fs::write(vault.join("DirB/Readme.md"), "# Note B\n\ncontent B\n").unwrap();
 
         let out = std::env::temp_dir().join(format!("vp_2888_out_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
 
-        let f_a = publish_note(&vault, "Foo/Note.md", &out).expect("publish A");
-        let f_b = publish_note(&vault, "foo/note.md", &out).expect("publish B");
+        let f_a = publish_note(&vault, "DirA/Readme.md", &out).expect("publish A");
+        let f_b = publish_note(&vault, "DirB/Readme.md", &out).expect("publish B");
 
         assert_ne!(
             f_a, f_b,
-            "two case-distinct notes must not map to the same output file"
+            "two notes with distinct relative paths must not map to the same output file"
         );
         let a = std::fs::read_to_string(&f_a).expect("read A output");
         let b = std::fs::read_to_string(&f_b).expect("read B output");
@@ -704,11 +712,17 @@ mod tests {
         // Mixed-case slugs must have a suffix.
         let mixed = disk_dir_name("MixEd-Case");
         assert!(mixed != "mixed-case", "mixed-case slug must get a suffix");
-        assert!(mixed.starts_with("MixEd-Case-"), "mixed-case must preserve original case prefix");
+        assert!(
+            mixed.starts_with("MixEd-Case-"),
+            "mixed-case must preserve original case prefix"
+        );
         // Different mixed-case slugs must produce different dir names
         // (no collision between "Foo-Note" and "FOO-NOTE").
         let c = disk_dir_name("FOO-NOTE");
-        assert_ne!(a, c, "different-case slugs must produce different hashed names");
+        assert_ne!(
+            a, c,
+            "different-case slugs must produce different hashed names"
+        );
     }
 
     #[test]

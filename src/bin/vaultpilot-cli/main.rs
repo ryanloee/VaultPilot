@@ -34,7 +34,10 @@ use vaultpilot_lib::storage::{
     search_notes_with_context, set_subscription_enabled_with_context, update_project_with_context,
     update_subscription_with_context, vault_export_with_context, NoteNotFound, StorageContext,
 };
-use vaultpilot_lib::vault_query::{parse_query, query_records, record_from_yaml, QValue};
+use vaultpilot_lib::vault_query::{
+    agg_function_from_str, format_summaries, parse_query, query_records, record_from_yaml,
+    summarize_records, AggFunction, QValue,
+};
 use vaultpilot_lib::{
     ask_with_ai_with_context, chat_with_ai_with_context, compress_chat_history_with_context,
     generate_serendipity, run_all_due_subscriptions, run_deep_research, run_single_subscription,
@@ -1115,6 +1118,7 @@ enum VaultActions {
     ///   vp vault query "SELECT title, priority WHERE project CONTAINS 'vault' ORDER BY priority DESC"
     ///   vp vault query "SELECT *" --format csv --output results.csv
     ///   vp vault query "SELECT * WHERE tags CONTAINS 'rust'" --format md-table
+    ///   vp vault query "SELECT *" --summarize priority=sum,avg,min,max --summarize status=count,unique
     Query {
         /// SQL-like query string (SELECT ... WHERE ... ORDER BY ... LIMIT ...)
         query: String,
@@ -1126,6 +1130,15 @@ enum VaultActions {
         /// Write results to a file instead of stdout
         #[arg(long, short)]
         output: Option<PathBuf>,
+
+        /// Column summarization spec: "column=func1,func2,..." (#2909)
+        ///
+        /// Supported functions: count, sum, avg, min, max, unique, empty, filled,
+        /// checked, unchecked, earliest, latest, range.
+        /// Can be specified multiple times for multiple columns.
+        /// When set, query results are followed by column summary statistics.
+        #[arg(long = "summarize", short = 's', value_name = "COL=funcs")]
+        summarize: Vec<String>,
     },
 }
 
@@ -2703,7 +2716,8 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             query,
             format,
             output,
-        } => handle_vault_query(context, query, format, output.as_deref()),
+            summarize,
+        } => handle_vault_query(context, query, format, output.as_deref(), summarize),
     }
 }
 
@@ -2718,6 +2732,7 @@ fn handle_vault_query(
     query_str: &str,
     format: &QueryFormat,
     output_path: Option<&Path>,
+    summarize_specs: &[String],
 ) -> Result<Value> {
     use std::fs;
 
@@ -2811,9 +2826,54 @@ fn handle_vault_query(
         }
     };
 
+    // Parse summarization specs if provided (#2909)
+    let mut summary_text = String::new();
+    if !summarize_specs.is_empty() {
+        let mut parsed_specs: Vec<(&str, Vec<AggFunction>)> = Vec::new();
+        let mut parse_errors: Vec<String> = Vec::new();
+        for spec in summarize_specs {
+            if let Some(eq_pos) = spec.find('=') {
+                let col = &spec[..eq_pos];
+                let funcs_str = &spec[eq_pos + 1..];
+                let mut funcs: Vec<AggFunction> = Vec::new();
+                for name in funcs_str.split(',') {
+                    let trimmed = name.trim();
+                    match agg_function_from_str(trimmed) {
+                        Some(f) => funcs.push(f),
+                        None => {
+                            parse_errors.push(format!("unknown function: '{trimmed}' in '{spec}'"))
+                        }
+                    }
+                }
+                if !funcs.is_empty() {
+                    parsed_specs.push((col, funcs));
+                }
+            } else {
+                parse_errors.push(format!(
+                    "invalid summary spec (expected COL=func1,func2,...): '{spec}'"
+                ));
+            }
+        }
+        if !parsed_specs.is_empty() {
+            let summaries = summarize_records(&rows, &parsed_specs);
+            summary_text = format_summaries(&summaries);
+        }
+        if !parse_errors.is_empty() {
+            summary_text.push_str(&format!(
+                "⚠ Summary parsing errors:\n{}\n",
+                parse_errors.join("\n")
+            ));
+        }
+    }
+
     // Write output
     if let Some(path) = output_path {
-        fs::write(path, &formatted)
+        let mut full_output = formatted;
+        if !summary_text.is_empty() {
+            full_output.push('\n');
+            full_output.push_str(&summary_text);
+        }
+        fs::write(path, &full_output)
             .with_context(|| format!("failed to write output to {}", path.display()))?;
         to_json(&serde_json::json!({
             "output": path.display().to_string(),
@@ -2823,6 +2883,9 @@ fn handle_vault_query(
     } else {
         // Print to stdout for piping / redirection
         println!("{formatted}");
+        if !summary_text.is_empty() {
+            print!("{}", summary_text);
+        }
         to_json(&serde_json::json!({
             "rows": rows.len(),
             "format": format!("{format:?}").to_lowercase(),

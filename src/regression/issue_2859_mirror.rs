@@ -65,6 +65,7 @@ mod tests {
                 updated_at: "t1".to_string(),
                 title: "Note a".to_string(),
                 path: "a.md".to_string(),
+                content_hash: None,
             },
         );
         // 'b' changed upstream -> update
@@ -74,6 +75,7 @@ mod tests {
                 updated_at: "OLD".to_string(),
                 title: "Note b".to_string(),
                 path: "b.md".to_string(),
+                content_hash: None,
             },
         );
         // 'c' deleted from vault -> delete
@@ -83,6 +85,7 @@ mod tests {
                 updated_at: "t9".to_string(),
                 title: "Note c".to_string(),
                 path: "c.md".to_string(),
+                content_hash: None,
             },
         );
 
@@ -120,6 +123,7 @@ mod tests {
                 updated_at: "2026-07-15T00:00:00Z".to_string(),
                 title: "X".to_string(),
                 path: "note_x.md".to_string(),
+                content_hash: None,
             },
         );
         write_mirror_state(&state_path, &state).expect("write must succeed");

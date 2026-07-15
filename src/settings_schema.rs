@@ -233,8 +233,8 @@ pub fn collect_setting_definitions() -> Vec<SettingDefinition> {
             SettingCategory::General,
             SettingType::Select {
                 options: vec![
-                    "concise".to_string(),
-                    "balanced".to_string(),
+                    "brief".to_string(),
+                    "standard".to_string(),
                     "detailed".to_string(),
                 ]
             }
@@ -553,13 +553,30 @@ mod tests {
                 assert_eq!(
                     options,
                     &vec![
-                        "concise".to_string(),
-                        "balanced".to_string(),
+                        "brief".to_string(),
+                        "standard".to_string(),
                         "detailed".to_string()
                     ]
                 );
             }
             other => panic!("responseStyle should be Select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_select_default_is_in_options() {
+        let defs = collect_setting_definitions();
+        for def in &defs {
+            if let SettingType::Select { options } = &def.setting_type {
+                let default_str = def.default.as_str().unwrap_or("");
+                assert!(
+                    options.contains(&default_str.to_string()),
+                    "Select '{}' default '{}' is not in options {:?}",
+                    def.key,
+                    default_str,
+                    options
+                );
+            }
         }
     }
 
@@ -636,7 +653,7 @@ mod tests {
     fn validate_value_enforces_select_options() {
         let defs = collect_setting_definitions();
         let style = def_by_key(&defs, "responseStyle");
-        assert!(validate_value(style, &json!("balanced")).is_ok());
+        assert!(validate_value(style, &json!("standard")).is_ok());
         assert!(validate_value(style, &json!("verbose")).is_err());
     }
 

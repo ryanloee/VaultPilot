@@ -235,16 +235,15 @@ async function chatAnthropic(
     // Mark success before returning the stream — the stream's own finally handles cleanup
     started = true;
 
-    // Wrap Anthropic SSE into OpenAI-compatible format so parseSSEStream works
-    const anthropicBody = res.body;
-    let anthropicReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    // Wrap Anthropic SSE into OpenAI-compatible format using the shared
+    // wrapAnthropicBody function (consolidates duplicate SSE parsing with
+    // chatWithReconnect's transformBody path — #2926).
+    const wrapped = wrapAnthropicBody(res.body);
+    let wrappedReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     return new ReadableStream<Uint8Array>({
       start(ctrl) {
-        const reader = anthropicBody.getReader();
-        anthropicReader = reader;
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let currentEvent = '';
+        const reader = wrapped.getReader();
+        wrappedReader = reader;
         const onAbort = () => {
           reader.cancel('abort').catch(() => {});
           ctrl.error(abortedByTimeout ? new DOMException('Timeout', 'AbortError') : new DOMException('Cancelled', 'AbortError'));
@@ -256,21 +255,7 @@ async function chatAnthropic(
             while (true) {
               const { value, done } = await reader.read();
               if (done) break;
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split(/\r\n|\r|\n/);
-              buffer = lines.pop() || '';
-
-
-              for (const line of lines) {
-                if (line.startsWith('event:')) {
-                  currentEvent = line.slice(6).trim();
-                  continue;
-                }
-                if (!line.startsWith('data:')) continue;
-                const data = line.slice(5).trimStart();
-                const result = convertAnthropicEvent(currentEvent, data);
-                if (result) ctrl.enqueue(new TextEncoder().encode(result));
-              }
+              ctrl.enqueue(value);
             }
             ctrl.close();
           } catch (e) { ctrl.error(e); }
@@ -282,7 +267,7 @@ async function chatAnthropic(
         })();
       },
       cancel(reason) {
-        anthropicReader?.cancel(reason).catch(() => {});
+        wrappedReader?.cancel(reason).catch(() => {});
       },
     });
   } finally {
@@ -431,6 +416,10 @@ async function chatOpenAI(
 /**
  * Wrap an Anthropic SSE response body into OpenAI-compatible SSE format,
  * so parseSSEStream can consume it uniformly.
+ *
+ * This is the canonical implementation — used by both chatAnthropic()
+ * (via stream passthrough) and chatWithReconnect() (via transformBody).
+ * Consolidation from #2926 — previously duplicated inline in chatAnthropic().
  */
 function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const reader = body.getReader();

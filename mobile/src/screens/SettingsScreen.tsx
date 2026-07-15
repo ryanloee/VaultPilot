@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator, Modal, Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -397,6 +397,22 @@ export default function SettingsScreen() {
         ))}
       </View>
 
+      {/* ── Focus / Reading Mode (#2894) ── */}
+      <View style={[s.toggleRow, { borderColor: c.border }]}>
+        <View style={{ flex: 1 }}>
+          <Text style={[s.toggleTitle, { color: c.text }]}>专注 / 阅读模式</Text>
+          <Text style={[s.toggleDesc, { color: c.textSecondary }]}>隐藏 AI 命令面板与助手入口，进入沉浸式写作</Text>
+        </View>
+        <Switch
+          value={store.focusMode}
+          onValueChange={(v) => store.setFocusMode(v)}
+          trackColor={{ false: c.border, true: store.accentColor }}
+          thumbColor={'#FFF'}
+          accessibilityLabel="专注 / 阅读模式"
+          accessibilityState={{ checked: store.focusMode }}
+        />
+      </View>
+
       <TouchableOpacity
         style={[s.updateBtn, { borderColor: store.accentColor }]}
         onPress={handleCheckUpdate}
@@ -502,6 +518,12 @@ const s = StyleSheet.create({
   themeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   colorRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 24,
+  },
+  toggleTitle: { fontSize: 16, fontWeight: '600' },
+  toggleDesc: { fontSize: 12, marginTop: 4 },
   version: { textAlign: 'center', fontSize: 12, marginTop: 20, marginBottom: 40 },
   updateBtn: {
     alignSelf: 'center',

@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useAppStore, getColors } from '../store';
+import { useAppStore, getColors, filterFocusModeToolbar } from '../store';
 import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
 import { chat, ChatMessage, parseSSEStream } from '../api/client';
@@ -15,7 +15,7 @@ import AiActionPalette from '../components/ai/AiActionPalette';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
-  const { isDark, accentColor } = useAppStore();
+  const { isDark, accentColor, focusMode } = useAppStore();
   const c = getColors(isDark, accentColor);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -411,7 +411,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           >
             <Ionicons name={previewMode ? 'create-outline' : 'eye-outline'} size={16} color={previewMode ? accentColor : c.text} />
           </TouchableOpacity>
-          {!previewMode && TOOLBAR.map((t) => (
+          {!previewMode && filterFocusModeToolbar(TOOLBAR, focusMode).map((t) => (
             <TouchableOpacity
               key={t.label}
               style={[s.toolBtn, { borderColor: c.border }]}
@@ -435,7 +435,8 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         </ScrollView>
       </View>
 
-      {/* AI Command Palette */}
+      {/* AI Command Palette — hidden in focus / reading mode (#2894) */}
+      {!focusMode && (
       <AiActionPalette
         visible={showAiPalette}
         onClose={() => setShowAiPalette(false)}
@@ -457,6 +458,7 @@ export default function NoteEditorScreen({ route, navigation }: any) {
           });
         }}
       />
+      )}
     </KeyboardAvoidingView>
     </SafeAreaView>
   );

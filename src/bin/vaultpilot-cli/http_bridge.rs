@@ -103,6 +103,9 @@ pub(super) async fn run_http_bridge(
         // AI Action Palette (#2188)
         .route("/api/ai/actions", get(http_list_ai_actions))
         .route("/api/ai/action", post(http_ai_action))
+        // Declarative settings catalog (#2872) — frontend renders controls
+        // dynamically from this schema and evaluates each `visibleWhen`.
+        .route("/api/settings/definitions", get(http_settings_definitions))
         // Vault file serving (#1767) — serve PDF/images from vault directory
         .route("/api/vault/files/{*path}", get(http_serve_vault_file))
         // #790: Rate limiter placed before body limit and timeout so
@@ -1165,6 +1168,26 @@ async fn http_list_ai_actions(
         openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to list actions")
     })?;
     Ok(Json(value))
+}
+
+/// GET /api/settings/definitions — Return the declarative settings catalog
+/// (#2872). The WinUI frontend renders controls dynamically from this schema
+/// and evaluates each definition's `visibleWhen` predicate client-side, so
+/// new settings appear without editing the UI.
+async fn http_settings_definitions(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let defs = vaultpilot_lib::settings_schema::collect_setting_definitions();
+    let value = serde_json::to_value(&defs).map_err(|e| {
+        tracing::warn!("http_settings_definitions: serialization failed: {e}");
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to serialize settings definitions",
+        )
+    })?;
+    Ok(Json(serde_json::json!({ "definitions": value })))
 }
 
 async fn http_health() -> Json<Value> {

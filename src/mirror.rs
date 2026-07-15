@@ -189,12 +189,22 @@ pub fn mirror_sync_with_context(
         let path = mirror_file_path(mirror_dir, id);
         std::fs::write(&path, compose_mirror_markdown(&markdown, id))?;
         if let Some(meta) = current.iter().find(|m| &m.id == id) {
+            // Store the *relative* path inside the mirror directory, not the
+            // absolute one. `.vp-mirror-state.json` must stay portable so the
+            // mirror can be moved or copied without breaking the contract
+            // (#2887). Fall back to the full path only if `mirror_dir` is
+            // somehow not a prefix (should never happen given the join above).
+            let rel = path
+                .strip_prefix(mirror_dir)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
             state.entries.insert(
                 id.clone(),
                 MirrorStateEntry {
                     updated_at: meta.updated_at.clone(),
                     title: meta.title.clone(),
-                    path: path.display().to_string(),
+                    path: rel,
                 },
             );
         }

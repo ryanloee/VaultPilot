@@ -16,7 +16,38 @@ import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
 import NotesScreen from './src/screens/NotesScreen';
 import NoteEditorScreen from './src/screens/NoteEditorScreen';
+import SearchScreen from './src/screens/SearchScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+
+/**
+ * Deep-link configuration for widget / Quick Settings tile (#2915).
+ * Supports vaultpilot:// scheme with routes:
+ *   vaultpilot://note/new  → create + open new note
+ *   vaultpilot://note/:id  → open existing note
+ *   vaultpilot://chat/new  → new chat session
+ *   vaultpilot://search    → global search
+ */
+const linking: any = {
+  prefixes: ['vaultpilot://'],
+  config: {
+    screens: {
+      Chat: {
+        screens: {
+          ChatMain: 'chat',
+          Sessions: 'chat/sessions',
+        },
+      },
+      Notes: {
+        screens: {
+          NotesList: 'note',
+          NoteEdit: 'note/:noteId',
+        },
+      },
+      Search: 'search',
+      Settings: 'settings',
+    },
+  },
+};
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -62,6 +93,10 @@ function MainTabs() {
       <Tab.Screen name="Notes" component={NotesStack} options={{
         tabBarLabel: '笔记',
         tabBarIcon: ({ color }) => <TabIcon name="document-text-outline" color={color} />,
+      }} />
+      <Tab.Screen name="Search" component={SearchScreen} options={{
+        tabBarLabel: '搜索',
+        tabBarIcon: ({ color }) => <TabIcon name="search-outline" color={color} />,
       }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{
         tabBarLabel: '设置',
@@ -155,7 +190,7 @@ export default function App() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <NavigationContainer>
+        <NavigationContainer linking={linking}>
           <MainTabs />
         </NavigationContainer>
       </ErrorBoundary>

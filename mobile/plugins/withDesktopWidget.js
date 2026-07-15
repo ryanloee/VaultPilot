@@ -98,6 +98,15 @@ function withWidgetSource(config) {
             android:text="💬"
             android:textSize="20sp"
             android:background="?android:attr/selectableItemBackgroundBorderless" />
+
+        <TextView
+            android:id="@+id/btn_search"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:text="🔍"
+            android:textSize="20sp"
+            android:background="?android:attr/selectableItemBackgroundBorderless" />
     </LinearLayout>
 </LinearLayout>
 `;
@@ -105,9 +114,9 @@ function withWidgetSource(config) {
       // Widget info
       const widgetInfoXml = `<?xml version="1.0" encoding="utf-8"?>
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="250dp"
+    android:minWidth="300dp"
     android:minHeight="40dp"
-    android:targetCellWidth="2"
+    android:targetCellWidth="3"
     android:targetCellHeight="1"
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/vaultpilot_widget"
@@ -127,8 +136,8 @@ import android.net.Uri
 import android.widget.RemoteViews
 
 /**
- * Home screen widget — quick new note / new chat actions.
- * Issue #892
+ * Home screen widget — quick new note / new chat / search actions.
+ * Issue #892, expanded #2915 with search button.
  */
 class VaultPilotWidgetProvider : AppWidgetProvider() {
 
@@ -159,6 +168,16 @@ class VaultPilotWidgetProvider : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             views.setOnClickPendingIntent(R.id.btn_new_chat, chatPending)
+
+            // Search button → vaultpilot://search (#2915)
+            val searchIntent = Intent(Intent.ACTION_VIEW, Uri.parse("vaultpilot://search")).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val searchPending = PendingIntent.getActivity(
+                context, 2, searchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            views.setOnClickPendingIntent(R.id.btn_search, searchPending)
 
             appWidgetManager.updateAppWidget(widgetId, views)
         }

@@ -500,7 +500,7 @@ export async function getNotes(folder?: string, limit?: number): Promise<DbNote[
 /** 只加载 id 和 updated_at，用于同步比较，避免全量 content 导致 OOM (#1668) */
 export async function getNoteTimestamps(): Promise<Array<{ id: string; updated_at: number }>> {
   const db = await getDb();
-  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes');
+  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes WHERE is_template = 0');
 }
 
 export async function getFolders(): Promise<string[]> {
@@ -525,15 +525,19 @@ export async function getNoteTags(noteId: string): Promise<string[]> {
 
 export async function addTag(noteId: string, tag: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
-  await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
-  await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
+    await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
+  });
   if (!options?.skipQueue) await queuePendingSync(noteId);
 }
 
 export async function removeTag(noteId: string, tag: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
-  await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
-  await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
+    await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
+  });
   if (!options?.skipQueue) await queuePendingSync(noteId);
 }
 

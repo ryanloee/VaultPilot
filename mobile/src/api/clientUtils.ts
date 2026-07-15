@@ -53,6 +53,6 @@ export function sanitizeApiError(status: number, _rawBody?: string): string {
 export function normalizeApiBase(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '');
   if (!trimmed) return DEFAULTS.apiBase;
-  if (/\/v\d+[\w-]*($|\/)/.test(trimmed)) return trimmed;
+  if (/\/v\d+[\w-]*(?:$|\/)/i.test(trimmed)) return trimmed;
   return trimmed + '/v1';
 }

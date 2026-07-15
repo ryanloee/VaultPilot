@@ -163,10 +163,18 @@ export async function flushPendingSyncs(): Promise<{ synced: number; failed: num
             }
 
             if (res.status >= 400 && res.status < 500) {
-              console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: client error ${res.status}`);
-              await clearPendingSync(entry.note_id);
+              // 4xx client error on DELETE: keep the pending entry and rely on
+              // cross-cycle retry instead of immediately clearing (#2933).
+              // Only clear after MAX_RETRY_ATTEMPTS are exhausted.
+              console.warn(`[OfflineSync] client error ${res.status} on delete for note ${entry.note_id}, will retry`);
+              await incrementPendingSyncRetry(entry.note_id);
+              const retryCount = await getPendingSyncRetryCount(entry.note_id);
+              if (retryCount >= MAX_RETRY_ATTEMPTS) {
+                console.warn(`[OfflineSync] clearing delete entry for note ${entry.note_id}: max retries exceeded (4xx=${res.status})`);
+                await clearPendingSync(entry.note_id);
+              }
               failed++;
-              break; // client error, won't succeed on retry
+              break;
             }
 
             // 5xx or unknown server error — retry if attempts remain

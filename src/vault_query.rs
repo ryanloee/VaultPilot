@@ -852,6 +852,267 @@ pub fn build_records_from_vault(
     Ok(records)
 }
 
+// ── Column aggregation / summarization (#2909) ──────────────────────────────
+
+/// Aggregation function type for column summarization (#2909).
+///
+/// Mirrors the Obsidian Bases "Summaries" feature: each column in a table view
+/// can display one or more aggregate statistics computed from the column values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AggFunction {
+    /// Number of non-null values.
+    Count,
+    /// Sum of numeric values.
+    Sum,
+    /// Arithmetic mean of numeric values.
+    Avg,
+    /// Minimum value (works on all ordered types).
+    Min,
+    /// Maximum value (works on all ordered types).
+    Max,
+    /// Count of distinct non-null values.
+    Unique,
+    /// Number of null / absent values.
+    Empty,
+    /// Number of non-null values (alias for Count).
+    Filled,
+    /// Number of boolean `true` values.
+    Checked,
+    /// Number of boolean `false` values.
+    Unchecked,
+    /// Earliest date.
+    Earliest,
+    /// Latest date.
+    Latest,
+    /// Numeric range (Max - Min) or date-range string.
+    Range,
+}
+
+impl std::fmt::Display for AggFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            AggFunction::Count => "Count",
+            AggFunction::Sum => "Sum",
+            AggFunction::Avg => "Avg",
+            AggFunction::Min => "Min",
+            AggFunction::Max => "Max",
+            AggFunction::Unique => "Unique",
+            AggFunction::Empty => "Empty",
+            AggFunction::Filled => "Filled",
+            AggFunction::Checked => "Checked",
+            AggFunction::Unchecked => "Unchecked",
+            AggFunction::Earliest => "Earliest",
+            AggFunction::Latest => "Latest",
+            AggFunction::Range => "Range",
+        };
+        write!(f, "{name}")
+    }
+}
+
+/// Parse an `AggFunction` from its display name (case-insensitive).
+pub fn agg_function_from_str(s: &str) -> Option<AggFunction> {
+    match s.to_ascii_lowercase().as_str() {
+        "count" => Some(AggFunction::Count),
+        "sum" => Some(AggFunction::Sum),
+        "avg" | "average" => Some(AggFunction::Avg),
+        "min" | "minimum" => Some(AggFunction::Min),
+        "max" | "maximum" => Some(AggFunction::Max),
+        "unique" | "distinct" => Some(AggFunction::Unique),
+        "empty" | "null" => Some(AggFunction::Empty),
+        "filled" | "nonnull" | "notnull" => Some(AggFunction::Filled),
+        "checked" | "true" => Some(AggFunction::Checked),
+        "unchecked" | "false" => Some(AggFunction::Unchecked),
+        "earliest" | "min_date" => Some(AggFunction::Earliest),
+        "latest" | "max_date" => Some(AggFunction::Latest),
+        "range" => Some(AggFunction::Range),
+        _ => None,
+    }
+}
+
+/// Compute a single aggregation function over a column (slice of values).
+///
+/// This is the core computational primitive. It works on any value type and
+/// returns the most appropriate result type for each function.  When the input
+/// is empty or no values satisfy the function's type requirement, returns
+/// [`QValue::Null`].
+pub fn summarize_column(values: &[QValue], func: AggFunction) -> QValue {
+    let non_null: Vec<&QValue> = values
+        .iter()
+        .filter(|v| !matches!(v, QValue::Null))
+        .collect();
+    let n = non_null.len();
+    let total = values.len();
+
+    match func {
+        AggFunction::Empty => QValue::Number((total - n) as f64),
+        AggFunction::Filled | AggFunction::Count => QValue::Number(n as f64),
+
+        AggFunction::Unique => {
+            let mut seen: Vec<String> = Vec::new();
+            for v in non_null {
+                let key = v.to_string();
+                if !seen.contains(&key) {
+                    seen.push(key);
+                }
+            }
+            QValue::Number(seen.len() as f64)
+        }
+
+        AggFunction::Sum => {
+            let nums: Vec<f64> = non_null.iter().filter_map(|v| to_f64(v)).collect();
+            if nums.is_empty() {
+                QValue::Null
+            } else {
+                QValue::Number(nums.iter().sum())
+            }
+        }
+
+        AggFunction::Avg => {
+            let nums: Vec<f64> = non_null.iter().filter_map(|v| to_f64(v)).collect();
+            if nums.is_empty() {
+                QValue::Null
+            } else {
+                QValue::Number(nums.iter().sum::<f64>() / nums.len() as f64)
+            }
+        }
+
+        AggFunction::Min => non_null
+            .into_iter()
+            .cloned()
+            .min_by(cmp_qvalue)
+            .unwrap_or(QValue::Null),
+
+        AggFunction::Max => non_null
+            .into_iter()
+            .cloned()
+            .max_by(cmp_qvalue)
+            .unwrap_or(QValue::Null),
+
+        AggFunction::Range => {
+            let nums: Vec<f64> = non_null.iter().filter_map(|v| to_f64(v)).collect();
+            if nums.len() >= 2 {
+                let min = nums.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max = nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                QValue::Number(max - min)
+            } else {
+                // Try date range
+                let dates: Vec<NaiveDate> = non_null.iter().filter_map(|v| to_date(v)).collect();
+                if dates.len() >= 2 {
+                    let min = *dates.iter().min().unwrap();
+                    let max = *dates.iter().max().unwrap();
+                    let days = (max - min).num_days();
+                    QValue::Text(format!("{days} days"))
+                } else {
+                    QValue::Null
+                }
+            }
+        }
+
+        AggFunction::Checked => {
+            let count = non_null
+                .iter()
+                .filter(|v| matches!(v, QValue::Bool(true)))
+                .count();
+            QValue::Number(count as f64)
+        }
+
+        AggFunction::Unchecked => {
+            let count = non_null
+                .iter()
+                .filter(|v| matches!(v, QValue::Bool(false)))
+                .count();
+            QValue::Number(count as f64)
+        }
+
+        AggFunction::Earliest => {
+            let dates: Vec<NaiveDate> = non_null.iter().filter_map(|v| to_date(v)).collect();
+            dates
+                .into_iter()
+                .min()
+                .map(QValue::Date)
+                .unwrap_or(QValue::Null)
+        }
+
+        AggFunction::Latest => {
+            let dates: Vec<NaiveDate> = non_null.iter().filter_map(|v| to_date(v)).collect();
+            dates
+                .into_iter()
+                .max()
+                .map(QValue::Date)
+                .unwrap_or(QValue::Null)
+        }
+    }
+}
+
+/// Compute multiple aggregation functions over multiple columns.
+///
+/// Returns a map from column name to a vector of `(function, result)` pairs
+/// in the same order as `specs` functions.
+pub fn summarize_records(
+    records: &[HashMap<String, QValue>],
+    column_specs: &[(&str, Vec<AggFunction>)],
+) -> HashMap<String, Vec<(AggFunction, QValue)>> {
+    let mut results = HashMap::new();
+    for (col, funcs) in column_specs {
+        let values: Vec<QValue> = records
+            .iter()
+            .map(|row| row.get(*col).cloned().unwrap_or(QValue::Null))
+            .collect();
+        let agg: Vec<(AggFunction, QValue)> = funcs
+            .iter()
+            .map(|f| (*f, summarize_column(&values, *f)))
+            .collect();
+        results.insert(col.to_string(), agg);
+    }
+    results
+}
+
+/// Format summarization results for human-readable display.
+///
+/// Produces a compact table where each column's aggregations are shown
+/// as `col: Func1=val1, Func2=val2, ...`.
+pub fn format_summaries(summaries: &HashMap<String, Vec<(AggFunction, QValue)>>) -> String {
+    if summaries.is_empty() {
+        return String::new();
+    }
+    let mut lines: Vec<String> = Vec::new();
+    // Sort columns for stable output
+    let mut columns: Vec<&String> = summaries.keys().collect();
+    columns.sort();
+    for col in columns {
+        if let Some(funcs) = summaries.get(col) {
+            let parts: Vec<String> = funcs.iter().map(|(f, v)| format!("{f}={v}")).collect();
+            lines.push(format!("{col}: {}", parts.join(", ")));
+        }
+    }
+    format!("📊 Column Summaries\n{}\n", lines.join("\n"))
+}
+
+// ── Internal helpers ────────────────────────────────────────────────────────
+
+/// Extract a numeric `f64` from a QValue (Numbers and numeric-looking Text).
+fn to_f64(v: &QValue) -> Option<f64> {
+    match v {
+        QValue::Number(n) => Some(*n),
+        QValue::Text(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+/// Extract a `NaiveDate` from a QValue.
+fn to_date(v: &QValue) -> Option<NaiveDate> {
+    match v {
+        QValue::Date(d) => Some(*d),
+        QValue::Text(s) => NaiveDate::parse_from_str(s, "%Y-%m-%d").ok(),
+        _ => None,
+    }
+}
+
+/// Compare two `QValue`s for ordering (used by min/max).
+fn cmp_qvalue(a: &QValue, b: &QValue) -> std::cmp::Ordering {
+    cmp_ord(a, b)
+}
+
 // ── Bridging helpers ───────────────────────────────────────────────────────
 
 fn yaml_to_qvalue(v: &Yaml) -> QValue {
@@ -1167,5 +1428,296 @@ mod tests {
         // and filters correctly (a.md priority 3 and c.md priority 5 qualify).
         let q = parse_query(r#"SELECT * WHERE priority >= 3 AND status != "x""#).unwrap();
         assert_eq!(query_records(&sample_records(), &q).len(), 2);
+    }
+
+    // ── Aggregation / summarization tests (#2909) ─────────────────────────
+
+    #[test]
+    fn summarize_count_and_empty() {
+        let values = vec![
+            QValue::Number(1.0),
+            QValue::Number(2.0),
+            QValue::Null,
+            QValue::Number(4.0),
+            QValue::Null,
+        ];
+        assert_eq!(
+            summarize_column(&values, AggFunction::Count),
+            QValue::Number(3.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Empty),
+            QValue::Number(2.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Filled),
+            QValue::Number(3.0)
+        );
+    }
+
+    #[test]
+    fn summarize_sum_avg_min_max() {
+        let values = vec![
+            QValue::Number(10.0),
+            QValue::Number(20.0),
+            QValue::Number(30.0),
+            QValue::Null,
+        ];
+        assert_eq!(
+            summarize_column(&values, AggFunction::Sum),
+            QValue::Number(60.0)
+        );
+        assert!(
+            (summarize_column(&values, AggFunction::Avg)
+                .to_string()
+                .parse::<f64>()
+                .unwrap()
+                - 20.0)
+                .abs()
+                < 1e-10
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Min),
+            QValue::Number(10.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Max),
+            QValue::Number(30.0)
+        );
+    }
+
+    #[test]
+    fn summarize_range_numeric() {
+        let values = vec![
+            QValue::Number(5.0),
+            QValue::Number(15.0),
+            QValue::Number(3.0),
+        ];
+        let r = summarize_column(&values, AggFunction::Range);
+        assert_eq!(r, QValue::Number(12.0)); // 15 - 3
+    }
+
+    #[test]
+    fn summarize_range_date() {
+        let values = vec![
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 1, 10).unwrap()),
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 1, 15).unwrap()),
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 1, 8).unwrap()),
+        ];
+        let r = summarize_column(&values, AggFunction::Range);
+        assert!(r.to_string().contains("7")); // 15 - 8 = 7 days
+    }
+
+    #[test]
+    fn summarize_unique() {
+        let values = vec![
+            QValue::Text("a".into()),
+            QValue::Text("b".into()),
+            QValue::Text("a".into()),
+            QValue::Null,
+            QValue::Text("c".into()),
+        ];
+        assert_eq!(
+            summarize_column(&values, AggFunction::Unique),
+            QValue::Number(3.0)
+        );
+    }
+
+    #[test]
+    fn summarize_checked_unchecked() {
+        let values = vec![
+            QValue::Bool(true),
+            QValue::Bool(false),
+            QValue::Bool(true),
+            QValue::Null,
+            QValue::Bool(false),
+        ];
+        assert_eq!(
+            summarize_column(&values, AggFunction::Checked),
+            QValue::Number(2.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Unchecked),
+            QValue::Number(2.0)
+        );
+    }
+
+    #[test]
+    fn summarize_earliest_latest() {
+        let values = vec![
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 10).unwrap()),
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()),
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()),
+        ];
+        assert_eq!(
+            summarize_column(&values, AggFunction::Earliest),
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Latest),
+            QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 20).unwrap())
+        );
+    }
+
+    #[test]
+    fn summarize_empty_input() {
+        let values: Vec<QValue> = vec![];
+        assert_eq!(summarize_column(&values, AggFunction::Sum), QValue::Null);
+        assert_eq!(summarize_column(&values, AggFunction::Avg), QValue::Null);
+        assert_eq!(summarize_column(&values, AggFunction::Min), QValue::Null);
+        assert_eq!(
+            summarize_column(&values, AggFunction::Count),
+            QValue::Number(0.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Empty),
+            QValue::Number(0.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Unique),
+            QValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn summarize_all_null() {
+        let values = vec![QValue::Null, QValue::Null, QValue::Null];
+        assert_eq!(summarize_column(&values, AggFunction::Sum), QValue::Null);
+        assert_eq!(
+            summarize_column(&values, AggFunction::Count),
+            QValue::Number(0.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Empty),
+            QValue::Number(3.0)
+        );
+        assert_eq!(summarize_column(&values, AggFunction::Min), QValue::Null);
+    }
+
+    #[test]
+    fn summarize_records_multiple_columns() {
+        let records = query_records(&sample_records(), &Query::default());
+        let specs = vec![
+            (
+                "priority",
+                vec![
+                    AggFunction::Sum,
+                    AggFunction::Avg,
+                    AggFunction::Min,
+                    AggFunction::Max,
+                ],
+            ),
+            (
+                "status",
+                vec![AggFunction::Count, AggFunction::Unique, AggFunction::Empty],
+            ),
+        ];
+        let summaries = summarize_records(&records, &specs);
+        assert!(summaries.contains_key("priority"));
+        assert!(summaries.contains_key("status"));
+
+        let prio = summaries.get("priority").unwrap();
+        // Sum of priorities: 3+1+5+null(d)=9
+        assert_eq!(
+            prio.iter().find(|(f, _)| *f == AggFunction::Sum).unwrap().1,
+            QValue::Number(9.0)
+        );
+        // Avg: 9/3 = 3
+        let avg_val = prio
+            .iter()
+            .find(|(f, _)| *f == AggFunction::Avg)
+            .unwrap()
+            .1
+            .to_string()
+            .parse::<f64>()
+            .unwrap();
+        assert!((avg_val - 3.0).abs() < 1e-10);
+        // Min: 1
+        assert_eq!(
+            prio.iter().find(|(f, _)| *f == AggFunction::Min).unwrap().1,
+            QValue::Number(1.0)
+        );
+        // Max: 5
+        assert_eq!(
+            prio.iter().find(|(f, _)| *f == AggFunction::Max).unwrap().1,
+            QValue::Number(5.0)
+        );
+
+        let status = summaries.get("status").unwrap();
+        // Count of non-null statuses: a,b,c,d = 4
+        assert_eq!(
+            status
+                .iter()
+                .find(|(f, _)| *f == AggFunction::Count)
+                .unwrap()
+                .1,
+            QValue::Number(4.0)
+        );
+        // Unique: active, done, backlog = 3
+        assert_eq!(
+            status
+                .iter()
+                .find(|(f, _)| *f == AggFunction::Unique)
+                .unwrap()
+                .1,
+            QValue::Number(3.0)
+        );
+        // Empty: 0
+        assert_eq!(
+            status
+                .iter()
+                .find(|(f, _)| *f == AggFunction::Empty)
+                .unwrap()
+                .1,
+            QValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn agg_function_from_str_parses_all() {
+        assert_eq!(agg_function_from_str("count"), Some(AggFunction::Count));
+        assert_eq!(agg_function_from_str("SUM"), Some(AggFunction::Sum));
+        assert_eq!(agg_function_from_str("Average"), Some(AggFunction::Avg));
+        assert_eq!(agg_function_from_str("min"), Some(AggFunction::Min));
+        assert_eq!(agg_function_from_str("MAX"), Some(AggFunction::Max));
+        assert_eq!(agg_function_from_str("unique"), Some(AggFunction::Unique));
+        assert_eq!(agg_function_from_str("empty"), Some(AggFunction::Empty));
+        assert_eq!(agg_function_from_str("Filled"), Some(AggFunction::Filled));
+        assert_eq!(agg_function_from_str("checked"), Some(AggFunction::Checked));
+        assert_eq!(
+            agg_function_from_str("UNCHECKED"),
+            Some(AggFunction::Unchecked)
+        );
+        assert_eq!(
+            agg_function_from_str("Earliest"),
+            Some(AggFunction::Earliest)
+        );
+        assert_eq!(agg_function_from_str("LATEST"), Some(AggFunction::Latest));
+        assert_eq!(agg_function_from_str("range"), Some(AggFunction::Range));
+        assert_eq!(agg_function_from_str("bogus"), None);
+        assert_eq!(agg_function_from_str("distinct"), Some(AggFunction::Unique));
+        assert_eq!(agg_function_from_str("null"), Some(AggFunction::Empty));
+        assert_eq!(agg_function_from_str("notnull"), Some(AggFunction::Filled));
+        assert_eq!(agg_function_from_str("minimum"), Some(AggFunction::Min));
+        assert_eq!(agg_function_from_str("maximum"), Some(AggFunction::Max));
+    }
+
+    #[test]
+    fn summarize_mixed_type_column() {
+        // Mixed types: numbers should still work for numeric aggs
+        let values = vec![
+            QValue::Number(42.0),
+            QValue::Text("hello".into()),
+            QValue::Bool(true),
+            QValue::Null,
+        ];
+        assert_eq!(
+            summarize_column(&values, AggFunction::Count),
+            QValue::Number(3.0)
+        );
+        assert_eq!(
+            summarize_column(&values, AggFunction::Sum),
+            QValue::Number(42.0)
+        );
     }
 }

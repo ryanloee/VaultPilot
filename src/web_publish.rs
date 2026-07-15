@@ -111,11 +111,13 @@ fn disk_dir_name(slug: &str) -> String {
     if slug == lower {
         return slug.to_string();
     }
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    slug.hash(&mut hasher);
-    // 取哈希低 32 位，8 位十六进制，足够避免碰撞且保持目录名简短。
-    format!("{}-{:08x}", slug, (hasher.finish() as u32))
+    // Use SHA-256 (not DefaultHasher) so the directory name suffix is stable
+    // across Rust releases. DefaultHasher's algorithm is unspecified and
+    // may change between compiler versions. (#2900, ref #2851)
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(slug.as_bytes());
+    let suffix = u64::from_be_bytes(hash[..8].try_into().unwrap());
+    format!("{}-{:08x}", slug, suffix)
 }
 
 // ── Markdown → HTML 渲染（纯 Rust） ─────────────────────────────
@@ -687,6 +689,26 @@ mod tests {
         assert_eq!(disk_dir_name("notes-rust-tips"), "notes-rust-tips");
         // Deterministic / idempotent for the same input.
         assert_eq!(disk_dir_name("Foo-Note"), disk_dir_name("Foo-Note"));
+    }
+
+    #[test]
+    fn regression_2900_disk_dir_name_stable_hash() {
+        // Regression for #2900: disk_dir_name must use a stable hash (SHA-256)
+        // not DefaultHasher, so the suffix is repeatable across Rust versions.
+        // Same input → same output (deterministic).
+        let a = disk_dir_name("Foo-Note");
+        let b = disk_dir_name("Foo-Note");
+        assert_eq!(a, b, "same input must produce same disk dir name");
+        // All-lowercase slugs must not get a hash suffix.
+        assert_eq!(disk_dir_name("foo-note"), "foo-note");
+        // Mixed-case slugs must have a suffix.
+        let mixed = disk_dir_name("MixEd-Case");
+        assert!(mixed != "mixed-case", "mixed-case slug must get a suffix");
+        assert!(mixed.starts_with("MixEd-Case-"), "mixed-case must preserve original case prefix");
+        // Different mixed-case slugs must produce different dir names
+        // (no collision between "Foo-Note" and "FOO-NOTE").
+        let c = disk_dir_name("FOO-NOTE");
+        assert_ne!(a, c, "different-case slugs must produce different hashed names");
     }
 
     #[test]

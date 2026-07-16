@@ -148,26 +148,35 @@ public sealed partial class MainWindow : Window
     {
         var isUser = author == "你";
         var isAssistant = author == "助手";
-        var bubbleText = isUser || isAssistant ? text : $"{author}: {text}";
-        var bubbleContent = CreateMessageContent(bubbleText, isAssistant, isUser);
 
-        var bubble = new Border
+        // ── Avatar circle ──
+        var avatarInitial = isUser ? "我" : "V";
+        var avatarBg = isUser
+            ? GetThemeBrush("VaultAvatarUserBg")
+            : GetThemeBrush("VaultAvatarAiBg");
+        var avatarFg = isUser
+            ? GetThemeBrush("VaultAvatarUserFg")
+            : GetThemeBrush("VaultAvatarAiFg");
+        var avatar = new Border
         {
-            MaxWidth = 680,
-            Padding = new Thickness(12, 9, 12, 9),
-            CornerRadius = new CornerRadius(8),
-            Background = isUser
-                ? GetThemeBrush("AccentFillColorDefaultBrush")
-                : GetThemeBrush("CardBackgroundFillColorSecondaryBrush"),
-            BorderBrush = isUser
-                ? null
-                : GetThemeBrush("CardStrokeColorDefaultBrush"),
-            BorderThickness = isUser ? new Thickness(0) : new Thickness(1),
-            HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-            Child = bubbleContent
+            Width = 28,
+            Height = 28,
+            CornerRadius = new CornerRadius(14),
+            Background = avatarBg,
+            MinHeight = 0, MinWidth = 0,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        avatar.Child = new TextBlock
+        {
+            Text = avatarInitial,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            FontSize = 12,
+            Foreground = avatarFg,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
         };
 
-        // Author label with timestamp — use turn's CreatedAt when available (#2578)
+        // ── Timestamp ──
         DateTime displayTime;
         if (!string.IsNullOrEmpty(createdAt) && DateTime.TryParse(createdAt, out var parsed))
         {
@@ -178,38 +187,79 @@ public sealed partial class MainWindow : Window
             displayTime = DateTime.Now;
         }
         var timeStr = displayTime.ToString("HH:mm");
-        var authorLine = new StackPanel
+
+        // ── Bubble content ──
+        var bubbleText = isUser || isAssistant ? text : $"{author}: {text}";
+        var bubbleContent = CreateMessageContent(bubbleText, isAssistant, isUser);
+
+        var bubble = new Border
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            HorizontalAlignment = bubble.HorizontalAlignment
+            MaxWidth = 680,
+            Padding = new Thickness(12, 9, 12, 9),
+            CornerRadius = new CornerRadius(12),
+            Background = isUser
+                ? GetThemeBrush("VaultBubbleUserBg")
+                : GetThemeBrush("VaultBubbleAiBg"),
+            BorderBrush = isUser ? null : GetThemeBrush("VaultBorder"),
+            BorderThickness = isUser ? new Thickness(0) : new Thickness(1),
+            Child = bubbleContent,
         };
+
+        // ── Author label row ──
         var authorText = new TextBlock
         {
             Text = author,
-            Opacity = 0.72
+            FontSize = 11,
+            Foreground = GetThemeBrush("VaultTextMuted"),
+            VerticalAlignment = VerticalAlignment.Center,
         };
         var timeText = new TextBlock
         {
             Text = timeStr,
-            Opacity = 0.45,
-            FontSize = 11
+            FontSize = 11,
+            Foreground = GetThemeBrush("VaultTextMuted"),
+            Opacity = 0.55,
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        authorLine.Children.Add(authorText);
-        authorLine.Children.Add(timeText);
+        var metaRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+        };
+        metaRow.Children.Add(authorText);
+        metaRow.Children.Add(timeText);
+
+        // ── Assemble: avatar + (meta + bubble) ──
+        var messageRow = new StackPanel { Spacing = 4 };
+        messageRow.Children.Add(metaRow);
+        messageRow.Children.Add(bubble);
+
+        var outerRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+        };
+
+        if (isUser)
+        {
+            // User: bubble left, avatar right
+            outerRow.Children.Add(messageRow);
+            outerRow.Children.Add(avatar);
+        }
+        else
+        {
+            // AI: avatar left, bubble right
+            outerRow.Children.Add(avatar);
+            outerRow.Children.Add(messageRow);
+        }
+
         AutomationProperties.SetName(bubble, isUser ? "用户消息" : "AI 消息");
 
-        var stack = new StackPanel
-        {
-            Spacing = 4,
-            HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left
-        };
-        stack.Children.Add(authorLine);
-        stack.Children.Add(bubble);
-
+        // Skip meta row for system messages
         if (!isUser && !isAssistant)
         {
-            stack.Children.Remove(authorLine);
+            messageRow.Children.Remove(metaRow);
         }
 
         // Invalidate note title cache when a tool action has saved a note (#2035)
@@ -218,7 +268,7 @@ public sealed partial class MainWindow : Window
             InvalidateNoteTitleCache();
         }
 
-        MessagesPanel.Children.Add(stack);
+        MessagesPanel.Children.Add(outerRow);
     }
 
     private void ShowThinkingIndicator()

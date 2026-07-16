@@ -75,9 +75,7 @@
             <Border
                 Grid.Column="0"
                 Padding="12"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
+                Background="{ThemeResource VaultSidebarBg}"
                 CornerRadius="8">
                 <Grid RowSpacing="8">
                     <Grid.RowDefinitions>
@@ -146,9 +144,7 @@
                 x:Name="DetailPanel"
                 Grid.Column="1"
                 Padding="16"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
+                Background="{ThemeResource VaultCardBg}"
                 CornerRadius="8">
                 <Grid RowSpacing="8">
                     <Grid.RowDefinitions>
@@ -216,9 +212,7 @@
                 x:Name="RelatedNotesPanel"
                 Grid.Column="2"
                 Padding="12"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
+                Background="{ThemeResource VaultSidebarBg}"
                 CornerRadius="8"
                 Visibility="Collapsed">
                 <Grid RowSpacing="8">

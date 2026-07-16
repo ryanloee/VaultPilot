@@ -1159,7 +1159,7 @@ pub(super) async fn validate_base_url(
             Ok(Ok(addrs)) => {
                 let mut resolved = Vec::new();
                 for addr in addrs {
-                    if is_private_ip(addr.ip()) {
+                    if is_blocked_ip(addr.ip()) {
                         return Err(anyhow!("{}", private_ip_error_message(host_str, addr.ip())));
                     }
                     resolved.push((host_str.to_string(), addr));
@@ -1186,7 +1186,7 @@ pub(super) async fn validate_base_url(
     }
 
     if let Ok(ip) = host_str.parse::<IpAddr>() {
-        if is_private_ip(ip) {
+        if is_blocked_ip(ip) {
             return Err(anyhow!("{}", private_ip_error_message(host_str, ip)));
         }
         Ok(Vec::new())
@@ -1205,7 +1205,7 @@ pub(super) async fn validate_base_url(
             Ok(Ok(addrs)) => {
                 let mut resolved = Vec::new();
                 for addr in addrs {
-                    if is_private_ip(addr.ip()) {
+                    if is_blocked_ip(addr.ip()) {
                         return Err(anyhow!("{}", private_ip_error_message(host_str, addr.ip())));
                     }
                     resolved.push((host_str.to_string(), addr));
@@ -1280,6 +1280,17 @@ pub(super) fn is_private_ip(ip: IpAddr) -> bool {
                     .is_some_and(|v4| is_private_ip(IpAddr::V4(v4))) // IPv4-mapped
         }
     }
+}
+
+/// Returns `true` if `ip` should be *blocked* by SSRF filtering.
+///
+/// This is `is_private_ip` minus the fake-ip proxy pool (198.18.0.0/15).
+/// Fake-ip addresses (Clash/sing-box TUN mode) are placeholder addresses the
+/// proxy transparently routes — they are not internal infrastructure worth
+/// protecting against, so they are allowed unless the operator opts into
+/// stricter blocking. See issue #2952.
+pub(super) fn is_blocked_ip(ip: IpAddr) -> bool {
+    is_private_ip(ip) && !is_fakeip(ip)
 }
 
 /// Route to the correct API endpoint based on provider type.

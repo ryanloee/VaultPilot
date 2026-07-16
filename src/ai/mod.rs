@@ -525,8 +525,9 @@ pub async fn select_relevant_note_ids(
 #[cfg(test)]
 mod tests {
     use super::client::{
-        is_fakeip, is_private_ip, is_retryable_provider_error, normalize_messages_endpoint,
-        OpenAiContent, OpenAiMessage, OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
+        is_blocked_ip, is_fakeip, is_private_ip, is_retryable_provider_error,
+        normalize_messages_endpoint, OpenAiContent, OpenAiMessage, OpenAiReasoningRequest,
+        OpenAiRequest, RequestUsage,
     };
     use super::context::{
         is_openai_reasoning_model, resolve_context_window, resolve_max_output_tokens,
@@ -1082,6 +1083,25 @@ mod tests {
         assert!(is_fakeip("198.19.255.255".parse().unwrap()));
         // Still classified as private/reserved so it's blocked by default.
         assert!(is_private_ip("198.18.0.71".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_ip_allows_fakeip_pool() {
+        // Regression test for #2952: 198.18.0.0/15 is a fake-ip proxy pool
+        // (Clash/sing-box) — classified as private/reserved but the SSRF
+        // filter must NOT block it, otherwise proxied API domains (e.g. the
+        // 智谱 scenario from #2944) can never be reached.
+        let fakeip = "198.18.0.71".parse().unwrap();
+        assert!(is_private_ip(fakeip)); // still reserved...
+        assert!(is_fakeip(fakeip));
+        assert!(!is_blocked_ip(fakeip)); // ...but allowed by SSRF filter
+
+        // Real RFC1918 addresses must still be blocked.
+        assert!(is_blocked_ip("10.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("192.168.1.1".parse().unwrap()));
+        assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
+        // Public IPs are not blocked.
+        assert!(!is_blocked_ip("8.8.8.8".parse().unwrap()));
     }
 
     #[test]

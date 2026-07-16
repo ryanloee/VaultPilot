@@ -3121,6 +3121,13 @@ fn format_as_kanban(
         return "*No results*\n".to_string();
     }
 
+    // #2919: if the requested group_by column does not exist in the result
+    // schema, every row falls into `## 未分类` silently and the header still
+    // claims "grouped by <col>", which is indistinguishable from a genuine
+    // "column exists but value is missing" situation. Warn the user so a typo
+    // (e.g. `--group-by typo_column`) is obvious instead of silent.
+    let group_by_exists = columns.iter().any(|c| c == group_by);
+
     // Determine a display title for each row.
     let note_title = |row: &std::collections::HashMap<String, QValue>| -> String {
         if let Some(QValue::Text(t)) = row.get("title") {
@@ -3166,7 +3173,16 @@ fn format_as_kanban(
 
     // Build kanban output.
     let mut out = String::new();
-    out.push_str(&format!("# Kanban Board — grouped by {group_by}\n\n"));
+    if group_by_exists {
+        out.push_str(&format!("# Kanban Board — grouped by {group_by}\n\n"));
+    } else {
+        out.push_str(&format!(
+            "# Kanban Board — grouped by {group_by}\n\n\
+             > ⚠️ Warning: column `{group_by}` does not exist in the query result; \
+             all rows are shown under `## 未分类`. Check for a typo or use an \
+             existing property.\n\n"
+        ));
+    }
 
     for (group_name, group_rows) in &groups {
         out.push_str(&format!("## {} ({})\n", group_name, group_rows.len()));
@@ -6292,11 +6308,32 @@ mod tests {
     }
 
     #[test]
-    fn kanban_handles_empty_rows() {
-        let cols = vec!["$path".to_string(), "status".to_string()];
-        let rows = vec![];
-        let result = format_as_kanban(&cols, &rows, "status");
-        assert_eq!(result, "*No results*\n");
+    fn kanban_warns_on_nonexistent_group_by_column() {
+        // Regression test for #2919: grouping by a column that does not exist
+        // in the result schema must warn the user (a typo'd column) rather than
+        // silently dumping every row under `## 未分类` with a misleading header.
+        let cols = vec![
+            "$path".to_string(),
+            "title".to_string(),
+            "status".to_string(),
+        ];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            ("$path".to_string(), QValue::Text("notes/a.md".to_string())),
+            ("title".to_string(), QValue::Text("A note".to_string())),
+            ("status".to_string(), QValue::Text("active".to_string())),
+        ])];
+
+        // Existing column: no warning.
+        let ok = format_as_kanban(&cols, &rows, "status");
+        assert!(!ok.contains("does not exist"));
+        assert!(ok.contains("## active (1)"));
+
+        // Typo'd column: warning emitted, all rows under 未分类.
+        let bad = format_as_kanban(&cols, &rows, "typo_column");
+        assert!(bad.contains("does not exist"));
+        assert!(bad.contains("typo_column"));
+        assert!(bad.contains("## 未分类 (1)"));
     }
 }
 

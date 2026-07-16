@@ -45,4 +45,5 @@ mod issue_2913_deterministic_columns;
 mod issue_2921_formulas;
 mod issue_2924_mirror_backflow;
 mod issue_2936_attachment_cleanup;
+mod issue_2953_single_backflow_entry;
 mod issue_914_related_notes;

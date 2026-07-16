@@ -640,6 +640,160 @@ pub fn clear_cache(context: &StorageContext, path_opt: Option<&str>) -> Result<(
     Ok(())
 }
 
+/// Parsed image-dimension suffix of an Obsidian/Logseq-style `![alt|WxH](url)`
+/// image, plus the original alt text and URL.  CommonMark does not natively
+/// support sizing, but the `|WxH` convention is widely used by Obsidian, Logseq
+/// and Notion exports.  VaultPilot keeps this information so the front-ends
+/// (WinUI drag-resize, Android pinch-zoom — issue #2934) can render and
+/// round-trip a user-chosen display size without losing data on re-save.
+///
+/// `width`/`height` are in pixels.  Either dimension may be omitted
+/// (`|300` = width only, `|x200` = height only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageSize {
+    /// Alt text without the `|WxH` suffix (may be empty).
+    pub alt: String,
+    /// Display width in pixels, if specified.
+    pub width: Option<u32>,
+    /// Display height in pixels, if specified.
+    pub height: Option<u32>,
+    /// The image target (relative path, vault link, or URL).
+    pub url: String,
+}
+
+/// Parse a markdown image written in the `![alt|WxH](url)` convention
+/// (Obsidian/Logseq size syntax).  Returns `Some` for **any** valid image
+/// token — including a bare `![alt](url)` with no `|WxH` suffix, in which case
+/// `width`/`height` are `None`.  Returns `None` only when the input is not a
+/// valid markdown image at all (plain text, a link, or empty alt+url).
+///
+/// The parser is tolerant of:
+/// * whitespace around the `|` (`![alt | 300x200 ](url)`)
+/// * missing width or height (`|300`, `|x200`)
+/// * non-numeric junk after `|` — treated as "no size" (`None` dims)
+pub fn parse_image_size(token: &str) -> Option<ImageSize> {
+    // Expect exactly the shape ![...](...)
+    let trimmed = token.trim();
+    if !trimmed.starts_with("![") || !trimmed.ends_with(')') {
+        return None;
+    }
+    let inner = &trimmed[2..trimmed.len() - 1];
+    // Split on the first ']' to separate alt from url.
+    let (alt_part, url_part) = match inner.split_once(']') {
+        Some((a, u)) => (a, u.strip_prefix('(').unwrap_or(u)),
+        None => return None,
+    };
+    let url = url_part.trim().to_string();
+    if url.is_empty() {
+        return None;
+    }
+
+    // The alt may carry a `|WxH` suffix.
+    let (alt, size) = match alt_part.split_once('|') {
+        Some((a, s)) => (a.trim().to_string(), Some(s.trim())),
+        None => (alt_part.trim().to_string(), None),
+    };
+
+    let (width, height) = match size {
+        None => (None, None),
+        Some("") => (None, None),
+        Some(s) => {
+            let (w, h) = match s.split_once('x') {
+                Some((w, h)) => (w.trim(), h.trim()),
+                None => (s, ""),
+            };
+            let width = if w.is_empty() {
+                None
+            } else {
+                w.parse::<u32>().ok()
+            };
+            let height = if h.is_empty() {
+                None
+            } else {
+                h.parse::<u32>().ok()
+            };
+            // If neither side parsed, there was no real size suffix.
+            if width.is_none() && height.is_none() {
+                (None, None)
+            } else {
+                (width, height)
+            }
+        }
+    };
+
+    Some(ImageSize {
+        alt,
+        width,
+        height,
+        url,
+    })
+}
+
+/// Serialize an [`ImageSize`] back into the `![alt|WxH](url)` markdown token.
+///
+/// Dimension rendering rules (matches Obsidian convention):
+/// * both present  → `![alt|WxH](url)`
+/// * width only    → `![alt|W](url)`
+/// * height only   → `![alt|xH](url)`
+/// * neither       → `![alt](url)` (no `|` suffix)
+pub fn serialize_image_size(img: &ImageSize) -> String {
+    let size = match (img.width, img.height) {
+        (Some(w), Some(h)) => format!("|{w}x{h}"),
+        (Some(w), None) => format!("|{w}"),
+        (None, Some(h)) => format!("|x{h}"),
+        (None, None) => String::new(),
+    };
+    format!("![{}{}]({})", img.alt, size, img.url)
+}
+
+/// Rewrite every `![alt|WxH](url)` (or `![alt](url)`) token in `markdown` so
+/// that images matching `target_url` get the supplied `width`/`height`
+/// applied/cleared.  Useful when a front-end reports a new user-chosen size and
+/// the note body must be persisted.  Non-matching images are left untouched,
+/// and tokens that are not valid images pass through unchanged.
+///
+/// Passing `width = None` and `height = None` *clears* any existing size on the
+/// matching image (reset to original dimensions), enabling the "double-click to
+/// reset" behavior from issue #2934.
+pub fn set_image_size(
+    markdown: &str,
+    target_url: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut rest = markdown;
+    while let Some(start) = rest.find("![") {
+        // Emit everything before this token verbatim.
+        out.push_str(&rest[..start]);
+        // Find the matching closing ')'. Markdown image tokens cannot be
+        // nested, so the first ')' after the '(' ends the token.
+        let after = &rest[start..];
+        let end = match after.find(']') {
+            Some(i) => match after[i..].find(')') {
+                Some(j) => start + i + j + 1,
+                None => rest.len(),
+            },
+            None => rest.len(),
+        };
+        let token = &rest[start..end];
+        if let Some(mut img) = parse_image_size(token) {
+            if img.url == target_url {
+                img.width = width;
+                img.height = height;
+                out.push_str(&serialize_image_size(&img));
+            } else {
+                out.push_str(token);
+            }
+        } else {
+            out.push_str(token);
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,5 +845,103 @@ mod tests {
         assert!(p.supports("log"));
         assert!(p.supports("text"));
         assert!(!p.supports("md"));
+    }
+
+    // ── issue #2934: image size attribute (Obsidian `![alt|WxH](url)`) ──────
+
+    #[test]
+    fn image_size_full_dimensions() {
+        let img = parse_image_size("![photo|300x200](img/cat.png)").unwrap();
+        assert_eq!(img.alt, "photo");
+        assert_eq!(img.width, Some(300));
+        assert_eq!(img.height, Some(200));
+        assert_eq!(img.url, "img/cat.png");
+    }
+
+    #[test]
+    fn image_size_width_only_and_height_only() {
+        let w = parse_image_size("![a|300](x.png)").unwrap();
+        assert_eq!((w.width, w.height), (Some(300), None));
+
+        let h = parse_image_size("![a|x200](x.png)").unwrap();
+        assert_eq!((h.width, h.height), (None, Some(200)));
+    }
+
+    #[test]
+    fn image_size_tolerates_whitespace() {
+        let img = parse_image_size("![alt | 300x200 ](url)").unwrap();
+        assert_eq!(img.width, Some(300));
+        assert_eq!(img.height, Some(200));
+        assert_eq!(img.alt, "alt");
+    }
+
+    #[test]
+    fn image_size_plain_image_has_no_dims() {
+        // A bare image with no `|WxH` suffix parses to Some with None dims.
+        let img = parse_image_size("![alt](img/cat.png)").unwrap();
+        assert_eq!(img.width, None);
+        assert_eq!(img.height, None);
+        assert_eq!(img.url, "img/cat.png");
+    }
+
+    #[test]
+    fn image_size_junk_suffix_yields_no_dims() {
+        // Non-numeric junk after `|` is not a real size → Some with None dims.
+        let img = parse_image_size("![alt|garbage](x.png)").unwrap();
+        assert_eq!(img.width, None);
+        assert_eq!(img.height, None);
+    }
+
+    #[test]
+    fn image_size_rejects_non_image_tokens() {
+        assert!(parse_image_size("just text").is_none());
+        assert!(parse_image_size("[link](url)").is_none());
+        assert!(parse_image_size("![]()").is_none());
+    }
+
+    #[test]
+    fn image_size_roundtrip_full() {
+        let token = "![photo|300x200](img/cat.png)";
+        let img = parse_image_size(token).unwrap();
+        assert_eq!(serialize_image_size(&img), token);
+    }
+
+    #[test]
+    fn image_size_roundtrip_width_only() {
+        let img = parse_image_size("![a|300](x.png)").unwrap();
+        assert_eq!(serialize_image_size(&img), "![a|300](x.png)");
+    }
+
+    #[test]
+    fn image_size_roundtrip_height_only() {
+        let img = parse_image_size("![a|x200](x.png)").unwrap();
+        assert_eq!(serialize_image_size(&img), "![a|x200](x.png)");
+    }
+
+    #[test]
+    fn set_image_size_applies_to_matching_url() {
+        let md = "intro\n\n![photo|100x50](img/cat.png)\n\noutro ![other](img/dog.png)";
+        let out = set_image_size(md, "img/cat.png", Some(400), Some(300));
+        assert!(out.contains("![photo|400x300](img/cat.png)"));
+        // Non-matching image untouched.
+        assert!(out.contains("![other](img/dog.png)"));
+        // Surrounding text preserved.
+        assert!(out.starts_with("intro"));
+        assert!(out.contains("outro"));
+    }
+
+    #[test]
+    fn set_image_size_can_clear_to_reset() {
+        // Passing None/None clears size → simulates "double-click to reset".
+        let md = "![photo|300x200](img/cat.png)";
+        let out = set_image_size(md, "img/cat.png", None, None);
+        assert_eq!(out, "![photo](img/cat.png)");
+    }
+
+    #[test]
+    fn set_image_size_leaves_non_matching_untouched() {
+        let md = "![a|300x200](img/cat.png)";
+        let out = set_image_size(md, "img/dog.png", Some(10), None);
+        assert_eq!(out, md);
     }
 }

@@ -525,8 +525,8 @@ pub async fn select_relevant_note_ids(
 #[cfg(test)]
 mod tests {
     use super::client::{
-        is_private_ip, is_retryable_provider_error, normalize_messages_endpoint, OpenAiContent,
-        OpenAiMessage, OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
+        is_fakeip, is_private_ip, is_retryable_provider_error, normalize_messages_endpoint,
+        OpenAiContent, OpenAiMessage, OpenAiReasoningRequest, OpenAiRequest, RequestUsage,
     };
     use super::context::{
         is_openai_reasoning_model, resolve_context_window, resolve_max_output_tokens,
@@ -1039,6 +1039,25 @@ mod tests {
     fn is_private_ip_allows_public_ip() {
         assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
         assert!(!is_private_ip("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_fakeip_detects_198_18_range() {
+        // The fake-ip pool used by Clash/sing-box (198.18.0.0/15).
+        assert!(is_fakeip("198.18.0.71".parse().unwrap())); // #2944 — 智谱/Clash
+        assert!(is_fakeip("198.18.0.0".parse().unwrap()));
+        assert!(is_fakeip("198.19.255.255".parse().unwrap()));
+        // Still classified as private/reserved so it's blocked by default.
+        assert!(is_private_ip("198.18.0.71".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_fakeip_rejects_non_fakeip() {
+        assert!(!is_fakeip("8.8.8.8".parse().unwrap()));
+        assert!(!is_fakeip("192.168.1.1".parse().unwrap())); // RFC1918, not fake-ip
+        assert!(!is_fakeip("198.17.0.1".parse().unwrap())); // just below the range
+        assert!(!is_fakeip("198.20.0.1".parse().unwrap())); // just above the range
+        assert!(!is_fakeip("::1".parse().unwrap()));
     }
 
     #[test]

@@ -1172,11 +1172,7 @@ pub(super) async fn validate_base_url(
 
     if let Ok(ip) = host_str.parse::<IpAddr>() {
         if is_private_ip(ip) {
-            return Err(anyhow!(
-                "base_url resolves to a private/reserved IP ({}); \
-                 set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
-                ip
-            ));
+            return Err(anyhow!("{}", private_ip_error_message(host_str, ip)));
         }
         Ok(Vec::new())
     } else {
@@ -1195,12 +1191,7 @@ pub(super) async fn validate_base_url(
                 let mut resolved = Vec::new();
                 for addr in addrs {
                     if is_private_ip(addr.ip()) {
-                        return Err(anyhow!(
-                            "base_url host '{}' resolves to a private/reserved IP ({}); \\
-                             set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow",
-                            host_str,
-                            addr.ip()
-                        ));
+                        return Err(anyhow!("{}", private_ip_error_message(host_str, addr.ip())));
                     }
                     resolved.push((host_str.to_string(), addr));
                 }
@@ -1216,6 +1207,38 @@ pub(super) async fn validate_base_url(
                 host_str
             )),
         }
+    }
+}
+
+/// Returns `true` if `ip` is in the 198.18.0.0/15 benchmarking range.
+///
+/// This range (RFC 2544) is widely repurposed by local proxy tools
+/// (Clash, sing-box, etc.) as the "fake-ip" pool: the proxy hands the
+/// client a placeholder address in this range and transparently routes the
+/// real traffic itself. Such an address is therefore a strong signal of a
+/// proxied setup rather than an SSRF attempt at an internal host.
+pub(super) fn is_fakeip(ip: IpAddr) -> bool {
+    matches!(ip, IpAddr::V4(v4) if matches!(v4.octets(), [198, 18..=19, _, _]))
+}
+
+/// Build a helpful error message when a base_url resolves to a private or
+/// reserved IP. Fake-ip (proxy) addresses get a proxy-specific hint because
+/// that is by far the most common real-world cause (#2944 — 智谱/Clash).
+fn private_ip_error_message(host: &str, ip: IpAddr) -> String {
+    if is_fakeip(ip) {
+        format!(
+            "base_url host '{host}' resolves to a fake-ip proxy address ({ip}, \
+             198.18.0.0/15). This usually means a local proxy (Clash/sing-box \
+             TUN or fake-ip mode) is intercepting DNS for this domain — the \
+             endpoint itself is fine. Set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to \
+             allow it, or disable fake-ip / add this domain to the proxy's \
+             real-ip (direct-DNS) list."
+        )
+    } else {
+        format!(
+            "base_url host '{host}' resolves to a private/reserved IP ({ip}); \
+             set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to allow"
+        )
     }
 }
 

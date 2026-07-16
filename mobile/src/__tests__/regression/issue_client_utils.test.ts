@@ -120,4 +120,22 @@ describe('normalizeApiBase', () => {
   it('preserves URLs with version and trailing content', () => {
     expect(normalizeApiBase('https://openrouter.ai/api/v1')).toBe('https://openrouter.ai/api/v1');
   });
+
+  // ── Regression: case-insensitive version path detection (#2932) ──────
+
+  it('preserves URL with uppercase /V1 path', () => {
+    expect(normalizeApiBase('https://api.example.com/V1')).toBe('https://api.example.com/V1');
+  });
+
+  it('preserves URL with uppercase /V2 path', () => {
+    expect(normalizeApiBase('https://api.example.com/V2')).toBe('https://api.example.com/V2');
+  });
+
+  it('preserves URL with mixed-case /V1-Beta path', () => {
+    expect(normalizeApiBase('https://api.example.com/V1-Beta')).toBe('https://api.example.com/V1-Beta');
+  });
+
+  it('preserves URL with uppercase /V1 and subpath', () => {
+    expect(normalizeApiBase('https://api.example.com/V1/chat')).toBe('https://api.example.com/V1/chat');
+  });
 });

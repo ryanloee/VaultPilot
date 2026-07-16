@@ -13,6 +13,14 @@
 //! used to perform an incremental sync, so unchanged notes are skipped instead
 //! of re-exported. The original implementation wrote the state file but never
 //! read it, making it dead write-only code.
+//!
+//! Two-way sync (#2924): after export, mirror files are scanned for external
+//! changes (detected via content hash). When a mirror file has been edited
+//! outside VaultPilot, the changes flow back into the vault:
+//!   - If the vault note hasn't changed since the last sync, the external edit
+//!     replaces the vault note directly.
+//!   - If both the mirror and vault have changed (concurrent edit), both
+//!     versions are preserved and a conflict marker is appended.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -44,6 +52,11 @@ pub struct MirrorStateEntry {
     pub title: String,
     /// Relative path of the mirror file inside the mirror directory.
     pub path: String,
+    /// SHA-256 hash of the mirror file content as last written by VaultPilot.
+    /// Used to detect external edits (#2924). `None` for entries created
+    /// before this field was added (backward-compatible).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 /// Persisted mirror state. Serialized to [`MIRROR_STATE_FILE`].
@@ -149,6 +162,76 @@ pub fn extract_note_id_anchor(content: &str) -> Option<String> {
     }
 }
 
+/// Compute the SHA-256 hex digest of a string. Used to detect external
+/// edits to mirror files (#2924).
+pub fn hash_content(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Strip the anchor comment line(s) from mirror file content, returning
+/// the original frontmatter + body as written by VaultPilot. This is needed
+/// when an externally-edited mirror file is read back for vault import: the
+/// anchor must be removed before the content is parsed as a note.
+pub fn strip_anchor_from_content(content: &str) -> String {
+    if let Some(pos) = content.find(NOTE_ID_ANCHOR_PREFIX) {
+        let anchor_start = content[..pos].rfind('\n').map(|n| n + 1).unwrap_or(0);
+        let after_prefix = &content[pos + NOTE_ID_ANCHOR_PREFIX.len()..];
+        if let Some(suffix_pos) = after_prefix.find(NOTE_ID_ANCHOR_SUFFIX) {
+            let anchor_end =
+                pos + NOTE_ID_ANCHOR_PREFIX.len() + suffix_pos + NOTE_ID_ANCHOR_SUFFIX.len();
+            let end = if anchor_end < content.len() && content.as_bytes()[anchor_end] == b'\n' {
+                anchor_end + 1
+            } else {
+                anchor_end
+            };
+            let mut result = String::with_capacity(content.len());
+            result.push_str(&content[..anchor_start]);
+            if end < content.len() {
+                result.push_str(&content[end..]);
+            }
+            return result.trim_end().to_string();
+        }
+    }
+    content.trim_end().to_string()
+}
+
+/// Result of a single sync cycle.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MirrorResult {
+    pub created: usize,
+    pub updated: usize,
+    pub deleted: usize,
+    pub unchanged: usize,
+    /// Number of mirror files whose external edits were flowed back into
+    /// the vault (#2924).
+    pub backflow: usize,
+}
+
+/// Detect mirror files that have been edited externally since the last
+/// VaultPilot sync. Compares the current on-disk content hash against the
+/// stored `content_hash` in the mirror state entry.
+///
+/// Returns a list of note_ids whose mirror hash differs from the recorded
+/// value. Pure function — no I/O.
+pub fn detect_external_changes(
+    disk_hashes: &HashMap<String, String>,
+    state: &MirrorState,
+) -> Vec<String> {
+    let mut changed = Vec::new();
+    for (id, hash) in disk_hashes {
+        if let Some(entry) = state.entries.get(id) {
+            match &entry.content_hash {
+                Some(stored) if stored == hash => {} // unchanged
+                _ => changed.push(id.clone()),
+            }
+        }
+    }
+    changed
+}
+
 /// Absolute path of a note's mirror file inside `mirror_dir`.
 pub fn mirror_file_path(mirror_dir: &Path, note_id: &str) -> PathBuf {
     mirror_dir.join(format!("{note_id}.md"))
@@ -206,21 +289,15 @@ pub fn orphan_mirror_files<'a>(
         .collect()
 }
 
-/// Result of a single sync cycle.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct MirrorResult {
-    pub created: usize,
-    pub updated: usize,
-    pub deleted: usize,
-    pub unchanged: usize,
-}
-
 /// Perform one incremental sync of the vault into `mirror_dir`.
 ///
 /// Reads the persisted state (if any), diffs it against the current vault,
 /// writes/updates/deletes mirror files accordingly, then rewrites the state
 /// file. This is the function that gives `vp mirror --watch` a real fast-start:
 /// on restart the saved state is read back and unchanged notes are skipped.
+///
+/// Two-way sync (#2924): after the export phase, scans mirror files for
+/// external edits and flows them back into the vault.
 pub fn mirror_sync_with_context(
     context: &StorageContext,
     mirror_dir: &Path,
@@ -233,18 +310,12 @@ pub fn mirror_sync_with_context(
 
     let current = list_all_notes_with_context(context)?;
 
-    // Disk-scan fallback (#2889): the persisted state may be missing, corrupt,
-    // or simply out of date. Reconcile against the files actually present on
-    // disk so orphan `.md` files (left behind when a note was deleted from the
-    // vault) are detected and removed instead of lingering forever. This also
-    // makes `extract_note_id_anchor` participate in the real reconcile path
-    // rather than only in tests.
     let disk_files = disk_scan_mirror_files(mirror_dir)?;
     let current_ids: std::collections::HashSet<&String> = current.iter().map(|m| &m.id).collect();
 
     let mut result = MirrorResult::default();
 
-    // Phase 1: remove orphan mirror files whose note no longer exists.
+    // Phase 1: remove orphan mirror files.
     for path in orphan_mirror_files(&disk_files, &current_ids, &state) {
         let _ = std::fs::remove_file(path);
         result.deleted += 1;
@@ -254,14 +325,11 @@ pub fn mirror_sync_with_context(
 
     for id in diff.to_create.iter().chain(diff.to_update.iter()) {
         let (markdown, _filename) = export_note_markdown_with_context(context, id)?;
+        let composed = compose_mirror_markdown(&markdown, id);
+        let file_hash = hash_content(&composed);
         let path = mirror_file_path(mirror_dir, id);
-        std::fs::write(&path, compose_mirror_markdown(&markdown, id))?;
+        std::fs::write(&path, &composed)?;
         if let Some(meta) = current.iter().find(|m| &m.id == id) {
-            // Store the *relative* path inside the mirror directory, not the
-            // absolute one. `.vp-mirror-state.json` must stay portable so the
-            // mirror can be moved or copied without breaking the contract
-            // (#2887). Fall back to the full path only if `mirror_dir` is
-            // somehow not a prefix (should never happen given the join above).
             let rel = path
                 .strip_prefix(mirror_dir)
                 .unwrap_or(&path)
@@ -273,6 +341,7 @@ pub fn mirror_sync_with_context(
                     updated_at: meta.updated_at.clone(),
                     title: meta.title.clone(),
                     path: rel,
+                    content_hash: Some(file_hash),
                 },
             );
         }
@@ -292,8 +361,146 @@ pub fn mirror_sync_with_context(
 
     result.unchanged = current.len() - diff.to_create.len() - diff.to_update.len();
 
+    // Phase 2: two-way sync — flow external edits back into the vault (#2924)
+    let mut disk_hashes: HashMap<String, String> = HashMap::new();
+    for (id, disk_path) in &disk_files {
+        if state.entries.contains_key(id) {
+            if let Ok(content) = std::fs::read_to_string(disk_path) {
+                disk_hashes.insert(id.clone(), hash_content(&content));
+            }
+        }
+    }
+
+    let external_changes = detect_external_changes(&disk_hashes, &state);
+
+    for note_id in &external_changes {
+        let mirror_path = mirror_file_path(mirror_dir, note_id);
+        let last_synced_at = state
+            .entries
+            .get(note_id.as_str())
+            .map(|e| e.updated_at.as_str())
+            .unwrap_or("");
+        match flow_back_external_change(context, &mirror_path, note_id, last_synced_at) {
+            Ok(true) => {
+                result.backflow += 1;
+                if let Some(entry) = state.entries.get_mut(note_id.as_str()) {
+                    if let Ok(content) = std::fs::read_to_string(&mirror_path) {
+                        entry.content_hash = Some(hash_content(&content));
+                    }
+                    if let Ok((markdown, _)) = export_note_markdown_with_context(context, note_id) {
+                        let composed = compose_mirror_markdown(&markdown, note_id);
+                        let _ = std::fs::write(&mirror_path, &composed);
+                        if let Some(entry) = state.entries.get_mut(note_id.as_str()) {
+                            entry.content_hash = Some(hash_content(&composed));
+                        }
+                    }
+                }
+            }
+            Ok(false) => {
+                if let Some(entry) = state.entries.get_mut(note_id.as_str()) {
+                    if let Ok(content) = std::fs::read_to_string(&mirror_path) {
+                        entry.content_hash = Some(hash_content(&content));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "mirror backflow: failed to merge external changes for note {}: {:#}",
+                    note_id, e
+                );
+            }
+        }
+    }
+
     write_mirror_state(&state_path, &state)?;
     Ok(result)
+}
+
+/// Flow an externally-edited mirror file back into the vault (#2924).
+///
+/// Reads the mirror file, strips the anchor comment, and determines whether
+/// the vault note has also been modified since the last sync by comparing
+/// the current vault `updated_at` against `last_synced_at` from the mirror
+/// state.
+///
+/// Returns `Ok(true)` if the vault was updated, `Ok(false)` if the mirror
+/// content is identical to the vault (no change needed).
+pub fn flow_back_external_change(
+    context: &StorageContext,
+    mirror_path: &Path,
+    note_id: &str,
+    last_synced_at: &str,
+) -> anyhow::Result<bool> {
+    use crate::storage::load_note_with_context;
+    use crate::storage::save_note_with_context;
+
+    let mirror_raw = std::fs::read_to_string(mirror_path)
+        .with_context(|| format!("failed to read mirror file {}", mirror_path.display()))?;
+    let mirror_body = strip_anchor_from_content(&mirror_raw);
+
+    let vault_note = match load_note_with_context(context, note_id) {
+        Ok(note) => note,
+        Err(_) => return Ok(false),
+    };
+
+    let vault_changed = vault_note.meta.updated_at != last_synced_at;
+    let mirror_content = &mirror_body;
+
+    if !vault_changed {
+        let mut updated_note = vault_note;
+        updated_note.body = mirror_content.to_string();
+        if let Some(title) = extract_title_from_markdown(mirror_content) {
+            updated_note.meta.title = title;
+        }
+        save_note_with_context(context, updated_note)?;
+        return Ok(true);
+    }
+
+    // Conflict: both mirror and vault changed.
+    let vault_markdown = {
+        let mut md = String::new();
+        md.push_str("---\n");
+        md.push_str(&format!("title: {}\n", vault_note.meta.title));
+        md.push_str(&format!("id: {}\n", vault_note.meta.id));
+        md.push_str("---\n\n");
+        md.push_str(&vault_note.body);
+        md
+    };
+
+    let merged_body = format!(
+        "{}\n\n<!-- ===== CONFLICT: vault and mirror both changed ===== -->\n\n\
+         ## Vault version (auto-saved)\n\n{}\n\n\
+         ## Mirror version (external edit)\n\n{}\n\n\
+         <!-- ===== END CONFLICT ===== -->\n",
+        mirror_content, vault_markdown, mirror_content
+    );
+
+    let mut merged_note = vault_note;
+    merged_note.body = merged_body;
+    save_note_with_context(context, merged_note)?;
+
+    Ok(true)
+}
+
+/// Extract the title from YAML frontmatter in a markdown string.
+fn extract_title_from_markdown(content: &str) -> Option<String> {
+    let body = content.trim();
+    if !body.starts_with("---") {
+        return None;
+    }
+    let after_first = &body[3..];
+    let end = after_first.find("\n---")?;
+    let frontmatter = &after_first[..end];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("title:") {
+            let title = value.trim().trim_matches('"').trim_matches('\'');
+            if !title.is_empty() {
+                return Some(title.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Run `vp mirror --watch`: sync once, then re-sync every `interval_secs`
@@ -306,7 +513,6 @@ pub fn mirror_watch_with_context(
 ) -> anyhow::Result<()> {
     loop {
         let result = mirror_sync_with_context(context, mirror_dir)?;
-        // Emit a JSON status line per cycle so logs are machine-readable.
         println!(
             "{}",
             serde_json::json!({
@@ -315,6 +521,7 @@ pub fn mirror_watch_with_context(
                 "updated": result.updated,
                 "deleted": result.deleted,
                 "unchanged": result.unchanged,
+                "backflow": result.backflow,
             })
         );
         std::thread::sleep(std::time::Duration::from_secs(interval_secs.max(1)));

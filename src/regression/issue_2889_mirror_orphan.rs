@@ -79,6 +79,7 @@ mod tests {
                 updated_at: "t".to_string(),
                 title: "s".to_string(),
                 path: "kept_state.md".to_string(),
+                content_hash: None,
             },
         );
 

@@ -35,6 +35,7 @@ mod tests {
                 updated_at: "t1".to_string(),
                 title: "Note a".to_string(),
                 path: "a.md".to_string(),
+                content_hash: None,
             },
         );
         write_mirror_state(&state_path, &prior).expect("write prior state");

@@ -404,7 +404,7 @@ public sealed partial class MainWindow : Window
         SidebarBorder.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
         SidebarColumn.Width = collapsed ? new GridLength(0) : new GridLength(280);
         ContentGrid.ColumnSpacing = collapsed ? 0 : 16;
-        ToggleSidebarButton.Label = collapsed ? "展开会话" : "收起会话";
+        ToggleSidebarButton.Content = collapsed ? "展开会话" : "收起会话";
     }
 
     private void EnforceMinimumWindowSize()

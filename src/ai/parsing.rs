@@ -226,25 +226,36 @@ pub(super) fn parse_or_fallback_answer(
     if let Ok(json) = extract_json(text) {
         if let Ok(parsed) = serde_json::from_str::<AskResponse>(&json) {
             let answer = parsed.answer.trim().to_string();
+            let answer = if answer.is_empty() {
+                fallback_answer(question, no_context)
+            } else {
+                answer
+            };
+            // Even structured answers may carry inline citation markers
+            // (#2985) — extract them and footnote the body.
+            let (answer, inline_citations) =
+                crate::citations::extract_citations_unresolved(&answer);
+            let mut citations = parsed.citations;
+            citations.extend(inline_citations);
             return AskResponse {
-                answer: if answer.is_empty() {
-                    fallback_answer(question, no_context)
-                } else {
-                    answer
-                },
-                citations: parsed.citations,
+                answer,
+                citations,
                 note_draft: parsed.note_draft,
             };
         }
     }
 
+    let answer = if text.trim().is_empty() {
+        fallback_answer(question, no_context)
+    } else {
+        text.trim().to_string()
+    };
+    // Pull `[[note#section]]` / `[#cite:path:offset]` markers out of the
+    // plain-text answer and rewrite it with `[n]` footnotes (#2985).
+    let (answer, citations) = crate::citations::extract_citations_unresolved(&answer);
     AskResponse {
-        answer: if text.trim().is_empty() {
-            fallback_answer(question, no_context)
-        } else {
-            text.trim().to_string()
-        },
-        citations: Vec::new(),
+        answer,
+        citations,
         note_draft: None,
     }
 }
@@ -1101,6 +1112,34 @@ mod tests {
     fn parse_or_fallback_answer_no_json_uses_text() {
         let result = parse_or_fallback_answer("plain text answer", "q", false);
         assert_eq!(result.answer, "plain text answer");
+    }
+
+    #[test]
+    fn parse_or_fallback_answer_extracts_inline_citations() {
+        // Plain-text answer carrying a wikilink marker should be footnoted
+        // and the citation surfaced (#2985).
+        let result = parse_or_fallback_answer(
+            "Per [[Rust Book#Ownership]] the borrow checker helps.",
+            "q",
+            false,
+        );
+        assert_eq!(result.answer, "Per [1] the borrow checker helps.");
+        assert_eq!(result.citations.len(), 1);
+        assert_eq!(result.citations[0].title, "Rust Book");
+        assert_eq!(result.citations[0].snippet, "Ownership");
+    }
+
+    #[test]
+    fn parse_or_fallback_answer_json_with_inline_markers() {
+        // Structured answers may also carry inline markers alongside explicit
+        // citations — both should be present (#2985).
+        let text = r#"{"answer":"See [[Notes A]] and explicit","citations":[{"noteId":"x","title":"Explicit","path":"p","snippet":""}]}"#;
+        let result = parse_or_fallback_answer(text, "q", false);
+        assert_eq!(result.answer, "See [1] and explicit");
+        assert_eq!(result.citations.len(), 2);
+        // Explicit citations from the JSON come first, inline markers appended.
+        assert_eq!(result.citations[0].title, "Explicit");
+        assert_eq!(result.citations[1].title, "Notes A");
     }
 
     #[test]

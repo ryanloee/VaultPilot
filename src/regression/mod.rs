@@ -43,6 +43,6 @@ mod issue_2887_mirror_relative_path;
 mod issue_2889_mirror_orphan;
 mod issue_2913_deterministic_columns;
 mod issue_2921_formulas;
-mod issue_2936_attachment_cleanup;
 mod issue_2924_mirror_backflow;
+mod issue_2936_attachment_cleanup;
 mod issue_914_related_notes;

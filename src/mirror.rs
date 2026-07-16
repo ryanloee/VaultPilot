@@ -436,7 +436,7 @@ pub fn flow_back_external_change(
 
     let mirror_raw = std::fs::read_to_string(mirror_path)
         .with_context(|| format!("failed to read mirror file {}", mirror_path.display()))?;
-    let mirror_body = strip_anchor_from_content(&mirror_raw);
+    let mirror_with_frontmatter = strip_anchor_from_content(&mirror_raw);
 
     let vault_note = match load_note_with_context(context, note_id) {
         Ok(note) => note,
@@ -444,12 +444,30 @@ pub fn flow_back_external_change(
     };
 
     let vault_changed = vault_note.meta.updated_at != last_synced_at;
-    let mirror_content = &mirror_body;
+
+    // #2941: the mirror file is `compose_markdown(meta, body)` + anchor, i.e. it
+    // already contains the YAML frontmatter block. `strip_anchor_from_content`
+    // only removes the anchor comment, leaving `frontmatter + body`. Storing that
+    // whole string as `NoteDocument.body` would nest the frontmatter inside the
+    // body and duplicate it on the next re-export. Split the frontmatter off and
+    // keep only the body slice — preserving the existing vault frontmatter fields.
+    let (mirror_fm, mirror_body) =
+        match crate::storage::notes::split_frontmatter(&mirror_with_frontmatter) {
+            Ok(parts) => parts,
+            Err(_) => (
+                crate::storage::Frontmatter::default(),
+                mirror_with_frontmatter.as_str(),
+            ),
+        };
 
     if !vault_changed {
         let mut updated_note = vault_note;
-        updated_note.body = mirror_content.to_string();
-        if let Some(title) = extract_title_from_markdown(mirror_content) {
+        updated_note.body = mirror_body.to_string();
+        // Prefer the externally-edited title from the mirror frontmatter; fall
+        // back to deriving it from the (now frontmatter-stripped) body.
+        if !mirror_fm.title.is_empty() {
+            updated_note.meta.title = mirror_fm.title.clone();
+        } else if let Some(title) = extract_title_from_markdown(mirror_body) {
             updated_note.meta.title = title;
         }
         save_note_with_context(context, updated_note)?;
@@ -472,7 +490,7 @@ pub fn flow_back_external_change(
          ## Vault version (auto-saved)\n\n{}\n\n\
          ## Mirror version (external edit)\n\n{}\n\n\
          <!-- ===== END CONFLICT ===== -->\n",
-        mirror_content, vault_markdown, mirror_content
+        mirror_body, vault_markdown, mirror_body
     );
 
     let mut merged_note = vault_note;

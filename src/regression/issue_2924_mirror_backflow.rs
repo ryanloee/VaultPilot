@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(r1.created, 2);
 
         // Delete A from vault
-        assert!(delete_note_with_context(&ctx, "A").expect("delete A"));
+        assert!(delete_note_with_context(&ctx, "A", None).expect("delete A"));
 
         // Remove state file to simulate state loss
         let _ = fs::remove_file(mirror.join(MIRROR_STATE_FILE));

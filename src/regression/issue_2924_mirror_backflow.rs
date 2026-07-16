@@ -228,4 +228,77 @@ mod tests {
         assert_eq!(md1, md2);
         assert_eq!(hash_content(&md1), hash_content(&md2));
     }
+
+    #[test]
+    fn regression_2941_backflow_does_not_nest_frontmatter() {
+        // #2941: a mirror file is `compose_markdown(meta, body)` + anchor, i.e. it
+        // already contains a YAML frontmatter block. When an external edit is
+        // flowed back, only the *body* (not the frontmatter) must be stored in
+        // `NoteDocument.body`. Otherwise the frontmatter is nested inside the body
+        // and duplicated on every round-trip re-export.
+        let vault = std::env::temp_dir().join(format!("vp_2941_vault_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&vault);
+        let _ = fs::create_dir_all(&vault);
+        let ctx = StorageContext::for_test(&vault);
+        initialize_storage_with_context(&ctx).expect("init storage");
+
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    id: "beta".to_string(),
+                    title: "Note Beta".to_string(),
+                    updated_at: "2026-01-01T00:00:00Z".to_string(),
+                    ..Default::default()
+                },
+                body: "# Beta\n\noriginal body\n".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("save beta");
+
+        let mirror = std::env::temp_dir().join(format!("vp_2941_mirror_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&mirror);
+
+        // First sync writes the mirror file (frontmatter + body + anchor).
+        let r1 = mirror_sync_with_context(&ctx, &mirror).expect("first sync");
+        assert_eq!(r1.created, 1);
+
+        let mirror_file = mirror.join("beta.md");
+        let original = fs::read_to_string(&mirror_file).expect("read mirror");
+
+        // Simulate an external edit inside the body only.
+        let edited = original.replace("original body", "externally edited body");
+        fs::write(&mirror_file, &edited).expect("write external edit");
+
+        // Second sync: detects the hash mismatch and flows the edit back.
+        // This uses the correct `last_synced_at` from the mirror state, so the
+        // simple (non-conflict) backflow branch is exercised.
+        let r2 = mirror_sync_with_context(&ctx, &mirror).expect("second sync");
+        assert_eq!(r2.backflow, 1, "external edit must flow back to vault");
+
+        // After backflow, the note body must contain the external edit ...
+        let updated = crate::storage::load_note_with_context(&ctx, "beta").expect("reload beta");
+        assert!(updated.body.contains("externally edited body"));
+        // ... but must NOT contain a nested frontmatter delimiter.
+        assert_eq!(
+            updated.body.matches("---\n").count(),
+            0,
+            "backflow must not nest frontmatter inside the body; got:\n{}",
+            updated.body
+        );
+
+        // The re-exported mirror file must contain exactly ONE frontmatter block
+        // (open + close), not a duplicated/nested one.
+        let reexport = fs::read_to_string(&mirror_file).expect("read re-exported mirror");
+        assert_eq!(
+            reexport.matches("---\n").count(),
+            2,
+            "re-export should have a single frontmatter block (open+close); got:\n{}",
+            reexport
+        );
+
+        let _ = fs::remove_dir_all(&vault);
+        let _ = fs::remove_dir_all(&mirror);
+    }
 }

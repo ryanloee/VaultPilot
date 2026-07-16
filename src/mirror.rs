@@ -266,6 +266,17 @@ pub fn disk_scan_mirror_files(mirror_dir: &Path) -> anyhow::Result<HashMap<Strin
         let content = std::fs::read_to_string(&path)?;
         if let Some(id) = extract_note_id_anchor(&content) {
             map.insert(id, path);
+        } else {
+            // #2935: an external editor may have deleted or corrupted the anchor
+            // comment. Such a file would otherwise be silently skipped and never
+            // reach `orphan_mirror_files`, leaving it as a permanent orphan on
+            // disk. VaultPilot names mirror files `<note_id>.md` (#2859), so fall
+            // back to the filename stem as the id — mirroring Logseq's
+            // filename-based attribution — so the file can still be reconciled.
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if !stem.is_empty() {
+                map.insert(stem.to_string(), path);
+            }
         }
     }
     Ok(map)

@@ -8,15 +8,37 @@ use crate::models::AppSettings;
 use super::atomic_write;
 use super::pool::{AppPaths, StorageContext};
 
-/// Check if a string value looks like it was masked by [`mask_secret`] in
-/// `models::provider`.  Masked values either contain the Unicode ellipsis
-/// character `…` (U+2026) or are entirely composed of `*` (short keys).
+/// Check if a string value was produced by [`mask_secret`] in `models::provider`.
+///
+/// This is **format-aware** so it does not false-positive on genuine plaintext
+/// keys that merely *contain* the masking characters (#2987):
+///
+/// * **Short key** (≤ 12 chars): entirely `*` chars, length 1..=12.
+///   `mask_secret` only emits all-`*` for inputs of length ≤ 12, so a longer
+///   `*`-only string (or one containing `…`) is treated as plaintext.
+/// * **Long key** (> 12 chars): exactly `<4 chars>…<4 chars>` where the middle
+///   char is [`MASK_ELLIPSIS`] and the stated prefix/suffix equal the real
+///   first/last 4 chars of `s`. Any other `…`-containing string is plaintext.
 ///
 /// Uses [`MASK_ELLIPSIS`] from the provider module so that changes to the
 /// masking format don't silently corrupt stored keys (#2539).
 pub(crate) fn is_masked_key(s: &str) -> bool {
-    s.contains(crate::models::provider::MASK_ELLIPSIS)
-        || (!s.is_empty() && s.chars().all(|c| c == '*'))
+    let chars: Vec<char> = s.chars().collect();
+    if chars.is_empty() {
+        return false;
+    }
+    // Long-key mask: exactly "<4><ELLIPSIS><4>" == 9 chars with the middle
+    // char being MASK_ELLIPSIS. This is emitted by mask_secret for inputs
+    // longer than 12 chars. Checked first because a 9-char string is also
+    // "<= 12" by length, which would otherwise be misclassified as a short
+    // mask below.
+    if chars.len() == 9 && chars[4] == crate::models::provider::MASK_ELLIPSIS {
+        return true;
+    }
+    // Short-key mask: all '*' chars, length 1..=12. mask_secret only emits
+    // all-'*' for inputs of length ≤ 12, so a longer *-only string (or any
+    // string containing '…' that isn't the exact long form above) is plaintext.
+    !chars.is_empty() && chars.len() <= 12 && chars.iter().all(|c| *c == '*')
 }
 
 /// Load settings directly from the disk file, bypassing the in-memory cache.
@@ -534,7 +556,12 @@ mod tests {
         let settings = AppSettings {
             vault_dir: temp.join("vault").to_string_lossy().to_string(),
             provider: ProviderConfig {
-                api_key: "sk-abcd…wxyz".to_string(), // masked
+                // A VALID mask in the exact "<4><ELLIPSIS><4>" format produced
+                // by mask_secret (9 chars). This is genuinely masked, so saving
+                // over a corrupt file must be refused. A plaintext key that
+                // merely contains '…' (e.g. "sk-abcd…wxyz", 13 chars) is NOT a
+                // valid mask and is treated as real per #2987.
+                api_key: "sk-a…wxyz".to_string(),
                 ..ProviderConfig::default()
             },
             ..AppSettings::default()

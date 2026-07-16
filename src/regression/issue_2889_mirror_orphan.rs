@@ -34,7 +34,7 @@ mod tests {
     }
 
     #[test]
-    fn regression_2889_disk_scan_finds_anchored_files_only() {
+    fn regression_2889_disk_scan_finds_anchored_and_anchorless_files() {
         let dir = std::env::temp_dir().join(format!("vp_2889_scan_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
 
@@ -44,7 +44,9 @@ mod tests {
             "title: X\n\nbody\n\n<!-- vaultpilot-note-id: note_x -->\n",
         )
         .unwrap();
-        // A `.md` file without an anchor must be ignored.
+        // A `.md` file without an anchor: as of #2935 it is still indexed via
+        // its filename stem so it can be reconciled/cleaned (an external editor
+        // may have stripped the anchor). It must NOT be silently dropped.
         std::fs::write(dir.join("note_y.md"), "no anchor here").unwrap();
         // The state file must be ignored.
         std::fs::write(dir.join(MIRROR_STATE_FILE), "{}").unwrap();
@@ -52,9 +54,13 @@ mod tests {
         std::fs::write(dir.join("readme.txt"), "x").unwrap();
 
         let files = disk_scan_mirror_files(&dir).expect("scan must succeed");
-        assert_eq!(files.len(), 1, "only the anchored .md must be indexed");
+        assert_eq!(
+            files.len(),
+            2,
+            "anchored and anchor-less .md must both be indexed"
+        );
         assert!(files.contains_key("note_x"));
-        assert!(!files.contains_key("note_y"));
+        assert!(files.contains_key("note_y"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -129,6 +135,61 @@ mod tests {
         );
         assert_eq!(r2.deleted, 1, "exactly one orphan file removed");
         assert_eq!(r2.created, 1, "note B re-exported to fill the state gap");
+    }
+
+    #[test]
+    fn regression_2935_anchorless_orphan_is_cleaned() {
+        // Issue #2935: an external editor strips the anchor comment from a
+        // mirror `.md`. Previously such a file was skipped by disk_scan and
+        // never reached orphan_mirror_files, so it lingered forever. Now the
+        // filename stem is used as a fallback id, so when the underlying note
+        // is deleted the anchor-less file is correctly detected as an orphan
+        // and removed.
+        let vault = std::env::temp_dir().join(format!("vp_2935_vault_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vault);
+        let _ = std::fs::create_dir_all(&vault);
+        let ctx = StorageContext::for_test(&vault);
+        initialize_storage_with_context(&ctx).expect("init storage");
+
+        save_note_with_context(&ctx, note_doc("A", "Note A", "t1")).expect("save A");
+        save_note_with_context(&ctx, note_doc("B", "Note B", "t2")).expect("save B");
+
+        let mirror = std::env::temp_dir().join(format!("vp_2935_mirror_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&mirror);
+        let _ = std::fs::create_dir_all(&mirror);
+
+        // First full mirror.
+        let r1 = mirror_sync_with_context(&ctx, &mirror).expect("first sync");
+        assert_eq!(r1.created, 2);
+
+        // External editor strips the anchor comment from A.md.
+        std::fs::write(
+            mirror.join("A.md"),
+            "title: A\n\nbody of A (anchor removed)\n",
+        )
+        .unwrap();
+
+        // Delete note A from the vault.
+        assert!(delete_note_with_context(&ctx, "A", None).expect("delete A"));
+
+        // Simulate state loss so reconcile relies purely on disk-scan.
+        let _ = std::fs::remove_file(mirror.join(MIRROR_STATE_FILE));
+
+        // Second sync: the anchor-less A.md must be found (via filename stem)
+        // and removed as an orphan.
+        let r2 = mirror_sync_with_context(&ctx, &mirror).expect("second sync");
+        assert!(
+            !mirror.join("A.md").exists(),
+            "anchor-less orphan A.md must be cleaned up"
+        );
+        assert!(
+            mirror.join("B.md").exists(),
+            "current note B.md must remain"
+        );
+        assert_eq!(
+            r2.deleted, 1,
+            "exactly one orphan (the anchor-less A.md) removed"
+        );
 
         let _ = std::fs::remove_dir_all(&vault);
         let _ = std::fs::remove_dir_all(&mirror);

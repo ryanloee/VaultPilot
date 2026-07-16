@@ -410,6 +410,20 @@ impl CustomSkill {
             return None;
         }
 
+        // Auto-detect `requires_input` from the template body. If the author
+        // omitted the frontmatter flag but the template contains the `{input}`
+        // placeholder, mark the skill as requiring input so user-supplied text
+        // is not silently dropped by `build_prompt` (#2980).
+        let mut requires_input = fm.requires_input;
+        if !requires_input && body.contains("{input}") {
+            requires_input = true;
+            tracing::warn!(
+                skill = %id,
+                "custom skill has no `requires_input: true` in frontmatter but its \
+                 template contains the `{{input}}` placeholder — inferred requires_input = true"
+            );
+        }
+
         let title = if fm.title.trim().is_empty() {
             id.replace('-', " ")
         } else {
@@ -432,7 +446,7 @@ impl CustomSkill {
             title,
             description,
             category: Self::parse_category(&fm.category),
-            requires_input: fm.requires_input,
+            requires_input,
             prompt_template: body.to_string(),
             source_file: path
                 .file_name()
@@ -700,5 +714,56 @@ mod tests {
 
         let summarize = find_skill("summarize").unwrap();
         assert!(summarize.requires_input, "summarize should require input");
+    }
+
+    #[test]
+    fn test_issue_2980_requires_input_inferred_from_input_placeholder() {
+        use std::io::Write;
+        let dir =
+            std::env::temp_dir().join(format!("vaultpilot-skill-test-2980-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("my-skill.md");
+        {
+            let mut f = std::fs::File::create(&file).unwrap();
+            // Frontmatter omits `requires_input`, but the body uses {input}.
+            writeln!(f, "---").unwrap();
+            writeln!(f, "title: My Skill").unwrap();
+            writeln!(f, "---").unwrap();
+            writeln!(f, "Summarize: {{input}}").unwrap();
+        }
+
+        let skill = CustomSkill::from_file(&file).expect("skill should parse");
+        assert!(
+            skill.requires_input,
+            "requires_input should be inferred true from {{input}} placeholder (#2980)"
+        );
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn test_issue_2980_no_input_placeholder_leaves_requires_input_false() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!(
+            "vaultpilot-skill-test-2980b-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("plain-skill.md");
+        {
+            let mut f = std::fs::File::create(&file).unwrap();
+            writeln!(f, "---").unwrap();
+            writeln!(f, "title: Plain Skill").unwrap();
+            writeln!(f, "---").unwrap();
+            writeln!(f, "Do something without input.").unwrap();
+        }
+
+        let skill = CustomSkill::from_file(&file).expect("skill should parse");
+        assert!(
+            !skill.requires_input,
+            "requires_input should remain false when no {{input}} placeholder (#2980)"
+        );
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

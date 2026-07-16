@@ -1192,6 +1192,11 @@ enum VaultActions {
         #[arg(long)]
         format: Option<QueryFormat>,
     },
+    /// Delete a previously saved named view (#2962)
+    DeleteView {
+        /// Name of the saved view to delete
+        name: String,
+    },
 }
 
 /// Output format for vault query results (#2813)
@@ -2793,6 +2798,7 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
         } => handle_save_view(context, name, query, format, group_by.as_deref(), formula),
         VaultActions::ListViews => handle_list_views(context),
         VaultActions::OpenView { name, format } => handle_open_view(context, name, format.as_ref()),
+        VaultActions::DeleteView { name } => handle_delete_view(context, name),
     }
 }
 
@@ -3141,6 +3147,27 @@ fn handle_open_view(
         &view.formula,
         &[],
     )
+}
+
+/// Delete a previously saved named view (#2962).
+fn handle_delete_view(context: &StorageContext, name: &str) -> Result<Value> {
+    let stem = sanitize_view_name(name);
+    let path = context
+        .vault_dir()
+        .join(VIEWS_DIR)
+        .join(format!("{stem}.json"));
+    if !path.exists() {
+        anyhow::bail!(
+            "saved view '{name}' not found at {}. Use `vp vault list-views` to see available views.",
+            path.display()
+        );
+    }
+    std::fs::remove_file(&path)
+        .with_context(|| format!("failed to delete view at {}", path.display()))?;
+    to_json(&serde_json::json!({
+        "deleted": path.display().to_string(),
+        "name": name,
+    }))
 }
 
 /// Extract the raw YAML string from a frontmatter block (`---\n...\n---`).

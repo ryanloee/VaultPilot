@@ -751,10 +751,14 @@ mod tests {
     use super::*;
 
     fn setup_test_context() -> StorageContext {
-        let temp = std::env::temp_dir().join(format!(
-            "vaultpilot-mail-test-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
+        // Use a random UUID (not a clock timestamp) for temp-dir uniqueness.
+        // `timestamp_nanos_opt()` collides on Windows where the system clock has
+        // ~15ms resolution: parallel tests grab the same nanosecond value, share
+        // one SQLite DB, and cross-contaminate each other (e.g.
+        // `test_add_and_list_mail_accounts` then sees >1 account). UUIDv4 is
+        // collision-proof across threads. Mirrors the pattern in
+        // `regression/issue_1912_fsrs_spaced_repetition.rs`.
+        let temp = std::env::temp_dir().join(format!("vaultpilot-mail-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&temp).expect("temp dir");
         let ctx = StorageContext::for_test(&temp);
         // Ensure schema (includes mail tables via ensure_schema)

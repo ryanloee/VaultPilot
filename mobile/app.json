@@ -2,7 +2,7 @@
   "expo": {
     "name": "VaultPilot",
     "slug": "vaultpilot",
-    "version": "0.5.56",
+    "version": "0.5.57",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.vaultpilot.mobile",
-      "versionCode": 556,
+      "versionCode": 557,
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",

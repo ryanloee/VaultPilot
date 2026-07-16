@@ -107,6 +107,32 @@
                 </ResourceDictionary>
                 <!-- High Contrast fallback (#811) — uses system gray text color -->
                 <ResourceDictionary x:Key="HighContrast">
+                    <!-- Design system: 3-layer hierarchy (#2967 refresh, #2972) -->
+                    <SolidColorBrush x:Key="VaultSurfaceBg" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="VaultCardBg" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="VaultSidebarBg" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="VaultBorder" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="VaultTextPrimary" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="VaultTextSecondary" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="VaultTextMuted" Color="{ThemeResource SystemColorGrayTextColor}" />
+                    <!-- Message bubbles -->
+                    <SolidColorBrush x:Key="VaultBubbleUserBg" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="VaultBubbleUserFg" Color="{ThemeResource SystemColorHighlightTextColor}" />
+                    <SolidColorBrush x:Key="VaultBubbleAiBg" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <SolidColorBrush x:Key="VaultBubbleAiFg" Color="{ThemeResource SystemColorButtonTextColor}" />
+                    <!-- Avatars -->
+                    <SolidColorBrush x:Key="VaultAvatarUserBg" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="VaultAvatarUserFg" Color="{ThemeResource SystemColorHighlightTextColor}" />
+                    <SolidColorBrush x:Key="VaultAvatarAiBg" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <SolidColorBrush x:Key="VaultAvatarAiFg" Color="{ThemeResource SystemColorButtonTextColor}" />
+                    <!-- Input area -->
+                    <SolidColorBrush x:Key="VaultInputBg" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <!-- Status accents -->
+                    <SolidColorBrush x:Key="VaultAccentBlue" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="VaultAccentGreen" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="VaultAccentOrange" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="VaultAccentRed" Color="{ThemeResource SystemColorHighlightColor}" />
+
                     <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
                     <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="{ThemeResource SystemColorButtonTextColor}" />
                     <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />

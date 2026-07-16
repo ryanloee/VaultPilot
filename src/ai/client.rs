@@ -1284,13 +1284,29 @@ pub(super) fn is_private_ip(ip: IpAddr) -> bool {
 
 /// Returns `true` if `ip` should be *blocked* by SSRF filtering.
 ///
-/// This is `is_private_ip` minus the fake-ip proxy pool (198.18.0.0/15).
-/// Fake-ip addresses (Clash/sing-box TUN mode) are placeholder addresses the
-/// proxy transparently routes — they are not internal infrastructure worth
-/// protecting against, so they are allowed unless the operator opts into
-/// stricter blocking. See issue #2952.
+/// This is `is_private_ip` minus the fake-ip proxy pool (198.18.0.0/15) — but
+/// only when the operator has explicitly opted into allowing fake-ip via the
+/// `VAULTPILOT_ALLOW_FAKEIP` env var (set when a local proxy such as
+/// Clash/sing-box TUN or fake-ip mode is actually intercepting DNS for the
+/// domain). Fake-ip addresses are placeholder addresses the proxy transparently
+/// routes, so they are safe to reach *through the proxy*.
+///
+/// **By default (no opt-in) the 198.18.0.0/15 range is blocked.** A direct
+/// (non-proxied) request to an address in that range would otherwise bypass
+/// SSRF filtering and reach reserved infrastructure. See issue #2977 — the
+/// previous unconditional allowance (#2952) over-relaxed SSRF protection in
+/// environments without a proxy. The opt-in preserves the legitimate
+/// 智谱/Clash use-case from #2944 while restoring default-deny.
 pub(super) fn is_blocked_ip(ip: IpAddr) -> bool {
-    is_private_ip(ip) && !is_fakeip(ip)
+    is_private_ip(ip) && !(is_fakeip(ip) && fakeip_opt_in())
+}
+
+/// Returns `true` if the operator has explicitly opted into allowing the
+/// 198.18.0.0/15 fake-ip proxy pool. Set `VAULTPILOT_ALLOW_FAKEIP=1` only when
+/// a local proxy (Clash/sing-box TUN or fake-ip mode) is genuinely intercepting
+/// DNS for the target domain. See issue #2977.
+fn fakeip_opt_in() -> bool {
+    std::env::var("VAULTPILOT_ALLOW_FAKEIP").is_ok()
 }
 
 /// Route to the correct API endpoint based on provider type.

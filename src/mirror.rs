@@ -485,19 +485,31 @@ pub fn flow_back_external_change(
         md
     };
 
-    let merged_body = format!(
-        "{}\n\n<!-- ===== CONFLICT: vault and mirror both changed ===== -->\n\n\
-         ## Vault version (auto-saved)\n\n{}\n\n\
-         ## Mirror version (external edit)\n\n{}\n\n\
-         <!-- ===== END CONFLICT ===== -->\n",
-        mirror_body, vault_markdown, mirror_body
-    );
+    let merged_body = build_conflict_merge_body(&vault_markdown, mirror_body);
 
     let mut merged_note = vault_note;
     merged_note.body = merged_body;
     save_note_with_context(context, merged_note)?;
 
     Ok(true)
+}
+
+/// Build the merged note body used when both the vault note and the mirror
+/// file changed concurrently (#2924 conflict branch).
+///
+/// The result contains exactly two labelled sections — `## Vault version
+/// (auto-saved)` with the vault content and `## Mirror version (external edit)`
+/// with the externally-edited mirror content — wrapped in a conflict banner.
+/// The mirror content must appear **once**, under its own heading; it must not
+/// leak above the banner. Regression guard for #2945.
+pub(crate) fn build_conflict_merge_body(vault_markdown: &str, mirror_body: &str) -> String {
+    format!(
+        "<!-- ===== CONFLICT: vault and mirror both changed ===== -->\n\n\
+         ## Vault version (auto-saved)\n\n{}\n\n\
+         ## Mirror version (external edit)\n\n{}\n\n\
+         <!-- ===== END CONFLICT ===== -->\n",
+        vault_markdown, mirror_body
+    )
 }
 
 /// Extract the title from YAML frontmatter in a markdown string.
@@ -543,5 +555,45 @@ pub fn mirror_watch_with_context(
             })
         );
         std::thread::sleep(std::time::Duration::from_secs(interval_secs.max(1)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_conflict_merge_body;
+
+    #[test]
+    fn conflict_merge_body_has_each_section_once() {
+        // Regression test for #2945: the mirror (external) content must appear
+        // exactly once, under its own heading, and must NOT leak above the
+        // conflict banner.
+        let vault = "# Vault content\nvault-only";
+        let mirror = "# Mirror content\nmirror-only";
+        let merged = build_conflict_merge_body(vault, mirror);
+
+        // Banner appears exactly once, at the very start.
+        let banner = "<!-- ===== CONFLICT: vault and mirror both changed ===== -->";
+        assert!(
+            merged.starts_with(banner),
+            "merged body must start with banner"
+        );
+        assert_eq!(merged.matches(banner).count(), 1);
+
+        // Each labelled section appears once.
+        assert_eq!(merged.matches("## Vault version (auto-saved)").count(), 1);
+        assert_eq!(
+            merged.matches("## Mirror version (external edit)").count(),
+            1
+        );
+
+        // Mirror content appears exactly once (no triple duplication).
+        assert_eq!(merged.matches("mirror-only").count(), 1);
+        // Vault content appears exactly once.
+        assert_eq!(merged.matches("vault-only").count(), 1);
+
+        // Mirror content is present *after* the banner, not before it.
+        let banner_pos = merged.find(banner).unwrap();
+        let mirror_pos = merged.find("mirror-only").unwrap();
+        assert!(mirror_pos > banner_pos);
     }
 }

@@ -1139,7 +1139,13 @@ pub(super) async fn validate_base_url(
         return Ok(Vec::new());
     }
     if allow_local {
-        // Resolve DNS and return addresses (skip private IP check) to enable DNS pinning.
+        // Allow local endpoints (Ollama, etc.) but DO NOT silently disable
+        // SSRF filtering for arbitrary private ranges. Literal `localhost`
+        // and literal IPs are handled above (returning Ok without resolving).
+        // Here we resolve a *hostname* and still reject any address that
+        // resolves to a private/reserved IP — matching the non-local path.
+        // This prevents VAULTPILOT_ALLOW_LOCAL_ENDPOINT from being a global
+        // opt-out that exposes internal infrastructure (#2950).
         let port = parsed
             .port_or_known_default()
             .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
@@ -1150,7 +1156,16 @@ pub(super) async fn validate_base_url(
         )
         .await
         {
-            Ok(Ok(addrs)) => Ok(addrs.map(|a| (host_str.to_string(), a)).collect()),
+            Ok(Ok(addrs)) => {
+                let mut resolved = Vec::new();
+                for addr in addrs {
+                    if is_private_ip(addr.ip()) {
+                        return Err(anyhow!("{}", private_ip_error_message(host_str, addr.ip())));
+                    }
+                    resolved.push((host_str.to_string(), addr));
+                }
+                Ok(resolved)
+            }
             Ok(Err(e)) => Err(anyhow!(
                 "failed to resolve base_url host '{}': {}",
                 host_str,

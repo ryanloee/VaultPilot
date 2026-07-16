@@ -1020,6 +1020,39 @@ mod tests {
             .is_err());
     }
 
+    // Regression test for #2950: VAULTPILOT_ALLOW_LOCAL_ENDPOINT must NOT
+    // become a global opt-out that disables SSRF filtering for arbitrary
+    // private ranges. The fix makes the allow_local DNS-resolution branch
+    // reject any address that resolves to a private/reserved IP (mirroring
+    // the non-local branch). The legitimate local cases (literal localhost
+    // and a literal local IP, used by Ollama) remain allowed because the
+    // user explicitly opted into a local endpoint.
+    #[test]
+    fn validate_base_url_allow_local_preserves_local() {
+        use super::client::validate_base_url;
+
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT", "1");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        // Legitimate local endpoints still allowed (Ollama use case).
+        assert!(rt
+            .block_on(validate_base_url("http://localhost:11434", false))
+            .is_ok());
+        assert!(rt
+            .block_on(validate_base_url("http://127.0.0.1:11434", false))
+            .is_ok());
+
+        // Without the env var, localhost is rejected (regression guard for
+        // the env guard itself).
+        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+        assert!(rt
+            .block_on(validate_base_url("http://localhost:11434", false))
+            .is_err());
+
+        std::env::remove_var("VAULTPILOT_ALLOW_LOCAL_ENDPOINT");
+    }
+
     // ── is_private_ip ──────────────────────────────────────────────────
 
     #[test]

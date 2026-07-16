@@ -16,6 +16,8 @@ module.exports = {
     '^@react-native-async-storage/async-storage$': '<rootDir>/src/__mocks__/async-storage.ts',
     '^expo-secure-store$': '<rootDir>/src/__mocks__/expo-secure-store.ts',
     '^expo-speech-recognition$': '<rootDir>/src/__mocks__/expo-speech-recognition.ts',
+    '^expo-image-picker$': '<rootDir>/src/__mocks__/expo-image-picker.ts',
+    '^expo-document-picker$': '<rootDir>/src/__mocks__/expo-document-picker.ts',
     '^expo-file-system$': '<rootDir>/src/__mocks__/expo-file-system.ts',
     '^expo-file-system/legacy$': '<rootDir>/src/__mocks__/expo-file-system-legacy.ts',
     '^expo-intent-launcher$': '<rootDir>/src/__mocks__/expo-intent-launcher.ts',

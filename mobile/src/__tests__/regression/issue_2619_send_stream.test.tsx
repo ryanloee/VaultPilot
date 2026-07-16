@@ -33,8 +33,25 @@ jest.mock('../../db', () => ({
 }));
 jest.mock('../../utils/noteRefs', () => ({ loadNoteTitleMap: jest.fn(async () => new Map()), clearNoteTitleCache: jest.fn() }));
 jest.mock('../../components/chat', () => {
-  const { View, Text } = require('react-native');
-  return { MessageBubble: ({ item }) => React.createElement(View, null, React.createElement(Text, null, item.content)) };
+  const { View, Text, TextInput, TouchableOpacity } = require('react-native');
+  const MessageBubble = ({ item }) => React.createElement(View, null, React.createElement(Text, null, item.content));
+  // Lightweight InputBar stub exposing the testIDs the #2619 suite relies on.
+  const InputBar = (p) => {
+    const disabled = !((p.input && p.input.trim()) || (p.attachments && p.attachments.length > 0));
+    return React.createElement(View, null,
+      React.createElement(TextInput, {
+        testID: 'chat-input',
+        value: p.input,
+        onChangeText: p.onInputChange,
+        onSubmitEditing: p.onSend,
+        editable: !p.streaming,
+      }),
+      p.streaming
+        ? React.createElement(TouchableOpacity, { testID: 'stop-btn', onPress: p.onStop }, React.createElement(Text, null, 'stop'))
+        : React.createElement(TouchableOpacity, { testID: 'send-btn', onPress: p.onSend, disabled }, React.createElement(Text, null, 'send')),
+    );
+  };
+  return { MessageBubble, InputBar };
 });
 jest.mock('../../components/MarkdownPreview', () => ({ default: ({ content }) => { const { Text } = require('react-native'); return React.createElement(Text, null, content); } }));
 jest.mock('expo-haptics', () => ({ impactAsync: jest.fn().mockResolvedValue(undefined), ImpactFeedbackStyle: { Medium: 'medium' } }));

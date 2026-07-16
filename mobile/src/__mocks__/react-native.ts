@@ -50,7 +50,36 @@ export const useColorScheme = () => 'light';
 export const StatusBar = createComponent('StatusBar');
 export const FlatList = require('react').forwardRef((props: any, ref: any) => {
   const React = require('react');
+  // Expose imperative scroll methods so components calling
+  // listRef.current?.scrollToEnd() in effects/timeouts don't throw in tests.
+  React.useImperativeHandle(ref, () => ({
+    scrollToEnd: () => {},
+    scrollToOffset: () => {},
+    scrollToIndex: () => {},
+  }));
   return React.createElement('FlatList', { ...props, ref }, props.children);
 });
 export const ActivityIndicator = createComponent('ActivityIndicator');
 export const SafeAreaView = createComponent('SafeAreaView');
+
+// Minimal Animated mock — enough for components that use Animated.Value /
+// Animated.View / timing / loop / sequence / parallel (e.g. InputBar waveform).
+class AnimatedValue {
+  _value: number;
+  constructor(v: number) { this._value = v; }
+  setValue(v: number) { this._value = v; }
+  interpolate() { return this; }
+}
+const animation = { start: (cb?: (r: { finished: boolean }) => void) => cb?.({ finished: true }), stop: () => {} };
+export const Animated = {
+  Value: AnimatedValue,
+  View: createComponent('Animated.View'),
+  Text: createComponent('Animated.Text'),
+  ScrollView: createComponent('Animated.ScrollView'),
+  timing: () => animation,
+  loop: () => animation,
+  sequence: () => animation,
+  parallel: () => animation,
+  spring: () => animation,
+};
+export const Haptics = { impactAsync: jest.fn(), ImpactFeedbackStyle: { Light: 'light', Medium: 'medium' } };

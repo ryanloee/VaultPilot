@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import {
-  View, Text, TextInput, FlatList, TouchableOpacity,
+  View, Text, FlatList, TouchableOpacity,
   KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet, Alert,
   NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
@@ -13,9 +13,27 @@ import { chatWithReconnect, ChatMessage } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls, ResponseStyle, RESPONSE_STYLE_LABELS } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession, getNoteTitleMap } from '../db';
 import { loadNoteTitleMap, clearNoteTitleCache } from '../utils/noteRefs';
-import { MessageBubble } from '../components/chat';
+import { MessageBubble, InputBar } from '../components/chat';
+import { useVoiceInput } from '../utils/useVoiceInput';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; streamStatus?: string; attachments?: { name: string; type: 'image' | 'file' }[]; }
+
+/** Attachment shape shared with InputBar. */
+interface Attachment { name: string; uri: string; type: 'image' | 'file'; }
+
+/** Parse the JSON attachments column stored in the DB into Msg shape. */
+function parseDbAttachments(raw?: string): Msg['attachments'] {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((a: any) => ({ name: String(a.name), type: a.type === 'file' ? 'file' : 'image' }));
+    }
+  } catch { /* ignore malformed JSON */ }
+  return undefined;
+}
 
 /** Max messages sent to API to avoid exceeding model context window */
 const MAX_HISTORY_MESSAGES = 50;
@@ -40,6 +58,7 @@ export default function ChatScreen({ navigation, route }: any) {
   const nearBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [responseStyle, setResponseStyle] = useState<ResponseStyle>('standard');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const activeLoadRef = useRef<string | null>(null);
   const isSendingRef = useRef(false);
   const routeHandledRef = useRef(false);
@@ -64,6 +83,7 @@ export default function ChatScreen({ navigation, route }: any) {
       // in-flight user/AI messages that are not yet in the DB (#2101).
       const dbMsgs = history.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+        attachments: parseDbAttachments((m as any).attachments as string | undefined),
       }));
       const dbIds = new Set(dbMsgs.map(m => m.id));
       setMsgs(prev => {
@@ -114,6 +134,7 @@ export default function ChatScreen({ navigation, route }: any) {
           if (cancelled) return;
           setMsgs(history.map(m => ({
             id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+            attachments: parseDbAttachments((m as any).attachments as string | undefined),
           })));
         } else {
           const id = await createSession('新对话');
@@ -155,6 +176,102 @@ export default function ChatScreen({ navigation, route }: any) {
   sessionIdRef.current = sessionId;
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
+  // ── Voice input (speech-to-text) ──
+  const voice = useVoiceInput();
+
+  // Sync transcript (live dictation) into the text input.
+  useEffect(() => {
+    if (voice.transcript) setInput(voice.transcript);
+  }, [voice.transcript]);
+
+  // ── Attachment selection handlers ──
+  const addAttachments = useCallback((items: Attachment[]) => {
+    setAttachments(prev => [...prev, ...items]);
+  }, []);
+
+  const handlePickImage = useCallback(async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('提示', '需要相册权限才能选择图片');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        allowsMultipleSelection: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      addAttachments(
+        result.assets.map(a => ({
+          name: a.fileName || a.uri.split('/').pop() || 'image',
+          uri: a.uri,
+          type: 'image' as const,
+        })),
+      );
+    } catch (e) {
+      console.warn('[Chat] pick image failed:', e);
+      Alert.alert('选择图片失败', String(e));
+    }
+  }, [addAttachments]);
+
+  const handleTakePhoto = useCallback(async () => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('提示', '需要相机权限才能拍照');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+      if (result.canceled || !result.assets?.length) return;
+      const a = result.assets[0];
+      addAttachments([{
+        name: a.fileName || a.uri.split('/').pop() || 'photo.jpg',
+        uri: a.uri,
+        type: 'image' as const,
+      }]);
+    } catch (e) {
+      console.warn('[Chat] take photo failed:', e);
+      Alert.alert('拍照失败', String(e));
+    }
+  }, [addAttachments]);
+
+  const handlePickDocument = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      addAttachments(
+        result.assets.map(d => ({
+          name: d.name,
+          uri: d.uri,
+          type: 'file' as const,
+        })),
+      );
+    } catch (e) {
+      console.warn('[Chat] pick document failed:', e);
+      Alert.alert('选择文件失败', String(e));
+    }
+  }, [addAttachments]);
+
+  const handleEmojiSelect = useCallback((emoji: string) => {
+    setInput(prev => prev + emoji);
+  }, []);
+
+  const handleVoiceToggle = useCallback(() => {
+    if (voice.isListening) {
+      voice.stopListening();
+    } else {
+      voice.startListening();
+    }
+  }, [voice]);
+
+  const handleRemoveAttachment = useCallback((index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
   // Handle navigation params when returning from SessionsScreen
   // NOTE: sessionId intentionally NOT in dependency array — its change would
   // cause the effect to re-fire with stale route.params, re-loading the old session.
@@ -176,7 +293,7 @@ export default function ChatScreen({ navigation, route }: any) {
   }, []);
 
   const send = useCallback(async () => {
-    if (!input.trim() || streaming || !sessionId || isSendingRef.current) return;
+    if ((!input.trim() && attachments.length === 0) || streaming || !sessionId || isSendingRef.current) return;
     isSendingRef.current = true;
     try {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(e => console.warn('[Haptics] error:', e));
@@ -196,7 +313,7 @@ export default function ChatScreen({ navigation, route }: any) {
     let userId: string;
     let activeSessionId = sessionId;
     try {
-      userId = await addMessage(activeSessionId, 'user', userText);
+      userId = await addMessage(activeSessionId, 'user', userText, attachments.length > 0 ? attachments.map(a => ({ name: a.name, type: a.type })) : undefined);
       if (!checkSessionAlive(activeSessionId)) return;
     } catch (e: any) {
       // FOREIGN KEY = session was deleted/reset; recreate and retry
@@ -204,7 +321,7 @@ export default function ChatScreen({ navigation, route }: any) {
         try {
           const newId = await createSession('新对话');
           activeSessionId = newId;
-          userId = await addMessage(newId, 'user', userText);
+          userId = await addMessage(newId, 'user', userText, attachments.length > 0 ? attachments.map(a => ({ name: a.name, type: a.type })) : undefined);
           if (!checkSessionAlive(newId)) return;
           // Only update UI state after message persistence succeeds (#2053)
           setSessionId(newId);
@@ -232,7 +349,9 @@ export default function ChatScreen({ navigation, route }: any) {
 
     setInput('');
     setInputHeight(0);
-    const userMsg: Msg = { id: userId, role: 'user', content: userText };
+    setAttachments([]);
+    const userAttachments = attachments.length > 0 ? attachments.map(a => ({ name: a.name, type: a.type })) : undefined;
+    const userMsg: Msg = { id: userId, role: 'user', content: userText, attachments: userAttachments };
     // Snapshot before state update — msgsRef may or may not be flushed by React
     // before we build the API history, so pin it here.
     const prevMsgs = [...msgsRef.current];
@@ -406,7 +525,7 @@ export default function ChatScreen({ navigation, route }: any) {
       abortRef.current = null;
       if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
     }
-  }, [input, streaming, sessionId, responseStyle]);
+  }, [input, streaming, sessionId, responseStyle, attachments]);
 
   // Create a new conversation
   const newChat = useCallback(async () => {
@@ -591,36 +710,32 @@ export default function ChatScreen({ navigation, route }: any) {
         ))}
       </View>
 
-      {/* Input bar */}
-      <View style={[s.inputBar, { backgroundColor: c.bg }]}>
-        <TextInput
-          testID="chat-input"
-          style={[s.textInput, { backgroundColor: c.inputBg, color: c.text, borderColor: c.border, height: Math.max(40, Math.min(inputHeight, 120)) }]}
-          value={input}
-          onChangeText={setInput}
-          onContentSizeChange={e => setInputHeight(e.nativeEvent.contentSize.height)}
-          placeholder="输入消息..."
-          placeholderTextColor={c.textSecondary}
-          maxLength={4000}
-          editable={!streaming}
-          returnKeyType="send"
-          onSubmitEditing={send}
-        />
-        {streaming ? (
-          <TouchableOpacity onPress={stop} testID="stop-btn" style={[s.sendBtn, { backgroundColor: '#EF4444' }]}>
-            <Ionicons name="stop-circle-outline" size={22} color="#FFF" />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            onPress={send}
-            testID="send-btn"
-            style={[s.sendBtn, { backgroundColor: input.trim() ? accentColor : c.border }]}
-            disabled={!input.trim()}
-          >
-            <Ionicons name="send" size={18} color="#FFF" />
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* Input bar — voice + image/photo/file sending via shared InputBar */}
+      <InputBar
+        input={input}
+        inputHeight={inputHeight}
+        streaming={streaming}
+        attachments={attachments}
+        accentColor={accentColor}
+        bgColor={c.bg}
+        inputBgColor={c.inputBg}
+        textColor={c.text}
+        textColorSecondary={c.textSecondary}
+        borderColor={c.border}
+        voiceAvailable={voice.isAvailable}
+        voiceListening={voice.isListening}
+        voiceVolume={voice.volumeLevel}
+        onInputChange={setInput}
+        onInputHeightChange={setInputHeight}
+        onSend={send}
+        onStop={stop}
+        onTakePhoto={handleTakePhoto}
+        onPickImage={handlePickImage}
+        onPickDocument={handlePickDocument}
+        onRemoveAttachment={handleRemoveAttachment}
+        onVoiceToggle={handleVoiceToggle}
+        onEmojiSelect={handleEmojiSelect}
+      />
     </KeyboardAvoidingView>
     </SafeAreaView>
   );

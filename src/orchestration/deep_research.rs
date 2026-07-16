@@ -1219,7 +1219,7 @@ mod tests {
         );
 
         // Clean up
-        delete_note_with_context(&ctx, &saved.meta.id).unwrap();
+        delete_note_with_context(&ctx, &saved.meta.id, None).unwrap();
     }
 
     #[test]

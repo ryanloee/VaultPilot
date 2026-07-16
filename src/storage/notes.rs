@@ -176,7 +176,22 @@ pub fn load_note_with_context(context: &StorageContext, note_id: &str) -> Result
     parse_markdown_note(Path::new(&path), "manual")
 }
 
-pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Result<bool> {
+/// Delete a note (and optionally its associated attachments).
+///
+/// `delete_attachments` controls attachment cleanup:
+/// * `None`      — use the default behavior (delete non-shared attachments, as before)
+/// * `Some(true)`— force deletion of non-shared attachment files
+/// * `Some(false)`— delete **only** the note's `.md` file; leave all attachment
+///   files on disk untouched (mirrors Obsidian's "Never" cleanup mode)
+///
+/// This powers the per-delete "Also delete attachments?" prompt
+/// (enhancement #2936): the UI passes `Some(user_choice)` while callers that
+/// don't care about the distinction pass `None` to keep the prior behavior.
+pub fn delete_note_with_context(
+    context: &StorageContext,
+    note_id: &str,
+    delete_attachments: Option<bool>,
+) -> Result<bool> {
     let (mut connection, _) = open_connection(context)?;
     let row: Option<(String, String)> = connection
         .query_row(
@@ -238,24 +253,32 @@ pub fn delete_note_with_context(context: &StorageContext, note_id: &str) -> Resu
     // files for attachments that are not shared with other notes.
     // For shared files (attachments referenced by multiple notes), we skip
     // deletion.
+    //
+    // When the caller explicitly opts out (`Some(false)`), we leave every
+    // attachment file on disk untouched and only remove the note itself —
+    // this is the "Never delete attachments" behavior. `None` and
+    // `Some(true)` both keep the original cleanup behavior. (#2936)
+    let keep_attachments = delete_attachments == Some(false);
     let note_stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let parent_dir = file.parent().unwrap_or(Path::new(""));
     let assets_dir = parent_dir.join(format!("{note_stem}-assets"));
 
-    for path_str in &attachment_paths {
-        let apath = PathBuf::from(path_str);
-        if apath.exists() && !shared_paths.contains(path_str) {
-            if let Err(e) = fs::remove_file(&apath) {
-                warn!(path = %apath.display(), error = %e, "failed to delete attachment file");
+    if !keep_attachments {
+        for path_str in &attachment_paths {
+            let apath = PathBuf::from(path_str);
+            if apath.exists() && !shared_paths.contains(path_str) {
+                if let Err(e) = fs::remove_file(&apath) {
+                    warn!(path = %apath.display(), error = %e, "failed to delete attachment file");
+                }
             }
         }
-    }
 
-    // Remove the assets directory if it exists and is now empty
-    // `fs::remove_dir` only succeeds if the directory is empty, so this
-    // is a no-op if shared attachment files or non-attachment files remain.
-    if assets_dir.exists() {
-        let _ = fs::remove_dir(&assets_dir);
+        // Remove the assets directory if it exists and is now empty
+        // `fs::remove_dir` only succeeds if the directory is empty, so this
+        // is a no-op if shared attachment files or non-attachment files remain.
+        if assets_dir.exists() {
+            let _ = fs::remove_dir(&assets_dir);
+        }
     }
 
     // Delete the physical file only after the DB transaction has been committed.
@@ -2039,7 +2062,7 @@ pub async fn save_note_with_images_async(
 pub async fn delete_note_async(ctx: &StorageContext, note_id: &str) -> Result<bool> {
     let ctx = ctx.clone();
     let note_id = note_id.to_owned();
-    tokio::task::spawn_blocking(move || delete_note_with_context(&ctx, &note_id))
+    tokio::task::spawn_blocking(move || delete_note_with_context(&ctx, &note_id, None))
         .await
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }

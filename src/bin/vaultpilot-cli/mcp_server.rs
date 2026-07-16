@@ -2043,7 +2043,7 @@ async fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Va
         None => return mcp_tool_error("notes.delete requires 'id' parameter".to_string()),
     };
     let ctx = context.clone();
-    tokio::task::spawn_blocking(move || match delete_note_with_context(&ctx, &id) {
+    tokio::task::spawn_blocking(move || match delete_note_with_context(&ctx, &id, None) {
         Ok(deleted) => mcp_tool_success(
             format!("Deleted={deleted}, id={}", escape_xml_content(&id)),
             serde_json::json!({ "deleted": deleted, "id": id }),

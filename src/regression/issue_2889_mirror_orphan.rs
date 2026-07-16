@@ -111,7 +111,7 @@ mod tests {
         assert!(mirror.join(MIRROR_STATE_FILE).exists(), "state written");
 
         // Delete note A from the vault; its mirror `.md` lingers on disk.
-        assert!(delete_note_with_context(&ctx, "A").expect("delete A"));
+        assert!(delete_note_with_context(&ctx, "A", None).expect("delete A"));
 
         // Simulate state loss / corruption / migration.
         let _ = std::fs::remove_file(mirror.join(MIRROR_STATE_FILE));

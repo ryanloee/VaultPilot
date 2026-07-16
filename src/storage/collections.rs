@@ -574,7 +574,7 @@ mod tests {
         add_note_to_collection_with_context(&ctx, &saved.meta.id, &col.id).unwrap();
 
         // Delete note
-        crate::storage::notes::delete_note_with_context(&ctx, &saved.meta.id).unwrap();
+        crate::storage::notes::delete_note_with_context(&ctx, &saved.meta.id, None).unwrap();
 
         // Collection should still exist but have zero notes
         let cols = list_collections_with_context(&ctx).unwrap();

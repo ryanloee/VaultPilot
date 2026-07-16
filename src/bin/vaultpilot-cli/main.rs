@@ -2477,7 +2477,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             to_json(&saved)
         }
         NotesActions::Delete { id } => {
-            let deleted = delete_note_with_context(context, id)?;
+            let deleted = delete_note_with_context(context, id, None)?;
             Ok(serde_json::json!({ "deleted": deleted, "id": id }))
         }
         NotesActions::Search {

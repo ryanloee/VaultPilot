@@ -9,14 +9,16 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
-import { chatWithReconnect, ChatMessage } from '../api/client';
+import { chatWithReconnect, ChatMessage, ContentPart } from '../api/client';
 import { buildNoteContext, buildSystemPrompt, executeToolCalls, ResponseStyle, RESPONSE_STYLE_LABELS } from '../services/rag';
 import { getMessages, addMessage, updateMessage, deleteMessage, createSession, getLatestSession, getNoteTitleMap } from '../db';
 import { loadNoteTitleMap, clearNoteTitleCache } from '../utils/noteRefs';
 import { MessageBubble, InputBar } from '../components/chat';
 import { useVoiceInput } from '../utils/useVoiceInput';
+import { buildUserContent, inferMime } from '../utils/chatHelpers';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; streaming?: boolean; isError?: boolean; streamStatus?: string; attachments?: { name: string; type: 'image' | 'file' }[]; }
 
@@ -403,10 +405,34 @@ export default function ChatScreen({ navigation, route }: any) {
       }
       const systemPrompt = buildSystemPrompt(noteContext, responseStyle);
 
+      // #2983: attachments were previously dropped from the API request body.
+      // Read each attachment's bytes and build multimodal content parts so the
+      // model actually receives images/files along with the text.
+      let userContent: string | ContentPart[] = userText;
+      if (attachments.length > 0) {
+        try {
+          const b64Attachments = await Promise.all(
+            attachments.map(async (a) => {
+              const base64 = await FileSystem.readAsStringAsync(a.uri, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+              const mime = a.type === 'image'
+                ? (a.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg')
+                : inferMime(a.name, 'application/octet-stream');
+              return { base64, mime };
+            }),
+          );
+          userContent = buildUserContent(userText, b64Attachments);
+        } catch (attErr) {
+          console.warn('[Chat] failed to read attachments, sending text only:', attErr);
+          userContent = userText;
+        }
+      }
+
       const history: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         ...prevMsgs.filter(m => (m.role !== 'assistant' || !m.streaming) && !m.isError).slice(-MAX_HISTORY_MESSAGES).map(m => ({ role: m.role as any, content: m.content })),
-        { role: 'user', content: userText },
+        { role: 'user', content: userContent },
       ];
       // #1900: 60s timeout to prevent UI freeze
       const TIMEOUT_MS = 60_000;

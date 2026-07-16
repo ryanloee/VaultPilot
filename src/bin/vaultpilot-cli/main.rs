@@ -6767,7 +6767,7 @@ mod tests {
 
 #[derive(Subcommand)]
 enum SkillActions {
-    /// List all available built-in skills
+    /// List all available skills (built-in + user-defined from .vaultpilot/skills/)
     List,
 
     /// Show details of a specific skill
@@ -6793,21 +6793,25 @@ enum SkillActions {
 
 // ─── Knowledge Skills (#1830) ──────────────────────────────────────
 
-/// Handle built-in knowledge-work skill commands.
+/// Handle built-in and user-defined knowledge-work skill commands (#1830, #2946).
 async fn handle_skill(context: &StorageContext, action: &SkillActions) -> Result<Value> {
+    let vault_dir = context.vault_dir();
     match action {
         SkillActions::List => {
-            let skills = vaultpilot_lib::skills::builtin_skills();
-            let mut rows: Vec<Value> = Vec::new();
-            for skill in skills {
-                rows.push(serde_json::json!({
-                    "id": skill.id,
-                    "title": skill.title,
-                    "description": skill.description,
-                    "category": skill.category.label(),
-                    "requires_input": skill.requires_input,
-                }));
-            }
+            let entries = vaultpilot_lib::skills::list_all_skills(vault_dir);
+            let rows: Vec<Value> = entries
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "id": s.id,
+                        "title": s.title,
+                        "description": s.description,
+                        "category": s.category,
+                        "requires_input": s.requires_input,
+                        "source": s.source, // "builtin" or "custom"
+                    })
+                })
+                .collect();
             Ok(serde_json::json!({
                 "status": "ok",
                 "count": rows.len(),
@@ -6815,46 +6819,54 @@ async fn handle_skill(context: &StorageContext, action: &SkillActions) -> Result
             }))
         }
         SkillActions::Show { id } => {
-            let skill = vaultpilot_lib::skills::find_skill(id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "skill '{}' not found. Run 'vp skill list' to see available skills.",
-                    id
-                )
-            })?;
+            let entry = vaultpilot_lib::skills::list_all_skills(vault_dir)
+                .into_iter()
+                .find(|s| s.id.eq_ignore_ascii_case(id))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "skill '{}' not found. Run 'vp skill list' to see available skills.",
+                        id
+                    )
+                })?;
             Ok(serde_json::json!({
                 "status": "ok",
                 "skill": {
-                    "id": skill.id,
-                    "title": skill.title,
-                    "description": skill.description,
-                    "category": skill.category.label(),
-                    "requires_input": skill.requires_input,
-                    "prompt_template": skill.prompt_template,
+                    "id": entry.id,
+                    "title": entry.title,
+                    "description": entry.description,
+                    "category": entry.category,
+                    "requires_input": entry.requires_input,
+                    "source": entry.source,
+                    "prompt_template": entry.prompt_template,
                 }
             }))
         }
         SkillActions::Run { id, input, style } => {
-            let skill = vaultpilot_lib::skills::find_skill(id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "skill '{}' not found. Run 'vp skill list' to see available skills.",
-                    id
-                )
-            })?;
+            let (prompt_template, requires_input, _source) =
+                vaultpilot_lib::skills::resolve_skill(vault_dir, id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "skill '{}' not found. Run 'vp skill list' to see available skills.",
+                        id
+                    )
+                })?;
 
             // Validate input requirement
-            if skill.requires_input {
+            if requires_input {
                 let provided = input.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty());
                 if provided.is_none() {
                     return Err(anyhow::anyhow!(
                         "skill '{}' requires input. Provide a topic or note path.\nExample: vp skill run {} \"your topic\"",
-                        skill.id,
-                        skill.id
+                        id,
+                        id
                     ));
                 }
             }
 
-            // Build the final prompt
-            let prompt = skill.build_prompt(input.as_deref());
+            // Build the final prompt — substitute {input} placeholder.
+            let prompt = match input.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                Some(text) => prompt_template.replace("{input}", text),
+                None => prompt_template.replace("{input}", ""),
+            };
 
             // Apply response style
             let rs = style

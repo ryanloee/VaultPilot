@@ -918,7 +918,7 @@ mod tests {
         let saved = save_note_with_context(&ctx, note).expect("save");
         let path = saved.meta.path.clone();
 
-        assert!(delete_note_with_context(&ctx, &saved.meta.id).expect("delete"));
+        assert!(delete_note_with_context(&ctx, &saved.meta.id, None).expect("delete"));
         assert!(load_note_with_context(&ctx, &saved.meta.id).is_err());
         assert!(!Path::new(&path).exists());
     }
@@ -927,7 +927,7 @@ mod tests {
     fn delete_nonexistent_note_returns_false() {
         let (_temp, ctx) = setup_temp_context();
         initialize_storage_with_context(&ctx).expect("init");
-        assert!(!delete_note_with_context(&ctx, "ghost-id").expect("delete ghost"));
+        assert!(!delete_note_with_context(&ctx, "ghost-id", None).expect("delete ghost"));
     }
 
     #[test]

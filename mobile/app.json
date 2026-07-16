@@ -14,7 +14,14 @@
     "android": {
       "package": "com.vaultpilot.mobile",
       "versionCode": 544,
-      "permissions": [],
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "READ_MEDIA_VISUAL_USER_SELECTED"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#1E3A5F",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -28,7 +35,8 @@
       "expo-splash-screen",
       "./plugins/withQuickSettingsTile.js",
       "./plugins/withDesktopWidget.js",
-      "expo-speech-recognition"
+      "expo-speech-recognition",
+      "expo-camera"
     ],
     "extra": {
       "eas": {

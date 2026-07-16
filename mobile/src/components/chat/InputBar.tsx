@@ -326,6 +326,7 @@ export default function InputBar({
           </View>
         ) : (
           <TextInput
+            testID="chat-input"
             style={[
               styles.textInput,
               {
@@ -373,11 +374,12 @@ export default function InputBar({
 
         {/* Send / Stop button */}
         {streaming ? (
-          <TouchableOpacity style={[styles.sendBtn, { backgroundColor: '#FF3B30' }]} onPress={onStop} accessibilityRole="button" accessibilityLabel="停止生成">
+          <TouchableOpacity testID="stop-btn" style={[styles.sendBtn, { backgroundColor: '#FF3B30' }]} onPress={onStop} accessibilityRole="button" accessibilityLabel="停止生成">
             <Icon name="stop" size={16} color="#fff" />
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
+            testID="send-btn"
             style={[styles.sendBtn, { backgroundColor: (input.trim() || attachments.length > 0) ? accentColor : borderColor }]}
             onPress={onSend}
             disabled={!input.trim() && attachments.length === 0}

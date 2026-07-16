@@ -86,6 +86,7 @@ async function initDb(): Promise<SQLite.SQLiteDatabase> {
           session_id TEXT NOT NULL,
           role TEXT NOT NULL,
           content TEXT NOT NULL,
+          attachments TEXT,
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
           FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
         );

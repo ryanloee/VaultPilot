@@ -1161,6 +1161,37 @@ enum VaultActions {
         #[arg(long = "formula", short = 'F', value_name = "NAME=expr")]
         formula: Vec<String>,
     },
+    /// Save the current query + format + filters as a named view (#2954).
+    ///
+    /// Saved views are persisted under `.vaultpilot/views/*.json` inside the
+    /// vault and can be reopened with `vp vault open-view <name>`. This mirrors
+    /// Obsidian Bases "Saved Views" — a named query you can relaunch from the
+    /// command palette without retyping the DSL.
+    SaveView {
+        /// Name of the saved view (used as the filename stem)
+        name: String,
+        /// SQL-like query string (SELECT ... WHERE ... ORDER BY ... LIMIT ...)
+        query: String,
+        /// Output format for the saved view
+        #[arg(long, default_value = "table")]
+        format: QueryFormat,
+        /// Column to group by (for kanban view)
+        #[arg(long)]
+        group_by: Option<String>,
+        /// Formula/computed column specs (same as `query --formula`)
+        #[arg(long = "formula", short = 'F', value_name = "NAME=expr")]
+        formula: Vec<String>,
+    },
+    /// List all saved named views (#2954)
+    ListViews,
+    /// Open and run a previously saved named view by name (#2954)
+    OpenView {
+        /// Name of the saved view to run
+        name: String,
+        /// Override the output format of the saved view
+        #[arg(long)]
+        format: Option<QueryFormat>,
+    },
 }
 
 /// Output format for vault query results (#2813)
@@ -1176,6 +1207,8 @@ enum QueryFormat {
     Json,
     /// Kanban board — grouped by a column value, rendered as Markdown sections
     Kanban,
+    /// Gallery — card grid with cover images, titles, and key property tags (#2954)
+    Gallery,
 }
 
 #[derive(Subcommand)]
@@ -2751,6 +2784,15 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             summarize,
             formula,
         ),
+        VaultActions::SaveView {
+            name,
+            query,
+            format,
+            group_by,
+            formula,
+        } => handle_save_view(context, name, query, format, group_by.as_deref(), formula),
+        VaultActions::ListViews => handle_list_views(context),
+        VaultActions::OpenView { name, format } => handle_open_view(context, name, format.as_ref()),
     }
 }
 
@@ -2872,6 +2914,7 @@ fn handle_vault_query(
             serde_json::to_string_pretty(&json_rows)?
         }
         QueryFormat::Kanban => format_as_kanban(&columns, &rows, group_by.unwrap_or("status")),
+        QueryFormat::Gallery => format_as_gallery(&columns, &rows),
     };
 
     // Parse summarization specs if provided (#2909)
@@ -2939,6 +2982,165 @@ fn handle_vault_query(
             "format": format!("{format:?}").to_lowercase(),
         }))
     }
+}
+
+/// Persistent saved-view record (#2954).
+///
+/// Stored as `.vaultpilot/views/<name>.json` inside the vault. Captures the
+/// full query DSL + view type + group_by + formulas so a named view can be
+/// relaunched exactly as saved.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct SavedView {
+    name: String,
+    query: String,
+    format: String,
+    group_by: Option<String>,
+    formula: Vec<String>,
+}
+
+/// Directory (relative to vault root) where named views are persisted (#2954).
+const VIEWS_DIR: &str = ".vaultpilot/views";
+
+/// Parse a stored format string back into a [`QueryFormat`] (#2954).
+///
+/// The string is the lowercased `Debug` representation of the variant
+/// (e.g. `"gallery"`, `"kanban"`, `"mdtable"`). Falls back to `Table` for
+/// unknown/legacy values so a corrupt or renamed format never hard-fails.
+fn parse_query_format(s: &str) -> QueryFormat {
+    match s.trim().to_lowercase().as_str() {
+        "table" => QueryFormat::Table,
+        "csv" => QueryFormat::Csv,
+        "mdtable" => QueryFormat::MdTable,
+        "json" => QueryFormat::Json,
+        "kanban" => QueryFormat::Kanban,
+        "gallery" => QueryFormat::Gallery,
+        _ => QueryFormat::Table,
+    }
+}
+
+/// Sanitize a view name into a safe filename stem (#2954).
+///
+/// Allows alphanumerics, `-`, `_`, and `.`; everything else is replaced with
+/// `_` so a malicious or accidental name cannot escape `VIEWS_DIR`.
+fn sanitize_view_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        out.push_str("view");
+    }
+    out
+}
+
+/// Persist a named view to the vault (#2954).
+fn handle_save_view(
+    context: &StorageContext,
+    name: &str,
+    query: &str,
+    format: &QueryFormat,
+    group_by: Option<&str>,
+    formula: &[String],
+) -> Result<Value> {
+    let stem = sanitize_view_name(name);
+    let dir = context.vault_dir().join(VIEWS_DIR);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create views dir {}", dir.display()))?;
+    let path = dir.join(format!("{stem}.json"));
+
+    let record = SavedView {
+        name: name.to_string(),
+        query: query.to_string(),
+        format: format!("{format:?}").to_lowercase(),
+        group_by: group_by.map(|s| s.to_string()),
+        formula: formula.to_vec(),
+    };
+    let json = serde_json::to_string_pretty(&record)?;
+    std::fs::write(&path, json)
+        .with_context(|| format!("failed to write view {}", path.display()))?;
+
+    to_json(&serde_json::json!({
+        "saved": path.display().to_string(),
+        "name": name,
+        "format": record.format,
+    }))
+}
+
+/// List all saved named views (#2954).
+fn handle_list_views(context: &StorageContext) -> Result<Value> {
+    let dir = context.vault_dir().join(VIEWS_DIR);
+    if !dir.exists() {
+        return to_json(&serde_json::json!({ "views": [] }));
+    }
+    let mut views: Vec<serde_json::Value> = Vec::new();
+    for entry in std::fs::read_dir(&dir)
+        .with_context(|| format!("failed to read views dir {}", dir.display()))?
+    {
+        let entry = entry?;
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&p) {
+            if let Ok(v) = serde_json::from_str::<SavedView>(&content) {
+                views.push(serde_json::json!({
+                    "name": v.name,
+                    "query": v.query,
+                    "format": v.format,
+                    "group_by": v.group_by,
+                }));
+            }
+        }
+    }
+    views.sort_by(|a, b| {
+        a.get("name")
+            .and_then(|n| n.as_str())
+            .cmp(&b.get("name").and_then(|n| n.as_str()))
+    });
+    to_json(&serde_json::json!({ "views": views }))
+}
+
+/// Open and run a previously saved named view (#2954).
+fn handle_open_view(
+    context: &StorageContext,
+    name: &str,
+    format_override: Option<&QueryFormat>,
+) -> Result<Value> {
+    let stem = sanitize_view_name(name);
+    let path = context
+        .vault_dir()
+        .join(VIEWS_DIR)
+        .join(format!("{stem}.json"));
+    if !path.exists() {
+        anyhow::bail!(
+            "saved view '{name}' not found at {}. Use `vp vault list-views` to see available views.",
+            path.display()
+        );
+    }
+    let content = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read view {}", path.display()))?;
+    let view: SavedView = serde_json::from_str(&content)
+        .with_context(|| format!("corrupt view file {}", path.display()))?;
+
+    let format: QueryFormat = match format_override {
+        Some(f) => f.clone(),
+        None => parse_query_format(&view.format),
+    };
+
+    eprintln!("📂 Opening saved view '{}'", view.name);
+    handle_vault_query(
+        context,
+        &view.query,
+        &format,
+        None,
+        view.group_by.as_deref(),
+        &view.formula,
+        &[],
+    )
 }
 
 /// Extract the raw YAML string from a frontmatter block (`---\n...\n---`).
@@ -3214,7 +3416,116 @@ fn format_as_kanban(
     out
 }
 
-/// Handle the `capture` subcommand — zero-friction quick text capture (#2833).
+/// Render query results as a Markdown gallery — a card grid where each note
+/// becomes a card with a cover image (from a `cover`/`banner` frontmatter
+/// property), its title, summary, and key property tags (#2954).
+///
+/// This mirrors the Obsidian Bases "Gallery" view: visually-oriented vaults
+/// (research素材, design references) get a structured, image-led browse
+/// experience. Cards without a cover fall back to a placeholder block so the
+/// grid layout stays consistent.
+///
+/// Cover detection order: `cover` → `banner` → `image` → `thumbnail`. The
+/// value may be a bare filename (resolved relative to the vault) or an
+/// absolute/URL path, which is embedded as-is.
+fn format_as_gallery(
+    columns: &[String],
+    rows: &[std::collections::HashMap<String, QValue>],
+) -> String {
+    if rows.is_empty() {
+        return "*No results*\n".to_string();
+    }
+
+    let cover_cols: &[&str] = &["cover", "banner", "image", "thumbnail"];
+
+    let note_title = |row: &std::collections::HashMap<String, QValue>| -> String {
+        if let Some(QValue::Text(t)) = row.get("title") {
+            if !t.is_empty() {
+                return t.clone();
+            }
+        }
+        row.get("$path")
+            .map(|v| {
+                let p = v.to_string();
+                p.rsplit('/').next().unwrap_or(&p).to_string()
+            })
+            .unwrap_or_else(|| "(untitled)".to_string())
+    };
+
+    let extract_cover = |row: &std::collections::HashMap<String, QValue>| -> Option<String> {
+        for cc in cover_cols {
+            if let Some(QValue::Text(t)) = row.get(*cc) {
+                let t = t.trim();
+                if !t.is_empty() && t != "null" {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    };
+
+    // Properties shown as tags under each card (exclude structural/display cols).
+    let tag_cols: Vec<&String> = columns
+        .iter()
+        .filter(|c| {
+            !matches!(
+                c.as_str(),
+                "title" | "$path" | "cover" | "banner" | "image" | "thumbnail" | "summary" | "body"
+            )
+        })
+        .collect();
+
+    let mut out = String::from("# Gallery View\n\n");
+    out.push_str("> 🖼️ Rendered as a card grid. Cover images come from `cover`/`banner`/`image`/`thumbnail` frontmatter.\n\n");
+
+    for row in rows {
+        let title = note_title(row);
+        let cover = extract_cover(row);
+
+        out.push_str("## ");
+        out.push_str(&title);
+        out.push('\n');
+
+        match cover {
+            Some(url) => {
+                out.push_str(&format!("![cover]({})\n", url));
+            }
+            None => {
+                out.push_str("> _(no cover)_ 📄\n");
+            }
+        }
+
+        // Summary line if present.
+        if let Some(QValue::Text(s)) = row.get("summary") {
+            let s = s.trim();
+            if !s.is_empty() && s != "null" {
+                out.push_str(&format!("\n{}\n", s));
+            }
+        }
+
+        // Property tags.
+        let tags: Vec<String> = tag_cols
+            .iter()
+            .filter_map(|col| {
+                let val = row.get(*col)?;
+                let s = val.to_string();
+                if s.is_empty() || s == "null" {
+                    None
+                } else {
+                    Some(format!("`{}: {}`", col, s))
+                }
+            })
+            .collect();
+
+        if !tags.is_empty() {
+            out.push_str(&format!("\n{}\n", tags.join(" ")));
+        }
+
+        out.push('\n');
+    }
+
+    out
+}
 ///
 /// Appends a timestamped bullet under a capture section of today's daily note
 /// (`Daily/YYYY-MM-DD`) or the inbox note (`Inbox`), creating the note and the
@@ -5520,6 +5831,7 @@ fn handle_graph(
 
 #[cfg(test)]
 mod tests {
+    use crate::format_as_gallery;
     use crate::http_bridge::{
         bridge_token_from_headers, constant_time_eq, normalize_bridge_token,
         validate_http_bridge_binding,
@@ -6334,6 +6646,95 @@ mod tests {
         assert!(bad.contains("does not exist"));
         assert!(bad.contains("typo_column"));
         assert!(bad.contains("## 未分类 (1)"));
+    }
+
+    // ── Gallery view (#2954) ──────────────────────────────────────
+
+    /// Gallery view renders a card per note with cover image + property tags.
+    #[test]
+    fn gallery_renders_cover_and_tags() {
+        let cols = vec![
+            "$path".to_string(),
+            "title".to_string(),
+            "cover".to_string(),
+            "status".to_string(),
+            "priority".to_string(),
+        ];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("notes/design.md".to_string()),
+            ),
+            (
+                "title".to_string(),
+                QValue::Text("Design Reference".to_string()),
+            ),
+            (
+                "cover".to_string(),
+                QValue::Text("assets/cover.png".to_string()),
+            ),
+            ("status".to_string(), QValue::Text("active".to_string())),
+            ("priority".to_string(), QValue::Text("high".to_string())),
+        ])];
+
+        let out = format_as_gallery(&cols, &rows);
+        assert!(out.contains("# Gallery View"));
+        // Cover image embedded as markdown image.
+        assert!(out.contains("![cover](assets/cover.png)"));
+        // Title rendered as heading.
+        assert!(out.contains("## Design Reference"));
+        // Property tags (status/priority), but not structural cols (title/$path/cover).
+        assert!(out.contains("`status: active`"));
+        assert!(out.contains("`priority: high`"));
+        assert!(!out.contains("`title:`"));
+        assert!(!out.contains("`$path:`"));
+    }
+
+    /// Gallery falls back to a placeholder when a note has no cover property.
+    #[test]
+    fn gallery_falls_back_when_no_cover() {
+        let cols = vec!["$path".to_string(), "title".to_string()];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("notes/plain.md".to_string()),
+            ),
+            ("title".to_string(), QValue::Text("Plain Note".to_string())),
+        ])];
+
+        let out = format_as_gallery(&cols, &rows);
+        assert!(out.contains("## Plain Note"));
+        // No cover image, placeholder shown instead.
+        assert!(!out.contains("![cover]("));
+        assert!(out.contains("_(no cover)_"));
+    }
+
+    /// Gallery detects cover from `banner` when `cover` is absent (#2954).
+    #[test]
+    fn gallery_detects_banner_as_cover() {
+        let cols = vec!["title".to_string(), "banner".to_string()];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            ("title".to_string(), QValue::Text("Banner Note".to_string())),
+            (
+                "banner".to_string(),
+                QValue::Text("img/banner.jpg".to_string()),
+            ),
+        ])];
+
+        let out = format_as_gallery(&cols, &rows);
+        assert!(out.contains("![cover](img/banner.jpg)"));
+    }
+
+    /// Empty result set yields a friendly "No results" message.
+    #[test]
+    fn gallery_empty_result() {
+        let cols: Vec<String> = vec![];
+        let rows: Vec<std::collections::HashMap<String, QValue>> = vec![];
+        let out = format_as_gallery(&cols, &rows);
+        assert!(out.contains("No results"));
     }
 }
 

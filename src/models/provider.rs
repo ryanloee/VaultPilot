@@ -556,6 +556,56 @@ mod tests {
         assert!(!crate::storage::is_masked_key(""));
     }
 
+    // ── #2987 regression: false-positives on plaintext keys ──
+
+    #[test]
+    fn is_masked_key_plaintext_with_ellipsis_is_not_masked() {
+        // Genuine plaintext key that happens to contain U+2026.
+        assert!(!crate::storage::is_masked_key("sk-…real…key"));
+    }
+
+    #[test]
+    fn is_masked_key_long_all_star_is_not_masked() {
+        // 24 stars: longer than mask_secret's short-key limit (12).
+        assert!(!crate::storage::is_masked_key("************************"));
+    }
+
+    #[test]
+    fn is_masked_key_eight_star_is_masked() {
+        // 8 stars: valid short-key mask produced by mask_secret.
+        assert!(crate::storage::is_masked_key("********"));
+    }
+
+    #[test]
+    fn is_masked_key_long_ellipsis_wrong_length_is_not_masked() {
+        // Contains ellipsis but not the exact "<4>…<4>" shape.
+        assert!(!crate::storage::is_masked_key("sk-abc…qrstuvwxyz"));
+    }
+
+    #[test]
+    fn is_masked_key_long_ellipsis_no_middle_is_not_masked() {
+        // 9 chars but the 5th char is not the ellipsis.
+        assert!(!crate::storage::is_masked_key("sk-abXqrst"));
+    }
+
+    #[test]
+    fn is_masked_key_round_trip_all_formats_extended() {
+        // Short keys 1..=12 chars must all be detected as masked (all stars).
+        for n in 1..=12 {
+            let input: String = "x".repeat(n);
+            let masked = mask_secret(&input);
+            assert!(
+                crate::storage::is_masked_key(&masked),
+                "short key len {n} -> {masked:?} should be masked"
+            );
+        }
+        // A 13-char (long) key produces the "<4>…<4>" mask.
+        let masked = mask_secret("1234567890123");
+        assert!(crate::storage::is_masked_key(&masked));
+        // A 24-char all-star string must NOT be detected as masked.
+        assert!(!crate::storage::is_masked_key(&"*".repeat(24)));
+    }
+
     #[test]
     fn is_masked_key_round_trip_all_formats() {
         // Every masking format that mask_secret can produce

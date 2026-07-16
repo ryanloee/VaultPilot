@@ -3,6 +3,7 @@ pub mod agent_engine;
 pub mod ai;
 pub mod calendar;
 pub mod capability_registry;
+pub mod citations;
 pub mod connector;
 pub mod context_surface;
 pub mod crypto;

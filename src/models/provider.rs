@@ -457,6 +457,38 @@ pub fn lookup_model(id: &str) -> Option<KnownModel> {
     known_models().into_iter().find(|m| m.id == id)
 }
 
+/// Return the subset of [`known_models`] that satisfy *every* capability flag
+/// set to `true` in `require`.
+///
+/// Used by the model-selector UI to narrow the preset dropdown — e.g. only
+/// show vision-capable models when the user is about to attach an image (#2970).
+/// Capability flags left as `false`/`false` in `require` are treated as
+/// "don't care" and never filter a model out.
+///
+/// Deterministic and allocation-light so it can be called on every render.
+pub fn models_with_capabilities(require: ModelCapabilities) -> Vec<KnownModel> {
+    known_models()
+        .into_iter()
+        .filter(|m| {
+            (!require.vision || m.capabilities.vision)
+                && (!require.reasoning || m.capabilities.reasoning)
+                && (!require.function_calling || m.capabilities.function_calling)
+                && (!require.streaming || m.capabilities.streaming)
+        })
+        .collect()
+}
+
+/// Return the subset of [`known_models`] for a single provider type (#2970).
+///
+/// Lets the selector group presets by provider (Anthropic / OpenAI / Ollama)
+/// so the UI can present a per-provider section rather than one flat list.
+pub fn models_for_provider(provider: ProviderType) -> Vec<KnownModel> {
+    known_models()
+        .into_iter()
+        .filter(|m| m.provider == provider)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -865,5 +897,60 @@ mod tests {
         assert!(!caps.reasoning);
         assert!(caps.function_calling);
         assert!(caps.streaming);
+    }
+
+    // ── models_with_capabilities / models_for_provider (#2970) ──
+
+    #[test]
+    fn models_with_capabilities_empty_require_returns_all() {
+        // No capabilities required → every preset passes through.
+        let all = models_with_capabilities(ModelCapabilities::default());
+        assert_eq!(all.len(), known_models().len());
+    }
+
+    #[test]
+    fn models_with_capabilities_vision_narrows_set() {
+        let vision_only = models_with_capabilities(ModelCapabilities {
+            vision: true,
+            ..Default::default()
+        });
+        assert!(
+            !vision_only.is_empty(),
+            "expected at least one vision model"
+        );
+        assert!(vision_only.iter().all(|m| m.capabilities.vision));
+        // Local/Ollama non-vision models should be excluded.
+        assert!(vision_only.iter().all(|m| m.id != "llama3.3"));
+    }
+
+    #[test]
+    fn models_with_capabilities_reasoning_and_vision() {
+        let both = models_with_capabilities(ModelCapabilities {
+            vision: true,
+            reasoning: true,
+            ..Default::default()
+        });
+        assert!(both
+            .iter()
+            .all(|m| m.capabilities.vision && m.capabilities.reasoning));
+        // A vision-only model without reasoning (Llama 3.2 Vision) must be dropped.
+        assert!(both.iter().all(|m| m.id != "llama3.2-vision"));
+    }
+
+    #[test]
+    fn models_for_provider_anthropic_only() {
+        let anthropic = models_for_provider(ProviderType::Anthropic);
+        assert!(!anthropic.is_empty());
+        assert!(anthropic
+            .iter()
+            .all(|m| m.provider == ProviderType::Anthropic));
+        assert!(anthropic.iter().all(|m| m.id != "gpt-5.5"));
+    }
+
+    #[test]
+    fn models_for_provider_olama_only() {
+        let ollama = models_for_provider(ProviderType::Ollama);
+        assert_eq!(ollama.len(), 6, "expected 6 local Ollama presets");
+        assert!(ollama.iter().all(|m| m.provider == ProviderType::Ollama));
     }
 }

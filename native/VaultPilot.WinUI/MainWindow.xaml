@@ -8,7 +8,7 @@
     mc:Ignorable="d"
     Title="VaultPilot">
 
-    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid x:Name="RootGrid" Background="{ThemeResource VaultSurfaceBg}">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="N" Modifiers="Control" Invoked="OnNewSessionAccelerator" />
             <KeyboardAccelerator Key="B" Modifiers="Control" Invoked="OnToggleSidebarAccelerator" />
@@ -22,44 +22,54 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Status bar + CommandBar (always visible) -->
-        <Grid Grid.Row="0" Padding="8,4,8,4" ColumnSpacing="8">
+        <!-- Compact header bar -->
+        <Grid Grid.Row="0" Padding="8,4,12,4" Background="{ThemeResource VaultCardBg}">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Border
-                x:Name="StatusBar"
-                Grid.Column="0"
-                MinWidth="280"
-                Padding="12,6,12,6"
-                CornerRadius="4"
-                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1">
-                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"
-                    AutomationProperties.Name="状态栏">
-                    <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource StatusBarIconBrush}"
-                        AutomationProperties.Name="状态图标" />
-                    <TextBlock x:Name="StatusBarTitle" Text="正在启动" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
-                        AutomationProperties.Name="状态标题" />
-                    <TextBlock x:Name="StatusBarMessage" Text="正在连接 Rust 后端..." Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
-                        AutomationProperties.Name="状态消息" />
-                </StackPanel>
+            <!-- Logo badge -->
+            <Border Grid.Column="0" Width="20" Height="20" CornerRadius="5"
+                    Background="{ThemeResource VaultAccentBlue}" VerticalAlignment="Center">
+                <TextBlock Text="V" FontWeight="Bold" FontSize="11" Foreground="White"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>
-            <CommandBar
-                Grid.Column="1"
-                DefaultLabelPosition="Right"
-                IsOpen="False">
-                <AppBarButton x:Name="ToggleSidebarButton" Icon="OpenPane" Label="收起会话"
-                    AutomationProperties.Name="切换侧边栏" AutomationProperties.HelpText="显示或隐藏会话列表侧边栏" />
-                <AppBarButton x:Name="ImportButton" Icon="Import" Label="导入 Markdown"
-                    AutomationProperties.Name="导入 Markdown" AutomationProperties.HelpText="从本地导入 Markdown 文件到知识库" />
-                <AppBarButton x:Name="RebuildButton" Icon="Refresh" Label="重建索引"
-                    AutomationProperties.Name="重建索引" AutomationProperties.HelpText="重建知识库搜索索引" />
-                <AppBarButton x:Name="SettingsButton" Icon="Setting" Label="设置"
-                    AutomationProperties.Name="设置" AutomationProperties.HelpText="打开应用设置对话框" />
-            </CommandBar>
+            <TextBlock Grid.Column="1" Text="VaultPilot" FontWeight="SemiBold" FontSize="13"
+                VerticalAlignment="Center" Margin="6,0,0,0" Foreground="{ThemeResource VaultTextPrimary}" />
+            <!-- Inline status -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                VerticalAlignment="Center" Margin="16,0,0,0">
+                <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource StatusBarIconBrush}" />
+                <TextBlock x:Name="StatusBarTitle" Text="正在启动" FontWeight="SemiBold" FontSize="12"
+                    VerticalAlignment="Center" Foreground="{ThemeResource VaultTextPrimary}" />
+                <TextBlock x:Name="StatusBarMessage" Text="正在连接 Rust 后端..."
+                    Opacity="0.55" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource VaultTextSecondary}" />
+            </StackPanel>
+            <!-- Quick actions as icon buttons -->
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2">
+                <Button x:Name="RebuildButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
+                    Padding="0" Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="重建索引">
+                    <FontIcon Glyph="&#xE72C;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                </Button>
+                <Button x:Name="ImportButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
+                    Padding="0" Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="导入 Markdown">
+                    <FontIcon Glyph="&#xE8B6;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                </Button>
+                <Button x:Name="ToggleSidebarButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
+                    Padding="0" Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="切换侧边栏">
+                    <FontIcon Glyph="&#xE700;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                </Button>
+                <Button x:Name="SettingsButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
+                    Padding="0" Background="Transparent" BorderThickness="0"
+                    AutomationProperties.Name="设置">
+                    <FontIcon Glyph="&#xE713;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                </Button>
+            </StackPanel>
         </Grid>
 
         <!-- NavigationView + content area -->
@@ -109,9 +119,7 @@
                                     x:Name="SidebarBorder"
                                     Grid.Column="0"
                                     Padding="16"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1"
+                                    Background="{ThemeResource VaultSidebarBg}"
                                     CornerRadius="8">
                                     <Grid RowSpacing="12">
                                         <Grid.RowDefinitions>
@@ -164,9 +172,7 @@
                                 <Border
                                     Grid.Column="1"
                                     Padding="16"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1"
+                                    Background="{ThemeResource VaultCardBg}"
                                     CornerRadius="8">
                                     <Grid>
                                         <ScrollViewer
@@ -225,7 +231,7 @@
                             </Grid>
                         </Grid>
 
-                        <Grid Grid.Row="1" Padding="24,0,24,24">
+                        <Grid Grid.Row="1" Padding="24,0,24,16">
                             <StackPanel Spacing="8">
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>
@@ -236,6 +242,7 @@
                                         x:Name="ComposerDropZone"
                                         Grid.Column="0"
                                         RowSpacing="6"
+                                        Padding="12,8,12,8"
                                         AllowDrop="True"
                                         DragOver="OnComposerDropZoneDragOver"
                                         Drop="OnComposerDropZoneDrop"
@@ -251,12 +258,12 @@
                                             x:Name="ComposerBox"
                                             Grid.Row="0"
                                             AcceptsReturn="False"
-                                            MinHeight="88"
-                                            MaxHeight="200"
+                                            MinHeight="48"
+                                            MaxHeight="120"
                                             TextChanged="OnComposerTextChanged"
                                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                                             TextWrapping="Wrap"
-                                            PlaceholderText="输入问题，或记录一条知识... (Enter 发送，Shift+Enter 换行)"
+                                            PlaceholderText="输入问题，或记录一条知识..."
                                             ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
                                             AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
                                         </TextBox>
@@ -265,7 +272,7 @@
                                             Grid.Row="1"
                                             Text="Enter 发送 · Shift+Enter 换行"
                                             FontSize="11"
-                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                            Foreground="{ThemeResource VaultTextMuted}"
                                             Margin="4,0,0,0"
                                             HorizontalAlignment="Right" />
                                         <Grid
@@ -312,34 +319,57 @@
                                                 AutomationProperties.Name="附件面板" />
                                         </ScrollViewer>
                                     </Grid>
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="8" HorizontalAlignment="Center">
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="6" HorizontalAlignment="Center">
                                         <Button
                                             x:Name="RecordButton"
-                                            Content="记录"
+                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
+                                            Padding="0" Background="Transparent" BorderThickness="1"
+                                            BorderBrush="{ThemeResource VaultBorder}"
+                                            CornerRadius="8"
                                             ToolTipService.ToolTip="将当前对话内容记录到知识库"
-                                            AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库" />
+                                            AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库">
+                                            <FontIcon Glyph="&#xE7C8;" FontSize="14" Foreground="{ThemeResource VaultTextSecondary}" />
+                                        </Button>
                                         <Button
                                             x:Name="SendButton"
-                                            Content="发送"
-                                            AutomationProperties.Name="发送" AutomationProperties.HelpText="发送消息到 AI" />
+                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
+                                            Padding="0"
+                                            CornerRadius="8"
+                                            Background="{ThemeResource VaultAccentBlue}"
+                                            BorderThickness="0"
+                                            AutomationProperties.Name="发送" AutomationProperties.HelpText="发送消息到 AI">
+                                            <FontIcon Glyph="&#x2191;" FontSize="14" Foreground="White" />
+                                        </Button>
                                         <Button
                                             x:Name="CancelButton"
-                                            Content="取消"
+                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
+                                            Padding="0" Background="Transparent" BorderThickness="1"
+                                            BorderBrush="{ThemeResource VaultBorder}"
+                                            CornerRadius="8"
                                             Visibility="Collapsed"
-                                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                            AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求" />
+                                            AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求">
+                                            <FontIcon Glyph="&#xE711;" FontSize="12" Foreground="{ThemeResource VaultAccentRed}" />
+                                        </Button>
                                         <Button
                                             x:Name="AgentModeButton"
-                                            Content="Agent"
+                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
+                                            Padding="0" Background="Transparent" BorderThickness="1"
+                                            BorderBrush="{ThemeResource VaultBorder}"
+                                            CornerRadius="8"
                                             ToolTipService.ToolTip="启动 Agent 模式 — AI 自主执行多步工具调用"
-                                            Foreground="{ThemeResource SystemFillColorAttentionBrush}"
-                                            AutomationProperties.Name="Agent 模式" AutomationProperties.HelpText="启动自主 AI Agent 执行多步工具调用" />
+                                            AutomationProperties.Name="Agent 模式" AutomationProperties.HelpText="启动自主 AI Agent 执行多步工具调用">
+                                            <FontIcon Glyph="&#xE7BF;" FontSize="13" Foreground="{ThemeResource VaultAccentBlue}" />
+                                        </Button>
                                         <Button
                                             x:Name="StopAgentButton"
-                                            Content="停止"
+                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
+                                            Padding="0" Background="Transparent" BorderThickness="1"
+                                            BorderBrush="{ThemeResource VaultBorder}"
+                                            CornerRadius="8"
                                             Visibility="Collapsed"
-                                            Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                            AutomationProperties.Name="停止 Agent" AutomationProperties.HelpText="立即终止 Agent 执行" />
+                                            AutomationProperties.Name="停止 Agent" AutomationProperties.HelpText="立即终止 Agent 执行">
+                                            <FontIcon Glyph="&#xE71A;" FontSize="12" Foreground="{ThemeResource VaultAccentRed}" />
+                                        </Button>
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>

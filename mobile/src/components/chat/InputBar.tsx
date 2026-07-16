@@ -347,7 +347,6 @@ export default function InputBar({
             returnKeyType="send"
             onSubmitEditing={onSend}
             blurOnSubmit={false}
-            testID="chat-input"
             onFocus={closeAll}
           />
         )}

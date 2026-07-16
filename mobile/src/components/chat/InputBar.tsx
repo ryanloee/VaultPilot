@@ -343,6 +343,10 @@ export default function InputBar({
             multiline
             maxLength={4000}
             editable={!streaming}
+            returnKeyType="send"
+            onSubmitEditing={onSend}
+            blurOnSubmit={false}
+            testID="chat-input"
             onFocus={closeAll}
           />
         )}

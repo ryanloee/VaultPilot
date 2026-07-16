@@ -1086,16 +1086,47 @@ mod tests {
     }
 
     #[test]
-    fn is_blocked_ip_allows_fakeip_pool() {
-        // Regression test for #2952: 198.18.0.0/15 is a fake-ip proxy pool
-        // (Clash/sing-box) — classified as private/reserved but the SSRF
-        // filter must NOT block it, otherwise proxied API domains (e.g. the
-        // 智谱 scenario from #2944) can never be reached.
+    fn is_blocked_ip_blocks_fakeip_pool_by_default() {
+        // Regression test for #2977: 198.18.0.0/15 is a fake-ip proxy pool
+        // (Clash/sing-box), but a *direct* (non-proxied) request to an address
+        // in that range would bypass SSRF filtering. So by default it must be
+        // BLOCKED — the allowance is opt-in via VAULTPILOT_ALLOW_FAKEIP only
+        // when a local proxy genuinely intercepts DNS for the domain (#2944).
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("VAULTPILOT_ALLOW_FAKEIP");
+
         let fakeip = "198.18.0.71".parse().unwrap();
         assert!(is_private_ip(fakeip)); // still reserved...
         assert!(is_fakeip(fakeip));
-        assert!(!is_blocked_ip(fakeip)); // ...but allowed by SSRF filter
+        assert!(is_blocked_ip(fakeip)); // ...and now blocked by default
 
+        std::env::remove_var("VAULTPILOT_ALLOW_FAKEIP");
+    }
+
+    #[test]
+    fn is_blocked_ip_allows_fakeip_pool_when_opt_in() {
+        // The opt-in preserves the legitimate 智谱/Clash scenario from #2944:
+        // when VAULTPILOT_ALLOW_FAKEIP=1 is set (proxy genuinely in use) the
+        // fake-ip pool is reachable.
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("VAULTPILOT_ALLOW_FAKEIP", "1");
+
+        let fakeip = "198.18.0.71".parse().unwrap();
+        assert!(is_private_ip(fakeip));
+        assert!(is_fakeip(fakeip));
+        assert!(!is_blocked_ip(fakeip)); // allowed only with explicit opt-in
+
+        // Real RFC1918 addresses remain blocked even with the opt-in, because
+        // the opt-in only relaxes the fake-ip pool, not the whole private range.
+        assert!(is_blocked_ip("10.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("192.168.1.1".parse().unwrap()));
+        assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
+
+        std::env::remove_var("VAULTPILOT_ALLOW_FAKEIP");
+    }
+
+    #[test]
+    fn is_blocked_ip_still_blocks_real_private_and_allows_public() {
         // Real RFC1918 addresses must still be blocked.
         assert!(is_blocked_ip("10.0.0.1".parse().unwrap()));
         assert!(is_blocked_ip("192.168.1.1".parse().unwrap()));

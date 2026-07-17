@@ -52,6 +52,59 @@ impl AgentTriggerRule {
     }
 }
 
+/// Status of the trigger-rule execution layer.
+///
+/// As of v0.5.61 (#3048), trigger rules can be created/listed/toggled via the
+/// CLI, and the storage layer (`trigger_rules` table) is fully functional — but
+/// **no scheduler / event dispatcher / cron evaluator consumes the table yet**.
+/// Stored rules will never fire until the executor ships (tracked separately).
+///
+/// This constant lets the CLI surface an honest warning so users are not
+/// silently misled into thinking automation is active. When the executor lands,
+/// flip this to [`ExecutorStatus::Connected`] and remove the CLI warning.
+///
+/// See <https://github.com/ryanloee/VaultPilot/issues/3048>.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutorStatus {
+    /// No background loop / event dispatcher is reading the trigger_rules
+    /// table. Rules are persisted but never fire. CLI must warn the user.
+    NotConnected,
+    /// The executor is active: due cron rules fire on schedule and subscribed
+    /// vault events dispatch to the matching rules. Reserved for the future
+    /// executor implementation; not currently returned.
+    Connected,
+}
+
+impl ExecutorStatus {
+    /// Current executor status. See [`ExecutorStatus`] doc for context.
+    pub fn current() -> Self {
+        // #3048: storage layer shipped in v0.5.61, executor not yet wired up.
+        Self::NotConnected
+    }
+
+    /// Stable string id suitable for JSON / CLI display.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotConnected => "not_connected",
+            Self::Connected => "connected",
+        }
+    }
+
+    /// Human-readable warning shown when rules exist but will not fire.
+    /// Returns `None` when the executor is connected.
+    pub fn warning(&self) -> Option<&'static str> {
+        match self {
+            Self::NotConnected => Some(
+                "Trigger rules are stored but NOT executed yet — the executor \
+                 (scheduler / event dispatcher) is not connected in this build. \
+                 Rules will not fire until a future version wires it up (#3048).",
+            ),
+            Self::Connected => None,
+        }
+    }
+}
+
 /// Trigger source: either a cron schedule or a vault event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
@@ -259,5 +312,67 @@ mod tests {
         assert_eq!(parsed.custom_prompt, None);
         // A Custom rule without a prompt is a configuration error, not a silent no-op.
         assert_eq!(parsed.effective_prompt(), None);
+    }
+
+    // ─── #3048: executor-status honesty contract ───────────────────────
+    //
+    // The trigger_rules storage layer shipped in v0.5.61 but the scheduler /
+    // event dispatcher that actually fires rules has not. Until it ships, the
+    // CLI must surface this honestly so users are not silently misled. These
+    // tests pin the contract:
+    //   - ExecutorStatus::current() reflects whether the executor is wired up.
+    //   - When NotConnected, a non-empty warning string is available.
+    //   - as_str() round-trips through serde as snake_case.
+    //
+    // When the executor lands, update ExecutorStatus::current() to return
+    // Connected and adjust these tests (the warning will then be None).
+
+    #[test]
+    fn executor_status_current_matches_wiring() {
+        // #3048: executor is intentionally not connected yet.
+        assert_eq!(ExecutorStatus::current(), ExecutorStatus::NotConnected);
+    }
+
+    #[test]
+    fn executor_status_not_connected_has_warning() {
+        let warning = ExecutorStatus::NotConnected.warning();
+        assert!(warning.is_some(), "NotConnected must surface a warning");
+        let w = warning.unwrap();
+        assert!(!w.is_empty());
+        // Warning must mention the executor is not active and that rules
+        // won't fire — this is the whole point of #3048.
+        assert!(
+            w.to_lowercase().contains("not"),
+            "warning should state the executor is not connected: {w}"
+        );
+        assert!(
+            w.to_lowercase().contains("fire") || w.to_lowercase().contains("execute"),
+            "warning should mention that rules won't fire: {w}"
+        );
+    }
+
+    #[test]
+    fn executor_status_connected_has_no_warning() {
+        // When the executor ships, no warning should be shown.
+        assert_eq!(ExecutorStatus::Connected.warning(), None);
+    }
+
+    #[test]
+    fn executor_status_as_str_is_stable() {
+        // as_str() is part of the CLI's JSON contract — must not change
+        // without coordinating with downstream parsers (WinUI / mobile).
+        assert_eq!(ExecutorStatus::NotConnected.as_str(), "not_connected");
+        assert_eq!(ExecutorStatus::Connected.as_str(), "connected");
+    }
+
+    #[test]
+    fn executor_status_serializes_snake_case() {
+        let json = serde_json::to_string(&ExecutorStatus::NotConnected).unwrap();
+        assert_eq!(json, "\"not_connected\"");
+        let parsed: ExecutorStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ExecutorStatus::NotConnected);
+
+        let json = serde_json::to_string(&ExecutorStatus::Connected).unwrap();
+        assert_eq!(json, "\"connected\"");
     }
 }

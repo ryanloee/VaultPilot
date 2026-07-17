@@ -57,8 +57,16 @@
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <Storyboard>
-                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.92" Duration="0:0:0.12" EasingFunction="{CubicEase EasingMode=EaseOut}" />
-                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.92" Duration="0:0:0.12" EasingFunction="{CubicEase EasingMode=EaseOut}" />
+                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.92" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut" />
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.92" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut" />
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                     </VisualStateGroup>
@@ -99,8 +107,16 @@
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <Storyboard>
-                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.9" Duration="0:0:0.12" EasingFunction="{CubicEase EasingMode=EaseOut}" />
-                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.9" Duration="0:0:0.12" EasingFunction="{CubicEase EasingMode=EaseOut}" />
+                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)" To="0.9" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut" />
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" To="0.9" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut" />
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                     </VisualStateGroup>

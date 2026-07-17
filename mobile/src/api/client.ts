@@ -270,6 +270,15 @@ async function chatAnthropic(
         wrappedReader?.cancel(reason).catch(() => {});
       },
     });
+  } catch (e: unknown) {
+    // #3036: Convert fetch-phase AbortError (timeout firing before the
+    // ReadableStream is returned) into a friendly Chinese message, matching
+    // chatOpenAI's behaviour. The stream-consumption path (started === true)
+    // never reaches here because the ReadableStream is returned synchronously.
+    if (e instanceof Error && e.name === 'AbortError' && !signal?.aborted) {
+      throw new Error('请求超时（2 分钟），请检查网络或服务端状态');
+    }
+    throw e;
   } finally {
     if (!started) {
       clearTimeout(timeout);

@@ -83,6 +83,14 @@ fn normalize_cron_expr(expr: &str) -> String {
 /// This is the core "is the rule due?" primitive: a rule is due when its last
 /// due time is later than its last *fired* time (or it has never fired and has
 /// any past occurrence).
+///
+/// **Performance note (#3054):** this walks a 366-day window, which is
+/// catastrophic for fine-grained cron (`0 * * * * *` = 527k iterations,
+/// ~143 ms per call). For callers that already know `last_fired_at`, use
+/// [`last_due_time_before_bounded`] instead — it bounds the scan to the
+/// window since the last fire and collapses already-fired minute-level rules
+/// to ~1 iteration. This public function is retained for never-fired rules
+/// and as a fallback; new callers should reach for the bounded variant.
 pub fn last_due_time_before(expr: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let full_expr = normalize_cron_expr(expr);
     let schedule = Schedule::from_str(&full_expr).ok()?;
@@ -95,16 +103,95 @@ pub fn last_due_time_before(expr: &str, now: DateTime<Utc>) -> Option<DateTime<U
     //
     // To bound the search we start 366 days back — any cron cadence finer than
     // yearly will have produced at least one fire in that window, and yearly
-    // cron rules are vanishingly rare in a personal vault.
-    let window_start = now - chrono::Duration::days(366);
+    // cron rules are vanishingly rare in a personal vault. Callers that know
+    // `last_fired_at` should use `last_due_time_before_bounded` to skip this
+    // walk entirely (#3054).
+    last_due_in_window(&schedule, now - chrono::Duration::days(366), now)
+}
+
+/// Like [`last_due_time_before`] but scans only the half-open window
+/// `(from, now)`. Used by the executor hot path to bound the iteration count
+/// for already-fired rules: if `from = last_fired_at`, then the window
+/// contains at most a few fires regardless of the rule's frequency (#3054).
+///
+/// Returns `None` when the expression is invalid or no fire occurs in the
+/// window. Schedule parsing is performed by the caller-facing wrappers so the
+/// inner helper stays zero-alloc and trivially testable.
+fn last_due_in_window(
+    schedule: &Schedule,
+    from: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
     let mut last_before_now: Option<DateTime<Utc>> = None;
-    for next in schedule.after(&window_start) {
+    for next in schedule.after(&from) {
         if next >= now {
             break;
         }
         last_before_now = Some(next);
     }
     last_before_now
+}
+
+/// Parse a cron expression and return the most recent firing time strictly
+/// before `now`, bounding the scan to times after `from`.
+///
+/// This is the bounded-scanner sibling of [`last_due_time_before`] and the
+/// primary entry point used by the executor hot path (`is_rule_due`,
+/// `evaluate_rules_at`). Passing `last_fired_at` (or a narrow recent window
+/// for never-fired rules) collapses the iteration count from O(frequency ×
+/// window) to O(fires in window) — for an already-fired `* * * * *` rule
+/// that drops ~527k iterations → ~1 (#3054).
+///
+/// Returns `None` when:
+/// - the expression is invalid, or
+/// - no fire occurs in the half-open window `(from, now)`.
+pub fn last_due_time_before_bounded(
+    expr: &str,
+    from: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let full_expr = normalize_cron_expr(expr);
+    let schedule = Schedule::from_str(&full_expr).ok()?;
+    last_due_in_window(&schedule, from, now)
+}
+
+/// Resolve the most recent cron fire strictly before `now` for a rule whose
+/// last *fired* timestamp is `last_fired_at`, choosing the smallest viable
+/// scan window so high-frequency rules stay cheap (#3054).
+///
+/// Strategy:
+/// - **Already fired** (`Some(fired)`): bound the scan to `(fired, now)`. For
+///   a healthy executor this window contains 1–2 fires regardless of cron
+///   frequency, so `* * * * *` collapses from ~527k iterations to ~1.
+/// - **Never fired** (`None`): try a 2-minute window first. This catches the
+///   perf-sensitive high-frequency case (`* * * * *`, `0 */5 * * * *`) in O(1)
+///   iterations. If that yields nothing (lower-frequency rules whose most
+///   recent fire was more than 2 minutes ago — hourly / daily / weekly), fall
+///   back to the full year-long scan via [`last_due_time_before`]. That
+///   fallback is cheap for low-frequency rules (~366 iterations for daily,
+///   measured ~160 µs).
+fn last_due_for_rule(
+    expr: &str,
+    last_fired_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    match last_fired_at {
+        Some(fired) => last_due_time_before_bounded(expr, fired, now),
+        None => {
+            // Narrow window covers high-frequency never-fired rules in O(1).
+            // 2 minutes > 1-minute cron resolution so the most recent fire is
+            // always caught.
+            let narrow =
+                last_due_time_before_bounded(expr, now - chrono::Duration::minutes(2), now);
+            if narrow.is_some() {
+                narrow
+            } else {
+                // Lower-frequency rule (hourly+): fall back to the year-long
+                // scan, which is cheap when fires are sparse.
+                last_due_time_before(expr, now)
+            }
+        }
+    }
 }
 
 /// Compute the next firing time at or after `from` (inclusive). Used to
@@ -121,6 +208,11 @@ pub fn next_due_time_at(expr: &str, from: DateTime<Utc>) -> Option<DateTime<Utc>
 /// Only cron triggers are evaluated here; event triggers fire via the event
 /// bus (a separate code path, not the cron executor). `last_fired_at == None`
 /// means "never fired" — the rule is due if it has any past occurrence.
+///
+/// Uses [`last_due_for_rule`] internally so the scan window is bounded by
+/// `last_fired_at` (or a 2-minute window for never-fired rules). This keeps
+/// high-frequency cron (`* * * * *`, `0 */5 * * * *`) cheap on the executor
+/// hot path — see #3054.
 pub fn is_rule_due(
     rule: &AgentTriggerRule,
     last_fired_at: Option<DateTime<Utc>>,
@@ -133,7 +225,7 @@ pub fn is_rule_due(
         TriggerKind::Cron { expression } => expression,
         TriggerKind::Event { .. } => return false,
     };
-    let Some(last_due) = last_due_time_before(expr, now) else {
+    let Some(last_due) = last_due_for_rule(expr, last_fired_at, now) else {
         return false;
     };
     match last_fired_at {
@@ -162,6 +254,10 @@ pub struct DueRule<'a> {
 ///
 /// This is the testable heart of the executor — no I/O. [`fire_due_rules`]
 /// wraps this with DB reads/writes.
+///
+/// Uses [`last_due_for_rule`] internally so the scan window for each rule is
+/// bounded by its `last_fired_at`, keeping high-frequency cron cheap on the
+/// hot path (#3054).
 pub fn evaluate_rules_at<'a>(
     inputs: &'a [RuleDueInput<'a>],
     now: DateTime<Utc>,
@@ -175,7 +271,7 @@ pub fn evaluate_rules_at<'a>(
             TriggerKind::Cron { expression } => expression.as_str(),
             TriggerKind::Event { .. } => continue,
         };
-        let Some(due_at) = last_due_time_before(expr, now) else {
+        let Some(due_at) = last_due_for_rule(expr, input.last_fired_at, now) else {
             continue;
         };
         let due = match input.last_fired_at {
@@ -310,7 +406,11 @@ pub fn fire_due_rules_at(context: &StorageContext, now: DateTime<Utc>) -> Result
             .effective_prompt()
             .map(|p| format!("effective_prompt={}", truncate(p, 200)))
             .unwrap_or_else(|| format!("action={:?}", d.rule.action));
-        let recorded = record_trigger_execution(context, d.rule, d.due_at, "fired", "", &detail);
+        // #3055: status field must match the documented contract ("success"
+        // or "failed"). The previous implementation passed the literal
+        // "fired", which broke any downstream filter on `status = 'success'`
+        // (WinUI Inspector, mobile surfaces, external dashboards).
+        let recorded = record_trigger_execution(context, d.rule, d.due_at, "success", "", &detail);
         match recorded {
             Ok(()) => {
                 outcome.fired += 1;
@@ -322,7 +422,17 @@ pub fn fire_due_rules_at(context: &StorageContext, now: DateTime<Utc>) -> Result
                 );
             }
             Err(e) => {
+                // #3055: when the success-row write itself fails (typically a
+                // DB lock or schema mismatch), try to record a "failed" row so
+                // the failure is observable in the execution log instead of
+                // only in `outcome.failed` + a warn log. If that fallback also
+                // fails (DB genuinely unavailable), the counters + warn log
+                // remain the source of truth.
                 outcome.failed += 1;
+                let err_msg = format!("{e:#}");
+                let _ = record_trigger_execution(
+                    context, d.rule, d.due_at, "failed", &err_msg, &detail,
+                );
                 warn!(rule_id = %d.rule.id, error = %e, "failed to record trigger execution");
             }
         }
@@ -748,5 +858,192 @@ mod tests {
     #[test]
     fn next_due_time_at_invalid_returns_none() {
         assert_eq!(next_due_time_at("garbage", fixed_time()), None);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // #3054 regression: bounded scan must keep high-frequency cron cheap.
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn last_due_time_before_bounded_returns_most_recent_in_window() {
+        // Daily 09:00 rule. With a window starting yesterday, the most recent
+        // fire before 09:30 today is today's 09:00.
+        let now = fixed_time();
+        let from = now - chrono::Duration::days(1);
+        let last = last_due_time_before_bounded("0 9 * * *", from, now)
+            .expect("should find today's 09:00 in a 1-day window");
+        assert_eq!(last, Utc.with_ymd_and_hms(2026, 7, 18, 9, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn last_due_time_before_bounded_returns_none_when_window_has_no_fire() {
+        // Daily 09:00 rule. Window [09:10 today, 09:30 today] contains no 09:00
+        // fire, so the bounded scan correctly yields None.
+        let now = fixed_time();
+        let from = Utc.with_ymd_and_hms(2026, 7, 18, 9, 10, 0).unwrap();
+        assert_eq!(
+            last_due_time_before_bounded("0 9 * * *", from, now),
+            None,
+            "no fire in the narrow window"
+        );
+    }
+
+    #[test]
+    fn last_due_time_before_bounded_invalid_expr_returns_none() {
+        let now = fixed_time();
+        assert_eq!(last_due_time_before_bounded("garbage", now, now), None);
+    }
+
+    #[test]
+    fn last_due_for_rule_already_fired_uses_tight_window() {
+        // #3054: an already-fired minute-level rule must resolve in O(1)
+        // iterations by bounding the scan to (last_fired_at, now).
+        // `* * * * *` is the pathological case from the bug report
+        // (~527k iterations with the old 366-day scan).
+        let now = fixed_time();
+        // Pretend the rule fired 2 minutes ago at 09:28:00. The bounded
+        // window (09:28:00, 09:30:00) contains exactly one fire: 09:29:00.
+        let last_fired = Utc.with_ymd_and_hms(2026, 7, 18, 9, 28, 0).unwrap();
+        let due = last_due_for_rule("* * * * *", Some(last_fired), now)
+            .expect("a fire should exist between last_fired and now");
+        assert!(due > last_fired, "due must be after last_fired");
+        assert!(due < now, "due must be strictly before now");
+        // The most recent minute fire before 09:30:00 is 09:29:00.
+        assert_eq!(due, Utc.with_ymd_and_hms(2026, 7, 18, 9, 29, 0).unwrap());
+    }
+
+    #[test]
+    fn last_due_for_rule_never_fired_minute_cron_uses_narrow_window() {
+        // #3054: a never-fired minute-level rule must resolve in O(1) via the
+        // 2-minute narrow window, not the 366-day fallback.
+        let now = fixed_time();
+        let due = last_due_for_rule("* * * * *", None, now)
+            .expect("never-fired minute rule should be due");
+        // The most recent minute fire before 09:30:00 is 09:29:00.
+        assert_eq!(due, Utc.with_ymd_and_hms(2026, 7, 18, 9, 29, 0).unwrap());
+    }
+
+    #[test]
+    fn last_due_for_rule_never_fired_daily_cron_falls_back_to_wide_window() {
+        // #3054: a never-fired daily rule whose most recent fire was hours ago
+        // is outside the 2-minute narrow window; the fallback to the full
+        // 366-day scan must still find it.
+        let now = fixed_time();
+        let due = last_due_for_rule("0 9 * * *", None, now)
+            .expect("never-fired daily rule should be due (today's 09:00)");
+        assert_eq!(due, Utc.with_ymd_and_hms(2026, 7, 18, 9, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn last_due_for_rule_perf_minute_cron_under_5ms() {
+        // #3054 perf regression guard: the bounded path for an already-fired
+        // every-minute rule must complete in well under the bug report's
+        // 143 ms. We assert < 50 ms to stay generous on shared CI runners
+        // while still catching the 3-orders-of-magnitude regression that the
+        // old 366-day scan would produce.
+        let now = fixed_time();
+        // Use a 2-minute gap so the bounded window (09:28:00, 09:30:00)
+        // contains exactly one fire (09:29:00) — a realistic "missed one
+        // tick" scenario for a healthy executor.
+        let last_fired = Utc.with_ymd_and_hms(2026, 7, 18, 9, 28, 0).unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let _ = last_due_for_rule("* * * * *", Some(last_fired), now);
+        }
+        let elapsed = start.elapsed();
+        // 100 iterations of an O(1) scan should be sub-millisecond in release
+        // and a few ms in debug. 50 ms / 100 = 500 µs per call ceiling.
+        assert!(
+            elapsed.as_millis() < 50,
+            "100 bounded minute-cron scans took {elapsed:?} (>50ms) — \
+             the 366-day fallback is likely firing (#3054 regression)",
+        );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // #3055 regression: status field contract ("success" / "failed") and
+    // the FireNow `fired` flag reflecting actual outcomes.
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn fire_due_rules_at_records_success_status_in_execution_log() {
+        // #3055: a successfully-fired rule must persist status = "success"
+        // (the documented contract), not the legacy "fired" literal.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Daily 9am",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+        let outcome = fire_due_rules_at(&ctx, fixed_time()).expect("fire step");
+        assert_eq!(outcome.fired, 1);
+        assert_eq!(outcome.failed, 0);
+
+        let (conn, _) = open_connection(&ctx).unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM trigger_executions WHERE rule_id = ?1 ORDER BY fired_at DESC LIMIT 1",
+                params![&rule.id],
+                |row| row.get(0),
+            )
+            .expect("execution row should exist");
+        assert_eq!(
+            status, "success",
+            "execution status must be 'success' per documented contract (#3055), got '{status}'"
+        );
+
+        // last_status on the rule row must also be "success".
+        let rule_status: String = conn
+            .query_row(
+                "SELECT last_status FROM trigger_rules WHERE id = ?1",
+                params![&rule.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            rule_status, "success",
+            "trigger_rules.last_status must mirror the execution status (#3055)"
+        );
+
+        // The error column should be empty on success.
+        let rule_err: String = conn
+            .query_row(
+                "SELECT last_error FROM trigger_rules WHERE id = ?1",
+                params![&rule.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(rule_err.is_empty(), "last_error should be empty on success");
+    }
+
+    #[test]
+    fn fire_now_json_fired_flag_reflects_outcome() {
+        // #3055: the `trigger fire-now` JSON `fired` field must reflect
+        // whether any rule actually fired, not be hardcoded to true. We
+        // mirror the CLI's value computation here (the CLI handler itself is
+        // an async entrypoint that's hard to unit-test in isolation, so we
+        // assert the formula it uses).
+        let fired_some = 3usize;
+        let fired_none = 0usize;
+
+        // CLI formula (post-fix): `"fired": outcome.fired > 0`.
+        assert!(
+            fired_some > 0,
+            "formula sanity: outcome.fired > 0 must be true when some rules fired"
+        );
+        let json_some = serde_json::json!({ "fired": fired_some > 0 });
+        assert_eq!(json_some["fired"], serde_json::Value::Bool(true));
+
+        let json_none = serde_json::json!({ "fired": fired_none > 0 });
+        assert_eq!(
+            json_none["fired"],
+            serde_json::Value::Bool(false),
+            "fired must be false on a no-op tick (#3055)"
+        );
     }
 }

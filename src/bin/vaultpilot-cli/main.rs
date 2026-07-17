@@ -4633,8 +4633,15 @@ fn handle_trigger(context: &StorageContext, action: &TriggerActions) -> Result<V
                 context,
                 chrono::Utc::now(),
             )?;
+            // #3055: `"fired"` must reflect whether any rule actually fired,
+            // not just whether the tick ran. The previous `true` hardcode
+            // misled naive consumers (`if (result.fired)`) into thinking a
+            // fire happened on every invocation, including no-op ticks. The
+            // tick's run-ness is already conveyed by the presence of the
+            // response + `evaluated` field; `fired` should mean "≥1 rule
+            // fired", matching `fired_count`'s plain-English semantics.
             Ok(serde_json::json!({
-                "fired": true,
+                "fired": outcome.fired > 0,
                 "evaluated": outcome.evaluated,
                 "fired_count": outcome.fired,
                 "failed": outcome.failed,

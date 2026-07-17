@@ -218,7 +218,7 @@ pub fn save_settings_with_context(
     }
 
     // Preserve existing API keys if the incoming values are masked.
-    // The UI sends masked keys (e.g. "sk-a…qrst") which would overwrite
+    // The UI sends masked keys (e.g. "mask:sk-a…qrst") which would overwrite
     // the real encrypted key if saved as-is. Load the current settings
     // and keep any key that hasn't been explicitly changed by the user.
     // If decryption fails (e.g. machine key changed), fall back to reading
@@ -280,7 +280,7 @@ pub fn save_settings_with_context(
             // #2557: we could not load the existing settings to resolve masked
             // API keys (the file is corrupt/unreadable and the raw-JSON
             // fallback also failed). If the incoming request contains any
-            // masked key (e.g. "sk-a…qrst"), persisting it as-is would
+            // masked key (e.g. "mask:sk-a…qrst"), persisting it as-is would
             // overwrite the real (encrypted) key on disk with a display-only
             // mask, permanently losing the user's API key with no warning.
             // Refuse the save and surface the underlying load error so the
@@ -558,12 +558,13 @@ mod tests {
         let settings = AppSettings {
             vault_dir: temp.join("vault").to_string_lossy().to_string(),
             provider: ProviderConfig {
-                // A VALID mask in the exact "<4><ELLIPSIS><4>" format produced
-                // by mask_secret (9 chars). This is genuinely masked, so saving
-                // over a corrupt file must be refused. A plaintext key that
-                // merely contains '…' (e.g. "sk-abcd…wxyz", 13 chars) is NOT a
-                // valid mask and is treated as real per #2987.
-                api_key: "sk-a…wxyz".to_string(),
+                // A VALID mask in the sentinel-prefixed format produced by
+                // mask_secret ("mask:<4><ELLIPSIS><4>"). This is genuinely
+                // masked, so saving over a corrupt file must be refused. A
+                // plaintext key that merely contains '…' (e.g. "sk-abcd…wxyz",
+                // no "mask:" prefix) is NOT a valid mask and is treated as real
+                // per #2987 / #2997 / #3001.
+                api_key: "mask:sk-a…wxyz".to_string(),
                 ..ProviderConfig::default()
             },
             ..AppSettings::default()

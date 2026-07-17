@@ -1246,6 +1246,11 @@ enum QueryFormat {
     Kanban,
     /// Gallery — card grid with cover images, titles, and key property tags (#2954)
     Gallery,
+    /// Cards — individual note cards similar to Gallery but without cover images,
+    /// focusing on title + summary + property tags in a compact layout (#2999)
+    Cards,
+    /// List — compact one-line-per-note bullet list with title + key properties (#2999)
+    List,
 }
 
 #[derive(Subcommand)]
@@ -3007,6 +3012,8 @@ fn handle_vault_query(
         }
         QueryFormat::Kanban => format_as_kanban(&columns, &rows, group_by.unwrap_or("status")),
         QueryFormat::Gallery => format_as_gallery(&columns, &rows),
+        QueryFormat::Cards => format_as_cards(&columns, &rows),
+        QueryFormat::List => format_as_list(&columns, &rows),
     };
 
     // Parse summarization specs if provided (#2909)
@@ -3106,6 +3113,8 @@ fn parse_query_format(s: &str) -> QueryFormat {
         "json" => QueryFormat::Json,
         "kanban" => QueryFormat::Kanban,
         "gallery" => QueryFormat::Gallery,
+        "cards" => QueryFormat::Cards,
+        "list" => QueryFormat::List,
         _ => QueryFormat::Table,
     }
 }
@@ -3526,6 +3535,136 @@ fn format_as_kanban(
         out.push('\n');
     }
 
+    out
+}
+
+/// Render query results as Cards — individual note cards focusing on title,
+/// summary, and property tags. Unlike Gallery, Cards do not require cover
+/// images and use a compact markdown blockquote layout (#2999).
+///
+/// This mirrors the Obsidian Bases "Cards" view: each note becomes a bordered
+/// card with its key metadata inline.
+fn format_as_cards(
+    columns: &[String],
+    rows: &[std::collections::HashMap<String, QValue>],
+) -> String {
+    if rows.is_empty() {
+        return "*No results*\n".to_string();
+    }
+
+    let note_title = |row: &std::collections::HashMap<String, QValue>| -> String {
+        if let Some(QValue::Text(t)) = row.get("title") {
+            if !t.is_empty() {
+                return t.clone();
+            }
+        }
+        row.get("$path")
+            .map(|v| {
+                let p = v.to_string();
+                p.rsplit('/').next().unwrap_or(&p).to_string()
+            })
+            .unwrap_or_else(|| "(untitled)".to_string())
+    };
+
+    let tag_cols: Vec<&String> = columns
+        .iter()
+        .filter(|c| !matches!(c.as_str(), "title" | "$path" | "summary" | "body"))
+        .collect();
+
+    let mut out = String::from("# Cards View\n\n");
+
+    for row in rows {
+        let title = note_title(row);
+        out.push_str(&format!("## {title}\n\n"));
+
+        if let Some(QValue::Text(s)) = row.get("summary") {
+            let s = s.trim();
+            if !s.is_empty() && s != "null" {
+                out.push_str(&format!("> {s}\n\n"));
+            }
+        }
+
+        let tags: Vec<String> = tag_cols
+            .iter()
+            .filter_map(|col| {
+                let val = row.get(*col)?;
+                let s = val.to_string();
+                if s.is_empty() || s == "null" {
+                    None
+                } else {
+                    Some(format!("`{col}: {s}`"))
+                }
+            })
+            .collect();
+
+        if !tags.is_empty() {
+            out.push_str(&format!("{tags}\n\n", tags = tags.join("  ")));
+        }
+
+        out.push_str("---\n\n");
+    }
+
+    out
+}
+
+/// Render query results as a compact bullet List — one line per note with
+/// title + key property values inline (#2999).
+///
+/// Mirrors the Obsidian Bases "List" view: dense, scannable, ideal for
+/// filtered quick-reference lists.
+fn format_as_list(
+    columns: &[String],
+    rows: &[std::collections::HashMap<String, QValue>],
+) -> String {
+    if rows.is_empty() {
+        return "*No results*\n".to_string();
+    }
+
+    let note_title = |row: &std::collections::HashMap<String, QValue>| -> String {
+        if let Some(QValue::Text(t)) = row.get("title") {
+            if !t.is_empty() {
+                return t.clone();
+            }
+        }
+        row.get("$path")
+            .map(|v| {
+                let p = v.to_string();
+                p.rsplit('/').next().unwrap_or(&p).to_string()
+            })
+            .unwrap_or_else(|| "(untitled)".to_string())
+    };
+
+    let meta_cols: Vec<&String> = columns
+        .iter()
+        .filter(|c| !matches!(c.as_str(), "title" | "$path" | "summary" | "body"))
+        .collect();
+
+    let mut out = String::from("# List View\n\n");
+
+    for row in rows {
+        let title = note_title(row);
+
+        let meta_parts: Vec<String> = meta_cols
+            .iter()
+            .filter_map(|col| {
+                let val = row.get(*col)?;
+                let s = val.to_string();
+                if s.is_empty() || s == "null" {
+                    None
+                } else {
+                    Some(format!("{col}: {s}"))
+                }
+            })
+            .collect();
+
+        if meta_parts.is_empty() {
+            out.push_str(&format!("- **{title}**\n"));
+        } else {
+            out.push_str(&format!("- **{title}** — {}\n", meta_parts.join(", ")));
+        }
+    }
+
+    out.push('\n');
     out
 }
 
@@ -6160,7 +6299,9 @@ fn handle_graph(
 
 #[cfg(test)]
 mod tests {
+    use crate::format_as_cards;
     use crate::format_as_gallery;
+    use crate::format_as_list;
     use crate::http_bridge::{
         bridge_token_from_headers, constant_time_eq, normalize_bridge_token,
         validate_http_bridge_binding,
@@ -7064,6 +7205,147 @@ mod tests {
         let rows: Vec<std::collections::HashMap<String, QValue>> = vec![];
         let out = format_as_gallery(&cols, &rows);
         assert!(out.contains("No results"));
+    }
+
+    // ── Cards view (#2999) ──────────────────────────────────────────
+
+    /// Cards view renders each note with a heading, summary blockquote, and property tags.
+    #[test]
+    fn cards_renders_heading_and_summary() {
+        let cols = vec![
+            "$path".to_string(),
+            "title".to_string(),
+            "status".to_string(),
+            "priority".to_string(),
+        ];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("notes/rfcs/agent.md".to_string()),
+            ),
+            (
+                "title".to_string(),
+                QValue::Text("Agent Architecture RFC".to_string()),
+            ),
+            ("status".to_string(), QValue::Text("draft".to_string())),
+            ("priority".to_string(), QValue::Text("high".to_string())),
+        ])];
+        let out = format_as_cards(&cols, &rows);
+        assert!(out.contains("# Cards View"));
+        assert!(out.contains("## Agent Architecture RFC"));
+        assert!(out.contains("`status: draft`"));
+        assert!(out.contains("`priority: high`"));
+        // Cards should not have cover/![] markers.
+        assert!(!out.contains("![cover]"));
+    }
+
+    /// Cards view shows summary as a blockquote when present.
+    #[test]
+    fn cards_shows_summary_as_blockquote() {
+        let cols = vec![
+            "$path".to_string(),
+            "title".to_string(),
+            "summary".to_string(),
+        ];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            (
+                "$path".to_string(),
+                QValue::Text("notes/plan.md".to_string()),
+            ),
+            ("title".to_string(), QValue::Text("Q3 Roadmap".to_string())),
+            (
+                "summary".to_string(),
+                QValue::Text("Key milestones for Q3 2026".to_string()),
+            ),
+        ])];
+        let out = format_as_cards(&cols, &rows);
+        assert!(out.contains("> Key milestones for Q3 2026"));
+    }
+
+    /// Cards view handles empty results gracefully.
+    #[test]
+    fn cards_empty_result() {
+        let cols: Vec<String> = vec![];
+        let rows: Vec<std::collections::HashMap<String, QValue>> = vec![];
+        let out = format_as_cards(&cols, &rows);
+        assert!(out.contains("No results"));
+    }
+
+    // ── List view (#2999) ───────────────────────────────────────────
+
+    /// List view renders a compact bullet list with title + metadata inline.
+    #[test]
+    fn list_renders_compact_bullets() {
+        let cols = vec![
+            "$path".to_string(),
+            "title".to_string(),
+            "status".to_string(),
+            "priority".to_string(),
+        ];
+        use std::collections::HashMap;
+        let rows = vec![
+            HashMap::from([
+                ("$path".to_string(), QValue::Text("notes/a.md".to_string())),
+                ("title".to_string(), QValue::Text("Alpha".to_string())),
+                ("status".to_string(), QValue::Text("active".to_string())),
+                ("priority".to_string(), QValue::Text("high".to_string())),
+            ]),
+            HashMap::from([
+                ("$path".to_string(), QValue::Text("notes/b.md".to_string())),
+                ("title".to_string(), QValue::Text("Beta".to_string())),
+                ("status".to_string(), QValue::Text("done".to_string())),
+                ("priority".to_string(), QValue::Text("low".to_string())),
+            ]),
+        ];
+        let out = format_as_list(&cols, &rows);
+        assert!(out.contains("# List View"));
+        assert!(out.contains("- **Alpha** — status: active, priority: high"));
+        assert!(out.contains("- **Beta** — status: done, priority: low"));
+        // List should not use ## headings (that's Cards/Gallery).
+        assert!(!out.contains("## Alpha"));
+    }
+
+    /// List view omits metadata suffix when no non-title/$path columns exist.
+    #[test]
+    fn list_no_extra_columns_omits_suffix() {
+        let cols = vec!["$path".to_string(), "title".to_string()];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([
+            ("$path".to_string(), QValue::Text("notes/x.md".to_string())),
+            ("title".to_string(), QValue::Text("X".to_string())),
+        ])];
+        let out = format_as_list(&cols, &rows);
+        // List view includes a header; strip it for compact assertion.
+        let body: String = out
+            .lines()
+            .skip_while(|l| l.starts_with('#') || l.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(body.trim(), "- **X**".trim());
+    }
+
+    /// List view handles empty results.
+    #[test]
+    fn list_empty_result() {
+        let cols: Vec<String> = vec![];
+        let rows: Vec<std::collections::HashMap<String, QValue>> = vec![];
+        let out = format_as_list(&cols, &rows);
+        assert!(out.contains("No results"));
+    }
+
+    /// List view falls back to filename when title is missing.
+    #[test]
+    fn list_falls_back_to_filename() {
+        let cols = vec!["$path".to_string()];
+        use std::collections::HashMap;
+        let rows = vec![HashMap::from([(
+            "$path".to_string(),
+            QValue::Text("notes/research.md".to_string()),
+        )])];
+        let out = format_as_list(&cols, &rows);
+        assert!(out.contains("**research.md**"));
     }
 
     // ── html_escape (#3033) ─────────────────────────────────────────

@@ -1252,15 +1252,12 @@ fn strip_boilerplate(html: &str) -> String {
     for tag in patterns {
         let open = format!("<{tag}");
         let close = format!("</{tag}>");
-        loop {
-            // Use find_ci (ASCII case-fold on the original string) so byte
-            // offsets are valid char boundaries even when the page contains
-            // characters like `İ` whose lowercase form has a different byte
-            // length. Mixing offsets from `to_lowercase()` with `replace_range`
-            // on the original panics (#3044).
-            let Some(s) = find_ci(&out, &open) else {
-                break;
-            };
+        // Use find_ci (ASCII case-fold on the original string) so byte
+        // offsets are valid char boundaries even when the page contains
+        // characters like `İ` whose lowercase form has a different byte
+        // length. Mixing offsets from `to_lowercase()` with `replace_range`
+        // on the original panics (#3044).
+        while let Some(s) = find_ci(&out, &open) {
             // Find the end of the open tag (the next '>').
             let Some(gt) = out[s..].find('>') else {
                 break;

@@ -433,6 +433,20 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             last_status TEXT NOT NULL DEFAULT '',
             last_error TEXT NOT NULL DEFAULT ''
         );
+
+        -- Agent trigger rules for vault event automation (#2984)
+        CREATE TABLE IF NOT EXISTS trigger_rules (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            trigger_type TEXT NOT NULL,
+            trigger_config TEXT NOT NULL,
+            filter TEXT,
+            action TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            custom_prompt TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         "#,
     )?;
 

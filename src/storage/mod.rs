@@ -24,6 +24,7 @@ pub(crate) mod session_export;
 mod settings;
 pub(crate) mod snapshots;
 pub(crate) mod subscriptions;
+pub(crate) mod trigger_rules;
 
 // Re-export StorageContext so callers see no difference.
 pub use pool::StorageContext;
@@ -106,6 +107,12 @@ pub use subscriptions::{
     set_subscription_enabled_with_context, update_subscription_async,
     update_subscription_next_run_with_context, update_subscription_run_with_context,
     update_subscription_with_context,
+};
+// Re-export trigger_rules public API (#2984).
+pub use trigger_rules::{
+    create_trigger_rule_with_context, delete_trigger_rule_with_context,
+    get_trigger_rule_with_context, list_trigger_rules_with_context,
+    toggle_trigger_rule_with_context,
 };
 // Re-export snapshots public API (#2855).
 pub use snapshots::{

@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_engine;
 pub mod ai;
+pub mod block_ref;
 pub mod calendar;
 pub mod capability_registry;
 pub mod citations;

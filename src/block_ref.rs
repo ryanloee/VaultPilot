@@ -35,19 +35,39 @@ pub struct Block {
 
 /// Compute a stable block id from its canonical content.
 ///
-/// The id is a short, url/path-safe base36 of a 32-bit FNV-1a hash over the
-/// heading path joined with `\0` and the trimmed text. Deterministic across
-/// runs and platforms; collision probability is negligible for note-scale text.
-fn block_id_for(heading_path: &[String], text: &str) -> String {
+/// The id is a short, url/path-safe base36 of a 32-bit hash over the heading
+/// path joined with `\0`, the occurrence count `n` of this exact block content
+/// within the note, and the trimmed text. The occurrence count disambiguates
+/// two blocks with identical text under the same heading path (#2998): a Daily
+/// Journal with two identical list items previously collided on the same `^id`,
+/// corrupting annotations and embedding resolution). Using the occurrence count
+/// (rather than raw document position) keeps ids identical between
+/// [`parse_blocks`] and [`annotate_blocks_grouped`] and stable across re-runs.
+fn block_id_for(heading_path: &[String], occurrence: usize, text: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for h in heading_path {
         h.hash(&mut hasher);
         '\0'.hash(&mut hasher);
     }
+    occurrence.hash(&mut hasher);
     text.hash(&mut hasher);
     let hash = hasher.finish();
     format!("{:x}", hash)
+}
+
+/// Return the 0-based occurrence index for `(heading_path, text)` within this
+/// note and record that we've now seen it once more. Used by [`block_id_for`]
+/// to disambiguate identically-texted blocks (#2998).
+fn occurrence_for(
+    seen: &mut HashMap<(Vec<String>, String), usize>,
+    heading_path: &[String],
+    text: &str,
+) -> usize {
+    let key = (heading_path.to_vec(), text.to_string());
+    let n = *seen.get(&key).unwrap_or(&0);
+    *seen.entry(key).or_insert(0) += 1;
+    n
 }
 
 /// Strip a trailing `<!-- ^id -->` block-id marker (if present) from a line.
@@ -98,15 +118,23 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
     // Pending prose/paragraph buffer: (heading_path, text).
     let mut current: Option<(Vec<String>, String)> = None;
     let mut index = 0usize;
+    // Tracks how many times each (heading_path, text) has appeared, so
+    // identically-texted blocks get distinct, stable ids (#2998).
+    let mut seen: HashMap<(Vec<String>, String), usize> = HashMap::new();
 
     // Push a non-heading block (paragraph / list item / code) into `blocks`.
-    let flush = |hp: &[String], buf: &str, blocks: &mut Vec<Block>, index: &mut usize| {
+    let flush = |hp: &[String],
+                 buf: &str,
+                 blocks: &mut Vec<Block>,
+                 index: &mut usize,
+                 seen: &mut HashMap<(Vec<String>, String), usize>| {
         let text = buf.trim();
         if text.is_empty() {
             return;
         }
+        let occ = occurrence_for(seen, hp, text);
         blocks.push(Block {
-            id: block_id_for(hp, text),
+            id: block_id_for(hp, occ, text),
             heading_path: hp.to_vec(),
             text: text.to_string(),
             index: *index,
@@ -115,22 +143,27 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
     };
 
     // Push a heading block and update the running heading path.
-    let push_heading =
-        |hp: Vec<String>, level: usize, title: &str, blocks: &mut Vec<Block>, index: &mut usize| {
-            let text = format!(
-                "{}{}{}",
-                "#".repeat(level),
-                if level > 0 { " " } else { "" },
-                title
-            );
-            blocks.push(Block {
-                id: block_id_for(&hp, title),
-                heading_path: hp,
-                text,
-                index: *index,
-            });
-            *index += 1;
-        };
+    let push_heading = |hp: Vec<String>,
+                        level: usize,
+                        title: &str,
+                        blocks: &mut Vec<Block>,
+                        index: &mut usize,
+                        seen: &mut HashMap<(Vec<String>, String), usize>| {
+        let text = format!(
+            "{}{}{}",
+            "#".repeat(level),
+            if level > 0 { " " } else { "" },
+            title
+        );
+        let occ = occurrence_for(seen, &hp, &text);
+        blocks.push(Block {
+            id: block_id_for(&hp, occ, title),
+            heading_path: hp,
+            text,
+            index: *index,
+        });
+        *index += 1;
+    };
 
     // True for the first line of a list item or blockquote.
     let is_list_or_quote_start = |line: &str| -> bool {
@@ -163,10 +196,12 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
             if in_code {
                 // Close the fence: flush the accumulated code block.
                 if let Some((hp, buf)) = current.take() {
+                    let text = buf.trim();
+                    let occ = occurrence_for(&mut seen, &hp, text);
                     blocks.push(Block {
-                        id: block_id_for(&hp, buf.trim()),
+                        id: block_id_for(&hp, occ, text),
                         heading_path: hp,
-                        text: buf.trim().to_string(),
+                        text: text.to_string(),
                         index,
                     });
                     index += 1;
@@ -176,7 +211,7 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
             } else {
                 // Open a fence: flush any pending prose first.
                 if let Some((hp, buf)) = current.take() {
-                    flush(&hp, &buf, &mut blocks, &mut index);
+                    flush(&hp, &buf, &mut blocks, &mut index, &mut seen);
                 }
                 in_code = true;
                 current = Some((heading_path.clone(), String::new()));
@@ -194,7 +229,7 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
         if trimmed.is_empty() {
             // Blank line ends the current block.
             if let Some((hp, buf)) = current.take() {
-                flush(&hp, &buf, &mut blocks, &mut index);
+                flush(&hp, &buf, &mut blocks, &mut index, &mut seen);
             }
             continue;
         }
@@ -202,7 +237,7 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
         // Heading: its own block, also updates heading_path for subsequent blocks.
         if trimmed.starts_with('#') {
             if let Some((hp, buf)) = current.take() {
-                flush(&hp, &buf, &mut blocks, &mut index);
+                flush(&hp, &buf, &mut blocks, &mut index, &mut seen);
             }
             let level = trimmed.chars().take_while(|c| *c == '#').count();
             // Strip any pre-existing block-id marker before computing the title.
@@ -211,7 +246,7 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
             hp.truncate(level.saturating_sub(1));
             hp.push(title.clone());
             heading_path = hp.clone();
-            push_heading(hp, level, &title, &mut blocks, &mut index);
+            push_heading(hp, level, &title, &mut blocks, &mut index, &mut seen);
             continue;
         }
 
@@ -245,7 +280,7 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
 
         if start_new {
             if let Some((hp, buf)) = current.take() {
-                flush(&hp, &buf, &mut blocks, &mut index);
+                flush(&hp, &buf, &mut blocks, &mut index, &mut seen);
             }
             current = Some((heading_path.clone(), clean));
         } else {
@@ -255,7 +290,7 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
         }
     }
     if let Some((hp, buf)) = current.take() {
-        flush(&hp, &buf, &mut blocks, &mut index);
+        flush(&hp, &buf, &mut blocks, &mut index, &mut seen);
     }
 
     blocks
@@ -280,8 +315,13 @@ fn annotate_blocks_grouped(body: &str) -> String {
     let mut in_code = false;
     let mut heading_path: Vec<String> = Vec::new();
     let mut block_lines: Vec<&str> = Vec::new();
+    // Same occurrence tracking as parse_blocks so emitted ids match (#2998).
+    let mut seen: HashMap<(Vec<String>, String), usize> = HashMap::new();
 
-    let flush_block = |block_lines: &[&str], heading_path: &[String], out: &mut String| {
+    let flush_block = |block_lines: &[&str],
+                       heading_path: &[String],
+                       seen: &mut HashMap<(Vec<String>, String), usize>,
+                       out: &mut String| {
         if block_lines.is_empty() {
             return;
         }
@@ -301,13 +341,15 @@ fn annotate_blocks_grouped(body: &str) -> String {
             let mut hp = heading_path.to_vec();
             hp.truncate(level.saturating_sub(1));
             hp.push(title.to_string());
-            let id = block_id_for(&hp, title);
+            let occ = occurrence_for(seen, &hp, title);
+            let id = block_id_for(&hp, occ, title);
             let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
         } else if block_lines.len() == 1 && has_block_id_marker(block_lines[0]) {
             // Already annotated — keep as-is.
             let _ = writeln!(out, "{}", block_lines[0].trim_end());
         } else {
-            let id = block_id_for(heading_path, text);
+            let occ = occurrence_for(seen, heading_path, text);
+            let id = block_id_for(heading_path, occ, text);
             let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
         }
     };
@@ -316,7 +358,7 @@ fn annotate_blocks_grouped(body: &str) -> String {
         let line = raw_line;
         let fence = line.trim_start().starts_with("```");
         if fence {
-            flush_block(&block_lines, &heading_path, &mut out);
+            flush_block(&block_lines, &heading_path, &mut seen, &mut out);
             block_lines.clear();
             let _ = writeln!(out, "{line}");
             in_code = !in_code;
@@ -327,14 +369,14 @@ fn annotate_blocks_grouped(body: &str) -> String {
             continue;
         }
         if line.trim().is_empty() {
-            flush_block(&block_lines, &heading_path, &mut out);
+            flush_block(&block_lines, &heading_path, &mut seen, &mut out);
             block_lines.clear();
             let _ = writeln!(out);
             continue;
         }
         // Heading is a block of its own; update the running heading path.
         if line.trim_start().starts_with('#') {
-            flush_block(&block_lines, &heading_path, &mut out);
+            flush_block(&block_lines, &heading_path, &mut seen, &mut out);
             block_lines.clear();
             let text = line.trim();
             let level = text.chars().take_while(|c| *c == '#').count();
@@ -343,13 +385,14 @@ fn annotate_blocks_grouped(body: &str) -> String {
             hp.truncate(level.saturating_sub(1));
             hp.push(title.to_string());
             heading_path = hp.clone();
-            let id = block_id_for(&hp, title);
+            let occ = occurrence_for(&mut seen, &hp, title);
+            let id = block_id_for(&hp, occ, title);
             let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
             continue;
         }
         block_lines.push(line);
     }
-    flush_block(&block_lines, &heading_path, &mut out);
+    flush_block(&block_lines, &heading_path, &mut seen, &mut out);
     out
 }
 
@@ -540,5 +583,46 @@ mod tests {
         let line = "Some text <!-- ^deadbeef -->";
         assert_eq!(strip_block_id_marker(line), "Some text");
         assert!(has_block_id_marker(line));
+    }
+
+    // ── #2998 regression: identical-text blocks get distinct ids ──
+    #[test]
+    fn identical_blocks_get_distinct_ids() {
+        // Two identical list items under the same heading must not collide.
+        let body = "## Tasks\n- [ ] 回复邮件\n- [ ] 回复邮件\n";
+        let blocks = parse_blocks(body);
+        let tasks: Vec<&Block> = blocks
+            .iter()
+            .filter(|b| b.text == "- [ ] 回复邮件")
+            .collect();
+        assert_eq!(tasks.len(), 2, "expected two identical blocks");
+        assert_ne!(
+            tasks[0].id, tasks[1].id,
+            "identical-text blocks must have distinct stable ids"
+        );
+        // And the ids are stable/deterministic across runs.
+        let blocks2 = parse_blocks(body);
+        let tasks2: Vec<&Block> = blocks2
+            .iter()
+            .filter(|b| b.text == "- [ ] 回复邮件")
+            .collect();
+        assert_eq!(tasks[0].id, tasks2[0].id);
+        assert_eq!(tasks[1].id, tasks2[1].id);
+    }
+
+    #[test]
+    fn annotate_and_parse_agree_on_ids() {
+        // The ids emitted by annotate_blocks must match those parse_blocks
+        // assigns, so re-annotation is stable (#2998 occurrence tracking).
+        let body = "## Tasks\n- [ ] 回复邮件\n- [ ] 回复邮件\n";
+        let annotated = annotate_blocks(body);
+        let parsed = parse_blocks(&annotated);
+        let ids: Vec<String> = parsed.iter().map(|b| b.id.clone()).collect();
+        // Two distinct ids for the duplicated item.
+        let dup: Vec<&String> = ids
+            .iter()
+            .filter(|id| parsed.iter().filter(|b| &b.id == *id).count() > 1)
+            .collect();
+        assert!(dup.is_empty(), "annotated ids must be unique per block");
     }
 }

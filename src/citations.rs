@@ -39,85 +39,6 @@ struct RawCitation {
     offset: Option<usize>,
 }
 
-/// Parse every `[[...]]` wikilink citation marker in `text`.
-///
-/// Returns the matched inner content (target + optional `#section`). Empty
-/// `[[ ]]` pairs are ignored. Pure and allocation-light so it can be unit
-/// tested exhaustively.
-fn extract_wikilink_citations(text: &str) -> Vec<RawCitation> {
-    let mut out = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while let Some(start) = text[i..].find("[[") {
-        let abs_start = i + start;
-        // Find the closing "]]" after this "[[".
-        let rest = &text[abs_start + 2..];
-        if let Some(end_rel) = rest.find("]]") {
-            let abs_end = abs_start + 2 + end_rel;
-            let inner = &text[abs_start + 2..abs_end];
-            let inner = inner.trim();
-            if !inner.is_empty() {
-                out.push(RawCitation {
-                    label: inner.to_string(),
-                    path: None,
-                    offset: None,
-                });
-            }
-            i = abs_end + 2;
-        } else {
-            break;
-        }
-        // Guard against unbounded loops on pathological input.
-        if i >= bytes.len() {
-            break;
-        }
-    }
-    out
-}
-
-/// Parse every `[#cite:path:offset]` compact citation marker in `text`.
-fn extract_compact_citations(text: &str) -> Vec<RawCitation> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    while let Some(start) = text[i..].find("[#cite:") {
-        let abs_start = i + start;
-        let rest = &text[abs_start + 7..];
-        if let Some(end_rel) = rest.find(']') {
-            let abs_end = abs_start + 7 + end_rel;
-            let inner = &text[abs_start + 7..abs_end];
-            // inner := "path:offset" or "path" or "path:" or ":offset"
-            let (path, offset) = match inner.split_once(':') {
-                None => (Some(inner.to_string()), None),
-                Some((p, o)) => {
-                    let path = if p.is_empty() {
-                        None
-                    } else {
-                        Some(p.to_string())
-                    };
-                    let offset = if o.is_empty() {
-                        None
-                    } else {
-                        o.parse::<usize>().ok()
-                    };
-                    (path, offset)
-                }
-            };
-            // Only keep markers that carry at least a path or an offset.
-            if path.is_some() || offset.is_some() {
-                out.push(RawCitation {
-                    label: path.clone().unwrap_or_else(|| "source".to_string()),
-                    path,
-                    offset,
-                });
-            }
-            i = abs_end + 1;
-        } else {
-            break;
-        }
-    }
-    out
-}
-
 /// Replace every citation marker in `text` with a `[n]` footnote, returning
 /// the rewritten text together with the ordered list of raw citations.
 ///
@@ -125,21 +46,17 @@ fn extract_compact_citations(text: &str) -> Vec<RawCitation> {
 /// left-to-right, each receiving the next index. This matches how a reader
 /// encounters the markers while scanning the answer.
 fn rewrite_with_footnotes(text: &str) -> (String, Vec<RawCitation>) {
-    let mut cites = Vec::new();
-    cites.extend(extract_wikilink_citations(text));
-    cites.extend(extract_compact_citations(text));
+    // Collect every recognized marker together with the raw citation data it
+    // represents. We keep spans and citations as parallel entries here, then
+    // sort by text position so emission order (and thus footnote numbers)
+    // always matches `cites[footnote - 1]`.
+    //
+    // Previously `cites` was built wikilink-first then compact, while `spans`
+    // were later reordered by position. When a compact marker preceded a
+    // wikilink, sorting flipped the emission order and footnote `[n]` pointed
+    // at the wrong `cites[n-1]` entry (see #3002).
+    let mut entries: Vec<(usize, usize, RawCitation)> = Vec::new(); // (start, end, raw)
 
-    if cites.is_empty() {
-        return (text.to_string(), cites);
-    }
-
-    // Build a single-pass rewrite. We walk the original text and, whenever we
-    // see a marker we recognized, emit the `[n]` footnote instead.
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0usize;
-    // Re-derive the exact marker spans so we can skip them precisely.
-    let mut spans: Vec<(usize, usize, usize)> = Vec::new(); // (start, end, cite_index)
-    let mut idx = 0usize;
     // wikilinks
     {
         let mut j = 0;
@@ -148,9 +65,17 @@ fn rewrite_with_footnotes(text: &str) -> (String, Vec<RawCitation>) {
             let rest = &text[abs_start + 2..];
             if let Some(end_rel) = rest.find("]]") {
                 let abs_end = abs_start + 2 + end_rel;
-                if !text[abs_start + 2..abs_end].trim().is_empty() {
-                    spans.push((abs_start, abs_end + 2, idx));
-                    idx += 1;
+                let inner = text[abs_start + 2..abs_end].trim();
+                if !inner.is_empty() {
+                    entries.push((
+                        abs_start,
+                        abs_end + 2,
+                        RawCitation {
+                            label: inner.to_string(),
+                            path: None,
+                            offset: None,
+                        },
+                    ));
                 }
                 j = abs_end + 2;
             } else {
@@ -167,15 +92,33 @@ fn rewrite_with_footnotes(text: &str) -> (String, Vec<RawCitation>) {
             if let Some(end_rel) = rest.find(']') {
                 let abs_end = abs_start + 7 + end_rel;
                 let inner = &text[abs_start + 7..abs_end];
-                let has = match inner.split_once(':') {
-                    None => !inner.is_empty(),
+                // inner := "path:offset" or "path" or "path:" or ":offset"
+                let (path, offset) = match inner.split_once(':') {
+                    None => (Some(inner.to_string()), None),
                     Some((p, o)) => {
-                        (!p.is_empty()) || (!o.is_empty() && o.parse::<usize>().is_ok())
+                        let path = if p.is_empty() {
+                            None
+                        } else {
+                            Some(p.to_string())
+                        };
+                        let offset = if o.is_empty() {
+                            None
+                        } else {
+                            o.parse::<usize>().ok()
+                        };
+                        (path, offset)
                     }
                 };
-                if has {
-                    spans.push((abs_start, abs_end + 1, idx));
-                    idx += 1;
+                if path.is_some() || offset.is_some() {
+                    entries.push((
+                        abs_start,
+                        abs_end + 1,
+                        RawCitation {
+                            label: path.clone().unwrap_or_else(|| "source".to_string()),
+                            path,
+                            offset,
+                        },
+                    ));
                 }
                 j = abs_end + 1;
             } else {
@@ -183,20 +126,31 @@ fn rewrite_with_footnotes(text: &str) -> (String, Vec<RawCitation>) {
             }
         }
     }
-    spans.sort_by_key(|s| s.0);
 
-    for (start, end, cite_index) in spans {
-        if start < i {
+    if entries.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+
+    // Sort by text position so footnote numbers follow reading order and
+    // `cites[footnote - 1]` always aligns with the emitted `[footnote]`.
+    entries.sort_by_key(|e| e.0);
+
+    // Build a single-pass rewrite. We walk the original text and, whenever we
+    // see a marker we recognized, emit the `[n]` footnote instead.
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    let mut cites = Vec::with_capacity(entries.len());
+    for (start, end, raw) in &entries {
+        if *start < i {
             // Overlapping/already-emitted span — skip defensively.
             continue;
         }
-        out.push_str(&text[i..start]);
-        out.push_str(&format!("[{}]", cite_index + 1));
-        i = end;
+        out.push_str(&text[i..*start]);
+        out.push_str(&format!("[{}]", cites.len() + 1));
+        cites.push(raw.clone());
+        i = *end;
     }
     out.push_str(&text[i..]);
-    // `cites` is already in wikilink-then-compact order which matches `spans`
-    // ordering, so citations[span.2] aligns with the footnote number.
     (out, cites)
 }
 
@@ -335,6 +289,20 @@ mod tests {
         assert_eq!(cites.len(), 2);
         assert_eq!(cites[0].title, "Note A");
         assert_eq!(cites[1].path, "notes/b.md");
+    }
+
+    #[test]
+    fn compact_before_wikilink_footnote_aligns_with_citation() {
+        // Regression test for #3002: when a compact marker precedes a wikilink,
+        // footnote numbers must still point at the correct citation.
+        let text = "first [#cite:notes/b.md:0] then [[Note A]] end.";
+        let (out, cites) = extract_citations_unresolved(text);
+        assert_eq!(out, "first [1] then [2] end.");
+        assert_eq!(cites.len(), 2);
+        // Footnote [1] sits at the compact position -> must be b.md.
+        assert_eq!(cites[0].path, "notes/b.md");
+        // Footnote [2] sits at the wikilink position -> must be Note A.
+        assert_eq!(cites[1].title, "Note A");
     }
 
     #[test]

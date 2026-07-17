@@ -124,12 +124,7 @@ pub(super) async fn run_http_bridge(
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|origin, _parts| {
-                    // Only allow localhost/127.0.0.1 origins (any port).
-                    let o = origin.to_str().unwrap_or("");
-                    o.starts_with("http://localhost:")
-                        || o.starts_with("http://127.0.0.1:")
-                        || o == "http://localhost"
-                        || o == "http://127.0.0.1"
+                    is_loopback_origin(origin)
                 }))
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any),
@@ -1838,9 +1833,81 @@ fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiEr
     )
 }
 
+/// Returns true iff `origin` is a loopback origin (localhost or 127.0.0.1)
+/// over either http or https, on any port. Used by the CORS `allow_origin`
+/// predicate so that HTTPS-fronted local clients (TLS-terminating dev proxy,
+/// Electron/Obsidian frontends served over https) are not rejected.
+///
+/// The bridge always binds to loopback and is never exposed, so allowing
+/// `https://localhost` / `https://127.0.0.1` introduces no security risk.
+pub(crate) fn is_loopback_origin(origin: &axum::http::HeaderValue) -> bool {
+    let o = origin.to_str().unwrap_or("");
+    let is_loopback_http = o.starts_with("http://localhost:")
+        || o.starts_with("http://127.0.0.1:")
+        || o == "http://localhost"
+        || o == "http://127.0.0.1";
+    let is_loopback_https = o.starts_with("https://localhost:")
+        || o.starts_with("https://127.0.0.1:")
+        || o == "https://localhost"
+        || o == "https://127.0.0.1";
+    is_loopback_http || is_loopback_https
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── is_loopback_origin (CORS predicate, #3023) ────────────────
+
+    fn hv(s: &str) -> axum::http::HeaderValue {
+        axum::http::HeaderValue::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn loopback_allows_http_localhost_with_port() {
+        assert!(is_loopback_origin(&hv("http://localhost:3000")));
+    }
+
+    #[test]
+    fn loopback_allows_http_127_with_port() {
+        assert!(is_loopback_origin(&hv("http://127.0.0.1:8080")));
+    }
+
+    #[test]
+    fn loopback_allows_https_localhost_with_port() {
+        // #3023: HTTPS-fronted local clients must not be rejected.
+        assert!(is_loopback_origin(&hv("https://localhost:3000")));
+    }
+
+    #[test]
+    fn loopback_allows_https_127_with_port() {
+        assert!(is_loopback_origin(&hv("https://127.0.0.1:8443")));
+    }
+
+    #[test]
+    fn loopback_allows_exact_http_localhost() {
+        assert!(is_loopback_origin(&hv("http://localhost")));
+        assert!(is_loopback_origin(&hv("http://127.0.0.1")));
+    }
+
+    #[test]
+    fn loopback_allows_exact_https_localhost() {
+        assert!(is_loopback_origin(&hv("https://localhost")));
+        assert!(is_loopback_origin(&hv("https://127.0.0.1")));
+    }
+
+    #[test]
+    fn loopback_rejects_non_loopback() {
+        assert!(!is_loopback_origin(&hv("http://example.com")));
+        assert!(!is_loopback_origin(&hv("https://example.com")));
+        assert!(!is_loopback_origin(&hv("http://192.168.1.5:3000")));
+    }
+
+    #[test]
+    fn loopback_rejects_garbage_origin() {
+        assert!(!is_loopback_origin(&hv("not a valid origin")));
+        assert!(!is_loopback_origin(&hv("ftp://localhost:21")));
+    }
 
     // ── constant_time_eq ──────────────────────────────────────────
 

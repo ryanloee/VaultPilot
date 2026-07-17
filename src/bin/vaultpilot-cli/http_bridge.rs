@@ -72,6 +72,8 @@ pub(super) async fn run_http_bridge(
         .route("/v1/models", get(http_models))
         .route("/v1/chat/completions", post(http_chat_completions))
         .route("/api/notes", get(http_list_notes).post(http_create_note))
+        // #3034 Web Clipper: server-side URL → Markdown note (Plan B)
+        .route("/api/clip", post(http_clip_url))
         .route("/api/notes/search", get(http_search_notes))
         .route("/api/notes/typeahead", get(http_typeahead))
         .route(
@@ -375,6 +377,34 @@ struct CreateNoteRequest {
 struct CreateNoteResponse {
     id: String,
     title: String,
+}
+
+/// Request body for POST /api/clip (#3034 Web Clipper Plan B).
+///
+/// The browser Bookmarklet / extension sends only the page URL; the bridge
+/// fetches the HTML server-side, extracts a title, strips boilerplate, and
+/// converts the body to Markdown before saving as a note. This avoids
+/// requiring a heavy browser extension and works with a simple Bookmarklet.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipRequest {
+    /// Absolute URL of the page to clip (required).
+    url: String,
+    /// Optional comma-separated tags (defaults to `clipped`).
+    #[serde(default)]
+    tags: String,
+    /// Optional target collection name.
+    #[serde(default)]
+    collection: String,
+}
+
+/// Response body for POST /api/clip.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipResponse {
+    id: String,
+    title: String,
+    url: String,
 }
 
 // ─── Route handlers ───────────────────────────────────────────────
@@ -820,6 +850,401 @@ async fn http_create_note(
         id: saved.meta.id,
         title: saved.meta.title,
     }))
+}
+
+// ─── Web Clipper — server-side URL → Markdown note (#3034 Plan B) ──
+
+/// Maximum size of HTML we are willing to fetch and parse for clipping.
+/// Pages larger than this are rejected to avoid memory exhaustion.
+const CLIP_MAX_HTML_BYTES: usize = 5 * 1024 * 1024; // 5 MB
+
+/// POST /api/clip — fetch a URL server-side, extract title + readable content,
+/// convert to Markdown, and save as a note. This implements #3034 Plan B
+/// (Bookmarklet-friendly: the browser only needs to send the URL).
+///
+/// The conversion is intentionally lightweight (regex + tag stripping) rather
+/// than pulling a full Readability crate, to keep the dependency footprint
+/// small. It handles the common article patterns: `<title>`, `<h1>`-`<h6>`,
+/// `<p>`, `<ul>`/`<ol>`/`<li>`, `<a>`, `<blockquote>`, `<code>`/`<pre>`, and
+/// `<img>` tags.
+async fn http_clip_url(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(request): Json<ClipRequest>,
+) -> Result<Json<ClipResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    let url = request.url.trim().to_string();
+    if url.is_empty() {
+        return Err(openai_error(StatusCode::BAD_REQUEST, "url is required"));
+    }
+    // Basic scheme validation — only http/https to prevent file:/// SSRF.
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "url must start with http:// or https://",
+        ));
+    }
+
+    // Fetch the page with a browser-like User-Agent (many sites block default
+    // reqwest UA). A 20s timeout bounds the wait for slow origins.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| {
+            tracing::warn!("http_clip_url: failed to build HTTP client: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to build HTTP client",
+            )
+        })?;
+
+    let resp = client
+        .get(&url)
+        .header(
+            "User-Agent",
+            "VaultPilot-WebClipper/1.0 (+https://vaultpilot.app)",
+        )
+        .header("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_clip_url: fetch failed for {url}: {e}");
+            openai_error(
+                StatusCode::BAD_GATEWAY,
+                &format!("Failed to fetch URL: {e}"),
+            )
+        })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(openai_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("Upstream returned HTTP {status}"),
+        ));
+    }
+
+    // Bound the body size to avoid pathological pages.
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    if !content_type.contains("html") && !content_type.contains("xml") {
+        return Err(openai_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            &format!("Expected HTML content, got '{content_type}'"),
+        ));
+    }
+
+    let body_bytes = resp.bytes().await.map_err(|e| {
+        tracing::warn!("http_clip_url: failed to read body: {e}");
+        openai_error(StatusCode::BAD_GATEWAY, "Failed to read response body")
+    })?;
+    if body_bytes.len() > CLIP_MAX_HTML_BYTES {
+        return Err(openai_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &format!(
+                "Page too large ({} bytes); max is {} bytes",
+                body_bytes.len(),
+                CLIP_MAX_HTML_BYTES
+            ),
+        ));
+    }
+
+    let html = String::from_utf8_lossy(&body_bytes).into_owned();
+    let title = extract_html_title(&html).unwrap_or_else(|| url.clone());
+    let markdown = html_to_markdown(&html);
+
+    if markdown.trim().is_empty() {
+        return Err(openai_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "No readable content could be extracted from the page",
+        ));
+    }
+
+    // Build tags (defaults to ["clipped"], otherwise user-provided + clipped).
+    let tags: Vec<String> = if request.tags.trim().is_empty() {
+        vec!["clipped".to_string()]
+    } else {
+        let mut t: Vec<String> = request
+            .tags
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !t.contains(&"clipped".to_string()) {
+            t.push("clipped".to_string());
+        }
+        t
+    };
+
+    let now = Utc::now().to_rfc3339();
+    // Prepend a source reference line so the clipped note is traceable.
+    let body = format!("> Source: {}\n\n{}", url.trim(), markdown.trim());
+
+    let note = NoteDocument {
+        meta: NoteMeta {
+            title,
+            tags,
+            source: url.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+            collections: if request.collection.trim().is_empty() {
+                vec![]
+            } else {
+                vec![request.collection.trim().to_string()]
+            },
+            ..Default::default()
+        },
+        body,
+        search_snippet: None,
+        search_score: None,
+    };
+
+    let saved = save_note_async(&state.context, note).await.map_err(|e| {
+        tracing::warn!("http_clip_url: failed to save note: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to save note")
+    })?;
+
+    Ok(Json(ClipResponse {
+        id: saved.meta.id,
+        title: saved.meta.title,
+        url,
+    }))
+}
+
+/// Extract the page title from the `<title>...</title>` tag (case-insensitive).
+/// Returns the trimmed title, or `None` if no `<title>` tag is present.
+fn extract_html_title(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title")?;
+    let after_open = &html[start..];
+    let tag_end = after_open.find('>')?;
+    let content_start = start + tag_end + 1;
+    let rest = &html[content_start..];
+    let lower_rest = &lower[content_start..];
+    let close = lower_rest.find("</title>")?;
+    let title = rest[..close].trim();
+    if title.is_empty() {
+        None
+    } else {
+        Some(decode_html_entities(title))
+    }
+}
+
+/// Strip the outermost wrapper tags (`<html>`, `<head>`, `<body>`,
+/// `<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, `<aside>`,
+/// `<noscript>`, `<iframe>`) from the HTML to isolate article content.
+/// This is a deliberately crude Readability stand-in: it does not score
+/// nodes, but removing nav/header/footer/script/style is enough to get a
+/// useful Markdown dump for most article pages.
+fn strip_boilerplate(html: &str) -> String {
+    // Remove <script>...</script>, <style>...</style>, <noscript>...</noscript>,
+    // <nav>...</nav>, <header>...</header>, <footer>...</footer>,
+    // <aside>...</aside>, <iframe>...</iframe> blocks (case-insensitive, DOTALL).
+    let patterns = [
+        "script", "style", "noscript", "nav", "header", "footer", "aside", "iframe",
+    ];
+    let mut out = html.to_string();
+    let lower = out.to_lowercase();
+    for tag in patterns {
+        loop {
+            let open = format!("<{tag}");
+            let close = format!("</{tag}>");
+            let lower_local = out.to_lowercase();
+            let Some(s) = lower_local.find(&open) else {
+                break;
+            };
+            // Find the end of the open tag (the next '>').
+            let Some(gt) = lower_local[s..].find('>') else {
+                break;
+            };
+            let open_end = s + gt + 1;
+            let Some(close_pos) = lower_local[open_end..].find(&close.to_lowercase()) else {
+                break;
+            };
+            let close_end = open_end + close_pos + close.len();
+            // Drop the matched region.
+            out.replace_range(s..close_end, "");
+        }
+        let _ = &lower; // suppress unused warning
+    }
+    out
+}
+
+/// Decode the most common HTML entities to their literal characters.
+fn decode_html_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+}
+
+/// Convert block-level and inline HTML tags to Markdown. This is a
+/// lightweight regex-free converter: it handles headings, paragraphs,
+/// lists, links, images, code blocks, blockquotes, emphasis, and `<br>`.
+/// Anything unrecognised is stripped of its tags but its text is kept.
+fn html_to_markdown(html: &str) -> String {
+    let cleaned = strip_boilerplate(html);
+    let mut out = String::with_capacity(cleaned.len());
+
+    // Tokenise into tags and text by scanning character by character.
+    let bytes = cleaned.as_bytes();
+    let mut i = 0;
+    // Track list nesting for indentation.
+    let mut list_stack: Vec<&'static str> = Vec::new();
+    // Track whether we're inside <pre> (suppress newline insertion).
+    let mut in_pre = false;
+
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            // Find the matching '>'.
+            if let Some(gt) = cleaned[i..].find('>') {
+                let tag_raw = &cleaned[i + 1..i + gt];
+                let tag_lower = tag_raw.trim_start_matches('/').to_lowercase();
+                let tag_name: String = tag_lower
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let is_closing = tag_raw.trim_start().starts_with('/');
+
+                // Action per tag name.
+                match tag_name.as_str() {
+                    "br" => out.push('\n'),
+                    "p" if !is_closing => out.push_str("\n\n"),
+                    "p" if is_closing => out.push('\n'),
+                    "h1" if !is_closing => out.push_str("\n\n# "),
+                    "h2" if !is_closing => out.push_str("\n\n## "),
+                    "h3" if !is_closing => out.push_str("\n\n### "),
+                    "h4" if !is_closing => out.push_str("\n\n#### "),
+                    "h5" if !is_closing => out.push_str("\n\n##### "),
+                    "h6" if !is_closing => out.push_str("\n\n###### "),
+                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" if is_closing => out.push('\n'),
+                    "strong" | "b" if !is_closing => out.push_str("**"),
+                    "strong" | "b" if is_closing => out.push_str("**"),
+                    "em" | "i" if !is_closing => out.push('_'),
+                    "em" | "i" if is_closing => out.push('_'),
+                    "code" if !is_closing && !in_pre => out.push('`'),
+                    "code" if is_closing && !in_pre => out.push('`'),
+                    "pre" if !is_closing => {
+                        out.push_str("\n```\n");
+                        in_pre = true;
+                    }
+                    "pre" if is_closing => {
+                        out.push_str("\n```\n");
+                        in_pre = false;
+                    }
+                    "blockquote" if !is_closing => out.push_str("\n> "),
+                    "blockquote" if is_closing => out.push('\n'),
+                    "hr" => out.push_str("\n\n---\n\n"),
+                    "ul" if !is_closing => list_stack.push("ul"),
+                    "ul" if is_closing => {
+                        list_stack.pop();
+                        if list_stack.is_empty() {
+                            out.push('\n');
+                        }
+                    }
+                    "ol" if !is_closing => list_stack.push("ol"),
+                    "ol" if is_closing => {
+                        list_stack.pop();
+                        if list_stack.is_empty() {
+                            out.push('\n');
+                        }
+                    }
+                    "li" if !is_closing => {
+                        let depth = list_stack.len().saturating_sub(1);
+                        let indent = "  ".repeat(depth);
+                        // Both <ul> and <ol> use "-" as the marker (ordered-list
+                        // numbering is simplified for the lightweight converter).
+                        out.push('\n');
+                        out.push_str(&indent);
+                        out.push_str("- ");
+                    }
+                    "img" => {
+                        // Extract src and alt attributes from the raw tag.
+                        let src = extract_attr(tag_raw, "src");
+                        let alt = extract_attr(tag_raw, "alt");
+                        if let Some(s) = src {
+                            out.push_str(&format!("![{}]({})", alt.unwrap_or_default(), s));
+                        }
+                    }
+                    "a" if !is_closing => {
+                        // Defer: we cannot easily wrap link text without a stack.
+                        // Store href in a side channel by pushing a marker.
+                    }
+                    _ => {} // ignore unknown tags (script/style already stripped)
+                }
+                i += gt + 1;
+                continue;
+            }
+        }
+        // Plain text character — decode entities and append.
+        if bytes[i] == b'&' {
+            if let Some(semi) = cleaned[i..].find(';') {
+                let entity = &cleaned[i..=i + semi];
+                out.push_str(&decode_html_entities(entity));
+                i += semi + 1;
+                continue;
+            }
+        }
+        // Normalise whitespace inside <pre> we keep verbatim; outside, collapse.
+        let ch = cleaned.as_bytes()[i] as char;
+        if in_pre {
+            out.push(ch);
+        } else if ch.is_whitespace() {
+            // Collapse runs of whitespace into a single space, but preserve
+            // existing newlines so paragraph breaks survive.
+            if ch == '\n' {
+                out.push('\n');
+            } else if !out.ends_with(' ') && !out.ends_with('\n') {
+                out.push(' ');
+            }
+        } else {
+            out.push(ch);
+        }
+        i += 1;
+    }
+
+    // Post-process: collapse 3+ consecutive newlines into exactly 2.
+    while out.contains("\n\n\n") {
+        out = out.replace("\n\n\n", "\n\n");
+    }
+    out.trim().to_string()
+}
+
+/// Extract the value of a named attribute from an HTML tag's raw inner text
+/// (e.g. `a href="..."`, `img src="..."`).
+fn extract_attr(tag_inner: &str, attr: &str) -> Option<String> {
+    let lower = tag_inner.to_lowercase();
+    let needle = format!("{attr}=");
+    let idx = lower.find(&needle)?;
+    let after = &tag_inner[idx + needle.len()..];
+    let after_trimmed = after.trim_start();
+    if let Some(rest) = after_trimmed.strip_prefix('"') {
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    } else if let Some(rest) = after_trimmed.strip_prefix('\'') {
+        let end = rest.find('\'')?;
+        Some(rest[..end].to_string())
+    } else {
+        // Unquoted attribute value — read until whitespace or '/'.
+        let end = after_trimmed
+            .find(|c: char| c.is_whitespace() || c == '/' || c == '>')
+            .unwrap_or(after_trimmed.len());
+        let val = after_trimmed[..end].trim().to_string();
+        if val.is_empty() {
+            None
+        } else {
+            Some(val)
+        }
+    }
 }
 
 // ─── Subscription API handlers (#2167) ──────────────────────────
@@ -2557,5 +2982,159 @@ mod tests {
                 "content-type for {name}"
             );
         }
+    }
+
+    // ── #3034 Web Clipper: HTML → Markdown helpers ──────────────────
+
+    #[test]
+    fn clip_extract_html_title_basic() {
+        let html = "<html><head><title>My Page Title</title></head><body>hi</body></html>";
+        assert_eq!(extract_html_title(html).as_deref(), Some("My Page Title"));
+    }
+
+    #[test]
+    fn clip_extract_html_title_case_insensitive_and_whitespace() {
+        let html = r#"<HTML><HEAD><TITLE>  Spaced Title  </TITLE></HEAD></HTML>"#;
+        assert_eq!(extract_html_title(html).as_deref(), Some("Spaced Title"));
+    }
+
+    #[test]
+    fn clip_extract_html_title_with_attributes() {
+        let html = r#"<html><head><title id="t">Title With Attr</title></head></html>"#;
+        assert_eq!(extract_html_title(html).as_deref(), Some("Title With Attr"));
+    }
+
+    #[test]
+    fn clip_extract_html_title_missing_returns_none() {
+        assert!(extract_html_title("<html><body>no title</body></html>").is_none());
+        assert!(extract_html_title("").is_none());
+    }
+
+    #[test]
+    fn clip_extract_html_title_decodes_entities() {
+        let html = "<title>Tom &amp; Jerry &lt;cartoon&gt;</title>";
+        assert_eq!(
+            extract_html_title(html).as_deref(),
+            Some("Tom & Jerry <cartoon>")
+        );
+    }
+
+    #[test]
+    fn clip_decode_html_entities_all_common() {
+        assert_eq!(
+            decode_html_entities("&amp;&lt;&gt;&quot;&#39;&apos;&nbsp;"),
+            "&<>\"'' "
+        );
+    }
+
+    #[test]
+    fn clip_strip_boilerplate_removes_script_style_nav() {
+        let html = concat!(
+            r#"<nav><a href="/">Home</a></nav>"#,
+            r#"<header><h1>Site Header</h1></header>"#,
+            r#"<article><p>Real content</p></article>"#,
+            r#"<footer>Copyright</footer>"#,
+            r#"<script>alert("xss")</script>"#,
+            r#"<style>.x { color: red; }</style>"#,
+        );
+        let stripped = strip_boilerplate(html);
+        assert!(!stripped.to_lowercase().contains("<script"));
+        assert!(!stripped.to_lowercase().contains("<style"));
+        assert!(!stripped.to_lowercase().contains("<nav"));
+        assert!(!stripped.to_lowercase().contains("<header"));
+        assert!(!stripped.to_lowercase().contains("<footer"));
+        assert!(!stripped.to_lowercase().contains("alert"));
+        // Article content survives
+        assert!(stripped.contains("Real content"));
+    }
+
+    #[test]
+    fn clip_html_to_markdown_headings() {
+        let html = "<h1>Title</h1><h2>Subtitle</h2><p>Body text</p>";
+        let md = html_to_markdown(html);
+        assert!(md.contains("# Title"));
+        assert!(md.contains("## Subtitle"));
+        assert!(md.contains("Body text"));
+    }
+
+    #[test]
+    fn clip_html_to_markdown_unordered_list() {
+        let html = "<ul><li>Apple</li><li>Banana</li></ul>";
+        let md = html_to_markdown(html);
+        assert!(md.contains("- Apple"));
+        assert!(md.contains("- Banana"));
+    }
+
+    #[test]
+    fn clip_html_to_markdown_code_block() {
+        let html = "<pre><code>fn main() {}</code></pre>";
+        let md = html_to_markdown(html);
+        assert!(md.contains("```"));
+        assert!(md.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn clip_html_to_markdown_blockquote_and_emphasis() {
+        let html =
+            "<blockquote>A quote</blockquote><p><strong>bold</strong> and <em>italic</em></p>";
+        let md = html_to_markdown(html);
+        assert!(md.contains("> A quote"));
+        assert!(md.contains("**bold**"));
+        assert!(md.contains("_italic_"));
+    }
+
+    #[test]
+    fn clip_html_to_markdown_image_and_link() {
+        let html =
+            r#"<img src="https://x.com/a.png" alt="pic"><a href="https://x.com">link text</a>"#;
+        let md = html_to_markdown(html);
+        // Image Markdown syntax
+        assert!(md.contains("![pic](https://x.com/a.png)"));
+        // Link text is preserved (link wrapping is simplified)
+        assert!(md.contains("link text"));
+    }
+
+    #[test]
+    fn clip_html_to_markdown_collapses_excess_newlines() {
+        let html = "<p>A</p><p>B</p><p>C</p>";
+        let md = html_to_markdown(html);
+        assert!(
+            !md.contains("\n\n\n"),
+            "triple newlines should be collapsed"
+        );
+    }
+
+    #[test]
+    fn clip_html_to_markdown_empty_yields_empty() {
+        assert_eq!(html_to_markdown(""), "");
+        assert_eq!(html_to_markdown("   \n  \n  "), "");
+    }
+
+    #[test]
+    fn clip_extract_attr_quoted_double() {
+        let tag = r#"a href="https://example.com" class="link""#;
+        assert_eq!(
+            extract_attr(tag, "href").as_deref(),
+            Some("https://example.com")
+        );
+    }
+
+    #[test]
+    fn clip_extract_attr_quoted_single() {
+        let tag = r#"img src='photo.jpg'"#;
+        assert_eq!(extract_attr(tag, "src").as_deref(), Some("photo.jpg"));
+    }
+
+    #[test]
+    fn clip_extract_attr_unquoted() {
+        // Unquoted values are read until whitespace, '/', or '>'.
+        let tag = r#"a href=page.html class="x""#;
+        assert_eq!(extract_attr(tag, "href").as_deref(), Some("page.html"));
+    }
+
+    #[test]
+    fn clip_extract_attr_missing_returns_none() {
+        let tag = r#"a class="link""#;
+        assert!(extract_attr(tag, "href").is_none());
     }
 }

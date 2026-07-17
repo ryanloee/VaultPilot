@@ -8,6 +8,7 @@ pub mod scheduled_research;
 pub mod serendipity;
 pub mod table;
 pub mod trigger;
+pub mod trigger_executor;
 pub mod tweet_import;
 pub mod write;
 

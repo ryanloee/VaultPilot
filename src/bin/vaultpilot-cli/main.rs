@@ -1472,6 +1472,27 @@ enum TriggerActions {
         /// Trigger rule ID
         id: String,
     },
+
+    /// Fire all due cron rules once (synchronous tick).
+    ///
+    /// Evaluates every enabled cron-type rule against the current clock and
+    /// records an execution row for each rule whose schedule is due. Intended
+    /// for external schedulers (system cron, systemd timers) that prefer to
+    /// invoke `vaultpilot trigger fire-now` on their own cadence rather than
+    /// running the built-in background loop (#3048).
+    FireNow,
+
+    /// Run the background trigger executor until Ctrl+C / SIGTERM.
+    ///
+    /// Every 60 seconds (override with `--interval`), the executor scans
+    /// enabled cron rules and fires any that are due. Rules fire observably:
+    /// each fire is recorded in the `trigger_executions` table and the rule's
+    /// `last_fired_at` / `run_count` are updated (#3048).
+    Start {
+        /// Tick interval in seconds (default 60).
+        #[arg(long, default_value_t = 60)]
+        interval: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2197,7 +2218,14 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_subscriptions(context, action))
         }
         Commands::Trigger { action } => {
-            tokio::task::block_in_place(|| handle_trigger(context, action))
+            // FireNow is synchronous and stays in block_in_place; Start is a
+            // long-running async loop and must be awaited on the runtime.
+            match action {
+                TriggerActions::Start { interval } => {
+                    handle_trigger_start(context, *interval).await
+                }
+                _ => tokio::task::block_in_place(|| handle_trigger(context, action)),
+            }
         }
         Commands::Mail { action } => handle_mail(context, action).await,
         Commands::People { action } => {
@@ -4598,7 +4626,61 @@ fn handle_trigger(context: &StorageContext, action: &TriggerActions) -> Result<V
                 "executor_status": executor_status_json,
             }))
         }
+        TriggerActions::FireNow => {
+            // One synchronous tick: evaluate enabled cron rules against the
+            // current clock and record an execution for each due rule (#3048).
+            let outcome = vaultpilot_lib::orchestration::trigger_executor::fire_due_rules_at(
+                context,
+                chrono::Utc::now(),
+            )?;
+            Ok(serde_json::json!({
+                "fired": true,
+                "evaluated": outcome.evaluated,
+                "fired_count": outcome.fired,
+                "failed": outcome.failed,
+                "executor_status": executor_status_json,
+            }))
+        }
+        // `Start` is dispatched directly to `handle_trigger_start` in
+        // `handle_command` because it is a long-running async loop; this arm
+        // is unreachable but keeps the match exhaustive.
+        TriggerActions::Start { .. } => {
+            unreachable!("trigger start is handled by handle_trigger_start, not handle_trigger")
+        }
     }
+}
+
+/// Run the background trigger-rule executor until SIGINT / SIGTERM (#3048).
+///
+/// This is the "always-on" mode: the executor ticks every `interval_secs`
+/// seconds and fires any due cron rule. Each fire is recorded in the
+/// `trigger_executions` table so the user / Inspector can verify the scheduler
+/// is alive (`SELECT * FROM trigger_executions ORDER BY fired_at DESC LIMIT 10`).
+async fn handle_trigger_start(context: &StorageContext, interval_secs: u64) -> Result<Value> {
+    use tokio_util::sync::CancellationToken;
+
+    let interval = std::time::Duration::from_secs(interval_secs.max(1));
+    let cancel = CancellationToken::new();
+    let cancel_for_signal = cancel.clone();
+
+    // Graceful shutdown on Ctrl+C / SIGTERM.
+    let signal_task = tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        cancel_for_signal.cancel();
+    });
+
+    eprintln!("▶ trigger executor started — ticking every {interval_secs}s. Press Ctrl+C to stop.");
+    let executor = vaultpilot_lib::orchestration::trigger_executor::TriggerExecutor::with_interval(
+        context.clone(),
+        interval,
+    );
+    executor.spawn(cancel).await;
+    signal_task.abort();
+
+    Ok(serde_json::json!({
+        "stopped": true,
+        "interval_secs": interval_secs,
+    }))
 }
 
 async fn handle_mail(context: &StorageContext, action: &MailActions) -> Result<Value> {

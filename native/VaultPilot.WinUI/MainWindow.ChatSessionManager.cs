@@ -339,14 +339,24 @@ public sealed partial class MainWindow : Window
             }
             if (session is null)
             {
+                // #3046: When the requested sessionId is stale / invalid,
+                // EnsureCurrentSession() either restores an existing session or
+                // mints a brand-new one — but its new id will never equal the
+                // original (invalid) sessionId, so re-querying by sessionId would
+                // still return null and silently drop the turn. Fall back to
+                // CurrentSession() (which honours _currentSessionId) instead.
                 EnsureCurrentSession();
-                session = sessionId is not null
-                    ? _chatState.Sessions.FirstOrDefault(s => s.Id == sessionId)
-                    : CurrentSession();
+                session = CurrentSession();
             }
 
             if (session is null)
             {
+                // Defensive: should be unreachable after EnsureCurrentSession(),
+                // but log instead of silently returning so a future regression
+                // is diagnosable rather than a silent message drop.
+                System.Diagnostics.Debug.WriteLine(
+                    $"AddTurnAsync: session lookup failed (sessionId={sessionId}, " +
+                    $"currentSessionId={_currentSessionId}, sessions={_chatState.Sessions.Count})");
                 return;
             }
 

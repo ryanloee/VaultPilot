@@ -984,6 +984,7 @@ mod tests {
             session_export_enabled: false,
             session_export_path: None,
             system_directive: String::new(),
+            privacy_mode: false,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

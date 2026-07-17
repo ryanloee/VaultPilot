@@ -106,6 +106,16 @@ pub struct AppSettings {
     /// response format, domain focus) that apply across all chat sessions.
     #[serde(default)]
     pub system_directive: String,
+    /// Privacy mode (#2992): when enabled, only local/offline providers
+    /// (e.g. Ollama on localhost) are permitted. Any cloud provider that would
+    /// send data off-device is rejected at validation time and at request time,
+    /// guaranteeing "nothing ever leaves your machine".
+    #[serde(default)]
+    pub privacy_mode: bool,
+}
+
+fn default_privacy_mode() -> bool {
+    false
 }
 
 fn default_session_export_enabled() -> bool {
@@ -134,6 +144,7 @@ impl Default for AppSettings {
             session_export_enabled: false,
             session_export_path: None,
             system_directive: String::new(),
+            privacy_mode: default_privacy_mode(),
         }
     }
 }
@@ -200,6 +211,17 @@ impl AppSettings {
 
         // Delegate provider-specific validation.
         errors.extend(ep.validate());
+
+        // Privacy mode (#2992): if enabled, only local/offline providers are
+        // permitted. Cloud providers (anything requiring an API key or not
+        // explicitly local) would send data off-device and must be rejected.
+        if self.privacy_mode && ep.effective_provider_type().requires_api_key() {
+            errors.push(
+                "privacy_mode is enabled but the active provider requires an API key \
+                 (cloud provider). Use a local provider such as Ollama (#2992)."
+                    .to_string(),
+            );
+        }
 
         errors
     }
@@ -275,6 +297,7 @@ mod tests {
             session_export_enabled: false,
             session_export_path: None,
             system_directive: String::new(),
+            privacy_mode: false,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -457,6 +480,53 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate().is_empty());
+    }
+
+    #[test]
+    fn validate_privacy_mode_rejects_cloud_provider() {
+        // Privacy mode (#2992): enabling it with a cloud (API-key-requiring)
+        // provider must be rejected so data cannot leave the device.
+        let cloud = AppSettings {
+            privacy_mode: true,
+            provider: ProviderConfig {
+                api_key: "sk-test-key".to_string(),
+                base_url: "https://api.anthropic.com/v1/messages".to_string(),
+                request_timeout_ms: 60_000,
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let errors = cloud.validate();
+        assert!(
+            errors.iter().any(|e| e.contains("privacy_mode")),
+            "expected privacy_mode rejection, got: {errors:?}"
+        );
+
+        // The same provider is fine when privacy mode is off.
+        let mut off = cloud;
+        off.privacy_mode = false;
+        assert!(off.validate().is_empty());
+    }
+
+    #[test]
+    fn validate_privacy_mode_allows_local_ollama() {
+        // Ollama requires no API key and is a local endpoint, so it must be
+        // permitted under privacy mode.
+        let local = AppSettings {
+            privacy_mode: true,
+            provider: ProviderConfig {
+                base_url: "http://localhost:11434/v1".to_string(),
+                model: "llama3".to_string(),
+                request_timeout_ms: 60_000,
+                provider_type: Some(crate::models::provider::ProviderType::Ollama),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        assert!(
+            local.validate().is_empty(),
+            "local Ollama should be allowed under privacy mode"
+        );
     }
 
     #[test]

@@ -886,11 +886,20 @@ async fn http_clip_url(
         ));
     }
 
-    // Fetch the page with a browser-like User-Agent (many sites block default
-    // reqwest UA). A 20s timeout bounds the wait for slow origins.
+    // SSRF protection (#3040): resolve the URL host and reject if any resolved
+    // IP falls in a forbidden range (loopback / private / link-local /
+    // multicast / unspecified / broadcast / documentation / IPv6 ULA).
+    validate_clip_url_host(&url)
+        .await
+        .map_err(|msg| openai_error(StatusCode::BAD_REQUEST, &msg))?;
+
+    // Build the client with NO automatic redirects. We follow them manually
+    // below so we can re-validate each hop's resolved IPs before fetching —
+    // otherwise a public URL that 302's to http://169.254.169.254/ would sail
+    // past the initial check.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| {
             tracing::warn!("http_clip_url: failed to build HTTP client: {e}");
@@ -900,22 +909,88 @@ async fn http_clip_url(
             )
         })?;
 
-    let resp = client
-        .get(&url)
-        .header(
-            "User-Agent",
-            "VaultPilot-WebClipper/1.0 (+https://vaultpilot.app)",
-        )
-        .header("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::warn!("http_clip_url: fetch failed for {url}: {e}");
-            openai_error(
-                StatusCode::BAD_GATEWAY,
-                &format!("Failed to fetch URL: {e}"),
+    // Fetch with manual redirect handling (cap at 5 hops, matching the previous
+    // `Policy::limited(5)` semantics, but with per-hop SSRF re-validation).
+    let mut current_url = url.clone();
+    let mut redirects_followed: usize = 0;
+    const MAX_CLIP_REDIRECTS: usize = 5;
+    let resp = loop {
+        let r = client
+            .get(&current_url)
+            .header(
+                "User-Agent",
+                "VaultPilot-WebClipper/1.0 (+https://vaultpilot.app)",
             )
-        })?;
+            .header("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::warn!("http_clip_url: fetch failed for {current_url}: {e}");
+                openai_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Failed to fetch URL: {e}"),
+                )
+            })?;
+
+        if !r.status().is_redirection() {
+            break r;
+        }
+
+        // Cap redirect chain at MAX_CLIP_REDIRECTS total hops.
+        if redirects_followed >= MAX_CLIP_REDIRECTS {
+            return Err(openai_error(
+                StatusCode::BAD_GATEWAY,
+                "Too many redirects (max 5)",
+            ));
+        }
+        redirects_followed += 1;
+
+        // Resolve the Location header (may be relative).
+        let location = r
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                openai_error(
+                    StatusCode::BAD_GATEWAY,
+                    "Redirect response missing Location header",
+                )
+            })?;
+        let base = match url::Url::parse(&current_url) {
+            Ok(u) => u,
+            Err(e) => {
+                return Err(openai_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Invalid current URL after redirect: {e}"),
+                ));
+            }
+        };
+        let next = match base.join(location) {
+            Ok(u) => u,
+            Err(e) => {
+                return Err(openai_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Invalid redirect Location '{location}': {e}"),
+                ));
+            }
+        };
+        // Refuse non-http(s) schemes (e.g. file://, ftp://, gopher://) on hop.
+        if !matches!(next.scheme(), "http" | "https") {
+            return Err(openai_error(
+                StatusCode::BAD_GATEWAY,
+                &format!(
+                    "Refusing redirect to non-http(s) scheme '{}'",
+                    next.scheme()
+                ),
+            ));
+        }
+        let next_str = next.to_string();
+        // Re-validate SSRF on the new host before fetching.
+        validate_clip_url_host(&next_str)
+            .await
+            .map_err(|msg| openai_error(StatusCode::BAD_REQUEST, &msg))?;
+        current_url = next_str;
+    };
 
     let status = resp.status();
     if !status.is_success() {
@@ -1016,17 +1091,142 @@ async fn http_clip_url(
     }))
 }
 
+/// Case-insensitive substring search that returns a byte offset into the
+/// ORIGINAL haystack (not a lowercased copy).
+///
+/// This is necessary because Rust's `str::to_lowercase()` is Unicode-aware and
+/// can change the byte length of certain characters (e.g. `İ` U+0130 is 2 bytes
+/// but lowercases to `i` + U+0307 combining dot, 3 bytes; Kelvin sign U+212A is
+/// 3 bytes but lowercases to ASCII `k`, 1 byte). Naively calling
+/// `haystack.to_lowercase().find(needle)` and then slicing the original with
+/// that offset panics on non-char-boundaries or silently mis-extracts content
+/// (#3044).
+///
+/// Since HTML tag and attribute names are ASCII, an ASCII-only case-fold is
+/// correct here and avoids the byte-length-mismatch pitfall entirely. ASCII
+/// letters never appear inside multi-byte UTF-8 continuation bytes (those are
+/// all >= 0x80), so there is no risk of false matches mid-codepoint.
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let needle_bytes = needle.as_bytes();
+    let needle_lower: Vec<u8> = needle_bytes
+        .iter()
+        .map(|b| b.to_ascii_lowercase())
+        .collect();
+    let hb = haystack.as_bytes();
+    let n = needle_lower.len();
+    if n > hb.len() {
+        return None;
+    }
+    let last_start = hb.len() - n;
+    let mut i = 0;
+    while i <= last_start {
+        if hb[i..i + n]
+            .iter()
+            .zip(needle_lower.iter())
+            .all(|(h, n_l)| h.to_ascii_lowercase() == *n_l)
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Classify an IP as forbidden for outbound Web Clipper fetches (#3040).
+///
+/// Forbidden ranges cover the classic SSRF targets:
+/// - IPv4: loopback (127/8), private (10/8, 172.16/12, 192.168/16), link-local
+///   (169.254/16, includes the AWS/GCE/Azure metadata endpoint
+///   169.254.169.254), multicast (224/4), broadcast (255.255.255.255),
+///   unspecified (0/0), documentation (RFC 5737).
+/// - IPv6: loopback (::1), multicast (ff00::/8), unspecified (::),
+///   unique-local (fc00::/7), link-local (fe80::/10).
+fn ip_is_forbidden(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+        }
+        IpAddr::V6(v6) => {
+            let segs = v6.segments();
+            // Unique-local addresses (fc00::/7): fc00:: through fdff:....
+            let is_ula = (segs[0] & 0xfe00) == 0xfc00;
+            // Link-local (fe80::/10): fe80:: through febf:....
+            let is_link_local = (segs[0] & 0xffc0) == 0xfe80;
+            v6.is_loopback() || v6.is_multicast() || v6.is_unspecified() || is_ula || is_link_local
+        }
+    }
+}
+
+/// Validate that the host of `url_str` does not resolve to a forbidden IP
+/// (#3040 SSRF mitigation). Used by `/api/clip` before every outbound fetch,
+/// including each redirect hop.
+///
+/// Returns `Ok(())` if every resolved IP is acceptable, or `Err(message)` with
+/// a human-readable reason. The caller is responsible for mapping the message
+/// to an HTTP error response.
+///
+/// Failure mode: DNS resolution failure is reported as an error (fail-closed)
+/// rather than silently letting the request through.
+async fn validate_clip_url_host(url_str: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("refusing non-http(s) scheme '{}'", parsed.scheme()));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+
+    // Literal IP — validate directly without DNS.
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if ip_is_forbidden(ip) {
+            return Err(format!(
+                "url host {host} is a forbidden IP (loopback/private/link-local/multicast/unspecified/broadcast)"
+            ));
+        }
+        return Ok(());
+    }
+
+    // Hostname — resolve via DNS and reject if ANY returned IP is forbidden.
+    // (Refusing on any-forbidden rather than all-forbidden defends against DNS
+    // rebinding setups that mix public and private IPs in a single response.)
+    let lookup_target = format!("{host}:0");
+    let resolved = tokio::net::lookup_host(lookup_target.as_str())
+        .await
+        .map_err(|e| format!("DNS resolution failed for '{host}': {e}"))?;
+    for addr in resolved {
+        if ip_is_forbidden(addr.ip()) {
+            return Err(format!(
+                "url host '{host}' resolves to forbidden IP {} (loopback/private/link-local/multicast/unspecified/broadcast)",
+                addr.ip()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Extract the page title from the `<title>...</title>` tag (case-insensitive).
 /// Returns the trimmed title, or `None` if no `<title>` tag is present.
+///
+/// Uses [`find_ci`] instead of `to_lowercase().find()` so that non-ASCII
+/// characters whose lowercase form has a different byte length (e.g. `İ`,
+/// Kelvin sign) do not corrupt the offsets used to slice the original string
+/// (#3044).
 fn extract_html_title(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
-    let start = lower.find("<title")?;
+    let start = find_ci(html, "<title")?;
     let after_open = &html[start..];
     let tag_end = after_open.find('>')?;
     let content_start = start + tag_end + 1;
     let rest = &html[content_start..];
-    let lower_rest = &lower[content_start..];
-    let close = lower_rest.find("</title>")?;
+    let close = find_ci(rest, "</title>")?;
     let title = rest[..close].trim();
     if title.is_empty() {
         None
@@ -1049,28 +1249,30 @@ fn strip_boilerplate(html: &str) -> String {
         "script", "style", "noscript", "nav", "header", "footer", "aside", "iframe",
     ];
     let mut out = html.to_string();
-    let lower = out.to_lowercase();
     for tag in patterns {
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
         loop {
-            let open = format!("<{tag}");
-            let close = format!("</{tag}>");
-            let lower_local = out.to_lowercase();
-            let Some(s) = lower_local.find(&open) else {
+            // Use find_ci (ASCII case-fold on the original string) so byte
+            // offsets are valid char boundaries even when the page contains
+            // characters like `İ` whose lowercase form has a different byte
+            // length. Mixing offsets from `to_lowercase()` with `replace_range`
+            // on the original panics (#3044).
+            let Some(s) = find_ci(&out, &open) else {
                 break;
             };
             // Find the end of the open tag (the next '>').
-            let Some(gt) = lower_local[s..].find('>') else {
+            let Some(gt) = out[s..].find('>') else {
                 break;
             };
             let open_end = s + gt + 1;
-            let Some(close_pos) = lower_local[open_end..].find(&close.to_lowercase()) else {
+            let Some(close_pos) = find_ci(&out[open_end..], &close) else {
                 break;
             };
             let close_end = open_end + close_pos + close.len();
             // Drop the matched region.
             out.replace_range(s..close_end, "");
         }
-        let _ = &lower; // suppress unused warning
     }
     out
 }
@@ -1221,10 +1423,13 @@ fn html_to_markdown(html: &str) -> String {
 
 /// Extract the value of a named attribute from an HTML tag's raw inner text
 /// (e.g. `a href="..."`, `img src="..."`).
+///
+/// Uses [`find_ci`] instead of `to_lowercase().find()` so that characters whose
+/// lowercase form changes byte length (e.g. `İ`) do not corrupt offsets used to
+/// slice the original tag text (#3044).
 fn extract_attr(tag_inner: &str, attr: &str) -> Option<String> {
-    let lower = tag_inner.to_lowercase();
     let needle = format!("{attr}=");
-    let idx = lower.find(&needle)?;
+    let idx = find_ci(tag_inner, &needle)?;
     let after = &tag_inner[idx + needle.len()..];
     let after_trimmed = after.trim_start();
     if let Some(rest) = after_trimmed.strip_prefix('"') {
@@ -3136,5 +3341,227 @@ mod tests {
     fn clip_extract_attr_missing_returns_none() {
         let tag = r#"a class="link""#;
         assert!(extract_attr(tag, "href").is_none());
+    }
+
+    // ── #3044: byte-offset corruption from `to_lowercase()` ────────
+    //
+    // These tests guard against the regression where offsets produced by
+    // `to_lowercase().find(...)` were used to slice the original string. The
+    // Turkish İ (U+0130) lowercases from 2 bytes to 3 bytes (`i` + combining
+    // dot above), which previously caused panics in `strip_boilerplate` and
+    // mis-extraction in `extract_html_title` / `extract_attr`.
+
+    #[test]
+    fn clip_find_ci_basic_ascii() {
+        assert_eq!(find_ci("Hello World", "world"), Some(6));
+        assert_eq!(find_ci("Hello World", "WORLD"), Some(6));
+        assert_eq!(find_ci("Hello World", "xyz"), None);
+        assert_eq!(find_ci("", "x"), None);
+        // Empty needle matches at position 0.
+        assert_eq!(find_ci("anything", ""), Some(0));
+    }
+
+    #[test]
+    fn clip_find_ci_returns_original_string_offset() {
+        // İ (U+0130) is 2 bytes; its lowercase form is 3 bytes. A naive
+        // `s.to_lowercase().find("world")` would return a byte offset that
+        // points into the wrong position when sliced against `s`. `find_ci`
+        // must return an offset that is a valid char boundary of the original.
+        let s = "İİİworld";
+        let off = find_ci(s, "world").expect("needle must be found");
+        assert_eq!(&s[off..], "world");
+    }
+
+    #[test]
+    fn clip_extract_html_title_ascii_baseline() {
+        let html = "<html><head><title>My Page</title></head></html>";
+        assert_eq!(extract_html_title(html).as_deref(), Some("My Page"));
+    }
+
+    #[test]
+    fn clip_extract_html_title_uppercase_tag() {
+        let html = "<HEAD><TITLE>My Page</TITLE></HEAD>";
+        assert_eq!(extract_html_title(html).as_deref(), Some("My Page"));
+    }
+
+    #[test]
+    fn clip_extract_html_title_with_turkish_i_before_tag() {
+        // #3044 regression: İ before `<title>` used to produce `"My Page<"`
+        // (the trailing `<` came from the offset shift).
+        let html = "İ<HEAD><TITLE>My Page</TITLE></HEAD>";
+        assert_eq!(extract_html_title(html).as_deref(), Some("My Page"));
+    }
+
+    #[test]
+    fn clip_extract_html_title_with_many_i_with_dot_above() {
+        // 20 İ's followed by a title: emphasises the offset drift.
+        let html = format!("{}<title>T</title>", "İ".repeat(20));
+        assert_eq!(extract_html_title(&html).as_deref(), Some("T"));
+    }
+
+    #[test]
+    fn clip_strip_boilerplate_ascii_baseline() {
+        let html = "<nav>menu</nav><p>main</p>";
+        let out = strip_boilerplate(html);
+        assert!(!out.to_lowercase().contains("<nav"));
+        assert!(out.contains("main"));
+    }
+
+    #[test]
+    fn clip_strip_boilerplate_no_panic_with_turkish_i_before_nav() {
+        // #3044 regression: previously panicked at
+        // `replace_range(s..close_end, "")` because `s` was a `to_lowercase()`
+        // offset (3 bytes/İ) applied to the original string (2 bytes/İ),
+        // landing on a non-char-boundary.
+        let html = format!("{}<nav>stuff</nav>after", "İ".repeat(20));
+        let out = strip_boilerplate(&html); // must not panic
+        assert!(!out.to_lowercase().contains("<nav"));
+        assert!(out.contains("after"));
+        // Turkish İ's before the tag must be preserved.
+        assert_eq!(out.matches('İ').count(), 20);
+    }
+
+    #[test]
+    fn clip_strip_boilerplate_no_panic_with_kelvin_sign() {
+        // Kelvin sign U+212A is 3 bytes in UTF-8 but lowercases to ASCII 'k'
+        // (1 byte) — the inverse byte-shrink case.
+        let html = format!("{}<script>alert(1)</script>ok", "\u{212A}".repeat(15));
+        let out = strip_boilerplate(&html); // must not panic
+        assert!(!out.to_lowercase().contains("<script"));
+        assert!(out.contains("ok"));
+    }
+
+    #[test]
+    fn clip_extract_attr_ascii_baseline() {
+        let tag = r#"img src="photo.jpg" alt="pic""#;
+        assert_eq!(extract_attr(tag, "src").as_deref(), Some("photo.jpg"));
+        assert_eq!(extract_attr(tag, "alt").as_deref(), Some("pic"));
+    }
+
+    #[test]
+    fn clip_extract_attr_with_turkish_i_before_attr() {
+        // #3044 regression: an İ before the attribute name shifted the offset
+        // so the quote could not be located and the value was silently dropped.
+        let tag = "İmg src=\"photo.jpg\"";
+        assert_eq!(extract_attr(tag, "src").as_deref(), Some("photo.jpg"));
+    }
+
+    #[test]
+    fn clip_extract_attr_uppercase_attr_name() {
+        let tag = r#"IMG SRC="photo.jpg""#;
+        assert_eq!(extract_attr(tag, "src").as_deref(), Some("photo.jpg"));
+    }
+
+    // ── #3040: SSRF IP classification ─────────────────────────────
+
+    #[test]
+    fn clip_ip_forbidden_ipv4_loopback() {
+        assert!(ip_is_forbidden("127.0.0.1".parse().unwrap()));
+        assert!(ip_is_forbidden("127.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_forbidden_ipv4_private() {
+        assert!(ip_is_forbidden("10.0.0.1".parse().unwrap()));
+        assert!(ip_is_forbidden("172.16.0.1".parse().unwrap()));
+        assert!(ip_is_forbidden("172.31.255.255".parse().unwrap()));
+        assert!(ip_is_forbidden("192.168.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_forbidden_ipv4_link_local_metadata_endpoint() {
+        // The cloud metadata endpoint (AWS/GCE/Azure) is the headline SSRF
+        // target from the issue.
+        assert!(ip_is_forbidden("169.254.169.254".parse().unwrap()));
+        assert!(ip_is_forbidden("169.254.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_forbidden_ipv4_multicast_unspecified_broadcast() {
+        assert!(ip_is_forbidden("224.0.0.1".parse().unwrap()));
+        assert!(ip_is_forbidden("0.0.0.0".parse().unwrap()));
+        assert!(ip_is_forbidden("255.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_forbidden_ipv4_documentation() {
+        // RFC 5737 documentation ranges.
+        assert!(ip_is_forbidden("192.0.2.1".parse().unwrap()));
+        assert!(ip_is_forbidden("198.51.100.1".parse().unwrap()));
+        assert!(ip_is_forbidden("203.0.113.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_allowed_ipv4_public() {
+        // 192.0.2.x is documentation; 8.8.8.8 is a real public DNS server.
+        assert!(!ip_is_forbidden("8.8.8.8".parse().unwrap()));
+        assert!(!ip_is_forbidden("1.1.1.1".parse().unwrap()));
+        assert!(!ip_is_forbidden("203.0.114.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_forbidden_ipv6_loopback_unspecified_multicast() {
+        assert!(ip_is_forbidden("::1".parse().unwrap()));
+        assert!(ip_is_forbidden("::".parse().unwrap()));
+        assert!(ip_is_forbidden("ff02::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_forbidden_ipv6_ula_and_link_local() {
+        // Unique-local fc00::/7.
+        assert!(ip_is_forbidden("fc00::1".parse().unwrap()));
+        assert!(ip_is_forbidden("fd00::1".parse().unwrap()));
+        // Link-local fe80::/10.
+        assert!(ip_is_forbidden("fe80::1".parse().unwrap()));
+        assert!(ip_is_forbidden("febf::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn clip_ip_allowed_ipv6_public() {
+        // Real public IPv6 (Google's public DNS).
+        assert!(!ip_is_forbidden("2001:4860:4860::8888".parse().unwrap()));
+    }
+
+    // We can't unit-test `validate_clip_url_host`'s DNS path deterministically
+    // (it depends on the live resolver), but we can test the literal-IP branch
+    // and the URL/scheme validation paths, which are the parts most likely to
+    // regress.
+
+    #[tokio::test]
+    async fn clip_validate_host_rejects_loopback_literal_ip() {
+        let err = validate_clip_url_host("http://127.0.0.1:8080/secret")
+            .await
+            .unwrap_err();
+        assert!(err.contains("forbidden IP"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn clip_validate_host_rejects_metadata_endpoint_literal_ip() {
+        let err = validate_clip_url_host("http://169.254.169.254/latest/meta-data/")
+            .await
+            .unwrap_err();
+        assert!(err.contains("forbidden IP"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn clip_validate_host_rejects_ipv6_loopback_literal_ip() {
+        let err = validate_clip_url_host("http://[::1]/").await.unwrap_err();
+        assert!(err.contains("forbidden IP"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn clip_validate_host_rejects_non_http_scheme() {
+        let err = validate_clip_url_host("file:///etc/passwd")
+            .await
+            .unwrap_err();
+        assert!(err.contains("non-http(s) scheme"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn clip_validate_host_rejects_garbage_url() {
+        let err = validate_clip_url_host("not a url at all")
+            .await
+            .unwrap_err();
+        assert!(err.contains("invalid URL"), "got: {err}");
     }
 }

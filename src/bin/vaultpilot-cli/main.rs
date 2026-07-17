@@ -4528,20 +4528,34 @@ fn handle_projects(context: &StorageContext, action: &ProjectActions) -> Result<
 }
 
 fn handle_trigger(context: &StorageContext, action: &TriggerActions) -> Result<Value> {
+    // #3048: surface executor status so users are not silently misled into
+    // thinking stored rules will fire. The storage layer shipped in v0.5.61 but
+    // the scheduler / event dispatcher is not yet connected.
+    let executor_status = vaultpilot_lib::orchestration::trigger::ExecutorStatus::current();
+    if let Some(warning) = executor_status.warning() {
+        eprintln!("⚠️  {warning}");
+    }
+    let executor_status_json = serde_json::json!({
+        "executor_status": executor_status.as_str(),
+        "executor_will_fire": executor_status
+            == vaultpilot_lib::orchestration::trigger::ExecutorStatus::Connected,
+    });
     match action {
         TriggerActions::List => {
             let rules = list_trigger_rules_with_context(context)?;
             let count = rules.len();
             Ok(serde_json::json!({
                 "trigger_rules": rules,
-                "count": count
+                "count": count,
+                "executor_status": executor_status_json,
             }))
         }
         TriggerActions::Get { id } => {
             let rule = get_trigger_rule_with_context(context, id)?
                 .ok_or_else(|| anyhow::anyhow!("trigger rule not found: {id}"))?;
             Ok(serde_json::json!({
-                "trigger_rule": rule
+                "trigger_rule": rule,
+                "executor_status": executor_status_json,
             }))
         }
         TriggerActions::Create {
@@ -4563,7 +4577,8 @@ fn handle_trigger(context: &StorageContext, action: &TriggerActions) -> Result<V
             )?;
             Ok(serde_json::json!({
                 "created": true,
-                "trigger_rule": rule
+                "trigger_rule": rule,
+                "executor_status": executor_status_json,
             }))
         }
         TriggerActions::Delete { id } => {
@@ -4579,7 +4594,8 @@ fn handle_trigger(context: &StorageContext, action: &TriggerActions) -> Result<V
             Ok(serde_json::json!({
                 "updated": true,
                 "id": id,
-                "enabled": enabled
+                "enabled": enabled,
+                "executor_status": executor_status_json,
             }))
         }
     }

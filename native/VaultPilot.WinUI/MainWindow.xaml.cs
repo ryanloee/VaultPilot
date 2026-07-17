@@ -62,7 +62,6 @@ public sealed partial class MainWindow : Window
     private DispatcherTimer? _autoWakeTimer;
     private Views.NotesView? _notesView;
     private bool _notesViewLoaded;
-    private bool _searchViewLoaded;
     private nint _windowHandle;
     private nint _originalWindowProc;
     private WindowProcDelegate? _windowProcDelegate;
@@ -375,16 +374,6 @@ public sealed partial class MainWindow : Window
                         _notesViewLoaded = true;
                     }
                     await _notesView.RefreshNotesAsync();
-                    break;
-
-                case "Search":
-                    ChatView.Visibility = Visibility.Collapsed;
-                    NotesViewHost.Visibility = Visibility.Collapsed;
-                    SearchViewHost.Visibility = Visibility.Visible;
-                    if (!_searchViewLoaded)
-                    {
-                        _searchViewLoaded = true;
-                    }
                     break;
             }
         }

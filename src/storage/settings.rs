@@ -11,29 +11,31 @@ use super::pool::{AppPaths, StorageContext};
 /// Check if a string value was produced by [`mask_secret`] in `models::provider`.
 ///
 /// This is **format-aware** so it does not false-positive on genuine plaintext
-/// keys that merely *contain* the masking characters (#2987):
+/// keys that merely *contain* the masking characters (#2987, #2997, #3001):
 ///
 /// * **Short key** (≤ 12 chars): entirely `*` chars, length 1..=12.
 ///   `mask_secret` only emits all-`*` for inputs of length ≤ 12, so a longer
 ///   `*`-only string (or one containing `…`) is treated as plaintext.
-/// * **Long key** (> 12 chars): exactly `<4 chars>…<4 chars>` where the middle
-///   char is [`MASK_ELLIPSIS`] and the stated prefix/suffix equal the real
-///   first/last 4 chars of `s`. Any other `…`-containing string is plaintext.
+/// * **Long key** (> 12 chars): exactly `mask:<4 chars>…<4 chars>` — the
+///   [`MASK_PREFIX`] sentinel followed by the first 4 chars, the
+///   [`MASK_ELLIPSIS`] char, and the last 4 chars. The sentinel makes the
+///   masked form unambiguously distinguishable from a genuine 9-char plaintext
+///   value that merely happens to contain an ellipsis.
 ///
-/// Uses [`MASK_ELLIPSIS`] from the provider module so that changes to the
-/// masking format don't silently corrupt stored keys (#2539).
+/// Uses [`MASK_PREFIX`]/[`MASK_ELLIPSIS`] from the provider module so that
+/// changes to the masking format don't silently corrupt stored keys (#2539).
 pub(crate) fn is_masked_key(s: &str) -> bool {
     let chars: Vec<char> = s.chars().collect();
     if chars.is_empty() {
         return false;
     }
-    // Long-key mask: exactly "<4><ELLIPSIS><4>" == 9 chars with the middle
-    // char being MASK_ELLIPSIS. This is emitted by mask_secret for inputs
-    // longer than 12 chars. Checked first because a 9-char string is also
-    // "<= 12" by length, which would otherwise be misclassified as a short
-    // mask below.
-    if chars.len() == 9 && chars[4] == crate::models::provider::MASK_ELLIPSIS {
-        return true;
+    // Long-key mask: the MASK_PREFIX sentinel followed by exactly
+    // "<4><ELLIPSIS><4>" (9 chars after the prefix). `mask_secret` only emits
+    // this form for inputs longer than 12 chars, and the sentinel guarantees a
+    // genuine plaintext value of the same shape is never misclassified (#2997).
+    if let Some(rest) = s.strip_prefix(crate::models::provider::MASK_PREFIX) {
+        let rc: Vec<char> = rest.chars().collect();
+        return rc.len() == 9 && rc[4] == crate::models::provider::MASK_ELLIPSIS;
     }
     // Short-key mask: all '*' chars, length 1..=12. mask_secret only emits
     // all-'*' for inputs of length ≤ 12, so a longer *-only string (or any

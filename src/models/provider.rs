@@ -156,6 +156,13 @@ impl std::fmt::Debug for ProviderConfig {
 /// don't silently corrupt stored keys (#2539).
 pub(crate) const MASK_ELLIPSIS: char = '\u{2026}';
 
+/// Prefix used to make masked long secrets unambiguously identifiable.
+///
+/// `is_masked_key` requires this prefix so that a genuine plaintext value
+/// of the same `<4>…<4>` shape (e.g. a 9-char key containing an ellipsis)
+/// is never misclassified as a mask (#2997, #3001, #2987).
+pub(crate) const MASK_PREFIX: &str = "mask:";
+
 /// Mask a secret string for safe display: show first 4 and last 4 chars.
 pub(crate) fn mask_secret(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
@@ -167,7 +174,7 @@ pub(crate) fn mask_secret(s: &str) -> String {
     }
     let prefix: String = chars[..4].iter().collect();
     let suffix: String = chars[chars.len() - 4..].iter().collect();
-    format!("{prefix}{MASK_ELLIPSIS}{suffix}")
+    format!("{MASK_PREFIX}{prefix}{MASK_ELLIPSIS}{suffix}")
 }
 
 pub fn default_base_url() -> String {
@@ -510,14 +517,14 @@ mod tests {
     fn mask_secret_long_shows_prefix_suffix() {
         let key = "sk-abc...qrst";
         let masked = mask_secret(key);
-        assert_eq!(masked, "sk-a…qrst");
+        assert_eq!(masked, "mask:sk-a…qrst");
         assert!(!masked.contains("bcdefghijklmnop"));
     }
 
     #[test]
     fn mask_secret_exactly_13_chars() {
         let masked = mask_secret("1234567890123");
-        assert_eq!(masked, "1234…0123");
+        assert_eq!(masked, "mask:1234…0123");
     }
 
     // ── mask_secret ↔ is_masked_key round-trip (#2539) ──
@@ -586,6 +593,38 @@ mod tests {
     fn is_masked_key_long_ellipsis_no_middle_is_not_masked() {
         // 9 chars but the 5th char is not the ellipsis.
         assert!(!crate::storage::is_masked_key("sk-abXqrst"));
+    }
+
+    // ── #2997 / #3001 regression: 9-char plaintext containing an ellipsis ──
+    //
+    // A genuine 9-char plaintext value of the exact "<4>…<4>" shape (e.g.
+    // "abcd…wxyz") previously collided with a masked 13-char key. The MASK_PREFIX
+    // sentinel in mask_secret's long form now makes these unambiguously distinct.
+
+    #[test]
+    fn is_masked_key_9char_plaintext_with_ellipsis_is_not_masked() {
+        // Genuine plaintext: 9 chars, ellipsis at index 4, no "mask:" prefix.
+        let mut p = String::new();
+        p.push_str("abcd");
+        p.push(MASK_ELLIPSIS);
+        p.push_str("wxyz");
+        assert_eq!(p.chars().count(), 9);
+        assert!(!crate::storage::is_masked_key(&p));
+    }
+
+    #[test]
+    fn is_masked_key_real_mask_still_detected() {
+        // A value produced by mask_secret must still be detected as masked.
+        let masked = mask_secret("sk-ant-api-key-xyz-6789");
+        assert!(masked.starts_with(MASK_PREFIX));
+        assert!(crate::storage::is_masked_key(&masked));
+    }
+
+    #[test]
+    fn is_masked_key_9char_with_prefix_is_masked() {
+        // Only the sentinel-prefixed form is treated as a mask.
+        assert!(crate::storage::is_masked_key("mask:abcd…wxyz"));
+        assert!(!crate::storage::is_masked_key("abcd…wxyz"));
     }
 
     #[test]

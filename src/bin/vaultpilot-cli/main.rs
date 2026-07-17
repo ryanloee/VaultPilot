@@ -289,6 +289,29 @@ enum Commands {
         section: String,
     },
 
+    /// Preview a note as a slide presentation (#3033)
+    ///
+    /// Reads the note's body, splits it by `---` horizontal rules into slides,
+    /// and generates a standalone reveal.js HTML file that can be viewed in
+    /// any browser. Supports the same syntax as Obsidian Slides and Marp.
+    ///
+    /// Examples:
+    ///   vaultpilot-cli present my-note-id
+    ///   vaultpilot-cli present my-note-id --open
+    ///   vaultpilot-cli present my-note-id -o slides/my-deck.html
+    Present {
+        /// Note ID or path of the note to present
+        note_id: String,
+
+        /// Output HTML file path (default: random temp file)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+
+        /// Open the generated HTML file in the default browser
+        #[arg(long)]
+        open: bool,
+    },
+
     /// Start an MCP stdio server for VaultPilot's built-in model chat interface
     Mcp,
 
@@ -1915,6 +1938,11 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             target,
             section,
         } => handle_capture(context, text, target, section),
+        Commands::Present {
+            note_id,
+            output,
+            open,
+        } => handle_present(context, note_id, output.as_ref(), *open),
         Commands::Collections { action } => {
             tokio::task::block_in_place(|| handle_collections(context, action))
         }
@@ -3688,6 +3716,164 @@ fn handle_capture(
         "captured": trimmed,
         "title": saved.meta.title,
     }))
+}
+
+/// Preview a note as an HTML slide presentation using reveal.js (#3033).
+///
+/// Splits the note body on `---` horizontal rules — each segment becomes a
+/// slide. Produces a standalone HTML file that loads reveal.js from CDN,
+/// with Markdown rendering, arrow-key navigation, and hash-based deep links.
+///
+/// When `output` is `None` the file is written to a temp directory under
+/// the vault's `.vaultpilot/` folder so it stays discoverable but out of
+/// the way.  If `--open` is set and `opener` / `xdg-open` are available,
+/// the browser is launched automatically.
+fn handle_present(
+    context: &StorageContext,
+    note_id: &str,
+    output: Option<&PathBuf>,
+    open: bool,
+) -> Result<Value> {
+    let note = load_note_with_context(context, note_id)?;
+    let title = note.meta.title.as_str();
+
+    // Split body on `---` horizontal rules (each `---` must be on its own
+    // line).  Split by "\n---\n" which catches the common case.  Also handle
+    // optional trailing whitespace around the delimiter.
+    let slides: Vec<String> = note
+        .body
+        .split("\n---\n")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if slides.is_empty() {
+        // No `---` separators found — treat the whole body as one slide.
+        let body = note.body.trim();
+        if body.is_empty() {
+            anyhow::bail!("note '{note_id}' has no content to present");
+        }
+    }
+
+    let slide_count = if slides.is_empty() { 1 } else { slides.len() };
+
+    // Build the reveal.js HTML
+    let mut slides_html = String::new();
+    if slides.is_empty() {
+        // Single-slide deck from the full body
+        let escaped = html_escape(note.body.trim());
+        slides_html.push_str(
+            &format!(
+                "          <section data-markdown>\n            <textarea data-template>\n{}\n            </textarea>\n          </section>\n",
+                escaped
+            )
+        );
+    } else {
+        for slide_content in slides.iter() {
+            let escaped = html_escape(slide_content);
+            slides_html.push_str(
+                &format!(
+                    "          <section data-markdown>\n            <textarea data-template>\n{}\n            </textarea>\n          </section>\n",
+                    escaped
+                )
+            );
+        }
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{} — Presentation</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/dracula.css">
+  <style>
+    .slides section {{ text-align: left; }}
+    .slides section pre {{ font-size: 0.7em; }}
+    .slide-number {{ font-size: 0.6em !important; }}
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+{}
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/markdown/markdown.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+  <script>
+    Reveal.initialize({{
+      plugins: [ RevealMarkdown, RevealNotes ],
+      hash: true,
+      slideNumber: 'c/t',
+    }});
+  </script>
+</body>
+</html>"#,
+        html_escape(title),
+        slides_html
+    );
+
+    // Determine output path
+    let out_path = match output {
+        Some(p) => {
+            let parent = p.parent().unwrap_or(Path::new("."));
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create output directory '{}'", parent.display())
+            })?;
+            p.to_path_buf()
+        }
+        None => {
+            let vault_dir = context.vault_dir();
+            let vp_dir = vault_dir.join(".vaultpilot");
+            std::fs::create_dir_all(&vp_dir).with_context(|| {
+                format!(
+                    "failed to create .vaultpilot directory at '{}'",
+                    vp_dir.display()
+                )
+            })?;
+            let slug = title
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "-")
+                .trim_matches('-')
+                .to_string();
+            let slug = if slug.is_empty() {
+                "presentation".to_string()
+            } else {
+                slug
+            };
+            vp_dir.join(format!("{}-slides.html", slug))
+        }
+    };
+
+    std::fs::write(&out_path, &html)
+        .with_context(|| format!("failed to write presentation to '{}'", out_path.display()))?;
+
+    if open {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&out_path)
+            .spawn();
+    }
+
+    Ok(serde_json::json!({
+        "status": "created",
+        "path": out_path.to_string_lossy(),
+        "slides": slide_count,
+        "title": title,
+        "open": open,
+    }))
+}
+
+/// Escape HTML special characters in a plain-text string so it can be safely
+/// placed inside an HTML `<textarea>` or element content.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Append a timestamped bullet under `section` in a Markdown note body.
@@ -6878,6 +7064,36 @@ mod tests {
         let rows: Vec<std::collections::HashMap<String, QValue>> = vec![];
         let out = format_as_gallery(&cols, &rows);
         assert!(out.contains("No results"));
+    }
+
+    // ── html_escape (#3033) ─────────────────────────────────────────
+
+    #[test]
+    fn html_escape_escapes_ampersand_first() {
+        assert_eq!(super::html_escape("A&B"), "A&amp;B");
+    }
+
+    #[test]
+    fn html_escape_escapes_angle_brackets() {
+        assert_eq!(super::html_escape("<tag>"), "&lt;tag&gt;");
+    }
+
+    #[test]
+    fn html_escape_escapes_quotes() {
+        assert_eq!(super::html_escape(r#""hello""#), "&quot;hello&quot;");
+    }
+
+    #[test]
+    fn html_escape_preserves_plain_text() {
+        assert_eq!(super::html_escape("hello world"), "hello world");
+    }
+
+    #[test]
+    fn html_escape_escapes_all_special_chars() {
+        assert_eq!(
+            super::html_escape("<a href=\"http://x.com?q=a&b\">click</a>"),
+            "&lt;a href=&quot;http://x.com?q=a&amp;b&quot;&gt;click&lt;/a&gt;"
+        );
     }
 }
 

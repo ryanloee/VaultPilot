@@ -1046,4 +1046,140 @@ mod tests {
             "fired must be false on a no-op tick (#3055)"
         );
     }
+
+    // ────────────────────────────────────────────────────────────────────
+    // #3057 / #3058 hardening: regression guards at the public-API layer.
+    //
+    // The underlying fixes for these bugs landed in PR #3056 (commit
+    // cbd3106) which closed the original reports #3054 / #3055. The
+    // follow-up scan that filed #3057 / #3058 ran against a pre-merge
+    // snapshot; the contracts below pin the behavior at the entry points
+    // the reports explicitly call out as the verification surface.
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn record_trigger_execution_failed_status_persists_to_db() {
+        // #3057: when `record_trigger_execution` is called with
+        // status = "failed" and a non-empty error message (the path used
+        // by `fire_due_rules_at` when the success-row write itself fails),
+        // both `trigger_executions.status` and `trigger_rules.last_status`
+        // must read back as "failed", and the error column must carry the
+        // message. The failure path used to insert no execution row at
+        // all, making DB write failures invisible in the audit log.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Daily 9am",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+        let fired_at = fixed_time();
+        record_trigger_execution(
+            &ctx,
+            &rule,
+            fired_at,
+            "failed",
+            "simulated DB error",
+            "test detail",
+        )
+        .expect("record failed execution");
+
+        let (conn, _) = open_connection(&ctx).unwrap();
+        let (status, error): (String, String) = conn
+            .query_row(
+                "SELECT status, error FROM trigger_executions \
+                 WHERE rule_id = ?1 ORDER BY fired_at DESC LIMIT 1",
+                params![&rule.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("failed execution row should exist");
+        assert_eq!(
+            status, "failed",
+            "execution status must be 'failed' when recorded as failed (#3057), got '{status}'"
+        );
+        assert_eq!(
+            error, "simulated DB error",
+            "execution error column must carry the failure message (#3057), got '{error}'"
+        );
+
+        // trigger_rules.last_status and last_error must mirror the row.
+        let (last_status, last_error): (String, String) = conn
+            .query_row(
+                "SELECT last_status, last_error FROM trigger_rules WHERE id = ?1",
+                params![&rule.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            last_status, "failed",
+            "trigger_rules.last_status must mirror 'failed' (#3057), got '{last_status}'"
+        );
+        assert_eq!(
+            last_error, "simulated DB error",
+            "trigger_rules.last_error must mirror the message (#3057), got '{last_error}'"
+        );
+
+        // run_count must still increment on a failed recording so the
+        // scheduler bookkeeping stays consistent.
+        let run_count: i64 = conn
+            .query_row(
+                "SELECT run_count FROM trigger_rules WHERE id = ?1",
+                params![&rule.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            run_count, 1,
+            "run_count must increment on failed record (#3057)"
+        );
+    }
+
+    #[test]
+    fn is_rule_due_minute_cron_hot_path_is_fast_already_fired() {
+        // #3058 regression guard at the public entry point used by the
+        // executor hot path. The pathological case in the report is a
+        // `* * * * *` rule (~527k iterations in the old 366-day scan).
+        // `is_rule_due` now resolves via `last_due_for_rule`, which for an
+        // already-fired rule bounds the scan to (last_fired_at, now). 100
+        // calls must finish well under the bug report's 143 ms *single-call*
+        // ceiling.
+        let now = fixed_time();
+        let rule = make_rule("min", "* * * * *", TriggerAction::DailyReview);
+        let last_fired = Utc.with_ymd_and_hms(2026, 7, 18, 9, 28, 0).unwrap();
+
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let _ = is_rule_due(&rule, Some(last_fired), now);
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 100,
+            "100 is_rule_due('* * * * *', already-fired) calls took {elapsed:?} (>100ms) — \
+             bounded hot-path resolver regressed (#3058)",
+        );
+    }
+
+    #[test]
+    fn is_rule_due_minute_cron_hot_path_is_fast_never_fired() {
+        // #3058 companion to the already-fired guard above: the never-fired
+        // branch of `last_due_for_rule` must route high-frequency cron
+        // through the 2-minute narrow window, not the 366-day fallback.
+        let now = fixed_time();
+        let rule = make_rule("min", "* * * * *", TriggerAction::DailyReview);
+
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            let _ = is_rule_due(&rule, None, now);
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 100,
+            "100 is_rule_due('* * * * *', never-fired) calls took {elapsed:?} (>100ms) — \
+             narrow-window resolver regressed (#3058)",
+        );
+    }
 }

@@ -244,7 +244,7 @@ jobs:
           git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
 

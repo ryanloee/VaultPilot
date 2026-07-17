@@ -331,6 +331,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
         ensure_attachment_columns(connection)?;
+        ensure_note_columns(connection)?;
         return Ok(());
     }
 
@@ -354,7 +355,8 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             source TEXT NOT NULL,
             path TEXT NOT NULL UNIQUE,
             summary TEXT NOT NULL,
-            body_hash TEXT NOT NULL
+            body_hash TEXT NOT NULL,
+            semantic_vector TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS attachments (
@@ -486,6 +488,33 @@ fn ensure_attachment_columns(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+fn ensure_note_columns(connection: &Connection) -> Result<()> {
+    let table_exists: bool = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='notes'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table_exists {
+        return Ok(());
+    }
+
+    let mut statement = connection.prepare("PRAGMA table_info(notes)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+
+    for (column, ddl) in [(
+        "semantic_vector",
+        "ALTER TABLE notes ADD COLUMN semantic_vector TEXT NOT NULL DEFAULT ''",
+    )] {
+        if !columns.contains(column) {
+            connection.execute(ddl, [])?;
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,6 +629,40 @@ mod tests {
 
         ensure_attachment_columns(&conn).unwrap();
         ensure_attachment_columns(&conn).unwrap();
+    }
+
+    #[test]
+    fn ensure_note_columns_adds_semantic_vector() {
+        let conn = in_memory_conn();
+        conn.execute_batch(
+            "CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, tags TEXT NOT NULL, keywords TEXT NOT NULL, platform TEXT NOT NULL, board TEXT NOT NULL, kernel TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, source TEXT NOT NULL, path TEXT NOT NULL UNIQUE, summary TEXT NOT NULL, body_hash TEXT NOT NULL);",
+        ).unwrap();
+
+        ensure_note_columns(&conn).unwrap();
+
+        let columns: HashSet<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(notes)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+
+        assert!(
+            columns.contains("semantic_vector"),
+            "column 'semantic_vector' missing after ensure_note_columns"
+        );
+    }
+
+    #[test]
+    fn ensure_note_columns_is_idempotent() {
+        let conn = in_memory_conn();
+        conn.execute_batch(
+            "CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, tags TEXT NOT NULL, keywords TEXT NOT NULL, platform TEXT NOT NULL, board TEXT NOT NULL, kernel TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, source TEXT NOT NULL, path TEXT NOT NULL UNIQUE, summary TEXT NOT NULL, body_hash TEXT NOT NULL);",
+        ).unwrap();
+
+        ensure_note_columns(&conn).unwrap();
+        ensure_note_columns(&conn).unwrap();
     }
 
     // ── Regression test for #2851 ─────────────────────────────────

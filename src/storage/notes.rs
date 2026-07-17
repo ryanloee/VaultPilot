@@ -1787,11 +1787,14 @@ fn index_note_file_with_connection(
         .map_err(|e| anyhow::anyhow!("cannot resolve path '{}': {e}", path.display()))?;
     let document = parse_markdown_note(&canonical, "manual")?;
     let body_hash = hash_content(&document.body);
+    let note_semantic_vector = build_text_semantic_vector(&document.body)
+        .map(|v| serialize_semantic_vector(&v))
+        .unwrap_or_default();
     connection.execute_batch("SAVEPOINT sp_index_note")?;
     let result: Result<()> = (|| {
         connection.execute(
-            "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(id) DO UPDATE SET
                title = excluded.title,
                tags = excluded.tags,
@@ -1805,7 +1808,8 @@ fn index_note_file_with_connection(
                source = excluded.source,
                path = excluded.path,
                summary = excluded.summary,
-               body_hash = excluded.body_hash",
+               body_hash = excluded.body_hash,
+               semantic_vector = excluded.semantic_vector",
             params![
                 document.meta.id,
                 document.meta.title,
@@ -1820,7 +1824,8 @@ fn index_note_file_with_connection(
                 document.meta.source,
                 canonical.to_string_lossy().to_string(),
                 document.meta.summary,
-                body_hash
+                body_hash,
+                note_semantic_vector
             ],
         )?;
         connection.execute(

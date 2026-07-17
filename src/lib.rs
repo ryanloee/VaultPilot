@@ -4,6 +4,7 @@ pub mod ai;
 pub mod block_ref;
 pub mod calendar;
 pub mod capability_registry;
+pub mod capture;
 pub mod citations;
 pub mod connector;
 pub mod context_surface;

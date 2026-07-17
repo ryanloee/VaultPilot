@@ -680,8 +680,48 @@ async fn handle_request(
             }))
             .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
+        // #2969: Quick Capture — append a timestamped bullet to today's daily
+        // note or the inbox. Exposed over JSON-RPC so the WinUI QuickCaptureOverlay
+        // (and future mobile quick-capture surfaces) can call it without spawning
+        // the CLI. Reuses the library implementation that the CLI command also
+        // uses, so behaviour is identical end-to-end.
+        "capture" => {
+            let params: CaptureParams = parse_params(&request.params)?;
+            // Apply the same defaults the CLI uses when the caller omits them
+            // (the WinUI overlay sends empty strings for "section" and switches
+            // "target" between "daily" / "inbox" — but empty "target" should
+            // behave like the CLI's default, not error out).
+            let target = if params.target.is_empty() {
+                "daily"
+            } else {
+                params.target.as_str()
+            };
+            let section = if params.section.is_empty() {
+                "Quick Capture"
+            } else {
+                params.section.as_str()
+            };
+            let result =
+                vaultpilot_lib::capture::handle_capture(context, &params.text, target, section)
+                    .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            serde_json::to_value(result).map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
         method => Err(format!("unknown method: {method}")),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureParams {
+    /// The text to capture.
+    text: String,
+    /// "daily" (today's daily note) or "inbox". Defaults to "daily".
+    #[serde(default)]
+    target: String,
+    /// Section heading to append under. Empty string uses the CLI default
+    /// ("Quick Capture").
+    #[serde(default)]
+    section: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1378,5 +1418,91 @@ mod tests {
         assert_eq!(params.note.meta.id, "note-789");
         assert_eq!(params.note.meta.title, "Test Note");
         assert_eq!(params.note.body, "Hello world");
+    }
+
+    // ─── #2969: Quick Capture JSON-RPC method ──────────────────────────
+
+    #[test]
+    fn capture_params_deserializes_with_all_fields() {
+        // WinUI QuickCaptureOverlay sends { text, target, section }.
+        let json = json!({
+            "id": "req-cap-1",
+            "method": "capture",
+            "params": {
+                "text": "buy milk",
+                "target": "inbox",
+                "section": "Errands"
+            }
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(request.method, "capture");
+        let params: CaptureParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.text, "buy milk");
+        assert_eq!(params.target, "inbox");
+        assert_eq!(params.section, "Errands");
+    }
+
+    #[test]
+    fn capture_params_deserializes_with_defaults() {
+        // The WinUI overlay sends an empty string for "section" when the user
+        // hasn't picked one — the request must still deserialize, and the
+        // handler applies the CLI-equivalent default ("Quick Capture").
+        let json = json!({
+            "id": "req-cap-2",
+            "method": "capture",
+            "params": {
+                "text": "quick idea",
+                "target": "daily",
+                "section": ""
+            }
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        let params: CaptureParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.text, "quick idea");
+        assert_eq!(params.target, "daily");
+        assert_eq!(params.section, "");
+    }
+
+    #[test]
+    fn capture_params_uses_camel_case_for_text_field() {
+        // The struct uses #[serde(rename_all = "camelCase")] but "text" has no
+        // case to rename — this test pins the wire format so future renames
+        // don't silently break the WinUI overlay.
+        let json = json!({
+            "id": "req-cap-3",
+            "method": "capture",
+            "params": {
+                "text": "hello",
+                "target": "daily"
+            }
+        });
+        let request: AgentRequest = serde_json::from_value(json).unwrap();
+        let params: CaptureParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.text, "hello");
+        // section defaults to empty string via #[serde(default)].
+        assert_eq!(params.section, "");
+    }
+
+    #[test]
+    fn capture_request_roundtrip_through_agent_request() {
+        // End-to-end wire-format check: the request the WinUI overlay sends
+        // must deserialize into AgentRequest + CaptureParams without loss.
+        let original = json!({
+            "id": "req-cap-rt",
+            "method": "capture",
+            "params": {
+                "text": "meeting at 3pm",
+                "target": "daily",
+                "section": "Today"
+            }
+        });
+        let request: AgentRequest = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(request.id, "req-cap-rt");
+        assert_eq!(request.method, "capture");
+
+        let params: CaptureParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.text, "meeting at 3pm");
+        assert_eq!(params.target, "daily");
+        assert_eq!(params.section, "Today");
     }
 }

@@ -183,21 +183,27 @@ fn rewrite_with_footnotes(text: &str) -> (String, Vec<RawCitation>) {
             }
         }
     }
+    // Sort spans by text position so footnotes appear in reading order.
     spans.sort_by_key(|s| s.0);
 
-    for (start, end, cite_index) in spans {
-        if start < i {
+    // Reorder `cites` to match the text-position order of the footnotes, so
+    // the k-th citation in the returned vec corresponds to footnote [k+1].
+    // Previously the vec stayed in wikilink-then-compact order while footnotes
+    // were numbered by original collection index, which misaligned when a
+    // compact marker precedes a wikilink (#3002).
+    let ordered_cites: Vec<RawCitation> = spans.iter().map(|s| cites[s.2].clone()).collect();
+
+    for (k, (start, end, _cite_index)) in spans.iter().enumerate() {
+        if *start < i {
             // Overlapping/already-emitted span — skip defensively.
             continue;
         }
-        out.push_str(&text[i..start]);
-        out.push_str(&format!("[{}]", cite_index + 1));
-        i = end;
+        out.push_str(&text[i..*start]);
+        out.push_str(&format!("[{}]", k + 1));
+        i = *end;
     }
     out.push_str(&text[i..]);
-    // `cites` is already in wikilink-then-compact order which matches `spans`
-    // ordering, so citations[span.2] aligns with the footnote number.
-    (out, cites)
+    (out, ordered_cites)
 }
 
 /// Resolve a parsed raw citation into a structured [`AnswerCitation`].
@@ -335,6 +341,32 @@ mod tests {
         assert_eq!(cites.len(), 2);
         assert_eq!(cites[0].title, "Note A");
         assert_eq!(cites[1].path, "notes/b.md");
+    }
+
+    // ── #3002 regression: compact marker preceding a wikilink ──
+    #[test]
+    fn compact_before_wikilink_aligns_footnotes() {
+        // The compact marker appears earlier in text than the wikilink, so the
+        // returned citation list must be reordered to match footnote order.
+        let text = "See [#cite:notes/b.md:0] and also [[Note A]] here.";
+        let (out, cites) = extract_citations_unresolved(text);
+        assert_eq!(out, "See [1] and also [2] here.");
+        assert_eq!(cites.len(), 2);
+        // Footnote [1] (first in text) must be the compact citation...
+        assert_eq!(cites[0].path, "notes/b.md");
+        // ...and footnote [2] the wikilink.
+        assert_eq!(cites[1].title, "Note A");
+    }
+
+    #[test]
+    fn multiple_compact_before_wikilink_align() {
+        let text = "[#cite:notes/x.md:0] [#cite:notes/y.md:5] and [[Z]] end.";
+        let (out, cites) = extract_citations_unresolved(text);
+        assert_eq!(out, "[1] [2] and [3] end.");
+        assert_eq!(cites.len(), 3);
+        assert_eq!(cites[0].path, "notes/x.md");
+        assert_eq!(cites[1].path, "notes/y.md");
+        assert_eq!(cites[2].title, "Z");
     }
 
     #[test]

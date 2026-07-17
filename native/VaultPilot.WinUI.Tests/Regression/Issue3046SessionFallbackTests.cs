@@ -35,7 +35,7 @@ public class Issue3046SessionFallbackTests
     {
         var method = typeof(MainWindow).GetMethod(
             "AddTurnAsync",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.Instance);
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         Assert.NotNull(method);
     }
 

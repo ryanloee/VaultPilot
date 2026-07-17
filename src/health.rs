@@ -578,7 +578,8 @@ mod tests {
                 source TEXT NOT NULL,
                 path TEXT NOT NULL UNIQUE,
                 summary TEXT NOT NULL,
-                body_hash TEXT NOT NULL
+                body_hash TEXT NOT NULL,
+                semantic_vector TEXT NOT NULL DEFAULT ''
             );",
         )
         .unwrap();
@@ -587,8 +588,8 @@ mod tests {
         conn.execute(
             "INSERT INTO notes
              (id, title, tags, keywords, platform, board, kernel,
-              status, created_at, updated_at, source, path, summary, body_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+              status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 "n1",
                 "Bad Tags",
@@ -603,6 +604,7 @@ mod tests {
                 "test",
                 "/bad-tags.md",
                 "",
+                "",
                 ""
             ],
         )
@@ -612,8 +614,8 @@ mod tests {
         conn.execute(
             "INSERT INTO notes
              (id, title, tags, keywords, platform, board, kernel,
-              status, created_at, updated_at, source, path, summary, body_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+              status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 "n2",
                 "Bad Keywords",
@@ -628,6 +630,7 @@ mod tests {
                 "test",
                 "/bad-keywords.md",
                 "",
+                "",
                 ""
             ],
         )
@@ -637,8 +640,8 @@ mod tests {
         conn.execute(
             "INSERT INTO notes
              (id, title, tags, keywords, platform, board, kernel,
-              status, created_at, updated_at, source, path, summary, body_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+              status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 "n3",
                 "Good Note",
@@ -652,6 +655,7 @@ mod tests {
                 "2026-01-01",
                 "test",
                 "/good.md",
+                "",
                 "",
                 ""
             ],

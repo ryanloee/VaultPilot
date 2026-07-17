@@ -112,8 +112,17 @@ pub fn search_notes_with_context(
     let mut notes = notes;
     if query.deep_search && !query.text.trim().is_empty() {
         let fetch_limit = (limit + offset).max(50);
-        let semantic_scores =
+        // Query semantic scores from both attachment vectors and note body vectors
+        let attachment_scores =
             query_attachment_semantic_scores(&connection, &query.text).unwrap_or_default();
+        let note_scores = query_note_semantic_scores(&connection, &query.text).unwrap_or_default();
+        let mut semantic_scores = attachment_scores;
+        for (note_id, score) in note_scores {
+            semantic_scores
+                .entry(note_id.clone())
+                .and_modify(|current| *current = (*current).max(score))
+                .or_insert(score);
+        }
         let mut seen_ids: HashSet<String> = notes.iter().map(|n| n.id.clone()).collect();
         let mut scored_ids: Vec<(String, i64)> = semantic_scores.into_iter().collect();
         scored_ids.sort_by_key(|b| std::cmp::Reverse(b.1));
@@ -234,7 +243,16 @@ pub fn deep_search_notes(context: &StorageContext, query: SearchQuery) -> Result
     let fts_results = rank_note_metas(context, &connection, &query.text, &[], fetch_limit)?;
 
     // Step 2: Semantic/vector search — compute semantic vectors and rank
-    let semantic_scores = query_attachment_semantic_scores(&connection, &query.text)?;
+    // Query both attachment vectors and note body vectors, then merge scores
+    let attachment_scores = query_attachment_semantic_scores(&connection, &query.text)?;
+    let note_scores = query_note_semantic_scores(&connection, &query.text)?;
+    let mut semantic_scores = attachment_scores;
+    for (note_id, score) in note_scores {
+        semantic_scores
+            .entry(note_id)
+            .and_modify(|current| *current = (*current).max(score))
+            .or_insert(score);
+    }
     let mut scored_ids: Vec<(String, i64)> = semantic_scores.into_iter().collect();
     scored_ids.sort_by_key(|b| std::cmp::Reverse(b.1)); // highest score first
 
@@ -1128,6 +1146,66 @@ fn query_attachment_semantic_scores(
     Ok(scores)
 }
 
+/// Query semantic scores for note bodies using the same n-gram vector approach.
+/// Searches the `notes` table for notes with stored semantic vectors and computes
+/// cosine similarity against the query vector.
+fn query_note_semantic_scores(
+    connection: &Connection,
+    query_text: &str,
+) -> Result<HashMap<String, i64>> {
+    let Some(query_vector) = build_text_semantic_vector(query_text) else {
+        return Ok(HashMap::new());
+    };
+
+    let mut scores = HashMap::new();
+    let batch_size: i64 = 500;
+    let mut last_id = String::new();
+
+    loop {
+        let mut count: usize = 0;
+        {
+            let mut statement = connection.prepare(
+                "SELECT id, semantic_vector
+                 FROM notes
+                 WHERE semantic_vector <> '' AND id > ?1
+                 ORDER BY id
+                 LIMIT ?2",
+            )?;
+            let rows = statement.query_map(params![last_id, batch_size], |row| {
+                let id: String = row.get(0)?;
+                let sv: String = row.get(1)?;
+                let vector = deserialize_semantic_vector(&sv);
+                Ok((id, vector))
+            })?;
+            let mut batch_last_id = String::new();
+            for row in rows {
+                let (id, candidate_vector_opt) = row?;
+                count += 1;
+                batch_last_id = id.clone();
+                let Some(candidate_vector) = candidate_vector_opt else {
+                    continue;
+                };
+                let similarity = cosine_similarity(&query_vector, &candidate_vector);
+                let score = similarity_to_rank_score(similarity);
+                if score <= 0 {
+                    continue;
+                }
+                scores
+                    .entry(id)
+                    .and_modify(|current: &mut i64| *current = (*current).max(score))
+                    .or_insert(score);
+            }
+            last_id = batch_last_id;
+        }
+
+        if count < batch_size as usize {
+            break;
+        }
+    }
+
+    Ok(scores)
+}
+
 pub(super) fn rank_note_metas(
     context: &StorageContext,
     connection: &Connection,
@@ -1156,7 +1234,15 @@ pub(super) fn rank_documents(
         limit.saturating_mul(4).max(12),
     )?;
     let visual_scores = query_visual_candidate_scores(connection, image_paths)?;
-    let semantic_scores = query_attachment_semantic_scores(connection, &attachment_query)?;
+    let attachment_semantic = query_attachment_semantic_scores(connection, &attachment_query)?;
+    let note_semantic = query_note_semantic_scores(connection, &attachment_query)?;
+    let mut semantic_scores: HashMap<String, i64> = attachment_semantic;
+    for (note_id, score) in note_semantic {
+        semantic_scores
+            .entry(note_id)
+            .and_modify(|current| *current = (*current).max(score))
+            .or_insert(score);
+    }
     let recent_ids = query_recent_note_ids(
         connection,
         limit
@@ -1782,8 +1868,8 @@ mod tests {
         for i in 0..total {
             let note_id = format!("note-{i}");
             conn.execute(
-                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash)
-                 VALUES (?1, ?2, '', '', '', '', '', '', ?3, ?3, '', ?4, '', '')",
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+                 VALUES (?1, ?2, '', '', '', '', '', '', ?3, ?3, '', ?4, '', '', '')",
                 params![&note_id, format!("Note {i}"), &now, format!("/p/{i}.md")],
             )
             .expect("insert note");

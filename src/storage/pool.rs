@@ -447,12 +447,79 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        -- Trigger execution log (#3048): one row per fired rule.
+        -- Populated by the trigger executor (src/orchestration/trigger_executor.rs).
+        CREATE TABLE IF NOT EXISTS trigger_executions (
+            id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            action TEXT NOT NULL,
+            fired_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_trigger_executions_rule_id ON trigger_executions(rule_id);
+        CREATE INDEX IF NOT EXISTS idx_trigger_executions_fired_at ON trigger_executions(fired_at);
         "#,
     )?;
+
+    // Idempotent migration: add execution-tracking columns to trigger_rules
+    // for the cron executor introduced in #3048. Older databases created
+    // before #3048 ship without these columns.
+    ensure_trigger_rule_columns(connection)?;
 
     // Ensure mail tables for Email-to-Vault integration
     connection.execute_batch(crate::mail::MAIL_SCHEMA_DDL)?;
     connection.execute_batch("PRAGMA user_version = 1;")?;
+    Ok(())
+}
+
+/// Add `last_fired_at`, `next_fire_at`, `run_count`, `last_status`, `last_error`
+/// columns to the `trigger_rules` table if missing (#3048). Idempotent.
+fn ensure_trigger_rule_columns(connection: &Connection) -> Result<()> {
+    let table_exists: bool = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='trigger_rules'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table_exists {
+        return Ok(());
+    }
+
+    let mut statement = connection.prepare("PRAGMA table_info(trigger_rules)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    drop(statement);
+
+    for (column, ddl) in [
+        (
+            "last_fired_at",
+            "ALTER TABLE trigger_rules ADD COLUMN last_fired_at TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "next_fire_at",
+            "ALTER TABLE trigger_rules ADD COLUMN next_fire_at TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "run_count",
+            "ALTER TABLE trigger_rules ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "last_status",
+            "ALTER TABLE trigger_rules ADD COLUMN last_status TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "last_error",
+            "ALTER TABLE trigger_rules ADD COLUMN last_error TEXT NOT NULL DEFAULT ''",
+        ),
+    ] {
+        if !columns.contains(column) {
+            connection.execute_batch(ddl)?;
+        }
+    }
     Ok(())
 }
 

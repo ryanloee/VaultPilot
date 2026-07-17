@@ -54,33 +54,46 @@ impl AgentTriggerRule {
 
 /// Status of the trigger-rule execution layer.
 ///
-/// As of v0.5.61 (#3048), trigger rules can be created/listed/toggled via the
-/// CLI, and the storage layer (`trigger_rules` table) is fully functional — but
-/// **no scheduler / event dispatcher / cron evaluator consumes the table yet**.
-/// Stored rules will never fire until the executor ships (tracked separately).
+/// As of v0.5.62 (#3053), the cron-based executor shipped in a033c4c (#3048)
+/// is fully wired up: `TriggerExecutor::spawn` reads the `trigger_rules`
+/// table on a 60 s cadence, evaluates due cron rules, records an execution
+/// row in `trigger_executions` per fire, and updates each rule's
+/// `last_fired_at` / `run_count` / `last_status`. The `trigger fire-now` and
+/// `trigger start` CLI subcommands exercise the same path.
 ///
-/// This constant lets the CLI surface an honest warning so users are not
-/// silently misled into thinking automation is active. When the executor lands,
-/// flip this to [`ExecutorStatus::Connected`] and remove the CLI warning.
+/// `NotConnected` is retained for backward-compat (older clients may still
+/// parse the JSON `executor_status` field) and for the future event-bus
+/// dispatcher, which is not yet wired up — but cron evaluation is live.
 ///
-/// See <https://github.com/ryanloee/VaultPilot/issues/3048>.
+/// See <https://github.com/ryanloee/VaultPilot/issues/3048> and
+/// <https://github.com/ryanloee/VaultPilot/issues/3053>.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutorStatus {
     /// No background loop / event dispatcher is reading the trigger_rules
     /// table. Rules are persisted but never fire. CLI must warn the user.
+    /// Currently only retained for backward-compat with older JSON consumers.
     NotConnected,
-    /// The executor is active: due cron rules fire on schedule and subscribed
-    /// vault events dispatch to the matching rules. Reserved for the future
-    /// executor implementation; not currently returned.
+    /// The executor is active: due cron rules fire on schedule and an
+    /// execution row is recorded per fire. Returned by [`Self::current()`]
+    /// since the cron executor shipped in a033c4c (#3048 / #3053).
     Connected,
 }
 
 impl ExecutorStatus {
     /// Current executor status. See [`ExecutorStatus`] doc for context.
+    ///
+    /// Returns [`Self::Connected`] since a033c4c (#3048) wired up the
+    /// cron evaluator + execution-log writer. The deferred agent-dispatch
+    /// work (LLM daily-review generation) is independent of this flag —
+    /// the flag reflects "is *any* executor reading the table", and the
+    /// cron evaluator clearly is (#3053).
     pub fn current() -> Self {
-        // #3048: storage layer shipped in v0.5.61, executor not yet wired up.
-        Self::NotConnected
+        // #3053: executor shipped in a033c4c (v0.5.62). Flip from
+        // NotConnected to Connected so the CLI no longer prints the stale
+        // "rules will NOT fire" warning that contradicts the executor that
+        // just landed.
+        Self::Connected
     }
 
     /// Stable string id suitable for JSON / CLI display.
@@ -314,23 +327,26 @@ mod tests {
         assert_eq!(parsed.effective_prompt(), None);
     }
 
-    // ─── #3048: executor-status honesty contract ───────────────────────
+    // ─── #3048 / #3053: executor-status honesty contract ───────────────
     //
-    // The trigger_rules storage layer shipped in v0.5.61 but the scheduler /
-    // event dispatcher that actually fires rules has not. Until it ships, the
-    // CLI must surface this honestly so users are not silently misled. These
-    // tests pin the contract:
+    // The trigger_rules storage layer shipped in v0.5.61 (#3048) and the
+    // cron-based executor that actually fires rules shipped in a033c4c
+    // (v0.5.62, #3053). `ExecutorStatus::current()` reflects whether *any*
+    // executor is wired up — and the cron evaluator + execution-log writer
+    // clearly is. These tests pin the contract:
     //   - ExecutorStatus::current() reflects whether the executor is wired up.
     //   - When NotConnected, a non-empty warning string is available.
     //   - as_str() round-trips through serde as snake_case.
     //
-    // When the executor lands, update ExecutorStatus::current() to return
-    // Connected and adjust these tests (the warning will then be None).
+    // (Previously this asserted NotConnected; it was flipped to Connected
+    // in #3053 when the executor shipped.)
 
     #[test]
     fn executor_status_current_matches_wiring() {
-        // #3048: executor is intentionally not connected yet.
-        assert_eq!(ExecutorStatus::current(), ExecutorStatus::NotConnected);
+        // #3053: the cron executor shipped in a033c4c — current() must now
+        // report Connected so the CLI no longer emits the stale "rules will
+        // NOT fire" warning that contradicts the live executor.
+        assert_eq!(ExecutorStatus::current(), ExecutorStatus::Connected);
     }
 
     #[test]

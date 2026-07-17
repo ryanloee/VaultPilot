@@ -8,7 +8,7 @@ use crate::models::AppSettings;
 use super::atomic_write;
 use super::pool::{AppPaths, StorageContext};
 
-/// Check if a string value was produced by [`mask_secret`] in `models::provider`.
+/// Heuristic: could `s` be a value produced by [`mask_secret`]?
 ///
 /// This is **format-aware** so it does not false-positive on genuine plaintext
 /// keys that merely *contain* the masking characters (#2987):
@@ -17,8 +17,13 @@ use super::pool::{AppPaths, StorageContext};
 ///   `mask_secret` only emits all-`*` for inputs of length ≤ 12, so a longer
 ///   `*`-only string (or one containing `…`) is treated as plaintext.
 /// * **Long key** (> 12 chars): exactly `<4 chars>…<4 chars>` where the middle
-///   char is [`MASK_ELLIPSIS`] and the stated prefix/suffix equal the real
-///   first/last 4 chars of `s`. Any other `…`-containing string is plaintext.
+///   char is [`MASK_ELLIPSIS`].
+///
+/// ⚠️ This is a *format* heuristic only. Because [`mask_secret`] is lossy, a
+/// genuine 9-char plaintext value `abcd…wxyz` shares the exact long-key shape
+/// and will be flagged here (#2997/#3001). When the real (unmasked) key is
+/// available, prefer [`is_masked_form_of`] which verifies the prefix/suffix
+/// actually match that key before treating the value as a display mask.
 ///
 /// Uses [`MASK_ELLIPSIS`] from the provider module so that changes to the
 /// masking format don't silently corrupt stored keys (#2539).
@@ -39,6 +44,40 @@ pub(crate) fn is_masked_key(s: &str) -> bool {
     // all-'*' for inputs of length ≤ 12, so a longer *-only string (or any
     // string containing '…' that isn't the exact long form above) is plaintext.
     !chars.is_empty() && chars.len() <= 12 && chars.iter().all(|c| *c == '*')
+}
+
+/// Returns `true` only if `candidate` is the actual masked form of `real_key` —
+/// i.e. it was produced by `mask_secret(real_key)` and therefore represents
+/// "the user left this key unchanged" rather than a genuine new value.
+///
+/// Unlike [`is_masked_key`] (a pure format heuristic), this verifies the
+/// candidate's prefix/suffix against `real_key`, so a genuine 9-char plaintext
+/// value such as `abcd…wxyz` is **not** mistaken for a display mask and is
+/// kept as a real key change (#2997/#3001). Used when the existing stored key
+/// is available so the silent key-loss path is fully disambiguated.
+pub(crate) fn is_masked_form_of(candidate: &str, real_key: &str) -> bool {
+    if !is_masked_key(candidate) {
+        return false;
+    }
+    let chars: Vec<char> = candidate.chars().collect();
+    let real: Vec<char> = real_key.chars().collect();
+    if chars.len() == 9 && chars[4] == crate::models::provider::MASK_ELLIPSIS {
+        // Long-key form: must match real_key's first/last 4 chars.
+        if real.len() <= 12 {
+            // A short real key would have been masked as all-*, never the
+            // long form, so this candidate cannot be its mask.
+            return false;
+        }
+        let prefix: String = chars[..4].iter().collect();
+        let suffix: String = chars[5..].iter().collect();
+        let rprefix: String = real[..4].iter().collect();
+        let rsuffix: String = real[real.len() - 4..].iter().collect();
+        prefix == rprefix && suffix == rsuffix
+    } else {
+        // Short-key form: all '*' of length L. mask_secret emits all-* for any
+        // key of length ≤ 12, so match iff real_key has the same length.
+        chars.len() == real.len()
+    }
 }
 
 /// Load settings directly from the disk file, bypassing the in-memory cache.
@@ -235,7 +274,10 @@ pub fn save_settings_with_context(
     match &existing_settings {
         Ok(existing_settings) => {
             if existing_settings.provider.api_key != settings.provider.api_key
-                && is_masked_key(&settings.provider.api_key)
+                && is_masked_form_of(
+                    &settings.provider.api_key,
+                    &existing_settings.provider.api_key,
+                )
                 && !settings.provider.api_key.is_empty()
             {
                 settings.provider.api_key = existing_settings.provider.api_key.clone();
@@ -266,7 +308,7 @@ pub fn save_settings_with_context(
                     });
                 if let Some(existing) = existing {
                     if p.api_key != existing.api_key
-                        && is_masked_key(&p.api_key)
+                        && is_masked_form_of(&p.api_key, &existing.api_key)
                         && !p.api_key.is_empty()
                     {
                         p.api_key = existing.api_key.clone();
@@ -601,6 +643,73 @@ mod tests {
             result.is_ok(),
             "saving a real key should repair the corrupt file: {:?}",
             result.err()
+        );
+    }
+
+    // ── #2997 / #3001: is_masked_form_of must not false-positive on a genuine
+    // 9-char plaintext value that shares the long-mask shape `XXXX…XXXX`. ──
+
+    #[test]
+    fn is_masked_key_still_heuristic_true_for_plaintext_shape() {
+        // is_masked_key is a pure format heuristic and WILL flag the shape;
+        // that is why callers must use is_masked_form_of when the real key is known.
+        assert!(is_masked_key("abcd…wxyz"));
+    }
+
+    #[test]
+    fn is_masked_form_of_rejects_plaintext_ellipsis_key() {
+        // A genuine 9-char plaintext key with an ellipsis must NOT be treated
+        // as the mask of a different (real) key.
+        let real_key = "sk-abc...6789"; // 13+ char stored key
+        assert!(!is_masked_form_of("abcd…wxyz", real_key));
+    }
+
+    #[test]
+    fn is_masked_form_of_accepts_true_mask() {
+        // The actual mask of the stored key is recognised as "unchanged".
+        let real_key = "sk-abc...6789";
+        let masked = crate::models::provider::mask_secret(real_key);
+        assert!(is_masked_form_of(&masked, real_key));
+        // And a different real key is NOT mistaken for the mask.
+        assert!(!is_masked_form_of(&masked, "sk-xyz...0000"));
+    }
+
+    #[test]
+    fn plaintext_ellipsis_key_not_silently_discarded() {
+        // #2997/#3001 end-to-end: saving a 9-char plaintext key containing an
+        // ellipsis must persist that key, not replace it with the stale one.
+        let temp = unique_temp("2997");
+        let ctx = StorageContext::for_test(&temp);
+        let vault = temp.join("vault").to_string_lossy().to_string();
+
+        // First save a real stored key.
+        let stored = AppSettings {
+            vault_dir: vault.clone(),
+            provider: ProviderConfig {
+                api_key: "sk-abc...6789".to_string(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        save_settings_with_context(&ctx, stored).expect("first save ok");
+
+        // Now the user changes the key to a genuine 9-char plaintext value that
+        // happens to contain an ellipsis (the false-positive shape).
+        let new_key = "abcd…wxyz";
+        let incoming = AppSettings {
+            vault_dir: vault,
+            provider: ProviderConfig {
+                api_key: new_key.to_string(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        save_settings_with_context(&ctx, incoming).expect("second save ok");
+
+        let reloaded = load_settings_raw(&ctx).expect("reload");
+        assert_eq!(
+            reloaded.provider.api_key, new_key,
+            "the plaintext ellipsis key must be persisted, not replaced by the stale key"
         );
     }
 }

@@ -189,6 +189,7 @@ pub fn toggle_trigger_rule_with_context(
 // Internal helpers
 // ────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn build_rule(
     id: &str,
     label: &str,

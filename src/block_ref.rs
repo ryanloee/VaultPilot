@@ -38,6 +38,12 @@ pub struct Block {
 /// The id is a short, url/path-safe base36 of a 32-bit FNV-1a hash over the
 /// heading path joined with `\0` and the trimmed text. Deterministic across
 /// runs and platforms; collision probability is negligible for note-scale text.
+///
+/// Note: this function alone only guarantees a *content-derived* id. When the
+/// same `(heading_path, text)` appears more than once in a single note (e.g.
+/// two identical `- [ ] reply to mail` list items in a Daily Journal), the
+/// base id collides. Callers must run the result through
+/// [`disambiguate_block_id`] to guarantee document-wide uniqueness (#2998).
 fn block_id_for(heading_path: &[String], text: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -48,6 +54,38 @@ fn block_id_for(heading_path: &[String], text: &str) -> String {
     text.hash(&mut hasher);
     let hash = hasher.finish();
     format!("{:x}", hash)
+}
+
+/// Disambiguate block ids so that every block in a single note has a globally
+/// unique id, even when the same `(heading_path, text)` is repeated.
+///
+/// The *first* occurrence of a given content id keeps the bare id (preserving
+/// inter-document stability for the common case). Each subsequent occurrence of
+/// the same content gets a `-N` suffix where `N` is the 0-based repeat index
+/// (`-1`, `-2`, ...). This means inserting unrelated text elsewhere in the note
+/// never reshuffles already-unique ids, while deterministic duplicate text is no
+/// longer merged into a single ambiguous anchor (#2998).
+struct IdDisambiguator {
+    seen: HashMap<String, usize>,
+}
+
+impl IdDisambiguator {
+    fn new() -> Self {
+        IdDisambiguator {
+            seen: HashMap::new(),
+        }
+    }
+
+    fn disambiguate(&mut self, base_id: String) -> String {
+        let entry = self.seen.entry(base_id.clone()).or_insert(0);
+        let count = *entry;
+        *entry += 1;
+        if count == 0 {
+            base_id
+        } else {
+            format!("{}-{count}", base_id)
+        }
+    }
 }
 
 /// Strip a trailing `<!-- ^id -->` block-id marker (if present) from a line.
@@ -258,6 +296,14 @@ pub fn parse_blocks(body: &str) -> Vec<Block> {
         flush(&hp, &buf, &mut blocks, &mut index);
     }
 
+    // Guarantee document-wide unique ids: when the same (heading_path, text)
+    // appears more than once the bare content-derived id collides, so append a
+    // `-N` repeat suffix (#2998). The first occurrence keeps the bare id.
+    let mut disambig = IdDisambiguator::new();
+    for block in blocks.iter_mut() {
+        block.id = disambig.disambiguate(block.id.clone());
+    }
+
     blocks
 }
 
@@ -280,8 +326,12 @@ fn annotate_blocks_grouped(body: &str) -> String {
     let mut in_code = false;
     let mut heading_path: Vec<String> = Vec::new();
     let mut block_lines: Vec<&str> = Vec::new();
+    let mut disambig = IdDisambiguator::new();
 
-    let flush_block = |block_lines: &[&str], heading_path: &[String], out: &mut String| {
+    let flush_block = |block_lines: &[&str],
+                       heading_path: &[String],
+                       out: &mut String,
+                       disambig: &mut IdDisambiguator| {
         if block_lines.is_empty() {
             return;
         }
@@ -301,13 +351,13 @@ fn annotate_blocks_grouped(body: &str) -> String {
             let mut hp = heading_path.to_vec();
             hp.truncate(level.saturating_sub(1));
             hp.push(title.to_string());
-            let id = block_id_for(&hp, title);
+            let id = disambig.disambiguate(block_id_for(&hp, title));
             let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
         } else if block_lines.len() == 1 && has_block_id_marker(block_lines[0]) {
             // Already annotated — keep as-is.
             let _ = writeln!(out, "{}", block_lines[0].trim_end());
         } else {
-            let id = block_id_for(heading_path, text);
+            let id = disambig.disambiguate(block_id_for(heading_path, text));
             let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
         }
     };
@@ -316,7 +366,7 @@ fn annotate_blocks_grouped(body: &str) -> String {
         let line = raw_line;
         let fence = line.trim_start().starts_with("```");
         if fence {
-            flush_block(&block_lines, &heading_path, &mut out);
+            flush_block(&block_lines, &heading_path, &mut out, &mut disambig);
             block_lines.clear();
             let _ = writeln!(out, "{line}");
             in_code = !in_code;
@@ -327,14 +377,14 @@ fn annotate_blocks_grouped(body: &str) -> String {
             continue;
         }
         if line.trim().is_empty() {
-            flush_block(&block_lines, &heading_path, &mut out);
+            flush_block(&block_lines, &heading_path, &mut out, &mut disambig);
             block_lines.clear();
             let _ = writeln!(out);
             continue;
         }
         // Heading is a block of its own; update the running heading path.
         if line.trim_start().starts_with('#') {
-            flush_block(&block_lines, &heading_path, &mut out);
+            flush_block(&block_lines, &heading_path, &mut out, &mut disambig);
             block_lines.clear();
             let text = line.trim();
             let level = text.chars().take_while(|c| *c == '#').count();
@@ -343,13 +393,13 @@ fn annotate_blocks_grouped(body: &str) -> String {
             hp.truncate(level.saturating_sub(1));
             hp.push(title.to_string());
             heading_path = hp.clone();
-            let id = block_id_for(&hp, title);
+            let id = disambig.disambiguate(block_id_for(&hp, title));
             let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
             continue;
         }
         block_lines.push(line);
     }
-    flush_block(&block_lines, &heading_path, &mut out);
+    flush_block(&block_lines, &heading_path, &mut out, &mut disambig);
     out
 }
 
@@ -540,5 +590,60 @@ mod tests {
         let line = "Some text <!-- ^deadbeef -->";
         assert_eq!(strip_block_id_marker(line), "Some text");
         assert!(has_block_id_marker(line));
+    }
+
+    #[test]
+    fn duplicate_blocks_get_unique_ids() {
+        // Two identical content blocks under the same heading must not share an id
+        // (#2998): embedding `![[note#^id]]` would otherwise be ambiguous.
+        // Blank lines keep each list item its own block in parse_blocks.
+        let body = "## Tasks\n\n- [ ] reply to mail\n\n- [ ] reply to mail\n";
+        let blocks = parse_blocks(body);
+        // heading + 2 list items (separated by blank lines)
+        assert_eq!(blocks.len(), 3, "expected 3 blocks, got {blocks:?}");
+        let ids: Vec<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            "duplicate content blocks collided on the same id"
+        );
+        // The two list items should carry distinct ids.
+        let item_ids: Vec<&str> = blocks
+            .iter()
+            .filter(|b| b.text == "- [ ] reply to mail")
+            .map(|b| b.id.as_str())
+            .collect();
+        assert_eq!(item_ids.len(), 2);
+        assert_ne!(item_ids[0], item_ids[1]);
+    }
+
+    #[test]
+    fn annotate_disambiguates_duplicate_blocks() {
+        // annotate_blocks must emit resolved, unique ids that parse_blocks can
+        // resolve back to the correct duplicate block (#2998). Blank lines keep
+        // each list item its own block.
+        let body = "## Tasks\n\n- [ ] reply to mail\n\n- [ ] reply to mail\n";
+        let annotated = annotate_blocks(body);
+        let ids: Vec<&str> = annotated
+            .lines()
+            .filter_map(|l| l.find("<!-- ^").map(|i| &l[i + 5..]))
+            .map(|m| m.trim_end_matches("-->").trim())
+            .collect();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            "annotate produced duplicate block ids"
+        );
+        // And those ids must be resolvable by parse_blocks without collision.
+        let parsed = parse_blocks(&annotated);
+        let resolved_ids: Vec<String> = parsed.iter().map(|b| b.id.clone()).collect();
+        assert_eq!(
+            resolved_ids.len(),
+            resolved_ids
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        );
     }
 }

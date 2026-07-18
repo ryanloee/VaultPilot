@@ -565,10 +565,8 @@ mod tests {
     use crate::storage::initialize_storage_with_context;
 
     fn setup_temp_context() -> (std::path::PathBuf, StorageContext) {
-        let temp = std::env::temp_dir().join(format!(
-            "vaultpilot-test-feeds-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let temp =
+            std::env::temp_dir().join(format!("vaultpilot-test-feeds-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp).expect("temp dir");
         let ctx = StorageContext::for_test(&temp);
         (temp, ctx)

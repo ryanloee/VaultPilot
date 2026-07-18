@@ -238,6 +238,22 @@ public sealed partial class MainWindow : Window
                 AppendMessage("Agent 错误", status.Detail ?? "未知错误");
                 StopAgentMode("执行出错");
                 break;
+
+            case "unhealthyDetected":
+                // #3109: SessionHealthTracker (PR #3105) detected a repetition
+                // loop / silent failure. This is a WARNING, not a terminal
+                // state — the agent may self-correct on the next step. Surface
+                // the reason + remediation hint to the user via the chat pane
+                // and a yellow status-bar banner; do NOT auto-stop the agent.
+                var reason = status.Detail ?? "Agent 可能陷入循环";
+                var suggestion = status.Suggestion?.Trim();
+                var warningBody = string.IsNullOrEmpty(suggestion)
+                    ? reason
+                    : $"{reason}\n\n建议: {suggestion}";
+                AppendMessage("⚠️ Agent 警告", warningBody);
+                AgentStatusText.Text = "Agent 可能陷入循环";
+                UpdateStatusBar("warning", "Agent 模式", reason);
+                break;
         }
     }
 

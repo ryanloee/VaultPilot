@@ -135,6 +135,10 @@ public sealed record AgentStatusEvent
     public bool? IsError { get; init; }
     public int? StepsUsed { get; init; }
     public ulong? TokensUsed { get; init; }
+    // #3109: Agent health-tracker emits a remediation hint alongside
+    // stage="unhealthyDetected". Surfaced to the user so they can decide
+    // whether to reset the agent context.
+    public string? Suggestion { get; init; }
 
     [JsonConstructor]
     public AgentStatusEvent() { }

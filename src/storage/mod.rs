@@ -23,6 +23,7 @@ pub(crate) mod projects;
 pub(crate) mod search;
 pub(crate) mod session_export;
 mod settings;
+pub(crate) mod skills;
 pub(crate) mod snapshots;
 pub(crate) mod subscriptions;
 pub(crate) mod trigger_rules;
@@ -122,6 +123,12 @@ pub use trigger_rules::{
     create_trigger_rule_with_context, delete_trigger_rule_with_context,
     get_trigger_rule_with_context, list_trigger_rules_with_context,
     toggle_trigger_rule_with_context,
+};
+// Re-export skills public API (#3068).
+pub use skills::{
+    create_skill_with_context, delete_skill_with_context, get_skill_with_context,
+    list_skills_with_context, toggle_skill_with_context, update_skill_with_context, SavedSkill,
+    SkillInvocation,
 };
 // Re-export snapshots public API (#2855).
 pub use snapshots::{

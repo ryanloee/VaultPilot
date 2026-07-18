@@ -74,7 +74,26 @@ pub fn save_note_with_images_with_context(
     let title = fallback_title(&note.meta.title);
     let is_new = note.meta.id.trim().is_empty();
     let id = if is_new {
-        Uuid::new_v4().to_string()
+        // ── Source-based dedup: if the caller provides a non-empty source
+        //    (e.g. feed entry link), look for an existing note with the same
+        //    source and reuse its id to turn this into an update/overwrite
+        //    instead of creating a duplicate. (#3077)
+        if !note.meta.source.trim().is_empty() {
+            let existing: Option<String> = connection
+                .query_row(
+                    "SELECT id FROM notes WHERE source = ?1 LIMIT 1",
+                    params![note.meta.source.trim()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(existing_id) = existing {
+                existing_id
+            } else {
+                Uuid::new_v4().to_string()
+            }
+        } else {
+            Uuid::new_v4().to_string()
+        }
     } else {
         // Sanitize the id: only allow alphanumeric, '-' and '_' to prevent
         // path traversal via sequences like "../" (#1966).  If after

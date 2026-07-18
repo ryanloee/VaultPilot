@@ -1262,7 +1262,19 @@ const DEFAULT_MAX_STEPS: usize = 20;
 
 /// Health tracker that detects agent degradation patterns (#3103):
 /// repetition (same tool/call over and over), looping (same file/args),
-/// and silent failure (no successful operations despite multiple attempts).
+/// and silent failure (no useful operations despite multiple attempts).
+///
+/// `successful_ops` counts every non-error result (preserving the original
+/// intent of #3103). `useful_ops` additionally requires the result to be
+/// non-trivial — non-error AND not empty/whitespace-only AND at least
+/// `USEFUL_RESULT_MIN_CHARS` characters after trimming (#3118).
+///
+/// This split is necessary because the original `successful_ops == 0`
+/// condition made the silent_failure branch unreachable: every non-error
+/// result incremented `successful_ops`, so the only way to keep it at 0
+/// was to have every step error — but in that case the error_spiral check
+/// (branch 2) already fires at step 3, preventing the silent_failure branch
+/// from ever being reached (#3118).
 #[derive(Debug, Clone)]
 struct SessionHealthTracker {
     /// Map from (tool_name, args_preview) to consecutive call count.
@@ -1271,11 +1283,24 @@ struct SessionHealthTracker {
     consecutive_errors: u32,
     /// Count of successful (non-error) tool results.
     successful_ops: u32,
+    /// Count of *useful* results: non-error AND non-trivial output (#3118).
+    /// Used by the silent_failure branch so that sequences of
+    /// "successful-but-empty" calls (e.g. agent receives "ok" / "" / short
+    /// acks without making real progress) still trigger the detector.
+    useful_ops: u32,
     /// Steps processed so far.
     total_steps: u32,
     /// Whether unhealthy event already emitted this session.
     unhealthy_emitted: bool,
 }
+
+/// Minimum trimmed length a non-error tool result must have to count as a
+/// "useful" operation for silent_failure detection (#3118).
+///
+/// Conservative threshold: catches trivial acks like "", "ok", "1", "[]" —
+/// which indicate the agent made a tool call that produced no real progress —
+/// while still counting real results (file contents, search hits, etc.).
+const USEFUL_RESULT_MIN_CHARS: usize = 5;
 
 impl SessionHealthTracker {
     fn new() -> Self {
@@ -1283,6 +1308,7 @@ impl SessionHealthTracker {
             recent: std::collections::HashMap::new(),
             consecutive_errors: 0,
             successful_ops: 0,
+            useful_ops: 0,
             total_steps: 0,
             unhealthy_emitted: false,
         }
@@ -1290,11 +1316,16 @@ impl SessionHealthTracker {
 
     /// Record a tool call and check for unhealthy patterns.
     /// Returns Some(reason, suggestion) if unhealthy, None otherwise.
+    ///
+    /// `result_text` is the tool's full output string (used to detect the
+    /// silent_failure pattern where every call is "successful" but produces
+    /// no useful content — #3118).
     fn record_and_check(
         &mut self,
         tool_name: &str,
         args_summary: &str,
         is_error: bool,
+        result_text: &str,
     ) -> Option<(String, String)> {
         if self.unhealthy_emitted {
             return None;
@@ -1336,17 +1367,31 @@ impl SessionHealthTracker {
         } else {
             self.consecutive_errors = 0;
             self.successful_ops += 1;
+            // Only count genuinely useful output: non-trivial length after
+            // trimming. This is the signal that lets the silent_failure
+            // branch actually fire on sequences of "successful-but-empty"
+            // acks (e.g. agent repeatedly gets "" or "ok" back) — #3118.
+            if result_text.trim().len() >= USEFUL_RESULT_MIN_CHARS {
+                self.useful_ops += 1;
+            }
         }
 
-        // 3. Silent failure: 6+ steps, zero successful operations
-        if self.successful_ops == 0 && self.total_steps >= 6 {
+        // 3. Silent failure: 6+ steps with zero *useful* operations (#3118).
+        //
+        // Previously this used `successful_ops == 0`, but that was unreachable:
+        // - all errors  → error_spiral (branch 2) returns at step 3
+        // - any success → successful_ops > 0 → condition never true
+        // Using `useful_ops` instead catches the intended case where the
+        // agent is not erroring out but is also not producing any meaningful
+        // output (the original #3103 spec's "silent failure" mode).
+        if self.useful_ops == 0 && self.total_steps >= 6 {
             self.unhealthy_emitted = true;
             return Some((
                 format!(
-                    "{} total steps with zero successful operations",
+                    "{} total steps with zero useful operations",
                     self.total_steps
                 ),
-                "Agent is unable to complete any tool call successfully. Check whether the tools it needs are available or if its permissions are too restrictive.".to_string(),
+                "Agent is producing no useful output. Check whether the tools it needs are available, its permissions are too restrictive, or the prompt is too vague.".to_string(),
             ));
         }
 
@@ -1679,7 +1724,7 @@ pub async fn run_agent(
 
                 // ── Session health check (#3103) ──────────────────────────
                 if let Some((reason, suggestion)) =
-                    health_tracker.record_and_check(tool_name, &args_summary, is_error)
+                    health_tracker.record_and_check(tool_name, &args_summary, is_error, &result)
                 {
                     on_event(&AgentEvent::UnhealthyDetected { reason, suggestion });
                 }
@@ -3184,5 +3229,140 @@ mod pure_function_tests {
     fn regression_2542_estimate_tokens_fallback_cjk() {
         // CJK 4 bytes per char; 12 bytes / 4 = 3 tokens
         assert_eq!(estimate_tokens(None, 12), 3);
+    }
+
+    // ── #3118: SessionHealthTracker silent_failure reachability ─────────────
+    // These tests exercise the real (private) struct, not a recreation.
+
+    #[test]
+    fn regression_3118_silent_failure_fires_on_successful_but_empty_results() {
+        // The exact case the original #3103 silent_failure branch was supposed
+        // to catch but never could: 6+ non-error tool calls, each returning
+        // trivial/empty output ("ok", "", "1") → useful_ops stays at 0 →
+        // silent_failure fires at step 6.
+        let mut t = SessionHealthTracker::new();
+        let mut fired: Option<String> = None;
+        let trivial_calls = [
+            ("read_file", "/x.md", "ok"),
+            ("read_file", "/x.md", ""),
+            ("search_notes", "x", "[]"),
+            ("read_file", "/x.md", "ok"),
+            ("list_notes", "all", ""),
+            ("search_notes", "x", "1"),
+        ];
+        for (i, (tool, args, result)) in trivial_calls.iter().enumerate() {
+            if let Some((reason, _suggestion)) = t.record_and_check(tool, args, false, result) {
+                fired = Some(reason);
+                assert_eq!(
+                    i, 5,
+                    "silent_failure should fire exactly at step 6, not earlier"
+                );
+                break;
+            }
+        }
+        let reason =
+            fired.expect("silent_failure must fire after 6 successful-but-empty steps (#3118)");
+        assert!(
+            reason.contains("zero useful operations"),
+            "Reason should mention 'zero useful operations', got: {reason}"
+        );
+    }
+
+    #[test]
+    fn regression_3118_silent_failure_does_not_fire_with_useful_output() {
+        // 6+ steps where every result is genuinely useful (length >= 5) must
+        // NOT trigger silent_failure — useful_ops increments each step.
+        let mut t = SessionHealthTracker::new();
+        let useful_calls = [
+            ("read_file", "/a.md", "# Title\nbody"),
+            ("read_file", "/b.md", "another file"),
+            ("search_notes", "x", "3 matches"),
+            ("read_file", "/c.md", "more content"),
+            ("list_notes", "all", "10 notes"),
+            ("search_notes", "x", "no exact match"),
+            ("read_file", "/d.md", "even more text"),
+        ];
+        for (tool, args, result) in useful_calls.iter() {
+            let fired = t.record_and_check(tool, args, false, result);
+            assert!(
+                fired.is_none(),
+                "Useful non-error output must not trigger any unhealthy signal, got: {fired:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn regression_3118_silent_failure_never_reached_when_all_errors() {
+        // The pre-#3118 bug: all-error input would in theory satisfy
+        // successful_ops==0 but error_spiral (branch 2) fires first at step 3.
+        // Verify that the production code emits error_spiral, not silent_failure.
+        let mut t = SessionHealthTracker::new();
+        let mut fired_reason: Option<String> = None;
+        let error_calls = [
+            ("read_file", "/missing.md", "tool error: not found"),
+            ("read_file", "/missing.md", "tool error: not found"),
+            ("read_file", "/missing.md", "tool error: not found"),
+            ("search_notes", "x", "tool error: invalid"),
+            ("read_file", "/missing.md", "tool error: not found"),
+            ("list_notes", "all", "tool error: failed"),
+        ];
+        for (tool, args, result) in error_calls.iter() {
+            if let Some((reason, _suggestion)) = t.record_and_check(tool, args, true, result) {
+                fired_reason = Some(reason);
+                break;
+            }
+        }
+        let reason = fired_reason.expect("must fire on all-error input");
+        assert!(
+            reason.contains("consecutive tool errors"),
+            "All-error input must trigger error_spiral, not silent_failure. Got: {reason}"
+        );
+    }
+
+    #[test]
+    fn regression_3118_useful_threshold_boundary() {
+        // USEFUL_RESULT_MIN_CHARS is 5. Pin the boundary:
+        //   - 4-char non-error result  → NOT useful
+        //   - 5-char non-error result  → useful
+        //
+        // Distinct args (different file paths) so the repetition detector
+        // (branch 1) never fires.
+        let mut t = SessionHealthTracker::new();
+        // 6 calls where only ONE has length >= 5 → useful_ops = 1 → silent_failure NOT fired.
+        let calls = [
+            ("read_file", "/a.md", "abcd"),  // 4 chars → not useful
+            ("read_file", "/b.md", "abcd"),  // 4 chars → not useful
+            ("read_file", "/c.md", "abcd"),  // 4 chars → not useful
+            ("read_file", "/d.md", "abcde"), // 5 chars → useful
+            ("read_file", "/e.md", "abcd"),  // 4 chars → not useful
+            ("read_file", "/f.md", "abcd"),  // 4 chars → not useful
+        ];
+        for (tool, args, result) in calls.iter() {
+            let fired = t.record_and_check(tool, args, false, result);
+            assert!(
+                fired.is_none(),
+                "Boundary test: one 5-char result makes useful_ops=1 → silent_failure must NOT fire. Got: {fired:?}"
+            );
+        }
+        // Now verify the all-4-char case DOES fire silent_failure at step 6.
+        let mut t2 = SessionHealthTracker::new();
+        let mut fired = false;
+        let calls_all_short = [
+            ("read_file", "/a.md", "abcd"),
+            ("read_file", "/b.md", "abcd"),
+            ("read_file", "/c.md", "abcd"),
+            ("read_file", "/d.md", "abcd"),
+            ("read_file", "/e.md", "abcd"),
+            ("read_file", "/f.md", "abcd"),
+        ];
+        for (tool, args, result) in calls_all_short.iter() {
+            if t2.record_and_check(tool, args, false, result).is_some() {
+                fired = true;
+            }
+        }
+        assert!(
+            fired,
+            "6 non-error steps with all 4-char results must trigger silent_failure (#3118)"
+        );
     }
 }

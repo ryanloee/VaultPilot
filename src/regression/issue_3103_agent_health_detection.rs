@@ -152,24 +152,46 @@ mod tests {
 
     #[test]
     fn test_silent_failure_no_success_6_steps() {
-        // 6+ steps with zero successful operations → unhealthy
-        let successful_ops: u32 = 0;
+        // 6+ steps with zero *useful* operations → unhealthy (#3118 fix).
+        //
+        // The original #3103 test used all-error calls (is_error=true) with
+        // simplified inline logic that omitted the consecutive_errors>=3 guard.
+        // That made the test pass while production's silent_failure branch was
+        // actually unreachable (error_spiral fires at step 3 instead).
+        //
+        // #3118 introduces `useful_ops`: a result is "useful" only when it is
+        // non-error AND has trimmed length >= USEFUL_RESULT_MIN_CHARS (5).
+        // This test exercises the genuine silent_failure path — a sequence of
+        // "successful-but-empty" calls (e.g. agent keeps getting "ok" / "" back
+        // without making real progress).
+        const USEFUL_RESULT_MIN_CHARS: usize = 5;
+        let mut successful_ops: u32 = 0;
+        let mut useful_ops: u32 = 0;
         let mut total_steps: u32 = 0;
         let mut unhealthy = false;
 
+        // 6 non-error calls, all with trivial output — useful_ops stays at 0.
         let calls = [
-            ("read_file", "/missing.md", true),
-            ("read_file", "/missing.md", true),
-            ("search_notes", "nothing", true),
-            ("read_file", "/missing.md", true),
-            ("list_notes", "empty", true),
-            ("search_notes", "nope", true),
+            ("read_file", "/empty.md", false, "ok"),
+            ("read_file", "/empty.md", false, ""),
+            ("search_notes", "nothing", false, "[]"),
+            ("read_file", "/empty.md", false, "ok"),
+            ("list_notes", "empty", false, ""),
+            ("search_notes", "nope", false, "1"),
         ];
 
-        for &(_tool, _args, _is_error) in &calls {
+        for &(_tool, _args, is_error, result) in &calls {
             total_steps += 1;
-            // No success incrementing — everything fails
-            if successful_ops == 0 && total_steps >= 6 {
+            if is_error {
+                // not exercised in this test
+            } else {
+                successful_ops += 1;
+                if result.trim().len() >= USEFUL_RESULT_MIN_CHARS {
+                    useful_ops += 1;
+                }
+            }
+            // silent_failure branch (#3118): useful_ops == 0 after 6+ steps
+            if useful_ops == 0 && total_steps >= 6 {
                 unhealthy = true;
                 break;
             }
@@ -177,7 +199,133 @@ mod tests {
 
         assert!(
             unhealthy,
-            "6+ steps with zero successes should trigger silent failure"
+            "6+ steps with zero useful ops should trigger silent failure (#3118)"
+        );
+        // Sanity: every step was non-error, so successful_ops > 0. The fix
+        // makes silent_failure depend on useful_ops, not successful_ops.
+        assert_eq!(
+            successful_ops, 6,
+            "successful_ops should count all non-error results even when useful_ops stays 0"
+        );
+        assert_eq!(useful_ops, 0, "All trivial results → useful_ops must be 0");
+    }
+
+    #[test]
+    fn test_silent_failure_useful_results_no_trigger() {
+        // #3118 regression: 6+ steps with genuinely useful output should NOT
+        // trigger silent_failure. This case never fired before either, but
+        // the test now explicitly pins the corrected invariant.
+        const USEFUL_RESULT_MIN_CHARS: usize = 5;
+        let mut useful_ops: u32 = 0;
+        let mut total_steps: u32 = 0;
+        let mut unhealthy = false;
+
+        // 6 non-error calls with substantial output → useful_ops increments each step
+        let calls = [
+            ("read_file", "/a.md", false, "# Note A\n\ncontent here"),
+            ("read_file", "/b.md", false, "another file with content"),
+            ("search_notes", "rust", false, "found 3 matches: ..."),
+            ("read_file", "/c.md", false, "yet more substantive content"),
+            ("list_notes", "all", false, "10 notes returned"),
+            ("search_notes", "ok", false, "no exact matches"),
+        ];
+
+        for &(_tool, _args, is_error, result) in &calls {
+            total_steps += 1;
+            if !is_error && result.trim().len() >= USEFUL_RESULT_MIN_CHARS {
+                useful_ops += 1;
+            }
+            if useful_ops == 0 && total_steps >= 6 {
+                unhealthy = true;
+                break;
+            }
+        }
+
+        assert!(
+            !unhealthy,
+            "6+ steps with useful results must NOT trigger silent_failure (#3118)"
+        );
+        assert_eq!(
+            useful_ops, 6,
+            "Every non-trivial non-error result should increment useful_ops"
+        );
+    }
+
+    #[test]
+    fn test_silent_failure_unreachable_with_all_errors() {
+        // #3118 critical regression: with all-error input, silent_failure
+        // must NEVER fire because error_spiral (branch 2) fires first at step 3.
+        // The original #3103 test masked this by skipping the consecutive_errors
+        // guard in the inline logic. This test mirrors production exactly.
+        let mut recent: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        let mut consecutive_errors: u32 = 0;
+        let mut successful_ops: u32 = 0;
+        let mut useful_ops: u32 = 0;
+        let mut total_steps: u32 = 0;
+        let mut unhealthy_emitted = false;
+        let mut fired_reason: String = String::new();
+
+        // 6 all-error calls. Production should fire error_spiral at step 3
+        // and return None for all subsequent steps (unhealthy_emitted guard).
+        let calls = [
+            ("read_file", "/missing.md", true, "tool error: not found"),
+            ("read_file", "/missing.md", true, "tool error: not found"),
+            ("read_file", "/missing.md", true, "tool error: not found"),
+            ("search_notes", "nothing", true, "tool error: invalid"),
+            ("read_file", "/missing.md", true, "tool error: not found"),
+            ("list_notes", "empty", true, "tool error: failed"),
+        ];
+
+        for &(tool, args, is_error, result) in &calls {
+            if unhealthy_emitted {
+                // Production early-returns None once unhealthy fires.
+                continue;
+            }
+            total_steps += 1;
+            let _ = result;
+
+            // Branch 1: repetition (not exercised here)
+            let key = format!("{}::{}", tool, args);
+            let count = recent.entry(key.clone()).or_insert(0);
+            *count += 1;
+            if *count >= 4 {
+                unhealthy_emitted = true;
+                fired_reason = "repetition".to_string();
+                continue;
+            }
+            recent.retain(|k, _| k == &key);
+
+            // Branch 2: error spiral (THIS should fire at step 3)
+            if is_error {
+                consecutive_errors += 1;
+                if consecutive_errors >= 3 && successful_ops == 0 && total_steps >= 3 {
+                    unhealthy_emitted = true;
+                    fired_reason = "error_spiral".to_string();
+                    continue;
+                }
+            } else {
+                consecutive_errors = 0;
+                successful_ops += 1;
+                if result.trim().len() >= 5 {
+                    useful_ops += 1;
+                }
+            }
+
+            // Branch 3: silent_failure (must NEVER fire on this input)
+            if useful_ops == 0 && total_steps >= 6 {
+                unhealthy_emitted = true;
+                fired_reason = "silent_failure".to_string();
+                continue;
+            }
+        }
+
+        assert!(
+            unhealthy_emitted,
+            "All-error input must trigger some unhealthy signal"
+        );
+        assert_eq!(
+            fired_reason, "error_spiral",
+            "All-error input must fire error_spiral at step 3, NOT silent_failure later (#3118)"
         );
     }
 

@@ -56,6 +56,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = "8.6.0"
 cron = "0.17"
+feed-rs = "2.4"
 imap = "3.0.0-alpha.15"
 mailparse = "0.16"
 native-tls = "0.2"

@@ -14,6 +14,7 @@ use crate::models::{
 mod backup;
 mod chat;
 pub(crate) mod collections;
+pub mod feeds;
 pub(crate) mod flashcards;
 pub(crate) mod instant_search;
 pub(crate) mod notes;
@@ -107,6 +108,14 @@ pub use subscriptions::{
     set_subscription_enabled_with_context, update_subscription_async,
     update_subscription_next_run_with_context, update_subscription_run_with_context,
     update_subscription_with_context,
+};
+// Re-export feeds public API (#3041).
+pub use feeds::{
+    create_feed_async, create_feed_with_context, delete_feed_async, delete_feed_with_context,
+    export_opml, get_feed_async, get_feed_with_context, list_feeds_async, list_feeds_with_context,
+    opml_feeds_to_subscriptions, parse_opml, set_feed_enabled_async, set_feed_enabled_with_context,
+    update_feed_async, update_feed_fetch_result_async, update_feed_fetch_result_with_context,
+    update_feed_with_context,
 };
 // Re-export trigger_rules public API (#2984).
 pub use trigger_rules::{

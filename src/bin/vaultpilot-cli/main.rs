@@ -1,3 +1,4 @@
+mod feed_poller;
 mod http_bridge;
 mod markdown_utils;
 mod mcp_server;
@@ -502,6 +503,13 @@ enum Commands {
     Mail {
         #[command(subcommand)]
         action: MailActions,
+    },
+
+    /// Manage RSS/Atom/JSON Feed subscriptions — auto-ingest new entries as
+    /// vault notes, reusing the Web Clipper pipeline (#3041)
+    Feed {
+        #[command(subcommand)]
+        action: FeedActions,
     },
 
     /// People-aware context — index vault notes by person (#1807 Phase 1)
@@ -1537,6 +1545,79 @@ enum MailActions {
     },
 }
 
+/// Sub-commands for the `vp feed` command (#3041).
+#[derive(Subcommand)]
+enum FeedActions {
+    /// Add a new feed subscription
+    Add {
+        /// Feed URL (RSS/Atom/JSON)
+        url: String,
+        /// Human-readable title (auto-detected from feed if omitted)
+        #[arg(long)]
+        title: Option<String>,
+        /// Feed kind: rss | atom | json (auto-detected from URL if omitted)
+        #[arg(long)]
+        kind: Option<String>,
+        /// Target collection name for ingested notes
+        #[arg(long, default_value = "")]
+        collection: String,
+        /// Comma-separated default tags (appended to the automatic `rss`/`feed-title` tags)
+        #[arg(long, default_value = "")]
+        tags: String,
+        /// Polling interval in minutes
+        #[arg(long, default_value_t = 60)]
+        interval: i64,
+    },
+
+    /// List all feed subscriptions
+    List,
+
+    /// Remove a feed subscription by ID
+    Remove {
+        /// Feed ID
+        id: String,
+    },
+
+    /// Enable a feed by ID
+    Enable {
+        /// Feed ID
+        id: String,
+    },
+
+    /// Disable a feed by ID
+    Disable {
+        /// Feed ID
+        id: String,
+    },
+
+    /// Fetch all enabled feeds now and ingest new entries as vault notes
+    Refresh,
+
+    /// Import feeds from an OPML file (flat list; folders are descended)
+    ImportOpml {
+        /// Path to the OPML file
+        path: String,
+        /// Default collection for imported feeds
+        #[arg(long, default_value = "")]
+        collection: String,
+        /// Default tags for imported feeds
+        #[arg(long, default_value = "")]
+        tags: String,
+        /// Polling interval in minutes
+        #[arg(long, default_value_t = 60)]
+        interval: i64,
+    },
+
+    /// Export all feeds to an OPML file
+    ExportOpml {
+        /// Output OPML file path
+        path: String,
+        /// Document title
+        #[arg(long, default_value = "VaultPilot Feeds")]
+        title: String,
+    },
+}
+
 /// Sub-commands for the `vp people` command (#1807 Phase 1).
 #[derive(Subcommand)]
 enum PeopleActions {
@@ -2228,6 +2309,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             }
         }
         Commands::Mail { action } => handle_mail(context, action).await,
+        Commands::Feed { action } => handle_feed(context, action).await,
         Commands::People { action } => {
             tokio::task::block_in_place(|| handle_people(context, action))
         }
@@ -4766,6 +4848,137 @@ async fn handle_mail(context: &StorageContext, action: &MailActions) -> Result<V
             .await
             .map_err(|e| anyhow::anyhow!("sync task failed: {e}"))??;
             to_json(&result)
+        }
+    }
+}
+
+/// Handler for the `vp feed` subcommand (#3041).
+async fn handle_feed(context: &StorageContext, action: &FeedActions) -> Result<Value> {
+    match action {
+        FeedActions::Add {
+            url,
+            title,
+            kind,
+            collection,
+            tags,
+            interval,
+        } => {
+            let feed = vaultpilot_lib::storage::create_feed_with_context(
+                context,
+                url,
+                title.as_deref().unwrap_or(""),
+                kind.as_deref().unwrap_or(""),
+                collection,
+                tags,
+                *interval,
+            )?;
+            Ok(serde_json::json!({
+                "created": true,
+                "feed": {
+                    "id": feed.id,
+                    "title": feed.title,
+                    "url": feed.url,
+                    "kind": feed.kind,
+                    "collection": feed.collection,
+                    "tags": feed.tags,
+                    "intervalMinutes": feed.interval_minutes,
+                    "enabled": feed.enabled,
+                }
+            }))
+        }
+        FeedActions::List => {
+            let feeds = vaultpilot_lib::storage::list_feeds_with_context(context)?;
+            let count = feeds.len();
+            let feeds: Vec<_> = feeds
+                .into_iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "id": f.id,
+                        "title": f.title,
+                        "url": f.url,
+                        "kind": f.kind,
+                        "collection": f.collection,
+                        "tags": f.tags,
+                        "intervalMinutes": f.interval_minutes,
+                        "enabled": f.enabled,
+                        "lastFetchedAt": f.last_fetched_at,
+                        "lastStatus": f.last_status,
+                        "lastError": f.last_error,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({ "feeds": feeds, "count": count }))
+        }
+        FeedActions::Remove { id } => {
+            let deleted = vaultpilot_lib::storage::delete_feed_with_context(context, id)?;
+            Ok(serde_json::json!({ "deleted": deleted, "id": id }))
+        }
+        FeedActions::Enable { id } => {
+            let ok = vaultpilot_lib::storage::set_feed_enabled_with_context(context, id, true)?;
+            Ok(serde_json::json!({ "enabled": ok, "id": id }))
+        }
+        FeedActions::Disable { id } => {
+            let ok = vaultpilot_lib::storage::set_feed_enabled_with_context(context, id, false)?;
+            Ok(serde_json::json!({ "disabled": ok, "id": id }))
+        }
+        FeedActions::Refresh => {
+            // html_to_markdown lives in this binary crate (Web Clipper pipeline).
+            let converter: crate::feed_poller::MarkdownConverter =
+                crate::http_bridge::html_to_markdown;
+            let results = crate::feed_poller::poll_all_feeds(context, converter).await;
+            let total_new: usize = results.iter().map(|r| r.new_entries).sum();
+            let feeds: Vec<_> = results
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "feedId": r.feed_id,
+                        "status": r.status,
+                        "newEntries": r.new_entries,
+                        "error": r.error,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "refresh": true,
+                "totalNewEntries": total_new,
+                "feeds": feeds,
+            }))
+        }
+        FeedActions::ImportOpml {
+            path,
+            collection,
+            tags,
+            interval,
+        } => {
+            let content = std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read OPML file: {path}"))?;
+            let parsed = vaultpilot_lib::storage::parse_opml(&content)
+                .map_err(|e| anyhow::anyhow!("OPML parse error: {e}"))?;
+            let subs = vaultpilot_lib::storage::opml_feeds_to_subscriptions(
+                &parsed, collection, tags, *interval,
+            );
+            let mut created = 0usize;
+            for (url, title, kind, coll, tg, iv) in subs {
+                vaultpilot_lib::storage::create_feed_with_context(
+                    context, &url, &title, &kind, &coll, &tg, iv,
+                )?;
+                created += 1;
+            }
+            Ok(serde_json::json!({
+                "imported": created,
+                "total": parsed.len(),
+                "path": path,
+            }))
+        }
+        FeedActions::ExportOpml { path, title } => {
+            let feeds = vaultpilot_lib::storage::list_feeds_with_context(context)?;
+            let opml = vaultpilot_lib::storage::export_opml(title, &feeds);
+            std::fs::write(path, opml.as_bytes())
+                .with_context(|| format!("failed to write OPML file: {path}"))?;
+            Ok(serde_json::json!({
+                "exported": feeds.len(),
+                "path": path,
+            }))
         }
     }
 }

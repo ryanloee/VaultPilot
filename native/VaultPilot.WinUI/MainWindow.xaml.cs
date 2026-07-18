@@ -87,6 +87,7 @@ public sealed partial class MainWindow : Window
         DeleteSessionButton.Click += OnDeleteSessionClicked;
         NewSessionButton.Click += OnNewSessionClicked;
         ToggleSidebarButton.Click += OnToggleSidebarClicked;
+        ExpandSidebarButton.Click += OnExpandSidebarClicked;
         ChatScrollViewer.ViewChanged += OnChatScrollViewerViewChanged;
         JumpLatestButton.Click += OnJumpLatestClicked;
         RootGrid.SizeChanged += OnRootGridSizeChanged;
@@ -364,41 +365,49 @@ public sealed partial class MainWindow : Window
 
     private void OnToggleSidebarClicked(object sender, RoutedEventArgs e)
     {
-        SetSidebarCollapsed(!_sidebarCollapsed, autoCollapsed: false);
+        SetSidebarCollapsed(collapsed: true, autoCollapsed: false);
     }
 
-    private async void OnNavigationSelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    private void OnExpandSidebarClicked(object sender, RoutedEventArgs e)
+    {
+        SetSidebarCollapsed(collapsed: false, autoCollapsed: false);
+    }
+
+    private void OnActivityChatClicked(object sender, RoutedEventArgs e)
+    {
+        SwitchToChatView();
+    }
+
+    private void OnActivityNotesClicked(object sender, RoutedEventArgs e)
+    {
+        _ = SwitchToNotesViewAsync();
+    }
+
+    /// <summary>Shows the chat view, hides notes.</summary>
+    private void SwitchToChatView()
+    {
+        ChatView.Visibility = Visibility.Visible;
+        NotesViewHost.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>Shows the notes view, lazily initializing it on first use.</summary>
+    private async Task SwitchToNotesViewAsync()
     {
         try
         {
-            if (args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag)
+            ChatView.Visibility = Visibility.Collapsed;
+            NotesViewHost.Visibility = Visibility.Visible;
+            if (!_notesViewLoaded)
             {
-                return;
+                _notesView = new Views.NotesView(_backendClient);
+                NotesViewHost.Children.Add(_notesView);
+                _notesViewLoaded = true;
             }
-
-            switch (tag)
-            {
-                case "Chat":
-                    ChatView.Visibility = Visibility.Visible;
-                    NotesViewHost.Visibility = Visibility.Collapsed;
-                    break;
-
-                case "Notes":
-                    ChatView.Visibility = Visibility.Collapsed;
-                    NotesViewHost.Visibility = Visibility.Visible;
-                    if (!_notesViewLoaded)
-                    {
-                        _notesView = new Views.NotesView(_backendClient);
-                        NotesViewHost.Children.Add(_notesView);
-                        _notesViewLoaded = true;
-                    }
-                    await _notesView.RefreshNotesAsync();
-                    break;
-            }
+            await _notesView.RefreshNotesAsync();
         }
         catch (Exception error)
         {
-            Debug.WriteLine($"[OnNavigationSelectionChanged] Error: {error}");
+            Debug.WriteLine($"[SwitchToNotesViewAsync] Error: {error}");
         }
     }
 
@@ -421,9 +430,10 @@ public sealed partial class MainWindow : Window
         _sidebarCollapsed = collapsed;
         _sidebarAutoCollapsed = collapsed && autoCollapsed;
         SidebarBorder.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        SidebarColumn.Width = collapsed ? new GridLength(0) : new GridLength(280);
-        ContentGrid.ColumnSpacing = collapsed ? 0 : 16;
-        ToggleSidebarButton.Content = collapsed ? "展开会话" : "收起会话";
+        SidebarColumn.Width = collapsed ? new GridLength(0) : new GridLength(260);
+        // Toggle which sidebar affordance is visible:
+        // collapsed → show "expand" button in the top bar; expanded → show "collapse" inside the panel.
+        ExpandSidebarButton.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void EnforceMinimumWindowSize()
@@ -638,13 +648,13 @@ public sealed partial class MainWindow : Window
     private void OnNavChatAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        NavChat.IsSelected = true;
+        SwitchToChatView();
     }
 
     private void OnNavNotesAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        NavNotes.IsSelected = true;
+        _ = SwitchToNotesViewAsync();
     }
 
     #endregion
@@ -1341,7 +1351,7 @@ public sealed partial class MainWindow : Window
                 : noteTitleOrId; // fallback: treat as id directly
 
             // Navigate to the Notes view
-            NavNotes.IsSelected = true;
+            await SwitchToNotesViewAsync();
 
             // Give the UI a moment to load the NotesView, then select the note
             await Task.Delay(100);

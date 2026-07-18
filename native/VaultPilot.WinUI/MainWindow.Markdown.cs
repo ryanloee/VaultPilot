@@ -407,19 +407,31 @@ public sealed partial class MainWindow : Window
             FontFamily = new FontFamily("Cascadia Code"),
             Foreground = GetThemeBrush("CodeBlockForegroundBrush")
         };
+        // Horizontal-scroll wrapper so very long lines (long URLs, minified
+        // code, base64) that TextWrapping cannot break don't overflow and get
+        // clipped by the message bubble.
+        var codeScroll = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalScrollMode = ScrollMode.Enabled,
+            VerticalScrollMode = ScrollMode.Disabled,
+            Content = codeText
+        };
 
         return new Border
         {
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(12),
             Background = GetThemeBrush("CodeBlockBackgroundBrush"),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Child = new StackPanel
             {
                 Spacing = 8,
                 Children =
                 {
                     header,
-                    codeText
+                    codeScroll
                 }
             }
         };

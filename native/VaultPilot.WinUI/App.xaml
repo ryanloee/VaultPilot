@@ -113,7 +113,7 @@
             <Style x:Key="VaultAccentButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
                 <Setter Property="Background" Value="{ThemeResource VaultAccentBlue}" />
                 <Setter Property="BorderThickness" Value="0" />
-                <Setter Property="Foreground" Value="White" />
+                <Setter Property="Foreground" Value="{ThemeResource VaultOnAccentForeground}" />
                 <Setter Property="MinWidth" Value="0" />
                 <Setter Property="MinHeight" Value="0" />
                 <Setter Property="Padding" Value="0" />
@@ -212,106 +212,116 @@
             <!-- ═══════════ Theme-aware palette ═══════════ -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
-                    <!-- Design system: 3-layer hierarchy (Slate) -->
-                    <SolidColorBrush x:Key="VaultSurfaceBg" Color="#F8FAFC" />
+                    <!-- Design system: neutral grayscale (VS Code Light) -->
+                    <SolidColorBrush x:Key="VaultSurfaceBg" Color="#FFFFFF" />
                     <SolidColorBrush x:Key="VaultCardBg" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="VaultSidebarBg" Color="#F1F5F9" />
-                    <!-- Elevated card (ChatGPT-style floating surface) -->
-                    <SolidColorBrush x:Key="VaultCardElevatedBg" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="VaultBorder" Color="#E2E8F0" />
-                    <SolidColorBrush x:Key="VaultTextPrimary" Color="#1E293B" />
-                    <SolidColorBrush x:Key="VaultTextSecondary" Color="#64748B" />
-                    <SolidColorBrush x:Key="VaultTextMuted" Color="#94A3B8" />
+                    <SolidColorBrush x:Key="VaultSidebarBg" Color="#F3F3F3" />
+                    <!-- Elevated card (subtle shadow layer) -->
+                    <SolidColorBrush x:Key="VaultCardElevatedBg" Color="#FAFAFA" />
+                    <SolidColorBrush x:Key="VaultBorder" Color="#E5E5E5" />
+                    <SolidColorBrush x:Key="VaultTextPrimary" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="VaultTextSecondary" Color="#6B6B6B" />
+                    <SolidColorBrush x:Key="VaultTextMuted" Color="#9B9B9B" />
                     <!-- Message bubbles / cards -->
-                    <SolidColorBrush x:Key="VaultBubbleUserBg" Color="#3B82F6" />
+                    <SolidColorBrush x:Key="VaultBubbleUserBg" Color="#1E1E1E" />
                     <SolidColorBrush x:Key="VaultBubbleUserFg" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="VaultBubbleAiBg" Color="#F1F5F9" />
-                    <SolidColorBrush x:Key="VaultBubbleAiFg" Color="#1E293B" />
+                    <SolidColorBrush x:Key="VaultBubbleAiBg" Color="#F3F3F3" />
+                    <SolidColorBrush x:Key="VaultBubbleAiFg" Color="#1E1E1E" />
                     <!-- Avatars -->
-                    <SolidColorBrush x:Key="VaultAvatarUserBg" Color="#3B82F6" />
+                    <SolidColorBrush x:Key="VaultAvatarUserBg" Color="#1E1E1E" />
                     <SolidColorBrush x:Key="VaultAvatarUserFg" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="VaultAvatarAiBg" Color="#E2E8F0" />
-                    <SolidColorBrush x:Key="VaultAvatarAiFg" Color="#475569" />
+                    <SolidColorBrush x:Key="VaultAvatarAiBg" Color="#E5E5E5" />
+                    <SolidColorBrush x:Key="VaultAvatarAiFg" Color="#4B4B4B" />
                     <!-- Input area -->
                     <SolidColorBrush x:Key="VaultInputBg" Color="#FFFFFF" />
-                    <!-- Status accents -->
-                    <SolidColorBrush x:Key="VaultAccentBlue" Color="#3B82F6" />
-                    <SolidColorBrush x:Key="VaultAccentGreen" Color="#059669" />
-                    <SolidColorBrush x:Key="VaultAccentOrange" Color="#D97706" />
-                    <SolidColorBrush x:Key="VaultAccentRed" Color="#DC2626" />
+                    <!-- Foreground that sits on top of an accent-colored background -->
+                    <SolidColorBrush x:Key="VaultOnAccentForeground" Color="#FFFFFF" />
+                    <!-- Brand logo background (always high-contrast neutral) -->
+                    <SolidColorBrush x:Key="VaultLogoBg" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="VaultLogoFg" Color="#FFFFFF" />
+                    <!-- Status accents: monochrome (black accent for light theme) -->
+                    <SolidColorBrush x:Key="VaultAccentBlue" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="VaultAccentGreen" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="VaultAccentOrange" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="VaultAccentRed" Color="#C42B1C" />
                     <!-- Overlay (modal backdrop) -->
                     <SolidColorBrush x:Key="VaultOverlayBrush" Color="#66000000" />
                     <!-- Code blocks -->
-                    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#F1F5F9" />
-                    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#1E293B" />
-                    <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="#E2E8F0" />
-                    <SolidColorBrush x:Key="CodeInlineForegroundBrush" Color="#1E293B" />
+                    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#F3F3F3" />
+                    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="#E5E5E5" />
+                    <SolidColorBrush x:Key="CodeInlineForegroundBrush" Color="#1E1E1E" />
                     <!-- Context usage bar -->
-                    <SolidColorBrush x:Key="ContextUsageTrackBrush" Color="#E2E8F0" />
-                    <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#3B82F6" />
+                    <SolidColorBrush x:Key="ContextUsageTrackBrush" Color="#E5E5E5" />
+                    <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#1E1E1E" />
                     <!-- Attachments -->
-                    <SolidColorBrush x:Key="AttachmentDotBrush" Color="#059669" />
-                    <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#E2E8F0" />
+                    <SolidColorBrush x:Key="AttachmentDotBrush" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#E5E5E5" />
                     <!-- Status bar -->
-                    <SolidColorBrush x:Key="StatusBarIconBrush" Color="#3B82F6" />
-                    <SolidColorBrush x:Key="StatusErrorBrush" Color="#DC2626" />
-                    <SolidColorBrush x:Key="StatusWarningBrush" Color="#D97706" />
-                    <SolidColorBrush x:Key="StatusSuccessBrush" Color="#059669" />
-                    <SolidColorBrush x:Key="StatusInfoBrush" Color="#3B82F6" />
+                    <SolidColorBrush x:Key="StatusBarIconBrush" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="StatusErrorBrush" Color="#C42B1C" />
+                    <SolidColorBrush x:Key="StatusWarningBrush" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="StatusSuccessBrush" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="StatusInfoBrush" Color="#1E1E1E" />
                     <!-- Legacy aliases (kept for code-behind GetThemeBrush calls) -->
                     <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#66000000" />
-                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#64748B" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#6B6B6B" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
-                    <!-- Design system: 3-layer hierarchy (Slate, deep) -->
-                    <SolidColorBrush x:Key="VaultSurfaceBg" Color="#0F172A" />
-                    <SolidColorBrush x:Key="VaultCardBg" Color="#1E293B" />
-                    <SolidColorBrush x:Key="VaultSidebarBg" Color="#1A2332" />
+                    <!-- Design system: neutral grayscale (VS Code Dark+) -->
+                    <SolidColorBrush x:Key="VaultSurfaceBg" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="VaultCardBg" Color="#252526" />
+                    <SolidColorBrush x:Key="VaultSidebarBg" Color="#252526" />
                     <!-- Elevated card (one step brighter than CardBg for depth) -->
-                    <SolidColorBrush x:Key="VaultCardElevatedBg" Color="#273449" />
-                    <SolidColorBrush x:Key="VaultBorder" Color="#334155" />
-                    <SolidColorBrush x:Key="VaultTextPrimary" Color="#F1F5F9" />
-                    <SolidColorBrush x:Key="VaultTextSecondary" Color="#94A3B8" />
-                    <SolidColorBrush x:Key="VaultTextMuted" Color="#64748B" />
+                    <SolidColorBrush x:Key="VaultCardElevatedBg" Color="#2D2D2D" />
+                    <SolidColorBrush x:Key="VaultBorder" Color="#3C3C3C" />
+                    <SolidColorBrush x:Key="VaultTextPrimary" Color="#CCCCCC" />
+                    <SolidColorBrush x:Key="VaultTextSecondary" Color="#969696" />
+                    <SolidColorBrush x:Key="VaultTextMuted" Color="#6A6A6A" />
                     <!-- Message bubbles / cards -->
-                    <SolidColorBrush x:Key="VaultBubbleUserBg" Color="#2563EB" />
+                    <SolidColorBrush x:Key="VaultBubbleUserBg" Color="#3C3C3C" />
                     <SolidColorBrush x:Key="VaultBubbleUserFg" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="VaultBubbleAiBg" Color="#273449" />
-                    <SolidColorBrush x:Key="VaultBubbleAiFg" Color="#F1F5F9" />
+                    <SolidColorBrush x:Key="VaultBubbleAiBg" Color="#2D2D2D" />
+                    <SolidColorBrush x:Key="VaultBubbleAiFg" Color="#CCCCCC" />
                     <!-- Avatars -->
-                    <SolidColorBrush x:Key="VaultAvatarUserBg" Color="#3B82F6" />
-                    <SolidColorBrush x:Key="VaultAvatarUserFg" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="VaultAvatarAiBg" Color="#334155" />
-                    <SolidColorBrush x:Key="VaultAvatarAiFg" Color="#CBD5E1" />
+                    <SolidColorBrush x:Key="VaultAvatarUserBg" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="VaultAvatarUserFg" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="VaultAvatarAiBg" Color="#3C3C3C" />
+                    <SolidColorBrush x:Key="VaultAvatarAiFg" Color="#CCCCCC" />
                     <!-- Input area -->
-                    <SolidColorBrush x:Key="VaultInputBg" Color="#1E293B" />
-                    <!-- Status accents -->
-                    <SolidColorBrush x:Key="VaultAccentBlue" Color="#60A5FA" />
-                    <SolidColorBrush x:Key="VaultAccentGreen" Color="#34D399" />
-                    <SolidColorBrush x:Key="VaultAccentOrange" Color="#FBBF24" />
-                    <SolidColorBrush x:Key="VaultAccentRed" Color="#F87171" />
+                    <SolidColorBrush x:Key="VaultInputBg" Color="#252526" />
+                    <!-- Foreground that sits on top of an accent-colored background -->
+                    <SolidColorBrush x:Key="VaultOnAccentForeground" Color="#1E1E1E" />
+                    <!-- Brand logo background (always high-contrast neutral) -->
+                    <SolidColorBrush x:Key="VaultLogoBg" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="VaultLogoFg" Color="#1E1E1E" />
+                    <!-- Status accents: monochrome (white accent for dark theme) -->
+                    <SolidColorBrush x:Key="VaultAccentBlue" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="VaultAccentGreen" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="VaultAccentOrange" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="VaultAccentRed" Color="#F48771" />
                     <!-- Overlay (modal backdrop) -->
                     <SolidColorBrush x:Key="VaultOverlayBrush" Color="#99000000" />
                     <!-- Code blocks -->
-                    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#0F172A" />
-                    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#F1F5F9" />
-                    <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="#273449" />
-                    <SolidColorBrush x:Key="CodeInlineForegroundBrush" Color="#F1F5F9" />
+                    <SolidColorBrush x:Key="CodeBlockBackgroundBrush" Color="#1E1E1E" />
+                    <SolidColorBrush x:Key="CodeBlockForegroundBrush" Color="#CCCCCC" />
+                    <SolidColorBrush x:Key="CodeInlineBackgroundBrush" Color="#2D2D2D" />
+                    <SolidColorBrush x:Key="CodeInlineForegroundBrush" Color="#CCCCCC" />
                     <!-- Context usage bar -->
-                    <SolidColorBrush x:Key="ContextUsageTrackBrush" Color="#334155" />
-                    <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#60A5FA" />
+                    <SolidColorBrush x:Key="ContextUsageTrackBrush" Color="#3C3C3C" />
+                    <SolidColorBrush x:Key="ContextUsageFillBrush" Color="#FFFFFF" />
                     <!-- Attachments -->
-                    <SolidColorBrush x:Key="AttachmentDotBrush" Color="#34D399" />
-                    <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#334155" />
+                    <SolidColorBrush x:Key="AttachmentDotBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="AttachmentBorderBrush" Color="#3C3C3C" />
                     <!-- Status bar -->
-                    <SolidColorBrush x:Key="StatusBarIconBrush" Color="#60A5FA" />
-                    <SolidColorBrush x:Key="StatusErrorBrush" Color="#F87171" />
-                    <SolidColorBrush x:Key="StatusWarningBrush" Color="#FBBF24" />
-                    <SolidColorBrush x:Key="StatusSuccessBrush" Color="#34D399" />
-                    <SolidColorBrush x:Key="StatusInfoBrush" Color="#60A5FA" />
+                    <SolidColorBrush x:Key="StatusBarIconBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="StatusErrorBrush" Color="#F48771" />
+                    <SolidColorBrush x:Key="StatusWarningBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="StatusSuccessBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="StatusInfoBrush" Color="#FFFFFF" />
                     <!-- Legacy aliases (kept for code-behind GetThemeBrush calls) -->
                     <SolidColorBrush x:Key="OverlayBackgroundBrush" Color="#99000000" />
-                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#94A3B8" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#969696" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
                     <SolidColorBrush x:Key="VaultSurfaceBg" Color="{ThemeResource SystemColorWindowColor}" />
@@ -331,6 +341,9 @@
                     <SolidColorBrush x:Key="VaultAvatarAiBg" Color="{ThemeResource SystemColorButtonFaceColor}" />
                     <SolidColorBrush x:Key="VaultAvatarAiFg" Color="{ThemeResource SystemColorButtonTextColor}" />
                     <SolidColorBrush x:Key="VaultInputBg" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <SolidColorBrush x:Key="VaultOnAccentForeground" Color="{ThemeResource SystemColorHighlightTextColor}" />
+                    <SolidColorBrush x:Key="VaultLogoBg" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="VaultLogoFg" Color="{ThemeResource SystemColorHighlightTextColor}" />
                     <SolidColorBrush x:Key="VaultAccentBlue" Color="{ThemeResource SystemColorHighlightColor}" />
                     <SolidColorBrush x:Key="VaultAccentGreen" Color="{ThemeResource SystemColorHighlightColor}" />
                     <SolidColorBrush x:Key="VaultAccentOrange" Color="{ThemeResource SystemColorHighlightColor}" />

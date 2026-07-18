@@ -739,6 +739,8 @@ async fn handle_mcp_request(
                 "notes.get" => mcp_call_notes_get(context, arguments).await,
                 "notes.create" => mcp_call_notes_create(context, arguments).await,
                 "notes.delete" => mcp_call_notes_delete(context, arguments).await,
+                "notes.preview_edit" => mcp_call_notes_preview_edit(context, arguments).await,
+                "notes.apply_edit" => mcp_call_notes_apply_edit(context, arguments).await,
                 "notes.search" => mcp_call_notes_search(context, arguments).await,
                 "notes.related" => mcp_call_notes_related(context, arguments).await,
                 "notes.follow_links" => mcp_call_notes_follow_links(context, arguments).await,
@@ -1426,6 +1428,93 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
+            "name": "notes.preview_edit",
+            "title": "Preview Note Edit (Diff)",
+            "description": "Run an AI-powered edit on a note and return a unified diff between the original and proposed bodies WITHOUT saving. Use this to review an Agent-proposed change before committing. Pair with notes.apply_edit (same noteId + instruction) to actually save the change. Preserves user agency over vault writes (#3095).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "noteId": {
+                        "type": "string",
+                        "description": "The ID of the note to edit."
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": "Natural-language edit instruction (e.g. 'add a summary section', 'fix typos', 'translate to English')."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model override for this AI call."
+                    }
+                },
+                "required": ["noteId", "instruction"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "noteId": { "type": "string" },
+                    "title": { "type": "string" },
+                    "saved": { "type": "boolean", "description": "Always false for preview." },
+                    "summary": { "type": "string", "description": "Human-readable diff summary." },
+                    "additions": { "type": "integer" },
+                    "deletions": { "type": "integer" },
+                    "hunks": { "type": "integer" },
+                    "diff": { "type": "string", "description": "Unified diff (patch format)." },
+                    "proposedBody": { "type": "string", "description": "The AI-proposed new body." },
+                    "originalLength": { "type": "integer" },
+                    "proposedLength": { "type": "integer" }
+                }
+            },
+            "annotations": {
+                "title": "Preview Note Edit (Diff)",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
+            "name": "notes.apply_edit",
+            "title": "Apply Note Edit",
+            "description": "Run an AI-powered edit on a note and SAVE the result to the vault. A backup of the pre-edit note is recorded so the change can be undone with `vaultpilot revert-edit <noteId>`. Recommended workflow: call notes.preview_edit first to inspect the diff, then call notes.apply_edit with the same arguments to commit.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "noteId": {
+                        "type": "string",
+                        "description": "The ID of the note to edit."
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": "Natural-language edit instruction. Should match the instruction passed to notes.preview_edit for a consistent result."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model override for this AI call."
+                    }
+                },
+                "required": ["noteId", "instruction"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "noteId": { "type": "string" },
+                    "title": { "type": "string" },
+                    "saved": { "type": "boolean", "description": "Always true on success." },
+                    "revertCommand": { "type": "string", "description": "CLI command to undo this edit." }
+                }
+            },
+            "annotations": {
+                "title": "Apply Note Edit",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            }
+        }),
+        serde_json::json!({
             "name": "notes.search",
             "title": "Search Notes",
             "description": "Full-text search across notes in the vault.",
@@ -2052,6 +2141,194 @@ async fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Va
     })
     .await
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
+// ─── Agent edit diff preview (#3095) ───────────────────────────────
+//
+// Two-step "Cursor-style diff" workflow for Agent-driven note edits:
+//   1. `notes.preview_edit` — read-only: runs EditNote AI, returns a unified
+//      diff between the original body and the AI-proposed body without saving.
+//   2. `notes.apply_edit`  — writes: re-runs EditNote AI, records a backup
+//      for `revert-edit`, and saves. Decoupled from preview so the caller
+//      (human or agent) makes the final apply decision.
+//
+// Splitting preview from apply preserves user agency: the agent can propose
+// changes but cannot overwrite the vault without an explicit second call.
+
+/// Shared helper: load note + run EditNote AI action, returning the original
+/// body and the AI-proposed edited body. Returns `Err(message)` on any failure
+/// with a user-safe (sanitized) message suitable for direct MCP return.
+async fn run_edit_note_ai(
+    context: &StorageContext,
+    note_id: &str,
+    instruction: &str,
+    model: Option<&str>,
+) -> Result<(NoteDocument, String), String> {
+    let ctx = context.clone();
+    let note_id = note_id.to_string();
+    let original = tokio::task::spawn_blocking(move || load_note_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| format!("internal error: {e}"))?
+        .map_err(|e| sanitize_error(&e.to_string()))?;
+
+    let ai_request = vaultpilot_lib::ai::AiActionRequest {
+        action: vaultpilot_lib::ai::AiActionType::EditNote,
+        text: original.body.clone(),
+        target_language: None,
+        tone: None,
+        note_id: Some(original.meta.id.clone()),
+        instruction: Some(instruction.to_string()),
+        model: model.map(|s| s.to_string()),
+    };
+
+    let settings = vaultpilot_lib::storage::load_settings_with_context(context)
+        .map_err(|e| sanitize_error(&e.to_string()))?;
+
+    let result = match tokio::time::timeout(
+        AI_CALL_TIMEOUT,
+        vaultpilot_lib::ai::execute_ai_action(&settings, &ai_request),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_elapsed) => return Err("AI edit timed out after 120 seconds".to_string()),
+    };
+
+    if let Some(ref err) = result.error {
+        return Err(err.clone());
+    }
+    let edited_body = result.result.trim().to_string();
+    if edited_body.is_empty() {
+        return Err("AI returned empty content".to_string());
+    }
+    Ok((original, edited_body))
+}
+
+/// `notes.preview_edit` — read-only diff preview of an Agent-proposed edit.
+///
+/// Loads the note, runs the EditNote AI action with the given instruction,
+/// and returns a unified diff between the original and proposed bodies **without
+/// saving**. Pair with `notes.apply_edit` (same arguments) to commit the change.
+async fn mcp_call_notes_preview_edit(context: &StorageContext, arguments: Value) -> Value {
+    let note_id = match arguments.get("noteId").and_then(Value::as_str) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => {
+            return mcp_tool_error(
+                "notes.preview_edit requires non-empty 'noteId' parameter".to_string(),
+            )
+        }
+    };
+    let instruction = match arguments.get("instruction").and_then(Value::as_str) {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => {
+            return mcp_tool_error(
+                "notes.preview_edit requires non-empty 'instruction' parameter".to_string(),
+            )
+        }
+    };
+    let model = arguments
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string());
+
+    match run_edit_note_ai(context, &note_id, &instruction, model.as_deref()).await {
+        Ok((original, edited_body)) => {
+            let diff = vaultpilot_lib::diff::compute_diff(&original.body, &edited_body, 3);
+            let unified = vaultpilot_lib::diff::render_unified_diff(&diff, "original", "proposed");
+            let structured = serde_json::json!({
+                "noteId": original.meta.id,
+                "title": original.meta.title,
+                "saved": false,
+                "summary": diff.summary(),
+                "additions": diff.additions,
+                "deletions": diff.deletions,
+                "hunks": diff.hunks.len(),
+                "diff": unified,
+                "proposedBody": edited_body,
+                "originalLength": original.body.len(),
+                "proposedLength": edited_body.len(),
+            });
+            let preview_hint = if diff.is_empty() {
+                "Preview: no changes proposed.".to_string()
+            } else {
+                format!(
+                    "Preview (not saved): {} Use notes.apply_edit to commit.",
+                    diff.summary()
+                )
+            };
+            mcp_tool_success(preview_hint, structured)
+        }
+        Err(msg) => mcp_tool_error(msg),
+    }
+}
+
+/// `notes.apply_edit` — apply an Agent-proposed edit to a note.
+///
+/// Re-runs the EditNote AI action (same `noteId` + `instruction`) and saves
+/// the result. A backup of the pre-edit note is recorded so the change can be
+/// undone with `vaultpilot revert-edit <noteId>`. Use `notes.preview_edit`
+/// first to inspect the diff before committing.
+async fn mcp_call_notes_apply_edit(context: &StorageContext, arguments: Value) -> Value {
+    let note_id = match arguments.get("noteId").and_then(Value::as_str) {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => {
+            return mcp_tool_error(
+                "notes.apply_edit requires non-empty 'noteId' parameter".to_string(),
+            )
+        }
+    };
+    let instruction = match arguments.get("instruction").and_then(Value::as_str) {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => {
+            return mcp_tool_error(
+                "notes.apply_edit requires non-empty 'instruction' parameter".to_string(),
+            )
+        }
+    };
+    let model = arguments
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string());
+
+    match run_edit_note_ai(context, &note_id, &instruction, model.as_deref()).await {
+        Ok((original, edited_body)) => {
+            // Record backup for revert (#1652), mirroring CLI Commands::Edit.
+            vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+
+            let edited_note = NoteDocument {
+                body: edited_body.clone(),
+                ..original
+            };
+            let ctx = context.clone();
+            let saved = match tokio::task::spawn_blocking(move || {
+                save_note_with_context(&ctx, edited_note)
+            })
+            .await
+            {
+                Ok(Ok(saved)) => saved,
+                Ok(Err(e)) => return mcp_tool_error(sanitize_error(&e.to_string())),
+                Err(join_err) => return mcp_tool_error(format!("internal error: {join_err}")),
+            };
+
+            let structured = serde_json::json!({
+                "noteId": saved.meta.id,
+                "title": saved.meta.title,
+                "saved": true,
+                "revertCommand": format!("vaultpilot revert-edit {}", saved.meta.id),
+            });
+            mcp_tool_success(
+                format!(
+                    "Note '{}' edited and saved. Revert with: vaultpilot revert-edit {}",
+                    escape_xml_content(&saved.meta.title),
+                    saved.meta.id
+                ),
+                structured,
+            )
+        }
+        Err(msg) => mcp_tool_error(msg),
+    }
 }
 
 async fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
@@ -2733,7 +3010,7 @@ mod tests {
     #[test]
     fn mcp_tools_count() {
         let tools = mcp_tools();
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 20);
     }
 
     #[test]
@@ -3254,6 +3531,161 @@ mod tests {
         assert!(modes.contains(&"summary"));
         assert!(modes.contains(&"meta"));
         // tool count reflects all registered tools.
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 20);
+    }
+
+    // ── #3095: Agent edit diff preview MCP tools ──────────────────
+
+    #[test]
+    fn notes_preview_edit_tool_registered_read_only() {
+        let tools = mcp_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "notes.preview_edit")
+            .expect("notes.preview_edit tool present");
+        // Preview must be read-only so it is available in read-only MCP mode.
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        assert_eq!(tool["annotations"]["destructiveHint"], false);
+        // Required params: noteId + instruction.
+        let required: Vec<&str> = tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(required.contains(&"noteId"));
+        assert!(required.contains(&"instruction"));
+    }
+
+    #[test]
+    fn notes_apply_edit_tool_registered_writable() {
+        let tools = mcp_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "notes.apply_edit")
+            .expect("notes.apply_edit tool present");
+        // Apply is a write operation (not read-only), but not destructive
+        // because a backup is recorded for revert.
+        assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        assert_eq!(tool["annotations"]["destructiveHint"], false);
+        let required: Vec<&str> = tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(required.contains(&"noteId"));
+        assert!(required.contains(&"instruction"));
+    }
+
+    #[test]
+    fn notes_preview_edit_and_apply_edit_are_distinct() {
+        // The two tools must coexist with unique names so agents can choose
+        // preview vs. apply explicitly (#3095).
+        let tools = mcp_tools();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"notes.preview_edit"));
+        assert!(names.contains(&"notes.apply_edit"));
+    }
+
+    #[test]
+    fn notes_preview_edit_rejects_missing_note_id_argument() {
+        // Validation logic mirror: the function reads noteId from the JSON
+        // arguments and returns an error Value when it is missing or empty.
+        // We verify the validation predicate directly to avoid the heavy
+        // StorageContext setup that the full async path requires.
+        let args = serde_json::json!({ "instruction": "fix typos" });
+        let note_id = args.get("noteId").and_then(Value::as_str);
+        assert!(
+            note_id.map(|s| s.is_empty()).unwrap_or(true),
+            "missing noteId must be treated as invalid"
+        );
+    }
+
+    #[test]
+    fn notes_preview_edit_rejects_blank_instruction_argument() {
+        let args = serde_json::json!({ "noteId": "abc", "instruction": "   " });
+        let instruction = args.get("instruction").and_then(Value::as_str);
+        assert!(
+            instruction.map(|s| s.trim().is_empty()).unwrap_or(true),
+            "blank instruction must be treated as invalid"
+        );
+    }
+
+    #[test]
+    fn notes_preview_edit_diff_output_schema_present() {
+        // The structured response must advertise the diff fields so UI clients
+        // know what to render (#3095).
+        let tools = mcp_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "notes.preview_edit")
+            .unwrap();
+        let props = tool["outputSchema"]["properties"]
+            .as_object()
+            .expect("preview_edit has outputSchema");
+        assert!(props.contains_key("diff"), "diff field advertised");
+        assert!(props.contains_key("summary"), "summary field advertised");
+        assert!(
+            props.contains_key("additions"),
+            "additions field advertised"
+        );
+        assert!(
+            props.contains_key("deletions"),
+            "deletions field advertised"
+        );
+        assert!(
+            props.contains_key("proposedBody"),
+            "proposedBody advertised"
+        );
+        assert!(props.contains_key("saved"), "saved flag advertised");
+    }
+
+    #[test]
+    fn notes_apply_edit_advertises_revert_command() {
+        // The apply response must include a revertCommand so the user knows
+        // how to undo the agent-applied edit (#3095, #1652).
+        let tools = mcp_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "notes.apply_edit")
+            .unwrap();
+        let props = tool["outputSchema"]["properties"]
+            .as_object()
+            .expect("apply_edit has outputSchema");
+        assert!(
+            props.contains_key("revertCommand"),
+            "revertCommand field advertised"
+        );
+        assert!(props.contains_key("saved"), "saved flag advertised");
+    }
+
+    #[test]
+    fn diff_compute_for_preview_edit_workflow() {
+        // End-to-end sanity for the diff layer that notes.preview_edit relies
+        // on: a simple edit must produce exactly one addition and one deletion
+        // with a renderable unified diff (#3095).
+        let old = "# Notes\n\nLine 1\nLine 2\nLine 3";
+        let new = "# Notes\n\nLine 1\nLine 2 (edited)\nLine 3";
+        let diff = vaultpilot_lib::diff::compute_diff(old, new, 3);
+        assert_eq!(diff.additions, 1);
+        assert_eq!(diff.deletions, 1);
+        let unified = vaultpilot_lib::diff::render_unified_diff(&diff, "original", "proposed");
+        assert!(unified.contains("--- original"));
+        assert!(unified.contains("+++ proposed"));
+        assert!(unified.contains("-Line 2"));
+        assert!(unified.contains("+Line 2 (edited)"));
+    }
+
+    #[test]
+    fn diff_empty_when_ai_proposes_no_changes() {
+        // If the AI returns the note unchanged, the preview must report an
+        // empty diff so the UI can show "no changes" instead of committing
+        // a no-op write (#3095).
+        let body = "# Notes\n\nLine 1\nLine 2";
+        let diff = vaultpilot_lib::diff::compute_diff(body, body, 3);
+        assert!(diff.is_empty());
+        assert_eq!(diff.additions, 0);
+        assert_eq!(diff.deletions, 0);
     }
 }

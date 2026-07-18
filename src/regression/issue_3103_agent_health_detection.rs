@@ -29,7 +29,7 @@ mod tests {
         let mut recent = std::collections::HashMap::<String, u32>::new();
         let mut unhealthy = false;
 
-        for (i, &(tool, args, _is_error)) in calls.iter().enumerate() {
+        for &(tool, args, _is_error) in calls.iter() {
             let key = format!("{}::{}", tool, args);
             let count = recent.entry(key.clone()).or_insert(0);
             *count += 1;
@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn test_silent_failure_no_success_6_steps() {
         // 6+ steps with zero successful operations → unhealthy
-        let mut successful_ops: u32 = 0;
+        let successful_ops: u32 = 0;
         let mut total_steps: u32 = 0;
         let mut unhealthy = false;
 
@@ -184,26 +184,14 @@ mod tests {
     #[test]
     fn test_below_threshold_no_false_positive() {
         // Only 2 steps, no errors — should be fine
-        let mut consecutive_errors: u32 = 0;
-        let mut successful_ops: u32 = 0;
-        let mut total_steps: u32 = 0;
-        let mut unhealthy = false;
+        let unhealthy = false;
 
-        let calls = [
+        let _calls = [
             ("read_file", "/notes/A.md", false),
             ("read_file", "/notes/B.md", false),
         ];
 
-        for &(_tool, _args, is_error) in &calls {
-            total_steps += 1;
-            if is_error {
-                consecutive_errors += 1;
-            } else {
-                consecutive_errors = 0;
-                successful_ops += 1;
-            }
-        }
-
+        // Below threshold patterns should not trigger unhealthy
         assert!(
             !unhealthy,
             "Low step count with successes should NOT trigger"

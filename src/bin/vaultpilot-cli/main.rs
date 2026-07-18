@@ -8658,11 +8658,15 @@ complete -F _vp_skill_saved_completions vp
                 r#"
 # Dynamic completion for 'vp skill-saved' — queries saved skills from the DB.
 _vp_skill_saved_completions() {{
-    local -a skill_ids
-    skill_ids=(${{(@f)"$(vp skill-saved list 2>/dev/null | \
-        sed -n '/"id"/s/.*"id": *"\([^"]*\)".*/\1/p')"}})
-    _describe 'skill' skill_ids
-}}
+    case "$words[2]" in
+        run|show|delete|enable|disable)
+            local -a skill_ids
+            skill_ids=(${{(@f)"$(vp skill-saved list 2>/dev/null | \
+                sed -n '/"id"/s/.*"id": *"\\([^"]*\\)".*/\1/p')"}})
+            _describe 'skill' skill_ids
+            ;;
+    esac
+}}"
 "#
             );
         }

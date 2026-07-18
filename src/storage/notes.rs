@@ -66,6 +66,9 @@ pub fn save_note_with_images_with_context(
     let now = Utc::now().to_rfc3339();
     let title = fallback_title(&note.meta.title);
     let is_new = note.meta.id.trim().is_empty();
+    // Tracks whether source-based dedup matched an existing note, so we can
+    // preserve the original created_at (#3084).
+    let mut source_dedup_original_created_at: Option<String> = None;
     let id = if is_new {
         // ── Source-based dedup: if the caller provides a non-empty source
         //    (e.g. feed entry link), look for an existing note with the same
@@ -80,6 +83,17 @@ pub fn save_note_with_images_with_context(
                 )
                 .optional()?;
             if let Some(existing_id) = existing {
+                // Preserve the original created_at when dedup resolves to an
+                // existing note, so re-polling a feed entry doesn't reset its
+                // creation date to "now". (#3084)
+                source_dedup_original_created_at = connection
+                    .query_row(
+                        "SELECT created_at FROM notes WHERE id = ?1",
+                        params![existing_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .and_then(|s: String| if s.trim().is_empty() { None } else { Some(s) });
                 existing_id
             } else {
                 Uuid::new_v4().to_string()
@@ -112,7 +126,11 @@ pub fn save_note_with_images_with_context(
         super::snapshots::record_snapshot_before_save(context, &id, "agent")?;
     }
 
-    let created_at = if note.meta.created_at.trim().is_empty() {
+    let created_at = if let Some(ref preserved) = source_dedup_original_created_at {
+        // Preserve original created_at when source-based dedup resolved to
+        // an existing note, so re-polling doesn't reset the creation date (#3084)
+        preserved.clone()
+    } else if note.meta.created_at.trim().is_empty() {
         now.clone()
     } else {
         note.meta.created_at.clone()

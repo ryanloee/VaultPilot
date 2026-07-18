@@ -49,4 +49,6 @@ mod issue_2946_user_skills;
 mod issue_2953_single_backflow_entry;
 mod issue_3077_feed_dedup;
 mod issue_3078_changelog;
+mod issue_3083_changelog_limit;
+mod issue_3084_feed_dedup_preserve_created_at;
 mod issue_914_related_notes;

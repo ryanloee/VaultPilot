@@ -6653,12 +6653,12 @@ async fn handle_changelog(
             }
         }
     } else {
-        let query = SearchQuery {
-            modified_after: Some(since),
-            limit: Some(2000),
-            ..Default::default()
-        };
-        search_notes_with_context(context, query)?.notes
+        // Use pagination-free list_all_notes_with_context + in-memory filter,
+        // consistent with the collection path above. (#3083)
+        list_all_notes_with_context(context)?
+            .into_iter()
+            .filter(|n| n.updated_at >= since)
+            .collect()
     };
 
     if notes.is_empty() {

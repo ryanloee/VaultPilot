@@ -487,6 +487,22 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_trigger_executions_rule_id ON trigger_executions(rule_id);
         CREATE INDEX IF NOT EXISTS idx_trigger_executions_fired_at ON trigger_executions(fired_at);
+
+        -- Saved Skills: user-defined reusable AI command library (#3068).
+        -- Distinct from trigger_rules: a skill is summoned actively by the user
+        -- in the foreground (e.g. /skill-name), not fired automatically.
+        CREATE TABLE IF NOT EXISTS skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            prompt TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);
+        CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
         "#,
     )?;
 

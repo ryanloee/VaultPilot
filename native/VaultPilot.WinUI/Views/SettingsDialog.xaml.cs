@@ -33,6 +33,13 @@ public sealed partial class SettingsDialog : ContentDialog
     public AppSettings? UpdatedSettings { get; private set; }
 
     /// <summary>
+    /// The theme selected in the dialog. Set after a successful save; defaults
+    /// to <see cref="ElementTheme.Default"/> (follow system) before that.
+    /// MainWindow reads this to apply the theme immediately.
+    /// </summary>
+    public ElementTheme ThemeMode { get; private set; } = ElementTheme.Default;
+
+    /// <summary>
     /// Creates a new settings dialog.
     /// </summary>
     /// <param name="settings">Current application settings to populate the dialog.</param>
@@ -128,6 +135,22 @@ public sealed partial class SettingsDialog : ContentDialog
 
         // Footer
         VersionLabel.Text = versionText;
+
+        // Theme selector — persisted client-side (ThemePreferences), independent
+        // of the backend AppSettings so it can ship without a schema change.
+        var theme = ThemePreferences.Load();
+        switch (theme)
+        {
+            case ElementTheme.Light:
+                ThemeLight.IsChecked = true;
+                break;
+            case ElementTheme.Dark:
+                ThemeDark.IsChecked = true;
+                break;
+            default:
+                ThemeSystem.IsChecked = true;
+                break;
+        }
     }
 
     private void LoadProviderFields(ProviderConfig p)
@@ -539,6 +562,15 @@ public sealed partial class SettingsDialog : ContentDialog
                 AutoWakePromptBox.Text?.Trim() ?? string.Empty,
                 _providers,
                 _activeProviderIndex);
+
+            // Persist theme preference client-side and expose it so MainWindow
+            // can apply it immediately after the dialog closes.
+            ThemeMode = ThemeDark.IsChecked == true
+                ? ElementTheme.Dark
+                : ThemeLight.IsChecked == true
+                    ? ElementTheme.Light
+                    : ElementTheme.Default;
+            ThemePreferences.Save(ThemeMode);
         }
         catch (Exception error)
         {

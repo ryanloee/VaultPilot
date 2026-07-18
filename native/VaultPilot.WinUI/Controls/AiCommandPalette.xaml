@@ -8,13 +8,13 @@
     Visibility="Collapsed">
 
     <!-- Semi-transparent backdrop -->
-    <Grid x:Name="BackdropGrid" Background="#80000000"
+    <Grid x:Name="BackdropGrid" Background="{ThemeResource VaultOverlayBrush}"
           PointerPressed="OnBackdropPressed">
 
         <!-- Centered floating palette card -->
         <Border
             x:Name="PaletteCard"
-            Width="520"
+            Width="540"
             MaxHeight="480"
             Padding="0"
             CornerRadius="12"
@@ -24,6 +24,11 @@
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             Translation="0,0,32">
+            <Border.Transitions>
+                <TransitionCollection>
+                    <EntranceThemeTransition FromVerticalOffset="24" IsStaggeringEnabled="False" />
+                </TransitionCollection>
+            </Border.Transitions>
 
             <Grid RowSpacing="0">
                 <Grid.RowDefinitions>
@@ -130,7 +135,7 @@
         <!-- Result overlay (shown after executing an action) -->
         <Border
             x:Name="ResultCard"
-            Width="520"
+            Width="540"
             MaxHeight="520"
             Padding="0"
             CornerRadius="12"
@@ -141,6 +146,11 @@
             VerticalAlignment="Center"
             Translation="0,0,32"
             Visibility="Collapsed">
+            <Border.Transitions>
+                <TransitionCollection>
+                    <EntranceThemeTransition FromVerticalOffset="24" IsStaggeringEnabled="False" />
+                </TransitionCollection>
+            </Border.Transitions>
 
             <Grid RowSpacing="0">
                 <Grid.RowDefinitions>
@@ -180,14 +190,14 @@
                         <Button
                             Grid.Column="2"
                             x:Name="CloseResultButton"
-                            Content="✕"
-                            FontSize="14"
                             Padding="8,4,8,4"
                             MinWidth="0"
                             MinHeight="0"
                             Click="OnCloseResultClicked"
                             AutomationProperties.Name="关闭结果"
-                            AutomationProperties.HelpText="关闭结果面板返回操作列表" />
+                            AutomationProperties.HelpText="关闭结果面板返回操作列表">
+                            <FontIcon Glyph="&#xE711;" FontSize="12" />
+                        </Button>
                     </Grid>
                 </Border>
 
@@ -256,7 +266,7 @@
         <!-- Loading overlay -->
         <Border
             x:Name="LoadingOverlay"
-            Width="520"
+            Width="540"
             Height="140"
             Padding="0"
             CornerRadius="12"

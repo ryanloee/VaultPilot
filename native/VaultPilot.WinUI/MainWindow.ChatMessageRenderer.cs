@@ -159,9 +159,9 @@ public sealed partial class MainWindow : Window
             : GetThemeBrush("VaultAvatarAiFg");
         var avatar = new Border
         {
-            Width = 28,
-            Height = 28,
-            CornerRadius = new CornerRadius(14),
+            Width = 32,
+            Height = 32,
+            CornerRadius = new CornerRadius(16),
             Background = avatarBg,
             MinHeight = 0, MinWidth = 0,
             VerticalAlignment = VerticalAlignment.Top,
@@ -170,7 +170,7 @@ public sealed partial class MainWindow : Window
         {
             Text = avatarInitial,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            FontSize = 12,
+            FontSize = 13,
             Foreground = avatarFg,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
@@ -192,14 +192,15 @@ public sealed partial class MainWindow : Window
         var bubbleText = isUser || isAssistant ? text : $"{author}: {text}";
         var bubbleContent = CreateMessageContent(bubbleText, isAssistant, isUser);
 
+        // Card-style bubble (ChatGPT desktop look): symmetric padding, soft border on AI
         var bubble = new Border
         {
-            MaxWidth = 680,
-            Padding = new Thickness(12, 9, 12, 9),
+            MaxWidth = 720,
+            Padding = new Thickness(14, 12, 14, 12),
             CornerRadius = new CornerRadius(12),
             Background = isUser
                 ? GetThemeBrush("VaultBubbleUserBg")
-                : GetThemeBrush("VaultBubbleAiBg"),
+                : GetThemeBrush("VaultCardElevatedBg"),
             BorderBrush = isUser ? null : GetThemeBrush("VaultBorder"),
             BorderThickness = isUser ? new Thickness(0) : new Thickness(1),
             Child = bubbleContent,
@@ -210,7 +211,8 @@ public sealed partial class MainWindow : Window
         {
             Text = author,
             FontSize = 11,
-            Foreground = GetThemeBrush("VaultTextMuted"),
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = GetThemeBrush("VaultTextSecondary"),
             VerticalAlignment = VerticalAlignment.Center,
         };
         var timeText = new TextBlock
@@ -218,7 +220,6 @@ public sealed partial class MainWindow : Window
             Text = timeStr,
             FontSize = 11,
             Foreground = GetThemeBrush("VaultTextMuted"),
-            Opacity = 0.55,
             VerticalAlignment = VerticalAlignment.Center,
         };
         var metaRow = new StackPanel
@@ -230,14 +231,14 @@ public sealed partial class MainWindow : Window
         metaRow.Children.Add(timeText);
 
         // ── Assemble: avatar + (meta + bubble) ──
-        var messageRow = new StackPanel { Spacing = 4 };
+        var messageRow = new StackPanel { Spacing = 6 };
         messageRow.Children.Add(metaRow);
         messageRow.Children.Add(bubble);
 
         var outerRow = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
+            Spacing = 10,
             HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
         };
 
@@ -275,40 +276,39 @@ public sealed partial class MainWindow : Window
     {
         RemoveThinkingIndicator();
 
-        _thinkingDotStep = 0;
-
-        var dotBrush = GetThemeBrush("TextFillColorPrimaryBrush");
-        var dots = new TextBlock[3];
-        for (var i = 0; i < 3; i++)
+        // ChatGPT-style thinking card: small spinner + label inside a soft card.
+        // Uses the built-in ProgressRing (smooth, GPU-driven) instead of the
+        // legacy hand-rolled 3-dot TextBlock + DispatcherTimer animation.
+        var spinner = new ProgressRing
         {
-            dots[i] = new TextBlock
-            {
-                Text = "●",
-                Opacity = 0.25,
-                FontSize = 12,
-                Foreground = dotBrush,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-        }
-
+            IsActive = true,
+            Width = 16,
+            Height = 16,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var thinkingLabel = new TextBlock
+        {
+            Text = "思考中…",
+            FontSize = 12,
+            Foreground = GetThemeBrush("VaultTextSecondary"),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         var dotsPanel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 6,
+            Spacing = 8,
             Padding = new Thickness(2, 2, 2, 2),
         };
-        foreach (var dot in dots)
-        {
-            dotsPanel.Children.Add(dot);
-        }
+        dotsPanel.Children.Add(spinner);
+        dotsPanel.Children.Add(thinkingLabel);
 
         var bubble = new Border
         {
-            MaxWidth = 680,
-            Padding = new Thickness(14, 10, 14, 10),
-            CornerRadius = new CornerRadius(8),
-            Background = GetThemeBrush("CardBackgroundFillColorSecondaryBrush"),
-            BorderBrush = GetThemeBrush("CardStrokeColorDefaultBrush"),
+            MaxWidth = 720,
+            Padding = new Thickness(14, 12, 14, 12),
+            CornerRadius = new CornerRadius(12),
+            Background = GetThemeBrush("VaultCardElevatedBg"),
+            BorderBrush = GetThemeBrush("VaultBorder"),
             BorderThickness = new Thickness(1),
             HorizontalAlignment = HorizontalAlignment.Left,
             Child = dotsPanel,
@@ -317,13 +317,15 @@ public sealed partial class MainWindow : Window
         var label = new TextBlock
         {
             Text = "助手",
-            Opacity = 0.72,
+            FontSize = 11,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = GetThemeBrush("VaultTextSecondary"),
             HorizontalAlignment = HorizontalAlignment.Left,
         };
 
         var stack = new StackPanel
         {
-            Spacing = 4,
+            Spacing = 6,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
         // Note: LiveSetting is not available in WinUI 3; using automation name only
@@ -333,20 +335,6 @@ public sealed partial class MainWindow : Window
 
         _thinkingIndicator = stack;
         MessagesPanel.Children.Add(stack);
-
-        _thinkingDotsTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(350),
-        };
-        _thinkingDotsTimer.Tick += (_, _) =>
-        {
-            _thinkingDotStep = (_thinkingDotStep + 1) % 4;
-            for (var i = 0; i < 3; i++)
-            {
-                dots[i].Opacity = i < _thinkingDotStep ? 1.0 : 0.25;
-            }
-        };
-        _thinkingDotsTimer.Start();
     }
 
     private void RemoveThinkingIndicator()
@@ -395,10 +383,10 @@ public sealed partial class MainWindow : Window
 
         var expander = new Expander
         {
-            Header = $"💭 思考过程 ({trace.Steps.Count} 步){(string.IsNullOrWhiteSpace(trace.Summary) ? "" : $" — {trace.Summary}")}",
+            Header = $"思考过程 ({trace.Steps.Count} 步){(string.IsNullOrWhiteSpace(trace.Summary) ? "" : $" — {trace.Summary}")}",
             IsExpanded = false,
             HorizontalAlignment = HorizontalAlignment.Left,
-            MaxWidth = 680,
+            MaxWidth = 720,
             Content = stepsPanel
         };
         AutomationProperties.SetName(expander, $"思考过程: {trace.Steps.Count} 步");
@@ -410,17 +398,17 @@ public sealed partial class MainWindow : Window
     {
         var citationsPanel = new StackPanel
         {
-            Spacing = 4,
+            Spacing = 6,
             HorizontalAlignment = HorizontalAlignment.Left,
-            MaxWidth = 680,
+            MaxWidth = 720,
             Margin = new Thickness(0, 4, 0, 0)
         };
 
         var header = new TextBlock
         {
-            Text = $"📚 引用 ({citations.Count})",
+            Text = $"引用 ({citations.Count})",
             FontSize = 12,
-            Opacity = 0.7,
+            Foreground = GetThemeBrush("VaultTextSecondary"),
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
         };
         citationsPanel.Children.Add(header);
@@ -429,11 +417,11 @@ public sealed partial class MainWindow : Window
         {
             var card = new Border
             {
-                Background = GetThemeBrush("CardBackgroundFillColorDefaultBrush"),
-                BorderBrush = GetThemeBrush("CardStrokeColorDefaultBrush"),
+                Background = GetThemeBrush("VaultCardElevatedBg"),
+                BorderBrush = GetThemeBrush("VaultBorder"),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(8, 4, 8, 4),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(10, 8, 10, 8),
                 Child = new StackPanel
                 {
                     Spacing = 2,
@@ -443,13 +431,15 @@ public sealed partial class MainWindow : Window
                         {
                             Text = citation.Title,
                             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                            FontSize = 12
+                            FontSize = 12,
+                            Foreground = GetThemeBrush("VaultTextPrimary")
                         },
                         new TextBlock
                         {
                             Text = citation.Snippet,
                             FontSize = 11,
                             Opacity = 0.8,
+                            Foreground = GetThemeBrush("VaultTextSecondary"),
                             TextWrapping = TextWrapping.Wrap,
                             MaxLines = 3,
                             TextTrimming = TextTrimming.CharacterEllipsis

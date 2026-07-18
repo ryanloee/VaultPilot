@@ -22,57 +22,56 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Compact header bar -->
-        <Grid Grid.Row="0" Padding="8,4,12,4" Background="{ThemeResource VaultCardBg}">
+        <!-- ── Compact header / title bar ── -->
+        <Grid Grid.Row="0" Padding="16,10,12,10" Background="{ThemeResource VaultCardBg}"
+              BorderBrush="{ThemeResource VaultBorder}" BorderThickness="0,0,0,1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <!-- Logo badge -->
-            <Border Grid.Column="0" Width="20" Height="20" CornerRadius="5"
-                    Background="{ThemeResource VaultAccentBlue}" VerticalAlignment="Center">
-                <TextBlock Text="V" FontWeight="Bold" FontSize="11" Foreground="White"
-                    HorizontalAlignment="Center" VerticalAlignment="Center" />
-            </Border>
-            <TextBlock Grid.Column="1" Text="VaultPilot" FontWeight="SemiBold" FontSize="13"
-                VerticalAlignment="Center" Margin="6,0,0,0" Foreground="{ThemeResource VaultTextPrimary}" />
-            <!-- Inline status -->
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
-                VerticalAlignment="Center" Margin="16,0,0,0">
-                <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource StatusBarIconBrush}" />
-                <TextBlock x:Name="StatusBarTitle" Text="正在启动" FontWeight="SemiBold" FontSize="12"
+            <!-- Logo + title -->
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <Border Width="24" Height="24" CornerRadius="6"
+                        Background="{ThemeResource VaultAccentBlue}" VerticalAlignment="Center">
+                    <TextBlock Text="V" FontWeight="Bold" FontSize="13" Foreground="White"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="VaultPilot" FontWeight="SemiBold" FontSize="{StaticResource VaultFontSizeMedium}"
                     VerticalAlignment="Center" Foreground="{ThemeResource VaultTextPrimary}" />
-                <TextBlock x:Name="StatusBarMessage" Text="正在连接 Rust 后端..."
-                    Opacity="0.55" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource VaultTextSecondary}" />
             </StackPanel>
-            <!-- Quick actions as icon buttons -->
-            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="2">
-                <Button x:Name="RebuildButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
-                    Padding="0" Background="Transparent" BorderThickness="0"
-                    AutomationProperties.Name="重建索引">
-                    <FontIcon Glyph="&#xE72C;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+            <!-- Inline status (single line, dot-separated) -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                VerticalAlignment="Center" HorizontalAlignment="Center">
+                <FontIcon x:Name="StatusBarIcon" Glyph="&#xE946;" FontSize="{StaticResource VaultFontSizeSmall}" Foreground="{ThemeResource StatusBarIconBrush}" />
+                <TextBlock x:Name="StatusBarTitle" Text="正在启动" FontWeight="SemiBold" FontSize="{StaticResource VaultFontSizeSmall}"
+                    VerticalAlignment="Center" Foreground="{ThemeResource VaultTextPrimary}" />
+                <TextBlock Text="·" FontSize="{StaticResource VaultFontSizeSmall}" Opacity="0.4" VerticalAlignment="Center" Foreground="{ThemeResource VaultTextMuted}" />
+                <TextBlock x:Name="StatusBarMessage" Text="正在连接 Rust 后端..."
+                    Opacity="0.7" FontSize="{StaticResource VaultFontSizeSmall}" VerticalAlignment="Center" Foreground="{ThemeResource VaultTextSecondary}" />
+            </StackPanel>
+            <!-- Quick actions: unified 32×32 icon buttons -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+                <Button x:Name="RebuildButton" Style="{StaticResource VaultIconButtonStyle}"
+                    AutomationProperties.Name="重建索引" AutomationProperties.HelpText="扫描知识库并重建搜索索引">
+                    <FontIcon Glyph="&#xE72C;" FontSize="{StaticResource VaultIconButtonGlyphSize}" />
                 </Button>
-                <Button x:Name="ImportButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
-                    Padding="0" Background="Transparent" BorderThickness="0"
-                    AutomationProperties.Name="导入 Markdown">
-                    <FontIcon Glyph="&#xE8B6;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                <Button x:Name="ImportButton" Style="{StaticResource VaultIconButtonStyle}"
+                    AutomationProperties.Name="导入 Markdown" AutomationProperties.HelpText="从文件导入 Markdown 笔记">
+                    <FontIcon Glyph="&#xE8B6;" FontSize="{StaticResource VaultIconButtonGlyphSize}" />
                 </Button>
-                <Button x:Name="ToggleSidebarButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
-                    Padding="0" Background="Transparent" BorderThickness="0"
-                    AutomationProperties.Name="切换侧边栏">
-                    <FontIcon Glyph="&#xE700;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                <Button x:Name="ToggleSidebarButton" Style="{StaticResource VaultIconButtonStyle}"
+                    AutomationProperties.Name="切换侧边栏" AutomationProperties.HelpText="显示或隐藏会话侧边栏">
+                    <FontIcon Glyph="&#xE700;" FontSize="{StaticResource VaultIconButtonGlyphSize}" />
                 </Button>
-                <Button x:Name="SettingsButton" MinWidth="0" MinHeight="0" Width="28" Height="28"
-                    Padding="0" Background="Transparent" BorderThickness="0"
-                    AutomationProperties.Name="设置">
-                    <FontIcon Glyph="&#xE713;" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                <Button x:Name="SettingsButton" Style="{StaticResource VaultIconButtonStyle}"
+                    AutomationProperties.Name="设置" AutomationProperties.HelpText="打开设置对话框">
+                    <FontIcon Glyph="&#xE713;" FontSize="{StaticResource VaultIconButtonGlyphSize}" />
                 </Button>
             </StackPanel>
         </Grid>
 
-        <!-- NavigationView + content area -->
+        <!-- ── Navigation + content area ── -->
         <NavigationView
             x:Name="RootNavigationView"
             Grid.Row="1"
@@ -101,278 +100,283 @@
 
             <NavigationView.Content>
                 <Grid>
-                    <!-- Chat view -->
+                    <!-- ── Chat view ── -->
                     <Grid x:Name="ChatView" Visibility="Visible">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <Grid Grid.Row="0" Padding="24" RowSpacing="16">
-                            <Grid x:Name="ContentGrid" ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition x:Name="SidebarColumn" Width="280" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
+                        <!-- Conversation area (sidebar + message thread) -->
+                        <Grid x:Name="ContentGrid" Grid.Row="0" Padding="20" ColumnSpacing="16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="SidebarColumn" Width="280" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-                                <Border
-                                    x:Name="SidebarBorder"
-                                    Grid.Column="0"
-                                    Padding="16"
-                                    Background="{ThemeResource VaultSidebarBg}"
-                                    CornerRadius="8">
-                                    <Grid RowSpacing="12">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="*" />
-                                        </Grid.RowDefinitions>
-                                        <TextBlock Grid.Row="0" Text="会话" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                                        <TextBlock Grid.Row="1" x:Name="NotesText" Text="笔记：正在加载..."
-                                            AutomationProperties.Name="笔记状态" AutomationProperties.HelpText="显示笔记同步状态信息" />
-                                        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
-                                            <Button x:Name="NewSessionButton"
-                                                AutomationProperties.Name="新建对话" AutomationProperties.HelpText="创建一个新的聊天会话">
-                                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <FontIcon Glyph="&#xE710;" FontSize="14" />
-                                                    <TextBlock Text="新建对话" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </Button>
-                                            <Button x:Name="DeleteSessionButton" Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                                AutomationProperties.Name="删除当前会话" AutomationProperties.HelpText="删除当前选中的聊天会话">
-                                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <FontIcon Glyph="&#xE74D;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
-                                                    <TextBlock Text="删除当前会话" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                            </Button>
-                                        </StackPanel>
-                                        <ListView
-                                            x:Name="SessionList"
-                                            Grid.Row="3"
-                                            MinHeight="0"
-                                            SelectionMode="Single"
-                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                            AutomationProperties.Name="会话列表" AutomationProperties.HelpText="选择一个聊天会话">
-                                            <ListView.ItemTemplate>
-                                                <DataTemplate>
-                                                    <StackPanel Spacing="2">
-                                                        <TextBlock Text="{Binding Title}" TextWrapping="WrapWholeWords" />
-                                                        <TextBlock
-                                                            Text="{Binding Detail}"
-                                                            Foreground="{ThemeResource SecondaryTextBrush}"
-                                                            Style="{ThemeResource BodyTextBlockStyle}" />
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </ListView.ItemTemplate>
-                                        </ListView>
-                                    </Grid>
-                                </Border>
-
-                                <Border
-                                    Grid.Column="1"
-                                    Padding="16"
-                                    Background="{ThemeResource VaultCardBg}"
-                                    CornerRadius="8">
-                                    <Grid>
-                                        <ScrollViewer
-                                            x:Name="ChatScrollViewer"
-                                            Margin="0,0,-10,0"
-                                            VerticalScrollBarVisibility="Auto">
-                                            <StackPanel
-                                                x:Name="MessagesPanel"
-                                                Margin="0,0,18,0"
-                                                Spacing="12">
-                                                <TextBlock Text="对话" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                                                <TextBlock Text="正在接入原生 Windows 界面。" TextWrapping="Wrap" />
+                            <!-- Sessions sidebar -->
+                            <Border
+                                x:Name="SidebarBorder"
+                                Grid.Column="0"
+                                Padding="16"
+                                Background="{ThemeResource VaultSidebarBg}"
+                                CornerRadius="{StaticResource VaultRadiusLarge}">
+                                <Grid RowSpacing="14">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Text="会话" FontSize="{StaticResource VaultFontSizeMedium}" FontWeight="SemiBold" Foreground="{ThemeResource VaultTextPrimary}" />
+                                    <TextBlock Grid.Row="1" x:Name="NotesText" Text="笔记：正在加载..."
+                                        FontSize="{StaticResource VaultFontSizeSmall}"
+                                        Foreground="{ThemeResource VaultTextSecondary}"
+                                        AutomationProperties.Name="笔记状态" AutomationProperties.HelpText="显示笔记同步状态信息" />
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                                        <Button x:Name="NewSessionButton"
+                                            AutomationProperties.Name="新建对话" AutomationProperties.HelpText="创建一个新的聊天会话">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <FontIcon Glyph="&#xE710;" FontSize="{StaticResource VaultFontSizeSmall}" />
+                                                <TextBlock Text="新建对话" VerticalAlignment="Center" FontSize="{StaticResource VaultFontSizeSmall}" />
                                             </StackPanel>
-                                        </ScrollViewer>
-                                        <!-- Agent tool call status panel -->
-                                        <Border
-                                            x:Name="AgentToolCallPanel"
-                                            Grid.Row="1"
-                                            Padding="12"
-                                            Margin="0,8,0,0"
-                                            CornerRadius="6"
-                                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                            BorderThickness="1"
-                                            Visibility="Collapsed"
-                                            AutomationProperties.Name="Agent 工具调用面板">
-                                            <Grid RowSpacing="8">
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="Auto" />
-                                                </Grid.RowDefinitions>
-                                                <!-- Agent status header -->
-                                                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
-                                                    <TextBlock x:Name="AgentStatusText" Text="Agent 运行中..." FontWeight="SemiBold" />
-                                                    <TextBlock x:Name="AgentStepCount" Text="步骤: 0/20" Opacity="0.7" />
-                                                    <TextBlock x:Name="AgentTokenCount" Text="Token: 0" Opacity="0.7" />
-                                                </StackPanel>
-                                                <!-- Tool call list -->
-                                                <ScrollViewer Grid.Row="1" MaxHeight="200" VerticalScrollBarVisibility="Auto">
-                                                    <StackPanel x:Name="AgentToolCallList" Spacing="4" />
-                                                </ScrollViewer>
-                                            </Grid>
-                                        </Border>
-                                        <Button
-                                            x:Name="JumpLatestButton"
-                                            Margin="0,8,0,0"
-                                            Padding="12,6,12,6"
-                                            HorizontalAlignment="Center"
-                                            VerticalAlignment="Top"
-                                            Content="回到最新对话"
-                                            Visibility="Collapsed"
-                                            AutomationProperties.Name="回到最新对话" AutomationProperties.HelpText="滚动到最新的聊天消息" />
-                                    </Grid>
-                                </Border>
-                            </Grid>
-                        </Grid>
-
-                        <Grid Grid.Row="1" Padding="24,0,24,16">
-                            <StackPanel Spacing="8">
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid
-                                        x:Name="ComposerDropZone"
-                                        Grid.Column="0"
-                                        RowSpacing="6"
-                                        Padding="12,8,12,8"
-                                        AllowDrop="True"
-                                        DragOver="OnComposerDropZoneDragOver"
-                                        Drop="OnComposerDropZoneDrop"
-                                        AutomationProperties.Name="消息编辑区域"
-                                        AutomationProperties.HelpText="支持拖放文件作为附件">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-                                        <TextBox
-                                            x:Name="ComposerBox"
-                                            Grid.Row="0"
-                                            AcceptsReturn="False"
-                                            MinHeight="48"
-                                            MaxHeight="120"
-                                            TextChanged="OnComposerTextChanged"
-                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                            TextWrapping="Wrap"
-                                            PlaceholderText="输入问题，或记录一条知识..."
-                                            ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
-                                            AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
-                                        </TextBox>
-                                        <TextBlock
-                                            x:Name="ComposerHintText"
-                                            Grid.Row="1"
-                                            Text="Enter 发送 · Shift+Enter 换行"
-                                            FontSize="11"
-                                            Foreground="{ThemeResource VaultTextMuted}"
-                                            Margin="4,0,0,0"
-                                            HorizontalAlignment="Right" />
-                                        <Grid
-                                            x:Name="ContextUsageBarHost"
-                                            Grid.Row="3"
-                                            Height="8"
-                                            MinWidth="120"
-                                            HorizontalAlignment="Stretch"
-                                            VerticalAlignment="Center"
-                                            SizeChanged="OnContextUsageBarHostSizeChanged"
-                                            AutomationProperties.Name="上下文使用量" AutomationProperties.HelpText="显示当前会话的上下文窗口使用百分比">
-                                            <Border
-                                                x:Name="ContextUsageTrack"
-                                                Height="4"
-                                                CornerRadius="2"
-                                                Background="{ThemeResource ContextUsageTrackBrush}"
-                                                Opacity="0.32"
-                                                HorizontalAlignment="Stretch"
-                                                VerticalAlignment="Center" />
-                                            <Border
-                                                x:Name="ContextUsageFill"
-                                                Height="4"
-                                                Width="0"
-                                                CornerRadius="2"
-                                                Background="{ThemeResource ContextUsageFillBrush}"
-                                                HorizontalAlignment="Left"
-                                                VerticalAlignment="Center" />
-                                        </Grid>
-                                        <ScrollViewer
-                                            x:Name="AttachmentScroller"
-                                            Grid.Row="4"
-                                            Margin="0,4,0,0"
-                                            HorizontalScrollBarVisibility="Auto"
-                                            VerticalScrollBarVisibility="Disabled"
-                                            VerticalAlignment="Center"
-                                            Visibility="Collapsed"
-                                            AutomationProperties.Name="附件列表"
-                                            AutomationProperties.HelpText="已添加的附件，可左右滚动浏览">
-                                            <StackPanel
-                                                x:Name="AttachmentPanel"
-                                                Orientation="Horizontal"
-                                                Spacing="6"
-                                                VerticalAlignment="Center"
-                                                AutomationProperties.Name="附件面板" />
-                                        </ScrollViewer>
-                                    </Grid>
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="6" HorizontalAlignment="Center">
-                                        <Button
-                                            x:Name="RecordButton"
-                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
-                                            Padding="0" Background="Transparent" BorderThickness="1"
-                                            BorderBrush="{ThemeResource VaultBorder}"
-                                            CornerRadius="8"
-                                            ToolTipService.ToolTip="将当前对话内容记录到知识库"
-                                            AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库">
-                                            <FontIcon Glyph="&#xE7C8;" FontSize="14" Foreground="{ThemeResource VaultTextSecondary}" />
                                         </Button>
-                                        <Button
-                                            x:Name="SendButton"
-                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
-                                            Padding="0"
-                                            CornerRadius="8"
-                                            Background="{ThemeResource VaultAccentBlue}"
-                                            BorderThickness="0"
-                                            AutomationProperties.Name="发送" AutomationProperties.HelpText="发送消息到 AI">
-                                            <FontIcon Glyph="&#x2191;" FontSize="14" Foreground="White" />
-                                        </Button>
-                                        <Button
-                                            x:Name="CancelButton"
-                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
-                                            Padding="0" Background="Transparent" BorderThickness="1"
-                                            BorderBrush="{ThemeResource VaultBorder}"
-                                            CornerRadius="8"
-                                            Visibility="Collapsed"
-                                            AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求">
-                                            <FontIcon Glyph="&#xE711;" FontSize="12" Foreground="{ThemeResource VaultAccentRed}" />
-                                        </Button>
-                                        <Button
-                                            x:Name="AgentModeButton"
-                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
-                                            Padding="0" Background="Transparent" BorderThickness="1"
-                                            BorderBrush="{ThemeResource VaultBorder}"
-                                            CornerRadius="8"
-                                            ToolTipService.ToolTip="启动 Agent 模式 — AI 自主执行多步工具调用"
-                                            AutomationProperties.Name="Agent 模式" AutomationProperties.HelpText="启动自主 AI Agent 执行多步工具调用">
-                                            <FontIcon Glyph="&#xE7BF;" FontSize="13" Foreground="{ThemeResource VaultAccentBlue}" />
-                                        </Button>
-                                        <Button
-                                            x:Name="StopAgentButton"
-                                            MinWidth="0" MinHeight="0" Width="32" Height="32"
-                                            Padding="0" Background="Transparent" BorderThickness="1"
-                                            BorderBrush="{ThemeResource VaultBorder}"
-                                            CornerRadius="8"
-                                            Visibility="Collapsed"
-                                            AutomationProperties.Name="停止 Agent" AutomationProperties.HelpText="立即终止 Agent 执行">
-                                            <FontIcon Glyph="&#xE71A;" FontSize="12" Foreground="{ThemeResource VaultAccentRed}" />
+                                        <Button x:Name="DeleteSessionButton" Foreground="{ThemeResource VaultAccentRed}"
+                                            AutomationProperties.Name="删除当前会话" AutomationProperties.HelpText="删除当前选中的聊天会话">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <FontIcon Glyph="&#xE74D;" FontSize="{StaticResource VaultFontSizeSmall}" Foreground="{ThemeResource VaultAccentRed}" />
+                                                <TextBlock Text="删除" VerticalAlignment="Center" FontSize="{StaticResource VaultFontSizeSmall}" />
+                                            </StackPanel>
                                         </Button>
                                     </StackPanel>
+                                    <ListView
+                                        x:Name="SessionList"
+                                        Grid.Row="3"
+                                        MinHeight="0"
+                                        SelectionMode="Single"
+                                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                        AutomationProperties.Name="会话列表" AutomationProperties.HelpText="选择一个聊天会话">
+                                        <ListView.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Spacing="2">
+                                                    <TextBlock Text="{Binding Title}" TextWrapping="WrapWholeWords" FontSize="{StaticResource VaultFontSizeSmall}" />
+                                                    <TextBlock
+                                                        Text="{Binding Detail}"
+                                                        Foreground="{ThemeResource VaultTextSecondary}"
+                                                        FontSize="{StaticResource VaultFontSizeCaption}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListView.ItemTemplate>
+                                    </ListView>
                                 </Grid>
-                            </StackPanel>
+                            </Border>
+
+                            <!-- Message thread -->
+                            <Border
+                                Grid.Column="1"
+                                Padding="0"
+                                Background="{ThemeResource VaultCardBg}"
+                                CornerRadius="{StaticResource VaultRadiusLarge}"
+                                BorderBrush="{ThemeResource VaultBorder}"
+                                BorderThickness="1">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <ScrollViewer
+                                        x:Name="ChatScrollViewer"
+                                        Grid.Row="0"
+                                        Padding="20,16,20,16"
+                                        VerticalScrollBarVisibility="Auto">
+                                        <StackPanel
+                                            x:Name="MessagesPanel"
+                                            Spacing="16"
+                                            ChildrenTransitions="{StaticResource AppChildrenTransitions}">
+                                            <TextBlock Text="对话" FontSize="{StaticResource VaultFontSizeMedium}" FontWeight="SemiBold" Foreground="{ThemeResource VaultTextPrimary}" />
+                                            <TextBlock Text="正在接入原生 Windows 界面。" TextWrapping="Wrap" FontSize="{StaticResource VaultFontSizeBody}" Foreground="{ThemeResource VaultTextSecondary}" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+
+                                    <!-- Agent tool call status panel -->
+                                    <Border
+                                        x:Name="AgentToolCallPanel"
+                                        Grid.Row="1"
+                                        Margin="20,0,20,12"
+                                        Padding="12"
+                                        CornerRadius="{StaticResource VaultRadiusMedium}"
+                                        Background="{ThemeResource VaultCardElevatedBg}"
+                                        BorderBrush="{ThemeResource VaultBorder}"
+                                        BorderThickness="1"
+                                        Visibility="Collapsed"
+                                        AutomationProperties.Name="Agent 工具调用面板">
+                                        <Grid RowSpacing="8">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                                                <TextBlock x:Name="AgentStatusText" Text="Agent 运行中..." FontWeight="SemiBold" FontSize="{StaticResource VaultFontSizeSmall}" Foreground="{ThemeResource VaultTextPrimary}" />
+                                                <TextBlock x:Name="AgentStepCount" Text="步骤: 0/20" Opacity="0.7" FontSize="{StaticResource VaultFontSizeCaption}" Foreground="{ThemeResource VaultTextSecondary}" />
+                                                <TextBlock x:Name="AgentTokenCount" Text="Token: 0" Opacity="0.7" FontSize="{StaticResource VaultFontSizeCaption}" Foreground="{ThemeResource VaultTextSecondary}" />
+                                            </StackPanel>
+                                            <ScrollViewer Grid.Row="1" MaxHeight="200" VerticalScrollBarVisibility="Auto">
+                                                <StackPanel x:Name="AgentToolCallList" Spacing="4" />
+                                            </ScrollViewer>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Jump-to-latest floating button -->
+                                    <Button
+                                        x:Name="JumpLatestButton"
+                                        Grid.Row="0"
+                                        Margin="0,0,0,12"
+                                        Padding="12,6,12,6"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Bottom"
+                                        CornerRadius="{StaticResource VaultRadiusPill}"
+                                        Background="{ThemeResource VaultCardElevatedBg}"
+                                        BorderBrush="{ThemeResource VaultBorder}"
+                                        BorderThickness="1"
+                                        Content="回到最新对话"
+                                        FontSize="{StaticResource VaultFontSizeCaption}"
+                                        Visibility="Collapsed"
+                                        AutomationProperties.Name="回到最新对话" AutomationProperties.HelpText="滚动到最新的聊天消息" />
+                                </Grid>
+                            </Border>
+                        </Grid>
+
+                        <!-- ── Composer ── -->
+                        <Grid Grid.Row="1" Padding="20,0,20,16">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Grid
+                                    x:Name="ComposerDropZone"
+                                    Grid.Column="0"
+                                    RowSpacing="6"
+                                    Padding="14,10,14,10"
+                                    Background="{ThemeResource VaultInputBg}"
+                                    CornerRadius="{StaticResource VaultRadiusLarge}"
+                                    BorderBrush="{ThemeResource VaultBorder}"
+                                    BorderThickness="1"
+                                    AllowDrop="True"
+                                    DragOver="OnComposerDropZoneDragOver"
+                                    Drop="OnComposerDropZoneDrop"
+                                    AutomationProperties.Name="消息编辑区域"
+                                    AutomationProperties.HelpText="支持拖放文件作为附件">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBox
+                                        x:Name="ComposerBox"
+                                        Grid.Row="0"
+                                        AcceptsReturn="False"
+                                        MinHeight="44"
+                                        MaxHeight="120"
+                                        TextChanged="OnComposerTextChanged"
+                                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                        TextWrapping="Wrap"
+                                        BorderThickness="0"
+                                        Background="Transparent"
+                                        PlaceholderText="输入问题，或记录一条知识..."
+                                        FontSize="{StaticResource VaultFontSizeBody}"
+                                        ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"
+                                        AutomationProperties.Name="消息输入框" AutomationProperties.HelpText="输入要发送的消息，Enter 发送，Shift+Enter 换行">
+                                    </TextBox>
+                                    <TextBlock
+                                        x:Name="ComposerHintText"
+                                        Grid.Row="1"
+                                        Text="Enter 发送 · Shift+Enter 换行"
+                                        FontSize="{StaticResource VaultFontSizeCaption}"
+                                        Foreground="{ThemeResource VaultTextMuted}"
+                                        HorizontalAlignment="Right" />
+                                    <Grid
+                                        x:Name="ContextUsageBarHost"
+                                        Grid.Row="3"
+                                        Height="6"
+                                        MinWidth="120"
+                                        HorizontalAlignment="Stretch"
+                                        VerticalAlignment="Center"
+                                        SizeChanged="OnContextUsageBarHostSizeChanged"
+                                        AutomationProperties.Name="上下文使用量" AutomationProperties.HelpText="显示当前会话的上下文窗口使用百分比">
+                                        <Border
+                                            x:Name="ContextUsageTrack"
+                                            Height="4"
+                                            CornerRadius="{StaticResource VaultRadiusPill}"
+                                            Background="{ThemeResource ContextUsageTrackBrush}"
+                                            HorizontalAlignment="Stretch"
+                                            VerticalAlignment="Center" />
+                                        <Border
+                                            x:Name="ContextUsageFill"
+                                            Height="4"
+                                            Width="0"
+                                            CornerRadius="{StaticResource VaultRadiusPill}"
+                                            Background="{ThemeResource ContextUsageFillBrush}"
+                                            HorizontalAlignment="Left"
+                                            VerticalAlignment="Center" />
+                                    </Grid>
+                                    <ScrollViewer
+                                        x:Name="AttachmentScroller"
+                                        Grid.Row="4"
+                                        Margin="0,4,0,0"
+                                        HorizontalScrollBarVisibility="Auto"
+                                        VerticalScrollBarVisibility="Disabled"
+                                        VerticalAlignment="Center"
+                                        Visibility="Collapsed"
+                                        AutomationProperties.Name="附件列表"
+                                        AutomationProperties.HelpText="已添加的附件，可左右滚动浏览">
+                                        <StackPanel
+                                            x:Name="AttachmentPanel"
+                                            Orientation="Horizontal"
+                                            Spacing="6"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="附件面板" />
+                                    </ScrollViewer>
+                                </Grid>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Spacing="8" HorizontalAlignment="Center">
+                                    <Button
+                                        x:Name="RecordButton"
+                                        Style="{StaticResource VaultOutlinedIconButtonStyle}"
+                                        ToolTipService.ToolTip="将当前对话内容记录到知识库"
+                                        AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库">
+                                        <FontIcon Glyph="&#xE7C8;" FontSize="{StaticResource VaultIconButtonGlyphSize}" Foreground="{ThemeResource VaultTextSecondary}" />
+                                    </Button>
+                                    <Button
+                                        x:Name="SendButton"
+                                        Style="{StaticResource VaultAccentButtonStyle}"
+                                        AutomationProperties.Name="发送" AutomationProperties.HelpText="发送消息到 AI">
+                                        <FontIcon Glyph="&#xE72A;" FontSize="{StaticResource VaultIconButtonGlyphSize}" Foreground="White" />
+                                    </Button>
+                                    <Button
+                                        x:Name="CancelButton"
+                                        Style="{StaticResource VaultOutlinedIconButtonStyle}"
+                                        Visibility="Collapsed"
+                                        AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求">
+                                        <FontIcon Glyph="&#xE711;" FontSize="{StaticResource VaultIconButtonGlyphSize}" Foreground="{ThemeResource VaultAccentRed}" />
+                                    </Button>
+                                    <Button
+                                        x:Name="AgentModeButton"
+                                        Style="{StaticResource VaultOutlinedIconButtonStyle}"
+                                        ToolTipService.ToolTip="启动 Agent 模式 — AI 自主执行多步工具调用"
+                                        AutomationProperties.Name="Agent 模式" AutomationProperties.HelpText="启动自主 AI Agent 执行多步工具调用">
+                                        <FontIcon Glyph="&#xE7BF;" FontSize="{StaticResource VaultIconButtonGlyphSize}" Foreground="{ThemeResource VaultAccentBlue}" />
+                                    </Button>
+                                    <Button
+                                        x:Name="StopAgentButton"
+                                        Style="{StaticResource VaultOutlinedIconButtonStyle}"
+                                        Visibility="Collapsed"
+                                        AutomationProperties.Name="停止 Agent" AutomationProperties.HelpText="立即终止 Agent 执行">
+                                        <FontIcon Glyph="&#xE71A;" FontSize="{StaticResource VaultIconButtonGlyphSize}" Foreground="{ThemeResource VaultAccentRed}" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
                         </Grid>
                     </Grid>
 
@@ -382,19 +386,20 @@
             </NavigationView.Content>
         </NavigationView>
 
-        <!-- Global AI Command Palette overlay (#2188) -->
+        <!-- ── Global AI Command Palette overlay (#2188) ── -->
         <controls:AiCommandPalette
             x:Name="AiCommandPaletteControl"
             Visibility="Collapsed"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />
 
-        <!-- Quick Ask overlay (#1799) -->
+        <!-- ── Quick Ask overlay (#1799) ── -->
         <controls:QuickAskOverlay
             x:Name="QuickAskControl"
             Visibility="Collapsed"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />
+
         <!-- AI Command Palette overlay (Phase 2 of #2188) — hidden by default,
              shown on Ctrl+Shift+P or right-click AI context menu -->
         <Grid

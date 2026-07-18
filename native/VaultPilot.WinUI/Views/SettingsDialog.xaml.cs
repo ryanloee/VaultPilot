@@ -654,4 +654,69 @@ public sealed partial class SettingsDialog : ContentDialog
         ClearFieldError(AutoWakeStartTimeBox, AutoWakeStartTimeError);
         ClearFieldError(AutoWakeEndTimeBox, AutoWakeEndTimeError);
     }
+
+    /// <summary>
+    /// Filters settings cards by search keyword (#3069).
+    /// Cards whose header text or child labels contain the keyword remain visible;
+    /// others are collapsed. An empty search restores all cards.
+    /// </summary>
+    private void OnSettingsSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        var keyword = SettingsSearchBox.Text?.Trim() ?? string.Empty;
+        // Collect searchable text from each card: the header TextBlock +
+        // all child TextBlock/TextBox headers inside the card.
+        foreach (var child in Panel.Children)
+        {
+            if (child is not Border card) continue;
+            if (string.IsNullOrEmpty(keyword))
+            {
+                card.Visibility = Visibility.Visible;
+                continue;
+            }
+
+            var searchText = CollectSearchText(card);
+            card.Visibility = searchText.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>
+    /// Recursively collects visible text from TextBlock.Text,
+    /// TextBox.Header, PasswordBox.Header, and ComboBox.Header
+    /// within a UI element subtree.
+    /// </summary>
+    private static string CollectSearchText(DependencyObject root)
+    {
+        var sb = new System.Text.StringBuilder();
+        CollectSearchTextRecursive(root, sb);
+        return sb.ToString();
+    }
+
+    private static void CollectSearchTextRecursive(DependencyObject element, System.Text.StringBuilder sb)
+    {
+        if (element is TextBlock tb && !string.IsNullOrEmpty(tb.Text))
+        {
+            sb.Append(' ').Append(tb.Text);
+        }
+        if (element is TextBox tbx && !string.IsNullOrEmpty(tbx.Header?.ToString()))
+        {
+            sb.Append(' ').Append(tbx.Header.ToString());
+        }
+        if (element is PasswordBox pwb && !string.IsNullOrEmpty(pwb.Header?.ToString()))
+        {
+            sb.Append(' ').Append(pwb.Header.ToString());
+        }
+        if (element is ComboBox cb && !string.IsNullOrEmpty(cb.Header?.ToString()))
+        {
+            sb.Append(' ').Append(cb.Header.ToString());
+        }
+
+        var count = VisualTreeHelper.GetChildrenCount(element);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(element, i);
+            CollectSearchTextRecursive(child, sb);
+        }
+    }
 }

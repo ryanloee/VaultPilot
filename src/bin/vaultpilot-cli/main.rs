@@ -635,6 +635,24 @@ enum Commands {
         action: SkillActions,
     },
 
+    /// Manage and invoke user-saved AI skills (Saved Skills / custom commands, #3068)
+    ///
+    /// Unlike `skill` (built-in + file-based knowledge skills), `skill-saved`
+    /// operates on the database-backed Saved Skills created from the Skills
+    /// panel. These are user-authored, named commands with `{{selection}}` /
+    /// `{{note}}` placeholders that can be invoked on demand.
+    ///
+    /// Examples:
+    ///   vp skill-saved list                       — list all saved skills
+    ///   vp skill-saved show <id>                  — show a saved skill's template
+    ///   vp skill-saved run <id> --selection "..." — render + run a saved skill
+    ///   vp skill-saved create "Name" "{{selection}} summarize" — create a skill
+    ///   vp skill-saved delete <id>                — delete a saved skill
+    SkillSaved {
+        #[command(subcommand)]
+        action: SkillSavedActions,
+    },
+
     /// Generate a knowledge graph from vault wikilinks (#1913)
     ///
     /// Builds a node-edge graph by extracting `[[wikilink]]` references from
@@ -2327,6 +2345,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
         Commands::Skill { action } => handle_skill(context, action).await,
+        Commands::SkillSaved { action } => handle_skill_saved(context, action).await,
         Commands::Graph {
             dot,
             json,
@@ -7809,6 +7828,178 @@ async fn handle_skill(context: &StorageContext, action: &SkillActions) -> Result
             vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
 
             // Run through the ask pipeline (vault-grounded AI)
+            let result = ask_with_ai_with_context(
+                context,
+                prompt,
+                None, // no history
+                None, // no images
+                None, // no model override
+                |_, _| (),
+            )
+            .await?;
+
+            to_json(&strip_cli_markdown_from_grounded_answer(result))
+        }
+    }
+}
+
+// ─── Saved Skills (#3068) ──────────────────────────────────────
+
+/// Subcommands for the database-backed Saved Skills (user-authored, named
+/// AI commands with `{{selection}}` / `{{note}}` placeholders).
+#[derive(clap::Subcommand)]
+enum SkillSavedActions {
+    /// List all saved skills (id, name, scope, enabled)
+    List,
+
+    /// Show a saved skill's template and metadata
+    Show {
+        /// Skill id (UUID)
+        id: String,
+    },
+
+    /// Create a new saved skill
+    Create {
+        /// Display name (also used as the `/command` label)
+        name: String,
+
+        /// Prompt template body; may contain `{{selection}}` / `{{note}}`
+        prompt: String,
+
+        /// Optional description
+        #[arg(long, default_value = "")]
+        description: String,
+
+        /// Optional vault-relative scope directory
+        #[arg(long, default_value = "")]
+        scope: String,
+    },
+
+    /// Delete a saved skill by id
+    Delete {
+        /// Skill id (UUID)
+        id: String,
+    },
+
+    /// Render a saved skill's template and run it through the AI pipeline
+    Run {
+        /// Skill id (UUID)
+        id: String,
+
+        /// Text substituted for `{{selection}}`
+        #[arg(long, default_value = "")]
+        selection: String,
+
+        /// Text substituted for `{{note}}`
+        #[arg(long, default_value = "")]
+        note: String,
+
+        /// Response style: brief, standard, or detailed
+        #[arg(long, default_value = "standard")]
+        style: String,
+    },
+}
+
+/// Handle database-backed Saved Skill commands (#3068).
+async fn handle_skill_saved(context: &StorageContext, action: &SkillSavedActions) -> Result<Value> {
+    use vaultpilot_lib::storage::{
+        create_skill_with_context, delete_skill_with_context, get_skill_with_context,
+        list_skills_with_context, SkillInvocation,
+    };
+
+    match action {
+        SkillSavedActions::List => {
+            let skills = list_skills_with_context(context, false)?;
+            let rows: Vec<Value> = skills
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "id": s.id,
+                        "name": s.name,
+                        "description": s.description,
+                        "scope": s.scope,
+                        "enabled": s.enabled,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "status": "ok",
+                "count": rows.len(),
+                "skills": rows,
+            }))
+        }
+        SkillSavedActions::Show { id } => {
+            let skill = get_skill_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("saved skill '{}' not found", id))?;
+            Ok(serde_json::json!({
+                "status": "ok",
+                "skill": {
+                    "id": skill.id,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "prompt": skill.prompt,
+                    "scope": skill.scope,
+                    "enabled": skill.enabled,
+                    "createdAt": skill.created_at,
+                    "updatedAt": skill.updated_at,
+                }
+            }))
+        }
+        SkillSavedActions::Create {
+            name,
+            prompt,
+            description,
+            scope,
+        } => {
+            let skill = create_skill_with_context(context, name, description, prompt, scope)?;
+            Ok(serde_json::json!({
+                "status": "ok",
+                "skill": {
+                    "id": skill.id,
+                    "name": skill.name,
+                }
+            }))
+        }
+        SkillSavedActions::Delete { id } => {
+            let removed = delete_skill_with_context(context, id)?;
+            if !removed {
+                return Err(anyhow::anyhow!("saved skill '{}' not found", id));
+            }
+            Ok(serde_json::json!({
+                "status": "ok",
+                "deleted": id,
+            }))
+        }
+        SkillSavedActions::Run {
+            id,
+            selection,
+            note,
+            style,
+        } => {
+            let skill = get_skill_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("saved skill '{}' not found", id))?;
+            if !skill.enabled {
+                return Err(anyhow::anyhow!(
+                    "saved skill '{}' is disabled; enable it before running",
+                    id
+                ));
+            }
+
+            // Render the template with invocation placeholders.
+            let prompt = skill.render(&SkillInvocation {
+                selection: selection.clone(),
+                note: note.clone(),
+            });
+
+            // Apply response style.
+            let rs = style
+                .parse::<ResponseStyle>()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let mut settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+            settings.response_style = rs;
+            vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+
+            // Run through the ask pipeline (vault-grounded AI).
             let result = ask_with_ai_with_context(
                 context,
                 prompt,

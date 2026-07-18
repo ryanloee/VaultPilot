@@ -749,32 +749,6 @@ enum Commands {
         #[command(subcommand)]
         action: PdfActions,
     },
-
-    /// Show a changelog of recently created/modified notes, grouped by date (#3078)
-    ///
-    /// Queries the notes table for notes created or modified within the specified
-    /// time window, groups them by date, and outputs a Markdown summary.
-    /// Supports optional collection filtering and JSON output.
-    ///
-    /// Examples:
-    ///   vp changelog                         — last 7 days, full Markdown
-    ///   vp changelog --days 1                — last 24h
-    ///   vp changelog --days 30               — last 30 days
-    ///   vp changelog --collection mycol      — only notes in "mycol" collection
-    ///   vp changelog --json                  — machine-readable JSON
-    Changelog {
-        /// Number of days to look back (default: 7)
-        #[arg(long, default_value_t = 7)]
-        days: usize,
-
-        /// Filter by collection name (optional)
-        #[arg(long)]
-        collection: Option<String>,
-
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -2414,11 +2388,6 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Connector { action } => handle_connector(action),
         Commands::Pdf { action } => handle_pdf(action),
-        Commands::Changelog {
-            days,
-            collection,
-            json,
-        } => handle_changelog(context, *days, collection.as_deref(), *json),
     }
 }
 
@@ -6583,161 +6552,6 @@ async fn handle_digest(context: &StorageContext, hours: u64, limit: usize) -> Re
         "window_hours": hours,
         "recent_notes": recent_entries,
         "count": recent_entries.len(),
-    }))
-}
-
-/// Handle `vp changelog` — show recently created/modified notes grouped by date (#3078)
-fn handle_changelog(
-    context: &StorageContext,
-    days: usize,
-    collection: Option<&str>,
-    json: bool,
-) -> Result<Value> {
-    let hours = (days as u64).saturating_mul(24).max(1);
-    let now = chrono::Utc::now();
-    let since = (now - chrono::Duration::hours(hours as i64)).to_rfc3339();
-
-    let query = SearchQuery {
-        modified_after: Some(since.clone()),
-        created_after: Some(since),
-        limit: Some(200),
-        ..Default::default()
-    };
-
-    let result = search_notes_with_context(context, query)?;
-    let mut notes = result.notes;
-
-    // Optional collection filtering: resolve collection name → ID, filter notes
-    if let Some(collection_name) = collection {
-        let collections = list_collections_with_context(context)?;
-        let col_id = collections
-            .iter()
-            .find(|c| c.name == collection_name)
-            .map(|c| c.id.clone());
-        if let Some(cid) = col_id {
-            // Collect note IDs that belong to this collection
-            let col_note_ids: std::collections::HashSet<String> =
-                list_notes_in_collection_with_context(context, &cid, 10000, 0)?
-                    .into_iter()
-                    .map(|n| n.id)
-                    .collect();
-            notes.retain(|n| col_note_ids.contains(&n.id));
-        } else {
-            eprintln!("⚠️  Collection \"{collection_name}\" not found.");
-            return Ok(serde_json::json!({
-                "status": "error",
-                "message": format!("Collection \"{collection_name}\" not found."),
-                "notes": [],
-                "count": 0,
-            }));
-        }
-    }
-
-    if notes.is_empty() {
-        let msg = if collection.is_some() {
-            format!("No notes changed in the last {days} day(s) in this collection.")
-        } else {
-            format!("No notes changed in the last {days} day(s).")
-        };
-        if json {
-            return Ok(serde_json::json!({
-                "status": "ok",
-                "window_days": days,
-                "notes": [],
-                "count": 0,
-            }));
-        }
-        eprintln!("📋 Vault Changelog (last {days} days)");
-        eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        eprintln!("{msg}");
-        return Ok(serde_json::json!({
-            "status": "ok",
-            "window_days": days,
-            "notes": [],
-            "count": 0,
-            "markdown": msg,
-        }));
-    }
-
-    // Group notes by date (YYYY-MM-DD based on updated_at)
-    let mut by_date: std::collections::BTreeMap<String, Vec<&vaultpilot_lib::models::NoteMeta>> =
-        std::collections::BTreeMap::new();
-    for note in &notes {
-        // Parse updated_at to extract the date part
-        let date_key = if note.updated_at.len() >= 10 {
-            note.updated_at[..10].to_string()
-        } else {
-            "unknown".to_string()
-        };
-        by_date.entry(date_key).or_default().push(note);
-    }
-
-    // Build JSON entries
-    let json_entries: Vec<Value> = notes
-        .iter()
-        .map(|n| {
-            serde_json::json!({
-                "id": n.id,
-                "title": n.title,
-                "tags": n.tags,
-                "summary": n.summary,
-                "updated_at": n.updated_at,
-                "created_at": n.created_at,
-            })
-        })
-        .collect();
-
-    if json {
-        return Ok(serde_json::json!({
-            "status": "ok",
-            "window_days": days,
-            "grouped_by_date": by_date.keys().collect::<Vec<&String>>(),
-            "notes": json_entries,
-            "count": json_entries.len(),
-        }));
-    }
-
-    // Print Markdown changelog to stderr
-    let changelog_title = if let Some(col) = collection {
-        format!("📋 Vault Changelog — last {days} days (collection: {col})")
-    } else {
-        format!("📋 Vault Changelog — last {days} days")
-    };
-    eprintln!("{changelog_title}");
-    eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    eprintln!();
-
-    for (date, day_notes) in &by_date {
-        eprintln!("## {date}");
-        eprintln!();
-        for note in day_notes {
-            let tags = if note.tags.is_empty() {
-                String::new()
-            } else {
-                format!(" `{}`", note.tags.join("` `"))
-            };
-            let summary = if note.summary.is_empty() {
-                String::new()
-            } else {
-                format!("\n  > {}", note.summary)
-            };
-            eprintln!(
-                "- **{}**{} — id: `{}`{}",
-                note.title, tags, note.id, summary
-            );
-        }
-        eprintln!();
-    }
-
-    eprintln!("---");
-    eprintln!("_Total: {} notes changed in {days} day(s)._", notes.len());
-
-    Ok(serde_json::json!({
-        "status": "ok",
-        "window_days": days,
-        "grouped_by_date": by_date.keys().collect::<Vec<&String>>(),
-        "notes": json_entries,
-        "count": json_entries.len(),
     }))
 }
 

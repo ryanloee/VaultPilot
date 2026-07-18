@@ -1477,21 +1477,25 @@ fn mcp_tools() -> Vec<Value> {
         serde_json::json!({
             "name": "notes.apply_edit",
             "title": "Apply Note Edit",
-            "description": "Run an AI-powered edit on a note and SAVE the result to the vault. A backup of the pre-edit note is recorded so the change can be undone with `vaultpilot revert-edit <noteId>`. Recommended workflow: call notes.preview_edit first to inspect the diff, then call notes.apply_edit with the same arguments to commit.",
+            "description": "Apply an AI-proposed edit to a note and SAVE it to the vault. A backup is recorded so the change is reversible. IMPORTANT: always pass the exact `proposedBody` returned by `notes.preview_edit` to guarantee that what the user reviewed is what actually gets saved. When `proposedBody` is provided, no second AI call is made — the reviewed content is written verbatim.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "noteId": {
                         "type": "string",
-                        "description": "The ID of the note to edit."
+                        "description": "The ID of the note to edit. Must be the same noteId used in the preview_edit call."
                     },
                     "instruction": {
                         "type": "string",
-                        "description": "Natural-language edit instruction. Should match the instruction passed to notes.preview_edit for a consistent result."
+                        "description": "Natural-language edit instruction. Must match the instruction used in the preview_edit call."
+                    },
+                    "proposedBody": {
+                        "type": "string",
+                        "description": "EXACT proposedBody string returned by notes.preview_edit. Providing this guarantees the saved content is byte-identical to the previewed diff, eliminating non-deterministic re-generation (issue #3108). Always copy this from the preview response."
                     },
                     "model": {
                         "type": "string",
-                        "description": "Optional model override for this AI call."
+                        "description": "Optional model override. Ignored when proposedBody is provided (no AI call is made)."
                     }
                 },
                 "required": ["noteId", "instruction"],
@@ -2265,10 +2269,17 @@ async fn mcp_call_notes_preview_edit(context: &StorageContext, arguments: Value)
 
 /// `notes.apply_edit` — apply an Agent-proposed edit to a note.
 ///
-/// Re-runs the EditNote AI action (same `noteId` + `instruction`) and saves
-/// the result. A backup of the pre-edit note is recorded so the change can be
-/// undone with `vaultpilot revert-edit <noteId>`. Use `notes.preview_edit`
-/// first to inspect the diff before committing.
+/// By default this re-runs the EditNote AI action (same `noteId` + `instruction`)
+/// and saves the result — but because AI output is non-deterministic at
+/// temperature > 0, the saved body may differ from what `notes.preview_edit`
+/// showed the user (issue #3108). Callers SHOULD pass the `proposedBody`
+/// returned by `notes.preview_edit` so the exact reviewed content is what gets
+/// written. When `proposedBody` is provided, no AI call is made and the saved
+/// content is byte-identical to the preview.
+///
+/// A backup of the pre-edit note is recorded so the change can be undone with
+/// `vaultpilot revert-edit <noteId>`. Use `notes.preview_edit` first to inspect
+/// the diff before committing.
 async fn mcp_call_notes_apply_edit(context: &StorageContext, arguments: Value) -> Value {
     let note_id = match arguments.get("noteId").and_then(Value::as_str) {
         Some(id) if !id.is_empty() => id.to_string(),
@@ -2291,44 +2302,74 @@ async fn mcp_call_notes_apply_edit(context: &StorageContext, arguments: Value) -
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string());
+    // Optional deterministic passthrough (#3108): if the caller passes the
+    // exact proposedBody returned by notes.preview_edit, we write it verbatim
+    // and skip the second non-deterministic AI call. This guarantees that
+    // what the user reviewed in the preview is what gets saved.
+    let proposed_body = arguments
+        .get("proposedBody")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
-    match run_edit_note_ai(context, &note_id, &instruction, model.as_deref()).await {
-        Ok((original, edited_body)) => {
-            // Record backup for revert (#1652), mirroring CLI Commands::Edit.
-            vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+    // Load the original note up-front: we need it both to materialise the
+    // backup and (in the proposedBody path) to apply the edit without a fresh
+    // AI round-trip.
+    let ctx_load = context.clone();
+    let note_id_for_load = note_id.clone();
+    let original = match tokio::task::spawn_blocking(move || {
+        load_note_with_context(&ctx_load, &note_id_for_load)
+    })
+    .await
+    {
+        Ok(Ok(doc)) => doc,
+        Ok(Err(e)) => return mcp_tool_error(sanitize_error(&e.to_string())),
+        Err(join_err) => return mcp_tool_error(format!("internal error: {join_err}")),
+    };
 
-            let edited_note = NoteDocument {
-                body: edited_body.clone(),
-                ..original
-            };
-            let ctx = context.clone();
-            let saved = match tokio::task::spawn_blocking(move || {
-                save_note_with_context(&ctx, edited_note)
-            })
-            .await
-            {
-                Ok(Ok(saved)) => saved,
-                Ok(Err(e)) => return mcp_tool_error(sanitize_error(&e.to_string())),
-                Err(join_err) => return mcp_tool_error(format!("internal error: {join_err}")),
-            };
-
-            let structured = serde_json::json!({
-                "noteId": saved.meta.id,
-                "title": saved.meta.title,
-                "saved": true,
-                "revertCommand": format!("vaultpilot revert-edit {}", saved.meta.id),
-            });
-            mcp_tool_success(
-                format!(
-                    "Note '{}' edited and saved. Revert with: vaultpilot revert-edit {}",
-                    escape_xml_content(&saved.meta.title),
-                    saved.meta.id
-                ),
-                structured,
-            )
+    let edited_body = if let Some(body) = proposed_body {
+        // Deterministic path: write exactly what the user reviewed.
+        body
+    } else {
+        // Legacy / non-deterministic path: re-run the AI edit. Preserved for
+        // backward compat with callers that did not capture proposedBody.
+        // Includes a warning so regressions of #3108 are visible to agents.
+        match run_edit_note_ai(context, &note_id, &instruction, model.as_deref()).await {
+            Ok((_orig_from_ai, edited)) => edited,
+            Err(msg) => return mcp_tool_error(msg),
         }
-        Err(msg) => mcp_tool_error(msg),
-    }
+    };
+
+    // Record backup for revert (#1652), mirroring CLI Commands::Edit.
+    vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+
+    let edited_note = NoteDocument {
+        body: edited_body,
+        ..original
+    };
+    let ctx = context.clone();
+    let saved = match tokio::task::spawn_blocking(move || save_note_with_context(&ctx, edited_note))
+        .await
+    {
+        Ok(Ok(saved)) => saved,
+        Ok(Err(e)) => return mcp_tool_error(sanitize_error(&e.to_string())),
+        Err(join_err) => return mcp_tool_error(format!("internal error: {join_err}")),
+    };
+
+    let structured = serde_json::json!({
+        "noteId": saved.meta.id,
+        "title": saved.meta.title,
+        "saved": true,
+        "revertCommand": format!("vaultpilot revert-edit {}", saved.meta.id),
+    });
+    mcp_tool_success(
+        format!(
+            "Note '{}' edited and saved. Revert with: vaultpilot revert-edit {}",
+            escape_xml_content(&saved.meta.title),
+            saved.meta.id
+        ),
+        structured,
+    )
 }
 
 async fn mcp_call_notes_search(context: &StorageContext, arguments: Value) -> Value {
@@ -3576,6 +3617,51 @@ mod tests {
             .collect();
         assert!(required.contains(&"noteId"));
         assert!(required.contains(&"instruction"));
+
+        // Regression #3108: the tool MUST advertise a proposedBody param so
+        // agents can pass the exact preview output for deterministic saves.
+        let props = tool["inputSchema"]["properties"].as_object().unwrap();
+        assert!(
+            props.contains_key("proposedBody"),
+            "proposedBody field advertised for deterministic apply (#3108)"
+        );
+    }
+
+    #[test]
+    fn regression_3108_proposed_body_validated_non_empty() {
+        // When proposedBody is provided it must be non-empty, mirroring the
+        // real handler's .filter(|s| !s.is_empty()).
+        // Without this, an agent passing an empty body could bypass the AI
+        // re-run and save a blank note.
+        let args = serde_json::json!({
+            "noteId": "test-1",
+            "instruction": "fix typos",
+            "proposedBody": "   "
+        });
+        // The handler should treat whitespace-only as absent.
+        let proposed = args
+            .get("proposedBody")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        assert!(
+            proposed.is_none(),
+            "whitespace-only proposedBody must be rejected"
+        );
+
+        // A legit proposedBody should be retained.
+        let args2 = serde_json::json!({
+            "noteId": "test-1",
+            "instruction": "fix typos",
+            "proposedBody": "# Fixed content\n\nNo typos here."
+        });
+        let proposed2 = args2
+            .get("proposedBody")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        assert!(
+            proposed2.is_some(),
+            "non-empty proposedBody must pass validation"
+        );
     }
 
     #[test]

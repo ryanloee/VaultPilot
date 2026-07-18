@@ -238,6 +238,19 @@ public sealed partial class MainWindow : Window
                 AppendMessage("Agent 错误", status.Detail ?? "未知错误");
                 StopAgentMode("执行出错");
                 break;
+
+            case "unhealthyDetected":
+                // The SessionHealthTracker (PR #3105) detected that the agent
+                // is stuck in a loop or otherwise misbehaving. The sidecar
+                // already continues the agent loop, but the UI must surface
+                // the warning so the user can intervene / reset the context.
+                // Without this case the event was silently dropped (issue #3109).
+                var reason = status.Detail ?? "Agent 行为异常";
+                var suggestion = status.Suggestion ?? "考虑重置 Agent 上下文后重试。";
+                AppendMessage("Agent 警告", $"⚠ {reason}\n建议：{suggestion}");
+                AgentStatusText.Text = "Agent 可能陷入循环";
+                UpdateStatusBar("warning", "Agent 异常", reason);
+                break;
         }
     }
 

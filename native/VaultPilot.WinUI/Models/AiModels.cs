@@ -136,6 +136,11 @@ public sealed record AgentStatusEvent
     public int? StepsUsed { get; init; }
     public ulong? TokensUsed { get; init; }
 
+    // Unhealthy-detected fields (populated for stage="unhealthyDetected").
+    // The agent sidecar sends a human-readable suggestion alongside the
+    // detail/reason; preserve it so the UI can render recovery guidance.
+    public string? Suggestion { get; init; }
+
     [JsonConstructor]
     public AgentStatusEvent() { }
 

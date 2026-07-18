@@ -619,6 +619,29 @@ enum Commands {
         limit: usize,
     },
 
+    /// Show recent vault changes grouped by date (#3078)
+    ///
+    /// Lists notes created or modified in the last N days, grouped by the
+    /// date of their last update.  Default output is Markdown with clickable
+    /// note links; pass --json for machine-readable output.
+    ///
+    /// Examples:
+    ///   vp changelog                          — last 7 days
+    ///   vp changelog --days 30                — last 30 days
+    ///   vp changelog --collection "Work"      — filter by collection
+    ///   vp changelog --days 1 --json          — last 24 h as JSON
+    Changelog {
+        /// Number of days to look back (default: 7)
+        #[arg(long, default_value_t = 7)]
+        days: u64,
+        /// Filter by collection name (case-insensitive match)
+        #[arg(long)]
+        collection: Option<String>,
+        /// Output as structured JSON instead of Markdown
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run built-in knowledge-work skills (#1830)
     ///
     /// Skills are pre-configured task templates (summarize, weekly-review,
@@ -2344,6 +2367,11 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tokio::task::block_in_place(|| handle_prompt(context, action))
         }
         Commands::Digest { hours, limit } => handle_digest(context, *hours, *limit).await,
+        Commands::Changelog {
+            days,
+            collection,
+            json,
+        } => handle_changelog(context, *days, collection.as_deref(), *json).await,
         Commands::Skill { action } => handle_skill(context, action).await,
         Commands::SkillSaved { action } => handle_skill_saved(context, action).await,
         Commands::Graph {
@@ -6571,6 +6599,143 @@ async fn find_related_notes_for_digest(
             })
             .collect(),
         Err(_) => Vec::new(),
+    }
+}
+
+/// Show recent vault changes grouped by date (#3078).
+///
+/// Lists notes created or modified in the last N days, grouped by the date of
+/// their last update.  Default output is Markdown; pass `--json` for structured
+/// JSON.
+async fn handle_changelog(
+    context: &StorageContext,
+    days: u64,
+    collection: Option<&str>,
+    json: bool,
+) -> Result<Value> {
+    let now = chrono::Utc::now();
+    let since = (now - chrono::Duration::days(days as i64)).to_rfc3339();
+
+    // If a collection filter is specified, resolve collection name → id,
+    // then query notes in that collection and filter by modified_after.
+    #[allow(clippy::mutable_key_type)]
+    let notes: Vec<NoteMeta> = if let Some(coll_name) = collection {
+        let collections = list_collections_with_context(context)?;
+        let coll = collections
+            .iter()
+            .find(|c| c.name.to_lowercase() == coll_name.to_lowercase());
+        match coll {
+            Some(coll) => {
+                // Fetch all notes in the collection (up to 2000) and filter by time
+                let mut all_in_collection = Vec::new();
+                let batch_size = 200;
+                for offset in (0..).step_by(batch_size) {
+                    let batch = list_notes_in_collection_with_context(
+                        context, &coll.id, batch_size, offset,
+                    )?;
+                    let count = batch.len();
+                    all_in_collection.extend(batch);
+                    if count < batch_size {
+                        break;
+                    }
+                }
+                all_in_collection
+                    .into_iter()
+                    .filter(|n| n.updated_at >= since)
+                    .collect()
+            }
+            None => {
+                return Ok(serde_json::json!({
+                    "status": "error",
+                    "message": format!("Collection \"{coll_name}\" not found."),
+                    "count": 0,
+                }));
+            }
+        }
+    } else {
+        let query = SearchQuery {
+            modified_after: Some(since),
+            limit: Some(2000),
+            ..Default::default()
+        };
+        search_notes_with_context(context, query)?.notes
+    };
+
+    if notes.is_empty() {
+        let msg = if let Some(coll) = collection {
+            format!("No notes modified in the last {days} days in collection \"{coll}\".")
+        } else {
+            format!("No notes modified in the last {days} days.")
+        };
+        return Ok(serde_json::json!({"status": "ok", "message": msg, "count": 0}));
+    }
+
+    // Group notes by date (YYYY-MM-DD from updated_at)
+    let mut by_date: std::collections::BTreeMap<String, Vec<&NoteMeta>> =
+        std::collections::BTreeMap::new();
+    for note in &notes {
+        // Extract date portion from RFC 3339 timestamp
+        let date_key = note.updated_at[..10].to_string();
+        by_date.entry(date_key).or_default().push(note);
+    }
+
+    if json {
+        // Structured JSON output grouped by date
+        let mut date_groups = Vec::new();
+        for (date, group_notes) in &by_date {
+            let entries: Vec<Value> = group_notes
+                .iter()
+                .map(|n| {
+                    serde_json::json!({
+                        "id": n.id,
+                        "title": n.title,
+                        "tags": n.tags,
+                        "summary": n.summary,
+                        "collections": n.collections,
+                        "updated_at": n.updated_at,
+                        "created_at": n.created_at,
+                    })
+                })
+                .collect();
+            date_groups.push(serde_json::json!({
+                "date": date,
+                "notes": entries,
+                "count": entries.len(),
+            }));
+        }
+        Ok(serde_json::json!({
+            "status": "ok",
+            "days": days,
+            "total_notes": notes.len(),
+            "groups": date_groups,
+        }))
+    } else {
+        // Markdown output, printed directly to stdout
+        let mut md = String::new();
+        md.push_str(&format!("# Changelog (last {} days)\n\n", days));
+        if let Some(coll) = collection {
+            md.push_str(&format!("_Collection: {}_\n\n", coll));
+        }
+
+        for (date, group_notes) in &by_date {
+            md.push_str(&format!("## {}\n\n", date));
+            for note in group_notes {
+                let title = if note.title.is_empty() {
+                    "(untitled)"
+                } else {
+                    &note.title
+                };
+                let line = format!(
+                    "- [{}](vaultpilot://note/{}) — {}\n",
+                    title, note.id, note.summary
+                );
+                md.push_str(&line);
+            }
+            md.push('\n');
+        }
+
+        println!("{}", md.trim());
+        Ok(Value::Null)
     }
 }
 

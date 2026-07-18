@@ -34,6 +34,8 @@ pub enum AiActionType {
     SummarizeUrl,
     /// Brainstorm creative ideas, alternatives, or solutions based on a topic.
     Brainstorm,
+    /// Review a note and suggest structural/content improvements without modifying (#3102).
+    ReviewNote,
 }
 
 impl AiActionType {
@@ -52,6 +54,7 @@ impl AiActionType {
             Self::EditNote => "编辑笔记",
             Self::SummarizeUrl => "链接摘要",
             Self::Brainstorm => "头脑风暴",
+            Self::ReviewNote => "审阅笔记",
         }
     }
 
@@ -70,6 +73,7 @@ impl AiActionType {
             Self::EditNote => "editNote",
             Self::SummarizeUrl => "summarizeUrl",
             Self::Brainstorm => "brainstorm",
+            Self::ReviewNote => "reviewNote",
         }
     }
 
@@ -88,6 +92,7 @@ impl AiActionType {
             "editNote" | "edit_note" => Some(Self::EditNote),
             "summarizeUrl" | "summarize_url" => Some(Self::SummarizeUrl),
             "brainstorm" => Some(Self::Brainstorm),
+            "reviewNote" | "review_note" | "review" => Some(Self::ReviewNote),
             _ => None,
         }
     }
@@ -107,6 +112,7 @@ impl AiActionType {
             Self::EditNote,
             Self::SummarizeUrl,
             Self::Brainstorm,
+            Self::ReviewNote,
         ]
     }
 }
@@ -257,6 +263,28 @@ fn system_prompt(action: AiActionType) -> String {
              Respond in the same language as the input."
                 .to_string()
         }
+        AiActionType::ReviewNote => {
+            "You are a knowledgeable document reviewer. Your task is to analyze the \
+             given note and provide a structured review of its quality, structure, \
+             and completeness. DO NOT rewrite or modify the text — only provide \
+             observations and suggestions. \n\
+             Output a structured review in the following format:\n\n\
+             ## Structure Assessment\n\
+             - Evaluate heading hierarchy, paragraph organization, and flow.\n\
+             - Point out missing sections or logical gaps.\n\n\
+             ## Content Completeness\n\
+             - Identify topics that should be expanded.\n\
+             - Note missing context, definitions, or examples.\n\n\
+             ## Improvement Suggestions\n\
+             - Specific, actionable suggestions (e.g., 'Section 2 could benefit from a code example').\n\
+             - Suggested reorganization or new sections.\n\n\
+             ## Clarity & Style\n\
+             - Flag unclear expressions, jargon, or verbose passages.\n\
+             - Suggest clearer alternatives.\n\n\
+             Output the review in the same language as the input. \
+             Be constructive and specific — avoid vague praise or criticism."
+                .to_string()
+        }
     }
 }
 
@@ -342,6 +370,13 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
             format!(
                 "Please brainstorm creative ideas, solutions, or perspectives \
                  based on the following topic or problem:\n\n{}",
+                request.text
+            )
+        }
+        AiActionType::ReviewNote => {
+            format!(
+                "Please review the following note and provide a structured evaluation. \
+                 Focus on structure, completeness, clarity, and actionable improvements:\n\n{}",
                 request.text
             )
         }
@@ -804,5 +839,150 @@ mod tests {
             result.is_some(),
             "empty text should fail validation for EditNote"
         );
+    }
+
+    // ── ReviewNote tests (#3102) ─────────────────────────────────────
+
+    #[test]
+    fn review_note_label_and_id_are_consistent() {
+        assert_eq!(AiActionType::ReviewNote.label(), "审阅笔记");
+        assert_eq!(AiActionType::ReviewNote.id(), "reviewNote");
+        assert_eq!(
+            AiActionType::from_id("reviewNote"),
+            Some(AiActionType::ReviewNote)
+        );
+        assert_eq!(
+            AiActionType::from_id("review_note"),
+            Some(AiActionType::ReviewNote)
+        );
+        assert_eq!(
+            AiActionType::from_id("review"),
+            Some(AiActionType::ReviewNote)
+        );
+    }
+
+    #[test]
+    fn review_note_is_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::ReviewNote),
+            "ReviewNote must be in the all() list"
+        );
+    }
+
+    #[test]
+    fn review_note_system_prompt_includes_review_sections() {
+        let prompt = system_prompt(AiActionType::ReviewNote);
+        assert!(!prompt.is_empty(), "system prompt must not be empty");
+        // Must explicitly instruct NOT to modify the text
+        assert!(
+            prompt.contains("DO NOT rewrite") || prompt.contains("not modify"),
+            "system prompt must instruct not to modify the note"
+        );
+        // Must include structured review sections
+        assert!(
+            prompt.contains("Structure Assessment"),
+            "system prompt must request structure assessment"
+        );
+        assert!(
+            prompt.contains("Content Completeness"),
+            "system prompt must request content completeness review"
+        );
+        assert!(
+            prompt.contains("Improvement Suggestions"),
+            "system prompt must request improvement suggestions"
+        );
+        assert!(
+            prompt.contains("Clarity"),
+            "system prompt must include clarity review"
+        );
+    }
+
+    #[test]
+    fn review_note_user_prompt_contains_input_text() {
+        let request = AiActionRequest {
+            action: AiActionType::ReviewNote,
+            text: "# 项目计划\n\n这是一份关于新产品的项目计划文档。".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::ReviewNote, &request);
+        assert!(
+            prompt.contains("项目计划"),
+            "user prompt must include the input note text"
+        );
+        assert!(
+            prompt.to_lowercase().contains("review"),
+            "user prompt must reference review task"
+        );
+    }
+
+    #[test]
+    fn review_note_empty_text_returns_error() {
+        let request = AiActionRequest {
+            action: AiActionType::ReviewNote,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "empty text should fail validation for ReviewNote"
+        );
+        assert!(
+            result.unwrap().error.unwrap().contains("空"),
+            "error message should mention empty input"
+        );
+    }
+
+    #[test]
+    fn review_note_whitespace_text_returns_error() {
+        let request = AiActionRequest {
+            action: AiActionType::ReviewNote,
+            text: "  \n\t  ".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "whitespace-only text should fail validation for ReviewNote"
+        );
+    }
+
+    #[test]
+    fn review_note_valid_text_passes_validation() {
+        let request = AiActionRequest {
+            action: AiActionType::ReviewNote,
+            text: "# Note\n\nSome real content to review.".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        assert!(
+            validate_request(&request).is_none(),
+            "valid note text should pass validation for ReviewNote"
+        );
+    }
+
+    #[test]
+    fn review_note_roundtrip_via_action_type_roundtrip() {
+        // The action_type_roundtrip test covers all actions in all().
+        // Since ReviewNote is in all(), this explicitly confirms it round-trips.
+        let id = AiActionType::ReviewNote.id();
+        let parsed = AiActionType::from_id(id);
+        assert_eq!(parsed, Some(AiActionType::ReviewNote));
     }
 }

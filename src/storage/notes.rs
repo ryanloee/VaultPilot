@@ -62,13 +62,6 @@ pub fn save_note_with_images_with_context(
     note: NoteDocument,
     image_paths: &[String],
 ) -> Result<NoteDocument> {
-    // ── Persistent snapshot: capture the old state before overwriting (#2855) ──
-    // If the note already exists (has a non-empty ID), record a snapshot of the
-    // current version so users can browse history and roll back across sessions.
-    if !note.meta.id.trim().is_empty() {
-        super::snapshots::record_snapshot_before_save(context, &note.meta.id, "agent")?;
-    }
-
     let (connection, settings) = open_connection(context)?;
     let now = Utc::now().to_rfc3339();
     let title = fallback_title(&note.meta.title);
@@ -110,6 +103,15 @@ pub fn save_note_with_images_with_context(
             sanitized
         }
     };
+
+    // ── Persistent snapshot: capture the old state before overwriting (#2855, #3081) ──
+    // After ID is fully resolved (including source-based dedup), record a snapshot
+    // if a note with this ID already exists.  The snapshot function handles the
+    // case where the note doesn't exist (first save) gracefully.
+    if !id.trim().is_empty() {
+        super::snapshots::record_snapshot_before_save(context, &id, "agent")?;
+    }
+
     let created_at = if note.meta.created_at.trim().is_empty() {
         now.clone()
     } else {

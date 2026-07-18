@@ -268,7 +268,10 @@ async function doSync(
             noteRetryAfterMs = parseRetryAfter(noteRes);
             continue;
           }
-          // 4xx 等不可重试状态 — 立即放弃
+          // 4xx 等不可重试状态 — 必须 cancel body 后放弃，否则底层 HTTP 连接
+          // 泄漏会逐步耗尽 fetch 连接池 (#3119). 与上方 isRetryable 分支的
+          // cancel 处理对称（#3111）.
+          await noteRes.body?.cancel().catch(() => {});
           break;
         } catch (fetchErr: unknown) {
           clearTimeout(timer);

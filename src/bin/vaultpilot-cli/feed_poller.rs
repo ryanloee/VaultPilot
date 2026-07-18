@@ -390,13 +390,20 @@ struct FetchOutcome {
 async fn fetch_feed_bytes(feed: &FeedSubscription) -> Result<FetchOutcome, String> {
     // SSRF guard — reject non-http(s) schemes and hosts that resolve to a
     // forbidden (loopback / private / link-local / …) address. Fail-closed.
-    crate::http_bridge::validate_clip_url_host(&feed.url)
+    // The guard returns the verified (host, SocketAddr) pins so we can pin DNS
+    // on the client, closing the DNS-rebinding TOCTOU window between this check
+    // and the actual fetch (#3059 hardening, reused from /api/clip).
+    let pins = crate::http_bridge::validate_clip_url_host(&feed.url)
         .await
         .map_err(|msg| format!("feed fetch blocked: {msg}"))?;
 
-    let client = reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::limited(5));
+    for (host, addr) in &pins {
+        client_builder = client_builder.resolve(host, *addr);
+    }
+    let client = client_builder
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 

@@ -858,6 +858,67 @@ async fn http_create_note(
 /// Pages larger than this are rejected to avoid memory exhaustion.
 const CLIP_MAX_HTML_BYTES: usize = 5 * 1024 * 1024; // 5 MB
 
+/// Error-message prefix used by `stream_body_with_cap` to signal "body
+/// exceeded the cap" so the caller can map it to HTTP 413 instead of 502.
+/// Kept as a `const` (not an enum) so the helper stays self-contained and
+/// trivially callable from tests.
+const CLIP_TOO_LARGE_MARKER: &str = "[clip-too-large]";
+
+/// Push `chunk` into `buf`, returning `Err(too-large marker)` if the
+/// running total would exceed `max_bytes`.
+///
+/// Extracted from [`stream_body_with_cap`] as a pure helper so the cap
+/// policy is unit-testable without spinning up a mock HTTP server. The
+/// check runs *before* the `extend_from_slice`, so an oversized chunk
+/// never lands in `buf` — important because a malicious upstream could
+/// send a single 1 GB chunk and we want to reject it without first
+/// allocating space for it (#3060).
+fn push_chunk_with_cap(buf: &mut Vec<u8>, chunk: &[u8], max_bytes: usize) -> Result<(), String> {
+    if buf.len().saturating_add(chunk.len()) > max_bytes {
+        return Err(format!(
+            "{CLIP_TOO_LARGE_MARKER}Page too large (exceeded {max_bytes} bytes mid-stream)"
+        ));
+    }
+    buf.extend_from_slice(chunk);
+    Ok(())
+}
+
+/// Stream a response body into a `Vec<u8>` with a hard byte cap.
+///
+/// Used by `/api/clip` (#3060) so a hijacked upstream cannot stream
+/// unbounded data into memory before the size check fires. The cap is
+/// enforced on the running `buf.len() + chunk.len()`, so it triggers as
+/// soon as a single oversized chunk arrives rather than after it has been
+/// fully buffered. The cap policy itself lives in [`push_chunk_with_cap`]
+/// so it can be unit-tested deterministically.
+///
+/// Returns:
+/// - `Ok(buf)` when the body completes within `max_bytes`.
+/// - `Err(CLIP_TOO_LARGE_MARKER + reason)` when the cap is exceeded; the
+///   caller maps this to HTTP 413.
+/// - `Err(other)` for transport-level read failures (mapped to 502).
+async fn stream_body_with_cap(
+    resp: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    use futures_util::StreamExt;
+    // Pre-size to either the declared Content-Length or a modest 64 KiB
+    // headroom, whichever is smaller — keeps small-page clips alloc-free
+    // while bounding speculative allocation for chunked / unknown-length
+    // streams.
+    let initial_cap = resp
+        .content_length()
+        .map(|cl| (cl as usize).min(max_bytes).min(64 * 1024))
+        .unwrap_or(64 * 1024);
+    let mut buf = Vec::with_capacity(initial_cap);
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("upstream stream read failed: {e}"))?;
+        push_chunk_with_cap(&mut buf, &chunk, max_bytes)?;
+    }
+    Ok(buf)
+}
+
 /// POST /api/clip — fetch a URL server-side, extract title + readable content,
 /// convert to Markdown, and save as a note. This implements #3034 Plan B
 /// (Bookmarklet-friendly: the browser only needs to send the URL).
@@ -886,28 +947,22 @@ async fn http_clip_url(
         ));
     }
 
-    // SSRF protection (#3040): resolve the URL host and reject if any resolved
-    // IP falls in a forbidden range (loopback / private / link-local /
-    // multicast / unspecified / broadcast / documentation / IPv6 ULA).
-    validate_clip_url_host(&url)
+    // SSRF protection (#3040) + DNS pinning (#3059): resolve the URL host
+    // and reject if any resolved IP falls in a forbidden range (loopback /
+    // private / link-local / multicast / unspecified / broadcast / IPv6
+    // ULA). The verified `(host, SocketAddr)` pairs are returned so the
+    // client builder can pin DNS, preventing a rebinding TOCTOU between
+    // this check and the actual fetch.
+    let initial_pins = validate_clip_url_host(&url)
         .await
         .map_err(|msg| openai_error(StatusCode::BAD_REQUEST, &msg))?;
 
     // Build the client with NO automatic redirects. We follow them manually
-    // below so we can re-validate each hop's resolved IPs before fetching —
-    // otherwise a public URL that 302's to http://169.254.169.254/ would sail
-    // past the initial check.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| {
-            tracing::warn!("http_clip_url: failed to build HTTP client: {e}");
-            openai_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build HTTP client",
-            )
-        })?;
+    // below so we can re-validate AND re-pin each hop's resolved IPs before
+    // fetching — otherwise a public URL that 302's to http://169.254.169.254/
+    // would sail past the initial check, and a rebinding DNS server could
+    // flip its answer between validation and fetch.
+    let mut client = build_clip_client(&initial_pins)?;
 
     // Fetch with manual redirect handling (cap at 5 hops, matching the previous
     // `Policy::limited(5)` semantics, but with per-hop SSRF re-validation).
@@ -985,10 +1040,14 @@ async fn http_clip_url(
             ));
         }
         let next_str = next.to_string();
-        // Re-validate SSRF on the new host before fetching.
-        validate_clip_url_host(&next_str)
+        // Re-validate SSRF on the new host AND rebuild the client with the
+        // newly-verified DNS pins. Both steps are required: validation alone
+        // still leaves the re-resolution window open (#3059), and pinning
+        // alone would let a redirect to a forbidden host through.
+        let next_pins = validate_clip_url_host(&next_str)
             .await
             .map_err(|msg| openai_error(StatusCode::BAD_REQUEST, &msg))?;
+        client = build_clip_client(&next_pins)?;
         current_url = next_str;
     };
 
@@ -1014,20 +1073,39 @@ async fn http_clip_url(
         ));
     }
 
-    let body_bytes = resp.bytes().await.map_err(|e| {
-        tracing::warn!("http_clip_url: failed to read body: {e}");
-        openai_error(StatusCode::BAD_GATEWAY, "Failed to read response body")
-    })?;
-    if body_bytes.len() > CLIP_MAX_HTML_BYTES {
-        return Err(openai_error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            &format!(
-                "Page too large ({} bytes); max is {} bytes",
-                body_bytes.len(),
-                CLIP_MAX_HTML_BYTES
-            ),
-        ));
+    // Stream the body with a hard byte cap so a malicious / hijacked
+    // upstream cannot exhaust memory by streaming GBs of data while we
+    // wait for EOF. The previous implementation called `resp.bytes().await`
+    // first and checked the size only after the full body was already in
+    // RAM, so the 5 MB cap was effectively advisory (#3060).
+    //
+    // 1. Pre-check Content-Length when present: reject immediately without
+    //    reading a single body byte.
+    if let Some(content_length) = resp.content_length() {
+        if content_length > CLIP_MAX_HTML_BYTES as u64 {
+            return Err(openai_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &format!(
+                    "Page too large (Content-Length {content_length} bytes); max is {CLIP_MAX_HTML_BYTES} bytes"
+                ),
+            ));
+        }
     }
+    // 2. Stream chunks, accumulating until we either exhaust the body or
+    //    exceed the cap. Cap is enforced on `buf.len() + chunk.len()` so a
+    //    10 MB chunk can't sneak past by being one large allocation.
+    let body_bytes = stream_body_with_cap(resp, CLIP_MAX_HTML_BYTES)
+        .await
+        .map_err(|e| {
+            // Distinguish "too large" from generic I/O failure so the client
+            // sees 413 (and can choose a different URL) vs 502.
+            if let Some(reason) = e.strip_prefix(CLIP_TOO_LARGE_MARKER) {
+                openai_error(StatusCode::PAYLOAD_TOO_LARGE, reason)
+            } else {
+                tracing::warn!("http_clip_url: failed to read body: {e}");
+                openai_error(StatusCode::BAD_GATEWAY, "Failed to read response body")
+            }
+        })?;
 
     let html = String::from_utf8_lossy(&body_bytes).into_owned();
     let title = extract_html_title(&html).unwrap_or_else(|| url.clone());
@@ -1176,7 +1254,31 @@ fn ip_is_forbidden(ip: IpAddr) -> bool {
 ///
 /// Failure mode: DNS resolution failure is reported as an error (fail-closed)
 /// rather than silently letting the request through.
-pub(crate) async fn validate_clip_url_host(url_str: &str) -> Result<(), String> {
+///
+/// Resolve and validate the host of `url_str` for SSRF safety (#3040),
+/// returning the verified `(hostname, SocketAddr)` pairs so the caller
+/// can **pin DNS** via `reqwest::ClientBuilder::resolve()`.
+///
+/// Returning the verified addresses (instead of `()`) closes the DNS
+/// rebinding TOCTOU window that would otherwise exist between this check
+/// and the subsequent HTTP fetch: without pinning, `reqwest` re-resolves
+/// the hostname independently, and an attacker-controlled authoritative
+/// DNS server can return a public IP here (passing validation) and a
+/// private / link-local / metadata IP for the actual fetch (#3059 — same
+/// class of bug as #503 on the AI base_url path; this is the same fix
+/// applied to the new Web Clipper code path introduced in #3034/#3045).
+///
+/// Returns:
+/// - `Ok(vec![])` for literal-IP URLs (no DNS pinning needed — reqwest
+///   does not resolve literal IPs) that pass the forbidden-range check.
+/// - `Ok(pins)` for hostname URLs where every resolved IP is acceptable;
+///   `pins` is suitable for `reqwest::ClientBuilder::resolve()` calls.
+/// - `Err(message)` for invalid URLs, non-http(s) schemes, missing host,
+///   DNS resolution failure, or any resolved IP in a forbidden range.
+///
+/// Failure mode: DNS resolution failure is reported as an error (fail-closed)
+/// rather than silently letting the request through.
+pub(crate) async fn validate_clip_url_host(url_str: &str) -> Result<Vec<(String, SocketAddr)>, String> {
     let parsed = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("refusing non-http(s) scheme '{}'", parsed.scheme()));
@@ -1185,23 +1287,33 @@ pub(crate) async fn validate_clip_url_host(url_str: &str) -> Result<(), String> 
         .host_str()
         .ok_or_else(|| "URL has no host".to_string())?;
 
-    // Literal IP — validate directly without DNS.
+    // Literal IP — validate directly without DNS. No pinning needed
+    // because reqwest does not perform DNS resolution for IP-literal
+    // URLs, so there is no TOCTOU window to close.
     if let Ok(ip) = host.parse::<IpAddr>() {
         if ip_is_forbidden(ip) {
             return Err(format!(
                 "url host {host} is a forbidden IP (loopback/private/link-local/multicast/unspecified/broadcast)"
             ));
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     // Hostname — resolve via DNS and reject if ANY returned IP is forbidden.
     // (Refusing on any-forbidden rather than all-forbidden defends against DNS
     // rebinding setups that mix public and private IPs in a single response.)
-    let lookup_target = format!("{host}:0");
+    //
+    // The resolved `SocketAddr`s are returned to the caller so they can be
+    // passed to `reqwest::ClientBuilder::resolve()`, pinning DNS for the
+    // subsequent fetch and eliminating the re-resolution window (#3059).
+    let port = parsed
+        .port_or_known_default()
+        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let lookup_target = format!("{host}:{port}");
     let resolved = tokio::net::lookup_host(lookup_target.as_str())
         .await
         .map_err(|e| format!("DNS resolution failed for '{host}': {e}"))?;
+    let mut pinned: Vec<(String, SocketAddr)> = Vec::new();
     for addr in resolved {
         if ip_is_forbidden(addr.ip()) {
             return Err(format!(
@@ -1209,8 +1321,41 @@ pub(crate) async fn validate_clip_url_host(url_str: &str) -> Result<(), String> 
                 addr.ip()
             ));
         }
+        // Normalize the port to the URL's port: `lookup_host` already uses
+        // the URL's port (via `lookup_target`), so `addr` carries the
+        // correct port for pinning.
+        pinned.push((host.to_string(), addr));
     }
-    Ok(())
+    Ok(pinned)
+}
+
+/// Build a `reqwest::Client` for `/api/clip` with DNS pinning applied.
+///
+/// `pins` is the verified `(hostname, SocketAddr)` list returned by
+/// [`validate_clip_url_host`]. Each entry is passed to
+/// `ClientBuilder::resolve()` so the client connects to the verified IP
+/// instead of re-resolving the hostname — closing the DNS rebinding
+/// TOCTOU window (#3059).
+///
+/// The client is configured with no-redirect policy (redirects are
+/// followed manually by [`http_clip_url`] so each hop can be re-validated
+/// and re-pinned) and a 20 s timeout matching the previous behavior.
+fn build_clip_client(
+    pins: &[(String, SocketAddr)],
+) -> Result<reqwest::Client, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none());
+    for (host, addr) in pins {
+        builder = builder.resolve(host, *addr);
+    }
+    builder.build().map_err(|e| {
+        tracing::warn!("http_clip_url: failed to build HTTP client: {e}");
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to build HTTP client",
+        )
+    })
 }
 
 /// Extract the page title from the `<title>...</title>` tag (case-insensitive).
@@ -1290,6 +1435,46 @@ fn decode_html_entities(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
+/// Wrap the trailing slice `out[anchor_start..]` as a Markdown link.
+///
+/// Used by [`html_to_markdown`] to convert `<a href="...">anchor text</a>`
+/// into `[anchor text](href)`. On entry `anchor_start` is the offset recorded
+/// when the `<a>` open tag was processed; we drain everything after that
+/// offset to obtain the anchor text, then push the formatted link back.
+///
+/// Graceful no-ops (the anchor text is left as plain text):
+/// - `anchor_start` is out of bounds (defensive; should not happen),
+/// - `href` is empty (e.g. `<a name="x">` anchor targets, `<a href="#">`),
+/// - the anchor text is empty / whitespace-only.
+///
+/// Both `href` and the anchor text are trimmed of surrounding whitespace so
+/// `<a href=" x "> text </a>` still produces `[text](x)` rather than
+/// `[ text ]( x )` — the latter is valid Markdown but visually noisy.
+fn wrap_link_in_place(out: &mut String, anchor_start: usize, href: &str) {
+    if anchor_start >= out.len() {
+        return;
+    }
+    let href_trimmed = href.trim();
+    if href_trimmed.is_empty() {
+        // No usable destination — leave the anchor text verbatim.
+        return;
+    }
+    let anchor_text: String = out.drain(anchor_start..).collect();
+    let anchor_trimmed = anchor_text.trim();
+    if anchor_trimmed.is_empty() {
+        // Nothing to wrap — restore the original whitespace and bail.
+        out.push_str(&anchor_text);
+        return;
+    }
+    // `anchor_trimmed` is a sub-slice of `anchor_text`; using it directly
+    // would borrow the local we just drained into, so copy via to_string.
+    out.push('[');
+    out.push_str(anchor_trimmed);
+    out.push_str("](");
+    out.push_str(href_trimmed);
+    out.push(')');
+}
+
 /// Convert block-level and inline HTML tags to Markdown. This is a
 /// lightweight regex-free converter: it handles headings, paragraphs,
 /// lists, links, images, code blocks, blockquotes, emphasis, and `<br>`.
@@ -1305,6 +1490,13 @@ pub(crate) fn html_to_markdown(html: &str) -> String {
     let mut i = 0;
     // Track list nesting for indentation.
     let mut list_stack: Vec<&'static str> = Vec::new();
+    // Track open <a> anchors so the closing tag can wrap the inner text as
+    // `[text](href)`. Each entry is `(anchor_start_offset_in_out, href)`.
+    // HTML disallows nested <a>; if we encounter an open while one is already
+    // active we defensively close the outer first (see the open-tag branch).
+    // Fixes #3061: previously the href was silently dropped on the floor and
+    // every link degraded to bare anchor text.
+    let mut link_stack: Vec<(usize, String)> = Vec::new();
     // Track whether we're inside <pre> (suppress newline insertion).
     let mut in_pre = false;
 
@@ -1382,8 +1574,25 @@ pub(crate) fn html_to_markdown(html: &str) -> String {
                         }
                     }
                     "a" if !is_closing => {
-                        // Defer: we cannot easily wrap link text without a stack.
-                        // Store href in a side channel by pushing a marker.
+                        // #3061: remember where the anchor text starts and
+                        // the href, so the matching </a> can wrap the
+                        // in-between text as `[text](href)`. HTML disallows
+                        // nested <a>; defensively pop+format any outer link
+                        // first so the inner's offset is correct.
+                        while let Some((anchor_start, outer_href)) = link_stack.pop() {
+                            wrap_link_in_place(&mut out, anchor_start, &outer_href);
+                        }
+                        let href = extract_attr(tag_raw, "href").unwrap_or_default();
+                        link_stack.push((out.len(), href));
+                    }
+                    "a" if is_closing => {
+                        // #3061: wrap everything emitted since the matching
+                        // <a> as a Markdown link. If the open tag never
+                        // happened (or href was missing), this is a no-op
+                        // and the text stays as-is.
+                        if let Some((anchor_start, href)) = link_stack.pop() {
+                            wrap_link_in_place(&mut out, anchor_start, &href);
+                        }
                     }
                     _ => {} // ignore unknown tags (script/style already stripped)
                 }
@@ -3294,13 +3503,220 @@ mod tests {
 
     #[test]
     fn clip_html_to_markdown_image_and_link() {
+        // #3061: this test previously only asserted that the anchor text
+        // ("link text") survived conversion. That check passed even though
+        // the href was silently dropped — the bug the report was filed
+        // against. The assertion below now requires the full Markdown
+        // link syntax `[text](url)` to be present.
         let html =
             r#"<img src="https://x.com/a.png" alt="pic"><a href="https://x.com">link text</a>"#;
         let md = html_to_markdown(html);
         // Image Markdown syntax
         assert!(md.contains("![pic](https://x.com/a.png)"));
-        // Link text is preserved (link wrapping is simplified)
-        assert!(md.contains("link text"));
+        // #3061: href MUST be preserved as a Markdown link, not just the
+        // bare anchor text.
+        assert!(
+            md.contains("[link text](https://x.com)"),
+            "#3061: link must render as '[link text](https://x.com)', got: {md:?}"
+        );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // #3061 regression: <a href> preservation across various edge cases.
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clip_html_to_markdown_link_in_paragraph_context() {
+        // #3061: link surrounded by prose must produce a valid inline
+        // Markdown link, not strip the href.
+        let html = r#"<p>Read <a href="https://example.com/article">more</a> here.</p>"#;
+        let md = html_to_markdown(html);
+        assert!(
+            md.contains("[more](https://example.com/article)"),
+            "#3061: inline link must keep href, got: {md:?}"
+        );
+        assert!(
+            md.contains("Read") && md.contains("here."),
+            "surrounding text must survive, got: {md:?}"
+        );
+    }
+
+    #[test]
+    fn clip_html_to_markdown_link_with_inline_formatting() {
+        // #3061: inline formatting inside the anchor must end up inside
+        // the link text — `<a href="x"><strong>bold</strong></a>` should
+        // produce `[**bold**](x)`, not `**[bold](x)**` or worse.
+        let html = r#"<a href="https://x.com"><strong>bold</strong></a>"#;
+        let md = html_to_markdown(html);
+        assert!(
+            md.contains("[**bold**](https://x.com)"),
+            "#3061: inline-formatted anchor text must render inside the link, got: {md:?}"
+        );
+    }
+
+    #[test]
+    fn clip_html_to_markdown_link_empty_href_falls_back_to_text() {
+        // #3061: empty href degrades gracefully — the anchor text survives
+        // as plain text rather than producing broken `[](text)` or similar.
+        let html = r#"<a href="">anchor target</a>"#;
+        let md = html_to_markdown(html);
+        assert!(
+            md.contains("anchor target"),
+            "anchor text must survive even with empty href, got: {md:?}"
+        );
+        assert!(
+            !md.contains("]("),
+            "empty href must NOT produce Markdown link syntax, got: {md:?}"
+        );
+    }
+
+    #[test]
+    fn clip_html_to_markdown_link_missing_href_falls_back_to_text() {
+        // #3061: `<a name="x">` (anchor target without href) must not
+        // produce `[](x)` or any spurious Markdown link.
+        let html = r#"<a name="section-1">Section heading</a>"#;
+        let md = html_to_markdown(html);
+        assert!(
+            md.contains("Section heading"),
+            "anchor text must survive, got: {md:?}"
+        );
+        assert!(
+            !md.contains("]("),
+            "missing href must NOT produce Markdown link syntax, got: {md:?}"
+        );
+    }
+
+    #[test]
+    fn clip_html_to_markdown_link_unclosed_does_not_panic() {
+        // #3061: unclosed `<a>` (no matching `</a>`) must leave the text
+        // as-is rather than panicking or producing malformed output.
+        let html = r#"<a href="https://x.com">text without close"#;
+        let md = html_to_markdown(html);
+        // We don't assert exact format (implementation may choose to
+        // flush pending links at EOF or leave them as plain text); we
+        // only assert the function returns without panicking and the
+        // anchor text survives.
+        assert!(md.contains("text without close"));
+    }
+
+    #[test]
+    fn clip_html_to_markdown_multiple_links() {
+        // #3061: multiple consecutive links must each get their own href.
+        let html = r#"<p><a href="https://a.com">first</a> <a href="https://b.com">second</a></p>"#;
+        let md = html_to_markdown(html);
+        assert!(
+            md.contains("[first](https://a.com)"),
+            "first link must keep href, got: {md:?}"
+        );
+        assert!(
+            md.contains("[second](https://b.com)"),
+            "second link must keep href, got: {md:?}"
+        );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // #3059 regression: validate_clip_url_host returns DNS pins, and
+    // build_clip_client accepts them.
+    // ────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn clip_validate_host_returns_empty_pins_for_public_literal_ip() {
+        // #3059: the new contract returns Vec<(host, SocketAddr)>. For a
+        // literal IP, no DNS pinning is needed (reqwest does not resolve
+        // literal IPs), so the returned Vec is empty.
+        let pins = validate_clip_url_host("http://8.8.8.8/")
+            .await
+            .expect("public literal IP should be allowed");
+        assert!(
+            pins.is_empty(),
+            "#3059: literal-IP URL must return empty pins (no DNS to pin), got {pins:?}"
+        );
+    }
+
+    #[test]
+    fn clip_build_clip_client_succeeds_without_pins() {
+        // #3059: building a client with no DNS pins (literal-IP case)
+        // must succeed and return a usable reqwest::Client.
+        let client = build_clip_client(&[]).expect("build with no pins must succeed");
+        // Smoke-test the returned client by checking it has no-redirect
+        // policy (we can't easily assert policy from outside reqwest, but
+        // the existence of the client is enough).
+        let _ = client;
+    }
+
+    #[test]
+    fn clip_build_clip_client_succeeds_with_pins() {
+        // #3059: building a client with DNS pins must succeed. The pin
+        // itself doesn't have to be reachable — we just verify the
+        // builder accepts the (host, SocketAddr) pairs without error.
+        let pins = vec![(
+            "example.test".to_string(),
+            "203.0.113.1:80".parse::<std::net::SocketAddr>().unwrap(),
+        )];
+        let client = build_clip_client(&pins).expect("build with valid pins must succeed");
+        let _ = client;
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // #3060 regression: push_chunk_with_cap enforces the size limit
+    // without first buffering the oversized chunk.
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clip_push_chunk_with_cap_accepts_within_limit() {
+        // #3060: a chunk that keeps the running total under the cap is
+        // appended normally.
+        let mut buf = Vec::new();
+        push_chunk_with_cap(&mut buf, b"hello", 100).expect("5 bytes < 100 cap");
+        assert_eq!(buf, b"hello");
+
+        // Second chunk still within cap.
+        push_chunk_with_cap(&mut buf, b" world", 100).expect("11 bytes < 100 cap");
+        assert_eq!(buf, b"hello world");
+    }
+
+    #[test]
+    fn clip_push_chunk_with_cap_rejects_chunk_that_would_exceed_limit() {
+        // #3060: a chunk that would push the total past the cap is
+        // rejected AND must not be partially appended to `buf` — that's
+        // the whole point of the streaming fix (don't materialise the
+        // oversized body in memory).
+        let mut buf = b"abc".to_vec();
+        let err = push_chunk_with_cap(&mut buf, b"oversized chunk", 5)
+            .expect_err("3 + 15 > 5 must be rejected");
+        assert!(
+            err.starts_with(CLIP_TOO_LARGE_MARKER),
+            "#3060: rejection must carry the too-large marker for 413 mapping, got: {err}"
+        );
+        // Critical: buf must be unchanged — the oversized chunk was not
+        // partially appended.
+        assert_eq!(buf, b"abc", "#3060: oversized chunk must not be buffered");
+    }
+
+    #[test]
+    fn clip_push_chunk_with_cap_boundary_exact_equal() {
+        // #3060: a chunk that exactly reaches the cap (==) is accepted;
+        // the cap is enforced as `>`, not `>=`.
+        let mut buf = Vec::new();
+        push_chunk_with_cap(&mut buf, b"abcd", 4).expect("4 == 4 must be accepted");
+        assert_eq!(buf, b"abcd");
+    }
+
+    #[test]
+    fn clip_push_chunk_with_cap_rejects_single_oversized_chunk() {
+        // #3060: the report specifically calls out a malicious upstream
+        // sending one large chunk (e.g. 10 MB) that would briefly allocate
+        // 10 MB even though we'd reject it. The helper must reject this
+        // without growing `buf`.
+        let mut buf = Vec::new();
+        let huge_chunk = vec![b'x'; 10 * 1024 * 1024]; // 10 MB
+        let err = push_chunk_with_cap(&mut buf, &huge_chunk, 5 * 1024 * 1024)
+            .expect_err("10 MB chunk must be rejected against 5 MB cap");
+        assert!(err.starts_with(CLIP_TOO_LARGE_MARKER));
+        assert!(
+            buf.is_empty(),
+            "#3060: 10 MB chunk must not be buffered before rejection"
+        );
     }
 
     #[test]

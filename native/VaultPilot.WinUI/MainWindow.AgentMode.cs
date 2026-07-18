@@ -256,8 +256,8 @@ public sealed partial class MainWindow : Window
             Glyph = isRunning ? "\uE768" : "\uE73E", // Running: play, Done: checkmark
             FontSize = 12,
             Foreground = isRunning
-                ? (Brush)Application.Current.Resources["SystemFillColorAttentionBrush"]
-                : (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"]
+                ? GetThemeBrush("SystemFillColorAttentionBrush")
+                : GetThemeBrush("VaultAccentGreen")
         };
 
         var toolText = new TextBlock
@@ -296,8 +296,8 @@ public sealed partial class MainWindow : Window
                     {
                         icon.Glyph = isError ? "\uE783" : "\uE73E"; // Error: X, Success: checkmark
                         icon.Foreground = isError
-                            ? (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"]
-                            : (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+                            ? GetThemeBrush("VaultAccentRed")
+                            : GetThemeBrush("VaultAccentGreen");
                         break;
                     }
                 }
@@ -326,7 +326,7 @@ public sealed partial class MainWindow : Window
                 Content = new TextBlock
                 {
                     Text = preview,
-                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Code"),
                     FontSize = 12,
                     TextWrapping = TextWrapping.Wrap,
                     IsTextSelectionEnabled = true

@@ -9,16 +9,16 @@
     PrimaryButtonText="保存"
     CloseButtonText="取消"
     DefaultButton="Primary"
-    Width="520"
+    Width="560"
     PrimaryButtonClick="OnPrimaryButtonClick">
 
     <ScrollViewer
         x:Name="SettingsScroller"
-        MaxHeight="520"
+        MaxHeight="600"
         HorizontalScrollBarVisibility="Disabled">
         <StackPanel
             x:Name="Panel"
-            Spacing="12"
+            Spacing="14"
             HorizontalAlignment="Stretch">
 
             <!-- Inline error bar -->
@@ -31,230 +31,261 @@
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="设置校验错误提示" />
 
-            <!-- Vault directory -->
-            <TextBox
-                x:Name="VaultBox"
-                Header="知识库目录"
-                PlaceholderText="例如 D:\KnowledgeVault"
-                HorizontalAlignment="Stretch"
-                AutomationProperties.Name="知识库目录路径" />
-            <Button
-                x:Name="OpenVaultButton"
-                Content="打开目录"
-                AutomationProperties.Name="打开知识库目录"
-                AutomationProperties.HelpText="打开文件选择对话框选择知识库目录" />
+            <!-- ══ Card: 知识库 ══ -->
+            <Border Background="{ThemeResource VaultCardBg}" CornerRadius="12"
+                    BorderBrush="{ThemeResource VaultBorder}" BorderThickness="1" Padding="16">
+                <StackPanel Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8B7;" FontSize="14" Foreground="{ThemeResource VaultAccentBlue}" VerticalAlignment="Center" />
+                        <TextBlock Text="知识库" FontSize="16" FontWeight="SemiBold" Foreground="{ThemeResource VaultTextPrimary}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBox
+                        x:Name="VaultBox"
+                        Header="知识库目录"
+                        PlaceholderText="例如 D:\KnowledgeVault"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="知识库目录路径" />
+                    <Button
+                        x:Name="OpenVaultButton"
+                        Content="打开目录"
+                        AutomationProperties.Name="打开知识库目录"
+                        AutomationProperties.HelpText="打开文件选择对话框选择知识库目录" />
+                </StackPanel>
+            </Border>
 
-            <!-- Provider list -->
-            <TextBlock Text="API 提供商" FontSize="16" FontWeight="SemiBold" Margin="0,4,0,0" />
-            <ListView
-                x:Name="ProviderList"
-                MaxHeight="140"
-                SelectionChanged="OnProviderSelectionChanged"
-                SelectionMode="Single"
-                HorizontalAlignment="Stretch"
-                AutomationProperties.Name="提供商列表" />
-            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
-                <Button x:Name="AddProviderButton" Content="+ 添加" Click="OnAddProvider" />
-                <Button x:Name="RemoveProviderButton" Content="删除" Click="OnRemoveProvider" />
-            </StackPanel>
+            <!-- ══ Card: AI 提供商 ══ -->
+            <Border Background="{ThemeResource VaultCardBg}" CornerRadius="12"
+                    BorderBrush="{ThemeResource VaultBorder}" BorderThickness="1" Padding="16">
+                <StackPanel Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE9D9;" FontSize="14" Foreground="{ThemeResource VaultAccentBlue}" VerticalAlignment="Center" />
+                        <TextBlock Text="AI 提供商" FontSize="16" FontWeight="SemiBold" Foreground="{ThemeResource VaultTextPrimary}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <ListView
+                        x:Name="ProviderList"
+                        MaxHeight="140"
+                        SelectionChanged="OnProviderSelectionChanged"
+                        SelectionMode="Single"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="提供商列表" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="AddProviderButton" Click="OnAddProvider">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE710;" FontSize="12" />
+                                <TextBlock Text="添加" FontSize="12" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="RemoveProviderButton" Click="OnRemoveProvider">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE74D;" FontSize="12" Foreground="{ThemeResource VaultAccentRed}" />
+                                <TextBlock Text="删除" FontSize="12" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
 
-            <!-- Provider edit fields -->
-            <TextBox
-                x:Name="ProviderNameBox"
-                Header="名称"
-                PlaceholderText="例如 OpenCode Zen"
-                HorizontalAlignment="Stretch"
-                AutomationProperties.Name="提供商名称" />
-            <InfoBar
-                x:Name="FreeTierHint"
-                Severity="Informational"
-                Title="🎉 免费使用"
-                Message="选 OpenCode Zen 或 OpenRouter 即可免费体验 AI 对话&#x0a;• OpenCode Zen：opencode.ai/zen（注册即送免费模型）&#x0a;• OpenRouter：openrouter.ai（GitHub 登录，27 个免费模型）"
-                IsOpen="True"
-                IsClosable="False"
-                HorizontalAlignment="Stretch"
-                Margin="0,8,0,4" />
-            <ComboBox
-                x:Name="ProviderTypeBox"
-                Header="格式"
-                HorizontalAlignment="Stretch">
-                <ComboBoxItem Content="OpenAI" IsSelected="True" />
-                <ComboBoxItem Content="Anthropic" />
-            </ComboBox>
-            <PasswordBox
-                x:Name="ApiKeyBox"
-                Header="API Key"
-                PlaceholderText="在 opencode.ai/zen 或 openrouter.ai 获取"
-                HorizontalAlignment="Stretch"
-                AutomationProperties.Name="API Key" />
-            <TextBlock
-                x:Name="ApiKeyError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
-            <TextBox
-                x:Name="BaseUrlBox"
-                Header="接口地址"
-                PlaceholderText="例如 https://opencode.ai/zen/v1"
-                HorizontalAlignment="Stretch"
-                AutomationProperties.Name="模型服务接口地址" />
-            <TextBlock
-                x:Name="BaseUrlError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
-            <TextBox
-                x:Name="ModelBox"
-                Header="模型"
-                PlaceholderText="例如 deepseek-v4-flash-free"
-                HorizontalAlignment="Stretch"
-                AutomationProperties.Name="模型名称" />
-            <TextBlock
-                x:Name="ModelError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
+                    <TextBox
+                        x:Name="ProviderNameBox"
+                        Header="名称"
+                        PlaceholderText="例如 OpenCode Zen"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="提供商名称" />
+                    <InfoBar
+                        x:Name="FreeTierHint"
+                        Severity="Informational"
+                        Title="免费使用"
+                        Message="选 OpenCode Zen 或 OpenRouter 即可免费体验 AI 对话&#x0a;• OpenCode Zen：opencode.ai/zen（注册即送免费模型）&#x0a;• OpenRouter：openrouter.ai（GitHub 登录，27 个免费模型）"
+                        IsOpen="True"
+                        IsClosable="False"
+                        HorizontalAlignment="Stretch" />
+                    <ComboBox
+                        x:Name="ProviderTypeBox"
+                        Header="格式"
+                        HorizontalAlignment="Stretch">
+                        <ComboBoxItem Content="OpenAI" IsSelected="True" />
+                        <ComboBoxItem Content="Anthropic" />
+                    </ComboBox>
+                    <PasswordBox
+                        x:Name="ApiKeyBox"
+                        Header="API Key"
+                        PlaceholderText="在 opencode.ai/zen 或 openrouter.ai 获取"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="API Key" />
+                    <TextBlock
+                        x:Name="ApiKeyError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                    <TextBox
+                        x:Name="BaseUrlBox"
+                        Header="接口地址"
+                        PlaceholderText="例如 https://opencode.ai/zen/v1"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="模型服务接口地址" />
+                    <TextBlock
+                        x:Name="BaseUrlError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                    <TextBox
+                        x:Name="ModelBox"
+                        Header="模型"
+                        PlaceholderText="例如 deepseek-v4-flash-free"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="模型名称" />
+                    <TextBlock
+                        x:Name="ModelError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                    <TextBox
+                        x:Name="TimeoutBox"
+                        Header="请求超时（毫秒）"
+                        HorizontalAlignment="Stretch"
+                        LostFocus="OnTimeoutLostFocus"
+                        AutomationProperties.Name="请求超时毫秒数" />
+                    <TextBlock
+                        x:Name="TimeoutError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                    <TextBox
+                        x:Name="ContextWindowBox"
+                        Header="上下文窗口 Token 数（可选）"
+                        HorizontalAlignment="Stretch"
+                        LostFocus="OnContextWindowLostFocus"
+                        AutomationProperties.Name="上下文窗口 Token 数" />
+                    <TextBlock
+                        x:Name="ContextWindowError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+            </Border>
 
-            <!-- Timeout -->
-            <TextBox
-                x:Name="TimeoutBox"
-                Header="请求超时（毫秒）"
-                HorizontalAlignment="Stretch"
-                LostFocus="OnTimeoutLostFocus"
-                AutomationProperties.Name="请求超时毫秒数" />
-            <TextBlock
-                x:Name="TimeoutError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
+            <!-- ══ Card: 偏好 ══ -->
+            <Border Background="{ThemeResource VaultCardBg}" CornerRadius="12"
+                    BorderBrush="{ThemeResource VaultBorder}" BorderThickness="1" Padding="16">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE771;" FontSize="14" Foreground="{ThemeResource VaultAccentBlue}" VerticalAlignment="Center" />
+                        <TextBlock Text="偏好" FontSize="16" FontWeight="SemiBold" Foreground="{ThemeResource VaultTextPrimary}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <CheckBox
+                        x:Name="AutoCheckUpdatesBox"
+                        Content="启动时自动检查更新"
+                        HorizontalAlignment="Left"
+                        AutomationProperties.Name="启动时自动检查更新" />
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="主题" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                        <RadioButtons x:Name="ThemeModeRadio" MaxColumns="1">
+                            <RadioButton x:Name="ThemeSystem" Content="跟随系统" />
+                            <RadioButton x:Name="ThemeLight" Content="亮色" />
+                            <RadioButton x:Name="ThemeDark" Content="暗色" />
+                        </RadioButtons>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
 
-            <!-- Context window tokens -->
-            <TextBox
-                x:Name="ContextWindowBox"
-                Header="上下文窗口 Token 数（可选）"
-                HorizontalAlignment="Stretch"
-                LostFocus="OnContextWindowLostFocus"
-                AutomationProperties.Name="上下文窗口 Token 数" />
-            <TextBlock
-                x:Name="ContextWindowError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
-
-            <!-- Auto-wake section -->
-            <Border
-                Height="1"
-                Background="{ThemeResource CardStrokeColorDefaultBrush}"
-                Margin="0,4,0,4" />
-            <TextBlock
-                Text="自动唤醒"
-                FontWeight="SemiBold" />
-            <CheckBox
-                x:Name="AutoWakeEnabledBox"
-                Content="启用自动唤醒（定时调用 API 保持会话活跃）"
-                HorizontalAlignment="Left"
-                Checked="OnAutoWakeToggled"
-                Unchecked="OnAutoWakeToggled"
-                AutomationProperties.Name="启用自动唤醒"
-                AutomationProperties.HelpText="定时调用 API 保持会话活跃" />
-            <TextBox
-                x:Name="AutoWakeIntervalBox"
-                Header="唤醒间隔（分钟）"
-                PlaceholderText="30"
-                HorizontalAlignment="Stretch"
-                LostFocus="OnAutoWakeIntervalLostFocus"
-                AutomationProperties.Name="唤醒间隔分钟" />
-            <TextBlock
-                x:Name="AutoWakeIntervalError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
-            <ComboBox
-                x:Name="AutoWakeModelBox"
-                Header="唤醒使用的模型（留空使用默认模型）"
-                HorizontalAlignment="Stretch"
-                IsEditable="True"
-                AutomationProperties.Name="唤醒使用的模型" />
-            <TextBox
-                x:Name="AutoWakeStartTimeBox"
-                Header="开始时间（HH:mm，留空不限）"
-                PlaceholderText="05:00"
-                HorizontalAlignment="Stretch"
-                LostFocus="OnAutoWakeStartTimeLostFocus"
-                AutomationProperties.Name="自动唤醒开始时间" />
-            <TextBlock
-                x:Name="AutoWakeStartTimeError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
-            <TextBox
-                x:Name="AutoWakeEndTimeBox"
-                Header="结束时间（HH:mm，留空不限）"
-                PlaceholderText="23:00"
-                HorizontalAlignment="Stretch"
-                LostFocus="OnAutoWakeEndTimeLostFocus"
-                AutomationProperties.Name="自动唤醒结束时间" />
-            <TextBlock
-                x:Name="AutoWakeEndTimeError"
-                Foreground="{ThemeResource StatusErrorBrush}"
-                FontSize="12"
-                Visibility="Collapsed"
-                AutomationProperties.LiveSetting="Polite"
-                Margin="0,-8,0,0" />
-            <TextBox
-                x:Name="AutoWakePromptBox"
-                Header="唤醒提问内容（留空使用默认提示）"
-                PlaceholderText="请简要回顾一下最近的知识库内容，给我一个简短的今日摘要。"
-                HorizontalAlignment="Stretch"
-                TextWrapping="Wrap"
-                AcceptsReturn="True"
-                MinHeight="60"
-                MaxHeight="120"
-                AutomationProperties.Name="唤醒提问内容" />
-
-            <!-- Next wake time -->
-            <TextBlock
-                x:Name="NextWakeLabel"
-                Foreground="{ThemeResource SecondaryTextBrush}" />
+            <!-- ══ Card: 自动唤醒 ══ -->
+            <Border Background="{ThemeResource VaultCardBg}" CornerRadius="12"
+                    BorderBrush="{ThemeResource VaultBorder}" BorderThickness="1" Padding="16">
+                <StackPanel Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE917;" FontSize="14" Foreground="{ThemeResource VaultAccentBlue}" VerticalAlignment="Center" />
+                        <TextBlock Text="自动唤醒" FontSize="16" FontWeight="SemiBold" Foreground="{ThemeResource VaultTextPrimary}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <CheckBox
+                        x:Name="AutoWakeEnabledBox"
+                        Content="启用自动唤醒（定时调用 API 保持会话活跃）"
+                        HorizontalAlignment="Left"
+                        Checked="OnAutoWakeToggled"
+                        Unchecked="OnAutoWakeToggled"
+                        AutomationProperties.Name="启用自动唤醒"
+                        AutomationProperties.HelpText="定时调用 API 保持会话活跃" />
+                    <TextBox
+                        x:Name="AutoWakeIntervalBox"
+                        Header="唤醒间隔（分钟）"
+                        PlaceholderText="30"
+                        HorizontalAlignment="Stretch"
+                        LostFocus="OnAutoWakeIntervalLostFocus"
+                        AutomationProperties.Name="唤醒间隔分钟" />
+                    <TextBlock
+                        x:Name="AutoWakeIntervalError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                    <ComboBox
+                        x:Name="AutoWakeModelBox"
+                        Header="唤醒使用的模型（留空使用默认模型）"
+                        HorizontalAlignment="Stretch"
+                        IsEditable="True"
+                        AutomationProperties.Name="唤醒使用的模型" />
+                    <TextBox
+                        x:Name="AutoWakeStartTimeBox"
+                        Header="开始时间（HH:mm，留空不限）"
+                        PlaceholderText="05:00"
+                        HorizontalAlignment="Stretch"
+                        LostFocus="OnAutoWakeStartTimeLostFocus"
+                        AutomationProperties.Name="自动唤醒开始时间" />
+                    <TextBlock
+                        x:Name="AutoWakeStartTimeError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                    <TextBox
+                        x:Name="AutoWakeEndTimeBox"
+                        Header="结束时间（HH:mm，留空不限）"
+                        PlaceholderText="23:00"
+                        HorizontalAlignment="Stretch"
+                        LostFocus="OnAutoWakeEndTimeLostFocus"
+                        AutomationProperties.Name="自动唤醒结束时间" />
+                    <TextBlock
+                        x:Name="AutoWakeEndTimeError"
+                        Foreground="{ThemeResource StatusErrorBrush}"
+                        FontSize="12"
+                        Visibility="Collapsed"
+                        AutomationProperties.LiveSetting="Polite" />
+                    <TextBox
+                        x:Name="AutoWakePromptBox"
+                        Header="唤醒提问内容（留空使用默认提示）"
+                        PlaceholderText="请简要回顾一下最近的知识库内容，给我一个简短的今日摘要。"
+                        HorizontalAlignment="Stretch"
+                        TextWrapping="Wrap"
+                        AcceptsReturn="True"
+                        MinHeight="60"
+                        MaxHeight="120"
+                        AutomationProperties.Name="唤醒提问内容" />
+                    <TextBlock
+                        x:Name="NextWakeLabel"
+                        Foreground="{ThemeResource VaultTextSecondary}" FontSize="12" />
+                </StackPanel>
+            </Border>
 
             <!-- Footer row -->
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <CheckBox
-                    x:Name="AutoCheckUpdatesBox"
-                    Grid.Column="0"
-                    Content="启动时自动检查更新"
-                    HorizontalAlignment="Left"
-                    AutomationProperties.Name="启动时自动检查更新" />
                 <Button
                     x:Name="ProjectLinkButton"
-                    Grid.Column="1"
+                    Grid.Column="0"
                     Content="项目地址"
                     HorizontalAlignment="Left"
                     AutomationProperties.Name="打开项目地址"
                     AutomationProperties.HelpText="在浏览器中打开 VaultPilot 项目页面" />
                 <TextBlock
                     x:Name="VersionLabel"
-                    Grid.Column="2"
-                    Foreground="{ThemeResource SecondaryTextBrush}"
+                    Grid.Column="1"
+                    Foreground="{ThemeResource VaultTextMuted}"
+                    FontSize="12"
                     VerticalAlignment="Center"
                     HorizontalAlignment="Right" />
             </Grid>

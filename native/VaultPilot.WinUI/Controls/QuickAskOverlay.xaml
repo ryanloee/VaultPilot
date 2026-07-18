@@ -8,7 +8,7 @@
     Visibility="Collapsed">
 
     <!-- Semi-transparent backdrop -->
-    <Grid x:Name="BackdropGrid" Background="#80000000"
+    <Grid x:Name="BackdropGrid" Background="{ThemeResource VaultOverlayBrush}"
           PointerPressed="OnBackdropPressed">
 
         <!-- Centered quick-ask card -->
@@ -24,6 +24,11 @@
             HorizontalAlignment="Center"
             VerticalAlignment="Center"
             Translation="0,0,32">
+            <Border.Transitions>
+                <TransitionCollection>
+                    <EntranceThemeTransition FromVerticalOffset="24" IsStaggeringEnabled="False" />
+                </TransitionCollection>
+            </Border.Transitions>
 
             <Grid RowSpacing="0">
                 <Grid.RowDefinitions>
@@ -55,7 +60,7 @@
 
                         <TextBlock
                             Grid.Column="1"
-                            Text="Quick Ask — 快速问答"
+                            Text="快速问答"
                             FontWeight="SemiBold"
                             FontSize="16"
                             VerticalAlignment="Center" />
@@ -134,9 +139,9 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Border
-                                        Padding="8,6,8,6"
+                                        Padding="10,8,10,8"
                                         Margin="0,2,0,2"
-                                        CornerRadius="4"
+                                        CornerRadius="8"
                                         Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}">
                                         <StackPanel>
                                             <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12" />
@@ -236,7 +241,7 @@
             Visibility="Collapsed">
 
             <StackPanel Orientation="Vertical" Spacing="12" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <ProgressRing IsActive="True" Width="28" Height="28" />
+                <ProgressRing IsActive="True" Width="32" Height="32" />
                 <TextBlock x:Name="LoadingText" Text="AI 思考中..." FontSize="14"
                     HorizontalAlignment="Center"
                     AutomationProperties.Name="AI 处理中" />

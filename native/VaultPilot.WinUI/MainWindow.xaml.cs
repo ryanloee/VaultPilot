@@ -116,6 +116,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            // Apply persisted theme as early as possible to avoid a flash of the
+            // wrong theme during backend startup.
+            ApplyTheme();
             await LogStartup("Window loaded");
             await UpdateStartupStepAsync("启动后端");
             var backendPath = ResolveBackendPath();
@@ -187,6 +190,20 @@ public sealed partial class MainWindow : Window
         catch
         {
             _appWindow = null;
+        }
+    }
+
+    /// <summary>
+    /// Applies the persisted theme preference to the root element. Called once
+    /// on startup (OnLoaded) and again after the user changes it in Settings.
+    /// <see cref="ElementTheme.Default"/> follows the OS theme.
+    /// </summary>
+    private void ApplyTheme(ElementTheme? mode = null)
+    {
+        var theme = mode ?? ThemePreferences.Load();
+        if (RootGrid.RequestedTheme != theme)
+        {
+            RootGrid.RequestedTheme = theme;
         }
     }
 
@@ -266,6 +283,8 @@ public sealed partial class MainWindow : Window
                 ApplyAutoWakeSettings();
                 UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
                 ShowNextWakeTime();
+                // Apply theme change immediately so the user sees it without restart.
+                ApplyTheme(dialog.ThemeMode);
             }
         }
         catch (Exception error)

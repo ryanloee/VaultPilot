@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using VaultPilot.WinUI.Backend;
 using VaultPilot.WinUI.Models;
 
@@ -222,7 +223,7 @@ public sealed partial class AiCommandPalette : UserControl
         ResultTitle.Text = action.Label;
         ResultTextBlock.Text = result.Result;
         // Reset foreground in case a previous ShowError() left it red
-        ResultTextBlock.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+        ResultTextBlock.Foreground = GetThemeBrush("TextFillColorPrimaryBrush");
         InsertToChatButton.Visibility = Visibility.Visible;
         CopyResultButton.Visibility = Visibility.Visible;
 
@@ -245,7 +246,7 @@ public sealed partial class AiCommandPalette : UserControl
     {
         ResultTitle.Text = "错误";
         ResultTextBlock.Text = message;
-        ResultTextBlock.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
+        ResultTextBlock.Foreground = GetThemeBrush("SystemFillColorCriticalBrush");
         InsertToChatButton.Visibility = Visibility.Collapsed;
         CopyResultButton.Visibility = Visibility.Visible;
         ResultUsageText.Text = string.Empty;
@@ -294,6 +295,21 @@ public sealed partial class AiCommandPalette : UserControl
         var old = Interlocked.Exchange(ref _activeRequestCts, null);
         old?.Cancel();
         old?.Dispose();
+    }
+
+    /// <summary>
+    /// Safe theme-brush lookup: returns the brush for the given key, or a
+    /// transparent fallback if the key is missing. Avoids the
+    /// KeyNotFoundException/InvalidCastException that direct indexer casts
+    /// (e.g. <c>(Brush)Application.Current.Resources[key]</c>) would throw.
+    /// </summary>
+    private static Brush GetThemeBrush(string key)
+    {
+        if (Application.Current?.Resources.TryGetValue(key, out var value) == true && value is Brush brush)
+        {
+            return brush;
+        }
+        return new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
     }
 
     /// <summary>

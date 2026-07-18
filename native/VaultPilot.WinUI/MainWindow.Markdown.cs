@@ -181,7 +181,7 @@ public sealed partial class MainWindow : Window
                 {
                     var span = new Span
                     {
-                        FontFamily = new FontFamily("Consolas"),
+                        FontFamily = new FontFamily("Cascadia Code"),
                         Foreground = GetThemeBrush("CodeInlineForegroundBrush")
                     };
                     span.Inlines.Add(new Run { Text = text[(index + 1)..closeIndex] });
@@ -404,14 +404,14 @@ public sealed partial class MainWindow : Window
             Text = code,
             TextWrapping = TextWrapping.Wrap,
             IsTextSelectionEnabled = true,
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = new FontFamily("Cascadia Code"),
             Foreground = GetThemeBrush("CodeBlockForegroundBrush")
         };
 
         return new Border
         {
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(10),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(12),
             Background = GetThemeBrush("CodeBlockBackgroundBrush"),
             Child = new StackPanel
             {

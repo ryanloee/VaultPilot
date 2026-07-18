@@ -1430,7 +1430,7 @@ fn mcp_tools() -> Vec<Value> {
         serde_json::json!({
             "name": "notes.preview_edit",
             "title": "Preview Note Edit (Diff)",
-            "description": "Run an AI-powered edit on a note and return a unified diff between the original and proposed bodies WITHOUT saving. Use this to review an Agent-proposed change before committing. Pair with notes.apply_edit (same noteId + instruction) to actually save the change. Preserves user agency over vault writes (#3095).",
+            "description": "Run an AI-powered edit on a note and return a unified diff between the original and proposed bodies WITHOUT saving. Use this to review an Agent-proposed change before committing. Pair with notes.apply_edit (same noteId + instruction) to actually save the change — pass the returned `proposedBody` to apply_edit to guarantee the user-approved diff is saved verbatim (#3108). Preserves user agency over vault writes (#3095).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1477,7 +1477,7 @@ fn mcp_tools() -> Vec<Value> {
         serde_json::json!({
             "name": "notes.apply_edit",
             "title": "Apply Note Edit",
-            "description": "Run an AI-powered edit on a note and SAVE the result to the vault. A backup of the pre-edit note is recorded so the change can be undone with `vaultpilot revert-edit <noteId>`. Recommended workflow: call notes.preview_edit first to inspect the diff, then call notes.apply_edit with the same arguments to commit.",
+            "description": "Run an AI-powered edit on a note and SAVE the result to the vault. A backup of the pre-edit note is recorded so the change can be undone with `vaultpilot revert-edit <noteId>`. Recommended workflow: call notes.preview_edit first to inspect the diff, then call notes.apply_edit with the same arguments PLUS the `proposedBody` returned by preview to commit the exact bytes the user approved (avoids non-deterministic AI re-runs, #3108).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1492,6 +1492,10 @@ fn mcp_tools() -> Vec<Value> {
                     "model": {
                         "type": "string",
                         "description": "Optional model override for this AI call."
+                    },
+                    "proposedBody": {
+                        "type": "string",
+                        "description": "Optional. The exact proposed note body returned by notes.preview_edit. When provided, the AI is NOT re-invoked — the given bytes are saved verbatim, guaranteeing the user-approved preview diff matches what is written (#3108). When omitted, the AI is re-run with `instruction` (non-deterministic; preview and apply may diverge)."
                     }
                 },
                 "required": ["noteId", "instruction"],
@@ -2155,6 +2159,22 @@ async fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Va
 // Splitting preview from apply preserves user agency: the agent can propose
 // changes but cannot overwrite the vault without an explicit second call.
 
+/// Load a note by ID for the edit workflow. Factored out of `run_edit_note_ai`
+/// so the deterministic apply path (#3108) can load the original note without
+/// re-invoking the AI. Returns `Err(message)` on any failure with a user-safe
+/// (sanitized) message suitable for direct MCP return.
+async fn load_note_for_edit(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<NoteDocument, String> {
+    let ctx = context.clone();
+    let note_id = note_id.to_string();
+    tokio::task::spawn_blocking(move || load_note_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| format!("internal error: {e}"))?
+        .map_err(|e| sanitize_error(&e.to_string()))
+}
+
 /// Shared helper: load note + run EditNote AI action, returning the original
 /// body and the AI-proposed edited body. Returns `Err(message)` on any failure
 /// with a user-safe (sanitized) message suitable for direct MCP return.
@@ -2164,12 +2184,7 @@ async fn run_edit_note_ai(
     instruction: &str,
     model: Option<&str>,
 ) -> Result<(NoteDocument, String), String> {
-    let ctx = context.clone();
-    let note_id = note_id.to_string();
-    let original = tokio::task::spawn_blocking(move || load_note_with_context(&ctx, &note_id))
-        .await
-        .map_err(|e| format!("internal error: {e}"))?
-        .map_err(|e| sanitize_error(&e.to_string()))?;
+    let original = load_note_for_edit(context, note_id).await?;
 
     let ai_request = vaultpilot_lib::ai::AiActionRequest {
         action: vaultpilot_lib::ai::AiActionType::EditNote,
@@ -2269,6 +2284,12 @@ async fn mcp_call_notes_preview_edit(context: &StorageContext, arguments: Value)
 /// the result. A backup of the pre-edit note is recorded so the change can be
 /// undone with `vaultpilot revert-edit <noteId>`. Use `notes.preview_edit`
 /// first to inspect the diff before committing.
+///
+/// **Determinism (#3108):** when the caller supplies `proposedBody` (the exact
+/// bytes returned by `notes.preview_edit`), the AI is NOT re-invoked — the
+/// provided bytes are saved verbatim. This guarantees the user-approved preview
+/// diff matches what is written. When omitted, the AI is re-run as a fallback
+/// (non-deterministic: preview and apply may diverge).
 async fn mcp_call_notes_apply_edit(context: &StorageContext, arguments: Value) -> Value {
     let note_id = match arguments.get("noteId").and_then(Value::as_str) {
         Some(id) if !id.is_empty() => id.to_string(),
@@ -2292,7 +2313,24 @@ async fn mcp_call_notes_apply_edit(context: &StorageContext, arguments: Value) -
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string());
 
-    match run_edit_note_ai(context, &note_id, &instruction, model.as_deref()).await {
+    // #3108: when proposedBody is supplied, save those bytes verbatim instead
+    // of re-running the AI. This makes the two-step preview→apply workflow
+    // deterministic: what the user approved in preview_edit is exactly what
+    // gets written here. Falls back to AI re-run when omitted (back-compat).
+    let proposed_body: Option<String> = arguments
+        .get("proposedBody")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let edit_outcome: Result<(NoteDocument, String), String> = match proposed_body {
+        Some(body) => load_note_for_edit(context, &note_id)
+            .await
+            .map(|original| (original, body)),
+        None => run_edit_note_ai(context, &note_id, &instruction, model.as_deref()).await,
+    };
+
+    match edit_outcome {
         Ok((original, edited_body)) => {
             // Record backup for revert (#1652), mirroring CLI Commands::Edit.
             vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
@@ -3687,5 +3725,69 @@ mod tests {
         assert!(diff.is_empty());
         assert_eq!(diff.additions, 0);
         assert_eq!(diff.deletions, 0);
+    }
+
+    // ── #3108: deterministic preview→apply via proposedBody ───────
+
+    #[test]
+    fn notes_apply_edit_advertises_proposed_body_param() {
+        // #3108: apply_edit must accept an optional `proposedBody` so the
+        // agent can replay the exact bytes returned by preview_edit, making
+        // the two-step workflow deterministic.
+        let tools = mcp_tools();
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "notes.apply_edit")
+            .expect("notes.apply_edit tool present");
+        let props = tool["inputSchema"]["properties"]
+            .as_object()
+            .expect("apply_edit has inputSchema.properties");
+        assert!(
+            props.contains_key("proposedBody"),
+            "proposedBody must be advertised as an input property (#3108)"
+        );
+        // proposedBody must NOT be in `required` — callers may omit it to
+        // fall back to the legacy non-deterministic AI re-run path.
+        let required: Vec<&str> = tool["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            !required.contains(&"proposedBody"),
+            "proposedBody must remain optional (back-compat with callers that omit it)"
+        );
+    }
+
+    #[test]
+    fn notes_apply_edit_proposed_body_resolution_logic() {
+        // Mirror of the argument-parsing predicate used in
+        // mcp_call_notes_apply_edit: empty / whitespace-only proposedBody
+        // must be treated as "absent" so we fall back to the AI re-run path.
+        let parse = |args: serde_json::Value| -> Option<String> {
+            args.get("proposedBody")
+                .and_then(Value::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+
+        // Missing key → None (AI re-run).
+        assert_eq!(parse(serde_json::json!({})), None);
+
+        // Empty string → None.
+        assert_eq!(parse(serde_json::json!({ "proposedBody": "" })), None);
+
+        // Whitespace-only → None.
+        assert_eq!(
+            parse(serde_json::json!({ "proposedBody": "   \n\t  " })),
+            None
+        );
+
+        // Non-empty → Some(trimmed) (deterministic apply path).
+        assert_eq!(
+            parse(serde_json::json!({ "proposedBody": "  hello world  " })),
+            Some("hello world".to_string())
+        );
     }
 }

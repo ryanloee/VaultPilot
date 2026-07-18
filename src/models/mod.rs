@@ -99,6 +99,52 @@ pub struct AiSubscription {
     pub last_error: String,
 }
 
+/// A single RSS/Atom/JSON Feed subscription for auto-ingestion (#3041).
+///
+/// Feeds are polled periodically; new entries are converted to Markdown and
+/// stored as vault notes. Incremental fetching relies on the conditional
+/// headers (`etag`, `last_modified`) sent on the next request plus the
+/// per-feed high-water mark (`last_entry_id`, `last_entry_date`) so already
+/// seen entries are not re-ingested.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedSubscription {
+    /// Unique id (UUID).
+    pub id: String,
+    /// Human-readable feed title (auto-detected if left empty on create).
+    pub title: String,
+    /// Feed URL (RSS/Atom/JSON).
+    pub url: String,
+    /// Feed kind: "rss" | "atom" | "json".
+    pub kind: String,
+    /// Target collection name for ingested notes.
+    pub collection: String,
+    /// Comma-separated default tags for ingested notes.
+    pub tags: String,
+    /// Polling interval in minutes.
+    pub interval_minutes: i64,
+    /// Whether this feed is active.
+    pub enabled: bool,
+    /// ISO-8601 timestamp of the last successful poll.
+    pub last_fetched_at: String,
+    /// ETag received from the last poll (sent back as If-None-Match).
+    pub etag: String,
+    /// Last-Modified received from the last poll (sent back as If-Modified-Since).
+    pub last_modified: String,
+    /// Id of the most recent entry seen (high-water mark for dedup).
+    pub last_entry_id: String,
+    /// Publish date (ISO-8601) of the most recent entry seen.
+    pub last_entry_date: String,
+    /// Status of the last poll: "success", "failed", "skipped", or "".
+    pub last_status: String,
+    /// Error message from last failed poll (empty if last was successful).
+    pub last_error: String,
+    /// ISO-8601 creation timestamp.
+    pub created_at: String,
+    /// ISO-8601 last-update timestamp.
+    pub updated_at: String,
+}
+
 impl Default for AiSubscription {
     fn default() -> Self {
         Self {

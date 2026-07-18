@@ -1168,7 +1168,7 @@ fn ip_is_forbidden(ip: IpAddr) -> bool {
 
 /// Validate that the host of `url_str` does not resolve to a forbidden IP
 /// (#3040 SSRF mitigation). Used by `/api/clip` before every outbound fetch,
-/// including each redirect hop.
+/// including each redirect hop. Also reused by the feed poller (#3041).
 ///
 /// Returns `Ok(())` if every resolved IP is acceptable, or `Err(message)` with
 /// a human-readable reason. The caller is responsible for mapping the message
@@ -1176,7 +1176,7 @@ fn ip_is_forbidden(ip: IpAddr) -> bool {
 ///
 /// Failure mode: DNS resolution failure is reported as an error (fail-closed)
 /// rather than silently letting the request through.
-async fn validate_clip_url_host(url_str: &str) -> Result<(), String> {
+pub(crate) async fn validate_clip_url_host(url_str: &str) -> Result<(), String> {
     let parsed = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("refusing non-http(s) scheme '{}'", parsed.scheme()));
@@ -1220,7 +1220,12 @@ async fn validate_clip_url_host(url_str: &str) -> Result<(), String> {
 /// characters whose lowercase form has a different byte length (e.g. `İ`,
 /// Kelvin sign) do not corrupt the offsets used to slice the original string
 /// (#3044).
-fn extract_html_title(html: &str) -> Option<String> {
+/// Extract the page title from the `<title>...</title>` tag (case-insensitive).
+/// Returns the trimmed title, or `None` if no `<title>` tag is present.
+///
+/// Used by both the Web Clipper (`/api/clip`) and the Feed poller (#3041) to
+/// derive a note title from fetched HTML.
+pub(crate) fn extract_html_title(html: &str) -> Option<String> {
     let start = find_ci(html, "<title")?;
     let after_open = &html[start..];
     let tag_end = after_open.find('>')?;
@@ -1289,7 +1294,9 @@ fn decode_html_entities(s: &str) -> String {
 /// lightweight regex-free converter: it handles headings, paragraphs,
 /// lists, links, images, code blocks, blockquotes, emphasis, and `<br>`.
 /// Anything unrecognised is stripped of its tags but its text is kept.
-fn html_to_markdown(html: &str) -> String {
+///
+/// Shared by the Web Clipper (`/api/clip`) and the Feed poller (#3041).
+pub(crate) fn html_to_markdown(html: &str) -> String {
     let cleaned = strip_boilerplate(html);
     let mut out = String::with_capacity(cleaned.len());
 

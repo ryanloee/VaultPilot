@@ -434,6 +434,31 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             last_error TEXT NOT NULL DEFAULT ''
         );
 
+        -- RSS/Atom/JSON Feed subscriptions for auto-ingestion (#3041)
+        -- Each row is one external feed polled periodically; new entries are
+        -- converted to Markdown and stored as vault notes (reusing the Web
+        -- Clipper conversion pipeline).
+        CREATE TABLE IF NOT EXISTS feeds (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL DEFAULT '',
+            url TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'rss',
+            collection TEXT NOT NULL DEFAULT '',
+            tags TEXT NOT NULL DEFAULT '',
+            interval_minutes INTEGER NOT NULL DEFAULT 60,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_fetched_at TEXT NOT NULL DEFAULT '',
+            etag TEXT NOT NULL DEFAULT '',
+            last_modified TEXT NOT NULL DEFAULT '',
+            last_entry_id TEXT NOT NULL DEFAULT '',
+            last_entry_date TEXT NOT NULL DEFAULT '',
+            last_status TEXT NOT NULL DEFAULT '',
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_feeds_enabled ON feeds(enabled);
+
         -- Agent trigger rules for vault event automation (#2984)
         CREATE TABLE IF NOT EXISTS trigger_rules (
             id TEXT PRIMARY KEY,

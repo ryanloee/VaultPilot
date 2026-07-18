@@ -1006,6 +1006,23 @@ async fn run_agent_task(
                     );
                     true
                 }
+                LibAgentEvent::UnhealthyDetected {
+                    reason,
+                    suggestion,
+                } => {
+                    let payload = serde_json::json!({
+                        "stage": "unhealthyDetected",
+                        "detail": reason,
+                        "suggestion": suggestion,
+                        "timestamp": Utc::now().to_rfc3339()
+                    });
+                    writer.write_line(&serde_json::json!({
+                        "event": "agentStatus",
+                        "payload": payload
+                    })
+                    .to_string());
+                    true
+                }
             }
         },
         |_plan| {

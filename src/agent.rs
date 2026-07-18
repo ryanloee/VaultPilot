@@ -689,6 +689,9 @@ pub enum AgentEvent {
     Error { message: String },
     /// A structured execution plan has been generated for user approval (Plan Mode, #2107).
     PlanProposed { plan: ExecutionPlan },
+    /// Agent session health degraded — repetition, looping, or no useful output
+    /// detected. Frontends should offer a "reset context" option (#3103).
+    UnhealthyDetected { reason: String, suggestion: String },
 }
 
 /// Result of an agent execution session.
@@ -1254,9 +1257,102 @@ fn extract_first_json_object(text: &str) -> Option<String> {
         .ok()
         .map(|_| candidate.to_string())
 }
-
 /// Maximum tool-calling rounds in the agent loop.
 const DEFAULT_MAX_STEPS: usize = 20;
+
+/// Health tracker that detects agent degradation patterns (#3103):
+/// repetition (same tool/call over and over), looping (same file/args),
+/// and silent failure (no successful operations despite multiple attempts).
+#[derive(Debug, Clone)]
+struct SessionHealthTracker {
+    /// Map from (tool_name, args_preview) to consecutive call count.
+    recent: std::collections::HashMap<String, u32>,
+    /// Consecutive steps ending in tool errors.
+    consecutive_errors: u32,
+    /// Count of successful (non-error) tool results.
+    successful_ops: u32,
+    /// Steps processed so far.
+    total_steps: u32,
+    /// Whether unhealthy event already emitted this session.
+    unhealthy_emitted: bool,
+}
+
+impl SessionHealthTracker {
+    fn new() -> Self {
+        Self {
+            recent: std::collections::HashMap::new(),
+            consecutive_errors: 0,
+            successful_ops: 0,
+            total_steps: 0,
+            unhealthy_emitted: false,
+        }
+    }
+
+    /// Record a tool call and check for unhealthy patterns.
+    /// Returns Some(reason, suggestion) if unhealthy, None otherwise.
+    fn record_and_check(
+        &mut self,
+        tool_name: &str,
+        args_summary: &str,
+        is_error: bool,
+    ) -> Option<(String, String)> {
+        if self.unhealthy_emitted {
+            return None;
+        }
+
+        self.total_steps += 1;
+
+        // 1. Repetition / looping detection: same tool + args 4+ times consecutively
+        let key = format!("{}::{}", tool_name, args_summary);
+        let count = self.recent.entry(key.clone()).or_insert(0);
+        *count += 1;
+        if *count >= 4 {
+            self.unhealthy_emitted = true;
+            return Some((
+                format!(
+                    "Repetition detected: {} called with same arguments {} times consecutively",
+                    tool_name, count
+                ),
+                "Agent has been calling the same tool repeatedly. Consider restarting with a more specific prompt.".to_string(),
+            ));
+        }
+
+        // Reset counts for all OTHER keys to detect only consecutive repetition
+        self.recent.retain(|k, _| k == &key);
+
+        // 2. Error spiral: 3+ consecutive errors with zero successes
+        if is_error {
+            self.consecutive_errors += 1;
+            if self.consecutive_errors >= 3 && self.successful_ops == 0 && self.total_steps >= 3 {
+                self.unhealthy_emitted = true;
+                return Some((
+                    format!(
+                        "{} consecutive tool errors with no successful operations",
+                        self.consecutive_errors
+                    ),
+                    "Agent hasn't completed any successful operation. Reset context and try a different prompt, or check tool permissions.".to_string(),
+                ));
+            }
+        } else {
+            self.consecutive_errors = 0;
+            self.successful_ops += 1;
+        }
+
+        // 3. Silent failure: 6+ steps, zero successful operations
+        if self.successful_ops == 0 && self.total_steps >= 6 {
+            self.unhealthy_emitted = true;
+            return Some((
+                format!(
+                    "{} total steps with zero successful operations",
+                    self.total_steps
+                ),
+                "Agent is unable to complete any tool call successfully. Check whether the tools it needs are available or if its permissions are too restrictive.".to_string(),
+            ));
+        }
+
+        None
+    }
+}
 
 /// Run an autonomous agent loop: prompt → LLM → tool call → execute → repeat.
 ///
@@ -1295,6 +1391,7 @@ pub async fn run_agent(
 
     let mut tool_transcripts: Vec<String> = Vec::new();
     let mut total_tokens: u64 = 0;
+    let mut health_tracker = SessionHealthTracker::new();
 
     // Track why the loop exited so we can emit the correct event
     // and avoid spurious StepLimitReached / extra LLM calls (#1689).
@@ -1579,6 +1676,13 @@ pub async fn run_agent(
                     result_preview: preview,
                     is_error,
                 });
+
+                // ── Session health check (#3103) ──────────────────────────
+                if let Some((reason, suggestion)) =
+                    health_tracker.record_and_check(tool_name, &args_summary, is_error)
+                {
+                    on_event(&AgentEvent::UnhealthyDetected { reason, suggestion });
+                }
 
                 tool_transcripts.push(format!(
                     "TOOL: {}\nSTATUS: {}\nINPUT:\n{}\nOUTPUT:\n{}",

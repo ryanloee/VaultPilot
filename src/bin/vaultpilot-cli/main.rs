@@ -5474,6 +5474,14 @@ async fn handle_agent(
                     eprintln!("\n📋 Plan generated — awaiting your decision...");
                     eprintln!("{}", plan.render_markdown());
                 }
+                vaultpilot_lib::agent::AgentEvent::UnhealthyDetected {
+                    reason,
+                    suggestion,
+                } => {
+                    eprintln!("\n⚠️  Agent health warning!");
+                    eprintln!("   Reason: {reason}");
+                    eprintln!("   Suggestion: {suggestion}");
+                }
             }
             true // default: continue
         },

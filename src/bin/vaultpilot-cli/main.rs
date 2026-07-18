@@ -1887,6 +1887,15 @@ enum AiSubcommand {
         model: Option<String>,
     },
 
+    /// Review a note and provide structured suggestions (no modification) (#3102)
+    Review {
+        /// The note text to review
+        text: String,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
     /// List all available AI quick actions with their IDs and labels
     ListActions,
 }
@@ -2541,6 +2550,18 @@ async fn handle_ai(context: &StorageContext, action: &AiSubcommand) -> Result<Va
                 None,
                 None,
                 note_id.clone(),
+                model.clone(),
+            )
+            .await
+        }
+        AiSubcommand::Review { text, model } => {
+            run_ai_action(
+                context,
+                AiActionType::ReviewNote,
+                text.clone(),
+                None,
+                None,
+                None,
                 model.clone(),
             )
             .await

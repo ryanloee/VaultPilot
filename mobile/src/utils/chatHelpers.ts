@@ -47,27 +47,44 @@ export function buildHistory(
  * Build the content payload for a user message that may include attachments.
  *
  * If there are no attachments (or only text), returns a plain string.
- * Otherwise returns a ContentPart[] array with text + image_url parts.
+ * Otherwise returns a ContentPart[] array:
+ *  - text files: their content is injected as additional `text` parts
+ *    (already read by the caller via readAsStringAsync, so no base64 step).
+ *  - images: `image_url` data-URI parts.
+ *  - other binary files (pdf, doc, etc.): `image_url` parts with the base64
+ *    data-URI. Most OpenAI-compatible APIs do not yet support a native `file`
+ *    ContentPart, so this is our best-effort bridge.
  */
 export function buildUserContent(
   text: string,
-  attachments: { base64: string; mime: string }[],
+  attachments: { base64: string; mime: string; textContent?: string }[],
 ): string | ContentPart[] {
   const parts: ContentPart[] = [];
 
   for (const att of attachments) {
-    parts.push({ type: 'image_url', image_url: { url: `data:${att.mime};base64,${att.base64}` } });
+    if (att.textContent !== undefined) {
+      // Text file: its content has already been read by the caller and is
+      // appended as a `text` part so the model actually sees the words.
+      parts.push({
+        type: 'text',
+        text:
+          `📄 ${att.mime}: ${att.textContent}`,
+      });
+    } else {
+      parts.push({ type: 'image_url', image_url: { url: `data:${att.mime};base64,${att.base64}` } });
+    }
   }
 
   if (text) {
     parts.unshift({ type: 'text', text });
   }
 
-  // If there's only text (no image parts), return plain string for efficiency
-  if (parts.length > 0 && parts.some(p => p.type !== 'text')) {
-    return parts;
-  }
-  return text;
+  // If there are no attachments (only a single text prompt), return a plain
+  // string for efficiency. Otherwise return ContentPart[] so the model sees
+  // each part distinctly.
+  if (!attachments || attachments.length === 0) return text;
+
+  return parts;
 }
 
 /**
@@ -101,4 +118,19 @@ export function inferMime(name: string, fallback: string): string {
     txt: 'text/plain', md: 'text/markdown',
   };
   return ext && map[ext] ? map[ext] : fallback;
+}
+
+/**
+ * Returns true when the filename extension indicates a text file whose content
+ * the model should read as words (not base64 image_url).
+ */
+export function isTextFile(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase();
+  if (!ext) return false;
+  const textExtensions = new Set([
+    'txt', 'md', 'markdown', 'csv', 'json', 'xml', 'html', 'htm',
+    'js', 'ts', 'tsx', 'jsx', 'py', 'rs', 'yaml', 'yml', 'toml',
+    'sh', 'bash', 'log',
+  ]);
+  return textExtensions.has(ext);
 }

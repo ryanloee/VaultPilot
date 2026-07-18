@@ -9,7 +9,7 @@
  *   2. `buildHistory` embeds that multimodal content as the final user message,
  *      so an attachment-bearing user turn is NOT reduced to plain text.
  */
-import { buildUserContent, buildHistory } from '../../utils/chatHelpers';
+import { buildUserContent, buildHistory, isTextFile } from '../../utils/chatHelpers';
 import type { Msg } from '../../utils/chatHelpers';
 
 describe('issue #2983 — attachments reach the API request body', () => {
@@ -47,5 +47,47 @@ describe('issue #2983 — attachments reach the API request body', () => {
     expect(Array.isArray(userTurn.content)).toBe(true);
     const parts = userTurn.content as any[];
     expect(parts.some((p) => p.type === 'image_url')).toBe(true);
+  });
+
+  // ── file (non-image) attachment paths ──
+
+  it('isTextFile recognises text extensions', () => {
+    expect(isTextFile('notes.txt')).toBe(true);
+    expect(isTextFile('README.md')).toBe(true);
+    expect(isTextFile('config.json')).toBe(true);
+    expect(isTextFile('photo.jpg')).toBe(false);
+    expect(isTextFile('report.pdf')).toBe(false);
+    expect(isTextFile('noext')).toBe(false);
+  });
+
+  it('buildUserContent injects text file content as a text part', () => {
+    const content = buildUserContent('summarise this', [
+      {
+        base64: '',
+        mime: 'text/plain',
+        textContent: 'Hello from a .txt file',
+      },
+    ]) as any[];
+
+    expect(Array.isArray(content)).toBe(true);
+    const textParts = content.filter((p) => p.type === 'text');
+    expect(textParts.length).toBe(2); // user prompt + file content
+    expect(textParts[1].text).toContain('Hello from a .txt file');
+  });
+
+  it('buildHistory embeds file-text content in the request', () => {
+    const prev: Msg[] = [
+      { id: '1', role: 'user', content: 'hi' },
+    ];
+    const multimodal = buildUserContent('review', [
+      { base64: '', mime: 'text/markdown', textContent: '# Title\npara' },
+    ]);
+    const history = buildHistory(prev, 'system', multimodal);
+
+    const userTurn = history[history.length - 1];
+    expect(Array.isArray(userTurn.content)).toBe(true);
+    const parts = userTurn.content as any[];
+    const fileText = parts.find((p) => p.type === 'text' && (p.text as string).includes('# Title'));
+    expect(fileText).toBeDefined();
   });
 });

@@ -15,7 +15,7 @@ import { getMessages, addMessage, updateMessage, deleteMessage, createSession, g
 import { loadNoteTitleMap, clearNoteTitleCache } from '../utils/noteRefs';
 import { MessageBubble, InputBar } from '../components/chat';
 import { useVoiceInput } from '../utils/useVoiceInput';
-import { buildUserContent, inferMime } from '../utils/chatHelpers';
+import { buildUserContent, inferMime, isTextFile } from '../utils/chatHelpers';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -413,12 +413,27 @@ export default function ChatScreen({ navigation, route }: any) {
         try {
           const b64Attachments = await Promise.all(
             attachments.map(async (a) => {
-              const base64 = await FileSystem.readAsStringAsync(a.uri, {
-                encoding: FileSystem.EncodingType.Base64,
-              });
               const mime = a.type === 'image'
                 ? (a.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg')
                 : inferMime(a.name, 'application/octet-stream');
+
+              // Text files: read as UTF-8 text so the model actually sees the
+              // words instead of an opaque base64 blob.
+              if (isTextFile(a.name)) {
+                try {
+                  const textContent = await FileSystem.readAsStringAsync(a.uri, {
+                    encoding: FileSystem.EncodingType.UTF8,
+                  });
+                  return { base64: '', mime, textContent };
+                } catch (txtErr) {
+                  // Fall back to base64 if UTF-8 read fails (binary faking a text extension)
+                  console.warn('[Chat] failed to read file as text, falling back to base64:', txtErr);
+                }
+              }
+
+              const base64 = await FileSystem.readAsStringAsync(a.uri, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
               return { base64, mime };
             }),
           );

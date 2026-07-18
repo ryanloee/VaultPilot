@@ -259,10 +259,14 @@ public sealed partial class MainWindow : Window
 
             // Use the active provider from the multi-provider list, with
             // fallback to the legacy single Provider field for backward compat.
+            // #3090: defensive null-coalesce — the Rust backend serializes
+            // Provider with a default, but if the payload ever explicitly
+            // includes `"provider": null`, System.Text.Json will set the
+            // property to null and the subsequent `.BaseUrl` access NPEs.
             var activeProvider = _settings.Providers.Count > 0
                 ? _settings.Providers[Math.Clamp(_settings.ActiveProviderIndex, 0, _settings.Providers.Count - 1)]
-                : _settings.Provider;
-            var models = GetModelsForProvider(activeProvider.BaseUrl);
+                : (_settings.Provider ?? new ProviderConfig());
+            var models = GetModelsForProvider((activeProvider ?? new ProviderConfig()).BaseUrl);
 
             var dialog = new Views.SettingsDialog(
                 _settings,
@@ -938,8 +942,11 @@ public sealed partial class MainWindow : Window
 
             // Send to AI
             var history = GetConversationHistory(requestSessionId);
+            // #3090: null-conditional guards _settings but not _settings.Provider.
+            // If Provider was explicitly null in the backend payload, accessing
+            // RequestTimeoutMs would NPE; coalesce to a sane default (60s).
             using var cts = new CancellationTokenSource(
-                TimeSpan.FromMilliseconds((_settings?.Provider.RequestTimeoutMs ?? 60_000) + 30_000));
+                TimeSpan.FromMilliseconds((_settings?.Provider?.RequestTimeoutMs ?? 60_000) + 30_000));
             var wakeModelOverride = _settings?.AutoWakeModel?.Trim();
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                 "askWithAi",

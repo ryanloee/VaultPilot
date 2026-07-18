@@ -192,10 +192,11 @@ public sealed partial class MainWindow : Window
         var bubbleText = isUser || isAssistant ? text : $"{author}: {text}";
         var bubbleContent = CreateMessageContent(bubbleText, isAssistant, isUser);
 
-        // Card-style bubble (ChatGPT desktop look): symmetric padding, soft border on AI
+        // Card-style bubble. User: right-aligned with a max width (chat look).
+        // AI: stretches to fill the available message column so long markdown /
+        // code blocks / tables are not truncated by a narrow fixed MaxWidth.
         var bubble = new Border
         {
-            MaxWidth = 720,
             Padding = new Thickness(14, 12, 14, 12),
             CornerRadius = new CornerRadius(12),
             Background = isUser
@@ -204,7 +205,13 @@ public sealed partial class MainWindow : Window
             BorderBrush = isUser ? null : GetThemeBrush("VaultBorder"),
             BorderThickness = isUser ? new Thickness(0) : new Thickness(1),
             Child = bubbleContent,
+            HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Stretch,
         };
+        if (isUser)
+        {
+            // Keep user bubbles from spanning the whole column.
+            bubble.MaxWidth = 560;
+        }
 
         // ── Author label row ──
         var authorText = new TextBlock
@@ -235,22 +242,34 @@ public sealed partial class MainWindow : Window
         messageRow.Children.Add(metaRow);
         messageRow.Children.Add(bubble);
 
-        var outerRow = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 10,
-            HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-        };
-
+        // Use a Grid (not a horizontal StackPanel) for the outer row so that the
+        // AI message bubble can stretch to fill the available width. A horizontal
+        // StackPanel never constrains its children's width, so a long markdown
+        // body / wide code block would overflow and get clipped.
+        Grid outerRow;
         if (isUser)
         {
-            // User: bubble left, avatar right
+            // User: [content (right-aligned, capped)] [avatar]
+            // Use a single *-column so the bubble's own MaxWidth + Right alignment
+            // position it at the right edge.
+            outerRow = new Grid { ColumnSpacing = 10 };
+            outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            messageRow.HorizontalAlignment = HorizontalAlignment.Right;
+            Grid.SetColumn(messageRow, 0);
+            Grid.SetColumn(avatar, 1);
             outerRow.Children.Add(messageRow);
             outerRow.Children.Add(avatar);
         }
         else
         {
-            // AI: avatar left, bubble right
+            // AI: [avatar] [content stretches to fill]
+            outerRow = new Grid { ColumnSpacing = 10 };
+            outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            messageRow.HorizontalAlignment = HorizontalAlignment.Stretch;
+            Grid.SetColumn(avatar, 0);
+            Grid.SetColumn(messageRow, 1);
             outerRow.Children.Add(avatar);
             outerRow.Children.Add(messageRow);
         }
@@ -385,8 +404,7 @@ public sealed partial class MainWindow : Window
         {
             Header = $"思考过程 ({trace.Steps.Count} 步){(string.IsNullOrWhiteSpace(trace.Summary) ? "" : $" — {trace.Summary}")}",
             IsExpanded = false,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            MaxWidth = 720,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Content = stepsPanel
         };
         AutomationProperties.SetName(expander, $"思考过程: {trace.Steps.Count} 步");
@@ -399,8 +417,7 @@ public sealed partial class MainWindow : Window
         var citationsPanel = new StackPanel
         {
             Spacing = 6,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            MaxWidth = 720,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Margin = new Thickness(0, 4, 0, 0)
         };
 

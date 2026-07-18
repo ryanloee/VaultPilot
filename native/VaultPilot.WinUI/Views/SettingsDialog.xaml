@@ -21,6 +21,16 @@
             Spacing="14"
             HorizontalAlignment="Stretch">
 
+            <!-- Search box (#3069) -->
+            <TextBox
+                x:Name="SettingsSearchBox"
+                Header="搜索设置"
+                PlaceholderText="输入关键词过滤设置项..."
+                HorizontalAlignment="Stretch"
+                TextChanged="OnSettingsSearchTextChanged"
+                AutomationProperties.Name="设置搜索框"
+                AutomationProperties.HelpText="输入关键词过滤设置项" />
+
             <!-- Inline error bar -->
             <InfoBar
                 x:Name="ErrorInfoBar"

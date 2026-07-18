@@ -93,7 +93,7 @@ pub fn save_note_with_images_with_context(
                         |row| row.get(0),
                     )
                     .optional()?
-                    .and_then(|s: String| if s.trim().is_empty() { None } else { Some(s) });
+                    .filter(|s: &String| !s.trim().is_empty());
                 existing_id
             } else {
                 Uuid::new_v4().to_string()

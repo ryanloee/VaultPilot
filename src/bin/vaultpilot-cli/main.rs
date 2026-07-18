@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueHint};
+use clap_complete::{generate, Shell};
 use serde::Serialize;
 use serde_json::Value;
 use tracing_subscriber::EnvFilter;
@@ -749,6 +750,21 @@ enum Commands {
         #[command(subcommand)]
         action: PdfActions,
     },
+
+    /// Generate shell completion scripts for bash, zsh, fish, or PowerShell
+    ///
+    /// Examples:
+    ///   vp completions bash    — print bash completion script
+    ///   vp completions zsh     — print zsh completion script
+    ///   vp completions fish    — print fish completion script
+    ///   vp completions powershell — print PowerShell completion script
+    ///
+    /// Source the output in your shell init file:
+    ///   eval "$(vp completions bash)"
+    Completions {
+        /// Shell to generate completions for (bash, zsh, fish, powershell)
+        shell: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1452,6 +1468,7 @@ enum SubscriptionActions {
         /// Subscription ID
         id: String,
         /// Enable (true) or disable (false)
+        #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
     },
 
@@ -2388,6 +2405,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Connector { action } => handle_connector(action),
         Commands::Pdf { action } => handle_pdf(action),
+        Commands::Completions { shell } => handle_completions(shell),
     }
 }
 
@@ -8020,6 +8038,7 @@ enum SkillSavedActions {
     /// Show a saved skill's template and metadata
     Show {
         /// Skill id (UUID)
+        #[arg(value_hint = ValueHint::Other)]
         id: String,
     },
 
@@ -8043,12 +8062,14 @@ enum SkillSavedActions {
     /// Delete a saved skill by id
     Delete {
         /// Skill id (UUID)
+        #[arg(value_hint = ValueHint::Other)]
         id: String,
     },
 
     /// Render a saved skill's template and run it through the AI pipeline
     Run {
         /// Skill id (UUID)
+        #[arg(value_hint = ValueHint::Other)]
         id: String,
 
         /// Text substituted for `{{selection}}`
@@ -8502,4 +8523,78 @@ fn handle_pdf(action: &PdfActions) -> Result<Value> {
             }
         }
     }
+}
+
+/// Generate shell completion scripts for bash, zsh, fish, or PowerShell.
+///
+/// In addition to static completions for subcommands and flags, this also
+/// generates a custom completion function for `skill-saved run/show/delete`
+/// that dynamically queries the database via `vp skill-saved list --json` to
+/// offer saved skill IDs as completions.
+fn handle_completions(shell: &str) -> Result<Value> {
+    use clap::CommandFactory;
+
+    let shell = match shell.to_lowercase().as_str() {
+        "bash" => Shell::Bash,
+        "zsh" => Shell::Zsh,
+        "fish" => Shell::Fish,
+        "powershell" | "powershell.exe" => Shell::PowerShell,
+        other => {
+            return Err(anyhow::anyhow!(
+                "Unknown shell '{}'. Supported shells: bash, zsh, fish, powershell",
+                other
+            ));
+        }
+    };
+
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+
+    // Generate static completions for subcommands, flags, etc.
+    generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
+
+    // Additional dynamic completion for skill-saved run/show/delete id
+    match shell {
+        Shell::Bash => {
+            println!(
+                r#"
+# Dynamic completion for 'vp skill-saved' — queries saved skills from the DB.
+_vp_skill_saved_completions() {{
+    local cur prev words cword
+    _init_completion || return
+    if [[ $cword -ge 3 ]]; then
+        local prev_subcmd="${{words[2]}}"
+        case "$prev_subcmd" in
+            run|show|delete)
+                COMPREPLY=($(compgen -W "$(vp skill-saved list 2>/dev/null | \
+                    sed -n '/"id"/s/.*"id": *"\([^"]*\)".*/\1/p')" -- "$cur"))
+                return 0
+                ;;
+        esac
+    fi
+}}
+complete -F _vp_skill_saved_completions vp
+"#
+            );
+        }
+        Shell::Zsh => {
+            println!(
+                r#"
+# Dynamic completion for 'vp skill-saved' — queries saved skills from the DB.
+_vp_skill_saved_completions() {{
+    local -a skill_ids
+    skill_ids=(${{(@f)"$(vp skill-saved list 2>/dev/null | \
+        sed -n '/"id"/s/.*"id": *"\([^"]*\)".*/\1/p')"}})
+    _describe 'skill' skill_ids
+}}
+"#
+            );
+        }
+        _ => {
+            // Fish and PowerShell don't have a simple dynamic completion hook;
+            // static completions from clap_complete cover the basic case.
+        }
+    }
+
+    Ok(serde_json::json!({ "status": "ok", "shell": shell.to_string() }))
 }

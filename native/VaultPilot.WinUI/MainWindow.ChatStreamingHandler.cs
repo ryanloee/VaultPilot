@@ -102,13 +102,16 @@ public sealed partial class MainWindow : Window
 
     private ulong ResolveContextWindowTokens()
     {
-        var configuredLimit = _settings?.Provider.ContextWindowTokens;
+        // Defensive null-propagation (issue #3090): _settings?.Provider only
+        // guards _settings, not Provider itself — System.Text.Json can leave
+        // Provider null if the backend explicitly sent "provider": null.
+        var configuredLimit = _settings?.Provider?.ContextWindowTokens;
         if (configuredLimit.HasValue && configuredLimit.Value > 0)
         {
             return configuredLimit.Value;
         }
 
-        var model = (_settings?.Provider.Model ?? string.Empty).Trim().ToLowerInvariant();
+        var model = (_settings?.Provider?.Model ?? string.Empty).Trim().ToLowerInvariant();
         if (ContainsModelToken(model, "glm-5.1"))
         {
             return 200_000;

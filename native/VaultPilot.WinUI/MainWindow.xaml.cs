@@ -259,10 +259,14 @@ public sealed partial class MainWindow : Window
 
             // Use the active provider from the multi-provider list, with
             // fallback to the legacy single Provider field for backward compat.
+            // Defensive null-coalescing (issue #3090): System.Text.Json can
+            // explicitly set Provider to null when the backend payload contains
+            // "provider": null, which would otherwise NullReferenceException
+            // on the .BaseUrl access below.
             var activeProvider = _settings.Providers.Count > 0
                 ? _settings.Providers[Math.Clamp(_settings.ActiveProviderIndex, 0, _settings.Providers.Count - 1)]
-                : _settings.Provider;
-            var models = GetModelsForProvider(activeProvider.BaseUrl);
+                : (_settings.Provider ?? new ProviderConfig());
+            var models = GetModelsForProvider(activeProvider?.BaseUrl ?? string.Empty);
 
             var dialog = new Views.SettingsDialog(
                 _settings,
@@ -938,8 +942,11 @@ public sealed partial class MainWindow : Window
 
             // Send to AI
             var history = GetConversationHistory(requestSessionId);
+            // Defensive: _settings?.Provider only guards _settings, not Provider
+            // itself — System.Text.Json can leave Provider null if the backend
+            // explicitly sent "provider": null (issue #3090).
             using var cts = new CancellationTokenSource(
-                TimeSpan.FromMilliseconds((_settings?.Provider.RequestTimeoutMs ?? 60_000) + 30_000));
+                TimeSpan.FromMilliseconds((_settings?.Provider?.RequestTimeoutMs ?? 60_000) + 30_000));
             var wakeModelOverride = _settings?.AutoWakeModel?.Trim();
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                 "askWithAi",

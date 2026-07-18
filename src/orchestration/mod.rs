@@ -4,6 +4,7 @@ pub mod chat;
 pub mod compress;
 pub mod deep_research;
 pub mod event_bus;
+pub mod recovery;
 pub mod scheduled_research;
 pub mod serendipity;
 pub mod table;

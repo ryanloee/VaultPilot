@@ -101,6 +101,7 @@ pub async fn chat_with_ai_with_context(
         created_session,
         answer,
         state,
+        unhealthy: false,
     })
 }
 
@@ -186,6 +187,24 @@ pub async fn finalize_chat_with_ai_answer(
     let mut state = load_chat_state_async(context).await?;
     let assistant_turn = build_chat_turn("assistant", &answer.answer, Some(&answer), &[]);
     append_turn_to_session(&mut state, &prepared.active_session_id, assistant_turn)?;
+
+    // Check session health after appending the assistant turn (#3103)
+    let unhealthy = {
+        let session = find_chat_session(&state, &prepared.active_session_id);
+        session.is_some_and(|s| super::recovery::check_session_health(s).is_some())
+    };
+
+    // Persist the unhealthy flag to storage for future loads
+    if unhealthy {
+        if let Some(session) = state
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == prepared.active_session_id)
+        {
+            session.unhealthy = true;
+        }
+    }
+
     state = save_chat_state_async(context, &state).await?;
 
     let session = find_chat_session(&state, &prepared.active_session_id).ok_or_else(|| {
@@ -201,6 +220,7 @@ pub async fn finalize_chat_with_ai_answer(
         created_session: prepared.created_session,
         answer,
         state,
+        unhealthy,
     })
 }
 
@@ -339,6 +359,7 @@ fn new_chat_session(title: Option<&str>) -> ChatSession {
         summary: None,
         created_at: now.clone(),
         updated_at: now,
+        unhealthy: false,
     }
 }
 

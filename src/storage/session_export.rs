@@ -341,6 +341,7 @@ mod tests {
             created_at: "2026-07-01T12:00:00Z".to_string(),
             updated_at: "2026-07-01T12:01:00Z".to_string(),
             summary: None,
+            unhealthy: false,
         }
     }
 
@@ -370,6 +371,7 @@ mod tests {
             created_at: "2026-07-01T12:00:00Z".to_string(),
             updated_at: "2026-07-01T12:00:00Z".to_string(),
             summary: None,
+            unhealthy: false,
         };
         let md = compose_session_markdown(&session).expect("compose");
         assert!(md.contains("空对话"), "title present");

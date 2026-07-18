@@ -356,6 +356,10 @@ pub struct ChatSession {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    /// Whether this session has been flagged as unhealthy (repetition, loops, etc.).
+    /// See `orchestration/recovery.rs` for detection logic (#3103).
+    #[serde(default)]
+    pub unhealthy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -506,6 +510,10 @@ pub struct ChatExchangeResult {
     pub answer: GroundedAnswer,
     #[serde(default)]
     pub state: ChatState,
+    /// Whether the session has been flagged as unhealthy after this exchange.
+    /// Frontends should surface a recovery prompt when true (#3103).
+    #[serde(default)]
+    pub unhealthy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -952,6 +960,7 @@ mod tests {
                 }),
                 created_at: "2026-01-01T00:00:00Z".to_string(),
                 updated_at: "2026-01-01T00:00:00Z".to_string(),
+                unhealthy: false,
             }],
         };
         let json = serde_json::to_string(&state).expect("serialize");

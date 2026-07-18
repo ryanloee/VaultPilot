@@ -5258,6 +5258,7 @@ fn new_cli_chat_session(title: Option<&str>) -> ChatSession {
         summary: None,
         created_at: now.clone(),
         updated_at: now,
+        unhealthy: false,
     }
 }
 

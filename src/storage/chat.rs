@@ -95,6 +95,7 @@ fn default_chat_session() -> ChatSession {
         summary: None,
         created_at: now.clone(),
         updated_at: now,
+        unhealthy: false,
     }
 }
 
@@ -116,6 +117,7 @@ fn parse_chat_state(raw: &str) -> Result<ChatState> {
             summary: legacy.summary,
             created_at: now.clone(),
             updated_at: now,
+            unhealthy: false,
         };
         return Ok(ChatState {
             current_session_id: session.id.clone(),
@@ -240,6 +242,7 @@ mod tests {
                 summary: None,
                 created_at: String::new(),
                 updated_at: "2026-01-01T00:00:00Z".to_string(),
+                unhealthy: false,
             }],
         };
         let result = normalize_chat_state(state);
@@ -268,6 +271,7 @@ mod tests {
                     summary: None,
                     created_at: "2026-01-01T00:00:00Z".to_string(),
                     updated_at: "2026-01-01T00:00:00Z".to_string(),
+                    unhealthy: false,
                 },
                 ChatSession {
                     id: "b".to_string(),
@@ -276,6 +280,7 @@ mod tests {
                     summary: None,
                     created_at: "2026-01-01T00:00:00Z".to_string(),
                     updated_at: "2026-06-01T00:00:00Z".to_string(),
+                    unhealthy: false,
                 },
             ],
         };
@@ -295,6 +300,7 @@ mod tests {
                 summary: None,
                 created_at: "2026-01-01T00:00:00Z".to_string(),
                 updated_at: "2026-01-01T00:00:00Z".to_string(),
+                unhealthy: false,
             }],
         };
         let result = normalize_chat_state(state);
@@ -339,6 +345,7 @@ mod tests {
             summary: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: updated_at.to_string(),
+            unhealthy: false,
         }
     }
 

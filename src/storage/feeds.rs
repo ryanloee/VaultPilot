@@ -382,16 +382,33 @@ fn find_from(haystack: &[u8], needle: u8, from: usize) -> Option<usize> {
 }
 
 fn attr_value(tag: &str, name: &str) -> Option<String> {
-    // Match name="..." or name='...'
+    // Match `name="..."` or `name='...'`. The attribute name must be preceded
+    // by whitespace or a tag boundary (`<`), so that a name appearing *inside
+    // another attribute's value* (e.g. `xmlUrl="...?htmlUrl=1"`) is not
+    // mistaken for a real attribute. See issue #3072.
     let pat = format!("{name}=");
-    let idx = tag.find(&pat)?;
-    let rest = &tag[idx + pat.len()..];
-    let quote = rest.chars().next()?;
-    if quote != '"' && quote != '\'' {
-        return None;
+    let mut search_from = 0;
+    while let Some(idx) = tag[search_from..].find(&pat) {
+        let abs = search_from + idx;
+        let preceded_by_boundary = abs == 0
+            || tag[..abs]
+                .chars()
+                .last()
+                .map(|c| c.is_whitespace() || c == '<')
+                == Some(true);
+        if preceded_by_boundary {
+            let rest = &tag[abs + pat.len()..];
+            let quote = rest.chars().next()?;
+            if quote != '"' && quote != '\'' {
+                return None;
+            }
+            let close = rest[1..].find(quote)?;
+            return Some(rest[1..1 + close].to_string());
+        }
+        // Keep scanning past this false-positive match.
+        search_from = abs + pat.len();
     }
-    let close = rest[1..].find(quote)?;
-    Some(rest[1..1 + close].to_string())
+    None
 }
 
 fn xml_escape(s: &str) -> String {
@@ -694,5 +711,43 @@ mod tests {
     fn test_opml_rejects_garbage() {
         assert!(parse_opml("just some random text").is_err());
         assert!(parse_opml("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_opml_attr_value_ignores_substring_in_other_attr() {
+        // Regression test for #3072: an attribute name appearing *inside*
+        // another attribute's value (e.g. a query string containing
+        // `?htmlUrl=1`) must not be mistaken for a real attribute.
+        let tag = r#"<outline text="Blog" xmlUrl="https://real.example.com/feed?htmlUrl=1" htmlUrl="https://real.example.com"/>"#;
+
+        // `htmlUrl` is a real attribute and must resolve correctly.
+        let html = attr_value(tag, "htmlUrl");
+        assert_eq!(html.as_deref(), Some("https://real.example.com"));
+
+        // `xmlUrl` is also a real attribute and must not be confused.
+        let xml = attr_value(tag, "xmlUrl");
+        assert_eq!(
+            xml.as_deref(),
+            Some("https://real.example.com/feed?htmlUrl=1")
+        );
+
+        // A name that only appears inside a value (not as a real attr) is None.
+        assert_eq!(attr_value(tag, "type"), None);
+    }
+
+    #[test]
+    fn test_parse_opml_does_not_drop_attr_in_query_string() {
+        // End-to-end: parse an OPML where one feed's xmlUrl contains another
+        // attribute name in its query string. The htmlUrl must survive.
+        let opml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <body>
+    <outline text="Blog" xmlUrl="https://real.example.com/feed?htmlUrl=1" htmlUrl="https://real.example.com"/>
+  </body>
+</opml>"#;
+        let parsed = parse_opml(opml).expect("parse failed");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].html_url, "https://real.example.com");
+        assert_eq!(parsed[0].xml_url, "https://real.example.com/feed?htmlUrl=1");
     }
 }

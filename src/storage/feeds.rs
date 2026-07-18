@@ -128,6 +128,7 @@ pub fn get_feed_with_context(
 
 /// Update mutable fields of a feed.
 #[instrument(skip(context))]
+#[allow(clippy::too_many_arguments)]
 pub fn update_feed_with_context(
     context: &StorageContext,
     id: &str,
@@ -166,6 +167,7 @@ pub fn set_feed_enabled_with_context(
 /// Record the result of a poll: high-water marks, status, error, and the
 /// conditional-request headers to send next time (ETag / Last-Modified).
 #[instrument(skip(context))]
+#[allow(clippy::too_many_arguments)]
 pub fn update_feed_fetch_result_with_context(
     context: &StorageContext,
     id: &str,
@@ -471,6 +473,7 @@ pub async fn get_feed_async(ctx: &StorageContext, id: String) -> Result<Option<F
 }
 
 #[instrument(skip(ctx))]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_feed_async(
     ctx: &StorageContext,
     id: String,
@@ -511,6 +514,7 @@ pub async fn set_feed_enabled_async(
 }
 
 #[instrument(skip(ctx))]
+#[allow(clippy::too_many_arguments)]
 pub async fn update_feed_fetch_result_async(
     ctx: &StorageContext,
     id: String,

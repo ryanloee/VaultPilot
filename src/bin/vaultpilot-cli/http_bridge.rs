@@ -1278,7 +1278,9 @@ fn ip_is_forbidden(ip: IpAddr) -> bool {
 ///
 /// Failure mode: DNS resolution failure is reported as an error (fail-closed)
 /// rather than silently letting the request through.
-pub(crate) async fn validate_clip_url_host(url_str: &str) -> Result<Vec<(String, SocketAddr)>, String> {
+pub(crate) async fn validate_clip_url_host(
+    url_str: &str,
+) -> Result<Vec<(String, SocketAddr)>, String> {
     let parsed = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("refusing non-http(s) scheme '{}'", parsed.scheme()));

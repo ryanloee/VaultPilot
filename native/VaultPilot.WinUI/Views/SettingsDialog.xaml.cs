@@ -1,7 +1,9 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using VaultPilot.WinUI.Models;
+using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace VaultPilot.WinUI.Views;
@@ -192,6 +194,251 @@ public sealed partial class SettingsDialog : ContentDialog
             try { await _openProjectHomepageAsync(); }
             catch (Exception ex) { Trace.TraceError($"ProjectLink error: {ex}"); }
         };
+
+        // #3120 — keyboard navigation: Ctrl+F to re-focus search, ArrowUp/Down
+        // to move between visible settings cards, Escape to clear search or
+        // close the dialog. PreviewKeyDown fires before child controls handle
+        // the key, so Ctrl+F still works even when focus is inside a TextBox.
+        PreviewKeyDown += OnDialogPreviewKeyDown;
+    }
+
+    // ──────────────────────────────────────────────
+    //  Keyboard navigation (#3120)
+    // ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Index of the currently keyboard-focused settings card (-1 = none).
+    /// Refers to a position in the list returned by <see cref="GetVisibleSettingsCards"/>.
+    /// </summary>
+    private int _keyboardFocusCardIndex = -1;
+
+    /// <summary>
+    /// Top-level dialog PreviewKeyDown handler (#3120). Implements the keyboard
+    /// contract promised in the issue:
+    /// <list type="bullet">
+    ///   <item><b>Ctrl+F</b> / <b>Cmd+F</b> — re-focus the settings search box
+    ///     (even when focus is inside another input field).</item>
+    ///   <item><b>Escape</b> — if the search box has text, clear it; otherwise
+    ///     close the dialog.</item>
+    ///   <item><b>ArrowUp</b> / <b>ArrowDown</b> — move keyboard focus between
+    ///     currently-visible settings cards. No-op if no cards are visible
+    ///     (e.g. search returned zero matches).</item>
+    ///   <item><b>j</b> / <b>k</b> — Vim equivalents of ArrowDown / ArrowUp.
+    ///     Only triggered when the focused element is NOT a text input so we
+    ///     don't swallow legitimate typing.</item>
+    /// </list>
+    /// </summary>
+    private void OnDialogPreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.System.VirtualKeyStates.Down);
+        var menu = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu).HasFlag(Windows.System.VirtualKeyStates.Down);
+        var modifierPressed = ctrl || menu;
+
+        switch (e.Key)
+        {
+            // Ctrl+F / Cmd+F: jump back to search box from anywhere in the dialog
+            case Windows.System.VirtualKey.F when modifierPressed:
+                e.Handled = true;
+                FocusSearchBox();
+                break;
+
+            case Windows.System.VirtualKey.Escape:
+                e.Handled = true;
+                ClearSearchOrClose();
+                break;
+
+            case Windows.System.VirtualKey.Down:
+                // Don't hijack arrow keys when the user is editing text — they
+                // need them for caret movement. Enter / ArrowDown on the search
+                // box is handled separately in OnSearchBoxKeyDown.
+                if (!IsFocusInsideTextInput())
+                {
+                    e.Handled = true;
+                    MoveCardFocus(delta: 1);
+                }
+                break;
+
+            case Windows.System.VirtualKey.Up:
+                if (!IsFocusInsideTextInput())
+                {
+                    e.Handled = true;
+                    MoveCardFocus(delta: -1);
+                }
+                break;
+        }
+
+        // Optional Vim-style bindings (j/k = ↓/↑). Only active when focus is
+        // not in a text input — otherwise typing 'j' into the API key field
+        // would jump cards. This mirrors Obsidian 1.13.0's Vim-mode behaviour.
+        if (!e.Handled && !IsFocusInsideTextInput())
+        {
+            if (e.Key == Windows.System.VirtualKey.J)
+            {
+                e.Handled = true;
+                MoveCardFocus(delta: 1);
+            }
+            else if (e.Key == Windows.System.VirtualKey.K)
+            {
+                e.Handled = true;
+                MoveCardFocus(delta: -1);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Keydown handler wired directly on SettingsSearchBox (#3120).
+    /// Handles keys meaningful only while the search box itself has focus:
+    /// <list type="bullet">
+    ///   <item><b>Escape</b> — clear search text but keep focus on the box,
+    ///     so the user can immediately type a new query. If the search is
+    ///     already empty, fall through to the dialog-level handler which
+    ///     will close the dialog.</item>
+    ///   <item><b>Enter</b> / <b>ArrowDown</b> — drop into the first visible
+    ///     settings card so the user can begin editing without reaching for
+    ///     the mouse.</item>
+    /// </list>
+    /// </summary>
+    private void OnSearchBoxKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Windows.System.VirtualKey.Escape:
+                if (!string.IsNullOrEmpty(SettingsSearchBox.Text))
+                {
+                    e.Handled = true;
+                    SettingsSearchBox.Text = string.Empty;
+                    // TextChanged will restore all cards; keep focus on search.
+                }
+                // else: let PreviewKeyDown close the dialog.
+                break;
+
+            case Windows.System.VirtualKey.Enter:
+            case Windows.System.VirtualKey.Down:
+                e.Handled = true;
+                // Drop into the first visible card.
+                _keyboardFocusCardIndex = -1;
+                MoveCardFocus(delta: 1);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Returns whether the currently-focused element is a text-input control.
+    /// Used to detect whether the user is editing text (we shouldn't hijack
+    /// typing keys for navigation in that case) — #3120.
+    /// </summary>
+    private static bool IsFocusInsideTextInput()
+    {
+        var focused = FocusManager.GetFocusedElement();
+        return focused is TextBox or PasswordBox or ComboBox;
+    }
+
+    /// <summary>
+    /// Sets keyboard focus to the settings search box and selects all text
+    /// so a new query can be typed immediately (#3120).
+    /// </summary>
+    private void FocusSearchBox()
+    {
+        SettingsSearchBox.Focus(FocusState.Programmatic);
+        SettingsSearchBox.SelectAll();
+    }
+
+    /// <summary>
+    /// If the search box contains text, clear it (which restores all cards
+    /// via OnSettingsSearchTextChanged). Otherwise, close the dialog (#3120).
+    /// </summary>
+    private void ClearSearchOrClose()
+    {
+        if (!string.IsNullOrEmpty(SettingsSearchBox.Text))
+        {
+            SettingsSearchBox.Text = string.Empty;
+            SettingsSearchBox.Focus(FocusState.Programmatic);
+        }
+        else
+        {
+            Hide();
+        }
+    }
+
+    /// <summary>
+    /// Collects the settings cards (Border elements directly inside Panel)
+    /// that are currently visible after search filtering. Cards are returned
+    /// in document order so index-based navigation stays stable (#3120).
+    /// </summary>
+    private List<Border> GetVisibleSettingsCards()
+    {
+        var cards = new List<Border>();
+        foreach (var child in Panel.Children)
+        {
+            if (child is Border card && card.Visibility == Visibility.Visible)
+            {
+                cards.Add(card);
+            }
+        }
+        return cards;
+    }
+
+    /// <summary>
+    /// Moves keyboard focus between visible settings cards by <paramref name="delta"/>
+    /// (negative = up, positive = down). Wraps around at the top/bottom. Sets
+    /// focus on the first focusable control inside the target card and brings
+    /// it into view via StartBringIntoView (#3120).
+    /// </summary>
+    private void MoveCardFocus(int delta)
+    {
+        var cards = GetVisibleSettingsCards();
+        if (cards.Count == 0) return;
+
+        // Compute wrapped index. If no card is currently focused (index -1),
+        // delta=+1 selects the first card, delta=-1 selects the last.
+        int newIndex;
+        if (_keyboardFocusCardIndex < 0 || _keyboardFocusCardIndex >= cards.Count)
+        {
+            newIndex = delta > 0 ? 0 : cards.Count - 1;
+        }
+        else
+        {
+            newIndex = (_keyboardFocusCardIndex + delta + cards.Count) % cards.Count;
+        }
+        _keyboardFocusCardIndex = newIndex;
+
+        var target = cards[newIndex];
+        // Find the first focusable control inside the card so arrow navigation
+        // immediately enables editing (Obsidian 1.13.0 Enter-to-open semantics).
+        var firstFocusable = FindFirstFocusableControl(target);
+        if (firstFocusable is Control focusable)
+        {
+            focusable.Focus(FocusState.Programmatic);
+        }
+        else
+        {
+            // Card itself isn't focusable by default — at minimum bring it into
+            // view so the user can see which card is logically "current".
+            target.StartBringIntoView();
+        }
+    }
+
+    /// <summary>
+    /// Depth-first search for the first focusable Control inside a subtree.
+    /// Used by <see cref="MoveCardFocus"/> to drop the user directly into the
+    /// first editable field of a card (#3120).
+    /// </summary>
+    private static Control? FindFirstFocusableControl(DependencyObject root)
+    {
+        if (root is Control c && c.IsEnabled && c.Visibility == Visibility.Visible)
+        {
+            return c;
+        }
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (FindFirstFocusableControl(child) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 
     // ──────────────────────────────────────────────

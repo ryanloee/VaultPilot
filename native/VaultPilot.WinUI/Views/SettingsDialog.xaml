@@ -21,15 +21,18 @@
             Spacing="14"
             HorizontalAlignment="Stretch">
 
-            <!-- Search box (#3069) -->
+            <!-- Search box (#3069) — keyboard navigation (#3120):
+                 ArrowDown/Enter drops into the first visible settings card,
+                 Escape clears the search (or closes the dialog if empty). -->
             <TextBox
                 x:Name="SettingsSearchBox"
                 Header="搜索设置"
                 PlaceholderText="输入关键词过滤设置项..."
                 HorizontalAlignment="Stretch"
                 TextChanged="OnSettingsSearchTextChanged"
+                KeyDown="OnSearchBoxKeyDown"
                 AutomationProperties.Name="设置搜索框"
-                AutomationProperties.HelpText="输入关键词过滤设置项" />
+                AutomationProperties.HelpText="输入关键词过滤设置项；Esc 清空，↓ 进入设置卡片" />
 
             <!-- Inline error bar -->
             <InfoBar

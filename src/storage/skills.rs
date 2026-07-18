@@ -406,4 +406,30 @@ mod tests {
         let rendered = skill.render(&SkillInvocation::default());
         assert_eq!(rendered, "Sel: []");
     }
+
+    #[test]
+    fn test_create_then_delete_roundtrip() {
+        let (_tmp, ctx) = setup_context();
+        let skill = create_skill_with_context(
+            &ctx,
+            "Summarize selection",
+            "Wraps the current selection in a summarize prompt",
+            "Summarize the following: {{selection}}",
+            "",
+        )
+        .unwrap();
+        assert!(!skill.id.is_empty());
+        assert!(skill.enabled);
+
+        // Deleting an existing skill reports true.
+        let removed = delete_skill_with_context(&ctx, &skill.id).unwrap();
+        assert!(removed);
+
+        // After deletion the skill is gone.
+        assert!(get_skill_with_context(&ctx, &skill.id).unwrap().is_none());
+
+        // Deleting a non-existent skill reports false (CLI surfaces this as an error).
+        let missing = delete_skill_with_context(&ctx, &skill.id).unwrap();
+        assert!(!missing);
+    }
 }

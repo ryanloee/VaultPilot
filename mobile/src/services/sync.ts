@@ -163,6 +163,8 @@ async function doSync(
           if (!listRes) { lastNetworkErr = lastNetworkErr ?? new Error('fetch returned null'); continue; }
           if (isRetryable(listRes.status)) {
             // 429/502/503/504 等可重试状态：尊重 Retry-After 头后重试 (#2132)
+            // 必须先取消 response body，否则底层 HTTP 连接泄漏可能耗尽连接池 (#3111)
+            await listRes.body?.cancel().catch(() => {});
             retryAfterMs = parseRetryAfter(listRes);
             lastNetworkErr = new Error(`获取笔记列表失败: ${listRes.status}`);
             if (attempt >= MAX_RETRIES) break;
@@ -261,6 +263,8 @@ async function doSync(
           if (noteRes.ok) break; // success
           // 可重试状态（429/502/503/504）：尊重 Retry-After 头后重试 (#2132)
           if (isRetryable(noteRes.status)) {
+            // 必须先取消 response body，否则底层 HTTP 连接泄漏可能耗尽连接池 (#3111)
+            await noteRes.body?.cancel().catch(() => {});
             noteRetryAfterMs = parseRetryAfter(noteRes);
             continue;
           }

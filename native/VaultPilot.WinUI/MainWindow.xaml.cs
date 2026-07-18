@@ -691,9 +691,10 @@ public sealed partial class MainWindow : Window
 
         // Cancel any active AI request before releasing resources
         // to prevent catch/finally blocks from accessing disposed objects.
-        // Use Interlocked.Exchange for thread safety with ExecuteAiRequestAsync (#588).
-        var activeCts = Interlocked.Exchange(ref _activeRequestCts, null);
-        activeCts?.Cancel();
+        // #3097: Only Cancel, don't dispose or null out _activeRequestCts.
+        // ExecuteAiRequestAsync's finally block is the sole owner of disposal (#2732).
+        var activeCts = Volatile.Read(ref _activeRequestCts);
+        try { activeCts?.Cancel(); } catch (ObjectDisposedException) { }
 
         // Wait for the active AI request to finish its catch/finally cleanup
         // before disposing shared resources (#446)
@@ -709,8 +710,6 @@ public sealed partial class MainWindow : Window
                 // Proceed with disposal even if the request doesn't finish in time
             }
         }
-
-        activeCts?.Dispose();
 
         // Cancel Agent mode to prevent ObjectDisposedException from
         // ExecuteAgentRequestAsync accessing disposed _backendClient (#2304)

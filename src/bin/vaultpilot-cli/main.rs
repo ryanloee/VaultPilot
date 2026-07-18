@@ -6832,7 +6832,7 @@ mod tests {
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
     use crate::{
         append_capture_entry, format_as_kanban, parse_batch_selector, render_daily_template,
-        resolve_audio_input, BatchSelector,
+        resolve_audio_input, BatchSelector, Cli, Commands, SkillSavedActions,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
@@ -7897,6 +7897,34 @@ mod tests {
             "&lt;a href=&quot;http://x.com?q=a&amp;b&quot;&gt;click&lt;/a&gt;"
         );
     }
+
+    // ── SkillSaved enable/disable (#3085) ───────────────────────────
+
+    #[test]
+    fn skill_saved_enable_parses() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["vp", "skill-saved", "enable", "abc-123"]);
+        match &cli.command {
+            Commands::SkillSaved { action } => match action {
+                SkillSavedActions::Enable { id } => assert_eq!(id, "abc-123"),
+                _ => panic!("expected Enable variant"),
+            },
+            _ => panic!("expected SkillSaved command"),
+        }
+    }
+
+    #[test]
+    fn skill_saved_disable_parses() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["vp", "skill-saved", "disable", "xyz-789"]);
+        match &cli.command {
+            Commands::SkillSaved { action } => match action {
+                SkillSavedActions::Disable { id } => assert_eq!(id, "xyz-789"),
+                _ => panic!("expected Disable variant"),
+            },
+            _ => panic!("expected SkillSaved command"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -8066,6 +8094,20 @@ enum SkillSavedActions {
         id: String,
     },
 
+    /// Enable a disabled saved skill (toggle enabled→true)
+    Enable {
+        /// Skill id (UUID)
+        #[arg(value_hint = ValueHint::Other)]
+        id: String,
+    },
+
+    /// Disable an enabled saved skill (toggle enabled→false)
+    Disable {
+        /// Skill id (UUID)
+        #[arg(value_hint = ValueHint::Other)]
+        id: String,
+    },
+
     /// Render a saved skill's template and run it through the AI pipeline
     Run {
         /// Skill id (UUID)
@@ -8090,7 +8132,7 @@ enum SkillSavedActions {
 async fn handle_skill_saved(context: &StorageContext, action: &SkillSavedActions) -> Result<Value> {
     use vaultpilot_lib::storage::{
         create_skill_with_context, delete_skill_with_context, get_skill_with_context,
-        list_skills_with_context, SkillInvocation,
+        list_skills_with_context, toggle_skill_with_context, SkillInvocation,
     };
 
     match action {
@@ -8154,6 +8196,40 @@ async fn handle_skill_saved(context: &StorageContext, action: &SkillSavedActions
             Ok(serde_json::json!({
                 "status": "ok",
                 "deleted": id,
+            }))
+        }
+        SkillSavedActions::Enable { id } => {
+            let skill = get_skill_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("saved skill '{}' not found", id))?;
+            if skill.enabled {
+                return Ok(serde_json::json!({
+                    "status": "ok",
+                    "enabled": true,
+                    "message": format!("saved skill '{}' is already enabled", id),
+                }));
+            }
+            let new_state = toggle_skill_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("saved skill '{}' not found", id))?;
+            Ok(serde_json::json!({
+                "status": "ok",
+                "enabled": new_state,
+            }))
+        }
+        SkillSavedActions::Disable { id } => {
+            let skill = get_skill_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("saved skill '{}' not found", id))?;
+            if !skill.enabled {
+                return Ok(serde_json::json!({
+                    "status": "ok",
+                    "enabled": false,
+                    "message": format!("saved skill '{}' is already disabled", id),
+                }));
+            }
+            let new_state = toggle_skill_with_context(context, id)?
+                .ok_or_else(|| anyhow::anyhow!("saved skill '{}' not found", id))?;
+            Ok(serde_json::json!({
+                "status": "ok",
+                "enabled": new_state,
             }))
         }
         SkillSavedActions::Run {
@@ -8553,7 +8629,7 @@ fn handle_completions(shell: &str) -> Result<Value> {
     // Generate static completions for subcommands, flags, etc.
     generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
 
-    // Additional dynamic completion for skill-saved run/show/delete id
+    // Additional dynamic completion for skill-saved run/show/delete/enable/disable id
     match shell {
         Shell::Bash => {
             println!(
@@ -8565,7 +8641,7 @@ _vp_skill_saved_completions() {{
     if [[ $cword -ge 3 ]]; then
         local prev_subcmd="${{words[2]}}"
         case "$prev_subcmd" in
-            run|show|delete)
+            run|show|delete|enable|disable)
                 COMPREPLY=($(compgen -W "$(vp skill-saved list 2>/dev/null | \
                     sed -n '/"id"/s/.*"id": *"\([^"]*\)".*/\1/p')" -- "$cur"))
                 return 0

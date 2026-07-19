@@ -112,6 +112,10 @@ pub struct AppSettings {
     /// guaranteeing "nothing ever leaves your machine".
     #[serde(default)]
     pub privacy_mode: bool,
+    /// Which semantic embedding provider to use for similarity search (#3129).
+    /// Defaults to the built-in keyword n-gram hash embedder.
+    #[serde(default)]
+    pub embedding_provider: crate::semantic::EmbeddingProvider,
 }
 
 fn default_privacy_mode() -> bool {
@@ -145,6 +149,7 @@ impl Default for AppSettings {
             session_export_path: None,
             system_directive: String::new(),
             privacy_mode: default_privacy_mode(),
+            embedding_provider: crate::semantic::EmbeddingProvider::default(),
         }
     }
 }
@@ -298,6 +303,7 @@ mod tests {
             session_export_path: None,
             system_directive: String::new(),
             privacy_mode: false,
+            embedding_provider: crate::semantic::EmbeddingProvider::default(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

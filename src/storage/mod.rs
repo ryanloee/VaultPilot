@@ -1013,6 +1013,7 @@ mod tests {
             session_export_path: None,
             system_directive: String::new(),
             privacy_mode: false,
+            embedding_provider: crate::semantic::EmbeddingProvider::default(),
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

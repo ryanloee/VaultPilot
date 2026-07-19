@@ -170,16 +170,20 @@ mod tests {
         save_settings_with_context(&ctx, cleared).expect("save cleared");
 
         // p1's key must be deleted from the keychain.
-        let p1_key = crate::keychain::account_key("P3170a");
-        let p1_result = KEYCHAIN.get(&p1_key);
+        let p1_account = crate::keychain::account_key("P3170a");
+        let p1_result = KEYCHAIN.get(&p1_account);
         assert!(
             p1_result.is_err() || p1_result.unwrap().is_none(),
             "Key for deleted provider P3170a still present in keychain"
         );
 
         // p2's key must still be present (it was not cleared).
-        let p2_key = crate::keychain::account_key("P3170b");
-        let p2_result = KEYCHAIN.get(&p2_key);
+        // NOTE: `account_key` returns the keychain identifier (e.g.
+        // "api_key:P3170b"), NOT the secret.  Bind it to a distinct name so
+        // the value comparison below checks the retrieved secret against the
+        // original secret `p2_key` ("sk-multi-b...2222"), not the identifier.
+        let p2_account = crate::keychain::account_key("P3170b");
+        let p2_result = KEYCHAIN.get(&p2_account);
         assert!(
             p2_result.is_ok() && p2_result.unwrap().map(|v| v == p2_key).unwrap_or(false),
             "Key for provider P3170b should NOT have been deleted"

@@ -2071,32 +2071,9 @@ fn read_file_for_agent(path: &str, vault_root: &Path) -> Result<String> {
 }
 
 fn slugify(title: &str) -> String {
-    let mut slug: String = title
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    // Collapse consecutive dashes
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    let cleaned = slug.trim_matches('-').to_string();
-    if cleaned.is_empty() {
-        // Use SHA-256 (not DefaultHasher) so the fallback name is stable
-        // across Rust releases. DefaultHasher's algorithm is unspecified and
-        // may change between compiler versions. (#2901, ref #2851)
-        use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(title.as_bytes());
-        let hex = format!("{:016x}", u64::from_be_bytes(hash[..8].try_into().unwrap()));
-        format!("note-{}", hex)
-    } else {
-        cleaned
-    }
+    // Delegate to the single canonical slugify in crate::utils.
+    // (#3167 — remove duplicate, unify with utils.rs canonical impl)
+    crate::utils::slugify(title)
 }
 
 fn tool_display_name(tool: &ai::AssistantToolCall) -> &'static str {
@@ -2579,14 +2556,15 @@ mod pure_function_tests {
 
     #[test]
     fn slugify_basic() {
-        assert_eq!(slugify("Hello World"), "Hello-World");
+        // Delegated to crate::utils::slugify (#3167) — now lowercase + deunicode
+        assert_eq!(slugify("Hello World"), "hello-world");
         assert_eq!(slugify("test.md"), "test-md");
         assert_eq!(slugify("hello"), "hello");
     }
 
     #[test]
     fn slugify_special_chars() {
-        assert_eq!(slugify("Hello! @#$% World"), "Hello-World");
+        assert_eq!(slugify("Hello! @#$% World"), "hello-world");
         assert_eq!(slugify("path/to/file"), "path-to-file");
     }
 

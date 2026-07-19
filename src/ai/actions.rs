@@ -36,6 +36,9 @@ pub enum AiActionType {
     Brainstorm,
     /// Review a note and suggest structural/content improvements without modifying (#3102).
     ReviewNote,
+    /// Synthesize a structured wiki article from related notes by tag/folder,
+    /// with inline citations back to source notes (#3128).
+    SynthesizeWiki,
 }
 
 impl AiActionType {
@@ -55,6 +58,7 @@ impl AiActionType {
             Self::SummarizeUrl => "链接摘要",
             Self::Brainstorm => "头脑风暴",
             Self::ReviewNote => "审阅笔记",
+            Self::SynthesizeWiki => "综合维基",
         }
     }
 
@@ -74,6 +78,7 @@ impl AiActionType {
             Self::SummarizeUrl => "summarizeUrl",
             Self::Brainstorm => "brainstorm",
             Self::ReviewNote => "reviewNote",
+            Self::SynthesizeWiki => "synthesizeWiki",
         }
     }
 
@@ -93,6 +98,9 @@ impl AiActionType {
             "summarizeUrl" | "summarize_url" => Some(Self::SummarizeUrl),
             "brainstorm" => Some(Self::Brainstorm),
             "reviewNote" | "review_note" | "review" => Some(Self::ReviewNote),
+            "synthesizeWiki" | "synthesize_wiki" | "synthesize" | "wiki" => {
+                Some(Self::SynthesizeWiki)
+            }
             _ => None,
         }
     }
@@ -113,6 +121,7 @@ impl AiActionType {
             Self::SummarizeUrl,
             Self::Brainstorm,
             Self::ReviewNote,
+            Self::SynthesizeWiki,
         ]
     }
 }
@@ -285,6 +294,23 @@ fn system_prompt(action: AiActionType) -> String {
              Be constructive and specific — avoid vague praise or criticism."
                 .to_string()
         }
+        AiActionType::SynthesizeWiki => {
+            "You are a knowledge synthesis assistant. Your task is to synthesize a \
+             structured wiki article from a collection of related notes (provided as \
+             source material) centered on a given topic, tag, or folder. \
+             - Organize the content into a coherent article with clear Markdown \
+               headings (H2/H3) and logical sections. \
+             - Integrate information from ALL provided source notes; do not invent \
+               facts not present in the sources. \
+             - Cite every claim back to its source using inline wikilinks in the \
+               form [[note title]] or [[note title#heading]] so each statement is \
+               traceable to a real note. Do NOT fabricate source references. \
+             - If sources conflict, surface the discrepancy rather than silently \
+               picking one. \
+             - End with a short '## Sources' section listing the source note titles. \
+             Output only the wiki article in Markdown, no extra commentary."
+                .to_string()
+        }
     }
 }
 
@@ -377,6 +403,19 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
             format!(
                 "Please review the following note and provide a structured evaluation. \
                  Focus on structure, completeness, clarity, and actionable improvements:\n\n{}",
+                request.text
+            )
+        }
+        AiActionType::SynthesizeWiki => {
+            let topic = request
+                .instruction
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("the provided topic");
+            format!(
+                "Synthesize a structured wiki article about '{topic}' from the following \
+                 related source notes. Integrate their content, cite each claim inline \
+                 with [[note title]] wikilinks, and list the sources at the end:\n\n{}",
                 request.text
             )
         }
@@ -984,5 +1023,116 @@ mod tests {
         let id = AiActionType::ReviewNote.id();
         let parsed = AiActionType::from_id(id);
         assert_eq!(parsed, Some(AiActionType::ReviewNote));
+    }
+
+    // ── SynthesizeWiki tests (#3128) ──────────────────────────────────
+
+    #[test]
+    fn synthesize_wiki_label_and_id_are_consistent() {
+        assert_eq!(AiActionType::SynthesizeWiki.label(), "综合维基");
+        assert_eq!(AiActionType::SynthesizeWiki.id(), "synthesizeWiki");
+        assert_eq!(
+            AiActionType::from_id("synthesizeWiki"),
+            Some(AiActionType::SynthesizeWiki)
+        );
+        assert_eq!(
+            AiActionType::from_id("synthesize_wiki"),
+            Some(AiActionType::SynthesizeWiki)
+        );
+        assert_eq!(
+            AiActionType::from_id("wiki"),
+            Some(AiActionType::SynthesizeWiki)
+        );
+    }
+
+    #[test]
+    fn synthesize_wiki_is_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::SynthesizeWiki),
+            "SynthesizeWiki must be in the all() list"
+        );
+    }
+
+    #[test]
+    fn synthesize_wiki_system_prompt_instructs_citations() {
+        let prompt = system_prompt(AiActionType::SynthesizeWiki);
+        assert!(!prompt.is_empty());
+        assert!(
+            prompt.contains("wiki") || prompt.contains("Wiki"),
+            "must describe wiki synthesis"
+        );
+        // Core constraint from #3128: citations must be real, not fabricated.
+        assert!(
+            prompt.contains("cite") || prompt.contains("Cite"),
+            "must instruct to cite sources"
+        );
+        assert!(
+            prompt.contains("[[") || prompt.contains("wikilink"),
+            "must require wikilink-style citations back to source notes"
+        );
+        assert!(
+            prompt.contains("Do NOT fabricate") || prompt.contains("fabricate"),
+            "must forbid fabricating source references"
+        );
+    }
+
+    #[test]
+    fn synthesize_wiki_user_prompt_contains_sources_and_topic() {
+        let request = AiActionRequest {
+            action: AiActionType::SynthesizeWiki,
+            text: "# Note A\ncontent...\n# Note B\nmore content...".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("project planning".to_string()),
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::SynthesizeWiki, &request);
+        assert!(
+            prompt.contains("project planning"),
+            "must include the topic"
+        );
+        assert!(prompt.contains("Note A"), "must include source note text");
+        assert!(
+            prompt.contains("[[note title]]"),
+            "must instruct wikilink citations"
+        );
+    }
+
+    #[test]
+    fn synthesize_wiki_user_prompt_defaults_topic_when_no_instruction() {
+        let request = AiActionRequest {
+            action: AiActionType::SynthesizeWiki,
+            text: "source material".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::SynthesizeWiki, &request);
+        assert!(
+            prompt.contains("the provided topic"),
+            "must fall back to a default topic when instruction is absent"
+        );
+    }
+
+    #[test]
+    fn synthesize_wiki_empty_text_returns_error() {
+        let request = AiActionRequest {
+            action: AiActionType::SynthesizeWiki,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "empty text should fail validation for SynthesizeWiki"
+        );
     }
 }

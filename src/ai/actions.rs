@@ -437,6 +437,45 @@ fn validate_request(request: &AiActionRequest) -> Option<AiActionResult> {
     None
 }
 
+/// Process a raw AI response into an [`AiActionResult`].
+///
+/// This is the pure (non-network) half of [`execute_ai_action`], extracted so it
+/// can be unit-tested without a live provider. It implements the structured-JSON
+/// contract: when the action is [`AiActionType::SummarizeUrl`], the model is asked
+/// to return JSON but commonly wraps it in ```json fences or prepends prose, so we
+/// run the existing `extract_json` helper. On failure to parse we surface an
+/// `error` instead of returning non-parseable text (issue #3145). All other
+/// actions keep returning the trimmed text verbatim.
+pub(crate) fn process_action_result(
+    action: AiActionType,
+    raw_text: &str,
+    usage: RequestUsage,
+) -> AiActionResult {
+    if action == AiActionType::SummarizeUrl {
+        match crate::ai::parsing::extract_json(raw_text) {
+            Ok(clean) => AiActionResult {
+                result: clean,
+                usage,
+                error: None,
+            },
+            Err(e) => AiActionResult {
+                result: String::new(),
+                usage,
+                error: Some(format!(
+                    "AI 操作执行失败：无法解析结构化 JSON 结果：{}",
+                    crate::sanitize_error(&e.to_string())
+                )),
+            },
+        }
+    } else {
+        AiActionResult {
+            result: raw_text.trim().to_string(),
+            usage,
+            error: None,
+        }
+    }
+}
+
 /// Execute an AI quick action (non-streaming).
 ///
 /// Returns the AI-generated result, or an error result if the AI call fails.
@@ -461,14 +500,7 @@ pub async fn execute_ai_action(
     }
 
     match send_request_with_temperature(&action_settings, &system, &prompt, &[], 0.3).await {
-        Ok(response) => {
-            let result = response.text.trim().to_string();
-            AiActionResult {
-                result,
-                usage: response.usage,
-                error: None,
-            }
-        }
+        Ok(response) => process_action_result(request.action, &response.text, response.usage),
         Err(e) => {
             let error_msg = format!("AI 操作执行失败：{}", crate::sanitize_error(&e.to_string()));
             AiActionResult {
@@ -714,6 +746,83 @@ mod tests {
                 || prompt.contains("structure")
         );
         assert!(prompt.contains("Output only the cleaned-up text"));
+    }
+
+    // ── SummarizeUrl structured-JSON extraction (#3145) ──────────────
+
+    #[test]
+    fn summarize_url_strips_json_fence() {
+        let fenced = "```json\n{\"title\":\"T\",\"key_points\":[\"a\"],\"summary\":\"s\",\"suggested_tags\":[\"x\"]}\n```";
+        let result =
+            process_action_result(AiActionType::SummarizeUrl, fenced, RequestUsage::default());
+        assert!(
+            result.error.is_none(),
+            "unexpected error: {:?}",
+            result.error
+        );
+        assert!(
+            result.result.starts_with('{') && result.result.ends_with('}'),
+            "result should be clean JSON, got: {}",
+            result.result
+        );
+        // Must be parseable by serde_json.
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&result.result).is_ok(),
+            "result must be valid JSON: {}",
+            result.result
+        );
+    }
+
+    #[test]
+    fn summarize_url_strips_leading_prose() {
+        let prose = "Here is the summary:\n{\"title\":\"T\",\"key_points\":[\"a\"],\"summary\":\"s\",\"suggested_tags\":[\"x\"]}";
+        let result =
+            process_action_result(AiActionType::SummarizeUrl, prose, RequestUsage::default());
+        assert!(
+            result.error.is_none(),
+            "unexpected error: {:?}",
+            result.error
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&result.result).is_ok(),
+            "result must be valid JSON: {}",
+            result.result
+        );
+    }
+
+    #[test]
+    fn summarize_url_bare_json_passes_through() {
+        let bare = "{\"title\":\"T\",\"key_points\":[],\"summary\":\"s\",\"suggested_tags\":[]}";
+        let result =
+            process_action_result(AiActionType::SummarizeUrl, bare, RequestUsage::default());
+        assert!(
+            result.error.is_none(),
+            "unexpected error: {:?}",
+            result.error
+        );
+        assert_eq!(result.result, bare);
+    }
+
+    #[test]
+    fn summarize_url_non_json_surfaces_error() {
+        let garbage = "I could not summarize that page.";
+        let result =
+            process_action_result(AiActionType::SummarizeUrl, garbage, RequestUsage::default());
+        assert!(result.error.is_some(), "non-JSON should surface an error");
+        assert!(
+            result.result.is_empty(),
+            "result must be empty on parse failure"
+        );
+    }
+
+    #[test]
+    fn non_summarize_url_actions_return_trimmed_text() {
+        let fenced = "```json\n{\"foo\":1}\n```";
+        let result =
+            process_action_result(AiActionType::Summarize, fenced, RequestUsage::default());
+        // Other actions must NOT strip fences — verbatim trimmed text.
+        assert!(result.error.is_none());
+        assert_eq!(result.result, fenced.trim());
     }
 
     // ── GenerateOutline tests (#1830) ────────────────────────────────

@@ -125,11 +125,21 @@ fn extract_embedding_terms(text: &str) -> Vec<String> {
 }
 
 /// Stable hash for a term (deterministic across runs).
+///
+/// Uses FNV-1a 64-bit internally — no random seed, so the same input always
+/// yields the same output, even across process restarts.  This is critical
+/// because semantic vectors are persisted across sessions and compared with
+/// cosine similarity after restart.
 fn stable_hash(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in s.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 /// Build character n‑grams of width `n` from `s`.

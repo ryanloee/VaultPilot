@@ -102,10 +102,26 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
         parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
             .context("Failed to decrypt stored API key — the machine key may have changed. Please re-enter your API key in Settings")?;
     }
+    // If the file has an empty key (or decryption produced empty), try the OS
+    // keychain as an alternative store (#3159).
+    if parsed.provider.api_key.is_empty() {
+        if let Ok(Some(kc_key)) =
+            crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&parsed.provider.name))
+        {
+            parsed.provider.api_key = kc_key;
+        }
+    }
     for p in &mut parsed.providers {
         if !p.api_key.is_empty() {
             p.api_key = crate::crypto::decrypt_secret(&p.api_key)
                 .context("Failed to decrypt provider API key")?;
+        }
+        if p.api_key.is_empty() {
+            if let Ok(Some(kc_key)) =
+                crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&p.name))
+            {
+                p.api_key = kc_key;
+            }
         }
     }
     parsed.migrate_providers();
@@ -186,11 +202,26 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
             parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
                 .context("Failed to decrypt stored API key — the machine key may have changed. Please re-enter your API key in Settings")?;
         }
+        // If the file has an empty key, try the OS keychain (#3159).
+        if parsed.provider.api_key.is_empty() {
+            if let Ok(Some(kc_key)) =
+                crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&parsed.provider.name))
+            {
+                parsed.provider.api_key = kc_key;
+            }
+        }
         // Decrypt keys in multi-provider list.
         for p in &mut parsed.providers {
             if !p.api_key.is_empty() {
                 p.api_key = crate::crypto::decrypt_secret(&p.api_key)
                     .context("Failed to decrypt provider API key")?;
+            }
+            if p.api_key.is_empty() {
+                if let Ok(Some(kc_key)) =
+                    crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&p.name))
+                {
+                    p.api_key = kc_key;
+                }
             }
         }
         // Migrate legacy single provider into providers list.
@@ -358,6 +389,21 @@ pub fn save_settings_with_context(
     for p in &mut settings.providers {
         if !p.api_key.is_empty() && !crate::crypto::is_encrypted(&p.api_key) {
             p.api_key = crate::crypto::encrypt_secret(&p.api_key)?;
+        }
+    }
+
+    // Optionally store plaintext keys in the OS keychain (#3159) as a
+    // supplemental store.  The file still carries the encrypted fallback
+    // so existing behaviour is preserved on all platforms.
+    if !api_key_plaintext.is_empty() {
+        let _ = crate::keychain::KEYCHAIN.set(
+            &crate::keychain::account_key(&settings.provider.name),
+            &api_key_plaintext,
+        );
+    }
+    for (p, plain) in settings.providers.iter().zip(&providers_plaintext) {
+        if !plain.is_empty() {
+            let _ = crate::keychain::KEYCHAIN.set(&crate::keychain::account_key(&p.name), plain);
         }
     }
 

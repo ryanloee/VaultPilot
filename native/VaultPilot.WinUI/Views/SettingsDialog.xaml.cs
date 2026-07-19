@@ -230,8 +230,11 @@ public sealed partial class SettingsDialog : ContentDialog
     /// </summary>
     private void OnDialogPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.System.VirtualKeyStates.Down);
-        var menu = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu).HasFlag(Windows.System.VirtualKeyStates.Down);
+        // NOTE: InputKeyboardSource.GetKeyStateForCurrentThread returns
+        // Windows.UI.Core.CoreVirtualKeyStates in this Windows App SDK version
+        // (see MainWindow.ChatInputHandler.cs for the established pattern).
+        var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        var menu = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Menu).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         var modifierPressed = ctrl || menu;
 
         switch (e.Key)

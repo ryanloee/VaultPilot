@@ -28,7 +28,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, ValidTimeout, ValidContext,
-            4096, false, "OpenAI", out var cfg);
+            4096, "openai", "OpenAI", out var cfg);
         Assert.True(ok);
         Assert.NotNull(cfg);
         Assert.Equal(ValidKey, cfg!.ApiKey);
@@ -43,7 +43,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, ValidTimeout, ValidContext,
-            null, true, "Claude", out var cfg);
+            null, "anthropic", "Claude", out var cfg);
         Assert.True(ok);
         Assert.NotNull(cfg);
         Assert.Equal("anthropic", cfg!.ProviderType);
@@ -54,7 +54,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             "", ValidUrl, ValidModel, ValidTimeout, ValidContext,
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -64,7 +64,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, "", ValidModel, ValidTimeout, ValidContext,
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -74,7 +74,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, "ftp://example.com", ValidModel, ValidTimeout, ValidContext,
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -84,7 +84,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, "", ValidTimeout, ValidContext,
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -94,7 +94,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, "500", ValidContext,
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -104,7 +104,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, "400000", ValidContext,
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -114,7 +114,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, ValidTimeout, "3000000",
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -124,7 +124,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, ValidTimeout, "abc",
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }
@@ -134,7 +134,7 @@ public class Issue2781ProviderValidationTests
     {
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, ValidTimeout, "",
-            null, false, "x", out var cfg);
+            null, "openai", "x", out var cfg);
         Assert.True(ok);
         Assert.NotNull(cfg);
         Assert.Null(cfg!.ContextWindowTokens);
@@ -146,7 +146,7 @@ public class Issue2781ProviderValidationTests
         // Simulates controls returning null (e.g. untouched) — must not produce
         // a valid config that could slip past always-on validation.
         var ok = SettingsDialog.TryBuildProviderConfig(
-            null, null, null, null, null, null, false, null, out var cfg);
+            null, null, null, null, null, null, "openai", null, out var cfg);
         Assert.False(ok);
         Assert.Null(cfg);
     }

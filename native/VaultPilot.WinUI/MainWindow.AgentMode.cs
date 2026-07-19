@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System.Text.Json;
+using System.Threading;
 using VaultPilot.WinUI.Models;
 
 namespace VaultPilot.WinUI;
@@ -95,7 +96,6 @@ public sealed partial class MainWindow : Window
     {
         var old = Interlocked.Exchange(ref _agentCts, null);
         old?.Cancel();
-        old?.Dispose();
         _agentModeActive = false;
 
         AgentModeButton.Visibility = Visibility.Visible;
@@ -374,7 +374,11 @@ public sealed partial class MainWindow : Window
         // _agentCts (the old one is disposed). Sending the approval with a stale,
         // disposed CancellationTokenSource throws OperationCanceledException and
         // the response is silently lost. Re-reading here uses the live token.
-        var cts = _agentCts;
+        // #3148: Use Volatile.Read to ensure latest _agentCts value is observed
+        // on all architectures (ARM included). Since StopAgentMode no longer
+        // disposes the CTS (only cancels it), a CTS reference captured here
+        // is safe to use even if StopAgentMode runs concurrently.
+        var cts = Volatile.Read(ref _agentCts);
         if (cts is null || !_agentModeActive)
         {
             AppendMessage("系统", "Agent 已停止，审批已取消。");

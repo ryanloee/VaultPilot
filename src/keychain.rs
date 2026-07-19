@@ -48,9 +48,9 @@ pub(crate) trait SecretStore: Send + Sync {
     fn get(&self, key: &str) -> Result<Option<String>>;
 
     /// Remove a stored entry.
-    // Not yet wired into settings/UI (tracked in #3159 WinUI/Android follow-up);
-    // declared on the trait so backends implement the full surface up front.
-    #[allow(dead_code)]
+    //
+    // Wired into settings' "clear ⇒ delete" rule (#3170); called by
+    // `sync_provider_keychain_entry` whenever an incoming API key is empty.
     fn delete(&self, key: &str) -> Result<()>;
 
     /// Returns `true` if this store is believed to work on the current host.
@@ -223,9 +223,9 @@ impl SelectiveStore {
         self.store().get(key)
     }
 
-    /// Delete a secret.
-    // Wired into settings/UI in the #3159 WinUI/Android follow-up.
-    #[allow(dead_code)]
+    /// Delete a secret. Called by `sync_provider_keychain_entry` whenever an
+    /// incoming API key is empty (user cleared it in the UI) so the old
+    /// credential does not resurrect on next load (#3170).
     pub(crate) fn delete(&self, key: &str) -> Result<()> {
         self.store().delete(key)
     }

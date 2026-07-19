@@ -14,6 +14,7 @@ pub mod file_parsing;
 pub mod flashcards;
 pub mod fsrs;
 pub mod health;
+pub mod keychain;
 pub mod knowledge_graph;
 pub mod mail;
 pub mod mirror;

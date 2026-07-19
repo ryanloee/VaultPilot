@@ -395,14 +395,24 @@ pub fn save_settings_with_context(
     // Optionally store plaintext keys in the OS keychain (#3159) as a
     // supplemental store.  The file still carries the encrypted fallback
     // so existing behaviour is preserved on all platforms.
-    if !api_key_plaintext.is_empty() {
+    //
+    // When a key is *empty* (user cleared it), explicitly delete the
+    // corresponding keychain entry — otherwise the stale secret survives
+    // in the OS keychain and is silently resurrected on the next load
+    // (#3170).
+    if api_key_plaintext.is_empty() {
+        let _ = crate::keychain::KEYCHAIN
+            .delete(&crate::keychain::account_key(&settings.provider.name));
+    } else {
         let _ = crate::keychain::KEYCHAIN.set(
             &crate::keychain::account_key(&settings.provider.name),
             &api_key_plaintext,
         );
     }
     for (p, plain) in settings.providers.iter().zip(&providers_plaintext) {
-        if !plain.is_empty() {
+        if plain.is_empty() {
+            let _ = crate::keychain::KEYCHAIN.delete(&crate::keychain::account_key(&p.name));
+        } else {
             let _ = crate::keychain::KEYCHAIN.set(&crate::keychain::account_key(&p.name), plain);
         }
     }

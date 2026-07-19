@@ -48,9 +48,6 @@ pub(crate) trait SecretStore: Send + Sync {
     fn get(&self, key: &str) -> Result<Option<String>>;
 
     /// Remove a stored entry.
-    // Not yet wired into settings/UI (tracked in #3159 WinUI/Android follow-up);
-    // declared on the trait so backends implement the full surface up front.
-    #[allow(dead_code)]
     fn delete(&self, key: &str) -> Result<()>;
 
     /// Returns `true` if this store is believed to work on the current host.
@@ -224,8 +221,6 @@ impl SelectiveStore {
     }
 
     /// Delete a secret.
-    // Wired into settings/UI in the #3159 WinUI/Android follow-up.
-    #[allow(dead_code)]
     pub(crate) fn delete(&self, key: &str) -> Result<()> {
         self.store().delete(key)
     }

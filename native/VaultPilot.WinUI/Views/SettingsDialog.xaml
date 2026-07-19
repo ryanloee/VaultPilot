@@ -116,6 +116,7 @@
                         HorizontalAlignment="Stretch">
                         <ComboBoxItem Content="OpenAI" IsSelected="True" />
                         <ComboBoxItem Content="Anthropic" />
+                        <ComboBoxItem Content="Ollama" />
                     </ComboBox>
                     <PasswordBox
                         x:Name="ApiKeyBox"

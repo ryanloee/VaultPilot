@@ -163,10 +163,20 @@ public sealed partial class SettingsDialog : ContentDialog
         ModelBox.Text = p.Model;
         TimeoutBox.Text = p.RequestTimeoutMs.ToString();
         ContextWindowBox.Text = p.ContextWindowTokens?.ToString() ?? string.Empty;
-        // Provider type
+        // Provider type — round-trip the actual saved value so a non-OpenAI /
+        // non-Anthropic provider (e.g. ollama) is preserved on save (#3131).
         var ptype = (p.ProviderType ?? "openai").ToLowerInvariant();
-        ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1 : 0;
+        ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1
+            : ptype.Contains("ollama") ? 2
+            : 0;
     }
+
+    // Maps the ProviderTypeBox selection back to the canonical provider type
+    // string so it round-trips through save without being rewritten (#3131).
+    private static string SelectedProviderType(int selectedIndex) =>
+        selectedIndex == 1 ? "anthropic"
+        : selectedIndex == 2 ? "ollama"
+        : "openai";
 
     private void RefreshProviderList()
     {
@@ -464,7 +474,7 @@ public sealed partial class SettingsDialog : ContentDialog
         string? timeoutText,
         string? contextWindowText,
         uint? existingMaxOutputTokens,
-        bool isAnthropic,
+        string? providerType,
         string? name,
         out ProviderConfig? config)
     {
@@ -494,7 +504,13 @@ public sealed partial class SettingsDialog : ContentDialog
             contextWindowTokens = parsedContextWindow;
         }
 
-        var ptype = isAnthropic ? "anthropic" : "openai";
+        // Round-trip the actual provider type so ollama (and any future type)
+        // is preserved on save instead of being silently rewritten to openai.
+        // (#3131) Unknown values fall back to openai for safety.
+        var normalized = (providerType ?? "openai").ToLowerInvariant();
+        var ptype = normalized.Contains("anthropic") ? "anthropic"
+            : normalized.Contains("ollama") ? "ollama"
+            : "openai";
         config = new ProviderConfig(
             trimmedApiKey,
             trimmedBaseUrl,
@@ -521,7 +537,7 @@ public sealed partial class SettingsDialog : ContentDialog
                 TimeoutBox.Text,
                 ContextWindowBox.Text,
                 _providers[_activeProviderIndex].MaxOutputTokens,
-                ProviderTypeBox.SelectedIndex == 1,
+                SelectedProviderType(ProviderTypeBox.SelectedIndex),
                 ProviderNameBox.Text,
                 out var cfg))
         {
@@ -784,7 +800,7 @@ public sealed partial class SettingsDialog : ContentDialog
                     TimeoutBox.Text,
                     ContextWindowBox.Text,
                     _providers[_activeProviderIndex].MaxOutputTokens,
-                    ProviderTypeBox.SelectedIndex == 1,
+                    SelectedProviderType(ProviderTypeBox.SelectedIndex),
                     ProviderNameBox.Text,
                     out var cfg))
             {

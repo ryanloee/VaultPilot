@@ -210,12 +210,12 @@ public sealed partial class MainWindow : Window
                 {
                     AgentTokenCount.Text = $"Token: {tokensUsed}";
                 }
-                // HandleAgentEvent is already invoked on the UI thread via
-                // OnAgentStatusReceived's DispatcherQueue.TryEnqueue, so the
-                // previous inner enqueue was redundant and delayed the
-                // _agentModeActive=false reset — creating a window where a
-                // subsequent event could be misrouted here instead of being
-                // ignored. Execute the UI reset synchronously. (Issue #2586)
+                // #3149: Clean up the CTS from the completed agent to prevent
+                // resource leak (kernel timer). agentCompleted always runs on UI
+                // thread via DispatcherQueue.TryEnqueue, so Interlocked.Exchange
+                // is for consistency — the key effect is nulling the field.
+                var completedCts = Interlocked.Exchange(ref _agentCts, null);
+                completedCts?.Dispose();
                 _agentModeActive = false;
                 AgentModeButton.Visibility = Visibility.Visible;
                 StopAgentButton.Visibility = Visibility.Collapsed;

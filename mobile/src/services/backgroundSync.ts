@@ -95,16 +95,24 @@ function registerTaskBody(): void {
  * Returns the numeric `BackgroundTaskResult` value:
  *   Success = 1, Failed = 2.
  * Falls back to raw numbers when the native module is absent (Jest).
+ *
+ * Result semantics (#3176):
+ *   - The task **executed without throwing** → `Success`. "Nothing to sync"
+ *     (no backend configured) and "backend temporarily unreachable" are
+ *     normal outcomes, not execution failures. Returning `Failed` for them
+ *     makes iOS map the result to `UIBackgroundFetchResult.failed`, which
+ *     Apple uses to gradually reduce the app's background-fetch budget.
+ *   - Only a thrown exception (genuine execution failure) → `Failed`.
  */
 export async function backgroundSyncTaskBody(): Promise<number> {
   try {
     const { url } = await getServerConfig();
-    if (!url) return resultFailed();
+    if (!url) return resultSuccess();
 
     // Quick liveness check before the heavier sync to avoid wasting the
     // background budget when the backend is offline.
     const reachable = await pingBackend();
-    if (!reachable) return resultFailed();
+    if (!reachable) return resultSuccess();
 
     await syncNotesFromServer();
     return resultSuccess();

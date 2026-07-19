@@ -133,18 +133,23 @@ describe('backgroundSyncTaskBody — task execution', () => {
     syncNotesSpy.mockReset();
   });
 
-  it('returns Failed (2) when no backend is configured', async () => {
+  it('returns Success (1) when no backend is configured (#3176)', async () => {
+    // No backend configured is a normal "nothing to do" outcome, not a task
+    // execution failure. Returning Failed here would erode iOS background
+    // budget per Apple's UIBackgroundFetchResult handling.
     getServerConfigSpy.mockResolvedValue({ url: '', token: '' });
     const result = await backgroundSyncTaskBody();
-    expect(result).toBe(2); // BackgroundTaskResult.Failed
+    expect(result).toBe(1); // BackgroundTaskResult.Success
     expect(syncNotesSpy).not.toHaveBeenCalled();
   });
 
-  it('returns Failed (2) when backend is unreachable', async () => {
+  it('returns Success (1) when backend is unreachable (#3176)', async () => {
+    // Backend temporarily offline is a normal outcome — we successfully
+    // detected it and chose to skip this window. Not a task failure.
     getServerConfigSpy.mockResolvedValue({ url: 'http://x', token: '' });
     pingBackendSpy.mockResolvedValue(false);
     const result = await backgroundSyncTaskBody();
-    expect(result).toBe(2);
+    expect(result).toBe(1);
     expect(syncNotesSpy).not.toHaveBeenCalled();
   });
 

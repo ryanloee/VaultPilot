@@ -1117,6 +1117,64 @@ enum NotesActions {
         #[arg(long)]
         snapshot: String,
     },
+
+    /// Bulk operations on multiple notes (#3104): tag, move, or delete a
+    /// selection of notes in a single pass.
+    ///
+    /// Selection is via `--select` (reuses the `vp organize batch` selector
+    /// syntax): `tag:NAME`, `id:<uuid>[,<uuid>...]`, or `all`.
+    ///
+    /// # Examples
+    ///
+    /// Dry-run preview (default):
+    ///   vp notes batch --select tag:inbox --add-tags triaged
+    ///   vp notes batch --select id:abc,def --delete
+    ///   vp notes batch --select all --to archive/2026
+    ///
+    /// Actually apply:
+    ///   vp notes batch --select tag:inbox --add-tags triaged --apply
+    ///   vp notes batch --select id:abc,def --delete --apply --yes
+    Batch {
+        /// Selection spec: `tag:NAME`, `id:<uuid>[,<uuid>...]`, or `all`.
+        #[arg(long)]
+        select: String,
+
+        /// Comma-separated tags to add to each selected note.
+        #[arg(long)]
+        add_tags: Option<String>,
+
+        /// Comma-separated tags to remove from each selected note
+        /// (case-insensitive match).
+        #[arg(long)]
+        remove_tags: Option<String>,
+
+        /// Target subdirectory within the vault to move the selected notes
+        /// into (relative to the vault root; the path is confined to the
+        /// vault, so `../` escape is rejected).
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Delete the selected notes. Mutually exclusive with `--add-tags`,
+        /// `--remove-tags`, and `--to`.
+        #[arg(long)]
+        delete: bool,
+
+        /// Skip the interactive confirmation prompt. Without this flag,
+        /// `--apply` will prompt before performing destructive operations
+        /// (delete / move).
+        #[arg(long, short = 'y')]
+        yes: bool,
+
+        /// Actually perform the operation. Without this flag the command
+        /// runs as a dry-run preview only — no notes are modified.
+        #[arg(long)]
+        apply: bool,
+
+        /// Maximum number of notes to operate on in a single batch
+        /// (clamped to 1..=2000 to avoid runaway operations).
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -2944,7 +3002,249 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             let diff = vaultpilot_lib::diff::compute_diff(&snap.body, &note.body, 3);
             to_json(&diff)
         }
+        NotesActions::Batch {
+            select,
+            add_tags,
+            remove_tags,
+            to,
+            delete,
+            yes,
+            apply,
+            limit,
+        } => execute_notes_batch(
+            context,
+            NotesBatchRequest {
+                select,
+                add_tags: add_tags.as_deref(),
+                remove_tags: remove_tags.as_deref(),
+                to: to.as_deref(),
+                delete: *delete,
+                yes: *yes,
+                apply: *apply,
+                limit: *limit,
+            },
+        ),
     }
+}
+
+/// Resolve a [`BatchSelector`] to the list of concrete note IDs that match
+/// (#3104). Reuses the same selector syntax as `vp organize batch`:
+/// `tag:NAME`, `id:<uuid>[,<uuid>...]`, or `all`.
+///
+/// Returns the matched [`NoteMeta`] list so the caller can show a preview
+/// (title + path) before applying destructive operations.
+fn resolve_batch_selection(
+    context: &StorageContext,
+    selector: &BatchSelector,
+    limit: usize,
+) -> Result<Vec<NoteMeta>> {
+    let limit = limit.clamp(1, 2000);
+    let notes: Vec<NoteMeta> = match selector {
+        BatchSelector::Tag(tag) => {
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    text: String::new(),
+                    tags: vec![tag.clone()],
+                    limit: Some(limit),
+                    ..Default::default()
+                },
+            )?;
+            result.notes
+        }
+        BatchSelector::Ids(ids) => {
+            let wanted: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    limit: Some(ids.len().max(1)),
+                    ..Default::default()
+                },
+            )?;
+            result
+                .notes
+                .into_iter()
+                .filter(|n| wanted.contains(n.id.as_str()))
+                .collect()
+        }
+        BatchSelector::All => {
+            let result = search_notes_with_context(
+                context,
+                SearchQuery {
+                    limit: Some(limit),
+                    ..Default::default()
+                },
+            )?;
+            result.notes
+        }
+    };
+    Ok(notes)
+}
+
+/// Arguments for [`execute_notes_batch`] (#3104), extracted into a struct
+/// to keep the function signature under clippy's `too_many_arguments`
+/// threshold (and to make future additions non-breaking).
+struct NotesBatchRequest<'a> {
+    select: &'a str,
+    add_tags: Option<&'a str>,
+    remove_tags: Option<&'a str>,
+    to: Option<&'a str>,
+    delete: bool,
+    yes: bool,
+    apply: bool,
+    limit: usize,
+}
+
+/// Handle `vp notes batch` (#3104).
+///
+/// Resolves the selector to a concrete list of notes, validates the
+/// requested operation, optionally prompts the user, then dispatches to
+/// the appropriate bulk function in [`vaultpilot_lib::storage`].
+fn execute_notes_batch(context: &StorageContext, request: NotesBatchRequest) -> Result<Value> {
+    let NotesBatchRequest {
+        select,
+        add_tags,
+        remove_tags,
+        to,
+        delete,
+        yes,
+        apply,
+        limit,
+    } = request;
+
+    let selector = parse_batch_selector(select).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid --select '{select}'. Use 'tag:NAME', 'id:<uuid>[,<uuid>...]', or 'all'."
+        )
+    })?;
+
+    // ── Validate operation flags ───────────────────────────────────────
+    let has_tag_op = add_tags.is_some() || remove_tags.is_some();
+    let has_move_op = to.is_some();
+    let op_count = [delete, has_tag_op, has_move_op]
+        .iter()
+        .filter(|&&b| b)
+        .count();
+    if op_count == 0 {
+        return Err(anyhow::anyhow!(
+            "no operation specified. Pass one of --delete, --add-tags, --remove-tags, or --to."
+        ));
+    }
+    if op_count > 1 {
+        return Err(anyhow::anyhow!(
+            "conflicting operations: pick exactly one of --delete, --add-tags/--remove-tags, or --to."
+        ));
+    }
+
+    // ── Resolve selection ──────────────────────────────────────────────
+    let notes = resolve_batch_selection(context, &selector, limit)?;
+    if notes.is_empty() {
+        eprintln!("ℹ️ No notes matched the selector '{select}'.");
+        return to_json(&serde_json::json!({
+            "selector": select,
+            "matched": 0,
+            "affected": 0,
+            "skipped": 0,
+            "failures": [],
+        }));
+    }
+
+    let matched = notes.len();
+    let op_label = if delete {
+        "DELETE"
+    } else if to.is_some() {
+        "MOVE"
+    } else {
+        "TAG"
+    };
+
+    // ── Dry-run preview ────────────────────────────────────────────────
+    if !apply {
+        eprintln!("📋 Dry-run preview (no changes made). Pass --apply to perform.");
+        eprintln!("   selector : {select}");
+        eprintln!("   matched  : {matched} note(s)");
+        eprintln!("   operation: {op_label}");
+        if let Some(add) = add_tags {
+            eprintln!("   add-tags : {add}");
+        }
+        if let Some(rm) = remove_tags {
+            eprintln!("   rm-tags  : {rm}");
+        }
+        if let Some(to) = to {
+            eprintln!("   to       : {to}");
+        }
+        for n in notes.iter().take(20) {
+            eprintln!("   • {} ({})", n.title, n.id);
+        }
+        if matched > 20 {
+            eprintln!("   … and {} more", matched - 20);
+        }
+        return to_json(&serde_json::json!({
+            "selector": select,
+            "matched": matched,
+            "dryRun": true,
+            "operation": op_label,
+            "notes": notes.iter().take(20).map(|n| serde_json::json!({
+                "id": n.id,
+                "title": n.title,
+                "path": n.path,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+
+    // ── Confirmation prompt for destructive operations ────────────────
+    if !yes && (delete || has_move_op) {
+        eprintln!("⚠️  About to {op_label} {matched} note(s) matched by '{select}'.");
+        if let Some(to) = to {
+            eprintln!("   target dir: {to}");
+        }
+        eprintln!("   Pass --yes / -y to skip this prompt.");
+        // In non-interactive contexts (e.g. piped stdin) read_line returns
+        // EOF immediately, which we treat as "no" — same behavior as `git
+        // rebase` etc.
+        eprint!("   Proceed? [y/N] ");
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf).ok();
+        if !buf.trim().eq_ignore_ascii_case("y") {
+            eprintln!("Aborted.");
+            return to_json(&serde_json::json!({
+                "selector": select,
+                "matched": matched,
+                "aborted": true,
+            }));
+        }
+    }
+
+    // ── Dispatch ───────────────────────────────────────────────────────
+    let ids: Vec<String> = notes.iter().map(|n| n.id.clone()).collect();
+    let result = if delete {
+        vaultpilot_lib::storage::bulk_delete_notes_with_context(context, &ids, None)
+    } else if let Some(to) = to {
+        vaultpilot_lib::storage::bulk_move_notes_with_context(context, &ids, to)
+    } else {
+        let add: Vec<String> = add_tags.map(|s| vec![s.to_string()]).unwrap_or_default();
+        let rm: Vec<String> = remove_tags.map(|s| vec![s.to_string()]).unwrap_or_default();
+        vaultpilot_lib::storage::bulk_update_tags_with_context(context, &ids, &add, &rm)
+    }?;
+
+    eprintln!(
+        "✅ {op_label}: {} affected, {} skipped, {} failed (of {} matched).",
+        result.affected,
+        result.skipped,
+        result.failures.len(),
+        matched
+    );
+    for f in &result.failures {
+        eprintln!("   ⚠️ {}: {}", f.id, f.reason);
+    }
+    to_json(&serde_json::json!({
+        "selector": select,
+        "matched": matched,
+        "operation": op_label,
+        "affected": result.affected,
+        "skipped": result.skipped,
+        "failures": result.failures,
+    }))
 }
 
 /// Handle `vp note ai <id> --action <action>` (#1914: in-document AI interaction).

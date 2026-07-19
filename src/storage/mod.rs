@@ -45,6 +45,9 @@ pub use instant_search::{
 };
 // Re-export notes public API so callers see no difference.
 pub use notes::{
+    bulk_delete_notes_with_context,
+    bulk_move_notes_with_context,
+    bulk_update_tags_with_context,
     delete_note_async,
     delete_note_with_context,
     export_all_notes_async,
@@ -81,6 +84,8 @@ pub use notes::{
     search_candidate_notes_with_context,
     vault_export_async,
     vault_export_with_context,
+    BulkNoteOpFailure,
+    BulkNoteOpResult,
     NoteNotFound,
 };
 // Re-export list_all_note_metas from search so orchestration modules can

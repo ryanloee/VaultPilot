@@ -333,6 +333,243 @@ pub fn delete_note_with_context(
 }
 
 // ────────────────────────────────────────────────────────
+// Bulk Operations (#3104)
+// ────────────────────────────────────────────────────────
+
+/// Outcome of a bulk operation on multiple notes (#3104).
+///
+/// Reports per-note outcomes so the caller (CLI/UI) can show which notes
+/// succeeded, which were skipped (no change needed), and which failed —
+/// without losing partial progress when a batch hits a few bad ids.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkNoteOpResult {
+    /// Total notes the caller asked to operate on.
+    pub requested: usize,
+    /// Notes that were successfully modified.
+    pub affected: usize,
+    /// Notes that were skipped (e.g. tag set unchanged, note already in target dir).
+    pub skipped: usize,
+    /// Per-note failures (id + reason).
+    pub failures: Vec<BulkNoteOpFailure>,
+}
+
+/// A single per-note failure inside a [`BulkNoteOpResult`] (#3104).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkNoteOpFailure {
+    pub id: String,
+    pub reason: String,
+}
+
+/// Bulk delete notes by ID (#3104).
+///
+/// Iterates over `note_ids`, calling [`delete_note_with_context`] for each.
+/// Failures (missing note, IO error) are recorded per-note and don't abort
+/// the rest of the batch — this mirrors the UX of selecting multiple files
+/// in a file manager and pressing Delete: some may fail while the rest go
+/// through.
+pub fn bulk_delete_notes_with_context(
+    context: &StorageContext,
+    note_ids: &[String],
+    delete_attachments: Option<bool>,
+) -> Result<BulkNoteOpResult> {
+    let mut result = BulkNoteOpResult {
+        requested: note_ids.len(),
+        ..Default::default()
+    };
+    for id in note_ids {
+        match delete_note_with_context(context, id, delete_attachments) {
+            Ok(true) => result.affected += 1,
+            Ok(false) => result.failures.push(BulkNoteOpFailure {
+                id: id.clone(),
+                reason: "not found".to_string(),
+            }),
+            Err(e) => result.failures.push(BulkNoteOpFailure {
+                id: id.clone(),
+                reason: e.to_string(),
+            }),
+        }
+    }
+    Ok(result)
+}
+
+/// Bulk add/remove tags on notes (#3104).
+///
+/// For each note: load, modify its tag set, and save. Tags are matched
+/// case-insensitively for removal. Notes whose final tag set is unchanged
+/// (e.g. trying to add a tag that's already present and removing none of
+/// the existing ones) are reported as `skipped` rather than `affected`,
+/// so callers can distinguish "no-op" from "wrote a new revision".
+pub fn bulk_update_tags_with_context(
+    context: &StorageContext,
+    note_ids: &[String],
+    add_tags: &[String],
+    remove_tags: &[String],
+) -> Result<BulkNoteOpResult> {
+    let mut result = BulkNoteOpResult {
+        requested: note_ids.len(),
+        ..Default::default()
+    };
+
+    // Normalize tag inputs: split on commas, trim, drop empties.
+    let add_tags: Vec<String> = add_tags
+        .iter()
+        .flat_map(|t| t.split(','))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let remove_tags_lower: Vec<String> = remove_tags
+        .iter()
+        .flat_map(|t| t.split(','))
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    for id in note_ids {
+        match load_note_with_context(context, id) {
+            Ok(mut note) => {
+                let original: Vec<String> = note.meta.tags.clone();
+
+                // 1. Remove first (case-insensitive) so a tag in both add and
+                //    remove lists ends up being added (last-write-wins).
+                note.meta
+                    .tags
+                    .retain(|t| !remove_tags_lower.contains(&t.to_lowercase()));
+
+                // 2. Then add (dedup case-insensitive, preserve caller casing).
+                for tag in &add_tags {
+                    let already = note.meta.tags.iter().any(|t| t.eq_ignore_ascii_case(tag));
+                    if !already {
+                        note.meta.tags.push(tag.clone());
+                    }
+                }
+
+                if note.meta.tags == original {
+                    result.skipped += 1;
+                } else {
+                    match save_note_with_context(context, note) {
+                        Ok(_) => result.affected += 1,
+                        Err(e) => result.failures.push(BulkNoteOpFailure {
+                            id: id.clone(),
+                            reason: e.to_string(),
+                        }),
+                    }
+                }
+            }
+            Err(e) => result.failures.push(BulkNoteOpFailure {
+                id: id.clone(),
+                reason: e.to_string(),
+            }),
+        }
+    }
+    Ok(result)
+}
+
+/// Bulk move notes to a target subdirectory within the vault (#3104).
+///
+/// `target_dir` is interpreted relative to the vault root and is confined
+/// to the vault by [`crate::normalize_tool_path`] (so `../escape` is
+/// rejected). The notes' existing filenames are preserved. After moving
+/// each physical file the FTS index and `notes.path` are updated so
+/// search returns the new location.
+pub fn bulk_move_notes_with_context(
+    context: &StorageContext,
+    note_ids: &[String],
+    target_dir: &str,
+) -> Result<BulkNoteOpResult> {
+    let mut result = BulkNoteOpResult {
+        requested: note_ids.len(),
+        ..Default::default()
+    };
+    let (connection, settings) = open_connection(context)?;
+    let vault_dir = PathBuf::from(&settings.vault_dir);
+    // `target_dir` is documented as relative to the vault root. `normalize_tool_path`
+    // only uses its second argument as a *confinement boundary* — it does NOT join the
+    // candidate onto the vault root — so a relative target would be resolved against the
+    // process CWD and rejected ("cannot verify path is inside the vault directory").
+    // Join it onto the vault root first so relative paths like `archive/2026` resolve
+    // correctly and the confinement walk-up can confirm the (existing) vault dir as the
+    // nearest ancestor. (#3104 regression: all relative moves currently fail.)
+    let target_candidate = vault_dir.join(target_dir);
+    let target_root =
+        crate::normalize_tool_path(target_candidate.to_str().unwrap_or(target_dir), &vault_dir)
+            .map_err(|e| anyhow::anyhow!("invalid target directory '{target_dir}': {e}"))?;
+    fs::create_dir_all(&target_root).ok();
+
+    for id in note_ids {
+        match move_one_note_with_connection(&connection, id, &target_root, &vault_dir) {
+            Ok(MoveOutcome::Moved) => result.affected += 1,
+            Ok(MoveOutcome::Skipped) => result.skipped += 1,
+            Err(e) => result.failures.push(BulkNoteOpFailure {
+                id: id.clone(),
+                reason: e.to_string(),
+            }),
+        }
+    }
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MoveOutcome {
+    Moved,
+    Skipped,
+}
+
+/// Move a single note file into `target_root`, then re-index it so the
+/// SQLite `notes.path` column and the FTS index reflect the new location.
+///
+/// Returns `Skipped` when the note is already inside `target_root`
+/// (no-op move). Returns an error when the note is missing, the target
+/// file already exists, or the underlying filesystem rename fails.
+fn move_one_note_with_connection(
+    connection: &Connection,
+    note_id: &str,
+    target_root: &Path,
+    vault_dir: &Path,
+) -> Result<MoveOutcome> {
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT id, path FROM notes WHERE id = ?1 OR path = ?1 LIMIT 1",
+            [note_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((_resolved_id, old_path_str)) = row else {
+        return Err(anyhow!("note not found: {note_id}"));
+    };
+    let old_path = PathBuf::from(&old_path_str);
+    let Some(filename) = old_path.file_name() else {
+        return Err(anyhow!("note has no filename: {}", old_path.display()));
+    };
+    let new_path = target_root.join(filename);
+    if new_path == old_path {
+        return Ok(MoveOutcome::Skipped);
+    }
+    if new_path.exists() {
+        return Err(anyhow!(
+            "target already exists: {} (note id={note_id})",
+            new_path.display()
+        ));
+    }
+    if let Some(parent) = new_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent dir for {}", new_path.display()))?;
+    }
+    // Move the physical file. fs::rename can fail across filesystems
+    // (EXDEV), so fall back to copy + delete for robustness — important
+    // when the vault lives on a different mount than the OS temp dir.
+    fs::rename(&old_path, &new_path)
+        .or_else(|_| {
+            fs::copy(&old_path, &new_path)?;
+            fs::remove_file(&old_path)
+        })
+        .with_context(|| format!("moving {} -> {}", old_path.display(), new_path.display()))?;
+    index_note_file_with_connection(connection, &new_path, vault_dir)?;
+    Ok(MoveOutcome::Moved)
+}
+
+// ────────────────────────────────────────────────────────
 // Import / Export
 // ────────────────────────────────────────────────────────
 

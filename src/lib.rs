@@ -3,6 +3,7 @@ pub mod agent_engine;
 pub mod ai;
 pub mod block_ref;
 pub mod calendar;
+pub mod canvas;
 pub mod capability_registry;
 pub mod capture;
 pub mod citations;

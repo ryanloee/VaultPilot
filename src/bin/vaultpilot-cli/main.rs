@@ -238,6 +238,23 @@ enum Commands {
         action: VaultActions,
     },
 
+    /// Discover and inspect Obsidian-compatible `.canvas` whiteboard files
+    /// inside the vault (#3000).
+    ///
+    /// Canvas files are JSON documents that place notes, text, links and
+    /// groups on a free-form 2D canvas with optional edges between them.
+    /// This command exposes the backend parsing/export layer; the
+    /// interactive editor lives in the WinUI/Mobile clients.
+    ///
+    /// Examples:
+    ///   vp canvas list                       # every .canvas file under the vault
+    ///   vp canvas show path/to/board.canvas  # human-readable summary + outline
+    ///   vp canvas export board.canvas        # emit a Markdown outline to stdout
+    Canvas {
+        #[command(subcommand)]
+        action: CanvasActions,
+    },
+
     /// Open or create today's daily note with optional template (#1843)
     ///
     /// Creates a structured daily note at `Daily/YYYY-MM-DD.md` using a template.
@@ -1266,6 +1283,33 @@ enum IndexActions {
 }
 
 #[derive(Subcommand)]
+enum CanvasActions {
+    /// List every `.canvas` file under the vault root (recursive).
+    ///
+    /// Paths are printed relative to the vault directory when possible, one
+    /// per line. Hidden directories (`.git`, `.obsidian`, …) are skipped.
+    /// Exit code is 0 even when no canvas files exist.
+    List,
+
+    /// Print a human-readable summary of a single `.canvas` file followed by
+    /// its Markdown outline. Useful for quick inspection in the terminal.
+    Show {
+        /// Path to the `.canvas` file (absolute or relative to CWD).
+        path: PathBuf,
+    },
+
+    /// Export a `.canvas` file as a Markdown outline to stdout.
+    ///
+    /// Each node becomes a bullet; edges are listed in their own section.
+    /// This format is suitable for diffing, accessibility, or feeding into
+    /// other tools (search index, AI agent context).
+    Export {
+        /// Path to the `.canvas` file (absolute or relative to CWD).
+        path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum VaultActions {
     /// Export the entire vault (notes + chat history) as a zip file
     Export {
@@ -2166,6 +2210,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             "message": "The MCP HTTP server is started by running `vaultpilot-cli mcp-http` directly."
         })),
         Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
+        Commands::Canvas { action } => handle_canvas(context, action),
         Commands::Daily {
             template,
             date,
@@ -3390,6 +3435,70 @@ fn handle_index(context: &StorageContext, action: &IndexActions) -> Result<Value
         IndexActions::Rebuild => {
             let stats = rebuild_index_with_context(context)?;
             to_json(&stats)
+        }
+    }
+}
+
+/// Handle the `canvas` command — discover and inspect `.canvas` files (#3000).
+///
+/// All three subcommands operate purely on the filesystem (no SQLite state),
+/// so they run synchronously without `block_in_place`.
+fn handle_canvas(context: &StorageContext, action: &CanvasActions) -> Result<Value> {
+    use vaultpilot_lib::canvas;
+
+    let vault_dir = context.vault_dir();
+
+    match action {
+        CanvasActions::List => {
+            let files = canvas::list_canvas_files(vault_dir)?;
+            let rel_files: Vec<String> = files
+                .iter()
+                .map(|p| {
+                    p.strip_prefix(vault_dir)
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| p.display().to_string())
+                })
+                .collect();
+            if rel_files.is_empty() {
+                eprintln!("No .canvas files found under {}", vault_dir.display());
+            } else {
+                for f in &rel_files {
+                    println!("{f}");
+                }
+            }
+            Ok(serde_json::json!({
+                "count": rel_files.len(),
+                "files": rel_files,
+            }))
+        }
+        CanvasActions::Show { path } => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("reading canvas file {}", path.display()))?;
+            let parsed = canvas::parse_canvas(&raw)?;
+            let summary = canvas::canvas_summary(&parsed);
+            let md = canvas::export_canvas_to_markdown(&parsed)?;
+            // Summary to stderr, outline to stdout — so `vp canvas show X |
+            // grep` works on just the outline.
+            eprintln!("{}", summary);
+            println!("{md}");
+            Ok(serde_json::json!({
+                "path": path.display().to_string(),
+                "summary": summary,
+                "node_count": parsed.nodes.len(),
+                "edge_count": parsed.edges.len(),
+            }))
+        }
+        CanvasActions::Export { path } => {
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("reading canvas file {}", path.display()))?;
+            let parsed = canvas::parse_canvas(&raw)?;
+            let md = canvas::export_canvas_to_markdown(&parsed)?;
+            println!("{md}");
+            Ok(serde_json::json!({
+                "path": path.display().to_string(),
+                "node_count": parsed.nodes.len(),
+                "edge_count": parsed.edges.len(),
+            }))
         }
     }
 }

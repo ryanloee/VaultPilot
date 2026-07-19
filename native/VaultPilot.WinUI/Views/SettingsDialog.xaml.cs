@@ -206,7 +206,7 @@ public sealed partial class SettingsDialog : ContentDialog
     // round-trip is idempotent and no data is silently lost (#3131, #3133).
     // Otherwise emit the canonical literal for the selected ComboBox item.
     private string SelectedProviderType(int selectedIndex) =>
-        IsCanonicalProviderType(_loadedProviderType)
+        IsCanonicalProviderType(_loadedProviderType) || selectedIndex != 0
             ? (selectedIndex == 1 ? ProviderTypeAnthropic
                : selectedIndex == 2 ? ProviderTypeOllama
                : ProviderTypeOpenAi)

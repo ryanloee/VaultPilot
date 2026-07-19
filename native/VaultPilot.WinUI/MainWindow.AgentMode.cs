@@ -72,6 +72,7 @@ public sealed partial class MainWindow : Window
         _agentCurrentStep = 0;
         _agentMaxSteps = maxSteps;
         var old = Interlocked.Exchange(ref _agentCts, null);
+        old?.Cancel();
         old?.Dispose();
         _agentCts = new CancellationTokenSource();
 

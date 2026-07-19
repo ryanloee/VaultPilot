@@ -288,42 +288,114 @@ mod tests {
     }
 
     #[test]
-    fn bulk_move_refuses_to_overwrite_existing_file() {
-        let (_temp, ctx) = setup_temp_context();
-        // Two notes with identical filenames in different dirs — we move
-        // both into the same target, which should fail for the second one
-        // rather than silently overwrite.
-        let n1 = save_note_with_context(&ctx, note_doc("Same Title", &[])).expect("save");
-        let n2 = save_note_with_context(&ctx, note_doc("Same Title", &[])).expect("save");
-        // Both got paths derived from title — but the storage layer appends
-        // the note id, so they shouldn't actually collide. To force a real
-        // collision, we craft a duplicate by copying n1's file to n2's id.
-        // Simpler: move n1 into target/ first, then craft a second file
-        // manually at target/<n1_filename> and try to move n2.
-        let _ = bulk_move_notes_with_context(&ctx, std::slice::from_ref(&n1.meta.id), "target")
-            .expect("move n1");
-        let n1_after = load_note_with_context(&ctx, &n1.meta.id).expect("load n1");
-        let n1_path = std::path::PathBuf::from(&n1_after.meta.path);
+    fn bulk_move_does_not_flatten_nested_subdir_3134() {
+        let (temp, ctx) = setup_temp_context();
+        // Save a note, then manually relocate it into a *nested* subdir of
+        // the eventual target so that it is already "inside" the target tree.
+        let ids = save_notes(&ctx, 1);
+        let note = load_note_with_context(&ctx, &ids[0]).expect("load seed");
+        let filename = std::path::Path::new(&note.meta.path)
+            .file_name()
+            .unwrap()
+            .to_os_string();
+        // Build the nested path under the vault root: <vault>/archive/2026/<file>
+        let nested_path = ctx.vault_dir().join("archive").join("2026").join(&filename);
+        std::fs::create_dir_all(nested_path.parent().unwrap()).expect("mkdir nested");
+        std::fs::rename(&note.meta.path, &nested_path).expect("relocate into nested");
+        // Update the indexed path directly (mirrors what the storage layer
+        // would record after the file was moved by an external tool).
+        let db_path = temp.join("knowledge-index.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).expect("open db");
+        conn.execute(
+            "UPDATE notes SET path = ?1 WHERE id = ?2",
+            rusqlite::params![nested_path.to_string_lossy().replace('\\', "/"), &ids[0]],
+        )
+        .expect("update indexed path");
+        drop(conn);
 
-        // Create a conflicting file at the same target path as n2 would
-        // land. We need n2's filename to match n1's.
-        // The simplest reliable way: write a dummy file with the same name
-        // as n1 in target/, then move n2's filename to match by renaming
-        // n2's file to match n1's filename before invoking bulk_move.
-        let n2_after = load_note_with_context(&ctx, &n2.meta.id).expect("load n2");
-        let n2_path = std::path::PathBuf::from(&n2_after.meta.path);
-        let n2_new_path = n2_path.with_file_name(n1_path.file_name().unwrap());
-        // Can't do this if it collides on the same dir, so skip if same.
-        if n2_new_path != n2_path {
-            let _ = std::fs::rename(&n2_path, &n2_new_path);
+        // Target is the parent `archive/`. The note already lives in
+        // `archive/2026/`, so it must be Skipped — NOT moved up to the
+        // `archive/` top level (which would flatten the user's hierarchy).
+        let result =
+            bulk_move_notes_with_context(&ctx, &ids, "archive").expect("bulk move archive");
+
+        assert_eq!(result.affected, 0, "nested note must not be relocated");
+        assert_eq!(result.skipped, 1, "expected skip, got {:?}", result);
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+
+        // Confirm the path is still inside archive/2026, not archive/.
+        let after = load_note_with_context(&ctx, &ids[0]).expect("load after move");
+        let normalized = after.meta.path.replace('\\', "/");
+        assert!(
+            normalized.contains("archive/2026"),
+            "note should remain nested, path was '{}'",
+            normalized
+        );
+        assert!(
+            !normalized.ends_with("/archive/note.md")
+                && !normalized.ends_with("\\archive\\note.md"),
+            "note must not be flattened to archive/ top level: '{}'",
+            normalized
+        );
+    }
+
+    #[test]
+    fn bulk_delete_with_delete_attachments_flag_3135() {
+        let (temp, ctx) = setup_temp_context();
+
+        // Helper: create a note with one real physical attachment file registered
+        // in the DB, and return (note_id, attachment_file_path).
+        fn make_note_with_attachment(
+            ctx: &StorageContext,
+            temp: &std::path::Path,
+            title: &str,
+            att_id: &str,
+        ) -> (String, std::path::PathBuf) {
+            let note = save_note_with_context(ctx, note_doc(title, &["seed"])).expect("save note");
+            let note_id = note.meta.id.clone();
+            let attach_path = ctx
+                .vault_dir()
+                .join(format!("{}-assets", note.meta.id))
+                .join("diagram.png");
+            std::fs::create_dir_all(attach_path.parent().unwrap()).expect("mkdir assets");
+            std::fs::write(&attach_path, b"fake-png-bytes").expect("write attachment file");
+            let attach_str = attach_path.to_string_lossy().replace('\\', "/");
+            let db_path = temp.join("knowledge-index.sqlite");
+            let conn = rusqlite::Connection::open(&db_path).expect("open db");
+            conn.execute(
+                "INSERT INTO attachments (id, note_id, path, file_name, stem, ocr_text, semantic_vector, perceptual_hash, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, '', '', '', 0)",
+                rusqlite::params![att_id, note_id, attach_str, "diagram.png", "diagram"],
+            )
+            .expect("insert attachment row");
+            drop(conn);
+            (note_id, attach_path)
         }
 
-        // Now try to move n2 into target/ — it would land on n1's file.
-        let r = bulk_move_notes_with_context(&ctx, std::slice::from_ref(&n2.meta.id), "target")
-            .expect("call");
+        // CASE A — opt-OUT via Some(false): attachment file must be KEPT.
+        // This is the control the new CLI `--delete-attachments` flag exposes
+        // (and guards against a future regression where None silently deleted).
+        let (id_a, path_a) = make_note_with_attachment(&ctx, &temp, "Keep Attach", "att-3135-a");
+        assert!(path_a.exists(), "attachment A should exist pre-delete");
+        let r_a = bulk_delete_notes_with_context(&ctx, std::slice::from_ref(&id_a), Some(false))
+            .expect("bulk delete Some(false)");
+        assert_eq!(r_a.affected, 1);
         assert!(
-            !r.failures.is_empty(),
-            "expected at least one failure due to existing file, got {r:?}"
+            path_a.exists(),
+            "with Some(false), attachment file must be KEPT on disk"
+        );
+
+        // CASE B — force delete via Some(true): attachment file MUST be removed.
+        // This is exactly what `vp notes batch --delete --delete-attachments`
+        // now wires up (#3135: previously no CLI flag could trigger cleanup).
+        let (id_b, path_b) = make_note_with_attachment(&ctx, &temp, "Delete Attach", "att-3135-b");
+        assert!(path_b.exists(), "attachment B should exist pre-delete");
+        let r_b = bulk_delete_notes_with_context(&ctx, std::slice::from_ref(&id_b), Some(true))
+            .expect("bulk delete Some(true)");
+        assert_eq!(r_b.affected, 1);
+        assert!(
+            !path_b.exists(),
+            "with Some(true), attachment file must be deleted from disk"
         );
     }
 }

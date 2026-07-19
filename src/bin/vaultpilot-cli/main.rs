@@ -1159,6 +1159,13 @@ enum NotesActions {
         #[arg(long)]
         delete: bool,
 
+        /// When deleting, also remove each deleted note's attachment files
+        /// from disk (mirrors the per-note "Also delete attachments?" prompt).
+        /// Without this flag, attachments are left in place and become
+        /// orphaned files (#3135). Ignored unless `--delete` is also set.
+        #[arg(long)]
+        delete_attachments: bool,
+
         /// Skip the interactive confirmation prompt. Without this flag,
         /// `--apply` will prompt before performing destructive operations
         /// (delete / move).
@@ -3008,6 +3015,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             remove_tags,
             to,
             delete,
+            delete_attachments,
             yes,
             apply,
             limit,
@@ -3019,6 +3027,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                 remove_tags: remove_tags.as_deref(),
                 to: to.as_deref(),
                 delete: *delete,
+                delete_attachments: *delete_attachments,
                 yes: *yes,
                 apply: *apply,
                 limit: *limit,
@@ -3090,6 +3099,7 @@ struct NotesBatchRequest<'a> {
     remove_tags: Option<&'a str>,
     to: Option<&'a str>,
     delete: bool,
+    delete_attachments: bool,
     yes: bool,
     apply: bool,
     limit: usize,
@@ -3107,6 +3117,7 @@ fn execute_notes_batch(context: &StorageContext, request: NotesBatchRequest) -> 
         remove_tags,
         to,
         delete,
+        delete_attachments,
         yes,
         apply,
         limit,
@@ -3198,6 +3209,14 @@ fn execute_notes_batch(context: &StorageContext, request: NotesBatchRequest) -> 
         if let Some(to) = to {
             eprintln!("   target dir: {to}");
         }
+        if delete {
+            let att = if delete_attachments {
+                "yes (attachment files will be removed)"
+            } else {
+                "no (orphaned attachment files will be left on disk)"
+            };
+            eprintln!("   delete attachments: {att}");
+        }
         eprintln!("   Pass --yes / -y to skip this prompt.");
         // In non-interactive contexts (e.g. piped stdin) read_line returns
         // EOF immediately, which we treat as "no" — same behavior as `git
@@ -3218,7 +3237,8 @@ fn execute_notes_batch(context: &StorageContext, request: NotesBatchRequest) -> 
     // ── Dispatch ───────────────────────────────────────────────────────
     let ids: Vec<String> = notes.iter().map(|n| n.id.clone()).collect();
     let result = if delete {
-        vaultpilot_lib::storage::bulk_delete_notes_with_context(context, &ids, None)
+        let del_attachments = if delete_attachments { Some(true) } else { None };
+        vaultpilot_lib::storage::bulk_delete_notes_with_context(context, &ids, del_attachments)
     } else if let Some(to) = to {
         vaultpilot_lib::storage::bulk_move_notes_with_context(context, &ids, to)
     } else {

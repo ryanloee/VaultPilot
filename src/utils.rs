@@ -1,5 +1,5 @@
 use deunicode::deunicode;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use sha2::{Digest, Sha256};
 
 /// Generate a file-system-safe slug from a title string.
 ///
@@ -29,9 +29,12 @@ pub fn slugify(value: &str) -> String {
     }
     let cleaned = slug.trim_matches('-').to_string();
     if cleaned.is_empty() {
-        let mut hasher = DefaultHasher::new();
-        value.hash(&mut hasher);
-        format!("note-{:08x}", hasher.finish())
+        // Use SHA-256 (not DefaultHasher) so the fallback name is stable
+        // across Rust releases. DefaultHasher's algorithm is unspecified and
+        // may change between compiler versions. (#3166)
+        let hash = Sha256::digest(value.as_bytes());
+        let hex = format!("{:016x}", u64::from_be_bytes(hash[..8].try_into().unwrap()));
+        format!("note-{hex}")
     } else {
         cleaned
     }
@@ -72,6 +75,31 @@ mod tests {
     fn slugify_empty_returns_hash_fallback() {
         assert!(slugify("").starts_with("note-"));
         assert!(slugify("---").starts_with("note-"));
+    }
+
+    #[test]
+    fn slugify_empty_hash_is_stable_across_runs() {
+        // DefaultHasher is non-deterministic across Rust versions;
+        // SHA-256 ensures the same title always produces the same slug. (#3166)
+        let h1 = slugify("");
+        let h2 = slugify("");
+        assert_eq!(h1, h2, "slugify('') must be deterministic");
+
+        let p1 = slugify("---");
+        let p2 = slugify("---");
+        assert_eq!(p1, p2, "slugify('---') must be deterministic");
+
+        let u1 = slugify("\u{3001}\u{3002}\u{300C}\u{300D}");
+        let u2 = slugify("\u{3001}\u{3002}\u{300C}\u{300D}");
+        assert_eq!(u1, u2, "slugify(punctuation-only) must be deterministic");
+    }
+
+    #[test]
+    fn slugify_empty_hash_format() {
+        // SHA-256 hex is 16 characters (8 bytes)
+        let slug = slugify("");
+        assert!(slug.starts_with("note-"));
+        assert_eq!(slug.len(), "note-".len() + 16);
     }
 
     #[test]

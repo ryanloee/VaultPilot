@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using System.Text.Json;
+using System.Threading;
 using VaultPilot.WinUI.Models;
 
 namespace VaultPilot.WinUI;
@@ -72,6 +73,7 @@ public sealed partial class MainWindow : Window
         _agentCurrentStep = 0;
         _agentMaxSteps = maxSteps;
         var old = Interlocked.Exchange(ref _agentCts, null);
+        old?.Cancel();
         old?.Dispose();
         _agentCts = new CancellationTokenSource();
 
@@ -94,7 +96,6 @@ public sealed partial class MainWindow : Window
     {
         var old = Interlocked.Exchange(ref _agentCts, null);
         old?.Cancel();
-        old?.Dispose();
         _agentModeActive = false;
 
         AgentModeButton.Visibility = Visibility.Visible;
@@ -209,12 +210,12 @@ public sealed partial class MainWindow : Window
                 {
                     AgentTokenCount.Text = $"Token: {tokensUsed}";
                 }
-                // HandleAgentEvent is already invoked on the UI thread via
-                // OnAgentStatusReceived's DispatcherQueue.TryEnqueue, so the
-                // previous inner enqueue was redundant and delayed the
-                // _agentModeActive=false reset — creating a window where a
-                // subsequent event could be misrouted here instead of being
-                // ignored. Execute the UI reset synchronously. (Issue #2586)
+                // #3149: Clean up the CTS from the completed agent to prevent
+                // resource leak (kernel timer). agentCompleted always runs on UI
+                // thread via DispatcherQueue.TryEnqueue, so Interlocked.Exchange
+                // is for consistency — the key effect is nulling the field.
+                var completedCts = Interlocked.Exchange(ref _agentCts, null);
+                completedCts?.Dispose();
                 _agentModeActive = false;
                 AgentModeButton.Visibility = Visibility.Visible;
                 StopAgentButton.Visibility = Visibility.Collapsed;
@@ -373,7 +374,11 @@ public sealed partial class MainWindow : Window
         // _agentCts (the old one is disposed). Sending the approval with a stale,
         // disposed CancellationTokenSource throws OperationCanceledException and
         // the response is silently lost. Re-reading here uses the live token.
-        var cts = _agentCts;
+        // #3148: Use Volatile.Read to ensure latest _agentCts value is observed
+        // on all architectures (ARM included). Since StopAgentMode no longer
+        // disposes the CTS (only cancels it), a CTS reference captured here
+        // is safe to use even if StopAgentMode runs concurrently.
+        var cts = Volatile.Read(ref _agentCts);
         if (cts is null || !_agentModeActive)
         {
             AppendMessage("系统", "Agent 已停止，审批已取消。");

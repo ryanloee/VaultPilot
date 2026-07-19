@@ -540,10 +540,29 @@ fn move_one_note_with_connection(
     };
     let old_path = PathBuf::from(&old_path_str);
     let Some(filename) = old_path.file_name() else {
-        return Err(anyhow!("note has no filename: {}", old_path.display()));
+        return Err(anyhow::anyhow!(
+            "note has no filename: {}",
+            old_path.display()
+        ));
     };
     let new_path = target_root.join(filename);
     if new_path == old_path {
+        return Ok(MoveOutcome::Skipped);
+    }
+    // If the note already lives inside `target_root` (including any nested
+    // subdirectory of it), moving it would only flatten the user's folder
+    // hierarchy without changing its logical location — treat that as a
+    // no-op rather than relocating the file to the target's top level.
+    // (#3134: bulk move previously pulled notes out of `archive/2026` up
+    // into `archive/`, destroying multi-level directory structures.)
+    if let (Ok(old_canon), Ok(target_canon)) = (old_path.canonicalize(), target_root.canonicalize())
+    {
+        if old_canon.starts_with(&target_canon) {
+            return Ok(MoveOutcome::Skipped);
+        }
+    } else if old_path.starts_with(target_root) {
+        // Fallback when canonicalize is unavailable (e.g. the note file was
+        // just created and not yet flushed) — compare lexical prefixes.
         return Ok(MoveOutcome::Skipped);
     }
     if new_path.exists() {

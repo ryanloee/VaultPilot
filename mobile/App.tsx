@@ -11,6 +11,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb, ensureDefaultTemplates } from './src/db';
 import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import { autoSyncOnStartup } from './src/services/sync';
+import { applyBackgroundSyncFromConfig } from './src/services/backgroundSync';
 
 import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
@@ -159,6 +161,13 @@ export default function App() {
     loadedRef.current = true;
     setInitState('ready');
     await SplashScreen.hideAsync();
+
+    // #3158 — Background sync: kick off (a) a one-shot foreground auto-sync
+    // now that the DB/settings are ready, and (b) re-apply the persisted
+    // background-fetch configuration so the OS scheduler matches user prefs.
+    // Both are fire-and-forget; errors are caught inside the helpers.
+    autoSyncOnStartup().catch((e) => console.warn('[App] autoSyncOnStartup:', e));
+    applyBackgroundSyncFromConfig().catch((e) => console.warn('[App] applyBackgroundSyncFromConfig:', e));
   }, [setIsDark]);
 
   // Load saved settings on startup

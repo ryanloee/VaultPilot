@@ -34,6 +34,7 @@ const linking: any = {
       Chat: {
         screens: {
           ChatMain: 'chat',
+          ChatNew: 'chat/new',
           Sessions: 'chat/sessions',
         },
       },
@@ -67,6 +68,7 @@ function ChatStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="ChatMain" component={ChatScreen} />
+      <Stack.Screen name="ChatNew" component={ChatScreen} initialParams={{ action: 'new' }} />
       <Stack.Screen name="Sessions" component={SessionsScreen} />
     </Stack.Navigator>
   );

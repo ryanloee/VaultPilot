@@ -121,6 +121,14 @@ export default function ChatScreen({ navigation, route }: any) {
     let cancelled = false;
     (async () => {
       try {
+        // #3156 — vaultpilot://chat/new deep link: force-create a new session
+        if (route.params?.action === 'new') {
+          routeHandledRef.current = true;
+          const id = await createSession('新对话');
+          if (cancelled) return;
+          setSessionId(id);
+          return;
+        }
         // If navigated from SessionsScreen with specific session
         if (route.params?.sessionId) {
           routeHandledRef.current = true;

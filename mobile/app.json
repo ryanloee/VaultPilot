@@ -36,7 +36,9 @@
       "./plugins/withQuickSettingsTile.js",
       "./plugins/withDesktopWidget.js",
       "expo-speech-recognition",
-      "expo-camera"
+      "expo-camera",
+      "expo-task-manager",
+      "expo-background-task"
     ],
     "extra": {
       "eas": {

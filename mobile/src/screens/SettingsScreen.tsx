@@ -10,6 +10,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import appJson from '../../app.json';
 import { checkForUpdate, type UpdateInfo } from '../utils/updateChecker';
 import { UpdateModal } from '../components/settings';
+import {
+  getBackgroundSyncConfig,
+  configureBackgroundSync,
+  type BackgroundSyncInterval,
+} from '../services/backgroundSync';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
@@ -27,6 +32,45 @@ export default function SettingsScreen() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const testControllerRef = useRef<AbortController | null>(null);
+
+  // #3158 — Background sync state
+  const [bgSyncEnabled, setBgSyncEnabled] = useState(false);
+  const [bgSyncInterval, setBgSyncInterval] = useState<BackgroundSyncInterval>(30);
+
+  // Load persisted background-sync config on mount.
+  useEffect(() => {
+    getBackgroundSyncConfig()
+      .then((cfg) => {
+        setBgSyncEnabled(cfg.enabled);
+        setBgSyncInterval(cfg.intervalMinutes);
+      })
+      .catch((e) => console.warn('[Settings] bg sync config load:', e));
+  }, []);
+
+  const handleToggleBgSync = async (value: boolean) => {
+    setBgSyncEnabled(value); // optimistic UI update
+    try {
+      const cfg = await configureBackgroundSync(value, bgSyncInterval);
+      setBgSyncEnabled(cfg.enabled);
+      setBgSyncInterval(cfg.intervalMinutes);
+    } catch (e) {
+      // Revert on failure.
+      setBgSyncEnabled(!value);
+      Alert.alert('错误', '无法更新后台同步设置: ' + String(e));
+    }
+  };
+
+  const handleSelectInterval = async (mins: BackgroundSyncInterval) => {
+    const prev = bgSyncInterval;
+    setBgSyncInterval(mins); // optimistic
+    try {
+      const cfg = await configureBackgroundSync(bgSyncEnabled, mins);
+      setBgSyncInterval(cfg.intervalMinutes);
+    } catch (e) {
+      setBgSyncInterval(prev);
+      Alert.alert('错误', '无法更新同步间隔: ' + String(e));
+    }
+  };
 
   // Abort in-flight test connection on unmount
   useEffect(() => {
@@ -412,6 +456,47 @@ export default function SettingsScreen() {
           accessibilityState={{ checked: store.focusMode }}
         />
       </View>
+
+      {/* ── Background Sync (#3158) ── */}
+      <Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>数据同步</Text>
+      <View style={[s.toggleRow, { borderColor: c.border }]}>
+        <View style={{ flex: 1 }}>
+          <Text style={[s.toggleTitle, { color: c.text }]}>后台自动同步</Text>
+          <Text style={[s.toggleDesc, { color: c.textSecondary }]}>
+            App 关闭时定期从服务器拉取笔记变更（默认关闭）
+          </Text>
+        </View>
+        <Switch
+          value={bgSyncEnabled}
+          onValueChange={handleToggleBgSync}
+          trackColor={{ false: c.border, true: store.accentColor }}
+          thumbColor={'#FFF'}
+          accessibilityLabel="后台自动同步"
+          accessibilityState={{ checked: bgSyncEnabled }}
+        />
+      </View>
+      {bgSyncEnabled && (
+        <View style={{ marginTop: 8 }}>
+          <Text style={[s.label, { color: c.textSecondary }]}>同步间隔</Text>
+          <View style={s.themeRow}>
+            {([15, 30, 60] as const).map(mins => (
+              <TouchableOpacity
+                key={mins}
+                testID={`bg-sync-interval-${mins}`}
+                style={[s.themeBtn, {
+                  borderColor: bgSyncInterval === mins ? store.accentColor : c.border,
+                  backgroundColor: bgSyncInterval === mins ? store.accentColor + '20' : 'transparent',
+                }]}
+                onPress={() => handleSelectInterval(mins)}
+              >
+                <Text style={{ color: bgSyncInterval === mins ? store.accentColor : c.text }}>
+                  {mins === 60 ? '1 小时' : `${mins} 分钟`}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
 
       <TouchableOpacity
         style={[s.updateBtn, { borderColor: store.accentColor }]}

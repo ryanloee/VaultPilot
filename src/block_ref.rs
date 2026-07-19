@@ -35,9 +35,20 @@ pub struct Block {
 
 /// Compute a stable block id from its canonical content.
 ///
-/// The id is a short, url/path-safe base36 of a 32-bit FNV-1a hash over the
+/// The id is a short, url-safe hex of a 64-bit **FNV-1a** hash over the
 /// heading path joined with `\0` and the trimmed text. Deterministic across
-/// runs and platforms; collision probability is negligible for note-scale text.
+/// runs, platforms, and Rust compiler versions; collision probability is
+/// negligible for note-scale text.
+///
+/// ## Why FNV-1a and not `std::collections::hash_map::DefaultHasher`?
+///
+/// `DefaultHasher`'s algorithm is explicitly **unspecified** per the Rust std
+/// docs ("the algorithm ... is not specified"), so block ids computed with it
+/// could silently drift after a Rust toolchain upgrade — orphaning every
+/// `![[note#^blockid]]` reference in a vault. FNV-1a is a fixed, documented
+/// algorithm we control byte-for-byte, so ids stay stable forever. This
+/// mirrors the same fix already applied in #3160 (`semantic::stable_hash`),
+/// #3166 (`utils::slugify`), and #3169 (`agent::slugify`).
 ///
 /// Note: this function alone only guarantees a *content-derived* id. When the
 /// same `(heading_path, text)` appears more than once in a single note (e.g.
@@ -45,14 +56,36 @@ pub struct Block {
 /// base id collides. Callers must run the result through
 /// [`disambiguate_block_id`] to guarantee document-wide uniqueness (#2998).
 fn block_id_for(heading_path: &[String], text: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // FNV-1a 64-bit — fixed algorithm (RFC-style), unlike DefaultHasher.
+    // Same constants as `semantic::stable_hash` for consistency.
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    // Each heading is folded as: length-prefix (as u64 byte) followed by its
+    // UTF-8 bytes. The length prefix makes the encoding unambiguous:
+    //   (["a","b"])   -> 1, 'a', 1, 'b'
+    //   (["a\0b"])    -> 3, 'a', 0, 'b'
+    // which differ, unlike a naive separator scheme (a single 0x00 separator
+    // after each heading would collide with embedded NULs).
     for h in heading_path {
-        h.hash(&mut hasher);
-        '\0'.hash(&mut hasher);
+        let len = h.len() as u64;
+        hash ^= len;
+        hash = hash.wrapping_mul(FNV_PRIME);
+        for byte in h.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
     }
-    text.hash(&mut hasher);
-    let hash = hasher.finish();
+    // Length-prefix the text too so trailing empty text is distinguishable
+    // from no text call site (defensive; current callers always pass text).
+    let text_len = text.len() as u64;
+    hash ^= text_len;
+    hash = hash.wrapping_mul(FNV_PRIME);
+    for byte in text.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
     format!("{:x}", hash)
 }
 
@@ -465,6 +498,53 @@ pub fn resolve_embeds(body: &str, notes: &HashMap<String, String>) -> Vec<(Block
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_id_for_is_fnv1a_deterministic_3173() {
+        // #3173 regression: block_id_for must be deterministic across runs,
+        // platforms, and Rust compiler versions. The previous implementation
+        // used std DefaultHasher whose algorithm is unspecified, risking
+        // silent id drift. We pin known FNV-1a values so any future change
+        // to the hash constants / algorithm is caught here.
+        //
+        // Reference values computed by an independent Python FNV-1a impl that
+        // mirrors this function's length-prefix encoding.
+        let id = block_id_for(&[], "Hello");
+        assert_eq!(id, "f37d64b8ed429e18");
+
+        // Empty content folds just the length-prefix byte (0). Not equal to
+        // the bare FNV offset basis anymore.
+        assert_eq!(block_id_for(&[], ""), "af63bd4c8601b7df");
+
+        // Same input must always produce the same id (regression guard).
+        assert_eq!(block_id_for(&[], "Hello"), id);
+
+        // Different inputs must produce different ids.
+        let id3 = block_id_for(&[], "Hello!");
+        assert_ne!(id, id3);
+        assert_eq!(id3, "ede81631820c462");
+    }
+
+    #[test]
+    fn block_id_for_heading_path_separators_3173() {
+        // Length-prefix encoding guarantees (["a","b"]) ≠ (["a\0b"]) — the
+        // former encodes as 1,'a',1,'b' while the latter is 3,'a',0,'b'.
+        let ab = block_id_for(&["a".to_string(), "b".to_string()], "x");
+        let a_null_b = block_id_for(&["a\0b".to_string()], "x");
+        assert_ne!(ab, a_null_b);
+        assert_eq!(ab, "1be9d399fe4afb1");
+        assert_eq!(a_null_b, "31db0044b1d433f2");
+    }
+
+    #[test]
+    fn block_id_for_unicode_safe_3173() {
+        // FNV-1a operates on UTF-8 bytes, so multi-byte content (CJK, emoji)
+        // is handled byte-wise — no panics on character boundaries.
+        let id = block_id_for(&["日记".to_string()], "今天的工作总结 🚀");
+        assert!(!id.is_empty());
+        // Deterministic.
+        assert_eq!(id, block_id_for(&["日记".to_string()], "今天的工作总结 🚀"));
+    }
 
     #[test]
     fn parse_blocks_assigns_stable_ids() {

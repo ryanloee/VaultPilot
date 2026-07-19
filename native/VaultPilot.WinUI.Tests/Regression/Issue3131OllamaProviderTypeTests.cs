@@ -65,14 +65,16 @@ public class Issue3131OllamaProviderTypeTests
     }
 
     [Fact]
-    public void Regression_3131_UnknownType_FallsBackToOpenAi()
+    public void Regression_3131_UnknownType_PreservedVerbatim()
     {
-        // Safety: unknown provider types must not produce garbage; default openai.
+        // #3133 supersedes the old "unknown falls back to openai" behaviour:
+        // a custom / future provider name must survive the round-trip verbatim
+        // rather than being silently rewritten to openai.
         var ok = SettingsDialog.TryBuildProviderConfig(
             ValidKey, ValidUrl, ValidModel, ValidTimeout, ValidContext,
             null, "some-future-provider", "x", out var cfg);
         Assert.True(ok);
-        Assert.Equal("openai", cfg!.ProviderType);
+        Assert.Equal("some-future-provider", cfg!.ProviderType);
     }
 
     [Fact]

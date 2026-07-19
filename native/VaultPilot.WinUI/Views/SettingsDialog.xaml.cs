@@ -28,6 +28,31 @@ public sealed partial class SettingsDialog : ContentDialog
     private List<ProviderConfig> _providers = new();
     private int _activeProviderIndex;
 
+    // Canonical provider-type set. The ProviderTypeBox ComboBox exposes exactly
+    // these three known providers. Any other string is a custom / future provider
+    // that must be round-tripped verbatim so it is not silently overwritten (#3133).
+    private const string ProviderTypeOpenAi = "openai";
+    private const string ProviderTypeAnthropic = "anthropic";
+    private const string ProviderTypeOllama = "ollama";
+
+    /// <summary>
+    /// Returns true when <paramref name="value"/> is one of the canonical provider
+    /// types known to the ComboBox, compared case-insensitively. Used as the single
+    /// source of truth by the load, save, and validate code paths so they can no
+    /// longer drift apart (#3133).
+    /// </summary>
+    private static bool IsCanonicalProviderType(string? value) =>
+        value is not null &&
+        (string.Equals(value, ProviderTypeOpenAi, System.StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(value, ProviderTypeAnthropic, System.StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(value, ProviderTypeOllama, System.StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The verbatim provider type string as last loaded into the dialog. Preserved
+    /// across save so custom / future provider names survive a round-trip (#3133).
+    /// </summary>
+    private string _loadedProviderType = ProviderTypeOpenAi;
+
 
     /// <summary>
     /// The updated settings after successful validation, or null if the user cancelled.
@@ -163,20 +188,29 @@ public sealed partial class SettingsDialog : ContentDialog
         ModelBox.Text = p.Model;
         TimeoutBox.Text = p.RequestTimeoutMs.ToString();
         ContextWindowBox.Text = p.ContextWindowTokens?.ToString() ?? string.Empty;
-        // Provider type — round-trip the actual saved value so a non-OpenAI /
-        // non-Anthropic provider (e.g. ollama) is preserved on save (#3131).
-        var ptype = (p.ProviderType ?? "openai").ToLowerInvariant();
-        ProviderTypeBox.SelectedIndex = ptype.Contains("anthropic") ? 1
-            : ptype.Contains("ollama") ? 2
+        // Provider type — round-trip the actual saved value so a custom / future
+        // provider name is preserved on save (#3131, #3133). The ComboBox only
+        // exposes the three canonical providers; select the matching index when the
+        // saved value is canonical, otherwise fall back to OpenAI for display while
+        // keeping the verbatim string in _loadedProviderType.
+        _loadedProviderType = p.ProviderType ?? ProviderTypeOpenAi;
+        var ptype = _loadedProviderType.ToLowerInvariant();
+        ProviderTypeBox.SelectedIndex = string.Equals(ptype, ProviderTypeAnthropic, System.StringComparison.OrdinalIgnoreCase) ? 1
+            : string.Equals(ptype, ProviderTypeOllama, System.StringComparison.OrdinalIgnoreCase) ? 2
             : 0;
     }
 
-    // Maps the ProviderTypeBox selection back to the canonical provider type
-    // string so it round-trips through save without being rewritten (#3131).
-    private static string SelectedProviderType(int selectedIndex) =>
-        selectedIndex == 1 ? "anthropic"
-        : selectedIndex == 2 ? "ollama"
-        : "openai";
+    // Maps the ProviderTypeBox selection back to a provider-type string on save.
+    // If the value currently loaded into the dialog is a custom / future provider
+    // name (not one of the three canonical types), emit it verbatim so the
+    // round-trip is idempotent and no data is silently lost (#3131, #3133).
+    // Otherwise emit the canonical literal for the selected ComboBox item.
+    private string SelectedProviderType(int selectedIndex) =>
+        IsCanonicalProviderType(_loadedProviderType)
+            ? (selectedIndex == 1 ? ProviderTypeAnthropic
+               : selectedIndex == 2 ? ProviderTypeOllama
+               : ProviderTypeOpenAi)
+            : _loadedProviderType;
 
     private void RefreshProviderList()
     {
@@ -504,13 +538,14 @@ public sealed partial class SettingsDialog : ContentDialog
             contextWindowTokens = parsedContextWindow;
         }
 
-        // Round-trip the actual provider type so ollama (and any future type)
-        // is preserved on save instead of being silently rewritten to openai.
-        // (#3131) Unknown values fall back to openai for safety.
-        var normalized = (providerType ?? "openai").ToLowerInvariant();
-        var ptype = normalized.Contains("anthropic") ? "anthropic"
-            : normalized.Contains("ollama") ? "ollama"
-            : "openai";
+        // Round-trip the actual provider type so ollama (and any future / custom
+        // type) is preserved on save instead of being silently rewritten (#3131,
+        // #3133). Use the single canonical-set helper shared with the load/save
+        // paths; custom / future names pass through verbatim rather than being
+        // coerced to a canonical literal.
+        var ptype = IsCanonicalProviderType(providerType)
+            ? (providerType ?? ProviderTypeOpenAi).ToLowerInvariant()
+            : (providerType ?? ProviderTypeOpenAi);
         config = new ProviderConfig(
             trimmedApiKey,
             trimmedBaseUrl,

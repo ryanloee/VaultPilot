@@ -116,6 +116,12 @@ pub struct AppSettings {
     /// Defaults to the built-in keyword n-gram hash embedder.
     #[serde(default)]
     pub embedding_provider: crate::semantic::EmbeddingProvider,
+    /// Allow list for vaultpilot:// URI actions that skip confirmation dialog
+    /// (#3074). Each entry is a URI prefix pattern; an incoming URI is allowed
+    /// without confirmation if it starts with any pattern in this list.
+    /// Example: ["vaultpilot://note/", "vaultpilot://chat/new"]
+    #[serde(default)]
+    pub allowed_uris: Vec<String>,
 }
 
 fn default_privacy_mode() -> bool {
@@ -150,6 +156,7 @@ impl Default for AppSettings {
             system_directive: String::new(),
             privacy_mode: default_privacy_mode(),
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
+            allowed_uris: Vec::new(),
         }
     }
 }
@@ -230,6 +237,37 @@ impl AppSettings {
 
         errors
     }
+
+    /// Check whether `uri` is allowed by the `allowed_uris` allow list (#3074).
+    /// A URI is allowed if it starts with any pattern in the list.
+    /// An empty allow list means NO uri is auto-allowed (always prompt).
+    pub fn is_uri_allowed(&self, uri: &str) -> bool {
+        self.allowed_uris
+            .iter()
+            .any(|pattern| uri.starts_with(pattern))
+    }
+
+    /// Add a URI pattern to the allow list (#3074). Returns false if already present.
+    pub fn add_allowed_uri(&mut self, pattern: String) -> bool {
+        if self.allowed_uris.contains(&pattern) {
+            false
+        } else {
+            self.allowed_uris.push(pattern);
+            true
+        }
+    }
+
+    /// Remove a URI pattern from the allow list (#3074). Returns false if not present.
+    pub fn remove_allowed_uri(&mut self, pattern: &str) -> bool {
+        let idx = self.allowed_uris.iter().position(|p| p == pattern);
+        match idx {
+            Some(i) => {
+                self.allowed_uris.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 pub fn default_auto_check_updates() -> bool {
@@ -304,6 +342,7 @@ mod tests {
             system_directive: String::new(),
             privacy_mode: false,
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
+            allowed_uris: Vec::new(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -797,5 +836,84 @@ mod tests {
         };
         settings.migrate_providers();
         assert!(settings.providers.is_empty());
+    }
+
+    // ── #3074: URI allow list ──
+
+    #[test]
+    fn allowed_uris_default_empty() {
+        let settings = AppSettings::default();
+        assert!(settings.allowed_uris.is_empty());
+        assert!(!settings.is_uri_allowed("vaultpilot://note/new"));
+    }
+
+    #[test]
+    fn allowed_uris_exact_match() {
+        let mut settings = AppSettings::default();
+        settings.add_allowed_uri("vaultpilot://note/new".into());
+        assert!(settings.is_uri_allowed("vaultpilot://note/new"));
+        assert!(!settings.is_uri_allowed("vaultpilot://chat/new"));
+    }
+
+    #[test]
+    fn allowed_uris_prefix_match() {
+        let mut settings = AppSettings::default();
+        settings.add_allowed_uri("vaultpilot://note/".into());
+        assert!(settings.is_uri_allowed("vaultpilot://note/new"));
+        assert!(settings.is_uri_allowed("vaultpilot://note/edit/abc"));
+        assert!(!settings.is_uri_allowed("vaultpilot://chat/"));
+    }
+
+    #[test]
+    fn allowed_uris_add_duplicate() {
+        let mut settings = AppSettings::default();
+        assert!(settings.add_allowed_uri("vaultpilot://note/".into()));
+        assert!(!settings.add_allowed_uri("vaultpilot://note/".into()));
+        assert_eq!(settings.allowed_uris.len(), 1);
+    }
+
+    #[test]
+    fn allowed_uris_remove_existing() {
+        let mut settings = AppSettings::default();
+        settings.add_allowed_uri("vaultpilot://chat/new".into());
+        assert!(settings.remove_allowed_uri("vaultpilot://chat/new"));
+        assert!(!settings.is_uri_allowed("vaultpilot://chat/new"));
+    }
+
+    #[test]
+    fn allowed_uris_remove_nonexistent() {
+        let mut settings = AppSettings::default();
+        assert!(!settings.remove_allowed_uri("vaultpilot://nonexistent"));
+    }
+
+    #[test]
+    fn allowed_uris_serde_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.add_allowed_uri("vaultpilot://note/".into());
+        settings.add_allowed_uri("vaultpilot://chat/new".into());
+        let json = serde_json::to_string(&settings).expect("serialize");
+        assert!(json.contains("\"allowedUris\""));
+        assert!(json.contains("vaultpilot://note/"));
+        let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.allowed_uris.len(), 2);
+        assert!(parsed.is_uri_allowed("vaultpilot://note/abc"));
+    }
+
+    #[test]
+    fn allowed_uris_backwards_compatible_when_absent() {
+        // Legacy settings without allowedUris must deserialize to empty vec.
+        let legacy = serde_json::json!({
+            "vaultDir": "/tmp/vault",
+            "provider": {
+                "apiKey": "k",
+                "baseUrl": "https://api.example.com",
+                "model": "m",
+                "requestTimeoutMs": 60000,
+            },
+        });
+        let parsed: AppSettings =
+            serde_json::from_value(legacy).expect("legacy JSON must deserialize");
+        assert!(parsed.allowed_uris.is_empty());
+        assert!(!parsed.is_uri_allowed("vaultpilot://note/new"));
     }
 }

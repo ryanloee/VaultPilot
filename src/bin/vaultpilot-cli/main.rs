@@ -108,6 +108,23 @@ enum Commands {
         action: SettingsActions,
     },
 
+    /// Inspect VaultPilot's user-visible configuration: vault root, settings
+    /// file path, and the `.vaultpilot/` sub-directories that hold prompts,
+    /// projects, and exported chat sessions (#1594).
+    ///
+    /// Unlike `settings get` (which dumps the raw JSON settings), `config show`
+    /// focuses on the **vault-facing** configuration surface — the files a user
+    /// can edit, version-control, or sync. `config edit` opens the settings
+    /// file in `$EDITOR` / `$VISUAL` (falling back to `vi` / `notepad`).
+    ///
+    /// Examples:
+    ///   vaultpilot config show
+    ///   vaultpilot config edit
+    Config {
+        #[command(subcommand)]
+        action: ConfigActions,
+    },
+
     /// Manage notes
     Notes {
         #[command(subcommand)]
@@ -952,6 +969,23 @@ enum SettingsActions {
         #[arg(long)]
         list: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ConfigActions {
+    /// Print the resolved vault-facing configuration: vault root, settings
+    /// file path, `.vaultpilot/` sub-directories, session-export status,
+    /// and the names of any user-defined prompts and projects.
+    ///
+    /// Output is a JSON object so it can be piped into other tools.
+    Show,
+
+    /// Open the on-disk settings file in `$EDITOR` (or `$VISUAL`).
+    /// Falls back to `vi` on POSIX and `notepad` on Windows.
+    ///
+    /// After saving, the new settings take effect on the next CLI invocation
+    /// (this command does not reload them in-process).
+    Edit,
 }
 
 #[derive(Subcommand)]
@@ -2117,6 +2151,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Settings { action } => {
             tokio::task::block_in_place(|| handle_settings(context, action))
         }
+        Commands::Config { action } => {
+            tokio::task::block_in_place(|| handle_config(context, action))
+        }
         Commands::Notes { action } => {
             // The Ai action requires async (calls execute_ai_action), so
             // intercept it here. All other note actions stay sync (#1914).
@@ -2856,6 +2893,116 @@ fn handle_settings(context: &StorageContext, action: &SettingsActions) -> Result
                     );
                 }
             }
+        }
+    }
+}
+
+// ─── Config (vault-facing configuration inspector) ───────────────
+
+/// Handler for `vaultpilot config show` / `vaultpilot config edit` (#1594).
+///
+/// Surfaces the user-visible, vault-facing configuration: the vault root, the
+/// on-disk settings file, and the `.vaultpilot/` sub-directories that hold
+/// prompts, projects, and (optionally) exported chat sessions. This is the
+/// "user data sovereignty" surface — every path printed here is a file the
+/// user can open, edit, version-control, or sync.
+fn handle_config(context: &StorageContext, action: &ConfigActions) -> Result<Value> {
+    let settings = load_settings_with_context(context)?;
+    let vault_dir = context.vault_dir();
+
+    // Sessions directory mirrors the resolution logic in
+    // `session_export::resolve_sessions_dir` (kept private here to avoid
+    // pulling that module's internals into the bin's public surface).
+    let sessions_dir = match &settings.session_export_path {
+        Some(custom) if !custom.trim().is_empty() => {
+            let p = PathBuf::from(custom);
+            if p.is_absolute() {
+                p
+            } else {
+                vault_dir.join(p)
+            }
+        }
+        _ => vault_dir.join(".vaultpilot").join("sessions"),
+    };
+    let prompts_dir = vaultpilot_lib::prompt_store::prompts_dir(vault_dir);
+    let projects_dir = vault_dir.join(".vaultpilot").join("projects");
+
+    match action {
+        ConfigActions::Show => {
+            // Best-effort listing of prompts and projects — a missing or
+            // corrupted directory should not prevent `config show` from
+            // reporting the rest of the configuration.
+            let prompts: Vec<serde_json::Value> =
+                vaultpilot_lib::prompt_store::list_prompts(vault_dir)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "name": p.name,
+                            "description": p.description,
+                            "model": p.model,
+                        })
+                    })
+                    .collect();
+            let projects: Vec<serde_json::Value> = list_projects_with_context(context)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "id": p.id,
+                        "name": p.name,
+                        "description": p.description,
+                        "notes": p.note_ids.len(),
+                    })
+                })
+                .collect();
+
+            // Sessions are individual .md files; count them so users know
+            // how many chats have been materialised into the vault.
+            let session_count = std::fs::read_dir(&sessions_dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                        .count()
+                })
+                .unwrap_or(0);
+
+            Ok(serde_json::json!({
+                "vault_dir": vault_dir,
+                "settings_file": context.settings_path(),
+                "sessions_dir": sessions_dir,
+                "sessions_export_enabled": settings.session_export_enabled,
+                "sessions_count": session_count,
+                "prompts_dir": prompts_dir,
+                "prompts_count": prompts.len(),
+                "prompts": prompts,
+                "projects_dir": projects_dir,
+                "projects_count": projects.len(),
+                "projects": projects,
+                "active_prompt_name": settings.active_prompt_name,
+            }))
+        }
+        ConfigActions::Edit => {
+            let path = context.settings_path();
+            let editor = std::env::var("EDITOR")
+                .or_else(|_| std::env::var("VISUAL"))
+                .unwrap_or_else(|_| {
+                    if cfg!(windows) {
+                        "notepad".to_string()
+                    } else {
+                        "vi".to_string()
+                    }
+                });
+            let status = std::process::Command::new(&editor)
+                .arg(path)
+                .status()
+                .with_context(|| format!("failed to launch editor '{editor}' on settings file"))?;
+            Ok(serde_json::json!({
+                "event": "config_edit",
+                "editor": editor,
+                "path": path,
+                "exit_status": status.code(),
+            }))
         }
     }
 }

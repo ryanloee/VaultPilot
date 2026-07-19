@@ -377,14 +377,18 @@ fn annotate_blocks_grouped(body: &str) -> String {
             text.push_str(strip_block_id_marker(l));
         }
         let text = text.trim();
-        // Heading?
-        if let Some(rest) = text.strip_prefix('#') {
-            let level = rest.chars().take_while(|c| *c == '#').count();
-            let title = rest[level..].trim();
+        // Heading? (Defensive — headings are normally handled inline below,
+        // but if one ever reaches flush_block we must compute the same id as
+        // parse_blocks would, including stripping any pre-existing marker and
+        // counting the leading `#`s from the full text to avoid an off-by-one
+        // on the heading_path truncation.)
+        if text.starts_with('#') {
+            let level = text.chars().take_while(|c| *c == '#').count();
+            let title = strip_block_id_marker(&text[level..]).trim().to_string();
             let mut hp = heading_path.to_vec();
             hp.truncate(level.saturating_sub(1));
-            hp.push(title.to_string());
-            let id = disambig.disambiguate(block_id_for(&hp, title));
+            hp.push(title.clone());
+            let id = disambig.disambiguate(block_id_for(&hp, &title));
             let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
         } else if block_lines.len() == 1 && has_block_id_marker(block_lines[0]) {
             // Already annotated — keep as-is.
@@ -421,13 +425,19 @@ fn annotate_blocks_grouped(body: &str) -> String {
             block_lines.clear();
             let text = line.trim();
             let level = text.chars().take_while(|c| *c == '#').count();
-            let title = text[level..].trim();
+            // Strip any pre-existing block-id marker before computing the
+            // title so re-annotating an already-annotated heading is
+            // idempotent and the id matches the one parse_blocks assigns
+            // (#3180).
+            let title = strip_block_id_marker(&text[level..]).trim().to_string();
             let mut hp = heading_path.clone();
             hp.truncate(level.saturating_sub(1));
-            hp.push(title.to_string());
+            hp.push(title.clone());
             heading_path = hp.clone();
-            let id = disambig.disambiguate(block_id_for(&hp, title));
-            let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
+            let id = disambig.disambiguate(block_id_for(&hp, &title));
+            // Emit the cleaned heading (marker removed) plus the new marker.
+            let clean_heading = format!("{} {}", "#".repeat(level), title);
+            let _ = writeln!(out, "{} <!-- {}{} -->", clean_heading, BLOCK_ID_PREFIX, id);
             continue;
         }
         block_lines.push(line);
@@ -629,6 +639,89 @@ mod tests {
         for (a, b) in original_ids.iter().zip(repro_ids.iter()) {
             assert_eq!(a, b, "block id changed after annotation");
         }
+    }
+
+    /// Regression for #3180: annotating a heading that already carries a
+    /// block-id marker must be idempotent (no double marker) and must not
+    /// include the marker text in the title used to compute the id.
+    #[test]
+    fn annotate_heading_with_premarker_is_idempotent_3180() {
+        let body = "# Title <!-- ^abc123 -->\n";
+        let once = annotate_blocks(body);
+        let twice = annotate_blocks(&once);
+        assert_eq!(once, twice, "annotation is not idempotent on headings");
+        // Exactly one block-id marker on the heading line — no double marker.
+        let marker_count: usize = once.lines().map(|l| l.matches("<!-- ^").count()).sum();
+        assert_eq!(marker_count, 1, "expected exactly 1 marker, got: {once:?}");
+        // The externally-supplied marker text must NOT leak into the output
+        // title — only the canonical id we assign should be present.
+        assert!(
+            !once.contains("abc123"),
+            "pre-existing marker id leaked into output: {once:?}"
+        );
+    }
+
+    /// Regression for #3180: the id annotate_blocks assigns to a heading
+    /// (whether or not it had a pre-existing marker) must match the id
+    /// parse_blocks assigns to the same heading, so `![[note#^id]]` embeds
+    /// resolve correctly.
+    #[test]
+    fn annotate_heading_id_matches_parse_blocks_with_premarker_3180() {
+        let with_marker = "# Heading A <!-- ^external -->\n";
+        let without_marker = "# Heading A\n";
+        let annotated_with = annotate_blocks(with_marker);
+        let annotated_without = annotate_blocks(without_marker);
+        // Idempotency across the two inputs: same heading text → same id,
+        // regardless of pre-existing marker.
+        let id_from = |s: &str| extract_first_block_id(s).expect("expected exactly one block id");
+        assert_eq!(
+            id_from(&annotated_with),
+            id_from(&annotated_without),
+            "heading id differs depending on pre-existing marker"
+        );
+        // And the id must match what parse_blocks computes for the clean
+        // heading (this is what `![[note#^id]]` resolves against).
+        let parsed = parse_blocks(without_marker);
+        let parse_id = parsed
+            .iter()
+            .find(|b| b.text.contains("Heading A"))
+            .expect("heading block must exist")
+            .id
+            .clone();
+        assert_eq!(
+            id_from(&annotated_with),
+            parse_id,
+            "annotated heading id does not match parse_blocks id"
+        );
+    }
+
+    /// Regression for #3180: multiple headings at different levels must each
+    /// be idempotent and produce the right heading_path even when some carry
+    /// pre-existing markers.
+    #[test]
+    fn annotate_multilevel_headings_with_premarker_3180() {
+        let body = "# Top <!-- ^t -->\n\n## Sub <!-- ^s -->\n\nbody text.\n";
+        let once = annotate_blocks(body);
+        let twice = annotate_blocks(&once);
+        assert_eq!(once, twice, "multi-level heading annotation not idempotent");
+        // Two heading markers + one body marker = 3 total.
+        assert_eq!(
+            once.lines().filter(|l| l.contains("<!-- ^")).count(),
+            3,
+            "expected 3 markers (2 headings + 1 body), got: {once:?}"
+        );
+    }
+
+    /// Helper: extract the first `<!-- ^id -->` value from a body.
+    fn extract_first_block_id(s: &str) -> Option<String> {
+        s.lines().find_map(|l| {
+            let l = l.trim();
+            l.find("<!-- ^").and_then(|start| {
+                let after = &l[start + "<!-- ^".len()..];
+                let end = after.find("-->")?;
+                Some(after[..end].trim().to_string())
+            })
+        })
     }
 
     #[test]

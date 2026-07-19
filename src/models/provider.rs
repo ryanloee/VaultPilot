@@ -1,4 +1,37 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize an optional [`ProviderType`] from a settings string,
+/// tolerating **unknown** provider-type values instead of failing the
+/// entire settings load.
+///
+/// WinUI (#3133) may persist a custom / future provider name
+/// (e.g. `anthropic-compatible`, `my-ollama-fork`) that has no matching
+/// `ProviderType` variant. Previously this caused `serde` to error out
+/// while deserializing `provider_type`, which aborted loading of the whole
+/// `settings.json` (losing the user's provider config). We now map any
+/// unrecognized value to `None`, which lets
+/// [`ProviderConfig::effective_provider_type`] fall back to auto-detecting
+/// from `base_url` — the documented behavior for an absent override
+/// (#3140).
+fn deserialize_optional_provider_type<'de, D>(
+    deserializer: D,
+) -> Result<Option<ProviderType>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(s) => match s.as_str() {
+            "anthropic" => Ok(Some(ProviderType::Anthropic)),
+            "openai" => Ok(Some(ProviderType::OpenAi)),
+            "ollama" => Ok(Some(ProviderType::Ollama)),
+            // Unknown provider type (custom / future) → treat as absent so
+            // settings still load and we fall back to base_url auto-detect.
+            _ => Ok(None),
+        },
+    }
+}
 
 /// The type of AI provider, used to select correct API headers and endpoint format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -64,7 +97,9 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
     /// Explicit provider type override. When `None`, auto-detected from `base_url`.
-    #[serde(default)]
+    /// Unknown provider-type strings (custom / future providers saved by WinUI #3133)
+    /// are tolerated and mapped to `None` so settings still load (#3140).
+    #[serde(default, deserialize_with = "deserialize_optional_provider_type")]
     pub provider_type: Option<ProviderType>,
 }
 
@@ -518,6 +553,40 @@ mod tests {
     fn mask_secret_exactly_13_chars() {
         let masked = mask_secret("1234567890123");
         assert_eq!(masked, "1234…0123");
+    }
+
+    // ── ProviderType unknown-value tolerance (#3140) ──
+
+    #[test]
+    fn provider_config_known_provider_type_deserializes() {
+        let json = r#"{"name":"ACME","baseUrl":"https://api.acme.ai/v1","providerType":"anthropic","model":"claude"}"#;
+        let cfg: ProviderConfig = serde_json::from_str(json).expect("known provider type parses");
+        assert_eq!(cfg.provider_type, Some(ProviderType::Anthropic));
+    }
+
+    #[test]
+    fn provider_config_unknown_provider_type_maps_to_none_3140() {
+        // A custom / future provider name saved by WinUI (#3133) must NOT
+        // break settings loading. It should deserialize to `None`, letting
+        // `effective_provider_type()` fall back to base_url auto-detect.
+        let json = r#"{"name":"my-ollama-fork","baseUrl":"https://llm.example.com/v1","providerType":"my-ollama-fork","model":"x"}"#;
+        let cfg: ProviderConfig =
+            serde_json::from_str(json).expect("unknown provider type must not error (#3140)");
+        assert_eq!(
+            cfg.provider_type, None,
+            "unknown provider type should be tolerated and mapped to None (#3140)"
+        );
+        // The custom display name is preserved separately...
+        assert_eq!(cfg.name, "my-ollama-fork");
+        // ...and the effective type auto-detects from base_url.
+        assert_eq!(cfg.effective_provider_type(), ProviderType::OpenAi);
+    }
+
+    #[test]
+    fn provider_config_missing_provider_type_is_none() {
+        let json = r#"{"name":"OpenAI","baseUrl":"https://api.openai.com/v1","model":"gpt"}"#;
+        let cfg: ProviderConfig = serde_json::from_str(json).expect("missing provider type parses");
+        assert_eq!(cfg.provider_type, None);
     }
 
     // ── mask_secret ↔ is_masked_key round-trip (#2539) ──

@@ -293,8 +293,8 @@ pub fn export_canvas_to_markdown(file: &CanvasFile) -> Result<String> {
 fn first_heading_or_truncate(s: &str) -> String {
     for line in s.lines() {
         let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix("# ") {
-            return rest.trim().to_string();
+        if let Some(title) = parse_atx_heading(t) {
+            return title;
         }
     }
     // No heading — take first non-empty line, capped.
@@ -305,6 +305,55 @@ fn first_heading_or_truncate(s: &str) -> String {
         }
     }
     String::new()
+}
+
+/// Parse a CommonMark ATX heading line (`#`..`######` followed by whitespace)
+/// and return the inner title text. Strips an optional closing sequence of
+/// `#`s (e.g. `# Title #`). Returns `None` if the line is not a heading or
+/// exceeds the 6-`#` maximum. Per CommonMark, at least one space (or end of
+/// line) is required after the leading `#`s, so `#Foo` is *not* a heading.
+fn parse_atx_heading(line: &str) -> Option<String> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let after = &line[hashes..];
+    // Must be followed by a space, tab, or end-of-line. `#Foo` is not a
+    // heading (CommonMark §4.2, "the opening sequence … must be followed by a
+    // space or by the end of line").
+    let body = match after.chars().next() {
+        None => "",
+        Some(' ') | Some('\t') => after[1..].trim_start(),
+        _ => return None,
+    };
+    // Strip optional closing `#` sequence (CommonMark: the closing sequence
+    // must be preceded by a space and may be followed by spaces/tabs only).
+    let body = strip_closing_hashes(body);
+    Some(body.trim().to_string())
+}
+
+/// Strip a trailing `#`-only sequence that is preceded by whitespace.
+fn strip_closing_hashes(s: &str) -> &str {
+    let trimmed_end = s.trim_end_matches([' ', '\t']);
+    if trimmed_end.is_empty() {
+        return s;
+    }
+    let n_trailing = trimmed_end.chars().rev().take_while(|c| *c == '#').count();
+    if n_trailing == 0 {
+        return s;
+    }
+    let cut = trimmed_end.len() - n_trailing;
+    if cut == 0 {
+        // Whole string was `#`s with nothing before — the closing sequence
+        // needs a preceding space, so keep as-is.
+        return s;
+    }
+    // The char just before the trailing `#`s must be a space/tab.
+    let before = &trimmed_end[..cut];
+    match before.chars().next_back() {
+        Some(' ') | Some('\t') => before.trim_end_matches([' ', '\t']),
+        _ => s,
+    }
 }
 
 fn truncate(s: &str, max: usize) -> &str {
@@ -561,6 +610,108 @@ mod tests {
         .unwrap();
         let md = export_canvas_to_markdown(&parsed).unwrap();
         assert!(md.contains("plain text no heading"), "got:\n{md}");
+    }
+
+    /// Regression for #3181: H2/H3 headings must be recognized — the title
+    /// must not include the leading `##`/`###` literal.
+    #[test]
+    fn first_heading_recognizes_h2_h3_3181() {
+        let parsed = parse_canvas(
+            r########"{ "nodes": [
+                { "id": "h2", "type": "text", "text": "## Section Title\nBody" },
+                { "id": "h3", "type": "text", "text": "### Subsection\nBody" },
+                { "id": "h6", "type": "text", "text": "###### DeepHeading\nBody" }
+            ] }"########,
+        )
+        .unwrap();
+        let md = export_canvas_to_markdown(&parsed).unwrap();
+        assert!(
+            md.contains("Section Title"),
+            "H2 title not extracted — md:\n{md}"
+        );
+        assert!(
+            !md.contains("## Section Title"),
+            "H2 literal `##` leaked into title — md:\n{md}"
+        );
+        assert!(
+            md.contains("Subsection"),
+            "H3 title not extracted — md:\n{md}"
+        );
+        assert!(
+            !md.contains("### Subsection"),
+            "H3 literal `###` leaked into title — md:\n{md}"
+        );
+        assert!(
+            md.contains("DeepHeading"),
+            "H6 title not extracted — md:\n{md}"
+        );
+    }
+
+    /// Regression for #3181: a closing `#` sequence on an ATX heading
+    /// (`# Title #`) must be stripped.
+    #[test]
+    fn first_heading_strips_closing_hashes_3181() {
+        let parsed = parse_canvas(
+            r########"{ "nodes": [
+                { "id": "c", "type": "text", "text": "# Title #\nBody" },
+                { "id": "c2", "type": "text", "text": "## Closed   ##\nBody" }
+            ] }"########,
+        )
+        .unwrap();
+        let md = export_canvas_to_markdown(&parsed).unwrap();
+        // The title should be "Title", not "Title #".
+        assert!(
+            md.contains("Title"),
+            "closing-hash title not extracted — md:\n{md}"
+        );
+        assert!(
+            !md.lines().any(|l| l.contains("Title #")),
+            "trailing `#` leaked into title — md:\n{md}"
+        );
+        assert!(
+            md.contains("Closed"),
+            "closing-hash H2 title not extracted — md:\n{md}"
+        );
+        assert!(
+            !md.lines().any(|l| l.contains("Closed   ##")),
+            "trailing `##` leaked into H2 title — md:\n{md}"
+        );
+    }
+
+    /// Regression for #3181: `#Foo` (no space after `#`) is NOT a heading
+    /// per CommonMark and must fall through to the first-non-empty-line path.
+    #[test]
+    fn first_heading_rejects_nospace_hash_3181() {
+        let parsed = parse_canvas(
+            r########"{ "nodes": [
+                { "id": "t", "type": "text", "text": "#NotAHeading\nbody" }
+            ] }"########,
+        )
+        .unwrap();
+        let md = export_canvas_to_markdown(&parsed).unwrap();
+        // Falls back to the whole line (truncated), not stripped to "NotAHeading".
+        assert!(
+            md.contains("#NotAHeading"),
+            "CommonMark-incompatible `#Foo` was wrongly parsed as heading — md:\n{md}"
+        );
+    }
+
+    /// Regression for #3181: headings of level 7+ (`#######`) are not valid
+    /// ATX headings and must not be treated as headings.
+    #[test]
+    fn first_heading_rejects_seven_hashes_3181() {
+        let parsed = parse_canvas(
+            r########"{ "nodes": [
+                { "id": "t", "type": "text", "text": "####### Not a heading\nbody" }
+            ] }"########,
+        )
+        .unwrap();
+        let md = export_canvas_to_markdown(&parsed).unwrap();
+        // Falls back to first-non-empty line; title keeps the `#######`.
+        assert!(
+            md.contains("####### Not a heading"),
+            "7-`#` line was wrongly parsed as heading — md:\n{md}"
+        );
     }
 
     #[test]

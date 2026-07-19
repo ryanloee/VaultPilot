@@ -3105,6 +3105,20 @@ struct NotesBatchRequest<'a> {
     limit: usize,
 }
 
+/// Map the CLI `--delete-attachments` boolean flag to the
+/// [`delete_note_with_context`] `Option<bool>` contract.
+///
+/// Per the CLI help text (#3135), *without* the flag attachments must be
+/// left on disk as orphaned files — so the flag absent maps to
+/// `Some(false)` ("never delete attachments"). Passing the flag maps to
+/// `Some(true)` (force delete). We must **not** map the absent case to
+/// `None`, because `delete_note_with_context` treats `None` as "delete
+/// non-shared attachments by default", which would make the flag a no-op
+/// (#3139).
+fn delete_attachments_opt(flag: bool) -> Option<bool> {
+    Some(flag)
+}
+
 /// Handle `vp notes batch` (#3104).
 ///
 /// Resolves the selector to a concrete list of notes, validates the
@@ -3237,7 +3251,13 @@ fn execute_notes_batch(context: &StorageContext, request: NotesBatchRequest) -> 
     // ── Dispatch ───────────────────────────────────────────────────────
     let ids: Vec<String> = notes.iter().map(|n| n.id.clone()).collect();
     let result = if delete {
-        let del_attachments = if delete_attachments { Some(true) } else { None };
+        // `--delete-attachments` controls whether attachment files are
+        // removed. The help text promises that *without* the flag,
+        // attachments are left on disk as orphaned files (#3135). Map the
+        // flag to `Some(true)`/`Some(false)` explicitly — passing `None`
+        // would fall back to the "delete non-shared attachments" default
+        // in `delete_note_with_context`, making the flag a no-op (#3139).
+        let del_attachments = delete_attachments_opt(delete_attachments);
         vaultpilot_lib::storage::bulk_delete_notes_with_context(context, &ids, del_attachments)
     } else if let Some(to) = to {
         vaultpilot_lib::storage::bulk_move_notes_with_context(context, &ids, to)
@@ -7180,13 +7200,42 @@ mod tests {
     };
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
     use crate::{
-        append_capture_entry, format_as_kanban, parse_batch_selector, render_daily_template,
-        resolve_audio_input, BatchSelector, Cli, Commands, SkillSavedActions,
+        append_capture_entry, delete_attachments_opt, format_as_kanban, parse_batch_selector,
+        render_daily_template, resolve_audio_input, BatchSelector, Cli, Commands,
+        SkillSavedActions,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use std::net::{IpAddr, Ipv4Addr};
     use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
     use vaultpilot_lib::vault_query::QValue;
+
+    // ── delete_attachments_opt — CLI flag mapping (#3139) ──────────
+    //
+    // Regression guard: `--delete-attachments` absent must map to
+    // `Some(false)` (keep attachments / orphan them), NOT `None`. Mapping
+    // to `None` falls back to the "delete non-shared attachments" default
+    // in `delete_note_with_context`, which made the flag a silent no-op
+    // (#3139) — both `vp notes batch --delete` with and without the flag
+    // deleted attachments identically.
+
+    #[test]
+    fn delete_attachments_opt_absent_keeps_3139() {
+        // Flag absent (false) -> Some(false): attachments must be KEPT.
+        assert_eq!(delete_attachments_opt(false), Some(false));
+    }
+
+    #[test]
+    fn delete_attachments_opt_present_deletes_3139() {
+        // Flag present (true) -> Some(true): attachments must be deleted.
+        assert_eq!(delete_attachments_opt(true), Some(true));
+    }
+
+    #[test]
+    fn delete_attachments_opt_never_none_3139() {
+        // The core regression: neither branch may ever produce `None`.
+        assert!(delete_attachments_opt(false).is_some());
+        assert!(delete_attachments_opt(true).is_some());
+    }
 
     // ── append_capture_entry — quick capture (#2833) ───────────────
 

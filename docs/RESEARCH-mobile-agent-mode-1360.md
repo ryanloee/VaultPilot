@@ -2,7 +2,7 @@
 
 > Issue: #1360 | Date: 2026-07-06 | Author: pipeline-developer
 > 
-> Agent Mode Phase 3.2 已在 Rust 后端 + CLI + WinUI 三端实现。移动端（Expo 56 + React Native 0.85.3）Agent Mode 完全空白。
+> Agent Mode Phase 3.2 已在 Rust 后端 + CLI + WinUI 三端实现。移动端（Expo 57 + React Native 0.86.0）Agent Mode 完全空白。
 
 ---
 
@@ -15,7 +15,7 @@
 - 已有 `http_bridge.rs` — REST 服务框架（LLM proxy 等）
 
 ### 1.2 移动端现状
-- Expo 56 + React Native 0.85.3 + TypeScript 6.0，**managed workflow**（已 `prebuild` 有 `android/` 目录）
+- Expo 57 + React Native 0.86.0 + TypeScript 6.0，**managed workflow**（已 `prebuild` 有 `android/` 目录）
 - 已连接远程后端: `src/api/client.ts`、`src/api/sse.ts`（SSE streaming with reconnect）
 - 安全存储: `expo-secure-store`（API keys）
 - 离线队列: `src/services/sync.ts`、`src/utils/offlineSync.ts`

@@ -56,7 +56,14 @@ public sealed class BackendClient : IAsyncDisposable
     public event Action<AgentStatusEvent>? AgentStatusReceived;
     public event Action<bool>? ConnectionStateChanged;
 
-    public void Start(string executablePath)
+    /// <summary>
+    /// Start the Rust backend process and wait for pump initialization before
+    /// starting the health check timer.  Previously this fire-and-forget'd
+    /// StartProcessAsync, which allowed the first health check tick (15s later)
+    /// to race with a slow-starting backend and spawn a duplicate process via
+    /// TryReconnectWithRetryAsync.  See #3204.
+    /// </summary>
+    public async Task StartAsync(string executablePath)
     {
         if (IsConnected)
         {
@@ -64,7 +71,7 @@ public sealed class BackendClient : IAsyncDisposable
         }
 
         _executablePath = executablePath;
-        StartProcessAsync();
+        await StartProcessAsync();
         StartHealthCheck();
         RegisterPowerModeHandler();
     }

@@ -237,6 +237,32 @@ pub fn render_month_grid(
             out.push_str("   ");
         }
         out.push('\n');
+        if with_titles {
+            // Render an aligned title row for the final (incomplete) week,
+            // mirroring the full-row title rendering above. The trailing row
+            // spans days [month_len - col + 1 ..= month_len] across columns
+            // [0 .. col). Leading slots within this row always hold a day
+            // because the date loop filled them contiguously from day 1.
+            for c in 0..7 {
+                if c < col {
+                    let d = (month_len as usize - col + 1 + c) as u32;
+                    if let Some(es) = by_day.get(&d) {
+                        if let Some(first) = es.first() {
+                            let title = first.title.as_deref().unwrap_or("");
+                            let trunc = truncate_str(title, 12);
+                            out.push_str(&format!("{:<14}", trunc));
+                            continue;
+                        }
+                    }
+                    // Existing day with no entry: full-width blank.
+                    out.push_str("              ");
+                } else {
+                    // Trailing padding column: narrow blank to match the date row.
+                    out.push_str("   ");
+                }
+            }
+            out.push('\n');
+        }
     }
 
     // Summary: total entries this month + a per-day list.
@@ -580,6 +606,50 @@ mod tests {
         assert_eq!(days_in_month(2026, 1), 31);
         assert_eq!(days_in_month(2026, 4), 30);
         assert_eq!(days_in_month(2026, 12), 31);
+    }
+
+    #[test]
+    fn render_with_titles_last_incomplete_week_has_titles() {
+        // Regression test for issue #3194: the trailing (incomplete) week
+        // of a month that does NOT end on a Saturday/Sunday row was missing
+        // its title line entirely — only full rows [col == 7] rendered
+        // titles. July 2026 ends on Friday (Sunday-first), so the last row
+        // is incomplete and must still receive an aligned title line.
+        let e1 = CalendarEntry {
+            note_path: "d30.md".into(),
+            date: NaiveDate::from_ymd_opt(2026, 7, 30).unwrap(),
+            title: Some("LastWeekA".into()),
+        };
+        let e2 = CalendarEntry {
+            note_path: "d31.md".into(),
+            date: NaiveDate::from_ymd_opt(2026, 7, 31).unwrap(),
+            title: Some("LastWeekB".into()),
+        };
+        let out = render_month_grid(2026, 7, &[e1, e2], WeekStart::Sunday, true);
+        // Both titles must appear somewhere in the output.
+        assert!(out.contains("LastWeekA"), "got:\n{out}");
+        assert!(out.contains("LastWeekB"), "got:\n{out}");
+        // The trailing title line is the one immediately after the final
+        // date row. Count title lines (rows containing a title) must be at
+        // least as many as the number of weeks that hold entries. We assert
+        // the total number of lines containing either title is > 0 and that
+        // the LAST date row is immediately followed by a title-bearing line.
+        let lines: Vec<&str> = out.lines().collect();
+        // The trailing title line must immediately follow the final date row.
+        // The grid row for day 31 renders as "31[1]", which only ever appears
+        // in the date grid (never in the summary section), so it uniquely
+        // identifies the last date row of July 2026.
+        let last_date_idx = lines
+            .iter()
+            .rposition(|l| l.contains("31[1]"))
+            .expect("expected a date row containing day 31");
+        let trailing_title = lines
+            .get(last_date_idx + 1)
+            .expect("expected a title line after the last date row");
+        assert!(
+            trailing_title.contains("LastWeekA") || trailing_title.contains("LastWeekB"),
+            "trailing week has no title line: last date row followed by {trailing_title:?}\nfull:\n{out}"
+        );
     }
 
     #[test]

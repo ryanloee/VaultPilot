@@ -392,6 +392,21 @@ pub fn save_settings_with_context(
         }
     }
 
+    // Delete keychain entries for providers that were removed from the
+    // settings entirely (#3193). The loop below only syncs keychain state
+    // for providers still present in `settings.providers`, so a deleted
+    // provider's plaintext credential would otherwise linger in the OS
+    // keychain indefinitely — a privacy leak and a source of silent
+    // resurrection if a same-named provider is later recreated.
+    if let Ok(existing) = &existing_settings {
+        for old_p in &existing.providers {
+            if !settings.providers.iter().any(|p| p.name == old_p.name) {
+                let _ =
+                    crate::keychain::KEYCHAIN.delete(&crate::keychain::account_key(&old_p.name));
+            }
+        }
+    }
+
     // Optionally store plaintext keys in the OS keychain (#3159) as a
     // supplemental store.  The file still carries the encrypted fallback
     // so existing behaviour is preserved on all platforms.

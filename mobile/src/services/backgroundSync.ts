@@ -180,6 +180,9 @@ export async function configureBackgroundSync(
     return { enabled, intervalMinutes: clamped };
   }
 
+  // #3225: Track OS registration outcome. If registerTaskAsync throws,
+  // we must NOT return enabled:true — that would make the UI show sync as
+  // ON when no OS-level task is actually registered (silent failure).
   try {
     // Always unregister first to clear any prior interval.
     try {
@@ -195,6 +198,13 @@ export async function configureBackgroundSync(
     }
   } catch (e) {
     console.warn('[BgSync] configure failed:', e);
+    // #3225: Registration failed: persist the corrected state so the UI
+    // doesn't display an optimistic enabled value that doesn't match OS
+    // reality. Disabled-state failures (e.g., unregister) are harmless.
+    if (enabled) {
+      await AsyncStorage.setItem(BG_SYNC_ENABLED_KEY, 'false');
+      return { enabled: false, intervalMinutes: clamped };
+    }
   }
 
   return { enabled, intervalMinutes: clamped };

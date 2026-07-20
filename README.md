@@ -164,6 +164,89 @@ vaultpilot mcp
 vaultpilot mcp-http --token YOUR_SECRET_TOKEN
 ```
 
+## CLI Command Reference
+
+VaultPilot's CLI (`vaultpilot` or `vp`) exposes 50+ top-level commands covering note management, AI features, search, configuration, and integrations. Commands are grouped by functional area below.
+
+| Category | Command | Description |
+|----------|---------|-------------|
+| **Vault & Notes** | `init` | Initialize storage and show resolved settings |
+| | `notes` | CRUD note operations: list, show, create, update, delete, search, import |
+| | `daily` | Open or create today's daily note with optional template |
+| | `capture` | Quick-capture a one-line note (append to daily note or inbox) |
+| | `clip` | Clip a web page URL into a Markdown vault note |
+| | `mirror` | Real-time mirror SQLite vault to Markdown files on disk |
+| **AI & Agent** | `chat` | Interactive chat sessions with persisted state |
+| | `agent` | Autonomous multi-step AI agent (tool-calling loop) |
+| | `ask` | One-shot Q&A against your vault (no chat persistence) |
+| | `ai` | AI quick actions: summarize, rewrite, translate, explain, etc. |
+| | `deep-research` | Multi-round research with citations, saves result as a note |
+| | `write` | AI-powered writing assistance (write, edit, expand, summarize) |
+| | `edit` | Edit a note via natural-language instruction (with preview) |
+| | `revert-edit` | Revert the last AI-applied edit to a note |
+| | `table` | Generate AI-powered Markdown comparison tables |
+| | `compress` | Compress long chat history into a summary |
+| | `digest` | Daily knowledge digest of recently changed notes |
+| **Search & Discovery** | `search` | Full-text search across the vault (via `notes search`) |
+| | `ask` | Natural-language Q&A grounded in vault content |
+| | `serendipity` | Discover forgotten notes scored against recent activity |
+| | `graph` | Generate knowledge graph from `[[wikilink]]` references |
+| | `context-surface` | Real-time "relevant notes" for text you are editing |
+| **Configuration** | `config` | View/edit vault-facing configuration (vault root, `.vaultpilot/` layout) |
+| | `settings` | View/update raw JSON settings |
+| | `prompt` | Manage system prompt templates stored in `.vaultpilot/prompts/` |
+| **Collections & Projects** | `collections` | Multi-group notes across projects |
+| | `project` | Isolated knowledge spaces with independent contexts |
+| **Index & Storage** | `index` | Manage search index (rebuild, stats) |
+| | `vault` | Vault operations: export zip, backup |
+| **Automation** | `subscriptions` | Manage AI scheduled research subscriptions |
+| | `trigger` | Agent trigger rules (events + cron schedules) |
+| | `organize` | Self-organizing vault: auto-link, categorize, suggest collections |
+| **Integration** | `serve` | Start a local chat-completions HTTP bridge (OpenAI-compatible endpoint) |
+| | `mcp` | Start MCP stdio server for local agent integration |
+| | `mcp-http` | Start MCP HTTP server with optional token auth |
+| | `feed` | Manage RSS/Atom/JSON Feed subscriptions → auto-ingest as notes |
+| | `mail` | Email-to-Vault integration: sync IMAP emails into vault |
+| | `connector` | List/manage external service connectors |
+| **People & Context** | `people` | People-aware context: index notes by person name, manage aliases |
+| | `calendar` | Render vault notes on a month-grid calendar by frontmatter dates |
+| | `canvas` | Inspect Obsidian-compatible `.canvas` whiteboard files |
+| | `health` | Vault health dashboard: note counts, orphan analysis, suggestions |
+| | `changelog` | Show recent vault changes grouped by date |
+| **Skills & Knowledge** | `skill` | Run built-in knowledge-work skills (summarize, weekly-review, etc.) |
+| | `skill-saved` | Manage and invoke user-saved AI skills (custom commands) |
+| **Learning** | `flashcard` | Manage spaced-repetition flashcards |
+| | `review` | Run FSRS spaced-repetition reviews |
+| **Media** | `voice` | Voice note capture: transcribe audio → save as vault note |
+| | `meeting` | Transcribe meeting audio and generate structured AI summary |
+| | `pdf` | Extract text content from PDF files |
+| | `present` | Preview a note as a reveal.js slide presentation |
+| **Utilities** | `diff` | Compute line-level diff between two notes |
+| | `publish` | Publish a Markdown note as a self-contained HTML page |
+| | `completions` | Generate shell completion scripts (bash/zsh/fish/powershell) |
+| | `plugins` | List registered plugins |
+| | `agent-engine` | Manage external agent engines (Claude Code / Codex adapter) |
+
+### Shell Completions
+
+VaultPilot ships with a built-in `completions` command that generates shell completion scripts for **bash**, **zsh**, **fish**, and **PowerShell**:
+
+```bash
+# Print completion script
+vp completions bash
+vp completions zsh
+vp completions fish
+vp completions powershell
+
+# Source in your shell init
+eval "$(vp completions bash)"          # bash
+source <(vp completions zsh)          # zsh
+vp completions fish | source          # fish
+vp completions powershell | Out-String | Invoke-Expression  # PowerShell
+```
+
+The generated completions include static completions for all subcommands and flags, plus dynamic completions for `vp skill-saved` that query the database for saved skill IDs.
+
 ### Build from Source
 
 See [docs/build.md](docs/build.md) for detailed build instructions.

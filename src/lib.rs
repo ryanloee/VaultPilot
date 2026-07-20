@@ -27,6 +27,7 @@ pub mod people_index;
 pub mod plugin;
 pub mod prompt_store;
 pub mod prompting;
+pub mod quick_switcher;
 pub mod search_rules;
 pub mod semantic;
 pub mod settings_schema;

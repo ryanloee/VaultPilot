@@ -368,8 +368,13 @@ fn strip_script_style(html: &str) -> String {
                 }
             }
         }
-        result.push(html[i..].chars().next().unwrap());
-        i += 1;
+        // Advance by the char's byte length (not 1 byte) so that `i` always
+        // lands on a UTF-8 char boundary. The previous `i += 1` panicked on any
+        // multibyte input (em-dash, curly quotes, CJK, accented letters, …)
+        // because the next `html[i..]` slice would land inside a character.
+        let c = html[i..].chars().next().unwrap();
+        result.push(c);
+        i += c.len_utf8();
     }
     result
 }
@@ -534,6 +539,27 @@ mod tests {
         let md = html_to_markdown("<ul><li>top<ul><li>child</li></ul></li></ul>");
         assert!(md.contains("- top"), "got: {md}");
         assert!(md.contains("  - child"), "got: {md}");
+    }
+
+    #[test]
+    fn test_multibyte_utf8_does_not_panic() {
+        // Regression test for #3216: strip_script_style iterated byte-by-byte
+        // but advanced the cursor by only 1 byte per char, so any multibyte
+        // input panicked when the next `html[i..]` slice landed inside a char.
+        let md = html_to_markdown("<p>café</p>");
+        assert!(md.contains("café"), "got: {md}");
+
+        let md = html_to_markdown("<p>hello — world</p>");
+        assert!(md.contains("hello — world"), "got: {md}");
+
+        let md = html_to_markdown("<style>x</style><p>中文</p>");
+        assert!(md.contains("中文"), "got: {md}");
+        assert!(!md.contains("style"), "style not stripped: {md}");
+
+        // Curly quotes + accented letters + emoji.
+        let md = html_to_markdown("<p>“naïve” résumé ✓</p>");
+        assert!(md.contains("“naïve”"), "got: {md}");
+        assert!(md.contains("✓"), "got: {md}");
     }
 
     #[test]

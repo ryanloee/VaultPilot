@@ -211,13 +211,15 @@ pub fn render_month_grid(
                         if let Some(es) = by_day.get(&d) {
                             if let Some(first) = es.first() {
                                 let title = first.title.as_deref().unwrap_or("");
-                                let trunc = truncate_str(title, 12);
-                                out.push_str(&format!("{:<14}", trunc));
+                                let trunc = truncate_str(title, 4);
+                                out.push_str(&format!("{:<4}", trunc));
                                 continue;
                             }
                         }
                         // Day exists but has no matching entry: full-width blank.
-                        out.push_str("              ");
+                        // Use 4 spaces to match the 4-char date cell width so the
+                        // title row stays vertically aligned with the date row.
+                        out.push_str("    ");
                     } else {
                         // No day in this column (leading blank of first row
                         // when month starts mid-week). Use narrow padding that
@@ -249,13 +251,14 @@ pub fn render_month_grid(
                     if let Some(es) = by_day.get(&d) {
                         if let Some(first) = es.first() {
                             let title = first.title.as_deref().unwrap_or("");
-                            let trunc = truncate_str(title, 12);
-                            out.push_str(&format!("{:<14}", trunc));
+                            let trunc = truncate_str(title, 4);
+                            out.push_str(&format!("{:<4}", trunc));
                             continue;
                         }
                     }
-                    // Existing day with no entry: full-width blank.
-                    out.push_str("              ");
+                    // Existing day with no entry: full-width blank (4 spaces,
+                    // matching the 4-char date cell width).
+                    out.push_str("    ");
                 } else {
                     // Trailing padding column: narrow blank to match the date row.
                     out.push_str("   ");
@@ -540,11 +543,9 @@ mod tests {
             title: Some("My Design Doc".into()),
         };
         let out = render_month_grid(2026, 7, &[e], WeekStart::Sunday, true);
-        // Title appears somewhere in the rendered output.
-        assert!(
-            out.contains("My Design Doc") || out.contains("My Design D…"),
-            "got:\n{out}"
-        );
+        // The title is truncated to the 4-char column width: "My Design Doc"
+        // becomes "My D…", so we assert the truncated prefix appears.
+        assert!(out.contains("My D"), "got:\n{out}");
     }
 
     #[test]
@@ -570,8 +571,11 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         assert!(lines.len() > 3, "not enough lines:\n{out}");
         let title_line = lines[3];
-        let pos = title_line.find("TITLEABC");
-        assert!(pos.is_some(), "TITLEABC not found in title line:\n{out}");
+        let pos = title_line.find("TIT");
+        assert!(
+            pos.is_some(),
+            "TITL (truncated TITLEABC) not found in title line:\n{out}"
+        );
         let pos = pos.unwrap();
         // Before fix: pos would be 42 (3 blank slots × 14 chars each).
         // After fix: pos should be ≤ 12 (3 blank slots × 3 chars + 3
@@ -579,7 +583,7 @@ mod tests {
         // We assert < 20 to leave margin for future width tweaks.
         assert!(
             pos < 20,
-            "TITLEABC at position {}, expected < 20 (first_col=3 should use narrow indent instead of 14-char slots):\n{}",
+            "TITL at position {}, expected < 20 (first_col=3 should use narrow indent instead of 14-char slots):\n{}",
             pos,
             out
         );
@@ -626,9 +630,9 @@ mod tests {
             title: Some("LastWeekB".into()),
         };
         let out = render_month_grid(2026, 7, &[e1, e2], WeekStart::Sunday, true);
-        // Both titles must appear somewhere in the output.
-        assert!(out.contains("LastWeekA"), "got:\n{out}");
-        assert!(out.contains("LastWeekB"), "got:\n{out}");
+        // Both titles truncate to "Las…" in the 4-char column width.
+        assert!(out.contains("Las"), "got:\n{out}");
+        assert!(out.contains("Las"), "got:\n{out}");
         // The trailing title line is the one immediately after the final
         // date row. Count title lines (rows containing a title) must be at
         // least as many as the number of weeks that hold entries. We assert
@@ -647,8 +651,70 @@ mod tests {
             .get(last_date_idx + 1)
             .expect("expected a title line after the last date row");
         assert!(
-            trailing_title.contains("LastWeekA") || trailing_title.contains("LastWeekB"),
+            trailing_title.contains("Las"),
             "trailing week has no title line: last date row followed by {trailing_title:?}\nfull:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_with_titles_columns_align_with_dates() {
+        // Regression test for issue #3197: the title row must stay vertically
+        // aligned with the date row. The date cell is 4 chars wide
+        // ("{:>2}[n]" or "{:>2}  "), so every title cell must also be
+        // exactly 4 chars wide. Previously titles used a 14-char width,
+        // shifting them far to the left of their date column.
+        //
+        // July 2026 (Sunday-first): first_col = 3 (Wed). Day 1 starts at
+        // column 3*3 + 0*4 = 9. Its title cell must start at column 9 too.
+        // Day 15 starts at column 3*3 + 14*4 = 9 + 56 = 65.
+        let e1 = CalendarEntry {
+            note_path: "d01.md".into(),
+            date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            title: Some("ONE".into()),
+        };
+        let e2 = CalendarEntry {
+            note_path: "d15.md".into(),
+            date: NaiveDate::from_ymd_opt(2026, 7, 15).unwrap(),
+            title: Some("FIFTEEN".into()),
+        };
+        let out = render_month_grid(2026, 7, &[e1, e2], WeekStart::Sunday, true);
+        let lines: Vec<&str> = out.lines().collect();
+        // Title row for the first week is line 3 (header=0, weekday=1,
+        // first date row=2, first title row=3).
+        let first_title_line = lines[3];
+        let one_pos = first_title_line
+            .find("ONE")
+            .expect("ONE title not found in first title row");
+        // Day 1 cell starts at column 9 (3 leading 3-char blanks + 0*4).
+        assert_eq!(
+            one_pos, 9,
+            "day-1 title must align under day-1 date cell (col 9), got {one_pos}:\n{out}"
+        );
+        // The title for day 15 sits in the third week's title row.
+        // Locate the date row containing "15[1]" and check the row right
+        // after it has "FIFTEEN" at the matching 4-char-aligned column.
+        let date_idx = lines
+            .iter()
+            .position(|l| l.contains("15[1]"))
+            .expect("date row for day 15 not found");
+        let title_line_15 = lines[date_idx + 1];
+        let fifteen_pos = title_line_15
+            .find("FIF")
+            .expect("FIF (truncated FIFTEEN) title not found in its title row");
+        // Day 15 date cell starts at column 12 (the week row is
+        // "12  13  14  15[1]...", i.e. day 12 at col 0 → day 15 at col 12).
+        // Its title must start at the same column.
+        assert_eq!(
+            fifteen_pos, 12,
+            "day-15 title must align under day-15 date cell (col 12), got {fifteen_pos}:\n{out}"
+        );
+        // Every title cell is exactly 4 chars wide: the gap between the start
+        // of ONE (col 9) and the start of the next column slot (col 13) must
+        // be 4. Pad "ONE" to 4 → "ONE ", so column 13 is a space, not a title.
+        let next_col_char = first_title_line.chars().nth(13).unwrap_or('x');
+        assert_eq!(
+            next_col_char, ' ',
+            "expected a 4-char-wide title slot (col 13 blank), got {next_col_char:?}:\n{out}"
         );
     }
 

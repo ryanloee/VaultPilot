@@ -377,15 +377,22 @@ fn annotate_blocks_grouped(body: &str) -> String {
             text.push_str(strip_block_id_marker(l));
         }
         let text = text.trim();
-        // Heading?
-        if let Some(rest) = text.strip_prefix('#') {
-            let level = rest.chars().take_while(|c| *c == '#').count();
-            let title = rest[level..].trim();
+        // Heading? (defensive — normal headings are annotated inline before
+        // reaching flush_block, but handle them correctly here too in case a
+        // future caller changes that flow. Mirror parse_blocks: count ALL
+        // leading '#' for the level and strip any pre-existing marker.)
+        if text.starts_with('#') {
+            let level = text.chars().take_while(|c| *c == '#').count();
+            let title = strip_block_id_marker(&text[level..]).trim().to_string();
             let mut hp = heading_path.to_vec();
             hp.truncate(level.saturating_sub(1));
-            hp.push(title.to_string());
-            let id = disambig.disambiguate(block_id_for(&hp, title));
-            let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
+            hp.push(title.clone());
+            let id = disambig.disambiguate(block_id_for(&hp, &title));
+            // Canonical form: hashes + stripped title + single marker. Using
+            // the stripped title (not original `text`) keeps this idempotent
+            // and in lock-step with parse_blocks (#3180).
+            let hashes = "#".repeat(level);
+            let _ = writeln!(out, "{hashes} {title} <!-- {}{} -->", BLOCK_ID_PREFIX, id);
         } else if block_lines.len() == 1 && has_block_id_marker(block_lines[0]) {
             // Already annotated — keep as-is.
             let _ = writeln!(out, "{}", block_lines[0].trim_end());
@@ -421,13 +428,24 @@ fn annotate_blocks_grouped(body: &str) -> String {
             block_lines.clear();
             let text = line.trim();
             let level = text.chars().take_while(|c| *c == '#').count();
-            let title = text[level..].trim();
+            // Mirror parse_blocks: strip any pre-existing block-id marker so
+            // the title (and thus the derived id) is stable across re-runs and
+            // matches what parse_blocks would emit. Without this, re-annotating
+            // a heading that already carries a marker appends a second one and
+            // computes the id from a polluted title (#3180).
+            let title = strip_block_id_marker(&text[level..]).trim().to_string();
             let mut hp = heading_path.clone();
             hp.truncate(level.saturating_sub(1));
-            hp.push(title.to_string());
+            hp.push(title.clone());
             heading_path = hp.clone();
-            let id = disambig.disambiguate(block_id_for(&hp, title));
-            let _ = writeln!(out, "{} <!-- {}{} -->", text, BLOCK_ID_PREFIX, id);
+            let id = disambig.disambiguate(block_id_for(&hp, &title));
+            // Canonical form: hashes + stripped title + single marker. Using
+            // the stripped title (not original `text`) keeps annotation
+            // idempotent even when a stale or duplicate marker was present,
+            // and keeps the emitted id in lock-step with what parse_blocks
+            // computes (#3180).
+            let hashes = "#".repeat(level);
+            let _ = writeln!(out, "{hashes} {title} <!-- {}{} -->", BLOCK_ID_PREFIX, id);
             continue;
         }
         block_lines.push(line);
@@ -725,5 +743,73 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>()
                 .len()
         );
+    }
+
+    #[test]
+    fn annotate_heading_with_premarker_is_idempotent_3180() {
+        // Regression for #3180: annotate_blocks did not strip a pre-existing
+        // `<!-- ^id -->` marker from heading titles before computing the id, so
+        // the second annotation pass appended a *second* marker and derived the
+        // id from a polluted title like `"Title <!-- ^abc123 -->"`. parse_blocks
+        // (used by embed resolution) strips the marker, so the two would
+        // disagree and `![[note#^id]]` references to annotated headings would
+        // fail to resolve.
+        let body = "# Title <!-- ^abc123 -->\n";
+        let once = annotate_blocks(body);
+        // Exactly one marker on the heading line — not two.
+        assert_eq!(
+            once.lines()
+                .filter(|l| l.matches("<!-- ^").count() == 1)
+                .count(),
+            1,
+            "heading should carry exactly one marker after annotation, got: {once:?}"
+        );
+        // The stripped title must equal "Title" — no leaked marker in the id
+        // source. Re-annotate and confirm idempotency.
+        let twice = annotate_blocks(&once);
+        assert_eq!(once, twice, "annotation is not idempotent on headings");
+        // The emitted id must match what parse_blocks computes for the same
+        // heading (this is the embed-resolution invariant).
+        let parsed = parse_blocks(&once);
+        let heading = parsed
+            .iter()
+            .find(|b| b.text.starts_with('#'))
+            .expect("a heading block to be parsed");
+        let emitted_id = once
+            .lines()
+            .next()
+            .and_then(|l| l.find("<!-- ^").map(|i| &l[i + 6..]))
+            .map(|m| m.trim_end_matches("-->").trim())
+            .expect("an emitted block id");
+        assert_eq!(
+            heading.id, emitted_id,
+            "annotate_blocks id disagrees with parse_blocks — embed resolution would break"
+        );
+    }
+
+    #[test]
+    fn annotate_heading_ids_match_parse_blocks_with_premarker_3180() {
+        // A broader regression: even when the heading already carries a marker
+        // from an external tool/user, annotate_blocks and parse_blocks must
+        // agree on the id, so a second annotate pass is a no-op.
+        let body = "# Top <!-- ^pre -->\n\nbody under top.\n\n## Sub\n\nchild.\n";
+        let annotated_once = annotate_blocks(body);
+        let annotated_twice = annotate_blocks(&annotated_once);
+        assert_eq!(
+            annotated_once, annotated_twice,
+            "second annotation pass must be idempotent"
+        );
+        let parsed = parse_blocks(&annotated_once);
+        let emitted_ids: Vec<&str> = annotated_once
+            .lines()
+            .filter_map(|l| l.find("<!-- ^").map(|i| &l[i + 6..]))
+            .map(|m| m.trim_end_matches("-->").trim())
+            .collect();
+        for id in emitted_ids {
+            assert!(
+                parsed.iter().any(|b| b.id == id),
+                "annotated id {id} not found in parsed blocks"
+            );
+        }
     }
 }

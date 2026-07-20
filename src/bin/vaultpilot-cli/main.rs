@@ -832,6 +832,33 @@ enum Commands {
         /// Shell to generate completions for (bash, zsh, fish, powershell)
         shell: String,
     },
+
+    /// Clip a web page into a Markdown vault note (Web Clipper, collect side, #3189)
+    ///
+    /// Fetches a URL, converts the HTML to clean Markdown, and saves it as a
+    /// note with `sourceUrl`/`clipped` frontmatter. This is the CLI backend of
+    /// the Web Clipper feature; the browser-extension capture UI is a follow-up.
+    ///
+    /// Examples:
+    ///   vaultpilot clip https://example.com/article
+    ///   vaultpilot clip https://example.com/article --tags reading,rust
+    ///   vaultpilot clip https://example.com/article --output /tmp/article.md
+    Clip {
+        /// URL of the web page to clip.
+        url: String,
+
+        /// Comma-separated tags to add to the note (in addition to `clipped`).
+        #[arg(long)]
+        tags: Option<String>,
+
+        /// Write the Markdown to this file instead of saving into the vault.
+        #[arg(long)]
+        output: Option<String>,
+
+        /// Override the note title (defaults to the page <title>/<h1>).
+        #[arg(long)]
+        title: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2611,10 +2638,186 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Connector { action } => handle_connector(action),
         Commands::Pdf { action } => handle_pdf(action),
         Commands::Completions { shell } => handle_completions(shell),
+        Commands::Clip {
+            url,
+            tags,
+            output,
+            title,
+        } => handle_clip(context, url, tags, output, title).await,
     }
 }
 
-/// Execute an AI quick action via the backend and return the result.
+/// Web Clipper — clip a URL into a Markdown vault note (#3189).
+///
+/// This is the **collect** side of the Web Clipper feature. It fetches the page,
+/// converts the HTML to clean Markdown using the pure-Rust converter in
+/// `vaultpilot_lib::clipper`, and stores it as a note with `sourceUrl` /
+/// `clipped` frontmatter. When `--output` is given the Markdown is written to a
+/// file instead of the vault (handy for offline/extension scenarios).
+async fn handle_clip(
+    context: &StorageContext,
+    url: &str,
+    tags: &Option<String>,
+    output: &Option<String>,
+    title_override: &Option<String>,
+) -> Result<Value> {
+    use vaultpilot_lib::clipper::html_to_markdown;
+    use vaultpilot_lib::models::NoteDocument;
+    use vaultpilot_lib::models::NoteMeta;
+    use vaultpilot_lib::storage::save_note_with_context;
+
+    let client =
+        build_clip_client().map_err(|e| anyhow::anyhow!("failed to build HTTP client: {e}"))?;
+    let resp = client
+        .get(url)
+        .header(
+            "User-Agent",
+            "VaultPilot-WebClipper/1.0 (+https://vaultpilot.app)",
+        )
+        .header("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to fetch {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "HTTP {} when fetching {url}",
+            resp.status()
+        ));
+    }
+    let html = resp
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to read response body: {e}"))?;
+
+    // 2. Derive a title (override > <title> > first <h1> > host).
+    let derived_title = title_override.clone().unwrap_or_else(|| {
+        extract_title(&html).unwrap_or_else(|| {
+            url::Url::parse(url)
+                .ok()
+                .and_then(|u| u.host_str().map(|h| h.to_string()))
+                .unwrap_or_else(|| "Clipped page".to_string())
+        })
+    });
+
+    // 3. Convert HTML -> Markdown.
+    let markdown_body = html_to_markdown(&html);
+
+    // 4. Build frontmatter.
+    let now = chrono::Utc::now();
+    let clipped_date = now.format("%Y-%m-%d").to_string();
+    let mut tag_list = vec!["clipped".to_string()];
+    if let Some(t) = tags {
+        for tag in t.split(',') {
+            let tag = tag.trim().to_string();
+            if !tag.is_empty() && !tag_list.contains(&tag) {
+                tag_list.push(tag);
+            }
+        }
+    }
+
+    let mut frontmatter = String::from("---\n");
+    frontmatter.push_str(&format!("title: {}\n", yaml_scalar(&derived_title)));
+    frontmatter.push_str(&format!("sourceUrl: {}\n", yaml_scalar(url)));
+    frontmatter.push_str(&format!("clipped: {}\n", now.to_rfc3339()));
+    frontmatter.push_str(&format!("clippedDate: {}\n", clipped_date));
+    frontmatter.push_str("type: web-clip\n");
+    frontmatter.push_str("tags:\n");
+    for tag in &tag_list {
+        frontmatter.push_str(&format!("  - {}\n", yaml_scalar(tag)));
+    }
+    frontmatter.push_str("---\n\n");
+
+    let content = format!("{frontmatter}# {derived_title}\n\n{markdown_body}");
+
+    // 5. Output to file or save to vault.
+    if let Some(path) = output {
+        let p = std::path::Path::new(path);
+        if let Some(parent) = p.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        }
+        std::fs::write(p, &content)
+            .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", p.display()))?;
+        return Ok(serde_json::json!({
+            "clipped": true,
+            "url": url,
+            "title": derived_title,
+            "tags": tag_list,
+            "output": path,
+            "bytes": content.len(),
+        }));
+    }
+
+    let note = NoteDocument {
+        meta: NoteMeta {
+            title: derived_title.clone(),
+            tags: tag_list.clone(),
+            source: url.to_string(),
+            created_at: now.to_rfc3339(),
+            updated_at: now.to_rfc3339(),
+            ..Default::default()
+        },
+        body: content,
+        ..Default::default()
+    };
+    let saved = save_note_with_context(context, note)
+        .map_err(|e| anyhow::anyhow!("failed to save clipped note: {e}"))?;
+    Ok(serde_json::json!({
+        "clipped": true,
+        "url": url,
+        "id": saved.meta.id,
+        "title": saved.meta.title,
+        "tags": saved.meta.tags,
+    }))
+}
+
+/// Build an HTTP client that honours the `HTTP_PROXY`/`HTTPS_PROXY` env vars
+/// when present (the dev box routes through a local proxy).
+fn build_clip_client() -> anyhow::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(5));
+    if let Ok(proxy) = std::env::var("HTTP_PROXY").or_else(|_| std::env::var("http_proxy")) {
+        if !proxy.is_empty() {
+            builder = builder.proxy(reqwest::Proxy::all(&proxy)?);
+        }
+    }
+    if let Ok(proxy) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("https_proxy")) {
+        if !proxy.is_empty() {
+            builder = builder.proxy(reqwest::Proxy::all(&proxy)?);
+        }
+    }
+    Ok(builder.build()?)
+}
+
+/// Extract the contents of the first `<title>` tag.
+fn extract_title(html: &str) -> Option<String> {
+    let low = html.to_ascii_lowercase();
+    let start = low.find("<title")?;
+    let after = html[start..].find('>')? + start + 1;
+    let end = html[after..].find("</title>")? + after;
+    let raw = &html[after..end];
+    let decoded = raw
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    let trimmed = decoded.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Render a string as a YAML scalar, quoting when needed.
+fn yaml_scalar(s: &str) -> String {
+    if s.contains(':') || s.contains('#') || s.contains('"') || s.trim() != s || s.is_empty() {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
 async fn run_ai_action(
     context: &StorageContext,
     action: AiActionType,

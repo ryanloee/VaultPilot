@@ -27,13 +27,14 @@ async function getApiKey(): Promise<string> {
 
     // One-time migration: move legacy key from AsyncStorage → SecureStore
     if (!_migrated) {
-      _migrated = true;
       const legacy = await AsyncStorage.getItem(KEYS.apiKey);
       if (legacy) {
         await SecureStore.setItemAsync(KEYS.apiKey, legacy);
         await AsyncStorage.removeItem(KEYS.apiKey);
+        _migrated = true;
         return legacy;
       }
+      _migrated = true;
     }
     return '';
   } catch (e: unknown) {

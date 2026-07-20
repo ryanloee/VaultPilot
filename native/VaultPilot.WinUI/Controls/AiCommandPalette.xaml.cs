@@ -327,7 +327,11 @@ public sealed partial class AiCommandPalette : UserControl
         "cleanUp" or "clean_up" => AiActionType.CleanUp,
         "generateOutline" or "generate_outline" => AiActionType.GenerateOutline,
         "editNote" or "edit_note" => AiActionType.EditNote,
+        "summarizeUrl" or "summarize_url" => AiActionType.SummarizeUrl,
         "brainstorm" => AiActionType.Brainstorm,
+        "reviewNote" or "review_note" or "review" => AiActionType.ReviewNote,
+        "synthesizeWiki" or "synthesize_wiki" or "synthesize" or "wiki" => AiActionType.SynthesizeWiki,
+        "workspaceQuery" or "workspace_query" or "workspace" => AiActionType.WorkspaceQuery,
         _ => AiActionType.Summarize
     };
 

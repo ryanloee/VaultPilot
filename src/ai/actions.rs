@@ -471,7 +471,18 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
 /// Validate the action request synchronously. Returns an error result if
 /// validation fails, or `None` if the request is valid.
 fn validate_request(request: &AiActionRequest) -> Option<AiActionResult> {
-    if request.text.trim().is_empty() && request.action != AiActionType::FindRelatedNotes {
+    // WorkspaceQuery may supply its question via `instruction` instead of `text`,
+    // so we only reject it when BOTH are empty (#3235).
+    let has_text = !request.text.trim().is_empty();
+    let has_instruction = request
+        .instruction
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let requires_input = request.action != AiActionType::FindRelatedNotes;
+    let instruction_optional = request.action == AiActionType::WorkspaceQuery;
+    let empty = !has_text && (!instruction_optional || !has_instruction);
+    if requires_input && empty {
         return Some(AiActionResult {
             result: String::new(),
             usage: RequestUsage::default(),
@@ -1394,6 +1405,48 @@ mod tests {
         assert!(
             result.is_some(),
             "empty text should fail validation for WorkspaceQuery"
+        );
+    }
+
+    // ── #3235 regression: instruction-only path must pass validation ──
+
+    #[test]
+    fn workspace_query_instruction_only_passes_validation() {
+        // Regression for #3235: WorkspaceQuery with empty text but a non-empty
+        // instruction must NOT be rejected by validate_request — otherwise the
+        // user_prompt fallback to `instruction` is unreachable dead code.
+        let request = AiActionRequest {
+            action: AiActionType::WorkspaceQuery,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("Summarize the Q3 roadmap across all project notes".to_string()),
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_none(),
+            "WorkspaceQuery with a non-empty instruction must pass validation (#3235)"
+        );
+    }
+
+    #[test]
+    fn workspace_query_whitespace_instruction_still_rejected() {
+        // Whitespace-only instruction must be treated as empty (#3235 edge case).
+        let request = AiActionRequest {
+            action: AiActionType::WorkspaceQuery,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("   \n\t ".to_string()),
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "whitespace-only instruction must still fail validation for WorkspaceQuery"
         );
     }
 }

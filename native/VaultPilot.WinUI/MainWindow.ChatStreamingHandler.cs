@@ -100,18 +100,35 @@ public sealed partial class MainWindow : Window
         return nonAscii + ((ascii + 3) / 4);
     }
 
+    private ProviderConfig ResolveActiveProvider()
+    {
+        // Mirror the active-provider resolution used by MainWindow.xaml.cs
+        // (#266-268): when the multi-provider list is populated, the real
+        // provider used for requests/model selection is Providers[ActiveProviderIndex],
+        // NOT the legacy single Provider field. Reading Provider here is a logic
+        // bug (#3191) that yields wrong context-window budgets and model names
+        // when the active provider differs from the legacy field.
+        if (_settings?.Providers is { Count: > 0 } providers)
+        {
+            var index = Math.Clamp(_settings.ActiveProviderIndex, 0, providers.Count - 1);
+            return providers[index];
+        }
+
+        // Fallback to legacy single Provider field (backward compat; defensive
+        // null-coalescing per issue #3090).
+        return _settings?.Provider ?? new ProviderConfig();
+    }
+
     private ulong ResolveContextWindowTokens()
     {
-        // Defensive null-propagation (issue #3090): _settings?.Provider only
-        // guards _settings, not Provider itself — System.Text.Json can leave
-        // Provider null if the backend explicitly sent "provider": null.
-        var configuredLimit = _settings?.Provider?.ContextWindowTokens;
+        var activeProvider = ResolveActiveProvider();
+        var configuredLimit = activeProvider.ContextWindowTokens;
         if (configuredLimit.HasValue && configuredLimit.Value > 0)
         {
             return configuredLimit.Value;
         }
 
-        var model = (_settings?.Provider?.Model ?? string.Empty).Trim().ToLowerInvariant();
+        var model = (activeProvider.Model ?? string.Empty).Trim().ToLowerInvariant();
         if (ContainsModelToken(model, "glm-5.1"))
         {
             return 200_000;

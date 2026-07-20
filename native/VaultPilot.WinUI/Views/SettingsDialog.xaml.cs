@@ -792,7 +792,9 @@ public sealed partial class SettingsDialog : ContentDialog
             ulong autoWakeInterval;
             if (!ulong.TryParse(AutoWakeIntervalBox.Text?.Trim() ?? "30", out autoWakeInterval) || autoWakeInterval == 0)
             {
-                autoWakeInterval = 30; // fallback default
+                SetFieldError(AutoWakeIntervalBox, AutoWakeIntervalError, "间隔必须是大于 0 的数字");
+                wakeWordValid = false;
+                firstErrorElement ??= AutoWakeIntervalBox;
             }
             else if (autoWakeInterval > 1440)
             {

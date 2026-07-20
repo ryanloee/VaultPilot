@@ -124,7 +124,7 @@ public sealed partial class MainWindow : Window
             await UpdateStartupStepAsync("启动后端");
             var backendPath = ResolveBackendPath();
             await LogStartup($"Backend path: {backendPath}");
-            _backendClient.Start(backendPath);
+            await _backendClient.StartAsync(backendPath);
             await LogStartup("Backend process started");
             await UpdateStartupStepAsync("检查后端响应");
             await SendWithTimeoutAsync(

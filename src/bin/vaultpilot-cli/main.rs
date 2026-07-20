@@ -18,6 +18,9 @@ use uuid::Uuid;
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
+use vaultpilot_lib::bases::{
+    base_filter_from_arg, base_sort_from_arg, run_base, BaseConfig, BaseView,
+};
 use vaultpilot_lib::diff::{compute_diff, render_colored_diff, render_unified_diff};
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
@@ -159,6 +162,20 @@ enum Commands {
     Collections {
         #[command(subcommand)]
         action: CollectionActions,
+    },
+
+    /// Run a Bases query — structured database views over vault notes (#3127).
+    ///
+    /// Reads a `.base` YAML config file describing filters, sort order, and
+    /// columns, then materializes the matching notes as rows.  Inspired by
+    /// Obsidian Bases (https://help.obsidian.md/bases).
+    ///
+    /// Examples:
+    ///   vaultpilot bases run status.base
+    ///   vaultpilot bases run --filter 'status = in-progress' --sort updated_at:desc
+    Bases {
+        #[command(subcommand)]
+        action: BasesActions,
     },
 
     /// Manage projects for isolated knowledge spaces (#1927)
@@ -1577,6 +1594,36 @@ enum CollectionActions {
 }
 
 #[derive(Subcommand)]
+enum BasesActions {
+    /// Run a `.base` YAML config against the vault and output matching rows.
+    ///
+    /// Reads a `.base` config file from disk (or inline filter/sort args),
+    /// loads all notes, applies filters, sorts, and projects the configured
+    /// columns.  Output is JSON for machine consumption; UI rendering is
+    /// WinUI/Mobile-side (#3127).
+    ///
+    /// Examples:
+    ///   vaultpilot bases run my-status.base
+    ///   vaultpilot bases run --filter 'status = in-progress' --filter 'tags contains rust'
+    Run {
+        /// Path to a `.base` config file (optional if filters/sort given inline).
+        #[arg(default_value = "")]
+        file: String,
+
+        /// Inline filter expressions in the form 'field op value' (e.g. 'status = done').
+        /// Use `is_empty` / `is_not_empty` without a value.
+        /// Supported ops: =, !=, contains, starts_with, ends_with, gt, lt,
+        ///                gte, lte, is_empty, is_not_empty
+        #[arg(long, short = 'f')]
+        filter: Vec<String>,
+
+        /// Inline sort directives in the form 'field:order' (e.g. 'updated_at:desc').
+        #[arg(long, short = 's')]
+        sort: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ProjectActions {
     /// List all projects
     List,
@@ -2343,6 +2390,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Collections { action } => {
             tokio::task::block_in_place(|| handle_collections(context, action))
         }
+        Commands::Bases { action } => tokio::task::block_in_place(|| handle_bases(context, action)),
         Commands::Project { action } => {
             tokio::task::block_in_place(|| handle_projects(context, action))
         }
@@ -5501,6 +5549,44 @@ fn handle_collections(context: &StorageContext, action: &CollectionActions) -> R
                 "notes": notes,
                 "count": count,
                 "collectionId": id
+            }))
+        }
+    }
+}
+
+fn handle_bases(context: &StorageContext, action: &BasesActions) -> Result<Value> {
+    match action {
+        BasesActions::Run { file, filter, sort } => {
+            // Build config from file or inline args.
+            let config = if !file.is_empty() {
+                BaseConfig::from_file(std::path::Path::new(file))?
+            } else {
+                let mut cfg = BaseConfig::default();
+                for f in filter {
+                    cfg.filters.push(base_filter_from_arg(f));
+                }
+                for s in sort {
+                    cfg.sort.push(base_sort_from_arg(s));
+                }
+                cfg
+            };
+
+            let result = run_base(context, &config)?;
+            // Serialize BaseResult: rows are the primary output.
+            // Include config metadata for UI consumption.
+            Ok(serde_json::json!({
+                "view": match result.view {
+                    BaseView::Table => "table",
+                    BaseView::Cards => "cards",
+                    BaseView::List => "list",
+                },
+                "columns": result.columns.iter().map(|c| serde_json::json!({
+                    "field": c.field,
+                    "label": c.label,
+                })).collect::<Vec<_>>(),
+                "rows": result.rows,
+                "matched": result.matched,
+                "scanned": result.scanned,
             }))
         }
     }

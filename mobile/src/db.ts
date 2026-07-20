@@ -254,7 +254,7 @@ export async function searchSessions(query: string): Promise<DbSession[]> {
        WHERE s.id IN (
          SELECT m.session_id FROM messages m
          INNER JOIN messages_fts fts ON m.rowid = fts.rowid
-         WHERE messages_fts MATCH ?
+         WHERE fts MATCH ?
        )
        OR s.title LIKE ? ESCAPE '\\'
        ORDER BY s.updated_at DESC LIMIT 50`,
@@ -773,7 +773,7 @@ export async function searchNotes(query: string, folder?: string): Promise<DbNot
     ftsResults = await db.getAllAsync<DbNote>(
       `SELECT n.* FROM notes n
        INNER JOIN notes_fts fts ON n.rowid = fts.rowid
-       WHERE n.is_template = 0 AND notes_fts MATCH ?${folderFilter.replace('folder', 'n.folder')}
+       WHERE n.is_template = 0 AND fts MATCH ?${folderFilter.replace('folder', 'n.folder')}
        ORDER BY n.updated_at DESC LIMIT 50`,
       [ftsQuery, ...folderParams]
     );
@@ -819,7 +819,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
                 SUBSTR(n.content, 1, 120) as snippet, n.updated_at
          FROM notes n
          INNER JOIN notes_fts fts ON n.rowid = fts.rowid
-         WHERE n.is_template = 0 AND notes_fts MATCH ?
+         WHERE n.is_template = 0 AND fts MATCH ?
          ORDER BY n.updated_at DESC LIMIT ?`,
         [ftsQuery, limit]
       );
@@ -857,7 +857,7 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
          FROM messages m
          INNER JOIN messages_fts fts ON m.rowid = fts.rowid
          INNER JOIN sessions s ON m.session_id = s.id
-         WHERE messages_fts MATCH ?
+         WHERE fts MATCH ?
          ORDER BY m.created_at DESC LIMIT ?`,
         [ftsQuery, limit]
       );

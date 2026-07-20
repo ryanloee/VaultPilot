@@ -22,7 +22,7 @@ describe('FTS query building (#1392)', () => {
   it('searchNotes builds correct FTS query with quoted terms', async () => {
     await searchNotes('hello world');
     const ftsCall = mockDb.getAllAsync.mock.calls.find(
-      (call: any[]) => typeof call[0] === 'string' && call[0].includes('notes_fts MATCH')
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('fts MATCH')
     );
     expect(ftsCall).toBeDefined();
     expect(ftsCall![1][0]).toBe('"hello" OR "world"');
@@ -31,7 +31,7 @@ describe('FTS query building (#1392)', () => {
   it('searchNotes escapes double quotes in FTS query', async () => {
     await searchNotes('say "hello"');
     const ftsCall = mockDb.getAllAsync.mock.calls.find(
-      (call: any[]) => typeof call[0] === 'string' && call[0].includes('notes_fts MATCH')
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('fts MATCH')
     );
     expect(ftsCall).toBeDefined();
     expect(ftsCall![1][0]).toBe('"say" OR """hello"""');
@@ -40,7 +40,7 @@ describe('FTS query building (#1392)', () => {
   it('searchSessions builds correct FTS query', async () => {
     await searchSessions('test query');
     const ftsCall = mockDb.getAllAsync.mock.calls.find(
-      (call: any[]) => typeof call[0] === 'string' && call[0].includes('messages_fts MATCH')
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('fts MATCH')
     );
     expect(ftsCall).toBeDefined();
     expect(ftsCall![1][0]).toBe('"test" OR "query"');

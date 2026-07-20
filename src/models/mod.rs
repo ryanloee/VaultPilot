@@ -475,6 +475,10 @@ pub struct AnswerCitation {
     /// Relevance score (0.0–1.0) from search ranking (#1704).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
+    /// Optional block-level anchor (^block-id) for precise citation within a note.
+    /// Enables click-to-navigate to a specific block in WinUI/Mobile (#3188).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -931,6 +935,7 @@ mod tests {
                         path: "/n.md".to_string(),
                         snippet: "snippet".to_string(),
                         score: None,
+                        block_id: None,
                     }],
                     saved_note: None,
                     thinking_trace: Some(ThinkingTrace {

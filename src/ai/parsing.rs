@@ -1323,6 +1323,7 @@ mod tests {
             path: "p".into(),
             snippet: "old".into(),
             score: None,
+            block_id: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1345,6 +1346,7 @@ mod tests {
             path: "p".into(),
             snippet: "short".into(),
             score: None,
+            block_id: None,
         };
         let doc = NoteDocument {
             meta: NoteMeta {
@@ -1368,6 +1370,7 @@ mod tests {
             path: "p".into(),
             snippet: "original".into(),
             score: None,
+            block_id: None,
         };
         let result = enrich_citations(vec![citation], &[]);
         assert_eq!(result[0].snippet, "original");
@@ -1502,6 +1505,7 @@ mod tests {
             path: "p".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let docs = vec![NoteDocument {
             meta: NoteMeta {
@@ -1525,6 +1529,7 @@ mod tests {
             path: "p1".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let cit2 = AnswerCitation {
             note_id: "n2".into(),
@@ -1532,6 +1537,7 @@ mod tests {
             path: "p2".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let docs = vec![
             NoteDocument {
@@ -1572,6 +1578,7 @@ mod tests {
             path: "p".into(),
             snippet: "s".into(),
             score: Some(42.0),
+            block_id: None,
         };
         let docs = vec![NoteDocument {
             meta: NoteMeta {
@@ -1594,6 +1601,7 @@ mod tests {
             path: "p".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let docs = vec![NoteDocument {
             meta: NoteMeta {
@@ -1618,6 +1626,7 @@ mod tests {
             path: "p1".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let cit2 = AnswerCitation {
             note_id: "n2".into(),
@@ -1625,6 +1634,7 @@ mod tests {
             path: "p2".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let docs = vec![
             NoteDocument {
@@ -1669,6 +1679,7 @@ mod tests {
             path: "p1".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let cit2 = AnswerCitation {
             note_id: "n2".into(),
@@ -1676,6 +1687,7 @@ mod tests {
             path: "p2".into(),
             snippet: "s".into(),
             score: None,
+            block_id: None,
         };
         let docs = vec![
             NoteDocument {

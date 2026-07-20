@@ -160,10 +160,24 @@ fn rewrite_with_footnotes(text: &str) -> (String, Vec<RawCitation>) {
 /// path) to its canonical `(note_id, title, path)`. When resolution fails we
 /// still emit a citation carrying the raw label so the UI can surface it.
 fn resolve_citation(raw: &RawCitation, title_resolver: &TitleResolver) -> AnswerCitation {
-    // For wikilink style the label is "Title" or "Title#Section".
-    let (title_part, section) = match raw.label.split_once('#') {
-        Some((t, s)) => (t.trim(), Some(s.trim().to_string())),
-        None => (raw.label.trim(), None),
+    // For wikilink style the label is "Title", "Title#Section", or
+    // "Title#^block-id" (Obsidian-style block reference, #3188).
+    let (title_part, section, block_id) = match raw.label.split_once('#') {
+        Some((t, s)) => {
+            let s = s.trim();
+            // A leading '^' marks an explicit block-id reference.
+            if let Some(rest) = s.strip_prefix('^') {
+                let bid = rest.trim().to_string();
+                (
+                    t.trim(),
+                    None,
+                    if bid.is_empty() { None } else { Some(bid) },
+                )
+            } else {
+                (t.trim(), Some(s.to_string()), None)
+            }
+        }
+        None => (raw.label.trim(), None, None),
     };
 
     let (note_id, title, path) = if let Some((id, t, p)) = title_resolver(title_part) {
@@ -189,6 +203,7 @@ fn resolve_citation(raw: &RawCitation, title_resolver: &TitleResolver) -> Answer
         path,
         snippet: section.unwrap_or_default(),
         score: None,
+        block_id,
     }
 }
 
@@ -339,5 +354,47 @@ mod tests {
         let (out, cites) = extract_citations_unresolved(text);
         assert_eq!(out, "[1][2]");
         assert_eq!(cites.len(), 2);
+    }
+
+    // ── Block-id citation support (#3188) ──────────────────────────────
+
+    #[test]
+    fn wikilink_block_ref_populates_block_id() {
+        // Obsidian-style block reference: [[Note#^abc123]]
+        let resolver = |title: &str| -> Option<(String, String, String)> {
+            if title == "Spec" {
+                Some((
+                    "spec_1".to_string(),
+                    "Spec".to_string(),
+                    "spec.md".to_string(),
+                ))
+            } else {
+                None
+            }
+        };
+        let (out, cites) = extract_citations("See [[Spec#^abc123]] for details.", &resolver);
+        assert_eq!(out, "See [1] for details.");
+        assert_eq!(cites.len(), 1);
+        assert_eq!(cites[0].note_id, "spec_1");
+        assert_eq!(cites[0].block_id.as_deref(), Some("abc123"));
+        // section/snippet stays empty because the anchor is a block-id, not a heading
+        assert_eq!(cites[0].snippet, "");
+    }
+
+    #[test]
+    fn wikilink_block_ref_without_resolver_keeps_block_id() {
+        // When the resolver cannot map the title, block_id is still extracted.
+        let resolver = |_title: &str| -> Option<(String, String, String)> { None };
+        let (out, cites) = extract_citations("See [[Unknown#^blk]] end.", &resolver);
+        assert_eq!(out, "See [1] end.");
+        assert_eq!(cites[0].block_id.as_deref(), Some("blk"));
+    }
+
+    #[test]
+    fn wikilink_heading_without_caret_keeps_section_in_snippet() {
+        // Plain `#Heading` (no caret) must NOT be treated as a block-id.
+        let (_, cites) = extract_citations_unresolved("See [[Note#Intro]] here.");
+        assert_eq!(cites[0].snippet, "Intro");
+        assert!(cites[0].block_id.is_none());
     }
 }

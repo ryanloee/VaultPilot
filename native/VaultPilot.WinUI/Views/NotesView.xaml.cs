@@ -325,6 +325,12 @@ public sealed partial class NotesView : UserControl
         }
     }
 
+    /// <summary>
+    /// Returns the currently selected note's ID, or null if nothing is selected.
+    /// Used by MainWindow for navigation history (#3230).
+    /// </summary>
+    public string? SelectedNoteId() => _selectedNote?.Id;
+
     private void ClearDetail()
     {
         DetailTitle.Text = "选择一篇笔记";

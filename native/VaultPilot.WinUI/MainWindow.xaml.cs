@@ -67,6 +67,10 @@ public sealed partial class MainWindow : Window
     private WindowProcDelegate? _windowProcDelegate;
     private GCHandle _windowProcDelegateHandle;
 
+    // ── Note navigation history (#3230) ────────────────────
+    private readonly List<string> _noteNavStack = new();
+    private int _noteNavIndex = -1;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -96,6 +100,10 @@ public sealed partial class MainWindow : Window
         AddKeyboardAccelerator((VirtualKey)188 /* OemComma */, VirtualKeyModifiers.Control, OnSettingsAccelerator);
         AddKeyboardAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, OnNavChatAccelerator);
         AddKeyboardAccelerator(VirtualKey.Number2, VirtualKeyModifiers.Control, OnNavNotesAccelerator);
+
+        // Note navigation history (#3230)
+        AddKeyboardAccelerator(VirtualKey.Left, VirtualKeyModifiers.Menu, OnNavigateBack);
+        AddKeyboardAccelerator(VirtualKey.Right, VirtualKeyModifiers.Menu, OnNavigateForward);
 
         // Initialize AI command palette (#2188)
         AiCommandPaletteControl.Backend = _backendClient;
@@ -1349,6 +1357,17 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            // Save current note position before navigating (#3230)
+            var currentNoteId = _notesView?.SelectedNoteId();
+            if (currentNoteId is not null && currentNoteId != noteTitleOrId)
+            {
+                // Truncate forward history when navigating from a non-tip position
+                if (_noteNavIndex >= 0 && _noteNavIndex < _noteNavStack.Count - 1)
+                    _noteNavStack.RemoveRange(_noteNavIndex + 1, _noteNavStack.Count - (_noteNavIndex + 1));
+                _noteNavStack.Add(currentNoteId);
+                _noteNavIndex = _noteNavStack.Count - 1;
+            }
+
             var titleMap = await LoadNoteTitleMapAsync();
 
             // Try to resolve title -> id
@@ -1372,6 +1391,46 @@ public sealed partial class MainWindow : Window
         {
             System.Diagnostics.Debug.WriteLine($"[NavigateToNoteFromTitleAsync] Error: {error.Message}");
             ShowError("打开笔记失败", error);
+        }
+    }
+
+    private void OnNavigateBack(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (_noteNavIndex <= 0 || _notesView is null) return;
+        _noteNavIndex--;
+        var noteId = _noteNavStack[_noteNavIndex];
+        _ = NavigateToNoteFromHistoryAsync(noteId);
+        args.Handled = true;
+    }
+
+    private void OnNavigateForward(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (_noteNavIndex >= _noteNavStack.Count - 1 || _notesView is null) return;
+        _noteNavIndex++;
+        var noteId = _noteNavStack[_noteNavIndex];
+        _ = NavigateToNoteFromHistoryAsync(noteId);
+        args.Handled = true;
+    }
+
+    /// <summary>
+    /// Navigates to a note from the history stack without recording it again.
+    /// (#3230 — keeps the browse history intact, like browser back/forward)
+    /// </summary>
+    private async Task NavigateToNoteFromHistoryAsync(string noteId)
+    {
+        try
+        {
+            await SwitchToNotesViewAsync();
+            await Task.Delay(100);
+            if (_notesView is not null)
+            {
+                await _notesView.RefreshNotesAsync();
+                _notesView.SelectNoteById(noteId);
+            }
+        }
+        catch (Exception error)
+        {
+            System.Diagnostics.Debug.WriteLine($"[NavigateToNoteFromHistoryAsync] Error: {error.Message}");
         }
     }
 }

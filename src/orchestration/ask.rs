@@ -428,6 +428,156 @@ pub async fn ask_with_ai_with_context(
     .await
 }
 
+// ── Workspace-wide Q&A (#3188) ──────────────────────────────────────────
+//
+// A workspace-wide reasoning answer that decomposes the question into
+// focused sub-queries, retrieves the most relevant notes across the whole
+// vault for each, synthesizes a single grounded answer, and returns
+// inline `AnswerCitation`s whose `path`/`note_id`/`snippet` let the UI
+// render clickable references back to the source notes.
+//
+// This is the backend half of #3188 (the "inline citation" + "workspace
+// reasoning" capabilities). The multi-step orchestration (sub-query
+// planner, synthesis) lives here so it can be exercised without a UI; the
+// WinUI / Android rendering of `GroundedAnswer.citations` as clickable
+// links is a follow-up UI task tracked in #3188.
+
+/// Default number of sub-queries to fan out when planning a workspace answer.
+const WORKSPACE_QA_SUBQUERIES: usize = 3;
+/// Cap on notes retrieved per sub-query round.
+const WORKSPACE_QA_DOCS_PER_QUERY: usize = 5;
+/// Cap on total distinct notes fed to the final synthesis call.
+const WORKSPACE_QA_MAX_DOCS: usize = 12;
+
+/// Run a workspace-wide Q&A pass over the vault.
+///
+/// * `question` — the user's natural-language question.
+/// * `history` — prior conversation turns (optional).
+/// * `model_override` — optional model string to substitute.
+/// * `emit_status` — progress callback (mirrors `ask_with_ai_with_context`).
+///
+/// Returns a [`GroundedAnswer`] whose `citations` are resolved against the
+/// retrieved vault notes (best-effort: a citation keeps its raw label when
+/// the source note cannot be resolved).
+#[allow(clippy::too_many_arguments)]
+pub async fn workspace_qa(
+    context: &StorageContext,
+    question: String,
+    history: Option<Vec<ConversationTurn>>,
+    model_override: Option<String>,
+    mut emit_status: impl FnMut(&str, String),
+) -> Result<GroundedAnswer, anyhow::Error> {
+    let mut settings = initialize_storage_async(context).await?;
+    if let Some(model) = model_override.filter(|m| !m.trim().is_empty()) {
+        settings.effective_provider_mut().model = model;
+    }
+    let raw_question = question.trim().to_string();
+    if raw_question.is_empty() {
+        return Err(anyhow::anyhow!("question is empty"));
+    }
+    let history = history.unwrap_or_default();
+
+    emit_status("analyzing", "Planning workspace query".to_string());
+
+    // Phase 1: derive focused sub-queries from the question + vault context.
+    let sub_queries = plan_workspace_subqueries(&raw_question, &history);
+
+    // Phase 2: retrieve the most relevant notes for each sub-query,
+    // accumulating distinct docs (dedup by note id, like #763).
+    let mut docs: Vec<NoteDocument> = Vec::new();
+    for q in &sub_queries {
+        emit_status("retrieving", format!("Searching workspace: {q}"));
+        let mut hits = match tokio::time::timeout(
+            STORAGE_IO_TIMEOUT,
+            load_context_notes_async(context, q, &[], WORKSPACE_QA_DOCS_PER_QUERY * 3),
+        )
+        .await
+        {
+            Ok(r) => r.unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        // Narrow to the per-query cap *after* ranking.
+        hits.truncate(WORKSPACE_QA_DOCS_PER_QUERY);
+        let existing: std::collections::HashSet<String> =
+            docs.iter().map(|d| d.meta.id.clone()).collect();
+        for doc in hits {
+            if !existing.contains(&doc.meta.id) && docs.len() < WORKSPACE_QA_MAX_DOCS {
+                docs.push(doc);
+            }
+        }
+        if docs.len() >= WORKSPACE_QA_MAX_DOCS {
+            break;
+        }
+    }
+
+    // Fallback: if no sub-query hit anything, fall back to recent notes so the
+    // answer still has vault context to reason over.
+    if docs.is_empty() {
+        emit_status(
+            "retrieving",
+            "No direct match; loading recent notes".to_string(),
+        );
+        docs = load_recent_notes_for_overview_async(context, WORKSPACE_QA_MAX_DOCS)
+            .await
+            .unwrap_or_default();
+    }
+
+    emit_status("responding", "Synthesizing workspace answer".to_string());
+
+    // Phase 3: single grounded synthesis call over the accumulated docs.
+    // `answer_question` already runs `enrich_citations`, so the returned
+    // `AnswerCitation`s carry resolved `path`/`note_id`/`snippet` (or the raw
+    // label when resolution fails).
+    let answer = ai::answer_question(&settings, &raw_question, &docs, &[], &history).await?;
+
+    Ok(GroundedAnswer {
+        answer: answer.answer,
+        citations: answer.citations,
+        saved_note: None,
+        thinking_trace: None,
+        context_status: None,
+        used_context_count: docs.len(),
+    })
+}
+
+/// Decompose a workspace question into focused sub-queries.
+///
+/// Strategy (kept dependency-free and deterministic so it is unit-testable):
+/// 1. If the question is short and simple, return it as a single query.
+/// 2. Otherwise split on sentence/question/clause punctuation and emit the
+///    longest clauses as separate sub-queries, padded with the full question
+///    as a catch-all.
+fn plan_workspace_subqueries(question: &str, _history: &[ConversationTurn]) -> Vec<String> {
+    let q = question.trim();
+    if q.is_empty() {
+        return vec![q.to_string()];
+    }
+    // Split into clauses on common separators, keeping meaningful fragments.
+    let mut clauses: Vec<String> = q
+        .split(['?', '？', '.', '。', ';', '；', '\n'])
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.chars().count() >= 4)
+        .collect();
+    // De-duplicate while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    clauses.retain(|c| seen.insert(c.clone()));
+
+    if clauses.len() <= 1 {
+        return vec![q.to_string()];
+    }
+
+    let mut out: Vec<String> = clauses
+        .into_iter()
+        .take(WORKSPACE_QA_SUBQUERIES.saturating_sub(1).max(1))
+        .collect();
+    // Always include the original question as a broad catch-all query.
+    if out.len() < WORKSPACE_QA_SUBQUERIES {
+        out.push(q.to_string());
+    }
+    out.truncate(WORKSPACE_QA_SUBQUERIES);
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn finalize_grounded_answer(
     settings: &AppSettings,
@@ -1658,5 +1808,55 @@ mod tests {
     #[test]
     fn is_existing_local_path_nonexistent_absolute_returns_false() {
         assert!(!is_existing_local_path("/nonexistent/path/xyz123.md"));
+    }
+
+    // ── plan_workspace_subqueries (#3188) ──────────────────────────
+
+    #[test]
+    fn workspace_subqueries_empty_returns_single_empty() {
+        let out = plan_workspace_subqueries("", &[]);
+        assert_eq!(out, vec!["".to_string()]);
+    }
+
+    #[test]
+    fn workspace_subqueries_simple_question_single_query() {
+        // A short, clause-free question stays as one query.
+        let out = plan_workspace_subqueries("What is Rust?", &[]);
+        assert_eq!(out, vec!["What is Rust?".to_string()]);
+    }
+
+    #[test]
+    fn workspace_subqueries_splits_multi_clause() {
+        let q = "How does Rust handle memory? What about async? Summarize the tradeoffs.";
+        let out = plan_workspace_subqueries(q, &[]);
+        // Must fan out into multiple focused sub-queries (capped at 3).
+        assert!(
+            out.len() >= 2 && out.len() <= 3,
+            "got {} queries",
+            out.len()
+        );
+        // The original full question is always included as a catch-all.
+        assert!(out.contains(&q.to_string()), "missing catch-all: {:?}", out);
+        // Each sub-query is a meaningful clause, not the separator.
+        for sub in &out {
+            assert!(sub.chars().count() >= 4, "too-short sub-query: {:?}", sub);
+        }
+    }
+
+    #[test]
+    fn workspace_subqueries_dedups_clauses() {
+        let q = "Rust is fast. Rust is safe. Rust is concurrent.";
+        let out = plan_workspace_subqueries(q, &[]);
+        // Even though there are 3 clauses, the catch-all + dedup keeps it <= 3.
+        assert!(out.len() <= 3, "too many queries: {:?}", out);
+        assert!(out.contains(&q.to_string()));
+    }
+
+    #[test]
+    fn workspace_subqueries_drops_short_fragments() {
+        // A leading short fragment ("hi.") must be dropped; the long clause remains.
+        let q = "hi. Explain the borrow checker in detail.";
+        let out = plan_workspace_subqueries(q, &[]);
+        assert!(out.iter().all(|s| s.chars().count() >= 4));
     }
 }

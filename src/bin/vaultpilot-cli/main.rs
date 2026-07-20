@@ -272,6 +272,39 @@ enum Commands {
         action: CanvasActions,
     },
 
+    /// Render vault notes on a month-grid calendar by their frontmatter dates
+    /// (#3182).
+    ///
+    /// Notes whose YAML frontmatter carries a date field (`date`, `created`,
+    /// `published`, `day`, in priority order) are placed on the calendar grid.
+    /// This mirrors Obsidian's planned "Calendar view for Bases" feature.
+    ///
+    /// Examples:
+    ///   vp calendar --year 2026 --month 7
+    ///   vp calendar --month 7 --with-titles --week-start monday
+    ///   vp calendar --month 7 --json
+    Calendar {
+        /// Calendar year (defaults to the current year)
+        #[arg(long)]
+        year: Option<i32>,
+
+        /// Calendar month 1-12 (defaults to the current month)
+        #[arg(long)]
+        month: Option<u32>,
+
+        /// Start the week on Monday instead of Sunday
+        #[arg(long, value_enum, default_value_t = CliWeekStart::Sunday)]
+        week_start: CliWeekStart,
+
+        /// Also render each day's first entry title below the grid
+        #[arg(long)]
+        with_titles: bool,
+
+        /// Emit machine-readable JSON instead of the text grid
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Open or create today's daily note with optional template (#1843)
     ///
     /// Creates a structured daily note at `Daily/YYYY-MM-DD.md` using a template.
@@ -1439,6 +1472,15 @@ enum VaultActions {
     },
 }
 
+/// Week-start convention for the `calendar` month grid (#3182).
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum CliWeekStart {
+    /// Sunday-first (US convention)
+    Sunday,
+    /// Monday-first (ISO 8601 / most of the world)
+    Monday,
+}
+
 /// Output format for vault query results (#2813)
 #[derive(Clone, Debug, clap::ValueEnum)]
 enum QueryFormat {
@@ -2248,6 +2290,13 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         })),
         Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
         Commands::Canvas { action } => handle_canvas(context, action),
+        Commands::Calendar {
+            year,
+            month,
+            week_start,
+            with_titles,
+            json,
+        } => handle_calendar(context, *year, *month, *week_start, *with_titles, *json),
         Commands::Daily {
             template,
             date,
@@ -3648,6 +3697,136 @@ fn handle_canvas(context: &StorageContext, action: &CanvasActions) -> Result<Val
             }))
         }
     }
+}
+
+fn handle_calendar(
+    context: &StorageContext,
+    year: Option<i32>,
+    month: Option<u32>,
+    week_start: CliWeekStart,
+    with_titles: bool,
+    json: bool,
+) -> Result<Value> {
+    use chrono::Datelike;
+    use vaultpilot_lib::calendar_view::{entries_from_records, render_month_grid, WeekStart};
+
+    let now = chrono::Local::now().date_naive();
+    let year = year.unwrap_or_else(|| now.year());
+    let month = month.unwrap_or_else(|| now.month());
+    if !(1..=12).contains(&month) {
+        anyhow::bail!("month must be between 1 and 12, got {month}");
+    }
+
+    let ws = match week_start {
+        CliWeekStart::Sunday => WeekStart::Sunday,
+        CliWeekStart::Monday => WeekStart::Monday,
+    };
+
+    // Read every markdown note from disk (recursively, skipping hidden dirs)
+    // and build Records from their frontmatter — no DB index required, so the
+    // command works against a raw vault out of the box. Mirrors how `canvas`
+    // lists files directly from disk.
+    let vault_dir = context.vault_dir();
+    let paths = collect_markdown_files(vault_dir)?;
+    let mut records: Vec<vaultpilot_lib::vault_query::Record> = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let content = raw.replace("\r\n", "\n");
+        let content = content.trim_start_matches('\u{feff}');
+        let rel = path
+            .strip_prefix(vault_dir)
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.display().to_string());
+        if let Some(yaml_block) = extract_frontmatter_yaml_block(content) {
+            if let Ok(mapping) = serde_yaml_ng::from_str::<serde_yaml_ng::Mapping>(&yaml_block) {
+                records.push(record_from_yaml(&rel, &mapping));
+            } else {
+                let rec = vaultpilot_lib::vault_query::Record::new(&rel);
+                records.push(rec);
+            }
+        } else {
+            let rec = vaultpilot_lib::vault_query::Record::new(&rel);
+            records.push(rec);
+        }
+    }
+
+    let entries = entries_from_records(
+        &records,
+        vaultpilot_lib::calendar_view::DEFAULT_DATE_FIELDS,
+        Some("title"),
+    );
+
+    if json {
+        let days: Vec<serde_json::Value> = entries
+            .iter()
+            .filter(|e| e.date.year() == year && e.date.month() == month)
+            .map(|e| {
+                serde_json::json!({
+                    "path": e.note_path,
+                    "date": e.date.format("%Y-%m-%d").to_string(),
+                    "title": e.title,
+                })
+            })
+            .collect();
+        return Ok(serde_json::json!({
+            "year": year,
+            "month": month,
+            "week_start": format!("{:?}", ws),
+            "scanned": records.len(),
+            "entries": days,
+        }));
+    }
+
+    let grid = render_month_grid(year, month, &entries, ws, with_titles);
+    println!("{grid}");
+    Ok(serde_json::json!({
+        "year": year,
+        "month": month,
+        "scanned": records.len(),
+        "entries_placed": entries
+            .iter()
+            .filter(|e| e.date.year() == year && e.date.month() == month)
+            .count(),
+    }))
+}
+
+/// Recursively collect every `.md` / `.markdown` file under `dir`, skipping
+/// hidden directories (those whose name starts with `.`).
+fn collect_markdown_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
+        };
+        for entry in rd {
+            let entry = entry?;
+            let path = entry.path();
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                }
+                walk(&path, out)?;
+            } else if ft.is_file() {
+                let ext = path.extension().and_then(|s| s.to_str());
+                if matches!(ext, Some("md") | Some("markdown")) {
+                    out.push(path);
+                }
+            }
+        }
+        Ok(())
+    }
+    walk(dir, &mut out)?;
+    out.sort();
+    Ok(out)
 }
 
 fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value> {

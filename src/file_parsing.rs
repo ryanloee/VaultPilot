@@ -661,11 +661,54 @@ pub struct ImageSize {
     pub url: String,
 }
 
+/// Try to parse `s` as a bare dimension specifier (no alt text, no `|`).
+///
+/// This handles the Obsidian 1.13.2 external-image syntax `![200](url)` and
+/// `![200x150](url)` where the alt position carries pure dimension metadata.
+/// Returns `Some(dimension_str)` only when `s` is a valid `W` or `WxH` string
+/// (both parts parse as `u32`, or at least one does); otherwise `None`.
+///
+/// A plain number `"200"` is accepted as width-only. Mixed text like
+/// `"my photo"` or `"note|300"` is rejected and treated as alt text.
+fn _try_parse_alt_as_size(s: &str) -> Option<&str> {
+    if s.is_empty() {
+        return None;
+    }
+    // Must be purely numeric or numeric-x-numeric — no stray words.
+    let has_x = s.contains('x');
+    if has_x {
+        let parts: Vec<&str> = s.split('x').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        let w = parts[0].trim();
+        let h = parts[1].trim();
+        let w_ok = !w.is_empty() && w.parse::<u32>().is_ok();
+        let h_ok = !h.is_empty() && h.parse::<u32>().is_ok();
+        if w_ok || h_ok {
+            Some(s)
+        } else {
+            None
+        }
+    } else {
+        // No 'x' → must be a pure number.
+        if s.parse::<u32>().is_ok() {
+            Some(s)
+        } else {
+            None
+        }
+    }
+}
+
 /// Parse a markdown image written in the `![alt|WxH](url)` convention
 /// (Obsidian/Logseq size syntax).  Returns `Some` for **any** valid image
 /// token — including a bare `![alt](url)` with no `|WxH` suffix, in which case
 /// `width`/`height` are `None`.  Returns `None` only when the input is not a
 /// valid markdown image at all (plain text, a link, or empty alt+url).
+///
+/// As of Obsidian 1.13.2, the `![WxH](url)` syntax (no `|`, no alt text) is
+/// also supported for external images — the alt position holds pure dimension
+/// metadata.  See #3221.
 ///
 /// The parser is tolerant of:
 /// * whitespace around the `|` (`![alt | 300x200 ](url)`)
@@ -688,10 +731,21 @@ pub fn parse_image_size(token: &str) -> Option<ImageSize> {
         return None;
     }
 
-    // The alt may carry a `|WxH` suffix.
+    // The alt may carry a `|WxH` suffix (Obsidian/Logseq convention).
+    // Additionally, Obsidian 1.13.2 added the `![WxH](url)` syntax for
+    // *external* images where the alt position holds pure dimension metadata
+    // (no `|` separator, no alt text).  See #3221.
     let (alt, size) = match alt_part.split_once('|') {
         Some((a, s)) => (a.trim().to_string(), Some(s.trim())),
-        None => (alt_part.trim().to_string(), None),
+        None => {
+            // No `|` → check whether alt_part is a pure dimension
+            // (width-only "200" or width×height "200x150"). If it parses as
+            // a dimension, treat it as the size suffix with empty alt.
+            // Otherwise treat the whole string as alt text.
+            _try_parse_alt_as_size(alt_part.trim())
+                .map(|size_str| ("".to_string(), Some(size_str)))
+                .unwrap_or_else(|| (alt_part.trim().to_string(), None))
+        }
     };
 
     let (width, height) = match size {
@@ -729,21 +783,32 @@ pub fn parse_image_size(token: &str) -> Option<ImageSize> {
     })
 }
 
-/// Serialize an [`ImageSize`] back into the `![alt|WxH](url)` markdown token.
+/// Serialize an [`ImageSize`] back into the markdown token.
 ///
 /// Dimension rendering rules (matches Obsidian convention):
-/// * both present  → `![alt|WxH](url)`
-/// * width only    → `![alt|W](url)`
-/// * height only   → `![alt|xH](url)`
-/// * neither       → `![alt](url)` (no `|` suffix)
+/// * alt + both      → `![alt|WxH](url)`  (Obsidian/Logseq convention)
+/// * alt + width only → `![alt|W](url)`
+/// * alt + height only → `![alt|xH](url)`
+/// * no alt + sized   → `![WxH](url)`  (Obsidian 1.13.2 external image syntax, #3221)
+/// * no alt + neither → `![](url)`  (bare image)
 pub fn serialize_image_size(img: &ImageSize) -> String {
+    let has_alt = !img.alt.is_empty();
+    let has_size = img.width.is_some() || img.height.is_some();
     let size = match (img.width, img.height) {
-        (Some(w), Some(h)) => format!("|{w}x{h}"),
-        (Some(w), None) => format!("|{w}"),
-        (None, Some(h)) => format!("|x{h}"),
+        (Some(w), Some(h)) => format!("{w}x{h}"),
+        (Some(w), None) => w.to_string(),
+        (None, Some(h)) => format!("x{h}"),
         (None, None) => String::new(),
     };
-    format!("![{}{}]({})", img.alt, size, img.url)
+    if has_alt && has_size {
+        format!("![{}|{}]({})", img.alt, size, img.url)
+    } else if !has_alt && has_size {
+        format!("![{}]({})", size, img.url)
+    } else if has_alt {
+        format!("![{}]({})", img.alt, img.url)
+    } else {
+        format!("![]({})", img.url)
+    }
 }
 
 /// Rewrite every `![alt|WxH](url)` (or `![alt](url)`) token in `markdown` so
@@ -943,5 +1008,60 @@ mod tests {
         let md = "![a|300x200](img/cat.png)";
         let out = set_image_size(md, "img/dog.png", Some(10), None);
         assert_eq!(out, md);
+    }
+
+    // ── #3221: Obsidian 1.13.2 external image size syntax ──────
+
+    #[test]
+    fn obsidian_external_image_width_only() {
+        // ![200](url) → width=200, height=None, alt=""
+        let img = parse_image_size("![200](https://example.com/img.png)").unwrap();
+        assert_eq!(img.width, Some(200));
+        assert_eq!(img.height, None);
+        assert_eq!(img.alt, "");
+        assert_eq!(img.url, "https://example.com/img.png");
+    }
+
+    #[test]
+    fn obsidian_external_image_full_dims() {
+        let img = parse_image_size("![200x150](https://example.com/img.png)").unwrap();
+        assert_eq!(img.width, Some(200));
+        assert_eq!(img.height, Some(150));
+        assert_eq!(img.alt, "");
+        assert_eq!(img.url, "https://example.com/img.png");
+    }
+
+    #[test]
+    fn obsidian_external_image_roundtrip_width_only() {
+        let token = "![200](https://example.com/img.png)";
+        let img = parse_image_size(token).unwrap();
+        assert_eq!(serialize_image_size(&img), token);
+    }
+
+    #[test]
+    fn obsidian_external_image_roundtrip_full() {
+        let token = "![200x150](https://example.com/img.png)";
+        let img = parse_image_size(token).unwrap();
+        assert_eq!(serialize_image_size(&img), token);
+    }
+
+    #[test]
+    fn obsidian_external_image_alt_with_pipe_still_works() {
+        // Alt text with `|` separator should still work (existing Obsidian/Logseq style)
+        let img = parse_image_size("![photo|300x200](img/cat.png)").unwrap();
+        assert_eq!(img.alt, "photo");
+        assert_eq!(img.width, Some(300));
+        assert_eq!(img.height, Some(200));
+    }
+
+    #[test]
+    fn obsidian_external_image_numeric_alt_but_with_pipe_is_alt() {
+        // "![300|200](url)" — the | means "300" is alt text, "200" is width.
+        // This differs from Obsidian where | separates alt from size.
+        // We preserve backwards compat: alt text before | is kept.
+        let img = parse_image_size("![300|200](url)").unwrap();
+        assert_eq!(img.alt, "300");
+        assert_eq!(img.width, Some(200));
+        assert_eq!(img.height, None);
     }
 }

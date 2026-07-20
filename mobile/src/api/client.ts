@@ -233,13 +233,15 @@ async function chatAnthropic(
 
     if (!res.body) throw new Error('No response body');
 
-    // Mark success before returning the stream — the stream's own finally handles cleanup
-    started = true;
-
     // Wrap Anthropic SSE into OpenAI-compatible format using the shared
     // wrapAnthropicBody function (consolidates duplicate SSE parsing with
     // chatWithReconnect's transformBody path — #2926).
     const wrapped = wrapAnthropicBody(res.body);
+    // #3224: Only mark `started = true` AFTER wrapAnthropicBody() succeeds.
+    // If wrapAnthropicBody throws, the finally block must clean up the
+    // timeout and signal listener (set started=true only when the
+    // ReadableStream is actually being returned).
+    started = true;
     let wrappedReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     return new ReadableStream<Uint8Array>({
       start(ctrl) {

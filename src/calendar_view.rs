@@ -216,8 +216,15 @@ pub fn render_month_grid(
                                 continue;
                             }
                         }
+                        // Day exists but has no matching entry: full-width blank.
+                        out.push_str("              ");
+                    } else {
+                        // No day in this column (leading blank of first row
+                        // when month starts mid-week). Use narrow padding that
+                        // matches the date row's blank column width so the
+                        // first title isn't massively shifted to the right.
+                        out.push_str("   ");
                     }
-                    out.push_str("              ");
                 }
                 out.push('\n');
             }
@@ -511,6 +518,44 @@ mod tests {
         assert!(
             out.contains("My Design Doc") || out.contains("My Design D…"),
             "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_with_titles_first_week_midweek_start() {
+        // Regression test for issue #3187: when a month starts mid-week
+        // (first_col > 0), the title for day 1 in the first row must
+        // appear under the correct column, not massively shifted right
+        // by empty 14-char slots for the leading blank columns.
+        //
+        // July 2026 starts on Wednesday (Sunday-first → first_col = 3).
+        // The first row has leading blanks for Sun/Mon/Tue, then day 1
+        // (Wed) through day 4 (Sat). The title for day 1 should align
+        // near the start of the title line, not at position 40+.
+        let e = CalendarEntry {
+            note_path: "a.md".into(),
+            date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            title: Some("TITLEABC".into()),
+        };
+        let out = render_month_grid(2026, 7, &[e], WeekStart::Sunday, true);
+        // The title line is 2 lines below the header (line 0 = title,
+        // line 1 = weekday headers, line 2 = first date row,
+        // line 3 = first title row).
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines.len() > 3, "not enough lines:\n{out}");
+        let title_line = lines[3];
+        let pos = title_line.find("TITLEABC");
+        assert!(pos.is_some(), "TITLEABC not found in title line:\n{out}");
+        let pos = pos.unwrap();
+        // Before fix: pos would be 42 (3 blank slots × 14 chars each).
+        // After fix: pos should be ≤ 12 (3 blank slots × 3 chars + 3
+        // for the narrow title indent, or less if no indent needed).
+        // We assert < 20 to leave margin for future width tweaks.
+        assert!(
+            pos < 20,
+            "TITLEABC at position {}, expected < 20 (first_col=3 should use narrow indent instead of 14-char slots):\n{}",
+            pos,
+            out
         );
     }
 

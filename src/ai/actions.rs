@@ -39,6 +39,10 @@ pub enum AiActionType {
     /// Synthesize a structured wiki article from related notes by tag/folder,
     /// with inline citations back to source notes (#3128).
     SynthesizeWiki,
+    /// Workspace-wide Q&A: plan subqueries, retrieve block-level context from
+    /// the entire vault, synthesize answer with inline [[Note#^block-id]]
+    /// citations.  Uses block_id infrastructure from #2998 (#3188).
+    WorkspaceQuery,
 }
 
 impl AiActionType {
@@ -59,6 +63,7 @@ impl AiActionType {
             Self::Brainstorm => "头脑风暴",
             Self::ReviewNote => "审阅笔记",
             Self::SynthesizeWiki => "综合维基",
+            Self::WorkspaceQuery => "工作区问答",
         }
     }
 
@@ -79,6 +84,7 @@ impl AiActionType {
             Self::Brainstorm => "brainstorm",
             Self::ReviewNote => "reviewNote",
             Self::SynthesizeWiki => "synthesizeWiki",
+            Self::WorkspaceQuery => "workspaceQuery",
         }
     }
 
@@ -101,6 +107,9 @@ impl AiActionType {
             "synthesizeWiki" | "synthesize_wiki" | "synthesize" | "wiki" => {
                 Some(Self::SynthesizeWiki)
             }
+            "workspaceQuery" | "workspace_query" | "workspaceQa" | "workspace" => {
+                Some(Self::WorkspaceQuery)
+            }
             _ => None,
         }
     }
@@ -122,6 +131,7 @@ impl AiActionType {
             Self::Brainstorm,
             Self::ReviewNote,
             Self::SynthesizeWiki,
+            Self::WorkspaceQuery,
         ]
     }
 }
@@ -311,6 +321,22 @@ fn system_prompt(action: AiActionType) -> String {
              Output only the wiki article in Markdown, no extra commentary."
                 .to_string()
         }
+        AiActionType::WorkspaceQuery => {
+            "You are a workspace-scale reasoning assistant. Your task is to answer \
+             the user's question by reasoning across the entire vault. \
+             - Plan sub-questions and retrieve relevant note blocks from the vault. \
+             - Synthesize a comprehensive answer from the retrieved context. \
+             - **Crucially**: cite every factual claim back to its source using \
+               inline citations in the form [[Note Title#^block-id]], where \
+               ^block-id is the exact block reference ID provided in the context \
+               (e.g., `<!-- ^a1b2c3d4 -->` markers). \
+             - If information is incomplete or sources conflict, note this \
+               explicitly rather than inventing facts. \
+             - Structure the answer with clear Markdown sections. End with a \
+               '## Sources' section listing cited notes with their block references. \
+             Output only the answer in Markdown with inline citations."
+                .to_string()
+        }
     }
 }
 
@@ -417,6 +443,24 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
                  related source notes. Integrate their content, cite each claim inline \
                  with [[note title]] wikilinks, and list the sources at the end:\n\n{}",
                 request.text
+            )
+        }
+        AiActionType::WorkspaceQuery => {
+            let question = if request.text.trim().is_empty() {
+                request
+                    .instruction
+                    .as_deref()
+                    .unwrap_or("the provided question")
+            } else {
+                request.text.as_str()
+            };
+            format!(
+                "Answer the following question by reasoning across all relevant notes \
+                 in the vault. Break the question into sub-questions, search the vault \
+                 for relevant context, and synthesize a comprehensive answer with \
+                 inline citations such as [[Note Title#^block-id]] for every factual \
+                 claim. Question:\n\n{}",
+                question
             )
         }
     }
@@ -1242,6 +1286,114 @@ mod tests {
         assert!(
             result.is_some(),
             "empty text should fail validation for SynthesizeWiki"
+        );
+    }
+
+    // ── WorkspaceQuery tests (#3188) ──────────────────────────────────
+
+    #[test]
+    fn workspace_query_label_and_id() {
+        assert_eq!(AiActionType::WorkspaceQuery.label(), "工作区问答");
+        assert_eq!(AiActionType::WorkspaceQuery.id(), "workspaceQuery");
+    }
+
+    #[test]
+    fn workspace_query_from_id() {
+        assert_eq!(
+            AiActionType::from_id("workspaceQuery"),
+            Some(AiActionType::WorkspaceQuery)
+        );
+        assert_eq!(
+            AiActionType::from_id("workspace_query"),
+            Some(AiActionType::WorkspaceQuery)
+        );
+        assert_eq!(
+            AiActionType::from_id("workspace"),
+            Some(AiActionType::WorkspaceQuery)
+        );
+    }
+
+    #[test]
+    fn workspace_query_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::WorkspaceQuery),
+            "WorkspaceQuery must be in the all() list"
+        );
+    }
+
+    #[test]
+    fn workspace_query_system_prompt_includes_block_id_citations() {
+        let prompt = system_prompt(AiActionType::WorkspaceQuery);
+        assert!(
+            prompt.contains("^block-id"),
+            "system prompt must instruct block-id citations"
+        );
+        assert!(
+            prompt.contains("workspace-scale"),
+            "must mention workspace-scale reasoning"
+        );
+    }
+
+    #[test]
+    fn workspace_query_user_prompt_includes_block_id() {
+        let request = AiActionRequest {
+            action: AiActionType::WorkspaceQuery,
+            text: "What is the project timeline?".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::WorkspaceQuery, &request);
+        assert!(
+            prompt.contains("project timeline"),
+            "must include the question text"
+        );
+        assert!(
+            prompt.contains("[[Note Title#^block-id]]"),
+            "must instruct inline citation format"
+        );
+    }
+
+    #[test]
+    fn workspace_query_user_prompt_falls_back_to_instruction() {
+        let request = AiActionRequest {
+            action: AiActionType::WorkspaceQuery,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("timeline inquiry".to_string()),
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::WorkspaceQuery, &request);
+        assert!(
+            prompt.contains("timeline inquiry"),
+            "must fall back to instruction when text is empty"
+        );
+        assert!(
+            !prompt.is_empty(),
+            "prompt must not be empty when instruction is provided"
+        );
+    }
+
+    #[test]
+    fn workspace_query_empty_all_returns_error() {
+        let request = AiActionRequest {
+            action: AiActionType::WorkspaceQuery,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "empty text should fail validation for WorkspaceQuery"
         );
     }
 }

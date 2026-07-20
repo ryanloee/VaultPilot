@@ -777,6 +777,41 @@ async fn http_progressive_search(
 ///
 /// Accepts markdown content with metadata (title, source URL, tags, collection).
 /// Returns the new note's ID and title.
+/// Build the tag list for a clipped note.
+///
+/// Web Clipper (#3189) callers always send `tags`, but we guarantee every
+/// clipped note carries the `clipped` tag so the Reader Mode (#3150) view and
+/// any `tag:clipped` queries can find it. Empty/missing input collapses to a
+/// single `clipped` tag; an explicit tag list keeps `clipped` appended if it
+/// isn't already present.
+pub(crate) fn build_clip_tags(raw_tags: &str) -> Vec<String> {
+    if raw_tags.trim().is_empty() {
+        return vec!["clipped".to_string()];
+    }
+    let mut t: Vec<String> = raw_tags
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !t.contains(&"clipped".to_string()) {
+        t.push("clipped".to_string());
+    }
+    t
+}
+
+/// Resolve the `source` metadata field for a clipped note.
+///
+/// When the clipper supplies a `sourceUrl` we record it verbatim; otherwise we
+/// fall back to the literal `web` sentinel so the note still sorts into the
+/// Web Clipper bucket in the UI.
+pub(crate) fn build_clip_source(raw_source_url: &str) -> String {
+    if raw_source_url.trim().is_empty() {
+        "web".to_string()
+    } else {
+        raw_source_url.to_string()
+    }
+}
+
 async fn http_create_note(
     State(state): State<Arc<HttpBridgeState>>,
     headers: HeaderMap,
@@ -795,26 +830,8 @@ async fn http_create_note(
 
     // Build frontmatter metadata
     let now = Utc::now().to_rfc3339();
-    let tags: Vec<String> = if request.tags.trim().is_empty() {
-        vec!["clipped".to_string()]
-    } else {
-        let mut t: Vec<String> = request
-            .tags
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !t.contains(&"clipped".to_string()) {
-            t.push("clipped".to_string());
-        }
-        t
-    };
-
-    let source = if request.source_url.trim().is_empty() {
-        "web".to_string()
-    } else {
-        request.source_url.clone()
-    };
+    let tags = build_clip_tags(&request.tags);
+    let source = build_clip_source(&request.source_url);
 
     let mut body = content;
     // Prepend source URL as a reference line if provided
@@ -3985,5 +4002,59 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("invalid URL"), "got: {err}");
+    }
+
+    // ── Web Clipper frontmatter helpers (#3189) ──────────────────
+    // These two pure functions are the contract between the browser
+    // extension (extensions/clipper/*) and the vault: every clipped note
+    // must be tagged `clipped` and carry a meaningful `source` so the
+    // Reader Mode view (#3150) and `tag:clipped` queries can find it.
+
+    #[test]
+    fn clip_tags_empty_input_defaults_to_clipped() {
+        assert_eq!(build_clip_tags(""), vec!["clipped".to_string()]);
+        assert_eq!(build_clip_tags("   "), vec!["clipped".to_string()]);
+    }
+
+    #[test]
+    fn clip_tags_explicit_list_keeps_clipped_appended() {
+        let tags = build_clip_tags("article,rust");
+        assert_eq!(
+            tags,
+            vec![
+                "article".to_string(),
+                "rust".to_string(),
+                "clipped".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn clip_tags_does_not_duplicate_existing_clipped() {
+        let tags = build_clip_tags("clipped,news");
+        assert_eq!(tags, vec!["clipped".to_string(), "news".to_string()]);
+    }
+
+    #[test]
+    fn clip_tags_trims_whitespace_and_drops_empty() {
+        let tags = build_clip_tags("  a , , b ");
+        assert_eq!(
+            tags,
+            vec!["a".to_string(), "b".to_string(), "clipped".to_string()]
+        );
+    }
+
+    #[test]
+    fn clip_source_records_url_when_present() {
+        assert_eq!(
+            build_clip_source("https://example.com/post"),
+            "https://example.com/post"
+        );
+    }
+
+    #[test]
+    fn clip_source_falls_back_to_web_sentinel() {
+        assert_eq!(build_clip_source(""), "web");
+        assert_eq!(build_clip_source("   "), "web");
     }
 }

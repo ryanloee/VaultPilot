@@ -402,8 +402,20 @@ export async function getNoteByTitle(title: string): Promise<DbNote | null> {
 let noteTitleCache: Map<string, string> | null = null;
 /** Promise for an in-flight getNoteTitleMap() call — dedup concurrent callers (#2526). */
 let noteTitleMapPromise: Promise<Map<string, string>> | null = null;
-/** True if an invalidation occurred while a load was in-flight; prevents restoring stale data. */
-let noteTitleMapDirty = false;
+/**
+ * Monotonically increasing generation counter for cache freshness (#3219).
+ *
+ * Replaces the binary `noteTitleMapDirty` flag which had a TOCTOU race:
+ *  1. `_doGetNoteTitleMap` `finally` nulls `noteTitleMapPromise` (line 466)
+ *  2. `invalidateNoteTitleCache` runs during the tiny window between promise-null
+ *     and the `!noteTitleMapDirty` guard — sees promise==null, skips dirty=true
+ *  3. `_doGetNoteTitleMap` passes the `!dirty` guard, caches stale data
+ *
+ * With a generation counter, every invalidation bumps the counter unconditionally.
+ * `_doGetNoteTitleMap` snapshots it before the DB query and only caches the result
+ * if the generation hasn't changed — no temporal window to exploit.
+ */
+let noteTitleGeneration = 0;
 /** External cache-invalidation callbacks (e.g. noteRefs.ts keeps its own cache in sync — #2527). */
 let onInvalidateNoteTitleCache: (() => void) | null = null;
 
@@ -421,12 +433,13 @@ export function setOnInvalidateNoteTitleCache(fn: () => void): void {
  * The cache is rebuilt on the next call to getNoteTitleMap().
  * Also notifies registered external listeners (e.g. noteRefs.ts) so their cache
  * stays in sync (#2527).
+ *
+ * #3219: always bumps the generation counter so no TOCTOU race can skip an
+ * invalidation signal, regardless of whether a load promise is in-flight.
  */
 export function invalidateNoteTitleCache(): void {
   noteTitleCache = null;
-  if (noteTitleMapPromise) {
-    noteTitleMapDirty = true;
-  }
+  noteTitleGeneration++;
   onInvalidateNoteTitleCache?.();
 }
 
@@ -445,6 +458,9 @@ export async function getNoteTitleMap(): Promise<Map<string, string>> {
 }
 
 async function _doGetNoteTitleMap(): Promise<Map<string, string>> {
+  // Snapshot the generation before the DB query so we can detect any
+  // invalidation that occurs while we're loading (#3219 TOCTOU fix).
+  const gen = noteTitleGeneration;
   try {
     const db = await getDb();
     const notes = await db.getAllAsync<{ id: string; title: string }>(
@@ -457,14 +473,14 @@ async function _doGetNoteTitleMap(): Promise<Map<string, string>> {
         map.set(n.title.trim().toLowerCase(), n.id);
       }
     }
-    // Only cache if not invalidated while we were loading (#2526 read race)
-    if (!noteTitleMapDirty) {
+    // Only cache if our snapshot generation still matches — i.e. no
+    // invalidation occurred while we were loading (#2526 read race, #3219).
+    if (noteTitleGeneration === gen) {
       noteTitleCache = map;
     }
     return map;
   } finally {
     noteTitleMapPromise = null;
-    noteTitleMapDirty = false;
   }
 }
 

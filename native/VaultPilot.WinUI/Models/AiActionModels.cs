@@ -42,6 +42,9 @@ public enum AiActionType
     /// <summary>Transcribe audio to text via OpenAI Whisper API (#3256).</summary>
     [JsonPropertyName("transcribeAudio")]
     TranscribeAudio,
+    /// <summary>AI-powered context-aware note link suggestion (#3271).</summary>
+    [JsonPropertyName("suggestLinks")]
+    SuggestLinks,
 }
 
 /// <summary>
@@ -176,6 +179,7 @@ public static class AiActionTypeExtensions
         AiActionType.SynthesizeWiki => "综合维基",
         AiActionType.WorkspaceQuery => "工作区问答",
         AiActionType.TranscribeAudio => "音频转写",
+        AiActionType.SuggestLinks => "智能推荐链接",
         _ => "未知操作"
     };
 }

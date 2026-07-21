@@ -333,6 +333,7 @@ public sealed partial class AiCommandPalette : UserControl
         "synthesizeWiki" or "synthesize_wiki" or "synthesize" or "wiki" => AiActionType.SynthesizeWiki,
         "workspaceQuery" or "workspace_query" or "workspace" => AiActionType.WorkspaceQuery,
         "transcribeAudio" or "transcribe_audio" or "transcribe" => AiActionType.TranscribeAudio,
+        "suggestLinks" or "suggest_links" or "suggest" => AiActionType.SuggestLinks,
         _ => AiActionType.Summarize
     };
 

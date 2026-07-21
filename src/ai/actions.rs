@@ -47,6 +47,10 @@ pub enum AiActionType {
     /// Transcribe an audio file to text using the OpenAI Whisper API (#3256).
     /// The `text` field of the request is treated as the audio file path.
     TranscribeAudio,
+    /// AI-powered context-aware note link suggestion: while a user is writing
+    /// and editing a note, the AI analyzes the current note content and
+    /// suggests relevant unlinked notes in the vault (#3271).
+    SuggestLinks,
 }
 
 impl AiActionType {
@@ -69,6 +73,7 @@ impl AiActionType {
             Self::SynthesizeWiki => "综合维基",
             Self::WorkspaceQuery => "工作区问答",
             Self::TranscribeAudio => "音频转写",
+            Self::SuggestLinks => "智能推荐链接",
         }
     }
 
@@ -91,6 +96,7 @@ impl AiActionType {
             Self::SynthesizeWiki => "synthesizeWiki",
             Self::WorkspaceQuery => "workspaceQuery",
             Self::TranscribeAudio => "transcribeAudio",
+            Self::SuggestLinks => "suggestLinks",
         }
     }
 
@@ -117,6 +123,7 @@ impl AiActionType {
                 Some(Self::WorkspaceQuery)
             }
             "transcribeAudio" | "transcribe_audio" | "transcribe" => Some(Self::TranscribeAudio),
+            "suggestLinks" | "suggest_links" | "suggest" => Some(Self::SuggestLinks),
             _ => None,
         }
     }
@@ -140,6 +147,7 @@ impl AiActionType {
             Self::SynthesizeWiki,
             Self::WorkspaceQuery,
             Self::TranscribeAudio,
+            Self::SuggestLinks,
         ]
     }
 }
@@ -348,6 +356,18 @@ fn system_prompt(action: AiActionType) -> String {
         // TranscribeAudio uses the Whisper API directly, not LLM chat completion.
         // The system prompt is unused — it's here only to satisfy the exhaustive match.
         AiActionType::TranscribeAudio => String::new(),
+        AiActionType::SuggestLinks => {
+            "You are a knowledge-graph assistant. Your task is to analyze the \
+             current note content and a list of available notes in the vault. \
+             Suggest 3-5 notes that are semantically related to the current \
+             note but are NOT already linked in it (check the note's existing \
+             wikilinks). Focus on notes that would create valuable connections. \
+             Output format: a Markdown bullet list where each item is \
+             `- [[Note Title]] — short reason (one sentence)`. \
+             If no meaningful unlinked notes exist, output 'No relevant unlinked notes found.' \
+             Output only the suggestion list, no extra commentary."
+                .to_string()
+        }
     }
 }
 
@@ -477,6 +497,21 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
         // TranscribeAudio uses the Whisper API directly, not LLM chat completion.
         // The user prompt is unused — it's here only to satisfy the exhaustive match.
         AiActionType::TranscribeAudio => String::new(),
+        AiActionType::SuggestLinks => {
+            format!(
+                "Current note content:\n\n{}\n\n\
+                 Available notes in the vault (title list):\n\n{}\n\n\
+                 Based on the current note content, suggest 3-5 notes from the \
+                 available notes list that are semantically related but NOT already \
+                 linked as [[wikilinks]] in the current note. For each suggestion, \
+                 include a one-sentence reason why they should be linked.",
+                request.text,
+                request
+                    .instruction
+                    .as_deref()
+                    .unwrap_or("(no vault notes provided)")
+            )
+        }
     }
 }
 
@@ -1603,5 +1638,110 @@ mod tests {
         };
         let prompt = user_prompt(AiActionType::TranscribeAudio, &request);
         assert_eq!(prompt, "");
+    }
+
+    // ── SuggestLinks tests (#3271) ─────────────────────────────────────
+
+    #[test]
+    fn suggest_links_label_and_id() {
+        assert_eq!(AiActionType::SuggestLinks.label(), "智能推荐链接");
+        assert_eq!(AiActionType::SuggestLinks.id(), "suggestLinks");
+    }
+
+    #[test]
+    fn suggest_links_from_id_variants() {
+        assert_eq!(
+            AiActionType::from_id("suggestLinks"),
+            Some(AiActionType::SuggestLinks)
+        );
+        assert_eq!(
+            AiActionType::from_id("suggest_links"),
+            Some(AiActionType::SuggestLinks)
+        );
+        assert_eq!(
+            AiActionType::from_id("suggest"),
+            Some(AiActionType::SuggestLinks)
+        );
+        assert_eq!(AiActionType::from_id("suggestLink"), None);
+    }
+
+    #[test]
+    fn suggest_links_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::SuggestLinks),
+            "SuggestLinks missing from all()"
+        );
+    }
+
+    #[test]
+    fn suggest_links_system_prompt_structure() {
+        let prompt = system_prompt(AiActionType::SuggestLinks);
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("knowledge-graph"));
+        assert!(prompt.contains("[[Note Title]]"));
+        assert!(prompt.contains("unlinked"));
+    }
+
+    #[test]
+    fn suggest_links_user_prompt_structure() {
+        let req = AiActionRequest {
+            action: AiActionType::SuggestLinks,
+            text: "Some note content".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("Note A\nNote B".to_string()),
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::SuggestLinks, &req);
+        assert!(prompt.contains("Some note content"));
+        assert!(prompt.contains("Note A"));
+        assert!(prompt.contains("[[wikilinks]]"));
+    }
+
+    #[test]
+    fn suggest_links_user_prompt_no_instruction() {
+        let req = AiActionRequest {
+            action: AiActionType::SuggestLinks,
+            text: "Note content".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::SuggestLinks, &req);
+        assert!(prompt.contains("Note content"));
+        assert!(prompt.contains("no vault notes provided"));
+    }
+
+    #[test]
+    fn suggest_links_empty_text_fails_validation() {
+        let req = AiActionRequest {
+            action: AiActionType::SuggestLinks,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: Some("some notes".to_string()),
+            model: None,
+        };
+        let result = validate_request(&req);
+        assert!(
+            result.is_some(),
+            "SuggestLinks with empty text should fail validation"
+        );
+    }
+
+    #[test]
+    fn suggest_links_process_action_result_trims() {
+        let result = process_action_result(
+            AiActionType::SuggestLinks,
+            "  - [[Note A]] — related topic\n\n  ",
+            RequestUsage::default(),
+        );
+        assert_eq!(result.result, "- [[Note A]] — related topic");
+        assert!(result.error.is_none());
     }
 }

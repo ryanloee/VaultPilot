@@ -60,6 +60,8 @@ public sealed partial class MainWindow : Window
     private volatile int _updateDownloadPercent = -1;
     private volatile string _updateDownloadVersion = string.Empty;
     private DispatcherTimer? _autoWakeTimer;
+    private int _autoWakeConsecutiveFailures;
+    private const int AutoWakeMaxFailures = 3;
     private Views.NotesView? _notesView;
     private bool _notesViewLoaded;
     private nint _windowHandle;
@@ -877,6 +879,7 @@ public sealed partial class MainWindow : Window
         }
 
         _lastAutoWakeTime = null;
+        _autoWakeConsecutiveFailures = 0;
         _autoWakeTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMinutes(1),
@@ -974,20 +977,45 @@ public sealed partial class MainWindow : Window
             await SaveChatStateAsync();
 
             _lastAutoWakeTime = DateTime.Now;
+            _autoWakeConsecutiveFailures = 0; // reset counter on success
             await LogStartup("自动唤醒完成: 已发送提问并收到回复");
         }
         catch (Exception error)
         {
-            // Add error as assistant message so user can see what happened
-            var errorSessionId = _currentSessionId;
-            await AddTurnAsync("assistant", $"⏰ 自动唤醒失败: {LocalizeError(error.Message)}", sessionId: errorSessionId, source: "scheduled_wake");
-            RenderCurrentSession();
-            ScrollToLatest();
-            if (!_isShuttingDown)
+            // Back off: update last wake time so the interval is respected
+            _lastAutoWakeTime = DateTime.Now;
+            _autoWakeConsecutiveFailures++;
+
+            if (_autoWakeConsecutiveFailures >= AutoWakeMaxFailures)
             {
-                await SaveChatStateAsync();
+                // After 3 consecutive failures, disable auto-wake to prevent
+                // flooding the UI with retries.
+                _autoWakeConsecutiveFailures = 0;
+                var msg = $"⏰ 自动唤醒失败 {AutoWakeMaxFailures} 次，已暂停自动唤醒。请修复后重启或重新启用。";
+                var failSessionId = _currentSessionId;
+                await AddTurnAsync("assistant", msg, sessionId: failSessionId, source: "scheduled_wake");
+                RenderCurrentSession();
+                ScrollToLatest();
+                if (!_isShuttingDown)
+                {
+                    await SaveChatStateAsync();
+                }
+                await LogStartup(msg);
+                StopAutoWakeTimer();
             }
-            await LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
+            else
+            {
+                // Add error as assistant message so user can see what happened
+                var errorSessionId = _currentSessionId;
+                await AddTurnAsync("assistant", $"⏰ 自动唤醒失败: {LocalizeError(error.Message)}", sessionId: errorSessionId, source: "scheduled_wake");
+                RenderCurrentSession();
+                ScrollToLatest();
+                if (!_isShuttingDown)
+                {
+                    await SaveChatStateAsync();
+                }
+                await LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
+            }
         }
         finally
         {

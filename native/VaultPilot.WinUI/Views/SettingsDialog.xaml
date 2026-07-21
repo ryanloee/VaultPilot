@@ -202,6 +202,12 @@
                             <RadioButton x:Name="ThemeDark" Content="暗色" />
                         </RadioButtons>
                     </StackPanel>
+                    <TextBox
+                        x:Name="ProxyUrlBox"
+                        Header="代理地址（可选）"
+                        PlaceholderText="例如 http://127.0.0.1:7897"
+                        AutomationProperties.Name="代理地址"
+                        HorizontalAlignment="Stretch" />
                 </StackPanel>
             </Border>
 

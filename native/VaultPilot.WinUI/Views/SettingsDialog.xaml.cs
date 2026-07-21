@@ -120,6 +120,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
         // General section
         AutoCheckUpdatesBox.IsChecked = settings.AutoCheckUpdates;
+        ProxyUrlBox.Text = settings.ProxyUrl ?? string.Empty;
 
         // Auto-wake section
         AutoWakeEnabledBox.IsChecked = settings.AutoWakeEnabled;
@@ -863,6 +864,7 @@ public sealed partial class SettingsDialog : ContentDialog
                 trimmedWakeStart,
                 trimmedWakeEnd,
                 AutoWakePromptBox.Text?.Trim() ?? string.Empty,
+                ProxyUrlBox.Text?.Trim(),
                 _providers,
                 _activeProviderIndex);
 

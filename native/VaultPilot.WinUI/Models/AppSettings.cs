@@ -57,6 +57,7 @@ public sealed record AppSettings
     /// If empty, a default prompt is used.
     /// </summary>
     public string AutoWakePrompt { get; init; } = string.Empty;
+    public string? ProxyUrl { get; init; }
 
     [JsonConstructor]
     public AppSettings() { }
@@ -71,6 +72,7 @@ public sealed record AppSettings
         string AutoWakeStartTime,
         string AutoWakeEndTime,
         string? AutoWakePrompt = null,
+        string? ProxyUrl = null,
         List<ProviderConfig>? Providers = null,
         int ActiveProviderIndex = 0)
     {
@@ -85,5 +87,6 @@ public sealed record AppSettings
         this.AutoWakeStartTime = AutoWakeStartTime ?? string.Empty;
         this.AutoWakeEndTime = AutoWakeEndTime ?? string.Empty;
         this.AutoWakePrompt = AutoWakePrompt ?? string.Empty;
+        this.ProxyUrl = ProxyUrl;
     }
 }

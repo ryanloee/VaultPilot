@@ -264,6 +264,16 @@ pub fn collect_setting_definitions() -> Vec<SettingDefinition> {
             SettingType::Boolean
         )
         .build(&defaults),
+        def!(
+            "proxyUrl",
+            "代理地址",
+            "HTTP 代理地址（如 http://127.0.0.1:7897）。留空则不使用代理。",
+            SettingCategory::General,
+            SettingType::Text
+        )
+        .placeholder("http://127.0.0.1:7897")
+        .default_value(serde_json::json!(""))
+        .build(&defaults),
         // ----- Provider -----
         def!(
             "provider.baseUrl",

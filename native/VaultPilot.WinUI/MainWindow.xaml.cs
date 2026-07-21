@@ -816,6 +816,10 @@ public sealed partial class MainWindow : Window
     private DateTime? _lastAutoWakeTime;
     private volatile int _autoWakeInProgress;
     private volatile bool _isStopping; // #677: volatile for cross-thread visibility
+    // #3253: track consecutive auto-wake failures so we stop hammering an
+    // unreachable backend. Reset to 0 on the first successful wake.
+    private int _autoWakeConsecutiveFailures;
+    private const int AutoWakeMaxConsecutiveFailures = 3;
 
     /// <summary>
     /// Called by App during shutdown to prevent the auto-wake timer
@@ -877,6 +881,9 @@ public sealed partial class MainWindow : Window
         }
 
         _lastAutoWakeTime = null;
+        // #3253: reset the failure counter when auto-wake is (re-)applied so
+        // the user gets a fresh start after re-enabling from settings.
+        Interlocked.Exchange(ref _autoWakeConsecutiveFailures, 0);
         _autoWakeTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMinutes(1),
@@ -974,10 +981,18 @@ public sealed partial class MainWindow : Window
             await SaveChatStateAsync();
 
             _lastAutoWakeTime = DateTime.Now;
+            // #3253: a successful wake resets the consecutive-failure counter.
+            Interlocked.Exchange(ref _autoWakeConsecutiveFailures, 0);
             await LogStartup("自动唤醒完成: 已发送提问并收到回复");
         }
         catch (Exception error)
         {
+            // #3253: update _lastAutoWakeTime on failure too, otherwise the
+            // interval guard above never passes and the per-minute timer tick
+            // retries every minute forever while the backend is unreachable.
+            _lastAutoWakeTime = DateTime.Now;
+            var failures = Interlocked.Increment(ref _autoWakeConsecutiveFailures);
+
             // Add error as assistant message so user can see what happened
             var errorSessionId = _currentSessionId;
             await AddTurnAsync("assistant", $"⏰ 自动唤醒失败: {LocalizeError(error.Message)}", sessionId: errorSessionId, source: "scheduled_wake");
@@ -988,6 +1003,16 @@ public sealed partial class MainWindow : Window
                 await SaveChatStateAsync();
             }
             await LogStartup($"自动唤醒失败: {LocalizeError(error.Message)}");
+
+            // #3253: after AutoWakeMaxConsecutiveFailures consecutive failures,
+            // stop the auto-wake timer so we don't keep spamming a dead backend.
+            // The user can re-enable it from settings (which calls
+            // ApplyAutoWakeSettings and resets the counter).
+            if (failures >= AutoWakeMaxConsecutiveFailures)
+            {
+                await LogStartup($"自动唤醒已连续失败 {failures} 次，暂停自动唤醒。请检查 AI 后端连接后在设置中重新开启。");
+                StopAutoWakeTimer();
+            }
         }
         finally
         {

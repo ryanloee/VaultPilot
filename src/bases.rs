@@ -400,14 +400,19 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
                     if arr.is_empty() {
                         vec![DEFAULT_KANBAN_UNGROUPED.to_string()]
                     } else {
+                        // #3251: trim each element so padded values match
+                        // declared columns.
                         arr.iter()
-                            .filter(|&s| !s.trim().is_empty())
-                            .cloned()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
                             .collect()
                     }
                 } else {
-                    let s = field_str(meta, group_field);
-                    if s.trim().is_empty() {
+                    // #3251: trim the key so whitespace-padded frontmatter
+                    // values match declared columns instead of spawning
+                    // phantom swimlanes.
+                    let s = field_str(meta, group_field).trim().to_string();
+                    if s.is_empty() {
                         vec![DEFAULT_KANBAN_UNGROUPED.to_string()]
                     } else {
                         vec![s]
@@ -462,11 +467,15 @@ pub fn build_kanban_groups(
         slots.len() - 1
     };
 
-    for (key, row) in pairs {
-        let idx = index_of(&key, &mut buckets);
+    for (raw_key, row) in pairs {
+        // #3251: trim intake keys so whitespace-padded frontmatter values
+        // ("  done  ") match declared columns instead of spawning phantom
+        // swimlanes. Mirrors the declared-column trim below.
+        let key = raw_key.trim();
+        let idx = index_of(key, &mut buckets);
         buckets[idx].1.push(row);
-        if !insertion_order.contains(&key) {
-            insertion_order.push(key);
+        if !insertion_order.iter().any(|s| s == key) {
+            insertion_order.push(key.to_string());
         }
     }
 

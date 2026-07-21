@@ -57,4 +57,5 @@ mod issue_3104_notes_batch_operations;
 mod issue_3159_os_keychain;
 mod issue_3170_keychain_clear;
 mod issue_3189_web_clipper;
+mod issue_3258_kanban_multi_value_group;
 mod issue_914_related_notes;

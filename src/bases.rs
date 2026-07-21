@@ -380,20 +380,44 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
             .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or("status");
-        // Pair each sorted row with its group key (computed from the same
-        // NoteMeta we projected from). Empty values fall into the ungrouped
-        // bucket so the column never disappears when a note has no status.
+        // Pair each sorted row with its group key(s). For single-value fields
+        // we use `field_str` to extract one key. For multi-value array fields
+        // (`tags`, `keywords`, `collections`) we expand the note into one
+        // (key, row) pair per element so it appears in every matching swimlane
+        // (#3258). Empty values / empty arrays fall into the ungrouped bucket.
+        let is_array = matches!(group_field, "tags" | "keywords" | "collections");
         let paired: Vec<(String, BaseRow)> = notes
             .iter()
             .zip(rows.iter())
-            .map(|(meta, row)| {
-                let key = field_str(meta, group_field);
-                let key = if key.trim().is_empty() {
-                    DEFAULT_KANBAN_UNGROUPED.to_string()
+            .flat_map(|(meta, row)| {
+                let keys: Vec<String> = if is_array {
+                    let arr: &[String] = match group_field {
+                        "tags" => &meta.tags,
+                        "keywords" => &meta.keywords,
+                        "collections" => &meta.collections,
+                        _ => unreachable!(),
+                    };
+                    if arr.is_empty() {
+                        vec![DEFAULT_KANBAN_UNGROUPED.to_string()]
+                    } else {
+                        arr.iter()
+                            .filter(|&s| !s.trim().is_empty())
+                            .cloned()
+                            .collect()
+                    }
                 } else {
-                    key
+                    let s = field_str(meta, group_field);
+                    if s.trim().is_empty() {
+                        vec![DEFAULT_KANBAN_UNGROUPED.to_string()]
+                    } else {
+                        vec![s]
+                    }
                 };
-                (key, row.clone())
+                if keys.is_empty() {
+                    vec![(DEFAULT_KANBAN_UNGROUPED.to_string(), row.clone())]
+                } else {
+                    keys.into_iter().map(|k| (k, row.clone())).collect()
+                }
             })
             .collect();
         build_kanban_groups(paired, config.kanban_columns.as_deref())

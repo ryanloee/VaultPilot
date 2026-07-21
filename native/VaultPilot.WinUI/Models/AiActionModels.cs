@@ -45,6 +45,9 @@ public enum AiActionType
     /// <summary>AI-powered context-aware note link suggestion (#3271).</summary>
     [JsonPropertyName("suggestLinks")]
     SuggestLinks,
+    /// <summary>Ad-hoc multi-note synthesis (#3270).</summary>
+    [JsonPropertyName("synthesizeNotes")]
+    SynthesizeNotes,
 }
 
 /// <summary>
@@ -180,6 +183,7 @@ public static class AiActionTypeExtensions
         AiActionType.WorkspaceQuery => "工作区问答",
         AiActionType.TranscribeAudio => "音频转写",
         AiActionType.SuggestLinks => "智能推荐链接",
+        AiActionType.SynthesizeNotes => "笔记综合",
         _ => "未知操作"
     };
 }

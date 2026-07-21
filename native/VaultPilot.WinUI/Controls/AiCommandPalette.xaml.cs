@@ -334,6 +334,7 @@ public sealed partial class AiCommandPalette : UserControl
         "workspaceQuery" or "workspace_query" or "workspace" => AiActionType.WorkspaceQuery,
         "transcribeAudio" or "transcribe_audio" or "transcribe" => AiActionType.TranscribeAudio,
         "suggestLinks" or "suggest_links" or "suggest" => AiActionType.SuggestLinks,
+        "synthesizeNotes" or "synthesize_notes" or "synNotes" => AiActionType.SynthesizeNotes,
         _ => AiActionType.Summarize
     };
 

@@ -51,6 +51,9 @@ pub enum AiActionType {
     /// and editing a note, the AI analyzes the current note content and
     /// suggests relevant unlinked notes in the vault (#3271).
     SuggestLinks,
+    /// Ad-hoc multi-note synthesis: synthesize a cross-note summary, identify
+    /// shared themes, missing links, and conflicts from selected notes (#3270).
+    SynthesizeNotes,
 }
 
 impl AiActionType {
@@ -74,6 +77,7 @@ impl AiActionType {
             Self::WorkspaceQuery => "工作区问答",
             Self::TranscribeAudio => "音频转写",
             Self::SuggestLinks => "智能推荐链接",
+            Self::SynthesizeNotes => "笔记综合",
         }
     }
 
@@ -97,6 +101,7 @@ impl AiActionType {
             Self::WorkspaceQuery => "workspaceQuery",
             Self::TranscribeAudio => "transcribeAudio",
             Self::SuggestLinks => "suggestLinks",
+            Self::SynthesizeNotes => "synthesizeNotes",
         }
     }
 
@@ -124,6 +129,9 @@ impl AiActionType {
             }
             "transcribeAudio" | "transcribe_audio" | "transcribe" => Some(Self::TranscribeAudio),
             "suggestLinks" | "suggest_links" | "suggest" => Some(Self::SuggestLinks),
+            "synthesizeNotes" | "synthesize_notes" | "synNotes" | "multiNoteSynthesis" => {
+                Some(Self::SynthesizeNotes)
+            }
             _ => None,
         }
     }
@@ -148,6 +156,7 @@ impl AiActionType {
             Self::WorkspaceQuery,
             Self::TranscribeAudio,
             Self::SuggestLinks,
+            Self::SynthesizeNotes,
         ]
     }
 }
@@ -368,6 +377,21 @@ fn system_prompt(action: AiActionType) -> String {
              Output only the suggestion list, no extra commentary."
                 .to_string()
         }
+        AiActionType::SynthesizeNotes => {
+            "You are a knowledge synthesis assistant specializing in multi-note \
+             synthesis. Your task is to synthesize a structured report from \
+             multiple selected notes. Output the following sections in Markdown:\n\
+             ## Summary\n- A 2-3 paragraph cross-note summary.\n\n\
+             ## Shared Themes\n- Bullet list of common themes across all notes.\n\n\
+             ## Missing Links\n- Notes in the vault that should be linked but aren't \
+               (if vault context not provided, skip this section).\n\n\
+             ## Conflicts / Inconsistencies\n- Any contradictions between the \
+               selected notes.\n\n\
+             Cite specific source notes inline with [[Note Title]] wikilinks. \
+             Do not invent facts not present in the sources. \
+             Output only the structured report, no extra commentary."
+                .to_string()
+        }
     }
 }
 
@@ -510,6 +534,17 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
                     .instruction
                     .as_deref()
                     .unwrap_or("(no vault notes provided)")
+            )
+        }
+        AiActionType::SynthesizeNotes => {
+            format!(
+                "Synthesize a multi-note report from the following selected notes.\n\
+                 For each note, the format is:\n\
+                 ## Note: <title>\n<content>\n---\n\n{}\n\n\
+                 Include a cross-note summary, shared themes, missing links \
+                 (if applicable), and any conflicts/inconsistencies. \
+                 Cite specific source notes inline with [[Note Title]] wikilinks.",
+                request.text
             )
         }
     }
@@ -1742,6 +1777,96 @@ mod tests {
             RequestUsage::default(),
         );
         assert_eq!(result.result, "- [[Note A]] — related topic");
+        assert!(result.error.is_none());
+    }
+
+    // ── SynthesizeNotes tests (#3270) ────────────────────────────────────
+
+    #[test]
+    fn synthesize_notes_label_and_id() {
+        assert_eq!(AiActionType::SynthesizeNotes.label(), "笔记综合");
+        assert_eq!(AiActionType::SynthesizeNotes.id(), "synthesizeNotes");
+    }
+
+    #[test]
+    fn synthesize_notes_from_id_variants() {
+        assert_eq!(
+            AiActionType::from_id("synthesizeNotes"),
+            Some(AiActionType::SynthesizeNotes)
+        );
+        assert_eq!(
+            AiActionType::from_id("synthesize_notes"),
+            Some(AiActionType::SynthesizeNotes)
+        );
+        assert_eq!(
+            AiActionType::from_id("synNotes"),
+            Some(AiActionType::SynthesizeNotes)
+        );
+    }
+
+    #[test]
+    fn synthesize_notes_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::SynthesizeNotes),
+            "SynthesizeNotes missing from all()"
+        );
+    }
+
+    #[test]
+    fn synthesize_notes_system_prompt_structure() {
+        let prompt = system_prompt(AiActionType::SynthesizeNotes);
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("Summary"));
+        assert!(prompt.contains("Shared Themes"));
+        assert!(prompt.contains("Missing Links"));
+        assert!(prompt.contains("Conflicts"));
+        assert!(prompt.contains("[[Note Title]]"));
+    }
+
+    #[test]
+    fn synthesize_notes_user_prompt_structure() {
+        let req = AiActionRequest {
+            action: AiActionType::SynthesizeNotes,
+            text: "## Note: Alpha\ncontent a\n---\n## Note: Beta\ncontent b\n---".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::SynthesizeNotes, &req);
+        assert!(prompt.contains("Alpha"));
+        assert!(prompt.contains("Beta"));
+        assert!(prompt.contains("[[Note Title]]"));
+    }
+
+    #[test]
+    fn synthesize_notes_empty_text_fails_validation() {
+        let req = AiActionRequest {
+            action: AiActionType::SynthesizeNotes,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&req);
+        assert!(
+            result.is_some(),
+            "SynthesizeNotes with empty text should fail validation"
+        );
+    }
+
+    #[test]
+    fn synthesize_notes_process_action_result_trims() {
+        let result = process_action_result(
+            AiActionType::SynthesizeNotes,
+            "  ## Summary\ncombined text\n  ",
+            RequestUsage::default(),
+        );
+        assert_eq!(result.result, "## Summary\ncombined text");
         assert!(result.error.is_none());
     }
 }

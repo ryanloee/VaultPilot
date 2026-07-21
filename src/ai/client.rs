@@ -1264,7 +1264,7 @@ fn private_ip_error_message(host: &str, ip: IpAddr) -> String {
             "base_url host '{host}' resolves to a fake-ip proxy address ({ip}, \
              198.18.0.0/15). This usually means a local proxy (Clash/sing-box \
              TUN or fake-ip mode) is intercepting DNS for this domain — the \
-             endpoint itself is fine. Set VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 to \
+             endpoint itself is fine. Set VAULTPILOT_ALLOW_FAKEIP=1 to \
              allow it, or disable fake-ip / add this domain to the proxy's \
              real-ip (direct-DNS) list."
         )
@@ -1824,5 +1824,37 @@ mod tests {
             .await
             .unwrap_err();
         assert!(should_retry_transport_error(&err));
+    }
+
+    // ── private_ip_error_message (#3252) ────────────────────────
+
+    #[test]
+    fn fakeip_error_message_points_to_allow_fakeip_env() {
+        // #3252: the fake-ip branch must recommend VAULTPILOT_ALLOW_FAKEIP=1,
+        // not VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1 (which only bypasses localhost
+        // / literal-IP checks and does NOT unblock hostname → fake-ip).
+        let fakeip = IpAddr::V4(Ipv4Addr::new(198, 18, 0, 1));
+        assert!(is_fakeip(fakeip));
+        let msg = private_ip_error_message("api.example.com", fakeip);
+        assert!(
+            msg.contains("VAULTPILOT_ALLOW_FAKEIP=1"),
+            "fake-ip error should mention VAULTPILOT_ALLOW_FAKEIP=1, got: {msg}"
+        );
+        assert!(
+            !msg.contains("VAULTPILOT_ALLOW_LOCAL_ENDPOINT"),
+            "fake-ip error must not recommend the ineffective LOCAL_ENDPOINT var, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn private_ip_error_message_still_uses_local_endpoint() {
+        // Non-fake-ip private addresses still use LOCAL_ENDPOINT.
+        let private = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        assert!(!is_fakeip(private));
+        let msg = private_ip_error_message("api.example.com", private);
+        assert!(
+            msg.contains("VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1"),
+            "non-fakeip private error should mention LOCAL_ENDPOINT, got: {msg}"
+        );
     }
 }

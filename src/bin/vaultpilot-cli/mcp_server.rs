@@ -749,6 +749,7 @@ async fn handle_mcp_request(
                 "index.rebuild" => mcp_call_index_rebuild(context).await,
                 "email.search" => mcp_call_email_search(context, arguments).await,
                 "email.get" => mcp_call_email_get(context, arguments).await,
+                "calendar.today" => mcp_call_calendar_today(context).await,
                 "ask" => mcp_call_ask(context, arguments).await,
                 _ => {
                     return Some(McpResponse::error(
@@ -1729,6 +1730,32 @@ fn mcp_tools() -> Vec<Value> {
                 "openWorldHint": false
             }
         }),
+        serde_json::json!({
+            "name": "calendar.today",
+            "title": "Today's Agenda",
+            "description": "Return today's calendar events from the synced calendar cache. Sorted by start time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "events": {
+                        "type": "array",
+                        "items": { "type": "object" }
+                    }
+                }
+            },
+            "annotations": {
+                "title": "Today's Agenda",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
     ]
 }
 
@@ -2653,6 +2680,26 @@ async fn mcp_call_email_get(context: &StorageContext, arguments: Value) -> Value
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
+async fn mcp_call_calendar_today(context: &StorageContext) -> Value {
+    let ctx = context.clone();
+    let now = chrono::Utc::now();
+    tokio::task::spawn_blocking(move || {
+        match vaultpilot_lib::calendar::today_agenda_cached(&ctx, now) {
+            Ok(events) => {
+                let count = events.len();
+                let structured = serde_json::json!({ "events": events });
+                mcp_tool_success(
+                    format!("{count} event(s) today."),
+                    with_token_estimate(structured),
+                )
+            }
+            Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
 // ─── Token optimization helpers (#2108) ──────────────────────────
 //
 // External Agents consume vault content through this MCP server. Returning
@@ -3048,7 +3095,7 @@ mod tests {
     #[test]
     fn mcp_tools_count() {
         let tools = mcp_tools();
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 21);
     }
 
     #[test]
@@ -3569,7 +3616,7 @@ mod tests {
         assert!(modes.contains(&"summary"));
         assert!(modes.contains(&"meta"));
         // tool count reflects all registered tools.
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 21);
     }
 
     // ── #3095: Agent edit diff preview MCP tools ──────────────────

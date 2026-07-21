@@ -1357,23 +1357,26 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            // Save current note position before navigating (#3230)
+            // Resolve the destination note ID first (#3239)
+            var titleMap = await LoadNoteTitleMapAsync();
+            var noteId = titleMap.TryGetValue(noteTitleOrId, out var id)
+                ? id
+                : noteTitleOrId; // fallback: treat as id directly
+
+            // Record the DESTINATION in the navigation stack so the browse
+            // trace is canonical: every entry is a note the user visited TO.
+            // Compare against the resolved noteId, not the raw input, so a
+            // wikilink that uses the note's title while already on that note
+            // does not push a self-loop (#3239, #3230).
             var currentNoteId = _notesView?.SelectedNoteId();
-            if (currentNoteId is not null && currentNoteId != noteTitleOrId)
+            if (currentNoteId is not null && currentNoteId != noteId)
             {
                 // Truncate forward history when navigating from a non-tip position
                 if (_noteNavIndex >= 0 && _noteNavIndex < _noteNavStack.Count - 1)
                     _noteNavStack.RemoveRange(_noteNavIndex + 1, _noteNavStack.Count - (_noteNavIndex + 1));
-                _noteNavStack.Add(currentNoteId);
+                _noteNavStack.Add(noteId);
                 _noteNavIndex = _noteNavStack.Count - 1;
             }
-
-            var titleMap = await LoadNoteTitleMapAsync();
-
-            // Try to resolve title -> id
-            var noteId = titleMap.TryGetValue(noteTitleOrId, out var id)
-                ? id
-                : noteTitleOrId; // fallback: treat as id directly
 
             // Navigate to the Notes view
             await SwitchToNotesViewAsync();

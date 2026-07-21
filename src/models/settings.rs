@@ -122,6 +122,12 @@ pub struct AppSettings {
     /// Example: ["vaultpilot://note/", "vaultpilot://chat/new"]
     #[serde(default)]
     pub allowed_uris: Vec<String>,
+    /// Global proxy URL for all AI API requests (e.g. "http://127.0.0.1:7890").
+    /// When set to a non-empty URL, all AI API calls go through this proxy.
+    /// When empty or None, the system proxy is disabled (no auto-detection).
+    /// Per-provider proxy is NOT supported — this is a global setting.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 fn default_privacy_mode() -> bool {
@@ -157,6 +163,7 @@ impl Default for AppSettings {
             privacy_mode: default_privacy_mode(),
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
             allowed_uris: Vec::new(),
+            proxy_url: None,
         }
     }
 }
@@ -343,6 +350,7 @@ mod tests {
             privacy_mode: false,
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
             allowed_uris: Vec::new(),
+            proxy_url: None,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

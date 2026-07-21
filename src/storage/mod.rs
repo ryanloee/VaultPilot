@@ -1015,6 +1015,7 @@ mod tests {
             privacy_mode: false,
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
             allowed_uris: Vec::new(),
+            proxy_url: None,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

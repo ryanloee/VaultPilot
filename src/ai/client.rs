@@ -31,6 +31,7 @@ pub(super) struct CachedClient {
     provider_type: crate::models::ProviderType,
     base_url: String,
     resolved_addrs: Vec<(String, SocketAddr)>,
+    proxy_url: Option<String>,
 }
 
 static CACHED_CLIENT: Mutex<Option<CachedClient>> = Mutex::new(None);
@@ -41,6 +42,7 @@ pub(super) fn get_or_build_client(
     provider_type: crate::models::ProviderType,
     base_url: &str,
     resolved_addrs: &[(String, SocketAddr)],
+    proxy_url: Option<&str>,
 ) -> Result<reqwest::Client> {
     let mut cache = CACHED_CLIENT.lock().unwrap_or_else(|e| {
         tracing::warn!("CACHED_CLIENT lock poisoned, recovering inner value");
@@ -52,6 +54,7 @@ pub(super) fn get_or_build_client(
             && cached.provider_type == provider_type
             && cached.base_url == base_url
             && cached.resolved_addrs == resolved_addrs
+            && cached.proxy_url.as_deref() == proxy_url
         {
             return Ok(cached.client.clone());
         }
@@ -92,6 +95,19 @@ pub(super) fn get_or_build_client(
         builder = builder.resolve(host, *addr);
     }
 
+    // Configure proxy: if proxy_url is set and non-empty, use it;
+    // otherwise disable system proxy auto-detection.
+    match proxy_url {
+        Some(url) if !url.trim().is_empty() => {
+            let proxy = reqwest::Proxy::all(url)
+                .map_err(|e| anyhow!("invalid proxy URL '{}': {}", url, e))?;
+            builder = builder.proxy(proxy);
+        }
+        _ => {
+            builder = builder.no_proxy();
+        }
+    }
+
     let client = builder.build()?;
 
     *cache = Some(CachedClient {
@@ -101,6 +117,7 @@ pub(super) fn get_or_build_client(
         provider_type,
         base_url: base_url.to_string(),
         resolved_addrs: resolved_addrs.to_vec(),
+        proxy_url: proxy_url.map(|s| s.to_string()),
     });
     Ok(client)
 }
@@ -263,6 +280,7 @@ pub(crate) async fn send_request_with_temperature(
         provider_type,
         &provider.base_url,
         &resolved_addrs,
+        settings.proxy_url.as_deref(),
     )?;
 
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);
@@ -511,6 +529,7 @@ pub async fn send_request_streaming<'a>(
         provider_type,
         &provider.base_url,
         &resolved_addrs,
+        settings.proxy_url.as_deref(),
     )?;
 
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);

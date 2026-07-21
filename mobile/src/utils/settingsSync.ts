@@ -163,8 +163,16 @@ export async function importSettings(json: string): Promise<{ providersImported:
   useAppStore.setState({
     themeMode: data.themeMode as ThemeMode,
     accentColor: data.accentColor,
+    // #3242: Normalize apiKey to '' (string) — exports with includeKeys=false
+    // omit apiKey (becomes undefined), but ProviderConfig.apiKey is typed as
+    // `string` (required). Spreading `...p` here would copy `undefined` into
+    // the Zustand store, creating a latent TypeError risk for any consumer
+    // that calls `.trim()` / `.length` on it. Mirror the normalization that
+    // line ~137 already applies when writing to AsyncStorage, and that
+    // `restoreProviderKeys` in store.ts applies when rehydrating.
     providers: data.providers.map(p => ({
       ...p,
+      apiKey: p.apiKey ?? '',
       apiFormat: p.apiFormat as ApiFormat,
     })) as ProviderConfig[],
     activeProviderIndex: data.providers.length > 0

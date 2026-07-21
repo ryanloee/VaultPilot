@@ -1602,9 +1602,16 @@ enum BasesActions {
     /// columns.  Output is JSON for machine consumption; UI rendering is
     /// WinUI/Mobile-side (#3127).
     ///
+    /// Kanban view (#3247): pass `--group-by <field>` to bucket notes into
+    /// swimlanes.  Use `--kanban-columns todo,doing,done` to fix column order;
+    /// unlisted values are appended after, and notes with no value land in a
+    /// trailing `未分组` column.  When `--group-by` is given inline the view
+    /// auto-switches to `kanban` (overridable via the `.base` file's `view:`).
+    ///
     /// Examples:
     ///   vaultpilot bases run my-status.base
     ///   vaultpilot bases run --filter 'status = in-progress' --filter 'tags contains rust'
+    ///   vaultpilot bases run --group-by status --kanban-columns todo,doing,done
     Run {
         /// Path to a `.base` config file (optional if filters/sort given inline).
         #[arg(default_value = "")]
@@ -1620,6 +1627,19 @@ enum BasesActions {
         /// Inline sort directives in the form 'field:order' (e.g. 'updated_at:desc').
         #[arg(long, short = 's')]
         sort: Vec<String>,
+
+        /// Kanban: NoteMeta field used to bucket rows into swimlanes (#3247).
+        /// Implies `view = kanban` when used in inline mode (no `--file`).
+        /// Typical values: `status` (default), `tags`, `board`, `platform`.
+        #[arg(long)]
+        group_by: Option<String>,
+
+        /// Kanban: comma-separated list of column keys in display order
+        /// (e.g. `todo,doing,done`).  Keys not listed are appended after in
+        /// first-seen order; notes with empty/missing values always land in a
+        /// final `未分组` column.
+        #[arg(long)]
+        kanban_columns: Option<String>,
     },
 }
 
@@ -5629,9 +5649,15 @@ fn handle_collections(context: &StorageContext, action: &CollectionActions) -> R
 
 fn handle_bases(context: &StorageContext, action: &BasesActions) -> Result<Value> {
     match action {
-        BasesActions::Run { file, filter, sort } => {
+        BasesActions::Run {
+            file,
+            filter,
+            sort,
+            group_by,
+            kanban_columns,
+        } => {
             // Build config from file or inline args.
-            let config = if !file.is_empty() {
+            let mut config = if !file.is_empty() {
                 BaseConfig::from_file(std::path::Path::new(file))?
             } else {
                 let mut cfg = BaseConfig::default();
@@ -5644,14 +5670,42 @@ fn handle_bases(context: &StorageContext, action: &BasesActions) -> Result<Value
                 cfg
             };
 
+            // Inline kanban flags override the .base file's settings.  When
+            // `--group-by` is supplied without an explicit `view`, switch to
+            // kanban automatically so the user doesn't have to repeat themselves.
+            if let Some(g) = group_by {
+                if !g.is_empty() {
+                    config.group_by = Some(g.clone());
+                    if config.view == BaseView::Table && config.columns.is_empty() {
+                        // Only auto-switch from the default (Table) — if the
+                        // user explicitly chose cards/list in their .base file,
+                        // respect that and let them opt in via `view: kanban`.
+                        config.view = BaseView::Kanban;
+                    }
+                }
+            }
+            if let Some(cols) = kanban_columns {
+                let parsed: Vec<String> = cols
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !parsed.is_empty() {
+                    config.kanban_columns = Some(parsed);
+                }
+            }
+
             let result = run_base(context, &config)?;
             // Serialize BaseResult: rows are the primary output.
-            // Include config metadata for UI consumption.
+            // Include config metadata for UI consumption.  `kanban_groups`
+            // is only populated for view=kanban and is omitted otherwise
+            // (Vec::is_empty skip rule on BaseResult itself).
             Ok(serde_json::json!({
                 "view": match result.view {
                     BaseView::Table => "table",
                     BaseView::Cards => "cards",
                     BaseView::List => "list",
+                    BaseView::Kanban => "kanban",
                 },
                 "columns": result.columns.iter().map(|c| serde_json::json!({
                     "field": c.field,
@@ -5660,6 +5714,7 @@ fn handle_bases(context: &StorageContext, action: &BasesActions) -> Result<Value
                 "rows": result.rows,
                 "matched": result.matched,
                 "scanned": result.scanned,
+                "kanbanGroups": result.kanban_groups,
             }))
         }
     }

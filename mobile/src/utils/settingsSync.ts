@@ -126,7 +126,7 @@ export async function importSettings(json: string): Promise<{ providersImported:
   }
   const keys: Record<string, string> = { ...existingKeys };
   for (const p of data.providers) {
-    if (p.apiKey) keys[p.name] = p.apiKey;
+    if (p.apiKey !== undefined) keys[p.name] = p.apiKey;
   }
   if (Object.keys(keys).length > 0) {
     await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
@@ -151,7 +151,7 @@ export async function importSettings(json: string): Promise<{ providersImported:
       model: active.model,
       apiFormat: active.apiFormat as ApiFormat,
     };
-    if (active.apiKey) {
+    if (active.apiKey !== undefined) {
       settings.apiKey = active.apiKey;
     }
     await saveSettings(settings);

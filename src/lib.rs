@@ -34,6 +34,7 @@ pub mod semantic;
 pub mod settings_schema;
 pub mod skills;
 pub mod storage;
+pub mod template;
 pub mod utils;
 pub mod vault_query;
 pub mod web_publish;

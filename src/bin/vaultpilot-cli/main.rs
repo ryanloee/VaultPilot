@@ -2938,6 +2938,15 @@ fn handle_open_external(
         if !status.success() {
             eprintln!("editor '{}' exited with code {:?}", editor, status.code());
         }
+        // When --save-to-vault is not set, return structured JSON here.
+        // Otherwise allow fallthrough to --save-to-vault import below.
+        if !save_to_vault {
+            return Ok(serde_json::json!({
+                "event": "open_external_edited",
+                "path": canonical.display().to_string(),
+                "editor": editor,
+            }));
+        }
     }
 
     // --save-to-vault: import the (possibly just-edited) file

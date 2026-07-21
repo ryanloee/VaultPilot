@@ -143,7 +143,7 @@ fn tokenize(template: &str) -> Vec<Token> {
         while i < len {
             if chars[i] == '{' && i + 1 < len && (chars[i + 1] == '{' || chars[i + 1] == '%') {
                 // Only break if a complete {{...}} or {%...%} looks possible
-                if (chars[i + 1] == '{' && i + 3 < len) || (chars[i + 1] == '%' && i + 3 < len) {
+                if (chars[i + 1] == '{' || chars[i + 1] == '%') && i + 3 < len {
                     // Check if there's a closing delimiter somewhere ahead
                     if (chars[i + 1] == '{' && has_closing(&chars, i + 2, '}', '}'))
                         || (chars[i + 1] == '%' && has_closing(&chars, i + 2, '%', '}'))
@@ -367,15 +367,12 @@ impl Parser {
 
         let mut body = Vec::new();
         while self.pos < self.tokens.len() {
-            match &self.tokens[self.pos] {
-                Token::Block(b) => {
-                    let lower = b.to_ascii_lowercase();
-                    if lower == "endfor" {
-                        self.pos += 1;
-                        break;
-                    }
+            if let Token::Block(b) = &self.tokens[self.pos] {
+                let lower = b.to_ascii_lowercase();
+                if lower == "endfor" {
+                    self.pos += 1;
+                    break;
                 }
-                _ => {}
             }
             body.push(self.parse_node());
         }
@@ -576,7 +573,7 @@ fn parse_filter_args(raw: &str) -> Vec<String> {
 ///
 /// ```
 /// use std::collections::HashMap;
-/// use vaultpilot::template::render;
+/// use vaultpilot_lib::template::render;
 ///
 /// let mut ctx = HashMap::new();
 /// ctx.insert("title".into(), "Hello".into());

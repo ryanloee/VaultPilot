@@ -3,7 +3,7 @@
 //! Inspired by Obsidian Bases (https://help.obsidian.md/bases), this module
 //! turns the vault into a queryable database: notes are rows, their frontmatter
 //! fields are columns, and a `.base` YAML file describes how to filter, sort,
-//! and group them into table / cards / list views.
+//! and group them into table / cards / list / **kanban** views.
 //!
 //! ## .base file format (YAML)
 //!
@@ -18,12 +18,23 @@
 //! sort:
 //!   - field: updated_at
 //!     order: desc
-//! view: table
+//! view: table           # or: cards | list | kanban
 //! columns:
 //!   - title
 //!   - status
 //!   - updated_at
+//! # ── kanban-only (#3247) ──
+//! # group_by: status                # default when view: kanban
+//! # kanban_columns: [todo, doing, done]
 //! ```
+//!
+//! ## Kanban view (#3247)
+//! `view: kanban` buckets notes into side-by-side swimlanes keyed by a
+//! frontmatter field.  By default the `status` field is used; pass
+//! `group_by: <field>` to bucket on any supported NoteMeta column (e.g.
+//! `tags`, `board`, `platform`).  `kanban_columns` declares display order;
+//! unlisted values are appended after in first-seen order, and notes whose
+//! `group_by` value is empty/missing land in a trailing `未分组` column.
 //!
 //! ## Supported filter operators
 //! - `equals` / `not_equals` — exact string match
@@ -81,6 +92,10 @@ pub enum BaseView {
     Table,
     Cards,
     List,
+    /// Side-by-side swimlanes grouped by a frontmatter field (#3247).
+    /// Use `BaseConfig.group_by` (default: `status`) to choose the column
+    /// field, and `BaseConfig.kanban_columns` to declare column order.
+    Kanban,
 }
 
 /// Column descriptor for table view.
@@ -105,6 +120,28 @@ pub struct BaseConfig {
     pub view: BaseView,
     #[serde(default)]
     pub columns: Vec<BaseColumn>,
+    /// Kanban: the NoteMeta field used to bucket notes into swimlanes (#3247).
+    ///
+    /// Defaults to `status` when `view == Kanban` and this is `None`.  Any
+    /// `field_str`-supported field works (e.g. `status`, `tags`, `board`,
+    /// `platform`).  Notes whose value is empty/missing land in a single
+    /// trailing bucket labelled by [`DEFAULT_KANBAN_UNGROUPED`].
+    ///
+    /// Note: the YAML/JSON key is explicitly `group_by` (snake_case) to match
+    /// the rest of the `.base` file vocabulary (`filters`, `sort`, `columns`)
+    /// rather than the struct's default camelCase mapping.
+    #[serde(rename = "group_by", default, skip_serializing_if = "Option::is_none")]
+    pub group_by: Option<String>,
+    /// Kanban: declare the column (group) order, e.g. `["todo", "doing",
+    /// "done"]`.  Groups whose key is not listed here are appended after the
+    /// declared columns in first-seen order.  When `None` or empty, groups
+    /// are ordered by first occurrence.
+    #[serde(
+        rename = "kanban_columns",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub kanban_columns: Option<Vec<String>>,
 }
 
 impl Default for BaseConfig {
@@ -114,6 +151,8 @@ impl Default for BaseConfig {
             sort: Vec::new(),
             view: BaseView::Table,
             columns: Vec::new(),
+            group_by: None,
+            kanban_columns: None,
         }
     }
 }
@@ -258,6 +297,23 @@ pub struct BaseRow {
     pub values: Vec<String>,
 }
 
+/// One swimlane in a Kanban view (#3247).
+///
+/// `key` is the group_by value (e.g. `"todo"`, `"doing"`, `"done"`), and
+/// `notes` are the projected rows in that column, already sorted by the
+/// config's `sort` directives.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct KanbanGroup {
+    /// The group_by field value that labels this column.
+    pub key: String,
+    /// Rows in this swimlane, preserving the order produced by `sort`.
+    pub notes: Vec<BaseRow>,
+}
+
+/// Label used for the bucket that collects notes whose `group_by` value is
+/// empty, missing, or unrecognised.
+pub const DEFAULT_KANBAN_UNGROUPED: &str = "未分组";
+
 /// The result of running a Base query.
 #[derive(Debug, Clone, Serialize)]
 pub struct BaseResult {
@@ -268,6 +324,12 @@ pub struct BaseResult {
     pub matched: usize,
     /// Total notes scanned.
     pub scanned: usize,
+    /// Populated only when `view == Kanban`; empty for every other view.
+    /// Order follows `BaseConfig.kanban_columns` (declared keys first), then
+    /// first-seen order for any remaining keys, with the ungrouped bucket
+    /// (`DEFAULT_KANBAN_UNGROUPED`) always last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kanban_groups: Vec<KanbanGroup>,
 }
 
 /// Run a Base query against the vault and return the materialized rows.
@@ -301,7 +363,7 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         config.columns.clone()
     };
 
-    let rows = notes
+    let rows: Vec<BaseRow> = notes
         .iter()
         .map(|meta| BaseRow {
             note_id: meta.id.clone(),
@@ -310,13 +372,125 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         })
         .collect();
 
+    // Kanban grouping (#3247). Only populated when the view requests it; for
+    // other views `kanban_groups` stays empty and is skipped at serialize time.
+    let kanban_groups = if config.view == BaseView::Kanban {
+        let group_field = config
+            .group_by
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("status");
+        // Pair each sorted row with its group key (computed from the same
+        // NoteMeta we projected from). Empty values fall into the ungrouped
+        // bucket so the column never disappears when a note has no status.
+        let paired: Vec<(String, BaseRow)> = notes
+            .iter()
+            .zip(rows.iter())
+            .map(|(meta, row)| {
+                let key = field_str(meta, group_field);
+                let key = if key.trim().is_empty() {
+                    DEFAULT_KANBAN_UNGROUPED.to_string()
+                } else {
+                    key
+                };
+                (key, row.clone())
+            })
+            .collect();
+        build_kanban_groups(paired, config.kanban_columns.as_deref())
+    } else {
+        Vec::new()
+    };
+
     Ok(BaseResult {
         view: config.view,
         columns,
         rows,
         matched: notes.len(),
         scanned,
+        kanban_groups,
     })
+}
+
+/// Bucket pre-projected rows into ordered Kanban swimlanes (#3247).
+///
+/// Pure helper extracted from [`run_base`] so it can be unit-tested without a
+/// storage context.  Invariant: groups follow `column_order` (declared keys
+/// first, in the given order), then any remaining keys in first-seen order,
+/// with [`DEFAULT_KANBAN_UNGROUPED`] always appended last when present.
+pub fn build_kanban_groups(
+    pairs: Vec<(String, BaseRow)>,
+    column_order: Option<&[String]>,
+) -> Vec<KanbanGroup> {
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+
+    // Preserve first-seen order for keys not declared in `column_order`.
+    let mut insertion_order: Vec<String> = Vec::new();
+    let mut buckets: Vec<(String, Vec<BaseRow>)> = Vec::new();
+    let index_of = |key: &str, slots: &mut Vec<(String, Vec<BaseRow>)>| -> usize {
+        for (i, (k, _)) in slots.iter().enumerate() {
+            if k == key {
+                return i;
+            }
+        }
+        slots.push((key.to_string(), Vec::new()));
+        slots.len() - 1
+    };
+
+    for (key, row) in pairs {
+        let idx = index_of(&key, &mut buckets);
+        buckets[idx].1.push(row);
+        if !insertion_order.contains(&key) {
+            insertion_order.push(key);
+        }
+    }
+
+    // Resolve final group ordering.
+    let mut ordered: Vec<KanbanGroup> = Vec::with_capacity(buckets.len());
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 1) Declared columns first, in the user's order.
+    if let Some(declared) = column_order {
+        for key in declared.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if seen.insert(key.to_string()) {
+                if let Some(pos) = buckets.iter().position(|(k, _)| k == key) {
+                    let (k, notes) = std::mem::take(&mut buckets[pos]);
+                    ordered.push(KanbanGroup { key: k, notes });
+                }
+                // A declared column with zero matching notes still shows up as
+                // an empty swimlane — this is intentional for stable UI layout.
+                else {
+                    ordered.push(KanbanGroup {
+                        key: key.to_string(),
+                        notes: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+
+    // 2) Remaining keys in first-seen order, with the ungrouped bucket last.
+    let mut ungrouped: Option<KanbanGroup> = None;
+    for key in insertion_order {
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key.clone());
+        if let Some(pos) = buckets.iter().position(|(k, _)| *k == key) {
+            let (k, notes) = std::mem::take(&mut buckets[pos]);
+            if k == DEFAULT_KANBAN_UNGROUPED {
+                ungrouped = Some(KanbanGroup { key: k, notes });
+            } else {
+                ordered.push(KanbanGroup { key: k, notes });
+            }
+        }
+    }
+    if let Some(g) = ungrouped {
+        ordered.push(g);
+    }
+
+    ordered
 }
 
 // ── CLI helpers ──────────────────────────────────────────────────────────
@@ -589,5 +763,170 @@ columns:
         let s2 = base_sort_from_arg("title");
         assert_eq!(s2.field, "title");
         assert_eq!(s2.order, "asc");
+    }
+
+    // ── Kanban view (#3247) ──────────────────────────────────────────────
+
+    fn row(id: &str, title: &str) -> BaseRow {
+        BaseRow {
+            note_id: id.into(),
+            title: title.into(),
+            values: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_parse_kanban_base_config() {
+        let yaml = r#"
+view: kanban
+group_by: status
+kanban_columns: [todo, doing, done]
+filters:
+  - field: tags
+    op: contains
+    value: "task"
+"#;
+        let cfg = BaseConfig::from_yaml(yaml).expect("parse");
+        assert_eq!(cfg.view, BaseView::Kanban);
+        assert_eq!(cfg.group_by.as_deref(), Some("status"));
+        assert_eq!(
+            cfg.kanban_columns.as_deref(),
+            Some(["todo".to_string(), "doing".to_string(), "done".to_string()].as_slice())
+        );
+        assert_eq!(cfg.filters.len(), 1);
+    }
+
+    #[test]
+    fn test_kanban_default_config_has_no_group_by() {
+        // Defaults are backward-compatible: existing `.base` files without
+        // kanban settings must keep working (Table view, no kanban output).
+        let cfg = BaseConfig::default();
+        assert_eq!(cfg.view, BaseView::Table);
+        assert!(cfg.group_by.is_none());
+        assert!(cfg.kanban_columns.is_none());
+    }
+
+    #[test]
+    fn test_build_kanban_groups_respects_declared_order() {
+        // Notes arrive in sort order; declared columns must appear first.
+        let pairs = vec![
+            ("done".to_string(), row("n1", "A")),
+            ("todo".to_string(), row("n2", "B")),
+            ("doing".to_string(), row("n3", "C")),
+            ("todo".to_string(), row("n4", "D")),
+        ];
+        let order = vec!["todo".to_string(), "doing".to_string(), "done".to_string()];
+        let groups = build_kanban_groups(pairs, Some(&order));
+
+        assert_eq!(groups.len(), 3, "three declared columns");
+        assert_eq!(groups[0].key, "todo");
+        assert_eq!(groups[0].notes.len(), 2);
+        assert_eq!(
+            groups[0].notes[0].note_id, "n2",
+            "first-seen order preserved"
+        );
+        assert_eq!(groups[0].notes[1].note_id, "n4");
+        assert_eq!(groups[1].key, "doing");
+        assert_eq!(groups[1].notes.len(), 1);
+        assert_eq!(groups[2].key, "done");
+        assert_eq!(groups[2].notes.len(), 1);
+    }
+
+    #[test]
+    fn test_build_kanban_groups_declared_empty_column_shows_up() {
+        // A declared column with zero matching notes still renders as an empty
+        // swimlane so the UI layout stays stable across vaults.
+        let pairs = vec![("todo".to_string(), row("n1", "A"))];
+        let order = vec!["todo".to_string(), "doing".to_string(), "done".to_string()];
+        let groups = build_kanban_groups(pairs, Some(&order));
+
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[1].key, "doing");
+        assert!(
+            groups[1].notes.is_empty(),
+            "declared-but-empty column shows as empty"
+        );
+        assert_eq!(groups[2].key, "done");
+        assert!(groups[2].notes.is_empty());
+    }
+
+    #[test]
+    fn test_build_kanban_groups_unknown_keys_append_in_first_seen_order() {
+        let pairs = vec![
+            ("blocked".to_string(), row("n1", "A")),
+            ("todo".to_string(), row("n2", "B")),
+            ("wishlist".to_string(), row("n3", "C")),
+            ("blocked".to_string(), row("n4", "D")),
+        ];
+        let order = vec!["todo".to_string(), "done".to_string()];
+        let groups = build_kanban_groups(pairs, Some(&order));
+
+        // Declared todo (1 note) + declared-but-empty done, then unknown keys
+        // in first-seen order: blocked (2 notes), wishlist (1 note).
+        assert_eq!(groups.len(), 4);
+        assert_eq!(groups[0].key, "todo");
+        assert_eq!(groups[1].key, "done");
+        assert!(groups[1].notes.is_empty());
+        assert_eq!(groups[2].key, "blocked");
+        assert_eq!(groups[2].notes.len(), 2);
+        assert_eq!(groups[3].key, "wishlist");
+        assert_eq!(groups[3].notes.len(), 1);
+    }
+
+    #[test]
+    fn test_build_kanban_groups_ungrouped_always_last() {
+        // Empty/missing group_by values are labelled DEFAULT_KANBAN_UNGROUPED
+        // and must always sort last — never between declared columns.
+        let pairs = vec![
+            (DEFAULT_KANBAN_UNGROUPED.to_string(), row("n1", "No status")),
+            ("todo".to_string(), row("n2", "B")),
+            (
+                DEFAULT_KANBAN_UNGROUPED.to_string(),
+                row("n3", "Also no status"),
+            ),
+            ("done".to_string(), row("n4", "D")),
+        ];
+        let order = vec!["todo".to_string(), "doing".to_string(), "done".to_string()];
+        let groups = build_kanban_groups(pairs, Some(&order));
+
+        assert_eq!(groups.last().unwrap().key, DEFAULT_KANBAN_UNGROUPED);
+        assert_eq!(groups.last().unwrap().notes.len(), 2);
+        assert_eq!(groups.len(), 4);
+    }
+
+    #[test]
+    fn test_build_kanban_groups_no_column_order_uses_first_seen() {
+        // Without kanban_columns, groups appear in first-seen order, but the
+        // ungrouped bucket is still pushed last.
+        let pairs = vec![
+            ("doing".to_string(), row("n1", "A")),
+            ("todo".to_string(), row("n2", "B")),
+            (DEFAULT_KANBAN_UNGROUPED.to_string(), row("n3", "C")),
+            ("doing".to_string(), row("n4", "D")),
+        ];
+        let groups = build_kanban_groups(pairs, None);
+
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].key, "doing");
+        assert_eq!(groups[0].notes.len(), 2);
+        assert_eq!(groups[1].key, "todo");
+        assert_eq!(
+            groups[2].key, DEFAULT_KANBAN_UNGROUPED,
+            "ungrouped still last without order"
+        );
+    }
+
+    #[test]
+    fn test_build_kanban_groups_empty_input() {
+        let groups = build_kanban_groups(Vec::new(), Some(&["todo".to_string()]));
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn test_default_kanban_ungrouped_label_is_localised() {
+        // The label is user-visible; lock it down so a refactor doesn't
+        // silently break the UI contract documented in BaseConfig.group_by.
+        assert_eq!(DEFAULT_KANBAN_UNGROUPED, "未分组");
+        assert!(!DEFAULT_KANBAN_UNGROUPED.is_empty());
     }
 }

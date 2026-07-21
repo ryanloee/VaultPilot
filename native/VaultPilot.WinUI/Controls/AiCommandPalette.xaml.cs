@@ -332,6 +332,7 @@ public sealed partial class AiCommandPalette : UserControl
         "reviewNote" or "review_note" or "review" => AiActionType.ReviewNote,
         "synthesizeWiki" or "synthesize_wiki" or "synthesize" or "wiki" => AiActionType.SynthesizeWiki,
         "workspaceQuery" or "workspace_query" or "workspace" => AiActionType.WorkspaceQuery,
+        "transcribeAudio" or "transcribe_audio" or "transcribe" => AiActionType.TranscribeAudio,
         _ => AiActionType.Summarize
     };
 

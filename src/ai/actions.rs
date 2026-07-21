@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::client::{send_request_with_temperature, RequestUsage};
+use super::transcription::transcribe_audio;
 use crate::models::AppSettings;
 
 // ─── Action type enum ─────────────────────────────────────────────────
@@ -43,6 +44,9 @@ pub enum AiActionType {
     /// the entire vault, synthesize answer with inline [[Note#^block-id]]
     /// citations.  Uses block_id infrastructure from #2998 (#3188).
     WorkspaceQuery,
+    /// Transcribe an audio file to text using the OpenAI Whisper API (#3256).
+    /// The `text` field of the request is treated as the audio file path.
+    TranscribeAudio,
 }
 
 impl AiActionType {
@@ -64,6 +68,7 @@ impl AiActionType {
             Self::ReviewNote => "审阅笔记",
             Self::SynthesizeWiki => "综合维基",
             Self::WorkspaceQuery => "工作区问答",
+            Self::TranscribeAudio => "音频转写",
         }
     }
 
@@ -85,6 +90,7 @@ impl AiActionType {
             Self::ReviewNote => "reviewNote",
             Self::SynthesizeWiki => "synthesizeWiki",
             Self::WorkspaceQuery => "workspaceQuery",
+            Self::TranscribeAudio => "transcribeAudio",
         }
     }
 
@@ -110,6 +116,7 @@ impl AiActionType {
             "workspaceQuery" | "workspace_query" | "workspaceQa" | "workspace" => {
                 Some(Self::WorkspaceQuery)
             }
+            "transcribeAudio" | "transcribe_audio" | "transcribe" => Some(Self::TranscribeAudio),
             _ => None,
         }
     }
@@ -132,6 +139,7 @@ impl AiActionType {
             Self::ReviewNote,
             Self::SynthesizeWiki,
             Self::WorkspaceQuery,
+            Self::TranscribeAudio,
         ]
     }
 }
@@ -337,6 +345,9 @@ fn system_prompt(action: AiActionType) -> String {
              Output only the answer in Markdown with inline citations."
                 .to_string()
         }
+        // TranscribeAudio uses the Whisper API directly, not LLM chat completion.
+        // The system prompt is unused — it's here only to satisfy the exhaustive match.
+        AiActionType::TranscribeAudio => String::new(),
     }
 }
 
@@ -463,6 +474,9 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
                 question
             )
         }
+        // TranscribeAudio uses the Whisper API directly, not LLM chat completion.
+        // The user prompt is unused — it's here only to satisfy the exhaustive match.
+        AiActionType::TranscribeAudio => String::new(),
     }
 }
 
@@ -534,6 +548,8 @@ pub(crate) fn process_action_result(
 /// Execute an AI quick action (non-streaming).
 ///
 /// Returns the AI-generated result, or an error result if the AI call fails.
+/// For [`TranscribeAudio`], the audio file path is taken from `request.text`
+/// and transcription is performed via the OpenAI Whisper API.
 #[instrument(skip(settings, request))]
 pub async fn execute_ai_action(
     settings: &AppSettings,
@@ -544,6 +560,35 @@ pub async fn execute_ai_action(
         return error_result;
     }
 
+    // TranscribeAudio uses the Whisper API directly, bypassing LLM chat completion.
+    if request.action == AiActionType::TranscribeAudio {
+        let provider = settings.effective_provider();
+        let lang = request.target_language.as_deref();
+        match transcribe_audio(&request.text, provider, lang).await {
+            Ok(transcript) => AiActionResult {
+                result: transcript,
+                usage: RequestUsage::default(),
+                error: None,
+            },
+            Err(e) => AiActionResult {
+                result: String::new(),
+                usage: RequestUsage::default(),
+                error: Some(format!(
+                    "音频转写失败：{}",
+                    crate::sanitize_error(&e.to_string())
+                )),
+            },
+        }
+    } else {
+        inner_execute_llm_action(settings, request).await
+    }
+}
+
+/// Core path for LLM-based actions: build prompts, send chat completion, process result.
+async fn inner_execute_llm_action(
+    settings: &AppSettings,
+    request: &AiActionRequest,
+) -> AiActionResult {
     let system = system_prompt(request.action);
     let prompt = user_prompt(request.action, request);
 
@@ -707,6 +752,11 @@ mod tests {
     #[test]
     fn system_prompt_not_empty() {
         for action in AiActionType::all() {
+            // TranscribeAudio uses Whisper API directly, not LLM chat — its
+            // system_prompt is intentionally empty (#3256).
+            if action == AiActionType::TranscribeAudio {
+                continue;
+            }
             let prompt = system_prompt(action);
             assert!(!prompt.is_empty(), "system prompt empty for {:?}", action);
         }
@@ -1448,5 +1498,110 @@ mod tests {
             result.is_some(),
             "whitespace-only instruction must still fail validation for WorkspaceQuery"
         );
+    }
+
+    // ── TranscribeAudio tests (#3256) ─────────────────────────────────
+
+    #[test]
+    fn transcribe_audio_label_and_id() {
+        assert_eq!(AiActionType::TranscribeAudio.label(), "音频转写");
+        assert_eq!(AiActionType::TranscribeAudio.id(), "transcribeAudio");
+    }
+
+    #[test]
+    fn transcribe_audio_from_id() {
+        assert_eq!(
+            AiActionType::from_id("transcribeAudio"),
+            Some(AiActionType::TranscribeAudio)
+        );
+        assert_eq!(
+            AiActionType::from_id("transcribe_audio"),
+            Some(AiActionType::TranscribeAudio)
+        );
+        assert_eq!(
+            AiActionType::from_id("transcribe"),
+            Some(AiActionType::TranscribeAudio)
+        );
+    }
+
+    #[test]
+    fn transcribe_audio_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::TranscribeAudio),
+            "TranscribeAudio must be in the all() list"
+        );
+    }
+
+    #[test]
+    fn transcribe_audio_empty_text_fails_validation() {
+        let request = AiActionRequest {
+            action: AiActionType::TranscribeAudio,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "empty text (no audio path) should fail validation"
+        );
+    }
+
+    #[test]
+    fn transcribe_audio_whitespace_text_fails_validation() {
+        let request = AiActionRequest {
+            action: AiActionType::TranscribeAudio,
+            text: "   ".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let result = validate_request(&request);
+        assert!(
+            result.is_some(),
+            "whitespace-only text should fail validation"
+        );
+    }
+
+    #[test]
+    fn transcribe_audio_with_path_passes_validation() {
+        let request = AiActionRequest {
+            action: AiActionType::TranscribeAudio,
+            text: "/path/to/audio.mp3".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        assert!(validate_request(&request).is_none());
+    }
+
+    #[test]
+    fn transcribe_audio_system_prompt_is_empty() {
+        // TranscribeAudio bypasses LLM chat — its prompts are intentionally empty (#3256).
+        let prompt = system_prompt(AiActionType::TranscribeAudio);
+        assert_eq!(prompt, "");
+    }
+
+    #[test]
+    fn transcribe_audio_user_prompt_is_empty() {
+        let request = AiActionRequest {
+            action: AiActionType::TranscribeAudio,
+            text: "/tmp/audio.wav".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+        };
+        let prompt = user_prompt(AiActionType::TranscribeAudio, &request);
+        assert_eq!(prompt, "");
     }
 }

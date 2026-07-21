@@ -146,11 +146,11 @@ public sealed partial class AiCommandPalette : UserControl
         // Using Interlocked.Exchange prevents the race where Dismiss()
         // runs between CancelActiveRequest and the new assignment,
         // seeing null and letting the new request continue after dismiss.
-        var oldCts = Interlocked.Exchange(ref _activeRequestCts,
-            new CancellationTokenSource(TimeSpan.FromSeconds(120)));
+        var newCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var oldCts = Interlocked.Exchange(ref _activeRequestCts, newCts);
         oldCts?.Cancel();
         oldCts?.Dispose();
-        var ct = _activeRequestCts.Token; // Capture token before any await (re-entrancy guard)
+        var ct = newCts.Token; // Capture from local, immune to Dismiss() racing
 
         try
         {

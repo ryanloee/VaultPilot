@@ -19,9 +19,9 @@ jest.mock('../api/client', () => ({
 }));
 
 describe('listAiActions', () => {
-  it('returns all 11 actions', () => {
+  it('returns all 12 actions', () => {
     const actions = listAiActions();
-    expect(actions).toHaveLength(11);
+    expect(actions).toHaveLength(12);
   });
 
   it('includes editNote action (#1569)', () => {

@@ -21,7 +21,8 @@ export type AiActionId =
   | 'cleanUp'
   | 'generateOutline'
   | 'editNote'
-  | 'brainstorm';
+  | 'brainstorm'
+  | 'workspaceQuery';
 
 export interface AiActionInfo {
   id: AiActionId;
@@ -124,6 +125,12 @@ const AI_ACTIONS: AiActionInfo[] = [
     icon: 'bulb-outline',
     description: '根据主题或问题生成创意想法和解决方案',
   },
+  {
+    id: 'workspaceQuery',
+    label: '工作区问答',
+    icon: 'search-outline',
+    description: '跨整库推理检索，回答并附带引用来源',
+  },
 ];
 
 /** Return all available AI quick actions (immutable copy). */
@@ -162,6 +169,8 @@ function systemPrompt(action: AiActionId): string {
       return 'You are a note editor (Composer). Apply the given natural-language editing instruction to the provided note. Return the complete edited note. Preserve the original language and all content not explicitly modified by the instruction. Output only the edited note, no extra commentary.';
     case 'brainstorm':
       return 'You are a creative brainstorming assistant. Your task is to generate a diverse set of ideas, alternatives, perspectives, or solutions based on the given topic or problem description. - Think broadly and consider multiple angles. - Be specific and actionable where possible. - Organize ideas into clear categories or themes. - Include both conventional and creative approaches. Output only the brainstormed ideas, no extra commentary. Respond in the same language as the input.';
+    case 'workspaceQuery':
+      return 'You are a workspace-scale reasoning assistant. Your task is to answer the user\'s question by reasoning across the entire vault. - Plan sub-questions and retrieve relevant note blocks from the vault. - Synthesize a comprehensive answer from the retrieved context. - Crucially: cite every factual claim back to its source using inline citations in the form [[Note Title#^block-id]], where ^block-id is the exact block reference ID provided in the context. - If information is incomplete or sources conflict, note this explicitly rather than inventing facts. - Structure the answer with clear Markdown sections. End with a \'## Sources\' section listing cited notes with their block references. Output only the answer in Markdown with inline citations.';
   }
 }
 
@@ -195,6 +204,12 @@ function userPrompt(action: AiActionId, request: AiActionRequest): string {
     }
     case 'brainstorm':
       return `Please brainstorm creative ideas, solutions, or perspectives based on the following topic or problem:\n\n${request.text}`;
+    case 'workspaceQuery': {
+      const question = request.text.trim()
+        ? request.text
+        : request.instruction || 'the provided question';
+      return `Answer the following question by reasoning across all relevant notes in the vault. Break the question into sub-questions, search the vault for relevant context, and synthesize a comprehensive answer with inline citations such as [[Note Title#^block-id]] for every factual claim. Question:\n\n${question}`;
+    }
   }
 }
 
@@ -202,7 +217,14 @@ function userPrompt(action: AiActionId, request: AiActionRequest): string {
 
 /** Validate the request before sending. Returns an error string or null. */
 function validateRequest(request: AiActionRequest): string | null {
-  if (!request.text.trim() && request.action !== 'findRelatedNotes') {
+  // WorkspaceQuery may supply its question via `instruction` instead of `text`,
+  // so we only reject it when BOTH are empty.
+  const hasText = request.text.trim().length > 0;
+  const hasInstruction = (request.instruction || '').trim().length > 0;
+  const instructionOptional = request.action === 'workspaceQuery';
+  const empty = !hasText && (!instructionOptional || !hasInstruction);
+
+  if (request.action !== 'findRelatedNotes' && empty) {
     return '输入文本不能为空。';
   }
   return null;

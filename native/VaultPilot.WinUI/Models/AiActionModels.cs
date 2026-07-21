@@ -39,6 +39,9 @@ public enum AiActionType
     /// <summary>Workspace-wide Q&amp;A with inline citations (#3188).</summary>
     [JsonPropertyName("workspaceQuery")]
     WorkspaceQuery,
+    /// <summary>Transcribe audio to text via OpenAI Whisper API (#3256).</summary>
+    [JsonPropertyName("transcribeAudio")]
+    TranscribeAudio,
 }
 
 /// <summary>
@@ -172,6 +175,7 @@ public static class AiActionTypeExtensions
         AiActionType.ReviewNote => "审阅笔记",
         AiActionType.SynthesizeWiki => "综合维基",
         AiActionType.WorkspaceQuery => "工作区问答",
+        AiActionType.TranscribeAudio => "音频转写",
         _ => "未知操作"
     };
 }

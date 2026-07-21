@@ -2216,6 +2216,31 @@ enum AiSubcommand {
         model: Option<String>,
     },
 
+    /// Suggest unlinked related notes in the vault for the current note (#3271)
+    Suggest {
+        /// The text of the current note to find related notes for
+        text: String,
+
+        /// Optional vault note paths/IDs to use as context (comma-separated)
+        #[arg(long)]
+        vault_notes: Option<String>,
+
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
+    /// Synthesize a multi-note report from selected notes (#3270)
+    Synthesize {
+        /// Comma-separated list of note IDs or paths to synthesize
+        #[arg(long, num_args = 1.., required = true)]
+        notes: Vec<String>,
+
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
     /// List all available AI quick actions with their IDs and labels
     ListActions,
 }
@@ -3225,7 +3250,110 @@ async fn handle_ai(context: &StorageContext, action: &AiSubcommand) -> Result<Va
             let actions = list_ai_actions();
             Ok(serde_json::json!({ "actions": actions }))
         }
+        AiSubcommand::Suggest {
+            text,
+            vault_notes,
+            model,
+        } => {
+            let vault_notes_str = vault_notes.clone().unwrap_or_default();
+            run_ai_action_with_instruction(
+                context,
+                AiActionType::SuggestLinks,
+                text.clone(),
+                if vault_notes_str.is_empty() {
+                    None
+                } else {
+                    Some(vault_notes_str)
+                },
+                None,
+                model.clone(),
+            )
+            .await
+        }
+        AiSubcommand::Synthesize { notes, model } => {
+            run_synthesize_notes(context, notes, model.clone()).await
+        }
     }
+}
+
+/// Load multiple notes by ID or path, concatenate into a single text blob,
+/// and run the SynthesizeNotes action on them (#3270).
+async fn run_synthesize_notes(
+    context: &StorageContext,
+    note_refs: &[String],
+    model: Option<String>,
+) -> Result<Value> {
+    let settings = vaultpilot_lib::storage::initialize_storage_with_context(context)?;
+
+    // Load each note by ID lookup, or treat as raw path
+    let vault_dir = context.vault_dir();
+    let mut combined = String::new();
+    for (i, note_ref) in note_refs.iter().enumerate() {
+        let doc = if note_ref.contains('/') || note_ref.ends_with(".md") {
+            // Load by path: treat note_ref as a file path relative to vault root
+            let full_path = vault_dir.join(note_ref);
+            match std::fs::read_to_string(&full_path) {
+                Ok(body) => {
+                    let title = note_ref
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(note_ref)
+                        .trim_end_matches(".md");
+                    vaultpilot_lib::models::NoteDocument {
+                        meta: vaultpilot_lib::models::NoteMeta {
+                            id: note_ref.clone(),
+                            title: title.to_string(),
+                            ..Default::default()
+                        },
+                        body,
+                        search_snippet: None,
+                        search_score: None,
+                    }
+                }
+                Err(e) => {
+                    anyhow::bail!("无法读取笔记文件 {}: {}", note_ref, e);
+                }
+            }
+        } else {
+            // Load by note ID via storage
+            vaultpilot_lib::storage::load_note_with_context(context, note_ref)
+                .map_err(|e| anyhow::anyhow!("无法加载笔记 {}: {}", note_ref, e))?
+        };
+
+        if i > 0 {
+            combined.push_str("\n---\n");
+        }
+        combined.push_str(&format!("## Note: {}\n{}\n", doc.meta.title, doc.body));
+    }
+
+    let request = AiActionRequest {
+        action: AiActionType::SynthesizeNotes,
+        text: combined,
+        target_language: None,
+        tone: None,
+        note_id: None,
+        instruction: None,
+        model,
+    };
+
+    let action_label = request.action.label();
+    let action_id = request.action.id();
+    let result = execute_ai_action(&settings, &request).await;
+
+    if let Some(error) = &result.error {
+        anyhow::bail!("AI 操作失败: {}", error);
+    }
+
+    Ok(serde_json::json!({
+        "action": action_id,
+        "actionLabel": action_label,
+        "result": result.result,
+        "sourceNotes": note_refs,
+        "usage": {
+            "inputTokens": result.usage.input_tokens,
+            "outputTokens": result.usage.output_tokens,
+        },
+    }))
 }
 
 async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<Value> {

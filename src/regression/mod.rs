@@ -59,4 +59,6 @@ mod issue_3170_keychain_clear;
 mod issue_3189_web_clipper;
 mod issue_3251_kanban_trim_keys;
 mod issue_3258_kanban_multi_value_group;
+mod issue_3270_synthesize_notes;
+mod issue_3271_suggest_links;
 mod issue_914_related_notes;

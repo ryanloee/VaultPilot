@@ -206,7 +206,7 @@ pub struct AiActionResult {
 // ─── Prompt builders ───────────────────────────────────────────────────
 
 /// Build the system prompt for a given AI action type.
-fn system_prompt(action: AiActionType) -> String {
+pub(crate) fn system_prompt(action: AiActionType) -> String {
     match action {
         AiActionType::Summarize => {
             "You are a text summarization assistant. Your task is to distill the \
@@ -396,7 +396,7 @@ fn system_prompt(action: AiActionType) -> String {
 }
 
 /// Build the user prompt for a given AI action type.
-fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
+pub(crate) fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
     match action {
         AiActionType::Summarize => {
             format!(
@@ -554,7 +554,7 @@ fn user_prompt(action: AiActionType, request: &AiActionRequest) -> String {
 
 /// Validate the action request synchronously. Returns an error result if
 /// validation fails, or `None` if the request is valid.
-fn validate_request(request: &AiActionRequest) -> Option<AiActionResult> {
+pub(crate) fn validate_request(request: &AiActionRequest) -> Option<AiActionResult> {
     // WorkspaceQuery may supply its question via `instruction` instead of `text`,
     // so we only reject it when BOTH are empty (#3235).
     let has_text = !request.text.trim().is_empty();

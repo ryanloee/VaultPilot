@@ -876,6 +876,33 @@ enum Commands {
         #[arg(long)]
         title: Option<String>,
     },
+
+    /// Open a standalone Markdown file outside the vault (read-only preview or
+    /// temporary editing) — no import, no sync, no SQLite. This is the CLI
+    /// backend for #3237 (opening .md files outside the vault).
+    ///
+    /// By default the file content is printed to stdout. Use --edit to open it
+    /// in $EDITOR/$VISUAL, or --save-to-vault to import it as a regular vault
+    /// note via the import_markdown pipeline.
+    ///
+    /// Examples:
+    ///   vaultpilot open /tmp/README.md               # print raw content
+    ///   vaultpilot open ~/docs/design.md --edit      # edit in $EDITOR
+    ///   vaultpilot open ~/docs/design.md --save-to-vault
+    Open {
+        /// Absolute or relative path to the .md file to open.
+        path: PathBuf,
+
+        /// Open the file in $EDITOR / $VISUAL instead of printing it.
+        #[arg(long)]
+        edit: bool,
+
+        /// Import the file into the vault via the standard import_markdown
+        /// pipeline (frontmatter preserved, FTS5 re-indexed). When combined
+        /// with --edit the edit happens first, then the result is imported.
+        #[arg(long)]
+        save_to_vault: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2726,6 +2753,11 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             output,
             title,
         } => handle_clip(context, url, tags, output, title).await,
+        Commands::Open {
+            path,
+            edit,
+            save_to_vault,
+        } => handle_open_external(context, path, *edit, *save_to_vault),
     }
 }
 
@@ -2852,6 +2884,80 @@ async fn handle_clip(
         "title": saved.meta.title,
         "tags": saved.meta.tags,
     }))
+}
+
+/// Open a standalone Markdown file outside the vault (#3237).
+///
+/// Three modes, determined by flags:
+///   1. Default (neither --edit nor --save-to-vault): read the file and print
+///      raw Markdown content to stdout, then exit immediately (same pattern as
+///      `notes export --output` — #2696).
+///   2. --edit: launch $EDITOR/$VISUAL on the file path. Falls back to vi/notepad.
+///   3. --save-to-vault: import the file into the vault via the standard
+///      import_markdown pipeline. When combined with --edit the file is opened
+///      in the editor first, then the result is imported.
+fn handle_open_external(
+    context: &StorageContext,
+    path: &Path,
+    edit: bool,
+    save_to_vault: bool,
+) -> Result<Value> {
+    // Normalise the path so relative lookups work from any CWD
+    let canonical = std::fs::canonicalize(path)
+        .with_context(|| format!("file not found: {}", path.display()))?;
+
+    // Validate it is a readable regular file
+    if !canonical.is_file() {
+        return Err(anyhow::anyhow!(
+            "{} is not a regular file",
+            canonical.display()
+        ));
+    }
+
+    // --edit mode: open in editor
+    if edit {
+        let editor = std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_else(|_| {
+                if cfg!(windows) {
+                    "notepad".to_string()
+                } else {
+                    "vi".to_string()
+                }
+            });
+        let status = std::process::Command::new(&editor)
+            .arg(&canonical)
+            .status()
+            .with_context(|| {
+                format!(
+                    "failed to launch editor '{}' on {}",
+                    editor,
+                    canonical.display()
+                )
+            })?;
+        if !status.success() {
+            eprintln!("editor '{}' exited with code {:?}", editor, status.code());
+        }
+    }
+
+    // --save-to-vault: import the (possibly just-edited) file
+    if save_to_vault {
+        let path_str = canonical.to_string_lossy().to_string();
+        let result = import_markdown_with_context(context, &[path_str])?;
+        return Ok(serde_json::json!({
+            "event": "open_external_save_to_vault",
+            "path": canonical.display().to_string(),
+            "imported": result.imported,
+            "skipped": result.skipped,
+            "errors": result.errors,
+        }));
+    }
+
+    // Default mode (neither flag): read file and print raw content, then exit
+    let content = std::fs::read_to_string(&canonical)
+        .with_context(|| format!("failed to read {}", canonical.display()))?;
+    print!("{content}");
+    std::process::exit(0);
 }
 
 /// Build an HTTP client that honours the `HTTP_PROXY`/`HTTPS_PROXY` env vars
@@ -9174,6 +9280,113 @@ mod tests {
             },
             _ => panic!("expected SkillSaved command"),
         }
+    }
+
+    // ── Open external .md file CLI parsing (#3237) ───────────────────
+
+    #[test]
+    fn regression_3237_open_cli_parses_path_only() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["vp", "open", "/tmp/readme.md"]);
+        match &cli.command {
+            Commands::Open {
+                path,
+                edit,
+                save_to_vault,
+            } => {
+                assert_eq!(path.to_string_lossy(), "/tmp/readme.md");
+                assert!(!edit);
+                assert!(!save_to_vault);
+            }
+            _ => panic!("expected Open command"),
+        }
+    }
+
+    #[test]
+    fn regression_3237_open_cli_edit_flag() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["vp", "open", "/tmp/doc.md", "--edit"]);
+        match &cli.command {
+            Commands::Open { edit, .. } => assert!(edit),
+            _ => panic!("expected Open command"),
+        }
+    }
+
+    #[test]
+    fn regression_3237_open_cli_save_to_vault_flag() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["vp", "open", "/tmp/doc.md", "--save-to-vault"]);
+        match &cli.command {
+            Commands::Open { save_to_vault, .. } => assert!(save_to_vault),
+            _ => panic!("expected Open command"),
+        }
+    }
+
+    #[test]
+    fn regression_3237_open_cli_both_flags() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["vp", "open", "/tmp/doc.md", "--edit", "--save-to-vault"]);
+        match &cli.command {
+            Commands::Open {
+                edit,
+                save_to_vault,
+                ..
+            } => {
+                assert!(edit);
+                assert!(save_to_vault);
+            }
+            _ => panic!("expected Open command"),
+        }
+    }
+
+    #[test]
+    fn regression_3237_open_existing_file_reads_content() {
+        // Integration test: write a temp file, call handle_open_external in
+        // save-to-vault mode and verify the returned JSON.
+        use crate::handle_open_external;
+        use std::env;
+        use std::fs;
+        let dir = env::temp_dir().join(format!("vp-test-3237-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create dir");
+        let md_path = dir.join("test.md");
+        fs::write(&md_path, "# Hello\n\nWorld\n").expect("write");
+
+        let ctx = vaultpilot_lib::storage::StorageContext::for_cli(Some(dir.clone()))
+            .expect("storage context");
+
+        // --save-to-vault mode
+        let result = handle_open_external(&ctx, &md_path, false, true)
+            .expect("save_to_vault should succeed");
+        assert_eq!(result["event"], "open_external_save_to_vault");
+        assert_eq!(result["imported"], 1);
+        assert_eq!(result["errors"].as_array().unwrap().len(), 0);
+
+        // Non-existent path error
+        let bad = dir.join("nope.md");
+        let err = handle_open_external(&ctx, &bad, false, false).unwrap_err();
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("file not found") || msg.contains("no such file"),
+            "expected 'file not found', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn regression_3237_open_rejects_directory() {
+        use crate::handle_open_external;
+        use std::env;
+        use std::fs;
+        let dir = env::temp_dir().join(format!("vp-test-3237-dir-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create dir");
+        let ctx = vaultpilot_lib::storage::StorageContext::for_cli(Some(dir.clone()))
+            .expect("storage context");
+
+        // Pass a directory instead of a file — canonicalize succeeds but is_file() fails
+        let err = handle_open_external(&ctx, &dir, false, false).unwrap_err();
+        assert!(
+            err.to_string().contains("not a regular file"),
+            "expected 'not a regular file', got: {err}"
+        );
     }
 }
 

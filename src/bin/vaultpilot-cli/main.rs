@@ -2155,6 +2155,20 @@ enum AiSubcommand {
         model: Option<String>,
     },
 
+    /// Workspace-wide Q&A: ask a question that reasons across the entire vault
+    /// and returns an answer with inline [[Note#^block-id]] citations (#3188).
+    WorkspaceQuery {
+        /// The question to ask (mutually exclusive with --instruction)
+        #[arg(long)]
+        text: Option<String>,
+        /// Alternative: natural-language question/instruction
+        #[arg(long)]
+        instruction: Option<String>,
+        /// Optional model override
+        #[arg(long)]
+        model: Option<String>,
+    },
+
     /// List all available AI quick actions with their IDs and labels
     ListActions,
 }
@@ -2906,6 +2920,47 @@ async fn run_ai_action(
     }))
 }
 
+/// Variant of [`run_ai_action`] that also forwards an `instruction` parameter,
+/// used by actions that accept an instruction-only path (e.g. WorkspaceQuery #3188).
+async fn run_ai_action_with_instruction(
+    context: &StorageContext,
+    action: AiActionType,
+    text: String,
+    instruction: Option<String>,
+    note_id: Option<String>,
+    model: Option<String>,
+) -> Result<Value> {
+    let settings = vaultpilot_lib::storage::initialize_storage_with_context(context)?;
+
+    let request = AiActionRequest {
+        action,
+        text,
+        target_language: None,
+        tone: None,
+        note_id,
+        instruction,
+        model,
+    };
+
+    let action_label = request.action.label();
+    let action_id = request.action.id();
+    let result = execute_ai_action(&settings, &request).await;
+
+    if let Some(error) = &result.error {
+        anyhow::bail!("AI 操作失败: {}", error);
+    }
+
+    Ok(serde_json::json!({
+        "action": action_id,
+        "actionLabel": action_label,
+        "result": result.result,
+        "usage": {
+            "inputTokens": result.usage.input_tokens,
+            "outputTokens": result.usage.output_tokens,
+        },
+    }))
+}
+
 async fn handle_ai(context: &StorageContext, action: &AiSubcommand) -> Result<Value> {
     match action {
         AiSubcommand::Summarize { text, model } => {
@@ -3008,6 +3063,24 @@ async fn handle_ai(context: &StorageContext, action: &AiSubcommand) -> Result<Va
                 text.clone(),
                 None,
                 None,
+                None,
+                model.clone(),
+            )
+            .await
+        }
+        AiSubcommand::WorkspaceQuery {
+            text,
+            instruction,
+            model,
+        } => {
+            // Either --text or --instruction must be supplied; validate_request
+            // inside execute_ai_action handles the "both empty" rejection (#3235).
+            let text = text.clone().unwrap_or_default();
+            run_ai_action_with_instruction(
+                context,
+                AiActionType::WorkspaceQuery,
+                text,
+                instruction.clone(),
                 None,
                 model.clone(),
             )

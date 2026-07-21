@@ -32,6 +32,13 @@ public enum AiActionType
     SummarizeUrl,
     [JsonPropertyName("brainstorm")]
     Brainstorm,
+    [JsonPropertyName("reviewNote")]
+    ReviewNote,
+    [JsonPropertyName("synthesizeWiki")]
+    SynthesizeWiki,
+    /// <summary>Workspace-wide Q&amp;A with inline citations (#3188).</summary>
+    [JsonPropertyName("workspaceQuery")]
+    WorkspaceQuery,
 }
 
 /// <summary>
@@ -157,6 +164,14 @@ public static class AiActionTypeExtensions
         AiActionType.ContinueWriting => "续写",
         AiActionType.ExtractTodos => "提取待办",
         AiActionType.FindRelatedNotes => "关联笔记",
+        AiActionType.CleanUp => "整理",
+        AiActionType.GenerateOutline => "大纲生成",
+        AiActionType.EditNote => "编辑笔记",
+        AiActionType.SummarizeUrl => "链接摘要",
+        AiActionType.Brainstorm => "头脑风暴",
+        AiActionType.ReviewNote => "审阅笔记",
+        AiActionType.SynthesizeWiki => "综合维基",
+        AiActionType.WorkspaceQuery => "工作区问答",
         _ => "未知操作"
     };
 }

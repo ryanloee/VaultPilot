@@ -866,6 +866,9 @@ pub struct HealthReport {
     /// Wiki-links that point to non-existent notes (#3294).
     #[serde(default)]
     pub broken_links: Vec<BrokenLink>,
+    /// Groups of tags that are likely synonyms/variants and could be merged (#3295).
+    #[serde(default)]
+    pub tag_clusters: Vec<TagCluster>,
 }
 
 /// A wiki-link (`[[target]]`) that does not resolve to any existing note (#3294).
@@ -881,6 +884,49 @@ pub struct BrokenLink {
     /// Suggested matches (fuzzy) that the user might have meant.
     #[serde(default)]
     pub suggested_matches: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Tag Sprawl Detector (#3295)
+// ---------------------------------------------------------------------------
+
+/// Why two or more tags were identified as variants of each other.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TagMergeReason {
+    /// Tags differ only in letter casing, e.g. `#AI` vs `#ai`.
+    CaseSensitive,
+    /// Tags differ only in singular/plural form, e.g. `#meeting` vs `#meetings`.
+    Plural,
+    /// Tags differ only in word-separator style, e.g. `#to-do` vs `#to_do` vs `#to do`.
+    Separator,
+}
+
+/// A single tag that is part of a cluster of near-duplicate tags.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagVariant {
+    /// The original tag string as it appears in notes.
+    pub tag: String,
+    /// Number of notes that use this tag variant.
+    pub note_count: usize,
+}
+
+/// A cluster of tags that are likely synonyms or surface variants and could be
+/// unified into a single canonical tag (#3295).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagCluster {
+    /// The suggested canonical (target) tag to merge all variants into.
+    pub canonical_tag: String,
+    /// All tag variants in this cluster, including the canonical tag itself.
+    pub variants: Vec<TagVariant>,
+    /// Total notes affected across all variants.
+    pub total_notes: usize,
+    /// Confidence score from 0.0 to 1.0 — deterministic rules always yield 1.0.
+    pub confidence: f32,
+    /// Why these tags were grouped together.
+    pub reason: TagMergeReason,
 }
 
 #[cfg(test)]

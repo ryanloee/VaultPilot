@@ -8203,6 +8203,29 @@ fn handle_health(context: &StorageContext, json: bool, weekly: bool) -> Result<V
             }
         }
 
+        if !report.tag_clusters.is_empty() {
+            eprintln!();
+            eprintln!("🏷️  Tag Sprawl (merge suggestions):");
+            for cluster in &report.tag_clusters {
+                let reason_str = match cluster.reason {
+                    TagMergeReason::CaseSensitive => "casing",
+                    TagMergeReason::Plural => "singular/plural",
+                    TagMergeReason::Separator => "separator",
+                };
+                let variants: Vec<String> = cluster
+                    .variants
+                    .iter()
+                    .map(|v| format!("#{} ({})", v.tag, v.note_count))
+                    .collect();
+                eprintln!(
+                    "  → #{} [{}] {}",
+                    cluster.canonical_tag,
+                    reason_str,
+                    variants.join(", ")
+                );
+            }
+        }
+
         if !report.suggestions.is_empty() {
             eprintln!();
             eprintln!("💡 Suggestions:");

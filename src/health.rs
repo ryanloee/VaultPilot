@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use tracing::{instrument, warn};
 
-use crate::models::{BrokenLink, Collection, HealthReport, NoteMeta};
+use crate::models::{
+    BrokenLink, Collection, HealthReport, NoteMeta, TagCluster, TagMergeReason, TagVariant,
+};
 use crate::storage::{list_collections_with_context, load_settings_with_context, StorageContext};
 
 /// Maximum notes to analyze for orphan / link detection. If the vault has more
@@ -67,16 +69,20 @@ pub fn health_check(context: &StorageContext) -> Result<HealthReport> {
     // ── 7. Broken link detection (#3294) ───────────────────────────────
     let broken_links = find_broken_links(&conn, &all_notes)?;
 
-    // ── 8. Load collections for suggestions ────────────────────────────
+    // ── 9. Tag sprawl detection (#3295) ────────────────────────────────
+    let tag_clusters = detect_tag_clusters(&all_notes);
+
+    // ── 10. Load collections for suggestions ───────────────────────────
     let collections = list_collections_with_context(context)?;
 
-    // ── 9. Generate suggestions ────────────────────────────────────────
+    // ── 11. Generate suggestions ───────────────────────────────────────
     let suggestions = generate_suggestions(
         &all_notes,
         &orphan_notes,
         &duplicate_clusters,
         &collections,
         &broken_links,
+        &tag_clusters,
     );
 
     Ok(HealthReport {
@@ -88,6 +94,7 @@ pub fn health_check(context: &StorageContext) -> Result<HealthReport> {
         suggestions,
         duplicate_clusters,
         broken_links,
+        tag_clusters,
     })
 }
 
@@ -451,6 +458,199 @@ fn detect_duplicate_clusters(all_notes: &[NoteMeta]) -> Vec<Vec<String>> {
     clusters
 }
 
+/// Normalize a tag for clustering comparison: strips leading `#`, lowercases,
+/// and replaces all non-alphanumeric characters (hyphens, underscores, spaces)
+/// with a single space. The trailing `s` is stripped for singular/plural matching.
+///
+/// Returns `(cased_key, case_insensitive_key, separator_normalized_key, singularized_key)`
+/// where each successive key is more aggressively normalized.
+fn tag_keys(tag: &str) -> (String, String, String, String) {
+    let stripped = tag.trim_start_matches('#').trim().to_string();
+
+    // Key 0: original (with case preserved) — used for case-collision detection.
+    let cased = stripped.clone();
+
+    // Key 1: case-insensitive — groups #AI, #ai, #Ai.
+    let case_insensitive = stripped.to_lowercase();
+
+    // Key 2: separator-normalized — replace -, _, and whitespace with single space.
+    let separator_normalized: String = case_insensitive
+        .chars()
+        .map(|c| {
+            if c == '-' || c == '_' || c.is_whitespace() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ");
+
+    // Key 3: singularized — strip trailing 's' for basic plural detection.
+    // Only strip if the word is long enough (> 3 chars after stripping) to
+    // avoid false positives like "is", "as", "us".
+    let singularized = if separator_normalized.len() > 4
+        && separator_normalized.ends_with('s')
+        && !separator_normalized.ends_with("ss")
+    {
+        separator_normalized[..separator_normalized.len() - 1].to_string()
+    } else {
+        separator_normalized.clone()
+    };
+
+    (cased, case_insensitive, separator_normalized, singularized)
+}
+
+/// Detect clusters of tags that are likely surface variants of the same concept.
+///
+/// Phase 1 (deterministic, no AI required):
+/// - **Case**: `#AI` ≡ `#ai` ≡ `#Ai` (same chars, different casing)
+/// - **Separator**: `#to-do` ≡ `#to_do` ≡ `#to do` (same words, different separators)
+/// - **Plural**: `#meeting` ≡ `#meetings` (singular/plural pair)
+///
+/// Each cluster is assigned the most frequently used variant as the canonical tag.
+/// A single tag never appears in more than one cluster (priority: plural > separator > case).
+fn detect_tag_clusters(all_notes: &[NoteMeta]) -> Vec<TagCluster> {
+    // Count how many notes use each tag variant.
+    let mut tag_counts: HashMap<String, usize> = HashMap::new();
+    for note in all_notes {
+        for tag in &note.tags {
+            *tag_counts.entry(tag.clone()).or_default() += 1;
+        }
+    }
+
+    if tag_counts.len() < 2 {
+        return Vec::new();
+    }
+
+    // Build key → set of original tags for each normalization level.
+    // We process from most-aggressive to least so a tag is only claimed once.
+    let mut assigned: HashSet<String> = HashSet::new();
+    let mut clusters: Vec<TagCluster> = Vec::new();
+
+    // Helper to build a cluster from a set of tag strings.
+    let build_cluster = |tags: &[String], reason: TagMergeReason| -> Option<TagCluster> {
+        if tags.len() < 2 {
+            return None;
+        }
+        let mut variants: Vec<TagVariant> = tags
+            .iter()
+            .map(|t| TagVariant {
+                tag: t.clone(),
+                note_count: *tag_counts.get(t).unwrap_or(&0),
+            })
+            .collect();
+        // Sort by note_count desc so the most-used variant becomes canonical.
+        variants.sort_by(|a, b| b.note_count.cmp(&a.note_count));
+        // Tie-break: shortest original tag (cleaner canonical).
+        variants.sort_by(|a, b| {
+            b.note_count
+                .cmp(&a.note_count)
+                .then_with(|| a.tag.len().cmp(&b.tag.len()))
+        });
+
+        let canonical = variants[0].tag.clone();
+        let total_notes: usize = variants.iter().map(|v| v.note_count).sum();
+        Some(TagCluster {
+            canonical_tag: canonical,
+            variants,
+            total_notes,
+            confidence: 1.0,
+            reason,
+        })
+    };
+
+    // --- Pass 1: Case-sensitive (most specific — same word, different casing) ---
+    // Group by case-insensitive key. Tags that differ ONLY in casing will
+    // share a case-insensitive key but have distinct cased keys.
+    let mut case_map: HashMap<String, Vec<String>> = HashMap::new();
+    for tag in tag_counts.keys() {
+        let (_, case_key, _, _) = tag_keys(tag);
+        case_map.entry(case_key).or_default().push(tag.clone());
+    }
+    for group in case_map.values() {
+        let unassigned: Vec<String> = group
+            .iter()
+            .filter(|t| !assigned.contains(*t))
+            .cloned()
+            .collect();
+        if let Some(cluster) = build_cluster(&unassigned, TagMergeReason::CaseSensitive) {
+            for v in &cluster.variants {
+                assigned.insert(v.tag.clone());
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    // --- Pass 2: Separator (hyphen/underscore/space) ---
+    // For unassigned tags, group by separator-normalized key. Tags that
+    // differ only in word-separator style will share a sep key but have
+    // distinct case-insensitive keys (which preserve separators).
+    let mut sep_map: HashMap<String, Vec<String>> = HashMap::new();
+    for tag in tag_counts.keys() {
+        if assigned.contains(tag) {
+            continue;
+        }
+        let (_, _, sep, _) = tag_keys(tag);
+        sep_map.entry(sep).or_default().push(tag.clone());
+    }
+    for group in sep_map.values() {
+        let unassigned: Vec<String> = group
+            .iter()
+            .filter(|t| !assigned.contains(*t))
+            .cloned()
+            .collect();
+        if let Some(cluster) = build_cluster(&unassigned, TagMergeReason::Separator) {
+            for v in &cluster.variants {
+                assigned.insert(v.tag.clone());
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    // --- Pass 3: Plural (singular/plural pairs) ---
+    // For unassigned tags, group by singularized key. Only create a cluster
+    // if there are ≥ 2 distinct separator-normalized forms — this ensures
+    // we only group tags that actually differ in plural/singular form.
+    let mut singular_map: HashMap<String, Vec<String>> = HashMap::new();
+    for tag in tag_counts.keys() {
+        if assigned.contains(tag) {
+            continue;
+        }
+        let (_, _, _, singular) = tag_keys(tag);
+        singular_map.entry(singular).or_default().push(tag.clone());
+    }
+    for group in singular_map.values() {
+        // Only group if there are at least 2 distinct separator-normalized forms
+        // — e.g. "meeting" and "meetings" both singularize to "meeting" but
+        // "react" and "react-native" don't.
+        let sep_keys: HashSet<String> = group.iter().map(|t| tag_keys(t).2).collect();
+        if sep_keys.len() < 2 {
+            continue;
+        }
+        let unassigned: Vec<String> = group
+            .iter()
+            .filter(|t| !assigned.contains(*t))
+            .cloned()
+            .collect();
+        if let Some(cluster) = build_cluster(&unassigned, TagMergeReason::Plural) {
+            for v in &cluster.variants {
+                assigned.insert(v.tag.clone());
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    // Sort clusters by total_notes descending (biggest impact first).
+    clusters.sort_by(|a, b| b.total_notes.cmp(&a.total_notes));
+
+    // Limit to 100 clusters to keep the report manageable.
+    clusters.truncate(100);
+    clusters
+}
+
 /// Generate human-readable suggestions based on analysis results.
 fn generate_suggestions(
     all_notes: &[NoteMeta],
@@ -458,6 +658,7 @@ fn generate_suggestions(
     duplicate_clusters: &[Vec<String>],
     collections: &[Collection],
     broken_links: &[BrokenLink],
+    tag_clusters: &[TagCluster],
 ) -> Vec<String> {
     let mut suggestions = Vec::new();
 
@@ -521,6 +722,16 @@ fn generate_suggestions(
                 sample.join("', '")
             ));
         }
+    }
+
+    // ── Tag sprawl (#3295) ────────────────────────────────────────────
+    if !tag_clusters.is_empty() {
+        let affected: usize = tag_clusters.iter().map(|c| c.total_notes).sum();
+        suggestions.push(format!(
+            "Detected {} tag clusters with {} notes across likely duplicate tags. Merging them will improve search and graph consistency.",
+            tag_clusters.len(),
+            affected
+        ));
     }
 
     // ── Untagged notes (excluding orphans already reported) ───────────
@@ -630,7 +841,7 @@ mod tests {
             tags: vec!["tag".into()],
             ..Default::default()
         }];
-        let suggestions = generate_suggestions(&notes, &[], &[], &[], &[]);
+        let suggestions = generate_suggestions(&notes, &[], &[], &[], &[], &[]);
         // No orphans, no duplicates, no empty collections → no suggestions
         // (But there may be density feedback — depends on the note count)
         assert!(suggestions.is_empty());
@@ -650,14 +861,14 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let suggestions = generate_suggestions(&notes, &notes, &[], &[], &[]);
+        let suggestions = generate_suggestions(&notes, &notes, &[], &[], &[], &[]);
         assert!(suggestions.iter().any(|s| s.contains("orphan")));
     }
 
     #[test]
     fn generate_suggestions_duplicates() {
         let clusters = vec![vec!["a".into(), "b".into()]];
-        let suggestions = generate_suggestions(&[], &[], &clusters, &[], &[]);
+        let suggestions = generate_suggestions(&[], &[], &clusters, &[], &[], &[]);
         assert!(suggestions.iter().any(|s| s.contains("highly similar")));
     }
 
@@ -668,7 +879,7 @@ mod tests {
             note_count: 1,
             ..Default::default()
         }];
-        let suggestions = generate_suggestions(&[], &[], &[], &collections, &[]);
+        let suggestions = generate_suggestions(&[], &[], &[], &collections, &[], &[]);
         assert!(
             suggestions.iter().any(|s| s.contains("Project X")),
             "should mention the collection name"
@@ -1085,12 +1296,263 @@ mod tests {
             link_target: "Missing Note".into(),
             suggested_matches: vec![],
         }];
-        let suggestions = generate_suggestions(&[], &[], &[], &[], &broken);
+        let suggestions = generate_suggestions(&[], &[], &[], &[], &broken, &[]);
         assert!(
             suggestions
                 .iter()
                 .any(|s| s.contains("broken wiki-link") && s.contains("Missing Note")),
             "should mention broken link in suggestions"
+        );
+    }
+
+    // ── Tag Sprawl Detector tests (#3295) ─────────────────────────────
+
+    #[test]
+    fn tag_keys_strips_hash_and_lowercases() {
+        let (cased, ci, sep, sing) = tag_keys("#AI");
+        assert_eq!(cased, "AI");
+        assert_eq!(ci, "ai");
+        assert_eq!(sep, "ai");
+        assert_eq!(sing, "ai");
+    }
+
+    #[test]
+    fn tag_keys_normalizes_separators() {
+        let (_, _, sep, _) = tag_keys("to-do");
+        assert_eq!(sep, "to do");
+        let (_, _, sep, _) = tag_keys("to_do");
+        assert_eq!(sep, "to do");
+        let (_, _, sep, _) = tag_keys("to do");
+        assert_eq!(sep, "to do");
+    }
+
+    #[test]
+    fn tag_keys_singularizes_plural() {
+        let (_, _, _, sing) = tag_keys("meetings");
+        assert_eq!(sing, "meeting");
+        let (_, _, _, sing) = tag_keys("meeting");
+        assert_eq!(sing, "meeting");
+    }
+
+    #[test]
+    fn tag_keys_does_not_singularize_short_words() {
+        let (_, _, _, sing) = tag_keys("is");
+        assert_eq!(sing, "is");
+        let (_, _, _, sing) = tag_keys("as");
+        assert_eq!(sing, "as");
+    }
+
+    #[test]
+    fn tag_keys_does_not_singularize_double_s() {
+        let (_, _, _, sing) = tag_keys("process");
+        assert_eq!(sing, "process");
+        let (_, _, _, sing) = tag_keys("class");
+        assert_eq!(sing, "class");
+    }
+
+    #[test]
+    fn detect_tag_clusters_case_sensitive() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["AI".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "Note 3".into(),
+                tags: vec!["Ai".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1, "should find 1 case cluster");
+        assert_eq!(clusters[0].variants.len(), 3);
+        assert_eq!(
+            clusters[0].reason,
+            TagMergeReason::CaseSensitive,
+            "should be case-sensitive reason"
+        );
+    }
+
+    #[test]
+    fn detect_tag_clusters_separator_variants() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["to-do".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["to_do".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "Note 3".into(),
+                tags: vec!["to do".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1, "should find 1 separator cluster");
+        assert_eq!(clusters[0].variants.len(), 3);
+        assert_eq!(
+            clusters[0].reason,
+            TagMergeReason::Separator,
+            "should be separator reason"
+        );
+    }
+
+    #[test]
+    fn detect_tag_clusters_plural() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["meeting".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["meetings".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1, "should find 1 plural cluster");
+        assert_eq!(clusters[0].variants.len(), 2);
+        assert_eq!(
+            clusters[0].reason,
+            TagMergeReason::Plural,
+            "should be plural reason"
+        );
+    }
+
+    #[test]
+    fn detect_tag_clusters_no_false_positives() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["rust".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["python".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert!(clusters.is_empty(), "distinct tags should not cluster");
+    }
+
+    #[test]
+    fn detect_tag_clusters_canonical_is_most_used() {
+        // "ai" appears in 3 notes, "AI" in 1 → canonical should be "ai"
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "N1".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "N2".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "N3".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n4".into(),
+                title: "N4".into(),
+                tags: vec!["AI".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(
+            clusters[0].canonical_tag, "ai",
+            "most-used variant should be canonical"
+        );
+        assert_eq!(clusters[0].total_notes, 4);
+    }
+
+    #[test]
+    fn detect_tag_clusters_empty_when_no_tags() {
+        let notes = vec![NoteMeta {
+            id: "n1".into(),
+            title: "N1".into(),
+            ..Default::default()
+        }];
+        let clusters = detect_tag_clusters(&notes);
+        assert!(clusters.is_empty());
+    }
+
+    #[test]
+    fn detect_tag_clusters_multiple_clusters() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "N1".into(),
+                tags: vec!["AI".into(), "to-do".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "N2".into(),
+                tags: vec!["ai".into(), "to_do".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 2, "should find case + separator clusters");
+    }
+
+    #[test]
+    fn generate_suggestions_includes_tag_clusters() {
+        let clusters = vec![TagCluster {
+            canonical_tag: "ai".into(),
+            variants: vec![
+                TagVariant {
+                    tag: "ai".into(),
+                    note_count: 5,
+                },
+                TagVariant {
+                    tag: "AI".into(),
+                    note_count: 2,
+                },
+            ],
+            total_notes: 7,
+            confidence: 1.0,
+            reason: TagMergeReason::CaseSensitive,
+        }];
+        let suggestions = generate_suggestions(&[], &[], &[], &[], &[], &clusters);
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.contains("tag clusters") && s.contains("7 notes")),
+            "should mention tag clusters and affected note count"
         );
     }
 }

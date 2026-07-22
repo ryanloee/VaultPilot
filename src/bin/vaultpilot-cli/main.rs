@@ -1576,6 +1576,8 @@ enum QueryFormat {
     Cards,
     /// List — compact one-line-per-note bullet list with title + key properties (#2999)
     List,
+    /// Calendar — month-grid calendar view with notes placed on their date (#3286)
+    Calendar,
 }
 
 #[derive(Subcommand)]
@@ -4624,6 +4626,7 @@ fn handle_vault_query(
         QueryFormat::Gallery => format_as_gallery(&columns, &rows),
         QueryFormat::Cards => format_as_cards(&columns, &rows),
         QueryFormat::List => format_as_list(&columns, &rows),
+        QueryFormat::Calendar => format_as_calendar(&columns, &rows, group_by.unwrap_or("date")),
     };
 
     // Parse summarization specs if provided (#2909)
@@ -4725,6 +4728,7 @@ fn parse_query_format(s: &str) -> QueryFormat {
         "gallery" => QueryFormat::Gallery,
         "cards" => QueryFormat::Cards,
         "list" => QueryFormat::List,
+        "calendar" => QueryFormat::Calendar,
         _ => QueryFormat::Table,
     }
 }
@@ -5275,6 +5279,228 @@ fn format_as_list(
     }
 
     out.push('\n');
+    out
+}
+
+/// Render query results as a month-grid calendar view, placing notes on their
+/// dates (#3286). The `date_field` identifies the column containing the date
+/// (defaults to `"date"`). Rows without a parseable date are omitted from
+/// the calendar grid but listed in a "Notes without dates" section.
+fn format_as_calendar(
+    columns: &[String],
+    rows: &[std::collections::HashMap<String, QValue>],
+    date_field: &str,
+) -> String {
+    use chrono::Datelike;
+    use std::collections::BTreeMap;
+
+    if rows.is_empty() {
+        return "*No results*\n".to_string();
+    }
+
+    let note_title = |row: &std::collections::HashMap<String, QValue>| -> String {
+        if let Some(QValue::Text(t)) = row.get("title") {
+            if !t.is_empty() {
+                return t.clone();
+            }
+        }
+        row.get("$path")
+            .map(|v| {
+                let p = v.to_string();
+                p.rsplit('/').next().unwrap_or(&p).to_string()
+            })
+            .unwrap_or_else(|| "(untitled)".to_string())
+    };
+
+    // Determine which non-date, non-$path columns to show as metadata.
+    let meta_cols: Vec<&String> = columns
+        .iter()
+        .filter(|c| *c != "$path" && *c != date_field && *c != "title")
+        .collect();
+
+    // Group notes by (year, month, day).
+    // Key: (year, month, day), Value: list of rows on that date.
+    let mut by_date: BTreeMap<(i32, u32, u32), Vec<&std::collections::HashMap<String, QValue>>> =
+        BTreeMap::new();
+    let mut undated: Vec<&std::collections::HashMap<String, QValue>> = Vec::new();
+
+    for row in rows {
+        let date_str = match row.get(date_field) {
+            Some(QValue::Text(s)) if !s.is_empty() => s.clone(),
+            _ => {
+                undated.push(row);
+                continue;
+            }
+        };
+
+        // Try common date formats: YYYY-MM-DD, YYYY/MM/DD, YYYY-MM-DDThh:mm:ss, etc.
+        let parsed = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+            .or_else(|_| chrono::NaiveDate::parse_from_str(&date_str, "%Y/%m/%d"))
+            .or_else(|_| {
+                // Try ISO 8601 with time portion
+                if date_str.len() >= 10 {
+                    chrono::NaiveDate::parse_from_str(&date_str[..10], "%Y-%m-%d")
+                } else {
+                    // Return an impossible date string to force Err
+                    chrono::NaiveDate::parse_from_str("", "%Y-%m-%d")
+                }
+            });
+
+        match parsed {
+            Ok(d) => {
+                let key = (d.year(), d.month(), d.day());
+                by_date.entry(key).or_default().push(row);
+            }
+            Err(_) => {
+                undated.push(row);
+            }
+        }
+    }
+
+    let mut out = String::new();
+
+    // Check if date_field exists in the result.
+    let date_field_exists = columns.iter().any(|c| c == date_field);
+    if date_field_exists {
+        out.push_str(&format!("# Calendar View — by {date_field}\n\n"));
+    } else {
+        out.push_str(&format!(
+            "# Calendar View — by {date_field}\n\n\
+             > ⚠️ Warning: column `{date_field}` does not exist in the query result; \
+             no dates could be determined.\n\n"
+        ));
+    }
+
+    if by_date.is_empty() {
+        out.push_str("*No dated notes found.*\n\n");
+    } else {
+        // Group by (year, month) to render month grids.
+        let mut month_groups: BTreeMap<
+            (i32, u32),
+            BTreeMap<u32, Vec<&std::collections::HashMap<String, QValue>>>,
+        > = BTreeMap::new();
+        for ((y, m, d), rows) in &by_date {
+            month_groups
+                .entry((*y, *m))
+                .or_default()
+                .entry(*d)
+                .or_default()
+                .extend(rows.iter().copied());
+        }
+
+        // Month names
+        let month_names = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+
+        for ((year, month), days) in &month_groups {
+            let m_name = month_names
+                .get((month - 1) as usize)
+                .copied()
+                .unwrap_or("Unknown");
+            out.push_str(&format!("## {m_name} {year}\n\n"));
+
+            // Determine the first weekday of this month (Mon=0, Sun=6).
+            let first_of_month = chrono::NaiveDate::from_ymd_opt(*year, *month, 1)
+                .unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+            let first_weekday = first_of_month.weekday().num_days_from_monday();
+
+            // Days in month
+            let days_in_month = if *month == 12 {
+                chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1)
+            } else {
+                chrono::NaiveDate::from_ymd_opt(*year, month + 1, 1)
+            }
+            .map(|next_first| next_first.pred_opt().unwrap_or(next_first).day())
+            .unwrap_or(30);
+
+            // Calendar header
+            out.push_str("| Mon | Tue | Wed | Thu | Fri | Sat | Sun |\n");
+            out.push_str("|-----|-----|-----|-----|-----|-----|-----|\n");
+
+            let mut day_counter = 0u32;
+            let mut week_line = String::from("|");
+
+            // Leading blanks
+            for _ in 0..first_weekday {
+                week_line.push_str("     |");
+                day_counter += 1;
+            }
+
+            for d in 1..=days_in_month {
+                let notes_on_day = days.get(&d);
+                let cell = match notes_on_day {
+                    Some(note_rows) if !note_rows.is_empty() => {
+                        let count = note_rows.len();
+                        if count > 3 {
+                            format!("  {d}📝({count}) |")
+                        } else {
+                            format!("  {d}📝|")
+                        }
+                    }
+                    _ => format!("  {d}   |"),
+                };
+                week_line.push_str(&cell);
+                day_counter += 1;
+
+                if day_counter == 7 {
+                    out.push_str(&week_line);
+                    out.push('\n');
+                    week_line = String::from("|");
+                    day_counter = 0;
+                }
+            }
+
+            // Close remaining cells
+            if day_counter > 0 && day_counter < 7 {
+                for _ in day_counter..7 {
+                    week_line.push_str("     |");
+                }
+                out.push_str(&week_line);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+
+    // List undated notes
+    if !undated.is_empty() {
+        out.push_str(&format!("## Notes without dates ({})\n\n", undated.len()));
+        for row in &undated {
+            let title = note_title(row);
+            let meta_parts: Vec<String> = meta_cols
+                .iter()
+                .filter_map(|col| {
+                    let val = row.get(*col)?;
+                    let s = val.to_string();
+                    if s.is_empty() || s == "null" {
+                        None
+                    } else {
+                        Some(format!("{col}: {s}"))
+                    }
+                })
+                .collect();
+
+            if meta_parts.is_empty() {
+                out.push_str(&format!("- **{title}**\n"));
+            } else {
+                out.push_str(&format!("- **{title}** — {}\n", meta_parts.join(", ")));
+            }
+        }
+        out.push('\n');
+    }
+
     out
 }
 

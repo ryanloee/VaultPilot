@@ -121,9 +121,7 @@ impl AiActionType {
             "summarizeUrl" | "summarize_url" => Some(Self::SummarizeUrl),
             "brainstorm" => Some(Self::Brainstorm),
             "reviewNote" | "review_note" | "review" => Some(Self::ReviewNote),
-            "synthesizeWiki" | "synthesize_wiki" | "synthesize" | "wiki" => {
-                Some(Self::SynthesizeWiki)
-            }
+            "synthesizeWiki" | "synthesize_wiki" | "wiki" => Some(Self::SynthesizeWiki),
             "workspaceQuery" | "workspace_query" | "workspaceQa" | "workspace" => {
                 Some(Self::WorkspaceQuery)
             }
@@ -711,6 +709,21 @@ mod tests {
     #[test]
     fn action_type_from_id_unknown() {
         assert_eq!(AiActionType::from_id("unknown_action"), None);
+    }
+
+    #[test]
+    fn synthesize_alias_is_not_ambiguous() {
+        // #3284 — from_id("synthesize") must NOT silently map to SynthesizeWiki
+        assert_eq!(AiActionType::from_id("synthesize"), None);
+        // But explicit aliases still work
+        assert_eq!(
+            AiActionType::from_id("synthesizeWiki"),
+            Some(AiActionType::SynthesizeWiki)
+        );
+        assert_eq!(
+            AiActionType::from_id("synthesizeNotes"),
+            Some(AiActionType::SynthesizeNotes)
+        );
     }
 
     #[test]

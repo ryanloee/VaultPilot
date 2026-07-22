@@ -14,6 +14,7 @@ pub mod connector;
 pub mod context_surface;
 pub mod crypto;
 pub mod diff;
+pub mod export;
 pub mod file_parsing;
 pub mod flashcards;
 pub mod fsrs;

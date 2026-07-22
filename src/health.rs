@@ -288,7 +288,7 @@ fn fuzzy_match_titles(target: &str, all_notes: &[NoteMeta]) -> Vec<String> {
     }
 
     // Sort descending by score, take top 3.
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     scored
         .into_iter()
         .take(3)

@@ -609,7 +609,7 @@ fn sort_notes(notes: &mut [crate::models::NoteMeta], sort_by: crate::models::Sea
             notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         }
         SearchSortBy::Title => {
-            notes.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+            notes.sort_by_key(|a| a.title.to_lowercase());
         }
     }
 }

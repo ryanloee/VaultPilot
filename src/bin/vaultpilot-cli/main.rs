@@ -5294,6 +5294,8 @@ fn format_as_calendar(
     use chrono::Datelike;
     use std::collections::BTreeMap;
 
+    type Row = std::collections::HashMap<String, QValue>;
+
     if rows.is_empty() {
         return "*No results*\n".to_string();
     }
@@ -5320,9 +5322,8 @@ fn format_as_calendar(
 
     // Group notes by (year, month, day).
     // Key: (year, month, day), Value: list of rows on that date.
-    let mut by_date: BTreeMap<(i32, u32, u32), Vec<&std::collections::HashMap<String, QValue>>> =
-        BTreeMap::new();
-    let mut undated: Vec<&std::collections::HashMap<String, QValue>> = Vec::new();
+    let mut by_date: BTreeMap<(i32, u32, u32), Vec<&Row>> = BTreeMap::new();
+    let mut undated: Vec<&Row> = Vec::new();
 
     for row in rows {
         let date_str = match row.get(date_field) {
@@ -5375,10 +5376,7 @@ fn format_as_calendar(
         out.push_str("*No dated notes found.*\n\n");
     } else {
         // Group by (year, month) to render month grids.
-        let mut month_groups: BTreeMap<
-            (i32, u32),
-            BTreeMap<u32, Vec<&std::collections::HashMap<String, QValue>>>,
-        > = BTreeMap::new();
+        let mut month_groups: BTreeMap<(i32, u32), BTreeMap<u32, Vec<&Row>>> = BTreeMap::new();
         for ((y, m, d), rows) in &by_date {
             month_groups
                 .entry((*y, *m))

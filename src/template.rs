@@ -1038,4 +1038,38 @@ Content here.
         let ctx = context_from_pairs(&[("name", "test"), ("value", "42")]);
         assert_eq!(render("{{name}} = {{value}}", &ctx), "test = 42");
     }
+
+    // ── #3198: url template variable ────────────────────────────────────
+
+    #[test]
+    fn render_url_variable() {
+        let mut ctx = Context::new();
+        ctx.insert("url".into(), "https://example.com/article".into());
+        assert_eq!(
+            render("来源：{{url}}", &ctx),
+            "来源：https://example.com/article"
+        );
+    }
+
+    #[test]
+    fn render_url_in_clip_template() {
+        // Simulates a Web Clipper template that inserts the source URL
+        // alongside title and content.
+        let mut ctx = Context::new();
+        ctx.insert("url".into(), "https://blog.dev/rust-tips".into());
+        ctx.insert("title".into(), "Rust Tips".into());
+        ctx.insert("content".into(), "Run cargo fmt.".into());
+        let result = render("# {{title}}\n\nSource: {{url}}\n\n{{content}}", &ctx);
+        assert_eq!(
+            result,
+            "# Rust Tips\n\nSource: https://blog.dev/rust-tips\n\nRun cargo fmt."
+        );
+    }
+
+    #[test]
+    fn render_empty_url_variable() {
+        // When no URL is provided (e.g. text-only share), variable renders empty.
+        let ctx = Context::new();
+        assert_eq!(render("Source: {{url}}", &ctx), "Source: ");
+    }
 }

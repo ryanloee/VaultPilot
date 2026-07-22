@@ -860,6 +860,7 @@ enum Commands {
     ///   vaultpilot clip https://example.com/article
     ///   vaultpilot clip https://example.com/article --tags reading,rust
     ///   vaultpilot clip https://example.com/article --output /tmp/article.md
+    ///   vaultpilot clip https://example.com/article --template "来源：{{url}}\n\n{{content}}"
     Clip {
         /// URL of the web page to clip.
         url: String,
@@ -875,6 +876,11 @@ enum Commands {
         /// Override the note title (defaults to the page <title>/<h1>).
         #[arg(long)]
         title: Option<String>,
+
+        /// Custom note template (overrides default frontmatter). Variables:
+        /// {{url}}, {{title}}, {{content}}, {{date}}, {{time}}, {{tags}}.
+        #[arg(long)]
+        template: Option<String>,
     },
 
     /// Open a standalone Markdown file outside the vault (read-only preview or
@@ -2818,7 +2824,8 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             tags,
             output,
             title,
-        } => handle_clip(context, url, tags, output, title).await,
+            template,
+        } => handle_clip(context, url, tags, output, title, template).await,
         Commands::Open {
             path,
             edit,
@@ -2840,6 +2847,7 @@ async fn handle_clip(
     tags: &Option<String>,
     output: &Option<String>,
     title_override: &Option<String>,
+    template_override: &Option<String>,
 ) -> Result<Value> {
     use vaultpilot_lib::clipper::html_to_markdown;
     use vaultpilot_lib::models::NoteDocument;
@@ -2907,7 +2915,25 @@ async fn handle_clip(
     }
     frontmatter.push_str("---\n\n");
 
-    let content = format!("{frontmatter}# {derived_title}\n\n{markdown_body}");
+    let default_content = format!("{frontmatter}# {derived_title}\n\n{markdown_body}");
+
+    // If a custom template is provided, render it with the template engine (#3198).
+    let content = if let Some(tmpl) = template_override {
+        use vaultpilot_lib::template::{render, Value as TplValue};
+        let mut ctx: std::collections::HashMap<String, TplValue> = std::collections::HashMap::new();
+        ctx.insert("url".into(), TplValue::Str(url.to_string()));
+        ctx.insert("title".into(), TplValue::Str(derived_title.clone()));
+        ctx.insert("content".into(), TplValue::Str(markdown_body.clone()));
+        ctx.insert("date".into(), TplValue::Str(clipped_date.clone()));
+        ctx.insert(
+            "time".into(),
+            TplValue::Str(now.format("%H:%M").to_string()),
+        );
+        ctx.insert("tags".into(), TplValue::Str(tag_list.join(", ")));
+        render(tmpl, &ctx)
+    } else {
+        default_content
+    };
 
     // 5. Output to file or save to vault.
     if let Some(path) = output {

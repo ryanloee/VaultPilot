@@ -150,11 +150,11 @@ pub fn export_markdown_to_xlsx(markdown: &str, output_path: &Path) -> Result<()>
 
         // Column widths (simple auto-width based on header length)
         xml.push_str("<cols>");
-        for header in &table.headers {
+        for (col_idx, header) in table.headers.iter().enumerate() {
             let width = (header.chars().count() + 2).clamp(10, 50) as f64;
             xml.push_str(&format!(
                 r#"<col min="{col}" max="{col}" width="{w}" customWidth="1"/> "#,
-                col = 1,
+                col = col_idx + 1,
                 w = width
             ));
         }
@@ -683,15 +683,13 @@ fn markdown_to_html_body(markdown: &str) -> String {
 /// Each H2 heading starts a new slide. Content under each H2 becomes the slide body.
 /// The output is standard Markdown with Marp frontmatter.
 pub fn export_markdown_to_marp(markdown: &str, title: &str, output_path: &Path) -> Result<()> {
-    let escaped_title = xml_escape(title);
-
     let mut output = format!(
-        "---\nmarp: true\ntheme: default\npaginate: true\ntitle: {title}\n---\n\n",
-        title = escaped_title
+        "---\nmarp: true\ntheme: default\npaginate: true\ntitle: \"{title}\"\n---\n\n",
+        title = title
     );
 
     // Title slide
-    output.push_str(&format!("# {}\n\n", escaped_title));
+    output.push_str(&format!("# {}\n\n", title));
 
     let lines: Vec<&str> = markdown.lines().collect();
     let mut current_slide = String::new();
@@ -921,6 +919,7 @@ fn parse_csv_line(line: &str, delimiter: char) -> Vec<String> {
     let mut cells = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
+    let mut was_quoted = false;
     let mut chars = line.chars().peekable();
 
     while let Some(ch) = chars.next() {
@@ -937,14 +936,28 @@ fn parse_csv_line(line: &str, delimiter: char) -> Vec<String> {
             }
         } else if ch == '"' {
             in_quotes = true;
+            was_quoted = true;
         } else if ch == delimiter {
-            cells.push(current.trim().to_string());
+            // RFC 4180: only trim unquoted fields; quoted content is preserved exactly
+            let cell = if was_quoted {
+                current.clone()
+            } else {
+                current.trim().to_string()
+            };
+            cells.push(cell);
             current = String::new();
+            was_quoted = false;
         } else {
             current.push(ch);
         }
     }
-    cells.push(current.trim().to_string());
+    // Last cell
+    let cell = if was_quoted {
+        current
+    } else {
+        current.trim().to_string()
+    };
+    cells.push(cell);
     cells
 }
 
@@ -1193,6 +1206,67 @@ Some text between tables.
         let line = r#""She said ""hi""",next"#;
         let cells = parse_csv_line(line, ',');
         assert_eq!(cells, vec![r#"She said "hi""#, "next"]);
+    }
+
+    // ── Regression tests ────────────────────────────────────────────────
+
+    /// #3312: RFC 4180 — quoted fields must preserve internal whitespace.
+    #[test]
+    fn parse_csv_line_preserves_quoted_whitespace() {
+        let line = r#""  hello  ",world"#;
+        let cells = parse_csv_line(line, ',');
+        assert_eq!(cells, vec!["  hello  ", "world"]);
+    }
+
+    /// #3312: Unquoted fields are still trimmed.
+    #[test]
+    fn parse_csv_line_trims_unquoted_whitespace() {
+        let line = "  hello  ,  world  ";
+        let cells = parse_csv_line(line, ',');
+        assert_eq!(cells, vec!["hello", "world"]);
+    }
+
+    /// #3312: Mixed quoted and unquoted in same line.
+    #[test]
+    fn parse_csv_line_mixed_quoted_unquoted() {
+        let line = r#"  untrimmed  ,"  preserved  ",normal"#;
+        let cells = parse_csv_line(line, ',');
+        assert_eq!(cells, vec!["untrimmed", "  preserved  ", "normal"]);
+    }
+
+    /// #3317: XLSX <col> elements must have correct min/max per-column, not all = 1.
+    #[test]
+    fn export_xlsx_column_definitions_correct() {
+        let md = "| Name | Age | City |\n| --- | --- | --- |\n| Alice | 30 | NYC |";
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-xlsx-cols-test-{}.xlsx",
+            std::process::id()
+        ));
+        export_markdown_to_xlsx(md, &tmp).expect("export should succeed");
+        assert!(tmp.exists());
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// #3318: Marp title must not be XML-escaped (& stays & in Markdown output).
+    #[test]
+    fn export_marp_title_not_xml_escaped() {
+        let md = "## Slide 1\n\nContent.\n";
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-marp-amp-test-{}.md",
+            std::process::id()
+        ));
+        export_markdown_to_marp(md, "Q3 & Q4 Reports", &tmp).expect("marp export should succeed");
+        assert!(tmp.exists());
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        assert!(
+            content.contains("Q3 & Q4 Reports"),
+            "title should contain literal '&', got: {content}"
+        );
+        assert!(
+            !content.contains("&amp;"),
+            "title should NOT contain XML-escaped '&amp;'"
+        );
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

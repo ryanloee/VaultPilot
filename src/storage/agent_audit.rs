@@ -153,7 +153,7 @@ pub fn query_agent_audit_log(
     sql.push_str(" ORDER BY created_at DESC");
     sql.push_str(&format!(
         " LIMIT {} OFFSET {}",
-        query.limit.max(1).min(1000),
+        query.limit.clamp(1, 1000),
         query.offset
     ));
 
@@ -254,7 +254,6 @@ pub fn list_operation_types(conn: &Connection) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::pool;
 
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

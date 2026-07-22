@@ -54,7 +54,7 @@ pub fn search_notes_with_context(
             let count = count_filtered_notes(&connection, &query)?;
             (filtered, count)
         } else {
-            let recent = query_recent_note_metas(&connection, limit, offset)?;
+            let recent = query_recent_note_metas(&connection, limit, offset, query.sort_by)?;
             let count = count_all_notes(&connection)?;
             (recent, count)
         }
@@ -238,7 +238,7 @@ pub fn deep_search_notes(context: &StorageContext, query: SearchQuery) -> Result
     let offset = query.offset.unwrap_or(0);
 
     if query.text.trim().is_empty() {
-        let notes = query_recent_note_metas(&connection, limit, offset)?;
+        let notes = query_recent_note_metas(&connection, limit, offset, query.sort_by)?;
         let total = count_all_notes(&connection)?;
         return Ok(SearchResult { notes, total });
     }
@@ -456,17 +456,34 @@ fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteMeta> {
     })
 }
 
+/// Map a `SearchSortBy` variant to the corresponding SQL `ORDER BY` clause
+/// for the non-FTS (empty-text) query paths (#3306).
+///
+/// In the non-FTS path there is no BM25 ranking, so `Relevance` falls back to
+/// `Modified` (updated_at DESC), which preserves the historical default.
+fn sort_by_to_sql_order(sort_by: crate::models::SearchSortBy) -> &'static str {
+    use crate::models::SearchSortBy;
+    match sort_by {
+        SearchSortBy::Relevance | SearchSortBy::Modified => "updated_at DESC",
+        SearchSortBy::Created => "created_at DESC",
+        SearchSortBy::Title => "LOWER(title) ASC",
+    }
+}
+
 fn query_recent_note_metas(
     connection: &Connection,
     limit: usize,
     offset: usize,
+    sort_by: crate::models::SearchSortBy,
 ) -> Result<Vec<NoteMeta>> {
-    let mut statement = connection.prepare(
+    let order_clause = sort_by_to_sql_order(sort_by);
+    let sql = format!(
         "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
          FROM notes
-         ORDER BY updated_at DESC
-         LIMIT ?1 OFFSET ?2",
-    )?;
+         ORDER BY {order_clause}
+         LIMIT ?1 OFFSET ?2"
+    );
+    let mut statement = connection.prepare(&sql)?;
     let rows = statement
         .query_map([limit as i64, offset as i64], row_to_meta)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -548,11 +565,16 @@ fn query_filtered_note_metas(
     params.push(Box::new(offset as i64));
     let offset_idx = param_idx;
 
+    // Push sort order into SQL ORDER BY for the non-FTS filtered path (#3306).
+    // Previously this hardcoded "updated_at DESC", so --sort title/created only
+    // re-sorted the already-paginated subset, silently excluding notes outside
+    // the initial window.
+    let order_clause = sort_by_to_sql_order(query.sort_by);
     let sql = format!(
         "SELECT id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary
          FROM notes
          {where_clause}
-         ORDER BY updated_at DESC
+         ORDER BY {order_clause}
          LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
     );
 
@@ -2700,7 +2722,193 @@ mod tests {
         assert_eq!(results.total, 1, "total should reflect the 1 matching note");
     }
 
-    // ── #2130: placeholder shift corrupts ?10+ ─────────────────────
+    // ── #3306: --sort silently ignored for empty-text (non-FTS) searches ──
+
+    /// Insert a note directly via SQL with controlled timestamps and title.
+    fn insert_note_with_timestamps(
+        conn: &Connection,
+        id: &str,
+        title: &str,
+        created_at: &str,
+        updated_at: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, '', '', '', '', '', '', ?3, ?4, '', ?5, '', '', '')",
+            params![id, title, created_at, updated_at, format!("/{id}.md")],
+        )
+        .expect("insert note");
+    }
+
+    #[test]
+    fn search_empty_text_sort_by_title_covers_full_set() {
+        // #3306: When searching with empty text and --sort title, the SQL
+        // ORDER BY must use LOWER(title) ASC so the result covers the full
+        // note set, not just the N most-recently-updated notes re-sorted.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+        let (conn, _) = open_connection(&ctx).expect("connect");
+
+        // Insert 4 notes. "Apple" is the alphabetically-first but has the
+        // OLDEST updated_at — without the fix it would be excluded by the
+        // hardcoded `ORDER BY updated_at DESC LIMIT 2`.
+        // title     created_at   updated_at
+        // Zulu      T+3 (newest) T+3 (newest)
+        // Mango     T+2          T+2
+        // Apple     T+0 (oldest) T+0 (oldest)
+        // Bravo     T+1          T+1
+        let base = "2025-01-01T00:00:00Z";
+        let ts = |offset: u32| {
+            chrono::DateTime::parse_from_rfc3339(base)
+                .unwrap()
+                .checked_add_signed(chrono::Duration::seconds(offset as i64))
+                .unwrap()
+                .to_rfc3339()
+        };
+        insert_note_with_timestamps(&conn, "note-zulu", "Zulu", &ts(0), &ts(30));
+        insert_note_with_timestamps(&conn, "note-mango", "Mango", &ts(0), &ts(20));
+        insert_note_with_timestamps(&conn, "note-apple", "Apple", &ts(0), &ts(0));
+        insert_note_with_timestamps(&conn, "note-bravo", "Bravo", &ts(0), &ts(10));
+
+        // sort_by=Title, limit=2 → must return Apple, Bravo (alphabetical),
+        // NOT Zulu, Mango (most recently updated).
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                limit: Some(2),
+                sort_by: crate::models::SearchSortBy::Title,
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        assert_eq!(results.notes.len(), 2, "should return 2 notes");
+        assert_eq!(
+            results.notes[0].title, "Apple",
+            "first result should be 'Apple'"
+        );
+        assert_eq!(
+            results.notes[1].title, "Bravo",
+            "second result should be 'Bravo'"
+        );
+
+        // sort_by=Title, limit=2, offset=2 → next page
+        let results_page2 = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                limit: Some(2),
+                offset: Some(2),
+                sort_by: crate::models::SearchSortBy::Title,
+                ..Default::default()
+            },
+        )
+        .expect("search page 2");
+        assert_eq!(results_page2.notes.len(), 2, "page 2 should have 2 notes");
+        assert_eq!(results_page2.notes[0].title, "Mango");
+        assert_eq!(results_page2.notes[1].title, "Zulu");
+    }
+
+    #[test]
+    fn search_empty_text_sort_by_created_orders_by_creation_date() {
+        // #3306: --sort created for empty-text searches must ORDER BY
+        // created_at DESC in SQL, not just re-sort the updated_at-limited subset.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+        let (conn, _) = open_connection(&ctx).expect("connect");
+
+        // created_at differs from updated_at ordering.
+        // title     created_at    updated_at
+        // Zulu      T+0 (oldest)  T+30 (newest)
+        // Mango     T+10          T+20
+        // Apple     T+20          T+10
+        // Bravo     T+30 (newest) T+0 (oldest)
+        let base = "2025-01-01T00:00:00Z";
+        let ts = |offset: u32| {
+            chrono::DateTime::parse_from_rfc3339(base)
+                .unwrap()
+                .checked_add_signed(chrono::Duration::seconds(offset as i64))
+                .unwrap()
+                .to_rfc3339()
+        };
+        insert_note_with_timestamps(&conn, "note-zulu", "Zulu", &ts(0), &ts(30));
+        insert_note_with_timestamps(&conn, "note-mango", "Mango", &ts(10), &ts(20));
+        insert_note_with_timestamps(&conn, "note-apple", "Apple", &ts(20), &ts(10));
+        insert_note_with_timestamps(&conn, "note-bravo", "Bravo", &ts(30), &ts(0));
+
+        // sort_by=Created, limit=2 → Bravo (newest created), Apple
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                limit: Some(2),
+                sort_by: crate::models::SearchSortBy::Created,
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        assert_eq!(results.notes.len(), 2);
+        assert_eq!(
+            results.notes[0].title, "Bravo",
+            "newest by created_at should be first"
+        );
+        assert_eq!(results.notes[1].title, "Apple");
+    }
+
+    #[test]
+    fn search_empty_text_sort_by_title_with_filters_uses_sql_order() {
+        // #3306: The filtered path (query_filtered_note_metas) must also push
+        // sort_by into the SQL ORDER BY, not just re-sort the paginated subset.
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+        let (conn, _) = open_connection(&ctx).expect("connect");
+
+        // Insert notes with a common tag so the filter path is exercised.
+        // Use the same test helper but add tags.
+        for (id, title, created, updated) in [
+            (
+                "f-zulu",
+                "Zulu",
+                "2025-01-01T00:00:03Z",
+                "2025-01-01T00:00:03Z",
+            ),
+            (
+                "f-mango",
+                "Mango",
+                "2025-01-01T00:00:02Z",
+                "2025-01-01T00:00:02Z",
+            ),
+            (
+                "f-apple",
+                "Apple",
+                "2025-01-01T00:00:00Z",
+                "2025-01-01T00:00:00Z",
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+                 VALUES (?1, ?2, '[\"shared\"]', '', '', '', '', '', ?3, ?4, '', ?5, '', '', '')",
+                params![id, title, created, updated, format!("/{id}.md")],
+            )
+            .expect("insert note");
+        }
+
+        // sort_by=Title with tag filter, limit=2 → Apple, Mango
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: vec!["shared".to_string()],
+                limit: Some(2),
+                sort_by: crate::models::SearchSortBy::Title,
+                ..Default::default()
+            },
+        )
+        .expect("search filtered");
+        assert_eq!(results.notes.len(), 2, "should return 2 filtered notes");
+        assert_eq!(results.notes[0].title, "Apple");
+        assert_eq!(results.notes[1].title, "Mango");
+    }
 
     #[test]
     fn count_fts_matches_with_nine_filters_no_placeholder_corruption() {

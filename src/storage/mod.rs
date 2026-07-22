@@ -11,6 +11,7 @@ use crate::models::{
     AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery, SearchResult,
 };
 
+pub(crate) mod agent_audit;
 mod backup;
 mod chat;
 pub(crate) mod collections;
@@ -134,6 +135,12 @@ pub use skills::{
     create_skill_with_context, delete_skill_with_context, get_skill_with_context,
     list_skills_with_context, toggle_skill_with_context, update_skill_with_context, SavedSkill,
     SkillInvocation,
+};
+// Re-export agent_audit public API (#3287).
+pub use agent_audit::{
+    count_agent_audit_entries, insert_agent_audit_entry_with_context, list_agent_names,
+    list_operation_types, prune_agent_audit_log_with_context, query_agent_audit_log_with_context,
+    AgentAuditEntry, AuditLogQuery,
 };
 // Re-export snapshots public API (#2855).
 pub use snapshots::{

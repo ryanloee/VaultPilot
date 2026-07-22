@@ -2083,6 +2083,41 @@ enum AgentEngineActions {
     /// List registered agent engines and their availability.
     List,
 
+    /// View the agent audit log (#3287).
+    Logs {
+        /// Filter by agent name.
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Filter by operation type (e.g. agent_created, agent_modified, create_note).
+        #[arg(long)]
+        op_type: Option<String>,
+
+        /// Filter by session ID.
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Show entries since ISO-8601 date/time.
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Show entries until ISO-8601 date/time.
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Maximum number of entries to show (default: 50).
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+
+        /// Number of entries to skip (for pagination).
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+
+        /// Show JSON output instead of table.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run a single prompt through a selected agent engine inside the vault.
     Run {
         /// Engine name (e.g. `claude-code`, `codex`, `builtin`).
@@ -2567,7 +2602,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             let result = result?;
             Ok(result)
         }
-        Commands::AgentEngine { action } => handle_agent_engine(cli, action).await,
+        Commands::AgentEngine { action } => handle_agent_engine(cli, context, action).await,
         Commands::ContextSurface { action } => {
             tokio::task::block_in_place(|| handle_context_surface(context, action))
         }
@@ -6745,11 +6780,79 @@ fn chat_session_overview(session: &ChatSession) -> ChatSessionOverview {
     }
 }
 
-async fn handle_agent_engine(cli: &Cli, action: &AgentEngineActions) -> Result<Value> {
+async fn handle_agent_engine(
+    cli: &Cli,
+    context: &StorageContext,
+    action: &AgentEngineActions,
+) -> Result<Value> {
     use vaultpilot_lib::agent_engine::{AgentEngineRegistry, EngineContext};
+    use vaultpilot_lib::storage::{query_agent_audit_log_with_context, AuditLogQuery};
 
     let registry = AgentEngineRegistry::new();
     match action {
+        AgentEngineActions::Logs {
+            agent,
+            op_type,
+            session,
+            since,
+            until,
+            limit,
+            offset,
+            json,
+        } => {
+            let query = AuditLogQuery {
+                agent_name: agent.clone(),
+                operation_type: op_type.clone(),
+                session_id: session.clone(),
+                since: since.clone(),
+                until: until.clone(),
+                limit: *limit,
+                offset: *offset,
+            };
+            let entries = tokio::task::block_in_place(|| {
+                query_agent_audit_log_with_context(context, &query)
+            })?;
+
+            if *json {
+                return Ok(serde_json::json!({
+                    "entries": entries,
+                    "count": entries.len(),
+                }));
+            }
+
+            if entries.is_empty() {
+                println!("No agent audit log entries found.");
+                return Ok(serde_json::json!({"entries": [], "count": 0}));
+            }
+
+            println!(
+                "{:<36} {:<20} {:<20} {:<20} {:<30} Details",
+                "ID", "Agent", "Operation", "Trigger", "Timestamp"
+            );
+            println!("{}", "-".repeat(150));
+            for entry in &entries {
+                let details_short = if entry.details.len() > 40 {
+                    format!("{}...", &entry.details[..37])
+                } else {
+                    entry.details.clone()
+                };
+                println!(
+                    "{:.8} {:<20} {:<20} {:<20} {:<30} {}",
+                    entry.id,
+                    entry.agent_name,
+                    entry.operation_type,
+                    entry.trigger_source,
+                    entry.created_at,
+                    details_short,
+                );
+            }
+            println!("\nTotal: {} entries", entries.len());
+
+            Ok(serde_json::json!({
+                "entries": entries,
+                "count": entries.len(),
+            }))
+        }
         AgentEngineActions::List => {
             let infos = registry.engine_infos();
             Ok(serde_json::json!({

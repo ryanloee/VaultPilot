@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use tracing::{instrument, warn};
 
-use crate::models::{Collection, HealthReport, NoteMeta};
+use crate::models::{BrokenLink, Collection, HealthReport, NoteMeta};
 use crate::storage::{list_collections_with_context, load_settings_with_context, StorageContext};
 
 /// Maximum notes to analyze for orphan / link detection. If the vault has more
@@ -64,12 +64,20 @@ pub fn health_check(context: &StorageContext) -> Result<HealthReport> {
     // ── 6. Duplicate detection ─────────────────────────────────────────
     let duplicate_clusters = detect_duplicate_clusters(&all_notes);
 
-    // ── 7. Load collections for suggestions ────────────────────────────
+    // ── 7. Broken link detection (#3294) ───────────────────────────────
+    let broken_links = find_broken_links(&conn, &all_notes)?;
+
+    // ── 8. Load collections for suggestions ────────────────────────────
     let collections = list_collections_with_context(context)?;
 
-    // ── 8. Generate suggestions ────────────────────────────────────────
-    let suggestions =
-        generate_suggestions(&all_notes, &orphan_notes, &duplicate_clusters, &collections);
+    // ── 9. Generate suggestions ────────────────────────────────────────
+    let suggestions = generate_suggestions(
+        &all_notes,
+        &orphan_notes,
+        &duplicate_clusters,
+        &collections,
+        &broken_links,
+    );
 
     Ok(HealthReport {
         total_notes,
@@ -79,6 +87,7 @@ pub fn health_check(context: &StorageContext) -> Result<HealthReport> {
         knowledge_density_score,
         suggestions,
         duplicate_clusters,
+        broken_links,
     })
 }
 
@@ -175,6 +184,116 @@ fn find_orphan_notes(conn: &rusqlite::Connection, all_notes: &[NoteMeta]) -> Res
         }
     }
     Ok(orphans)
+}
+
+/// Detect broken wiki-links — `[[target]]` references that do not resolve to
+/// any existing note (#3294). For each broken link, suggests the closest
+/// matching note titles via case-insensitive substring / edit-distance heuristics.
+fn find_broken_links(
+    conn: &rusqlite::Connection,
+    all_notes: &[NoteMeta],
+) -> Result<Vec<BrokenLink>> {
+    use crate::storage::notes::extract_wikilinks;
+
+    // Build a case-insensitive title set for O(1) resolution checks.
+    let mut title_index: HashSet<String> = HashSet::with_capacity(all_notes.len());
+    for note in all_notes {
+        title_index.insert(note.title.to_lowercase());
+    }
+
+    let mut broken: Vec<BrokenLink> = Vec::new();
+    for note in all_notes {
+        // Load the note body from FTS (same as body_has_links uses).
+        let body: String = match conn.query_row(
+            "SELECT body FROM note_fts WHERE note_id = ?1",
+            [&note.id],
+            |row| row.get(0),
+        ) {
+            Ok(b) => b,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(e) => {
+                warn!(error = %e, note_id = %note.id, "failed to query note_fts for broken link check");
+                continue;
+            }
+        };
+
+        let raw_links = extract_wikilinks(&body);
+        for (target, _alias) in &raw_links {
+            // Strip section anchors: [[Note Title#section]] → "Note Title"
+            let base_target = target.split('#').next().unwrap_or(target).trim();
+            if base_target.is_empty() {
+                continue;
+            }
+            if title_index.contains(&base_target.to_lowercase()) {
+                continue; // resolved — not broken
+            }
+
+            // Fuzzy match: find note titles that share significant words or
+            // have a small Levenshtein distance to the target.
+            let suggestions = fuzzy_match_titles(base_target, all_notes);
+
+            broken.push(BrokenLink {
+                source_note_id: note.id.clone(),
+                source_note_title: note.title.clone(),
+                link_target: target.clone(),
+                suggested_matches: suggestions,
+            });
+        }
+    }
+
+    // Limit to 200 broken links to keep the report manageable.
+    broken.truncate(200);
+    Ok(broken)
+}
+
+/// Simple fuzzy matching: returns up to 3 note titles that are similar to
+/// `target`. Uses case-insensitive substring match first, then falls back to
+/// a normalised Levenshtein distance.
+fn fuzzy_match_titles(target: &str, all_notes: &[NoteMeta]) -> Vec<String> {
+    let target_lower = target.to_lowercase();
+    let target_words: HashSet<&str> = target_lower
+        .split_whitespace()
+        .filter(|w| w.len() >= 3)
+        .collect();
+
+    // Score each note title.
+    let mut scored: Vec<(usize, &str)> = Vec::new();
+    for note in all_notes {
+        let title_lower = note.title.to_lowercase();
+
+        // Substring match (high score).
+        if title_lower.contains(&target_lower) || target_lower.contains(&title_lower) {
+            scored.push((100, note.title.as_str()));
+            continue;
+        }
+
+        // Word overlap.
+        let title_words: HashSet<&str> = title_lower
+            .split_whitespace()
+            .filter(|w| w.len() >= 3)
+            .collect();
+        let overlap = target_words.intersection(&title_words).count();
+        if overlap > 0 {
+            scored.push((50 + overlap * 10, note.title.as_str()));
+            continue;
+        }
+
+        // Normalised Levenshtein distance (0..100, higher = closer).
+        let dist = levenshtein_distance(&target_lower, &title_lower);
+        let max_len = target_lower.len().max(title_lower.len()).max(1);
+        let similarity = 100 - (dist * 100 / max_len);
+        if similarity >= 60 {
+            scored.push((similarity, note.title.as_str()));
+        }
+    }
+
+    // Sort descending by score, take top 3.
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored
+        .into_iter()
+        .take(3)
+        .map(|(_, title)| title.to_string())
+        .collect()
 }
 
 /// Calculate a knowledge density score (0.0–1.0) based on three factors:
@@ -338,6 +457,7 @@ fn generate_suggestions(
     orphan_notes: &[NoteMeta],
     duplicate_clusters: &[Vec<String>],
     collections: &[Collection],
+    broken_links: &[BrokenLink],
 ) -> Vec<String> {
     let mut suggestions = Vec::new();
 
@@ -380,6 +500,27 @@ fn generate_suggestions(
             duplicate_clusters.len(),
             total_dupes
         ));
+    }
+
+    // ── Broken links (#3294) ──────────────────────────────────────────
+    if !broken_links.is_empty() {
+        let sample: Vec<&str> = broken_links
+            .iter()
+            .take(3)
+            .map(|bl| bl.link_target.as_str())
+            .collect();
+        if broken_links.len() == 1 {
+            suggestions.push(format!(
+                "Found 1 broken wiki-link '{}' that points to a non-existent note. Rename or create the target note to fix it.",
+                sample[0]
+            ));
+        } else {
+            suggestions.push(format!(
+                "Found {} broken wiki-links (e.g. '{}') pointing to non-existent notes. Review and fix them to keep your knowledge graph navigable.",
+                broken_links.len(),
+                sample.join("', '")
+            ));
+        }
     }
 
     // ── Untagged notes (excluding orphans already reported) ───────────
@@ -489,7 +630,7 @@ mod tests {
             tags: vec!["tag".into()],
             ..Default::default()
         }];
-        let suggestions = generate_suggestions(&notes, &[], &[], &[]);
+        let suggestions = generate_suggestions(&notes, &[], &[], &[], &[]);
         // No orphans, no duplicates, no empty collections → no suggestions
         // (But there may be density feedback — depends on the note count)
         assert!(suggestions.is_empty());
@@ -509,14 +650,14 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let suggestions = generate_suggestions(&notes, &notes, &[], &[]);
+        let suggestions = generate_suggestions(&notes, &notes, &[], &[], &[]);
         assert!(suggestions.iter().any(|s| s.contains("orphan")));
     }
 
     #[test]
     fn generate_suggestions_duplicates() {
         let clusters = vec![vec!["a".into(), "b".into()]];
-        let suggestions = generate_suggestions(&[], &[], &clusters, &[]);
+        let suggestions = generate_suggestions(&[], &[], &clusters, &[], &[]);
         assert!(suggestions.iter().any(|s| s.contains("highly similar")));
     }
 
@@ -527,7 +668,7 @@ mod tests {
             note_count: 1,
             ..Default::default()
         }];
-        let suggestions = generate_suggestions(&[], &[], &[], &collections);
+        let suggestions = generate_suggestions(&[], &[], &[], &collections, &[]);
         assert!(
             suggestions.iter().any(|s| s.contains("Project X")),
             "should mention the collection name"
@@ -790,5 +931,166 @@ mod tests {
         )
         .unwrap();
         assert!(!body_has_links(&conn, "n4").unwrap());
+    }
+
+    /// #3294: find_broken_links detects wiki-links to non-existent notes.
+    #[test]
+    fn find_broken_links_detects_dangling_wikilinks() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                keywords TEXT NOT NULL DEFAULT '[]',
+                platform TEXT NOT NULL DEFAULT '',
+                board TEXT NOT NULL DEFAULT '',
+                kernel TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                body_hash TEXT NOT NULL DEFAULT '',
+                semantic_vector TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                keywords TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // Note A links to Note B (exists) and Note C (does NOT exist).
+        conn.execute("INSERT INTO notes (id, title) VALUES ('a', 'Note A')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES ('a', 'See [[Note B]] and [[Note C]] for details.')",
+            [],
+        )
+        .unwrap();
+
+        // Note B exists and has no links.
+        conn.execute("INSERT INTO notes (id, title) VALUES ('b', 'Note B')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES ('b', 'This is Note B.')",
+            [],
+        )
+        .unwrap();
+
+        let all_notes = vec![
+            NoteMeta {
+                id: "a".into(),
+                title: "Note A".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "b".into(),
+                title: "Note B".into(),
+                ..Default::default()
+            },
+        ];
+
+        let broken = find_broken_links(&conn, &all_notes).unwrap();
+        assert_eq!(broken.len(), 1, "should detect exactly 1 broken link");
+        assert_eq!(broken[0].link_target, "Note C");
+        assert_eq!(broken[0].source_note_id, "a");
+        assert_eq!(broken[0].source_note_title, "Note A");
+        // Note B should be suggested as a fuzzy match for "Note C".
+        assert!(
+            broken[0].suggested_matches.contains(&"Note B".to_string()),
+            "should suggest 'Note B' as a similar title"
+        );
+    }
+
+    /// #3294: resolved wiki-links are not flagged as broken.
+    #[test]
+    fn find_broken_links_skips_resolved_links() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                keywords TEXT NOT NULL DEFAULT '[]',
+                platform TEXT NOT NULL DEFAULT '',
+                board TEXT NOT NULL DEFAULT '',
+                kernel TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                body_hash TEXT NOT NULL DEFAULT '',
+                semantic_vector TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                keywords TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        conn.execute("INSERT INTO notes (id, title) VALUES ('a', 'Alpha')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES ('a', 'Link to [[Beta]] and [[Gamma#section]]')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO notes (id, title) VALUES ('b', 'Beta')", [])
+            .unwrap();
+        conn.execute("INSERT INTO note_fts (note_id, body) VALUES ('b', '')", [])
+            .unwrap();
+        conn.execute("INSERT INTO notes (id, title) VALUES ('c', 'Gamma')", [])
+            .unwrap();
+        conn.execute("INSERT INTO note_fts (note_id, body) VALUES ('c', '')", [])
+            .unwrap();
+
+        let all_notes = vec![
+            NoteMeta {
+                id: "a".into(),
+                title: "Alpha".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "b".into(),
+                title: "Beta".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "c".into(),
+                title: "Gamma".into(),
+                ..Default::default()
+            },
+        ];
+
+        let broken = find_broken_links(&conn, &all_notes).unwrap();
+        assert!(broken.is_empty(), "all links resolve — no broken links");
+    }
+
+    /// #3294: generate_suggestions includes broken link feedback.
+    #[test]
+    fn generate_suggestions_includes_broken_links() {
+        let broken = vec![BrokenLink {
+            source_note_id: "a".into(),
+            source_note_title: "Note A".into(),
+            link_target: "Missing Note".into(),
+            suggested_matches: vec![],
+        }];
+        let suggestions = generate_suggestions(&[], &[], &[], &[], &broken);
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.contains("broken wiki-link") && s.contains("Missing Note")),
+            "should mention broken link in suggestions"
+        );
     }
 }

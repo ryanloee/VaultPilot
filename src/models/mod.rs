@@ -863,6 +863,24 @@ pub struct HealthReport {
     pub suggestions: Vec<String>,
     /// Groups of note IDs whose titles are highly similar (potential duplicates).
     pub duplicate_clusters: Vec<Vec<String>>,
+    /// Wiki-links that point to non-existent notes (#3294).
+    #[serde(default)]
+    pub broken_links: Vec<BrokenLink>,
+}
+
+/// A wiki-link (`[[target]]`) that does not resolve to any existing note (#3294).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrokenLink {
+    /// ID of the note that contains the broken link.
+    pub source_note_id: String,
+    /// Title of the note that contains the broken link (for display).
+    pub source_note_title: String,
+    /// The `[[target]]` text that could not be resolved.
+    pub link_target: String,
+    /// Suggested matches (fuzzy) that the user might have meant.
+    #[serde(default)]
+    pub suggested_matches: Vec<String>,
 }
 
 #[cfg(test)]

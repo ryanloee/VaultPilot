@@ -183,6 +183,11 @@ pub fn search_notes_with_context(
         total.max(notes.len())
     };
 
+    // Apply sort order BEFORE pagination so that non-relevance sorts cover the
+    // full result set, not just the already-paginated page. This was a
+    // regression from #3288 where sort ran after skip/take (#3293).
+    sort_notes(&mut notes, query.sort_by);
+
     // For FTS path: apply offset AFTER in-memory filtering so page boundaries
     // are correct. For non-FTS paths, offset was already applied in SQL.
     if !query.text.trim().is_empty() {
@@ -195,9 +200,6 @@ pub fn search_notes_with_context(
     } else {
         notes.truncate(limit);
     }
-
-    // Apply sort order after all filtering and pagination (#3288).
-    sort_notes(&mut notes, query.sort_by);
 
     Ok(SearchResult { notes, total })
 }
@@ -277,7 +279,12 @@ pub fn deep_search_notes(context: &StorageContext, query: SearchQuery) -> Result
         }
     }
 
-    // Step 4: Apply offset/limit
+    // Step 4: Apply sort BEFORE pagination so non-relevance sorts cover the
+    // full combined result set (#3293). Previously sort was entirely missing
+    // from this path, silently ignoring --sort.
+    sort_notes(&mut combined, query.sort_by);
+
+    // Step 5: Apply offset/limit
     let combined_len = combined.len();
     let effective_offset = offset.min(combined_len);
     let notes = combined
@@ -3116,5 +3123,89 @@ mod tests {
         assert_eq!(notes[0].id, "2", "title 'A' should be first");
         assert_eq!(notes[1].id, "3", "title 'B' should be second");
         assert_eq!(notes[2].id, "1", "title 'C' should be third");
+    }
+
+    /// #3293: sort must happen BEFORE pagination, not after. If we search with
+    /// `--sort modified --limit 1` and the most-recently-modified note is NOT
+    /// the top BM25 result, it must still be returned. Under the old buggy
+    /// order (sort after pagination) it would be excluded.
+    #[test]
+    fn sort_before_pagination_not_after_3293() {
+        use crate::models::SearchSortBy;
+        let (_temp, ctx) = setup_temp_context();
+        let (conn, _) = open_connection(&ctx).expect("open connection");
+
+        // Insert 3 notes all containing the same search term "alpha".
+        // All share a tag so that `has_filters` is true, which triggers
+        // over-fetching (fetch_limit = (limit+offset)*4 .max(50)). Without
+        // over-fetch, only `limit` candidates are returned by FTS and the
+        // sort-before-pagination fix cannot be exercised.
+        let notes_data = [
+            ("note-1", "Alpha beta", "2026-01-01T00:00:00Z"),
+            ("note-2", "Alpha gamma", "2026-01-02T00:00:00Z"),
+            ("note-3", "Alpha delta", "2026-03-01T00:00:00Z"),
+        ];
+        for (id, title, updated) in notes_data.iter() {
+            conn.execute(
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+                 VALUES (?1, ?2, '[\"test\"]', '', '', '', '', '', ?3, ?3, '', ?4, '', '', '')",
+                params![id, title, updated, format!("/p/{id}.md")],
+            )
+            .expect("insert note");
+            conn.execute(
+                "INSERT INTO note_fts (note_id, title, keywords, body)
+                 VALUES (?1, ?2, '', ?2)",
+                params![id, title],
+            )
+            .expect("insert fts");
+        }
+
+        // Search with --sort modified --limit 1.
+        // The most recently modified note (note-3, 2026-03-01) must be returned.
+        // Under the old bug (sort after pagination), only the BM25 #1 result
+        // would be fetched and returned regardless of --sort modified.
+        let query = SearchQuery {
+            text: "alpha".into(),
+            tags: vec!["test".into()],
+            keywords: vec![],
+            limit: Some(1),
+            offset: None,
+            created_after: None,
+            created_before: None,
+            modified_after: None,
+            modified_before: None,
+            deep_search: false,
+            sort_by: SearchSortBy::Modified,
+        };
+        let result = search_notes_with_context(&ctx, query).expect("search");
+        assert_eq!(
+            result.notes.len(),
+            1,
+            "should return exactly 1 result with limit=1"
+        );
+        assert_eq!(
+            result.notes[0].id, "note-3",
+            "most-recently-modified note must be returned when --sort modified"
+        );
+
+        // Also verify --sort title --limit 1 returns "Alpha beta" (A < B < C)
+        let query_title = SearchQuery {
+            text: "alpha".into(),
+            tags: vec!["test".into()],
+            keywords: vec![],
+            limit: Some(1),
+            offset: None,
+            created_after: None,
+            created_before: None,
+            modified_after: None,
+            modified_before: None,
+            deep_search: false,
+            sort_by: SearchSortBy::Title,
+        };
+        let result_title = search_notes_with_context(&ctx, query_title).expect("search title");
+        assert_eq!(
+            result_title.notes[0].id, "note-1",
+            "alphabetically first title 'Alpha beta' must be returned when --sort title"
+        );
     }
 }

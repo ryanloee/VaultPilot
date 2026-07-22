@@ -581,11 +581,12 @@ export interface TemplateVars {
   time?: string;
   week?: string;
   vault_name?: string;
+  url?: string;
 }
 
 /**
  * Substitute template placeholder variables in content.
- * Supported built-ins: {{title}} {{date}} {{time}} {{week}} {{vault_name}}.
+ * Supported built-ins: {{title}} {{date}} {{time}} {{week}} {{vault_name}} {{url}}.
  * Custom fields use {{field:label}} — each unique label maps to a value in `fields`.
  * Unknown / unfilled placeholders are replaced with an empty string so the new note
  * never contains raw {{...}} markers.
@@ -601,6 +602,7 @@ export function applyTemplateVariables(
     .replace(/\{\{time\}\}/g, vars.time ?? '')
     .replace(/\{\{week\}\}/g, vars.week ?? '')
     .replace(/\{\{vault_name\}\}/g, vars.vault_name ?? 'VaultPilot')
+    .replace(/\{\{url\}\}/g, vars.url ?? '')
     .replace(/\{\{field:([^}]+)\}\}/g, (_m, label) => fields[String(label).trim()] ?? '');
 }
 
@@ -621,7 +623,7 @@ export function extractTemplateFields(content: string): string[] {
 }
 
 /** Build default built-in variable values for "now". */
-export function buildTemplateVars(title: string): Required<TemplateVars> {
+export function buildTemplateVars(title: string, url = ''): Required<TemplateVars> {
   const now = new Date();
   return {
     title,
@@ -629,6 +631,7 @@ export function buildTemplateVars(title: string): Required<TemplateVars> {
     time: `${pad2(now.getHours())}:${pad2(now.getMinutes())}`,
     week: WEEKDAYS_ZH[now.getDay()],
     vault_name: 'VaultPilot',
+    url,
   };
 }
 

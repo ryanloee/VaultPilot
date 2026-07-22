@@ -1023,6 +1023,8 @@ mod tests {
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
             allowed_uris: Vec::new(),
             proxy_url: None,
+            app_lock_enabled: false,
+            app_lock_pin_hash: None,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

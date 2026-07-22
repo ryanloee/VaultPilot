@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use super::provider::ProviderConfig;
 use crate::models::ResponseStyle;
 
+use sha2::{Digest, Sha256};
+
 /// Configuration for intelligent model routing (#1842).
 ///
 /// When enabled, VaultPilot inspects each request and routes it to a
@@ -128,10 +130,34 @@ pub struct AppSettings {
     /// Per-provider proxy is NOT supported — this is a global setting.
     #[serde(default)]
     pub proxy_url: Option<String>,
+    /// App Lock (#3304): when enabled, the client (WinUI/mobile) must
+    /// authenticate the user on launch before granting access to vault content.
+    /// The actual authentication (PIN entry, biometric prompt) is handled by
+    /// the platform UI layer; this flag and `app_lock_pin_hash` provide the
+    /// shared configuration that all clients read from the settings file.
+    #[serde(default)]
+    pub app_lock_enabled: bool,
+    /// SHA-256 hash of the user's PIN (hex string) when App Lock method is "pin".
+    /// `None` when App Lock is disabled or using biometric-only auth.
+    /// The PIN itself is never stored in plaintext.
+    #[serde(default)]
+    pub app_lock_pin_hash: Option<String>,
 }
 
 fn default_privacy_mode() -> bool {
     false
+}
+
+/// Compare two byte slices in constant time to mitigate timing attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 fn default_session_export_enabled() -> bool {
@@ -164,6 +190,8 @@ impl Default for AppSettings {
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
             allowed_uris: Vec::new(),
             proxy_url: None,
+            app_lock_enabled: false,
+            app_lock_pin_hash: None,
         }
     }
 }
@@ -202,6 +230,40 @@ impl AppSettings {
             };
             self.providers.push(self.provider.clone());
         }
+    }
+
+    /// Hash a PIN string using SHA-256 and return the hex digest (#3304).
+    /// Used by the UI layer when the user sets or changes their App Lock PIN.
+    /// The plaintext PIN is never persisted — only this hash is stored.
+    pub fn hash_pin(pin: &str) -> String {
+        let hash = Sha256::digest(pin.as_bytes());
+        format!("{:x}", hash)
+    }
+
+    /// Verify a user-entered PIN against the stored hash (#3304).
+    /// Returns `false` when App Lock is disabled or no PIN hash is configured.
+    pub fn verify_pin(&self, pin: &str) -> bool {
+        match &self.app_lock_pin_hash {
+            Some(stored) => {
+                let input = Self::hash_pin(pin);
+                // Constant-time comparison to mitigate timing attacks.
+                constant_time_eq(stored.as_bytes(), input.as_bytes())
+            }
+            None => false,
+        }
+    }
+
+    /// Enable App Lock with a PIN (#3304). Stores the hashed PIN and sets
+    /// the enabled flag.
+    pub fn enable_app_lock_pin(&mut self, pin: &str) {
+        self.app_lock_pin_hash = Some(Self::hash_pin(pin));
+        self.app_lock_enabled = true;
+    }
+
+    /// Disable App Lock entirely (#3304). Clears the PIN hash and flag.
+    pub fn disable_app_lock(&mut self) {
+        self.app_lock_pin_hash = None;
+        self.app_lock_enabled = false;
     }
 
     /// Validate settings after deserialization, returning all error messages at once.
@@ -351,6 +413,8 @@ mod tests {
             embedding_provider: crate::semantic::EmbeddingProvider::default(),
             allowed_uris: Vec::new(),
             proxy_url: None,
+            app_lock_enabled: false,
+            app_lock_pin_hash: None,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -923,5 +987,83 @@ mod tests {
             serde_json::from_value(legacy).expect("legacy JSON must deserialize");
         assert!(parsed.allowed_uris.is_empty());
         assert!(!parsed.is_uri_allowed("vaultpilot://note/new"));
+    }
+
+    // ── App Lock (#3304) ──────────────────────────────────────────────
+
+    #[test]
+    fn app_lock_disabled_by_default() {
+        let settings = AppSettings::default();
+        assert!(!settings.app_lock_enabled);
+        assert!(settings.app_lock_pin_hash.is_none());
+    }
+
+    #[test]
+    fn app_lock_enable_and_verify_pin() {
+        let mut settings = AppSettings::default();
+        settings.enable_app_lock_pin("1234");
+        assert!(settings.app_lock_enabled);
+        assert!(settings.app_lock_pin_hash.is_some());
+        // Correct PIN
+        assert!(settings.verify_pin("1234"));
+        // Wrong PIN
+        assert!(!settings.verify_pin("9999"));
+    }
+
+    #[test]
+    fn app_lock_disable_clears_state() {
+        let mut settings = AppSettings::default();
+        settings.enable_app_lock_pin("4321");
+        assert!(settings.app_lock_enabled);
+        settings.disable_app_lock();
+        assert!(!settings.app_lock_enabled);
+        assert!(settings.app_lock_pin_hash.is_none());
+    }
+
+    #[test]
+    fn app_lock_pin_hash_is_not_plaintext() {
+        let mut settings = AppSettings::default();
+        settings.enable_app_lock_pin("secret123");
+        let hash = settings.app_lock_pin_hash.as_ref().unwrap();
+        // Hash must NOT contain the plaintext PIN.
+        assert!(!hash.contains("secret123"));
+        // Hash must be a 64-char hex string (SHA-256).
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn app_lock_verify_returns_false_without_hash() {
+        let settings = AppSettings::default();
+        assert!(!settings.verify_pin("1234"));
+    }
+
+    #[test]
+    fn app_lock_serde_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.enable_app_lock_pin("0000");
+        let json = serde_json::to_string(&settings).expect("serialize");
+        assert!(json.contains("\"appLockEnabled\":true"));
+        assert!(json.contains("\"appLockPinHash\""));
+        let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert!(parsed.app_lock_enabled);
+        assert!(parsed.verify_pin("0000"));
+    }
+
+    #[test]
+    fn app_lock_backwards_compatible_when_absent() {
+        let legacy = serde_json::json!({
+            "vaultDir": "/tmp/vault",
+            "provider": {
+                "apiKey": "k",
+                "baseUrl": "https://api.example.com",
+                "model": "m",
+                "requestTimeoutMs": 60000,
+            },
+        });
+        let parsed: AppSettings =
+            serde_json::from_value(legacy).expect("legacy JSON must deserialize");
+        assert!(!parsed.app_lock_enabled);
+        assert!(parsed.app_lock_pin_hash.is_none());
     }
 }

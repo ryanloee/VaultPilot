@@ -25,6 +25,7 @@ fn suggest_links_cli_forwards_text_and_vault_notes() {
             "Note A: tokio basics\nNote B: async/await in Rust\nNote C: Pin and Unpin".to_string(),
         ),
         model: None,
+        export_format: None,
     };
 
     let prompt = user_prompt(AiActionType::SuggestLinks, &req);
@@ -44,6 +45,7 @@ fn suggest_links_cli_without_vault_notes() {
         note_id: None,
         instruction: None,
         model: None,
+        export_format: None,
     };
 
     let prompt = user_prompt(AiActionType::SuggestLinks, &req);
@@ -64,6 +66,7 @@ fn suggest_links_cli_empty_text_fails() {
         note_id: None,
         instruction: Some("some vault notes".to_string()),
         model: None,
+        export_format: None,
     };
 
     let result = validate_request(&req);

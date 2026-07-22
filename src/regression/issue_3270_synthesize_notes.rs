@@ -62,6 +62,7 @@ fn synthesize_notes_empty_input_fails_validation() {
         note_id: None,
         instruction: None,
         model: None,
+        export_format: None,
     };
     let validation = validate_request(&req);
     assert!(
@@ -81,6 +82,7 @@ fn synthesize_notes_with_content_passes_validation() {
         note_id: None,
         instruction: None,
         model: None,
+        export_format: None,
     };
     let result = validate_request(&req);
     assert!(result.is_none(), "valid input should pass validation");
@@ -97,6 +99,7 @@ fn synthesize_notes_user_prompt_contains_all_notes() {
         note_id: None,
         instruction: None,
         model: None,
+        export_format: None,
     };
     let prompt = user_prompt(AiActionType::SynthesizeNotes, &req);
     assert!(prompt.contains("Alpha"));

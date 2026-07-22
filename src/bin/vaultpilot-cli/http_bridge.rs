@@ -1997,6 +1997,7 @@ async fn http_ai_action(
         note_id: req.note_id,
         instruction: req.instruction,
         model: req.model,
+        export_format: None,
     };
     let settings = load_settings_async(&state.context).await.map_err(|e| {
         tracing::warn!("http_ai_action: failed to load settings: {e}");

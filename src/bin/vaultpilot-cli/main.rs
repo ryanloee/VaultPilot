@@ -1186,6 +1186,26 @@ enum NotesActions {
         output: Option<PathBuf>,
     },
 
+    /// Export a single note to a structured file format (XLSX/DOCX/HTML/PPTX) (#3276)
+    ///
+    /// Examples:
+    ///   vp note export-format note_123 --format xlsx --output report.xlsx
+    ///   vp note export-format note_123 --format docx --output doc.docx
+    ///   vp note export-format note_123 --format html --output page.html
+    ExportFormat {
+        /// Note ID or file path
+        #[arg(long)]
+        id: String,
+
+        /// Target format: xlsx, docx, html, pdf, pptx
+        #[arg(long)]
+        format: String,
+
+        /// Output file path (required for file-based formats)
+        #[arg(long)]
+        output: PathBuf,
+    },
+
     /// Export all notes as Markdown files to a directory
     ExportAll {
         /// Output directory path
@@ -2688,6 +2708,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 note_id: Some(original.meta.id.clone()),
                 instruction: Some(instruction.clone()),
                 model: None,
+                export_format: None,
             };
 
             let settings = load_settings_with_context(context)?;
@@ -3126,6 +3147,7 @@ async fn run_ai_action(
         note_id,
         instruction: None,
         model,
+        export_format: None,
     };
 
     let action_label = request.action.label();
@@ -3167,6 +3189,7 @@ async fn run_ai_action_with_instruction(
         note_id,
         instruction,
         model,
+        export_format: None,
     };
 
     let action_label = request.action.label();
@@ -3401,6 +3424,7 @@ async fn run_synthesize_notes(
         note_id: None,
         instruction: None,
         model,
+        export_format: None,
     };
 
     let action_label = request.action.label();
@@ -3853,6 +3877,26 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             let result = export_all_notes_with_context(context, output)?;
             to_json(&result)
         }
+        NotesActions::ExportFormat { id, format, output } => {
+            let (markdown, _filename) = export_note_markdown_with_context(context, id)?;
+            let fmt =
+                vaultpilot_lib::export::ExportFormat::parse_format(format).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Unsupported export format '{}'. Supported: xlsx, docx, html, pdf, pptx",
+                        format
+                    )
+                })?;
+            let title = id.clone();
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            vaultpilot_lib::export::export_markdown(&markdown, fmt, &title, output)?;
+            Ok(serde_json::json!({
+                "exported": true,
+                "format": fmt.label(),
+                "path": output.display().to_string(),
+            }))
+        }
         NotesActions::Related { id, limit } => {
             let results = find_related_notes_with_context(context, id, *limit)?;
             to_json(&results)
@@ -3876,6 +3920,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                 note_id: Some(note.meta.id.clone()),
                 instruction: Some(instruction.clone()),
                 model: model.clone(),
+                export_format: None,
             };
             let settings = load_settings_with_context(context)?;
             let handle = tokio::runtime::Handle::current();
@@ -4233,6 +4278,7 @@ async fn handle_note_ai(context: &StorageContext, action: &NotesActions) -> Resu
         note_id: Some(note_id.clone()),
         instruction: None,
         model: model.clone(),
+        export_format: None,
     };
 
     let settings = load_settings_with_context(context)?;

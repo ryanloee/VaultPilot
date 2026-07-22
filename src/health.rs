@@ -69,13 +69,13 @@ pub fn health_check(context: &StorageContext) -> Result<HealthReport> {
     // ── 7. Broken link detection (#3294) ───────────────────────────────
     let broken_links = find_broken_links(&conn, &all_notes)?;
 
-    // ── 9. Tag sprawl detection (#3295) ────────────────────────────────
+    // ── 8. Tag sprawl detection (#3295) ────────────────────────────────
     let tag_clusters = detect_tag_clusters(&all_notes);
 
-    // ── 10. Load collections for suggestions ───────────────────────────
+    // ── 9. Load collections for suggestions ───────────────────────────
     let collections = list_collections_with_context(context)?;
 
-    // ── 11. Generate suggestions ───────────────────────────────────────
+    // ── 10. Generate suggestions ──────────────────────────────────────
     let suggestions = generate_suggestions(
         &all_notes,
         &orphan_notes,
@@ -511,7 +511,7 @@ fn tag_keys(tag: &str) -> (String, String, String, String) {
 /// - **Plural**: `#meeting` ≡ `#meetings` (singular/plural pair)
 ///
 /// Each cluster is assigned the most frequently used variant as the canonical tag.
-/// A single tag never appears in more than one cluster (priority: plural > separator > case).
+/// A single tag never appears in more than one cluster (priority: case > separator > plural).
 fn detect_tag_clusters(all_notes: &[NoteMeta]) -> Vec<TagCluster> {
     // Count how many notes use each tag variant.
     let mut tag_counts: HashMap<String, usize> = HashMap::new();
@@ -551,7 +551,14 @@ fn detect_tag_clusters(all_notes: &[NoteMeta]) -> Vec<TagCluster> {
         });
 
         let canonical = variants[0].tag.clone();
-        let total_notes: usize = variants.iter().map(|v| v.note_count).sum();
+        // Count unique notes that have at least one of the cluster's variant tags.
+        // This avoids double-counting notes that carry multiple variant tags in
+        // the same cluster (e.g. a note tagged both #ai and #AI).
+        let cluster_tags: HashSet<&str> = tags.iter().map(|s| s.as_str()).collect();
+        let total_notes: usize = all_notes
+            .iter()
+            .filter(|note| note.tags.iter().any(|t| cluster_tags.contains(t.as_str())))
+            .count();
         Some(TagCluster {
             canonical_tag: canonical,
             variants,
@@ -1526,6 +1533,47 @@ mod tests {
         ];
         let clusters = detect_tag_clusters(&notes);
         assert_eq!(clusters.len(), 2, "should find case + separator clusters");
+    }
+
+    #[test]
+    fn detect_tag_clusters_total_notes_no_double_count() {
+        // Regression for #3314: a note with multiple variant tags in the same
+        // cluster should NOT inflate total_notes beyond the unique note count.
+        //
+        // N1 has BOTH "ai" and "AI" → before the fix, total_notes = 4 (3+1),
+        // but the correct unique count is 3.
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "N1".into(),
+                tags: vec!["ai".into(), "AI".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "N2".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "N3".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(
+            clusters[0].variants.len(),
+            2,
+            "should merge ai + AI into one cluster"
+        );
+        // tag_counts: {"ai": 3, "AI": 1} → old sum = 4, but only 3 unique notes
+        assert_eq!(
+            clusters[0].total_notes, 3,
+            "total_notes must be unique notes, not sum of per-variant counts"
+        );
     }
 
     #[test]

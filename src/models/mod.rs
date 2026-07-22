@@ -244,6 +244,19 @@ pub struct RelatedNote {
     pub snippet: Option<String>,
 }
 
+/// A heading (H1–H6) extracted from a note body, with its 1-based line number
+/// and nesting level. Used by the outline/TOC navigation feature (#3319).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HeadingNode {
+    /// Heading level: 1 for `#`, 2 for `##`, … up to 6 for `######`.
+    pub level: u8,
+    /// The heading text (without the leading `#` markers).
+    pub text: String,
+    /// 1-based line number in the original note body where the heading appears.
+    pub line: usize,
+}
+
 /// A wikilink target found inside a note body — either resolved to a
 /// note (when `note` is `Some`) or unresolved (dangling link).
 ///

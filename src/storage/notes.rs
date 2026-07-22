@@ -33,7 +33,9 @@ impl std::fmt::Display for NoteNotFound {
 
 impl std::error::Error for NoteNotFound {}
 
-use crate::models::{ExportResult, ImportResult, NoteDocument, NoteMeta, VaultExportResult};
+use crate::models::{
+    ExportResult, HeadingNode, ImportResult, NoteDocument, NoteMeta, VaultExportResult,
+};
 
 use super::pool::open_connection;
 use super::search::{
@@ -1014,6 +1016,51 @@ pub fn extract_wikilinks(body: &str) -> Vec<(String, Option<String>)> {
         }
     }
     results
+}
+
+/// Extract all Markdown headings (H1–H6) from a note body as a flat list of
+/// [`HeadingNode`] entries, each carrying its level, text, and 1-based line
+/// number. Headings inside fenced code blocks (``` … ```) are ignored.
+///
+/// Used by the outline/TOC navigation feature (#3319).
+#[allow(dead_code)] // wired to CLI/MCP in follow-up PRs
+pub fn extract_heading_tree(body: &str) -> Vec<HeadingNode> {
+    let mut headings = Vec::new();
+    let mut in_code_block = false;
+
+    for (line_idx, line) in body.lines().enumerate() {
+        let trimmed = line.trim_start();
+
+        // Toggle code-block state on ``` fences
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
+        // Count leading '#' characters (max 6)
+        let level = trimmed.chars().take(6).take_while(|&c| c == '#').count();
+        if level == 0 || level > 6 {
+            continue;
+        }
+
+        // A heading requires at least one space (or end of line) after the '#'s
+        let rest = &trimmed[level..];
+        if !rest.is_empty() && !rest.starts_with(' ') {
+            continue;
+        }
+
+        let text = rest.trim().to_string();
+        headings.push(HeadingNode {
+            level: level as u8,
+            text,
+            line: line_idx + 1,
+        });
+    }
+
+    headings
 }
 
 /// Parse the inner content of a `[[…]]` wikilink into (target, alias).
@@ -3204,5 +3251,87 @@ mod tests {
     fn regression_2832_body_mentions_title_inline_code_skipped() {
         let body = "Run `Machine Learning` from the CLI.";
         assert!(!body_mentions_title(body, "machine learning"));
+    }
+
+    // ── #3319: extract_heading_tree tests ──────────────────────────────
+
+    #[test]
+    fn heading_tree_simple_h1_to_h3() {
+        let body = "# Title\n\n## Section A\n\n### Subsection\n\nText.\n";
+        let tree = extract_heading_tree(body);
+        assert_eq!(tree.len(), 3);
+        assert_eq!(
+            tree[0],
+            HeadingNode {
+                level: 1,
+                text: "Title".into(),
+                line: 1
+            }
+        );
+        assert_eq!(
+            tree[1],
+            HeadingNode {
+                level: 2,
+                text: "Section A".into(),
+                line: 3
+            }
+        );
+        assert_eq!(
+            tree[2],
+            HeadingNode {
+                level: 3,
+                text: "Subsection".into(),
+                line: 5
+            }
+        );
+    }
+
+    #[test]
+    fn heading_tree_skips_code_block_headings() {
+        let body = "# Real Heading\n\n```\n## Fake Heading in Code\n```\n\n## Real H2\n";
+        let tree = extract_heading_tree(body);
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree[0].text, "Real Heading");
+        assert_eq!(tree[1].text, "Real H2");
+    }
+
+    #[test]
+    fn heading_tree_empty_body() {
+        let tree = extract_heading_tree("");
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn heading_tree_no_headings() {
+        let body = "Just some text.\nNo headings here.\n";
+        let tree = extract_heading_tree(body);
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn heading_tree_skips_hash_in_words() {
+        // `#tag` is not a heading (no space after #)
+        let body = "This is #not-a-heading.\n## This is\n";
+        let tree = extract_heading_tree(body);
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].text, "This is");
+        assert_eq!(tree[0].level, 2);
+    }
+
+    #[test]
+    fn heading_tree_max_level_h6() {
+        let body = "# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n####### Not H7\n";
+        let tree = extract_heading_tree(body);
+        assert_eq!(tree.len(), 6); // 7 #'s is not a valid heading
+        assert_eq!(tree[5].level, 6);
+    }
+
+    #[test]
+    fn heading_tree_indented_headings() {
+        // Leading whitespace before # is acceptable in Markdown
+        let body = "  ## Indented H2\n";
+        let tree = extract_heading_tree(body);
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].text, "Indented H2");
     }
 }

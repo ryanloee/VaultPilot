@@ -2233,7 +2233,7 @@ enum AiSubcommand {
     /// Synthesize a multi-note report from selected notes (#3270)
     Synthesize {
         /// Comma-separated list of note IDs or paths to synthesize
-        #[arg(long, num_args = 1.., required = true)]
+        #[arg(long, num_args = 1.., required = true, value_delimiter = ',')]
         notes: Vec<String>,
 
         /// Optional model override
@@ -4133,10 +4133,14 @@ async fn handle_note_ai(context: &StorageContext, action: &NotesActions) -> Resu
     };
 
     let ai_action = vaultpilot_lib::ai::AiActionType::from_id(action_str).ok_or_else(|| {
+        let action_ids: Vec<&str> = vaultpilot_lib::ai::AiActionType::all()
+            .iter()
+            .map(|a| a.id())
+            .collect();
         anyhow::anyhow!(
-            "unknown AI action '{}'. Available: summarize, translate, rewrite, explain, \
-                 continueWriting, extractTodos, findRelatedNotes, cleanUp, generateOutline",
-            action_str
+            "unknown AI action '{}'. Available: {}",
+            action_str,
+            action_ids.join(", ")
         )
     })?;
 

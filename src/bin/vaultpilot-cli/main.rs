@@ -1157,6 +1157,10 @@ enum NotesActions {
         /// Filter notes modified on or before ISO-8601 datetime
         #[arg(long)]
         modified_before: Option<String>,
+
+        /// Sort results by: relevance (default), modified, created, title (#3288)
+        #[arg(long, default_value = "relevance")]
+        sort: String,
     },
 
     /// Import markdown files
@@ -3708,7 +3712,14 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             before,
             modified_after,
             modified_before,
+            sort,
         } => {
+            let sort_by = match sort.to_lowercase().as_str() {
+                "modified" => vaultpilot_lib::models::SearchSortBy::Modified,
+                "created" => vaultpilot_lib::models::SearchSortBy::Created,
+                "title" => vaultpilot_lib::models::SearchSortBy::Title,
+                _ => vaultpilot_lib::models::SearchSortBy::Relevance,
+            };
             let result = search_notes_with_context(
                 context,
                 SearchQuery {
@@ -3721,6 +3732,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                     created_before: before.clone(),
                     modified_after: modified_after.clone(),
                     modified_before: modified_before.clone(),
+                    sort_by,
                     ..Default::default()
                 },
             )?;
@@ -3738,6 +3750,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                         created_before: before.clone(),
                         modified_after: modified_after.clone(),
                         modified_before: modified_before.clone(),
+                        sort_by,
                         ..Default::default()
                     },
                 )?;

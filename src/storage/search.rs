@@ -196,6 +196,9 @@ pub fn search_notes_with_context(
         notes.truncate(limit);
     }
 
+    // Apply sort order after all filtering and pagination (#3288).
+    sort_notes(&mut notes, query.sort_by);
+
     Ok(SearchResult { notes, total })
 }
 
@@ -588,7 +591,30 @@ pub(crate) fn list_all_note_metas(connection: &Connection) -> Result<Vec<NoteMet
     Ok(rows)
 }
 
-/// Escape SQL LIKE wildcard characters (`%`, `_`, `\`) in user input
+/// Apply sort order to search results after all filtering and pagination (#3288).
+///
+/// When `sort_by` is `Relevance`, results are already in FTS5 BM25 rank order
+/// from the upstream `rank_note_metas` / `query_like_note_metas`, so this is a
+/// no-op. Other sort orders are applied in-place.
+fn sort_notes(notes: &mut [crate::models::NoteMeta], sort_by: crate::models::SearchSortBy) {
+    use crate::models::SearchSortBy;
+    match sort_by {
+        SearchSortBy::Relevance => {
+            // Already in BM25 rank order — no re-sort needed.
+        }
+        SearchSortBy::Modified => {
+            notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        }
+        SearchSortBy::Created => {
+            notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        }
+        SearchSortBy::Title => {
+            notes.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        }
+    }
+}
+
+/// Escape SQL LIKE wildcard characters (`%`, `_`, `\\`) in user input
 /// so they are treated as literal characters in a LIKE pattern.
 fn escape_like_pattern(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
@@ -3046,5 +3072,49 @@ mod tests {
             document_relevance_score("mmc", &doc) > 0,
             "tag match should yield positive score"
         );
+    }
+
+    /// #3288: sort_notes applies the requested sort order correctly.
+    #[test]
+    fn sort_notes_respects_sort_by() {
+        use crate::models::SearchSortBy;
+
+        let mut notes = vec![
+            NoteMeta {
+                id: "1".into(),
+                title: "C".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                updated_at: "2026-01-03T00:00:00Z".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "2".into(),
+                title: "A".into(),
+                created_at: "2026-01-02T00:00:00Z".into(),
+                updated_at: "2026-01-05T00:00:00Z".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "3".into(),
+                title: "B".into(),
+                created_at: "2026-01-03T00:00:00Z".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        ];
+
+        // Modified: most recent first
+        sort_notes(&mut notes, SearchSortBy::Modified);
+        assert_eq!(notes[0].id, "2", "updated_at 2026-01-05 should be first");
+
+        // Created: most recent first
+        sort_notes(&mut notes, SearchSortBy::Created);
+        assert_eq!(notes[0].id, "3", "created_at 2026-01-03 should be first");
+
+        // Title: alphabetical
+        sort_notes(&mut notes, SearchSortBy::Title);
+        assert_eq!(notes[0].id, "2", "title 'A' should be first");
+        assert_eq!(notes[1].id, "3", "title 'B' should be second");
+        assert_eq!(notes[2].id, "1", "title 'C' should be third");
     }
 }

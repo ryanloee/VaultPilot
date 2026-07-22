@@ -1023,6 +1023,7 @@ pub fn extract_wikilinks(body: &str) -> Vec<(String, Option<String>)> {
 /// number. Headings inside fenced code blocks (``` … ```) are ignored.
 ///
 /// Used by the outline/TOC navigation feature (#3319).
+#[allow(dead_code)] // wired to CLI/MCP in follow-up PRs
 pub fn extract_heading_tree(body: &str) -> Vec<HeadingNode> {
     let mut headings = Vec::new();
     let mut in_code_block = false;

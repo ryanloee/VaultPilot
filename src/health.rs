@@ -543,7 +543,6 @@ fn detect_tag_clusters(all_notes: &[NoteMeta]) -> Vec<TagCluster> {
             })
             .collect();
         // Sort by note_count desc so the most-used variant becomes canonical.
-        variants.sort_by(|a, b| b.note_count.cmp(&a.note_count));
         // Tie-break: shortest original tag (cleaner canonical).
         variants.sort_by(|a, b| {
             b.note_count
@@ -644,7 +643,7 @@ fn detect_tag_clusters(all_notes: &[NoteMeta]) -> Vec<TagCluster> {
     }
 
     // Sort clusters by total_notes descending (biggest impact first).
-    clusters.sort_by(|a, b| b.total_notes.cmp(&a.total_notes));
+    clusters.sort_by_key(|c| std::cmp::Reverse(c.total_notes));
 
     // Limit to 100 clusters to keep the report manageable.
     clusters.truncate(100);

@@ -23,6 +23,13 @@ public sealed partial class NotesView : UserControl
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _relatedCts;
 
+    /// <summary>
+    /// In-memory clipboard for note copy/paste (#3094).
+    /// Holds the NoteMeta of the most recently copied note so that Ctrl+V
+    /// can duplicate it. Static so it survives navigation between views.
+    /// </summary>
+    private static NoteMeta? s_clipboardNote;
+
     public NotesView(BackendClient backendClient)
     {
         _backendClient = backendClient;
@@ -33,8 +40,15 @@ public sealed partial class NotesView : UserControl
         NotesList.SelectionChanged += OnNoteSelectionChanged;
         RefreshButton.Click += OnRefreshClicked;
         DeleteNoteButton.Click += OnDeleteNoteClicked;
+        CopyNoteButton.Click += OnCopyNoteClicked;
+        PasteNoteButton.Click += OnPasteNoteClicked;
         RelatedNotesList.SelectionChanged += OnRelatedNoteSelectionChanged;
         Loaded += OnLoaded;
+
+        // Register Ctrl+C / Ctrl+V keyboard shortcuts on the NotesList (#3094)
+        NotesList.KeyDown += OnNotesListKeyDown;
+
+        UpdatePasteButtonState();
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -154,6 +168,7 @@ public sealed partial class NotesView : UserControl
         {
             _selectedNote = item.Meta;
             DeleteNoteButton.IsEnabled = true;
+            CopyNoteButton.IsEnabled = true;
             _loadDetailCts?.Cancel();
             _loadDetailCts?.Dispose();
             _loadDetailCts = new CancellationTokenSource();
@@ -166,6 +181,7 @@ public sealed partial class NotesView : UserControl
             _loadDetailCts = null;
             _selectedNote = null;
             DeleteNoteButton.IsEnabled = false;
+            CopyNoteButton.IsEnabled = false;
         }
     }
 
@@ -264,6 +280,7 @@ public sealed partial class NotesView : UserControl
             }
             _selectedNote = null;
             DeleteNoteButton.IsEnabled = false;
+            CopyNoteButton.IsEnabled = false;
             ApplyFilter();
             UpdateNotesCount();
 
@@ -277,6 +294,111 @@ public sealed partial class NotesView : UserControl
         {
             ShowLoading(false);
         }
+    }
+
+    // ─── Copy / Paste (Duplicate) ────────────────────────────────────────
+    // #3094: Ctrl+C copies the selected note, Ctrl+V (or the Paste button)
+    // creates a duplicate with a fresh ID and "(副本)" suffix.
+
+    private void OnNotesListKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        var ctrlDown = Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+        if (!ctrlDown) return;
+
+        if (e.Key == Windows.System.VirtualKey.C)
+        {
+            CopySelectedNote();
+            e.Handled = true;
+        }
+        else if (e.Key == Windows.System.VirtualKey.V)
+        {
+            _ = PasteNoteAsync();
+            e.Handled = true;
+        }
+    }
+
+    private void OnCopyNoteClicked(object sender, RoutedEventArgs e)
+    {
+        CopySelectedNote();
+    }
+
+    private async void OnPasteNoteClicked(object sender, RoutedEventArgs e)
+    {
+        await PasteNoteAsync();
+    }
+
+    /// <summary>
+    /// Copy the currently selected note to the in-memory clipboard.
+    /// </summary>
+    private void CopySelectedNote()
+    {
+        if (_selectedNote is null) return;
+
+        s_clipboardNote = _selectedNote;
+        UpdatePasteButtonState();
+    }
+
+    /// <summary>
+    /// Duplicate the note from the in-memory clipboard: load its full
+    /// document, create a copy with a fresh ID and "(副本)" title, then
+    /// save it via the backend's saveNote method.
+    /// </summary>
+    private async Task PasteNoteAsync()
+    {
+        if (s_clipboardNote is null) return;
+
+        var source = s_clipboardNote;
+
+        try
+        {
+            ShowLoading(true);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+            // Load the full document (meta + body) for the source note
+            var doc = await _backendClient.SendAsync<NoteDocument>(
+                "loadNote", new { id = source.Id }, cts.Token);
+
+            // Build a new NoteDocument with a fresh ID and "(副本)" suffix
+            var newMeta = CreateDuplicateMeta(source);
+
+            var body = doc?.Body ?? source.Summary ?? string.Empty;
+            var newDoc = new NoteDocument(newMeta, body);
+
+            var saved = await _backendClient.SendAsync<NoteDocument>(
+                "saveNote", new { note = newDoc }, cts.Token);
+
+            if (saved is null)
+            {
+                ShowError("复制失败", new Exception("后端未能保存副本笔记"));
+                return;
+            }
+
+            // Refresh the list to show the new duplicate
+            await RefreshNotesAsync();
+
+            // Select the newly created note
+            SelectNoteById(saved.Meta.Id);
+        }
+        catch (Exception error)
+        {
+            ShowError("复制笔记失败", error);
+        }
+        finally
+        {
+            ShowLoading(false);
+        }
+    }
+
+    /// <summary>
+    /// Enable or disable the Paste button based on clipboard state.
+    /// </summary>
+    private void UpdatePasteButtonState()
+    {
+        PasteNoteButton.IsEnabled = s_clipboardNote is not null;
     }
 
     private void ApplyFilter()
@@ -412,6 +534,31 @@ public sealed partial class NotesView : UserControl
     {
         if (isCancellationRequested) return false;
         return itemsSource is IList<RelatedNoteItem> { Count: > 0 };
+    }
+
+    /// <summary>
+    /// Creates a duplicate NoteMeta from a source note, with a fresh GUID ID,
+    /// "(副本)" title suffix, reset path, and current timestamps (#3094).
+    /// Extracted as a pure function for unit testing.
+    /// </summary>
+    public static NoteMeta CreateDuplicateMeta(NoteMeta source)
+    {
+        return new NoteMeta
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Title = $"{source.Title} (副本)",
+            Tags = source.Tags,
+            Keywords = source.Keywords,
+            Platform = source.Platform,
+            Board = source.Board,
+            Kernel = source.Kernel,
+            Status = source.Status,
+            CreatedAt = DateTimeOffset.UtcNow.ToString("o"),
+            UpdatedAt = DateTimeOffset.UtcNow.ToString("o"),
+            Source = source.Source,
+            Path = string.Empty,
+            Summary = source.Summary,
+        };
     }
 
     private void ClearRelatedNotes()

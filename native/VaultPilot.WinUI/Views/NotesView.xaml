@@ -31,6 +31,8 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <AutoSuggestBox
                 x:Name="SearchBox"
@@ -50,8 +52,24 @@
                 </StackPanel>
             </Button>
             <Button
-                x:Name="DeleteNoteButton"
+                x:Name="CopyNoteButton"
                 Grid.Column="2"
+                IsEnabled="False"
+                AutomationProperties.Name="复制笔记"
+                AutomationProperties.HelpText="复制当前选中的笔记 (Ctrl+C)">
+                <FontIcon Glyph="&#xE8C8;" FontSize="14" />
+            </Button>
+            <Button
+                x:Name="PasteNoteButton"
+                Grid.Column="3"
+                IsEnabled="False"
+                AutomationProperties.Name="粘贴笔记"
+                AutomationProperties.HelpText="粘贴（复制）上次复制的笔记 (Ctrl+V)">
+                <FontIcon Glyph="&#xE77F;" FontSize="14" />
+            </Button>
+            <Button
+                x:Name="DeleteNoteButton"
+                Grid.Column="4"
                 Foreground="{ThemeResource SystemFillColorCriticalBrush}"
                 IsEnabled="False"
                 AutomationProperties.Name="删除笔记"

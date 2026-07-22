@@ -5,6 +5,126 @@ use crate::models::ResponseStyle;
 
 use sha2::{Digest, Sha256};
 
+/// Number of PBKDF2-HMAC-SHA256 iterations applied to App Lock PINs (#3323).
+///
+/// OWASP (2023) recommends ≥ 600,000 iterations for PBKDF2-SHA256 to resist
+/// offline brute-force attacks. This makes brute-forcing a 4-digit PIN take
+/// hours-to-days instead of <1 ms (as was the case with unsalted SHA-256).
+const PBKDF2_ITERATIONS: u32 = 600_000;
+/// Salt length in bytes (128 bits of randomness from `Uuid::new_v4`).
+const PBKDF2_SALT_LEN: usize = 16;
+/// PBKDF2 output length (SHA-256 digest size).
+const PBKDF2_HASH_LEN: usize = 32;
+/// Minimum PIN length accepted by `enable_app_lock_pin` (#3324).
+const MIN_PIN_LEN: usize = 4;
+/// Maximum PIN length accepted by `enable_app_lock_pin` (#3324).
+const MAX_PIN_LEN: usize = 32;
+
+/// Compute HMAC-SHA256(key, message) and return the 32-byte digest.
+///
+/// This is a minimal RFC 2104 implementation built on `sha2::Sha256`,
+/// avoiding the need for a separate `hmac` crate dependency.
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; PBKDF2_HASH_LEN] {
+    const BLOCK_SIZE: usize = 64;
+
+    // If key is longer than the block size, hash it first.
+    let mut key_block = [0u8; BLOCK_SIZE];
+    if key.len() > BLOCK_SIZE {
+        let kh = Sha256::digest(key);
+        key_block[..PBKDF2_HASH_LEN].copy_from_slice(&kh);
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+
+    // Inner pad (key XOR 0x36) and outer pad (key XOR 0x5c).
+    let mut ipad = [0u8; BLOCK_SIZE];
+    let mut opad = [0u8; BLOCK_SIZE];
+    for i in 0..BLOCK_SIZE {
+        ipad[i] = key_block[i] ^ 0x36;
+        opad[i] = key_block[i] ^ 0x5c;
+    }
+
+    // Inner hash: H(ipad || message)
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(message);
+    let inner_hash = inner.finalize();
+
+    // Outer hash: H(opad || inner_hash)
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner_hash);
+    outer.finalize().into()
+}
+
+/// Compute PBKDF2-HMAC-SHA256(password, salt, iterations) producing 32 bytes.
+///
+/// Because the requested output length (32) equals the hash size, only one
+/// block needs to be computed (RFC 8018 §5.2).
+fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; PBKDF2_HASH_LEN] {
+    let block_index = 1u32;
+
+    // U_1 = HMAC(password, salt || INT_32_BE(1))
+    let mut msg = Vec::with_capacity(salt.len() + 4);
+    msg.extend_from_slice(salt);
+    msg.extend_from_slice(&block_index.to_be_bytes());
+    let mut u = hmac_sha256(password, &msg);
+    let mut result = u;
+
+    for _ in 1..iterations {
+        u = hmac_sha256(password, &u);
+        for i in 0..PBKDF2_HASH_LEN {
+            result[i] ^= u[i];
+        }
+    }
+
+    result
+}
+
+/// Generate a 16-byte cryptographically random salt using `Uuid::new_v4`,
+/// which draws from the OS CSPRNG.
+fn generate_salt() -> [u8; PBKDF2_SALT_LEN] {
+    let id = uuid::Uuid::new_v4();
+    let mut salt = [0u8; PBKDF2_SALT_LEN];
+    salt.copy_from_slice(id.as_bytes());
+    salt
+}
+
+/// Encode a byte slice as lowercase hexadecimal.
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Decode a hexadecimal string into bytes. Returns `None` on malformed input.
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    let bytes = hex.as_bytes();
+    for chunk in bytes.chunks_exact(2) {
+        let hi = hex_nibble(chunk[0])?;
+        let lo = hex_nibble(chunk[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+/// Convert a single hex ASCII character to its nibble value.
+fn hex_nibble(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Configuration for intelligent model routing (#1842).
 ///
 /// When enabled, VaultPilot inspects each request and routes it to a
@@ -137,7 +257,10 @@ pub struct AppSettings {
     /// shared configuration that all clients read from the settings file.
     #[serde(default)]
     pub app_lock_enabled: bool,
-    /// SHA-256 hash of the user's PIN (hex string) when App Lock method is "pin".
+    /// Hashed PIN string when App Lock method is "pin". Stored in PHC-style
+    /// format: `pbkdf2-sha256$<iterations>$<salt_hex>$<hash_hex>` (#3323).
+    /// Legacy settings files may still contain a bare 64-char SHA-256 hex
+    /// digest; `verify_pin` handles both formats for backward compatibility.
     /// `None` when App Lock is disabled or using biometric-only auth.
     /// The PIN itself is never stored in plaintext.
     #[serde(default)]
@@ -232,32 +355,113 @@ impl AppSettings {
         }
     }
 
-    /// Hash a PIN string using SHA-256 and return the hex digest (#3304).
+    /// Hash a PIN string using PBKDF2-HMAC-SHA256 with a random salt (#3304, #3323).
+    ///
+    /// The returned string follows the PHC-style format:
+    /// `pbkdf2-sha256$<iterations>$<salt_hex>$<hash_hex>`
+    ///
+    /// Because a fresh random salt is generated each call, hashing the same
+    /// PIN twice produces **different** strings — preventing rainbow-table and
+    /// pre-computation attacks. The 600k iteration count makes brute-forcing a
+    /// 4-digit PIN take hours rather than <1 ms.
+    ///
     /// Used by the UI layer when the user sets or changes their App Lock PIN.
     /// The plaintext PIN is never persisted — only this hash is stored.
     pub fn hash_pin(pin: &str) -> String {
-        let hash = Sha256::digest(pin.as_bytes());
-        format!("{:x}", hash)
+        Self::hash_pin_with_iterations(pin, PBKDF2_ITERATIONS)
     }
 
-    /// Verify a user-entered PIN against the stored hash (#3304).
-    /// Returns `false` when App Lock is disabled or no PIN hash is configured.
+    /// Internal helper that allows overriding the iteration count (used by
+    /// tests to keep the suite fast while production uses the full count).
+    fn hash_pin_with_iterations(pin: &str, iterations: u32) -> String {
+        let salt = generate_salt();
+        let hash = pbkdf2_sha256(pin.as_bytes(), &salt, iterations);
+        format!(
+            "pbkdf2-sha256${}${}${}",
+            iterations,
+            bytes_to_hex(&salt),
+            bytes_to_hex(&hash),
+        )
+    }
+
+    /// Verify a user-entered PIN against the stored hash (#3304, #3323, #3324).
+    ///
+    /// Returns `false` when:
+    /// - App Lock is disabled (`app_lock_enabled == false`), even if a stale
+    ///   hash remains from a prior configuration (#3324).
+    /// - No PIN hash is configured.
+    /// - The PIN does not match the stored hash.
+    ///
+    /// Both the modern PBKDF2 format and legacy bare-SHA-256 hashes are
+    /// accepted so that existing settings files continue to work after
+    /// upgrade. Comparison is constant-time to mitigate timing attacks.
     pub fn verify_pin(&self, pin: &str) -> bool {
+        // #3324: Must honour the enabled flag — a stale hash from a previous
+        // configuration must NOT allow verification when App Lock is off.
+        if !self.app_lock_enabled {
+            return false;
+        }
         match &self.app_lock_pin_hash {
             Some(stored) => {
-                let input = Self::hash_pin(pin);
-                // Constant-time comparison to mitigate timing attacks.
-                constant_time_eq(stored.as_bytes(), input.as_bytes())
+                if let Some(rest) = stored.strip_prefix("pbkdf2-sha256$") {
+                    Self::verify_pbkdf2_hash(pin, rest)
+                } else {
+                    // Legacy: bare SHA-256 hex digest (pre-#3323).
+                    let input = Self::legacy_sha256_hex(pin);
+                    constant_time_eq(stored.as_bytes(), input.as_bytes())
+                }
             }
             None => false,
         }
     }
 
-    /// Enable App Lock with a PIN (#3304). Stores the hashed PIN and sets
-    /// the enabled flag.
-    pub fn enable_app_lock_pin(&mut self, pin: &str) {
+    /// Verify a PIN against a PBKDF2 hash body (everything after the
+    /// `pbkdf2-sha256$` prefix). Returns `false` on any parse failure.
+    fn verify_pbkdf2_hash(pin: &str, body: &str) -> bool {
+        let parts: Vec<&str> = body.split('$').collect();
+        if parts.len() != 3 {
+            return false;
+        }
+        let iterations = match parts[0].parse::<u32>() {
+            Ok(n) if n > 0 => n,
+            _ => return false,
+        };
+        let salt = match hex_to_bytes(parts[1]) {
+            Some(s) if s.len() == PBKDF2_SALT_LEN => s,
+            _ => return false,
+        };
+        let expected = match hex_to_bytes(parts[2]) {
+            Some(h) if h.len() == PBKDF2_HASH_LEN => h,
+            _ => return false,
+        };
+        let computed = pbkdf2_sha256(pin.as_bytes(), &salt, iterations);
+        constant_time_eq(&computed, &expected[..])
+    }
+
+    /// Compute a bare SHA-256 hex digest (legacy format, pre-#3323).
+    fn legacy_sha256_hex(pin: &str) -> String {
+        let hash = Sha256::digest(pin.as_bytes());
+        format!("{:x}", hash)
+    }
+
+    /// Enable App Lock with a PIN (#3304, #3324).
+    ///
+    /// Validates that the PIN is ≥ 4 ASCII digits and ≤ 32 characters, then
+    /// stores the PBKDF2 hash and sets the enabled flag. Returns an error
+    /// message describing why the PIN was rejected, if applicable.
+    pub fn enable_app_lock_pin(&mut self, pin: &str) -> Result<(), String> {
+        if pin.len() < MIN_PIN_LEN {
+            return Err(format!("PIN must be at least {MIN_PIN_LEN} digits"));
+        }
+        if pin.len() > MAX_PIN_LEN {
+            return Err(format!("PIN must be at most {MAX_PIN_LEN} digits"));
+        }
+        if !pin.chars().all(|c| c.is_ascii_digit()) {
+            return Err("PIN must contain only digits (0-9)".to_string());
+        }
         self.app_lock_pin_hash = Some(Self::hash_pin(pin));
         self.app_lock_enabled = true;
+        Ok(())
     }
 
     /// Disable App Lock entirely (#3304). Clears the PIN hash and flag.
@@ -1001,7 +1205,7 @@ mod tests {
     #[test]
     fn app_lock_enable_and_verify_pin() {
         let mut settings = AppSettings::default();
-        settings.enable_app_lock_pin("1234");
+        settings.enable_app_lock_pin("1234").unwrap();
         assert!(settings.app_lock_enabled);
         assert!(settings.app_lock_pin_hash.is_some());
         // Correct PIN
@@ -1013,7 +1217,7 @@ mod tests {
     #[test]
     fn app_lock_disable_clears_state() {
         let mut settings = AppSettings::default();
-        settings.enable_app_lock_pin("4321");
+        settings.enable_app_lock_pin("4321").unwrap();
         assert!(settings.app_lock_enabled);
         settings.disable_app_lock();
         assert!(!settings.app_lock_enabled);
@@ -1023,13 +1227,15 @@ mod tests {
     #[test]
     fn app_lock_pin_hash_is_not_plaintext() {
         let mut settings = AppSettings::default();
-        settings.enable_app_lock_pin("secret123");
+        settings.enable_app_lock_pin("1234567890").unwrap();
         let hash = settings.app_lock_pin_hash.as_ref().unwrap();
         // Hash must NOT contain the plaintext PIN.
-        assert!(!hash.contains("secret123"));
-        // Hash must be a 64-char hex string (SHA-256).
-        assert_eq!(hash.len(), 64);
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!hash.contains("1234567890"));
+        // #3323: Hash must be in PHC-style PBKDF2 format, not bare SHA-256.
+        assert!(
+            hash.starts_with("pbkdf2-sha256$"),
+            "expected pbkdf2 prefix, got: {hash}"
+        );
     }
 
     #[test]
@@ -1041,7 +1247,7 @@ mod tests {
     #[test]
     fn app_lock_serde_round_trip() {
         let mut settings = AppSettings::default();
-        settings.enable_app_lock_pin("0000");
+        settings.enable_app_lock_pin("0000").unwrap();
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"appLockEnabled\":true"));
         assert!(json.contains("\"appLockPinHash\""));
@@ -1065,5 +1271,194 @@ mod tests {
             serde_json::from_value(legacy).expect("legacy JSON must deserialize");
         assert!(!parsed.app_lock_enabled);
         assert!(parsed.app_lock_pin_hash.is_none());
+    }
+
+    // ── #3323: PBKDF2 + salt ──────────────────────────────────────────
+
+    #[test]
+    fn hash_pin_uses_pbkdf2_format() {
+        // Format: pbkdf2-sha256$<iterations>$<salt_hex>$<hash_hex>
+        let h = AppSettings::hash_pin_with_iterations("1234", 1000);
+        let parts: Vec<&str> = h.split('$').collect();
+        assert_eq!(parts[0], "pbkdf2-sha256");
+        assert_eq!(parts[1], "1000", "iteration count must be encoded");
+        // Salt is 16 bytes → 32 hex chars.
+        assert_eq!(parts[2].len(), 32, "salt must be 16 bytes (32 hex chars)");
+        assert!(parts[2].chars().all(|c| c.is_ascii_hexdigit()));
+        // Hash is 32 bytes → 64 hex chars.
+        assert_eq!(parts[3].len(), 64, "hash must be 32 bytes (64 hex chars)");
+        assert!(parts[3].chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hash_pin_same_pin_produces_different_hashes() {
+        // #3323: Each call generates a fresh random salt, so two hashes of
+        // the same PIN must differ. This is the core property that defeats
+        // rainbow-table and pre-computation attacks.
+        let a = AppSettings::hash_pin_with_iterations("1234", 1000);
+        let b = AppSettings::hash_pin_with_iterations("1234", 1000);
+        assert_ne!(a, b, "same PIN must produce different hashes (salt)");
+        // But both must verify against the same correct PIN.
+        let mut s = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some(a.clone()),
+            ..Default::default()
+        };
+        assert!(s.verify_pin("1234"));
+        s.app_lock_pin_hash = Some(b);
+        assert!(s.verify_pin("1234"));
+    }
+
+    #[test]
+    fn verify_pin_accepts_pbkdf2_hash() {
+        let settings = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some(AppSettings::hash_pin_with_iterations("9999", 1000)),
+            ..Default::default()
+        };
+        assert!(settings.verify_pin("9999"), "correct PIN must verify");
+        assert!(!settings.verify_pin("0000"), "wrong PIN must not verify");
+    }
+
+    #[test]
+    fn verify_pin_accepts_legacy_sha256_hash() {
+        // #3323 backward compat: old settings files store a bare 64-char
+        // SHA-256 hex digest. verify_pin must still accept the correct PIN.
+        let legacy_hash = AppSettings::legacy_sha256_hex("4321");
+        assert_eq!(legacy_hash.len(), 64);
+        assert!(!legacy_hash.starts_with("pbkdf2"));
+        let settings = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some(legacy_hash),
+            ..Default::default()
+        };
+        assert!(settings.verify_pin("4321"), "legacy hash must verify");
+        assert!(!settings.verify_pin("1234"), "wrong PIN must not verify");
+    }
+
+    #[test]
+    fn verify_pin_rejects_malformed_pbkdf2_hash() {
+        // Garbage after the pbkdf2-sha256$ prefix must not panic or verify.
+        let settings = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some("pbkdf2-sha256$garbage".to_string()),
+            ..Default::default()
+        };
+        assert!(!settings.verify_pin("1234"));
+        let settings = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some("pbkdf2-sha256$1000$bad$also_bad".to_string()),
+            ..Default::default()
+        };
+        assert!(!settings.verify_pin("1234"));
+    }
+
+    // ── #3324: enabled-flag + PIN validation ─────────────────────────
+
+    #[test]
+    fn verify_pin_returns_false_when_disabled_but_hash_present() {
+        // #3324 critical: when app_lock_enabled is false but a stale hash
+        // remains (e.g. from partial migration), verify_pin MUST return false.
+        let mut settings = AppSettings::default();
+        settings.enable_app_lock_pin("1234").unwrap();
+        assert!(settings.verify_pin("1234"));
+        // Simulate the inconsistent state: enabled=false, hash still present.
+        settings.app_lock_enabled = false;
+        assert!(
+            !settings.verify_pin("1234"),
+            "verify_pin must respect app_lock_enabled flag"
+        );
+    }
+
+    #[test]
+    fn enable_app_lock_pin_rejects_empty_pin() {
+        let mut settings = AppSettings::default();
+        assert!(settings.enable_app_lock_pin("").is_err());
+        assert!(!settings.app_lock_enabled, "must not enable on empty PIN");
+        assert!(settings.app_lock_pin_hash.is_none());
+    }
+
+    #[test]
+    fn enable_app_lock_pin_rejects_short_pin() {
+        let mut settings = AppSettings::default();
+        assert!(settings.enable_app_lock_pin("123").is_err());
+        assert!(!settings.app_lock_enabled);
+        // Exactly 4 digits is the minimum and must succeed.
+        assert!(settings.enable_app_lock_pin("1234").is_ok());
+        assert!(settings.app_lock_enabled);
+    }
+
+    #[test]
+    fn enable_app_lock_pin_rejects_non_digit_pin() {
+        let mut settings = AppSettings::default();
+        // Letters mixed with digits.
+        assert!(settings.enable_app_lock_pin("12a4").is_err());
+        // Special characters.
+        assert!(settings.enable_app_lock_pin("12-4").is_err());
+        // Spaces.
+        assert!(settings.enable_app_lock_pin("12 4").is_err());
+        // Unicode digits (not ASCII).
+        assert!(settings.enable_app_lock_pin("１２３４").is_err());
+        assert!(!settings.app_lock_enabled);
+    }
+
+    #[test]
+    fn enable_app_lock_pin_rejects_overlong_pin() {
+        let mut settings = AppSettings::default();
+        let long = "1".repeat(33);
+        assert!(settings.enable_app_lock_pin(&long).is_err());
+        // 32 digits is the maximum and must succeed.
+        let max = "9".repeat(32);
+        assert!(settings.enable_app_lock_pin(&max).is_ok());
+    }
+
+    #[test]
+    fn enable_app_lock_pin_accepts_valid_pins() {
+        let mut settings = AppSettings::default();
+        assert!(settings.enable_app_lock_pin("0000").is_ok());
+        assert!(settings.app_lock_enabled);
+        assert!(settings.verify_pin("0000"));
+
+        settings.disable_app_lock();
+        assert!(settings.enable_app_lock_pin("1234567890").is_ok());
+        assert!(settings.verify_pin("1234567890"));
+    }
+
+    // ── PBKDF2 + hex helpers unit tests ──────────────────────────────
+
+    #[test]
+    fn hmac_sha256_matches_known_test_vector() {
+        // RFC 4231 Test Case 2:
+        //   key = "Jefe", data = "what do ya want for nothing?"
+        //   HMAC-SHA256 = 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+        let result = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+        let expected_hex = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
+        assert_eq!(bytes_to_hex(&result), expected_hex);
+    }
+
+    #[test]
+    fn pbkdf2_sha256_matches_known_test_vector() {
+        // RFC 7914 / RFC 6070-style vector for PBKDF2-HMAC-SHA256:
+        //   password = "password", salt = "salt", c = 1
+        //   output   = 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b
+        let result = pbkdf2_sha256(b"password", b"salt", 1);
+        let expected_hex = "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b";
+        assert_eq!(bytes_to_hex(&result), expected_hex);
+    }
+
+    #[test]
+    fn hex_round_trip() {
+        let original = vec![0x00u8, 0x01, 0xfe, 0xff, 0xab, 0xcd];
+        let hex = bytes_to_hex(&original);
+        assert_eq!(hex, "0001feffabcd");
+        let decoded = hex_to_bytes(&hex).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn hex_to_bytes_rejects_malformed() {
+        assert!(hex_to_bytes("abc").is_none(), "odd length");
+        assert!(hex_to_bytes("xy").is_none(), "non-hex chars");
+        assert!(hex_to_bytes("").is_some(), "empty is valid → empty vec");
     }
 }

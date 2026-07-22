@@ -683,13 +683,17 @@ fn markdown_to_html_body(markdown: &str) -> String {
 /// Each H2 heading starts a new slide. Content under each H2 becomes the slide body.
 /// The output is standard Markdown with Marp frontmatter.
 pub fn export_markdown_to_marp(markdown: &str, title: &str, output_path: &Path) -> Result<()> {
+    // #3327: Escape backslash and double-quote for YAML double-quoted scalar.
+    let yaml_title = title.replace('\\', "\\\\").replace('"', "\\\"");
     let mut output = format!(
-        "---\nmarp: true\ntheme: default\npaginate: true\ntitle: \"{title}\"\n---\n\n",
-        title = title
+        "---\nmarp: true\ntheme: default\npaginate: true\ntitle: \"{yaml_title}\"\n---\n\n",
+        yaml_title = yaml_title
     );
 
-    // Title slide
-    output.push_str(&format!("# {}\n\n", title));
+    // Title slide — also escape for Markdown body (backslash-escape # and other
+    // Markdown-special chars that could break heading structure).
+    let body_title = title.replace('#', "\\#");
+    output.push_str(&format!("# {}\n\n", body_title));
 
     let lines: Vec<&str> = markdown.lines().collect();
     let mut current_slide = String::new();
@@ -1265,6 +1269,50 @@ Some text between tables.
         assert!(
             !content.contains("&amp;"),
             "title should NOT contain XML-escaped '&amp;'"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// #3327: Title with double-quote must be escaped in YAML frontmatter.
+    #[test]
+    fn export_marp_title_double_quote_escaped() {
+        let md = "## Slide 1\n\nContent.\n";
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-marp-quote-test-{}.md",
+            std::process::id()
+        ));
+        export_markdown_to_marp(md, r#"Q3 "final" report"#, &tmp)
+            .expect("marp export should succeed");
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        // The frontmatter should contain the escaped quote.
+        assert!(
+            content.contains(r#"title: "Q3 \"final\" report""#),
+            "expected escaped YAML title, got: {content}"
+        );
+        // The raw title should NOT appear as unescaped inside the frontmatter line.
+        let fm_line = content
+            .lines()
+            .find(|l| l.starts_with("title:"))
+            .unwrap_or("");
+        assert!(
+            !fm_line.contains(r#"Q3 "final" report""#),
+            "frontmatter should NOT contain unescaped quotes, got: {fm_line}"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn export_marp_title_backslash_escaped() {
+        let md = "## Slide 1\n\nContent.\n";
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-marp-backslash-test-{}.md",
+            std::process::id()
+        ));
+        export_markdown_to_marp(md, r"C:\path\to\notes", &tmp).expect("marp export should succeed");
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        assert!(
+            content.contains(r#"title: "C:\\path\\to\\notes""#),
+            "expected backslash-escaped YAML title, got: {content}"
         );
         let _ = std::fs::remove_file(&tmp);
     }

@@ -2221,6 +2221,7 @@ async fn run_edit_note_ai(
         note_id: Some(original.meta.id.clone()),
         instruction: Some(instruction.to_string()),
         model: model.map(|s| s.to_string()),
+        export_format: None,
     };
 
     let settings = vaultpilot_lib::storage::load_settings_with_context(context)

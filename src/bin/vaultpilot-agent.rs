@@ -552,6 +552,7 @@ async fn handle_request(
                 note_id: params.note_id,
                 instruction: params.instruction,
                 model: params.model_override,
+                export_format: None,
             };
             let settings = initialize_storage_async(context)
                 .await

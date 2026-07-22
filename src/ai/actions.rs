@@ -54,6 +54,9 @@ pub enum AiActionType {
     /// Ad-hoc multi-note synthesis: synthesize a cross-note summary, identify
     /// shared themes, missing links, and conflicts from selected notes (#3270).
     SynthesizeNotes,
+    /// Export note content to a structured file format (XLSX/DOCX/HTML/PPTX).
+    /// The `instruction` field carries the target format (#3276).
+    ExportDocument,
 }
 
 impl AiActionType {
@@ -78,6 +81,7 @@ impl AiActionType {
             Self::TranscribeAudio => "音频转写",
             Self::SuggestLinks => "智能推荐链接",
             Self::SynthesizeNotes => "笔记综合",
+            Self::ExportDocument => "导出文档",
         }
     }
 
@@ -102,6 +106,7 @@ impl AiActionType {
             Self::TranscribeAudio => "transcribeAudio",
             Self::SuggestLinks => "suggestLinks",
             Self::SynthesizeNotes => "synthesizeNotes",
+            Self::ExportDocument => "exportDocument",
         }
     }
 
@@ -130,6 +135,7 @@ impl AiActionType {
             "synthesizeNotes" | "synthesize_notes" | "synNotes" | "multiNoteSynthesis" => {
                 Some(Self::SynthesizeNotes)
             }
+            "exportDocument" | "export_document" | "export" => Some(Self::ExportDocument),
             _ => None,
         }
     }
@@ -155,6 +161,7 @@ impl AiActionType {
             Self::TranscribeAudio,
             Self::SuggestLinks,
             Self::SynthesizeNotes,
+            Self::ExportDocument,
         ]
     }
 }
@@ -185,6 +192,9 @@ pub struct AiActionRequest {
     /// Optional model override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Export format for ExportDocument action: "xlsx", "docx", "html", "pdf", "pptx" (#3276).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_format: Option<String>,
 }
 
 /// Result of an executed AI quick action.
@@ -390,6 +400,19 @@ pub(crate) fn system_prompt(action: AiActionType) -> String {
              Output only the structured report, no extra commentary."
                 .to_string()
         }
+        AiActionType::ExportDocument => {
+            "You are a document formatting and export assistant. Your task is to \
+             transform the given note content into a well-structured format suitable \
+             for the target export type. \
+             - For XLSX: restructure data into clean Markdown tables with headers. \
+             - For DOCX: organize into clear headings, paragraphs, and lists. \
+             - For HTML: produce clean, semantic Markdown that converts well to HTML. \
+             - For PPTX: organize into slide-sized sections with H2 as slide titles. \
+             Preserve all factual content. Enhance structure and readability. \
+             Do not add new information. \
+             Output only the restructured content in Markdown, no extra commentary."
+                .to_string()
+        }
     }
 }
 
@@ -543,6 +566,22 @@ pub(crate) fn user_prompt(action: AiActionType, request: &AiActionRequest) -> St
                  (if applicable), and any conflicts/inconsistencies. \
                  Cite specific source notes inline with [[Note Title]] wikilinks.",
                 request.text
+            )
+        }
+        AiActionType::ExportDocument => {
+            let fmt = request
+                .export_format
+                .as_deref()
+                .or(request.instruction.as_deref())
+                .unwrap_or("html");
+            format!(
+                "Transform the following note content for export to {fmt} format. \
+                 Restructure it for optimal presentation in the target format \
+                 (clean tables for XLSX, well-organized headings/paragraphs for DOCX, \
+                 semantic structure for HTML, slide-sized sections for PPTX). \
+                 Preserve all factual content.\n\n{content}",
+                fmt = fmt,
+                content = request.text
             )
         }
     }
@@ -760,6 +799,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(result.is_some(), "empty text should fail validation");
@@ -776,6 +816,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -794,6 +835,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         assert!(
             validate_request(&request).is_none(),
@@ -811,6 +853,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         // find_related_notes is exempt from the text requirement
         assert!(validate_request(&request).is_none());
@@ -855,6 +898,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::Summarize, &request);
         assert!(prompt.contains("Hello world"));
@@ -870,6 +914,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::Rewrite, &request);
         assert!(prompt.contains("vivid"));
@@ -885,6 +930,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::Translate, &request);
         assert!(prompt.contains("Chinese"));
@@ -900,6 +946,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -918,6 +965,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::CleanUp, &request);
         assert!(prompt.contains("roadmap Q3"));
@@ -1060,6 +1108,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::GenerateOutline, &request);
         assert!(prompt.contains("项目管理最佳实践"));
@@ -1076,6 +1125,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1129,6 +1179,7 @@ mod tests {
             note_id: None,
             instruction: Some("Make it more formal".to_string()),
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::EditNote, &request);
         assert!(
@@ -1151,6 +1202,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::EditNote, &request);
         assert!(
@@ -1169,6 +1221,7 @@ mod tests {
             note_id: None,
             instruction: Some("Edit this".to_string()),
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1244,6 +1297,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::ReviewNote, &request);
         assert!(
@@ -1266,6 +1320,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1288,6 +1343,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1306,6 +1362,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         assert!(
             validate_request(&request).is_none(),
@@ -1384,6 +1441,7 @@ mod tests {
             note_id: None,
             instruction: Some("project planning".to_string()),
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::SynthesizeWiki, &request);
         assert!(
@@ -1407,6 +1465,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::SynthesizeWiki, &request);
         assert!(
@@ -1425,6 +1484,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1489,6 +1549,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::WorkspaceQuery, &request);
         assert!(
@@ -1511,6 +1572,7 @@ mod tests {
             note_id: None,
             instruction: Some("timeline inquiry".to_string()),
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::WorkspaceQuery, &request);
         assert!(
@@ -1533,6 +1595,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1556,6 +1619,7 @@ mod tests {
             note_id: None,
             instruction: Some("Summarize the Q3 roadmap across all project notes".to_string()),
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1575,6 +1639,7 @@ mod tests {
             note_id: None,
             instruction: Some("   \n\t ".to_string()),
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1626,6 +1691,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1644,6 +1710,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&request);
         assert!(
@@ -1662,6 +1729,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         assert!(validate_request(&request).is_none());
     }
@@ -1683,6 +1751,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::TranscribeAudio, &request);
         assert_eq!(prompt, "");
@@ -1741,6 +1810,7 @@ mod tests {
             note_id: None,
             instruction: Some("Note A\nNote B".to_string()),
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::SuggestLinks, &req);
         assert!(prompt.contains("Some note content"));
@@ -1758,6 +1828,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::SuggestLinks, &req);
         assert!(prompt.contains("Note content"));
@@ -1774,6 +1845,7 @@ mod tests {
             note_id: None,
             instruction: Some("some notes".to_string()),
             model: None,
+            export_format: None,
         };
         let result = validate_request(&req);
         assert!(
@@ -1847,6 +1919,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let prompt = user_prompt(AiActionType::SynthesizeNotes, &req);
         assert!(prompt.contains("Alpha"));
@@ -1864,6 +1937,7 @@ mod tests {
             note_id: None,
             instruction: None,
             model: None,
+            export_format: None,
         };
         let result = validate_request(&req);
         assert!(

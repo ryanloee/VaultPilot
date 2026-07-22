@@ -1081,7 +1081,7 @@ enum SettingsActions {
     },
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum ConfigActions {
     /// Print the resolved vault-facing configuration: vault root, settings
     /// file path, `.vaultpilot/` sub-directories, session-export status,
@@ -1096,6 +1096,19 @@ enum ConfigActions {
     /// After saving, the new settings take effect on the next CLI invocation
     /// (this command does not reload them in-process).
     Edit,
+
+    /// Search settings by keyword — fuzzy match across label, description,
+    /// and category (#3332). An empty query lists all visible settings.
+    ///
+    /// Examples:
+    ///   vaultpilot config search model
+    ///   vaultpilot config search app lock
+    ///   vaultpilot config search ""          — list all settings
+    Search {
+        /// Search query (matches label/description, case-insensitive).
+        /// Pass an empty string to list all settings.
+        query: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -3729,6 +3742,31 @@ fn handle_config(context: &StorageContext, action: &ConfigActions) -> Result<Val
                 "editor": editor,
                 "path": path,
                 "exit_status": status.code(),
+            }))
+        }
+        ConfigActions::Search { query } => {
+            // #3332: Expose the settings search (already implemented in
+            // settings_schema::search_settings_definitions) as a CLI command.
+            let defs = vaultpilot_lib::settings_schema::collect_setting_definitions();
+            let matches = vaultpilot_lib::settings_schema::search_settings_definitions(
+                &defs, query, &settings,
+            );
+            let results: Vec<serde_json::Value> = matches
+                .into_iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "key": d.key,
+                        "label": d.label,
+                        "description": d.description,
+                        "category": d.category,
+                    })
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "event": "config_search",
+                "query": query,
+                "matchCount": results.len(),
+                "results": results,
             }))
         }
     }
@@ -8739,6 +8777,7 @@ mod tests {
         SkillSavedActions,
     };
     use axum::http::{HeaderMap, HeaderValue};
+    use clap::Parser;
     use std::net::{IpAddr, Ipv4Addr};
     use vaultpilot_lib::models::{ChatSession, ChatState, ChatTurn, ThinkingTrace};
     use vaultpilot_lib::vault_query::QValue;
@@ -9963,6 +10002,72 @@ mod tests {
             err.to_string().contains("not a regular file"),
             "expected 'not a regular file', got: {err}"
         );
+    }
+
+    // ── #3332: config search CLI subcommand ─────────────────────────
+
+    #[test]
+    fn regression_3332_config_search_parses_query() {
+        // Verify Clap parses `vp config search model` correctly.
+        let cli = Cli::parse_from(["vp", "config", "search", "model"]);
+        match &cli.command {
+            Commands::Config { action } => match action {
+                crate::ConfigActions::Search { query } => {
+                    assert_eq!(query, "model");
+                }
+                _ => panic!("expected ConfigActions::Search, got {action:?}"),
+            },
+            _ => panic!("expected Config command"),
+        }
+    }
+
+    #[test]
+    fn regression_3332_config_search_accepts_empty_query() {
+        // An empty query should list all visible settings.
+        let cli = Cli::parse_from(["vp", "config", "search", ""]);
+        match &cli.command {
+            Commands::Config { action } => match action {
+                crate::ConfigActions::Search { query } => {
+                    assert!(query.is_empty());
+                }
+                _ => panic!("expected ConfigActions::Search"),
+            },
+            _ => panic!("expected Config command"),
+        }
+    }
+
+    #[test]
+    fn regression_3332_config_search_returns_matches() {
+        // Integration test: run the actual search logic (no StorageContext
+        // needed — the search function operates on definitions + settings).
+        use vaultpilot_lib::models::AppSettings;
+        use vaultpilot_lib::settings_schema::{
+            collect_setting_definitions, search_settings_definitions,
+        };
+
+        let defs = collect_setting_definitions();
+        assert!(!defs.is_empty(), "catalog must be non-empty");
+
+        let settings = AppSettings::default();
+
+        // "model" should match provider.model and possibly modelRouting entries.
+        let matches = search_settings_definitions(&defs, "model", &settings);
+        assert!(
+            !matches.is_empty(),
+            "search for 'model' must return results"
+        );
+        assert!(
+            matches.iter().any(|d| d.key.contains("model")),
+            "at least one match must contain 'model' in its key"
+        );
+
+        // Empty query returns ALL visible definitions.
+        let all = search_settings_definitions(&defs, "", &settings);
+        assert!(
+            all.len() >= matches.len(),
+            "empty query must return at least as many results as any filtered query"
+        );
+        assert!(!all.is_empty(), "empty query must return all settings");
     }
 }
 

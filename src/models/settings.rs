@@ -272,12 +272,17 @@ fn default_privacy_mode() -> bool {
 }
 
 /// Compare two byte slices in constant time to mitigate timing attacks.
+///
+/// Does NOT early-return on length mismatch — iterates over the full length of
+/// both buffers (zero-padding the shorter one). This prevents leaking the
+/// expected hash length via timing (#3326).
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
+    let max = a.len().max(b.len());
     let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
+    diff |= (a.len() != b.len()) as u8;
+    for i in 0..max {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
         diff |= x ^ y;
     }
     diff == 0
@@ -1460,5 +1465,23 @@ mod tests {
         assert!(hex_to_bytes("abc").is_none(), "odd length");
         assert!(hex_to_bytes("xy").is_none(), "non-hex chars");
         assert!(hex_to_bytes("").is_some(), "empty is valid → empty vec");
+    }
+
+    // ── #3326: constant_time_eq length-leak fix ──────────────────────
+
+    #[test]
+    fn constant_time_eq_handles_length_mismatch() {
+        // Same content prefix, different lengths → must return false.
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"abcd", b"abc"));
+        assert!(!constant_time_eq(b"short", b"longer"));
+        assert!(!constant_time_eq(b"", b"a"));
+        assert!(!constant_time_eq(b"a", b""));
+        // Same length, same content → must return true.
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(constant_time_eq(b"", b""));
+        // Same length, different content → must return false.
+        assert!(!constant_time_eq(b"secret", b"Secret"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
     }
 }

@@ -395,6 +395,10 @@ impl AppSettings {
     /// Both the modern PBKDF2 format and legacy bare-SHA-256 hashes are
     /// accepted so that existing settings files continue to work after
     /// upgrade. Comparison is constant-time to mitigate timing attacks.
+    ///
+    /// This function is read-only. Use [`verify_pin_and_upgrade`] instead when
+    /// you also need to migrate legacy SHA-256 hashes to PBKDF2 on success
+    /// (#3330).
     pub fn verify_pin(&self, pin: &str) -> bool {
         // #3324: Must honour the enabled flag — a stale hash from a previous
         // configuration must NOT allow verification when App Lock is off.
@@ -409,6 +413,44 @@ impl AppSettings {
                     // Legacy: bare SHA-256 hex digest (pre-#3323).
                     let input = Self::legacy_sha256_hex(pin);
                     constant_time_eq(stored.as_bytes(), input.as_bytes())
+                }
+            }
+            None => false,
+        }
+    }
+
+    /// Verify a PIN and seamlessly upgrade legacy SHA-256 hashes to PBKDF2
+    /// on successful verification (#3330).
+    ///
+    /// Behaves identically to [`verify_pin`] for PBKDF2 hashes. For legacy
+    /// bare-SHA-256 hashes (pre-#3323), a successful verification triggers an
+    /// automatic in-place upgrade: the stored hash is replaced with a
+    /// PBKDF2-HMAC-SHA256 hash (600k iterations, random salt) of the same PIN.
+    ///
+    /// Callers that hold a `&mut AppSettings` should prefer this function over
+    /// [`verify_pin`] so that users who set their PIN before the PBKDF2
+    /// migration (#3323) are automatically upgraded the next time they unlock.
+    ///
+    /// Still returns `false` when App Lock is disabled or no PIN hash is
+    /// configured, same as [`verify_pin`].
+    pub fn verify_pin_and_upgrade(&mut self, pin: &str) -> bool {
+        if !self.app_lock_enabled {
+            return false;
+        }
+        match &self.app_lock_pin_hash {
+            Some(stored) => {
+                if let Some(rest) = stored.strip_prefix("pbkdf2-sha256$") {
+                    // Already PBKDF2 — just verify, no upgrade needed.
+                    Self::verify_pbkdf2_hash(pin, rest)
+                } else {
+                    // Legacy: bare SHA-256 hex digest (pre-#3323).
+                    // If the PIN matches, upgrade the hash to PBKDF2.
+                    let input = Self::legacy_sha256_hex(pin);
+                    let matches = constant_time_eq(stored.as_bytes(), input.as_bytes());
+                    if matches {
+                        self.app_lock_pin_hash = Some(Self::hash_pin(pin));
+                    }
+                    matches
                 }
             }
             None => false,
@@ -1334,6 +1376,101 @@ mod tests {
         };
         assert!(settings.verify_pin("4321"), "legacy hash must verify");
         assert!(!settings.verify_pin("1234"), "wrong PIN must not verify");
+    }
+
+    // ── #3330: legacy hash → PBKDF2 migration on successful verify ──
+
+    #[test]
+    fn verify_pin_and_upgrade_migrates_legacy_hash_to_pbkdf2() {
+        // Core #3330 property: when a user with a pre-#3323 legacy SHA-256
+        // hash enters the correct PIN, the stored hash must be silently
+        // upgraded to PBKDF2 so that the weak hash is no longer exploitable
+        // for offline brute-force attacks.
+        let legacy_hash = AppSettings::legacy_sha256_hex("7777");
+        assert!(!legacy_hash.starts_with("pbkdf2"));
+        let mut settings = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some(legacy_hash.clone()),
+            ..Default::default()
+        };
+        // Verify with correct PIN — must succeed AND upgrade hash.
+        assert!(
+            settings.verify_pin_and_upgrade("7777"),
+            "correct PIN must verify"
+        );
+        let upgraded = settings.app_lock_pin_hash.as_ref().unwrap();
+        assert!(
+            upgraded.starts_with("pbkdf2-sha256$"),
+            "hash must be upgraded to PBKDF2 format, got: {upgraded}"
+        );
+        // The upgraded hash must still verify the correct PIN.
+        assert!(settings.verify_pin("7777"), "upgraded hash must verify PIN");
+        // Wrong PIN must still be rejected.
+        assert!(
+            !settings.verify_pin("0000"),
+            "wrong PIN must not verify after upgrade"
+        );
+    }
+
+    #[test]
+    fn verify_pin_and_upgrade_keeps_pbkdf2_hash_unchanged() {
+        // verify_pin_and_upgrade should be a no-op for modern PBKDF2 hashes:
+        // the hash must not be rewritten when it is already strong.
+        let mut settings = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some(AppSettings::hash_pin_with_iterations("1234", 1000)),
+            ..Default::default()
+        };
+        let before = settings.app_lock_pin_hash.clone().unwrap();
+        assert!(settings.verify_pin_and_upgrade("1234"));
+        assert_eq!(
+            settings.app_lock_pin_hash.as_ref().unwrap(),
+            &before,
+            "PBKDF2 hash must not be rewritten"
+        );
+    }
+
+    #[test]
+    fn verify_pin_and_upgrade_does_not_upgrade_on_wrong_pin() {
+        // A wrong PIN must NOT trigger a hash upgrade; the weak hash must
+        // stay untouched so the legitimate user can still unlock later.
+        let legacy_hash = AppSettings::legacy_sha256_hex("8888");
+        let mut settings = AppSettings {
+            app_lock_enabled: true,
+            app_lock_pin_hash: Some(legacy_hash.clone()),
+            ..Default::default()
+        };
+        assert!(
+            !settings.verify_pin_and_upgrade("0000"),
+            "wrong PIN must fail"
+        );
+        assert_eq!(
+            settings.app_lock_pin_hash.as_ref().unwrap(),
+            &legacy_hash,
+            "legacy hash must remain untouched on wrong PIN"
+        );
+    }
+
+    #[test]
+    fn verify_pin_and_upgrade_still_honours_enabled_flag() {
+        // #3324 cross-check: when App Lock is disabled, verify_pin_and_upgrade
+        // must return false even when a legacy hash is present, and must NOT
+        // upgrade the hash.
+        let legacy_hash = AppSettings::legacy_sha256_hex("5555");
+        let mut settings = AppSettings {
+            app_lock_enabled: false,
+            app_lock_pin_hash: Some(legacy_hash.clone()),
+            ..Default::default()
+        };
+        assert!(
+            !settings.verify_pin_and_upgrade("5555"),
+            "must reject when disabled"
+        );
+        assert_eq!(
+            settings.app_lock_pin_hash.as_ref().unwrap(),
+            &legacy_hash,
+            "hash must not change when disabled"
+        );
     }
 
     #[test]

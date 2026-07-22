@@ -437,6 +437,25 @@ pub struct SearchQuery {
     /// after the initial FTS5 keyword results (#2033).
     #[serde(default)]
     pub deep_search: bool,
+    /// Sort order for search results (#3288).
+    /// Defaults to `Relevance` (FTS5 BM25 ranking).
+    #[serde(default)]
+    pub sort_by: SearchSortBy,
+}
+
+/// Sort order for note search results (#3288).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchSortBy {
+    /// FTS5 BM25 relevance ranking (default).
+    #[default]
+    Relevance,
+    /// Most recently modified first (`updated_at` descending).
+    Modified,
+    /// Most recently created first (`created_at` descending).
+    Created,
+    /// Alphabetical by title (case-insensitive).
+    Title,
 }
 
 /// A single event in the progressive search SSE stream (#2033).

@@ -503,6 +503,22 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);
         CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
+
+        -- Agent audit log: persistent tracking of agent lifecycle and operations (#3287)
+        CREATE TABLE IF NOT EXISTS agent_audit_log (
+            id TEXT PRIMARY KEY,
+            agent_name TEXT NOT NULL,
+            session_id TEXT NOT NULL DEFAULT '',
+            operation_type TEXT NOT NULL,
+            note_ids TEXT NOT NULL DEFAULT '',
+            trigger_source TEXT NOT NULL DEFAULT '',
+            details TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_audit_log_created_at ON agent_audit_log(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_agent_audit_log_agent_name ON agent_audit_log(agent_name);
+        CREATE INDEX IF NOT EXISTS idx_agent_audit_log_operation_type ON agent_audit_log(operation_type);
+        CREATE INDEX IF NOT EXISTS idx_agent_audit_log_session_id ON agent_audit_log(session_id);
         "#,
     )?;
 

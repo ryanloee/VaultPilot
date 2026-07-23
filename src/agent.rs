@@ -725,6 +725,85 @@ pub enum ExecutionMode {
     Direct,
     /// Generate a plan first; the user must approve it before execution.
     Plan,
+    /// Auto-detect: heuristically switch to Plan Mode when the prompt implies
+    /// major or destructive changes (batch rewrites, deletions, schema changes).
+    /// Resolved via [`should_auto_plan`] at execution time (#3375).
+    Auto,
+}
+
+/// Heuristic check: does `prompt` imply a major or destructive change that
+/// should trigger Plan Mode automatically?
+///
+/// Detects patterns in both English and Chinese:
+/// - Bulk deletions ("delete all", "删除所有")
+/// - Batch rewrites ("rewrite all notes", "批量改写")
+/// - Structural/schema changes ("restructure", "重构")
+/// - Bulk merge/move/archive operations ("merge all", "合并所有")
+///
+/// Returns `true` when any high-confidence pattern matches. False positives
+/// are acceptable (user can reject the plan); false negatives are not
+/// dangerous because the user can always pass `--plan` explicitly.
+pub fn should_auto_plan(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+
+    /// Patterns that strongly indicate a major or destructive change.
+    /// Curated to minimise false positives on single-note operations.
+    const MAJOR_CHANGE_PATTERNS: &[&str] = &[
+        // ── English: bulk deletions ────────────────────────────────────
+        "delete all",
+        "delete every",
+        "remove all",
+        "remove every",
+        "drop all",
+        "purge all",
+        "erase all",
+        // ── English: batch rewrites / updates ──────────────────────────
+        "batch rewrite",
+        "batch update",
+        "bulk rewrite",
+        "bulk update",
+        "rewrite all",
+        "update all notes",
+        "reorganize all",
+        // ── English: merge / consolidate / archive ─────────────────────
+        "merge all",
+        "consolidate all",
+        "combine all",
+        "archive all",
+        "move all notes",
+        // ── English: schema / structural changes ───────────────────────
+        "schema change",
+        "restructure",
+        "add column",
+        "remove column",
+        "change schema",
+        // ── Chinese: bulk deletions ────────────────────────────────────
+        "删除所有",
+        "删除全部",
+        "批量删除",
+        "清空所有",
+        "清空全部",
+        // ── Chinese: batch rewrites / updates ──────────────────────────
+        "批量改写",
+        "批量更新",
+        "批量重写",
+        "重写所有",
+        "重写全部",
+        // ── Chinese: merge / consolidate / archive ─────────────────────
+        "合并所有",
+        "合并全部",
+        "归档所有",
+        "归档全部",
+        "移动所有",
+        "移动全部",
+        "批量移动",
+        // ── Chinese: schema / structural changes ───────────────────────
+        "重构所有",
+        "重组所有",
+        "批量重构",
+    ];
+
+    MAJOR_CHANGE_PATTERNS.iter().any(|p| lower.contains(p))
 }
 
 /// High-level category of a plan step.
@@ -1449,8 +1528,12 @@ pub async fn run_agent(
     let mut exit_reason = ExitReason::StepLimit;
     let mut actual_steps = 0usize;
 
-    // ── Plan Mode (#2107): generate plan, get user decision, then execute ────
-    if config.execution_mode == ExecutionMode::Plan {
+    // ── Plan Mode (#2107, #3375): generate plan, get user decision, then execute ─
+    // #3375: ExecutionMode::Auto resolves to Plan when should_auto_plan detects
+    //        major/destructive changes in the prompt; otherwise falls through to Direct.
+    let enter_plan_mode = config.execution_mode == ExecutionMode::Plan
+        || (config.execution_mode == ExecutionMode::Auto && should_auto_plan(prompt));
+    if enter_plan_mode {
         let (plan, recon_audit_log) = generate_execution_plan(
             settings,
             context,

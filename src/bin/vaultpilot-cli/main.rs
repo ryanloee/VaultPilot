@@ -7423,7 +7423,8 @@ async fn handle_agent(
         execution_mode: if plan {
             ExecutionMode::Plan
         } else {
-            ExecutionMode::Direct
+            // #3375: Auto-detect major/destructive changes and switch to Plan Mode.
+            ExecutionMode::Auto
         },
         ..Default::default()
     };
@@ -7436,7 +7437,11 @@ async fn handle_agent(
         } else {
             "read-only"
         },
-        if plan { " [Plan Mode]" } else { "" }
+        if plan {
+            " [Plan Mode]"
+        } else {
+            " [Auto-Plan]" // #3375: auto-detect major changes
+        }
     );
 
     let result = vaultpilot_lib::agent::run_agent(

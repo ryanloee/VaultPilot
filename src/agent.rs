@@ -25,6 +25,7 @@ use crate::sanitize_error;
 
 /// Permission level for an agent session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentPermission {
     /// Can only read/search — no mutations.
     #[default]

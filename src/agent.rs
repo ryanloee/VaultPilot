@@ -1933,10 +1933,16 @@ async fn execute_tool(
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
             use crate::storage::save_note_with_images_async;
-            // Record backup before saving so revert_write works (#2286)
-            if let Ok(existing) = crate::storage::load_note_async(context, note_id).await {
-                crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+            // Load existing note for backup and to preserve original created_at (#3350)
+            let existing_note = crate::storage::load_note_async(context, note_id).await.ok();
+            if let Some(ref existing) = existing_note {
+                crate::orchestration::write::WRITE_TRACKER.record_backup(existing);
             }
+            // Preserve created_at from existing note; fall back to now() for new notes
+            let created_at = existing_note
+                .as_ref()
+                .map(|n| n.meta.created_at.clone())
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
             let short_id: String = note_id.chars().take(8).collect();
             let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(4); // "-" + ".md"
             let slug = slugify(&draft.title);
@@ -1960,7 +1966,13 @@ async fn execute_tool(
                     path: format!("{}-{}.md", slug, short_id),
                     tags: draft.tags.clone(),
                     keywords: draft.keywords.clone(),
-                    created_at: chrono::Utc::now().to_rfc3339(),
+                    platform: draft.platform.clone(),
+                    board: draft.board.clone(),
+                    kernel: draft.kernel.clone(),
+                    status: draft.status.clone(),
+                    source: draft.source.clone(),
+                    summary: draft.summary.clone(),
+                    created_at,
                     updated_at: chrono::Utc::now().to_rfc3339(),
                     ..Default::default()
                 },

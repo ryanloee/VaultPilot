@@ -290,8 +290,9 @@ public sealed partial class MainWindow : Window
             // IPC overhead) instead of the hardcoded 90s default.
             // #X: increased buffer from 30s to 90s to prevent premature timeout
             // when the agent has a 120s internal timeout.
-            var aiTimeout = TimeSpan.FromMilliseconds(
-                (ResolveActiveProvider().RequestTimeoutMs ?? 60_000UL) + 90_000);
+            var timeout = ResolveActiveProvider().RequestTimeoutMs;
+                var aiTimeout = TimeSpan.FromMilliseconds(
+                (timeout > 0 ? timeout : 60_000) + 90_000);
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                     "askWithAi",
                     new

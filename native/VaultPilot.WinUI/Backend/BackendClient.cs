@@ -20,7 +20,7 @@ public sealed class BackendClient : IAsyncDisposable
     private const int DegradedFailureThreshold = 3; // consecutive health check cycles before switching to degraded mode
     private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan DefaultIpcTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan DefaultIpcTimeout = TimeSpan.FromSeconds(180);
 
     private readonly ConcurrentQueue<string> _stderrLines = new();
 

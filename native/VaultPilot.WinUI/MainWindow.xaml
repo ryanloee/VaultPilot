@@ -258,41 +258,6 @@
                             </Grid>
                         </ScrollViewer>
 
-                        <!-- Agent tool call status panel (overlays above composer) -->
-                        <Border
-                            x:Name="AgentToolCallPanel"
-                            Grid.Row="0"
-                            Margin="32,0,32,0"
-                            Padding="12"
-                            VerticalAlignment="Bottom"
-                            CornerRadius="{StaticResource VaultRadiusMedium}"
-                            Background="{ThemeResource VaultCardElevatedBg}"
-                            BorderBrush="{ThemeResource VaultBorder}"
-                            BorderThickness="1"
-                            Visibility="Collapsed"
-                            AutomationProperties.Name="Agent 工具调用面板">
-                            <Grid RowSpacing="8">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
-                                    <TextBlock x:Name="AgentStatusText" Text="Agent 运行中..." FontWeight="SemiBold"
-                                               FontSize="{StaticResource VaultFontSizeSmall}"
-                                               Foreground="{ThemeResource VaultTextPrimary}" />
-                                    <TextBlock x:Name="AgentStepCount" Text="步骤: 0/20" Opacity="0.7"
-                                               FontSize="{StaticResource VaultFontSizeCaption}"
-                                               Foreground="{ThemeResource VaultTextSecondary}" />
-                                    <TextBlock x:Name="AgentTokenCount" Text="Token: 0" Opacity="0.7"
-                                               FontSize="{StaticResource VaultFontSizeCaption}"
-                                               Foreground="{ThemeResource VaultTextSecondary}" />
-                                </StackPanel>
-                                <ScrollViewer Grid.Row="1" MaxHeight="200" VerticalScrollBarVisibility="Auto">
-                                    <StackPanel x:Name="AgentToolCallList" Spacing="4" />
-                                </ScrollViewer>
-                            </Grid>
-                        </Border>
-
                         <!-- ══ Capsule composer (bottom) ══ -->
                         <Grid Grid.Row="1" Padding="24,8,24,16">
                             <Border x:Name="ComposerDropZone"
@@ -342,12 +307,6 @@
                                                 ToolTipService.ToolTip="将当前对话内容记录到知识库"
                                                 AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库">
                                             <FontIcon Glyph="&#xE7C8;" FontSize="14" />
-                                        </Button>
-                                        <Button x:Name="AgentModeButton" Style="{StaticResource VaultIconButtonStyle}"
-                                                Width="32" Height="32"
-                                                ToolTipService.ToolTip="启动 Agent 模式 — AI 自主执行多步工具调用"
-                                                AutomationProperties.Name="Agent 模式" AutomationProperties.HelpText="启动自主 AI Agent 执行多步工具调用">
-                                            <FontIcon Glyph="&#xE7BF;" FontSize="14" />
                                         </Button>
                                     </StackPanel>
 
@@ -401,12 +360,6 @@
                                                 Visibility="Collapsed"
                                                 AutomationProperties.Name="取消" AutomationProperties.HelpText="取消当前 AI 请求">
                                             <FontIcon Glyph="&#xE711;" FontSize="14" Foreground="{ThemeResource StatusErrorBrush}" />
-                                        </Button>
-                                        <Button x:Name="StopAgentButton" Style="{StaticResource VaultIconButtonStyle}"
-                                                Width="32" Height="32"
-                                                Visibility="Collapsed"
-                                                AutomationProperties.Name="停止 Agent" AutomationProperties.HelpText="立即终止 Agent 执行">
-                                            <FontIcon Glyph="&#xE71A;" FontSize="14" Foreground="{ThemeResource StatusErrorBrush}" />
                                         </Button>
                                         <Button x:Name="SendButton"
                                                 Style="{StaticResource VaultAccentButtonStyle}"

@@ -49,21 +49,24 @@ public sealed partial class MainWindow : Window
         var textBox = (TextBox)sender;
         if (textBox.ActualWidth <= 0) return;
 
-        _composerMeasureBlock ??= new TextBlock
+        // #X: Simple line-count estimation instead of expensive TextBlock.Measure().
+        // The old code created a TextBlock and called Measure() on every keystroke,
+        // which caused severe lag with long text (#X).
+        var text = textBox.Text ?? string.Empty;
+        if (string.IsNullOrEmpty(text))
         {
-            FontFamily = textBox.FontFamily,
-            FontSize = textBox.FontSize,
-            FontWeight = textBox.FontWeight,
-            TextWrapping = TextWrapping.Wrap,
-        };
+            textBox.Height = 40;
+            return;
+        }
 
-        _composerMeasureBlock.Text = textBox.Text ?? string.Empty;
-        var availableWidth = textBox.ActualWidth - 20; // padding + scrollbar
-        _composerMeasureBlock.Measure(new Windows.Foundation.Size(availableWidth, double.PositiveInfinity));
-
-        var desiredHeight = _composerMeasureBlock.DesiredSize.Height + 20; // inner padding
-        var clampedHeight = Math.Max(88, Math.Min(200, desiredHeight));
-        textBox.Height = clampedHeight;
+        // Approximate: count explicit newlines + wrap estimate
+        var newlineCount = text.Count(c => c == '\n');
+        // Estimate visible line width: ~80 chars per line for the configured font
+        var wrapLines = text.Length / 80;
+        var estimatedLines = Math.Max(1, newlineCount + wrapLines);
+        var lineHeight = textBox.FontSize + 6; // ~26px for 14pt font
+        var estimatedHeight = Math.Max(40, Math.Min(140, estimatedLines * lineHeight));
+        textBox.Height = estimatedHeight;
     }
 
     private async void OnComposerKeyDown(object sender, KeyRoutedEventArgs e)
@@ -285,8 +288,10 @@ public sealed partial class MainWindow : Window
 
             // Issue #710: use the user-configured request timeout (plus buffer for
             // IPC overhead) instead of the hardcoded 90s default.
+            // #X: increased buffer from 30s to 90s to prevent premature timeout
+            // when the agent has a 120s internal timeout.
             var aiTimeout = TimeSpan.FromMilliseconds(
-                (_settings?.Provider.RequestTimeoutMs ?? 60_000) + 30_000);
+                (_settings?.Provider.RequestTimeoutMs ?? 60_000) + 90_000);
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                     "askWithAi",
                     new

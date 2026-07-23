@@ -21,6 +21,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::ai::client::{send_request_with_temperature, RequestUsage};
+use crate::capture::handle_capture;
 use crate::models::{AppSettings, NoteDocument, NoteMeta, ProviderConfig};
 use crate::storage::{save_note_with_context, StorageContext};
 
@@ -584,6 +585,55 @@ pub async fn transcribe_voice_note(
     })
 }
 
+/// Transcribe audio and append the transcript as a capture entry in a target
+/// note (daily/inbox), rather than saving it as a standalone voice note (#3333).
+///
+/// This bridges voice capture with the existing text-capture flow: after
+/// transcription, the transcript is appended via [`handle_capture`] so it
+/// appears in the user's daily note or inbox under the specified section.
+///
+/// Returns the same [`VoiceNoteResult`] shape (note_id refers to the target
+/// note, not a newly-created one).
+#[instrument(skip(provider_config, context))]
+pub async fn transcribe_and_capture_to_target(
+    audio_path: &str,
+    provider_config: &ProviderConfig,
+    language: Option<&str>,
+    context: &StorageContext,
+    target: &str,
+    section: &str,
+) -> Result<VoiceNoteResult> {
+    // 1. Transcribe via the shared Whisper provider path.
+    let transcript = transcribe_audio(audio_path, provider_config, language).await?;
+    let trimmed = transcript.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("voice capture produced empty transcript");
+    }
+
+    // 2. Append to the target note via handle_capture (sync, on the blocking
+    //    pool) so the transcript lands in the daily note / inbox section.
+    let ctx = context.clone();
+    let target_owned = target.to_string();
+    let section_owned = section.to_string();
+    let transcript_owned = trimmed.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        handle_capture(&ctx, &transcript_owned, &target_owned, &section_owned)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))??;
+
+    let note_id = result["note_id"].as_str().unwrap_or("unknown").to_string();
+
+    Ok(VoiceNoteResult {
+        note_id,
+        title: format!(
+            "🎤 Voice capture → {}",
+            trimmed.chars().take(60).collect::<String>()
+        ),
+        transcript,
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -840,5 +890,46 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    // ── Regression: transcribe_and_capture_to_target (#3333) ───────────
+
+    #[tokio::test]
+    async fn transcribe_and_capture_to_target_rejects_nonexistent_audio() {
+        // Verify the function exists and fails on I/O (file not found)
+        // before reaching any transcription / storage logic.
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-test-voice-capture-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let ctx = crate::storage::StorageContext::for_test(&temp);
+
+        let provider = crate::models::ProviderConfig::default();
+
+        let result = transcribe_and_capture_to_target(
+            "/nonexistent/audio/file.wav",
+            &provider,
+            None,
+            &ctx,
+            "daily",
+            "Voice Capture",
+        )
+        .await;
+
+        assert!(result.is_err(), "should fail — file does not exist");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("No such file")
+                || err.contains("failed to read")
+                || err.contains("audio file")
+                || err.contains("NotFound")
+                || err.contains("Cannot find")
+                || err.contains("system cannot find"),
+            "error should mention file I/O: got: {err}"
+        );
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

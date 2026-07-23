@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -58,10 +58,23 @@ pub struct WriteBackup {
     pub timestamp: i64,
 }
 
+/// Maximum number of entries to track in the undo/redo modification log.
+const MAX_UNDO_LOG: usize = 20;
+
 /// Thread-safe store for write backups, keyed by note_id.
-/// Used to allow the user to revert AI-written notes.
+/// Used to allow the user to revert AI-written notes (#1986).
+///
+/// #3359: Added undo/redo stack — `modification_order` tracks the
+/// chronological order of AI writes so `vp undo` can revert the most
+/// recent modification without specifying a note ID.
 pub struct WriteTracker {
     backups: Mutex<HashMap<String, Vec<WriteBackup>>>,
+    /// Chronological log of note IDs that were backed up (most recent last).
+    /// Drives `last_modified_note()` for `vp undo`.
+    modification_order: Mutex<VecDeque<String>>,
+    /// Store for redo data: after an undo, the *current* (post-edit) content
+    /// is saved here so `vp redo` can re-apply the change.
+    redo_store: Mutex<HashMap<String, WriteBackup>>,
 }
 
 impl WriteTracker {
@@ -69,10 +82,13 @@ impl WriteTracker {
     pub fn new() -> Self {
         Self {
             backups: Mutex::new(HashMap::new()),
+            modification_order: Mutex::new(VecDeque::new()),
+            redo_store: Mutex::new(HashMap::new()),
         }
     }
 
     /// Record a backup of a note before it gets modified.
+    /// Also pushes the note_id onto the undo stack (#3359).
     pub fn record_backup(&self, note: &NoteDocument) {
         let entry = WriteBackup {
             note_id: note.meta.id.clone(),
@@ -92,12 +108,25 @@ impl WriteTracker {
             body: note.body.clone(),
             timestamp: chrono::Utc::now().timestamp(),
         };
+        let note_id = entry.note_id.clone();
         let mut map = self.backups.lock().unwrap_or_else(|e| e.into_inner());
         let backups = map.entry(entry.note_id.clone()).or_default();
         backups.push(entry);
         // Keep only the most recent N backups
         if backups.len() > MAX_BACKUPS_PER_NOTE {
             backups.remove(0);
+        }
+        // ── #3359: push onto undo stack ────────────────────────────────
+        let mut order = self
+            .modification_order
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Deduplicate: if same note_id is already in the log, remove the
+        // old entry so the most recent modification for that note is last.
+        order.retain(|id| id != &note_id);
+        order.push_back(note_id);
+        if order.len() > MAX_UNDO_LOG {
+            order.pop_front();
         }
     }
 
@@ -119,6 +148,52 @@ impl WriteTracker {
         } else {
             None
         }
+    }
+
+    // ── #3359: Undo/Redo ──────────────────────────────────────────────
+
+    /// Return the most recently backed-up note_id, if any.
+    /// This is the note that `vp undo` would revert.
+    pub fn last_modified_note(&self) -> Option<String> {
+        let order = self
+            .modification_order
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        order.back().cloned()
+    }
+
+    /// Pop the most recent modification from the undo stack.
+    /// Called after a successful undo so the same note isn't undone twice.
+    pub fn pop_last_modification(&self) -> Option<String> {
+        let mut order = self
+            .modification_order
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        order.pop_back()
+    }
+
+    /// Store the *current* content of a note as redo data (#3359).
+    /// After a successful undo, the post-edit version is saved here so
+    /// `vp redo` can re-apply it.
+    pub fn record_redo(&self, redo_entry: WriteBackup) {
+        let mut store = self.redo_store.lock().unwrap_or_else(|e| e.into_inner());
+        store.insert(redo_entry.note_id.clone(), redo_entry);
+    }
+
+    /// Retrieve and remove redo data for a note_id.
+    pub fn take_redo(&self, note_id: &str) -> Option<WriteBackup> {
+        let mut store = self.redo_store.lock().unwrap_or_else(|e| e.into_inner());
+        store.remove(note_id)
+    }
+
+    /// Return the number of entries in the modification log.
+    #[cfg(test)]
+    pub fn undo_log_len(&self) -> usize {
+        let order = self
+            .modification_order
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        order.len()
     }
 }
 
@@ -175,6 +250,134 @@ pub async fn revert_write(
         backup.timestamp
     );
     Ok(saved)
+}
+
+// ── #3359: Instant Undo / Redo ──────────────────────────────────────────────
+
+/// Undo the most recent AI write — no need to specify a note_id (#3359).
+///
+/// Automatically discovers the most recently backed-up note, reverts it,
+/// and stores the *current* content as redo data for `redo_last_undo`.
+///
+/// Returns the restored note, or an error if there's nothing to undo.
+pub async fn undo_last_write(ctx: &StorageContext) -> Result<NoteDocument, anyhow::Error> {
+    let note_id = WRITE_TRACKER
+        .last_modified_note()
+        .ok_or_else(|| anyhow::anyhow!("nothing to undo — no AI writes recorded"))?;
+
+    // Before reverting, record the *current* note content as redo data.
+    // This allows `vp redo` to re-apply the change.
+    if let Ok(current_note) = crate::storage::load_note_async(ctx, &note_id).await {
+        let redo_backup = WriteBackup {
+            note_id: current_note.meta.id.clone(),
+            note_path: current_note.meta.path.clone(),
+            title: current_note.meta.title.clone(),
+            tags: current_note.meta.tags.clone(),
+            keywords: current_note.meta.keywords.clone(),
+            platform: current_note.meta.platform.clone(),
+            board: current_note.meta.board.clone(),
+            kernel: current_note.meta.kernel.clone(),
+            status: current_note.meta.status.clone(),
+            created_at: current_note.meta.created_at.clone(),
+            updated_at: current_note.meta.updated_at.clone(),
+            source: current_note.meta.source.clone(),
+            summary: current_note.meta.summary.clone(),
+            collections: current_note.meta.collections.clone(),
+            body: current_note.body.clone(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        WRITE_TRACKER.record_redo(redo_backup);
+    }
+
+    // Perform the revert (this pops the backup and push from undo stack)
+    let restored = revert_write(ctx, &note_id).await?;
+
+    // Pop from modification_order so undo can't be called twice
+    // on the same note without another write in between.
+    WRITE_TRACKER.pop_last_modification();
+
+    tracing::info!(
+        "undo: reverted note '{}' — redo available via `vp redo {}`",
+        restored.meta.id,
+        restored.meta.id
+    );
+    Ok(restored)
+}
+
+/// Redo the most recent undo — re-applies the change (#3359).
+///
+/// Takes the redo data stored by `undo_last_write` and writes it back,
+/// effectively re-applying the AI edit that was undone.
+///
+/// Returns the re-applied note, or an error if there's nothing to redo.
+pub async fn redo_last_undo(ctx: &StorageContext) -> Result<NoteDocument, anyhow::Error> {
+    // Find any redo entry — iterate since we don't know the note_id ahead of time
+    let redo_entry = {
+        let store = WRITE_TRACKER
+            .redo_store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if store.is_empty() {
+            return Err(anyhow::anyhow!(
+                "nothing to redo — no undo has been performed"
+            ));
+        }
+        // Take the first available redo entry
+        store.values().next().cloned()
+    };
+
+    let redo = redo_entry.ok_or_else(|| anyhow::anyhow!("nothing to redo"))?;
+
+    let re_applied = NoteDocument {
+        meta: crate::models::NoteMeta {
+            id: redo.note_id.clone(),
+            title: redo.title.clone(),
+            tags: redo.tags.clone(),
+            keywords: redo.keywords.clone(),
+            platform: redo.platform.clone(),
+            board: redo.board.clone(),
+            kernel: redo.kernel.clone(),
+            status: redo.status.clone(),
+            created_at: redo.created_at.clone(),
+            updated_at: redo.updated_at.clone(),
+            source: redo.source.clone(),
+            path: redo.note_path.clone(),
+            summary: redo.summary.clone(),
+            collections: redo.collections.clone(),
+        },
+        body: redo.body.clone(),
+        ..Default::default()
+    };
+
+    // Record a backup of the current note before redo, so undo works again
+    if let Ok(current_note) = crate::storage::load_note_async(ctx, &redo.note_id).await {
+        WRITE_TRACKER.record_backup(&current_note);
+    }
+
+    let saved = save_note_with_images_async(ctx, re_applied, &[]).await?;
+
+    // Clean up redo data
+    WRITE_TRACKER.take_redo(&redo.note_id);
+
+    tracing::info!(
+        "redo: re-applied note '{}' — undo available again",
+        saved.meta.id
+    );
+    Ok(saved)
+}
+
+/// Return the note_id of the most recently modified note (for CLI preview).
+pub fn last_modified_note_id() -> Option<String> {
+    WRITE_TRACKER.last_modified_note()
+}
+
+/// Return the number of undo entries available.
+pub fn undo_count() -> usize {
+    let order = WRITE_TRACKER
+        .modification_order
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    order.len()
 }
 
 // ── Original module code below ─────────────────────────────────────────────

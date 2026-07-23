@@ -29,7 +29,10 @@ pub use scheduled_research::{
     run_all_due_subscriptions, run_single_subscription, SubscriptionRunResult,
 };
 pub use table::table_with_ai_with_context;
-pub use write::{revert_write, write_with_ai_with_context, WriteBackup};
+pub use write::{
+    last_modified_note_id, redo_last_undo, revert_write, undo_count, undo_last_write,
+    write_with_ai_with_context, WriteBackup,
+};
 
 // Re-export serendipity public API (#1943)
 pub use serendipity::{generate_serendipity, SerendipityItem, SerendipityResult};

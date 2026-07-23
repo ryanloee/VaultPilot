@@ -518,6 +518,30 @@ enum Commands {
         note_id: String,
     },
 
+    /// Instant undo: revert the most recent AI write without specifying a note (#3359).
+    ///
+    /// Automatically discovers the most recently modified note and restores
+    /// its pre-edit backup. The undone content is saved as redo data so
+    /// `vp redo` can re-apply it.
+    ///
+    /// Examples:
+    ///   vp undo           — undo the last AI write
+    ///   vp undo --list    — show the undo stack
+    Undo {
+        /// List the undo stack instead of performing undo.
+        #[arg(long, short = 'l')]
+        list: bool,
+    },
+
+    /// Redo: re-apply the most recently undone AI write (#3359).
+    ///
+    /// After `vp undo` reverts an AI edit, `vp redo` can re-apply it by
+    /// restoring the post-edit content that was saved at undo time.
+    ///
+    /// Example:
+    ///   vp redo           — redo the last undo
+    Redo,
+
     /// Compute and display a line-level diff between two notes (#2804 Phase 1)
     ///
     /// Uses the built-in Myers diff algorithm to compare note bodies.
@@ -2811,6 +2835,49 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 "note_id": restored.meta.id,
                 "title": restored.meta.title,
                 "reverted": true,
+            }))
+        }
+        Commands::Undo { list } => {
+            if *list {
+                let count = vaultpilot_lib::orchestration::undo_count();
+                let last = vaultpilot_lib::orchestration::last_modified_note_id();
+                eprintln!("Undo stack: {} modification(s) recorded", count);
+                if let Some(ref note_id) = last {
+                    eprintln!("  Last modified: {}", note_id);
+                    eprintln!("  Run `vp undo` to revert it.");
+                } else {
+                    eprintln!("  (empty — no AI writes recorded)");
+                }
+                Ok(serde_json::json!({
+                    "undo_stack_size": count,
+                    "last_modified_note_id": last,
+                }))
+            } else {
+                let restored = vaultpilot_lib::orchestration::undo_last_write(context).await?;
+                eprintln!(
+                    "✅ Undo: reverted note '{}' to pre-AI-edit state.",
+                    restored.meta.id
+                );
+                eprintln!("   ↻ Redo with: vp redo");
+                Ok(serde_json::json!({
+                    "note_id": restored.meta.id,
+                    "title": restored.meta.title,
+                    "undone": true,
+                    "redo_available": true,
+                }))
+            }
+        }
+        Commands::Redo => {
+            let re_applied = vaultpilot_lib::orchestration::redo_last_undo(context).await?;
+            eprintln!(
+                "✅ Redo: re-applied note '{}' — undo available again.",
+                re_applied.meta.id
+            );
+            Ok(serde_json::json!({
+                "note_id": re_applied.meta.id,
+                "title": re_applied.meta.title,
+                "redone": true,
+                "undo_available": true,
             }))
         }
         Commands::Diff {

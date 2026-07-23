@@ -957,7 +957,7 @@ public sealed partial class MainWindow : Window
             // itself — System.Text.Json can leave Provider null if the backend
             // explicitly sent "provider": null (issue #3090).
             using var cts = new CancellationTokenSource(
-                TimeSpan.FromMilliseconds((_settings?.Provider?.RequestTimeoutMs ?? 60_000) + 30_000));
+                TimeSpan.FromMilliseconds((ResolveActiveProvider().RequestTimeoutMs ?? 60_000) + 30_000));
             var wakeModelOverride = _settings?.AutoWakeModel?.Trim();
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                 "askWithAi",

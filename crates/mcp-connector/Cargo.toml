@@ -5,6 +5,8 @@ description = "Standalone MCP Stdio connector — lets Claude Desktop / Cursor /
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ryanloee/VaultPilot"
+documentation = "https://github.com/ryanloee/VaultPilot/blob/main/crates/mcp-connector/README.md"
+readme = "README.md"
 
 [dependencies]
 vaultpilot_lib = { package = "vaultpilot", path = "../.." }

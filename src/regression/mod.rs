@@ -65,4 +65,5 @@ mod issue_3276_export_documents;
 mod issue_3320_tag_merge;
 mod issue_3342_callouts;
 mod issue_3350_savenote_created_at;
+mod issue_3359_undo_redo;
 mod issue_914_related_notes;

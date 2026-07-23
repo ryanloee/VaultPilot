@@ -443,18 +443,19 @@ fn markdown_to_docx_body(markdown: &str) -> String {
     while i < lines.len() {
         let line = lines[i];
 
-        // Headings
-        if let Some(rest) = line.strip_prefix("### ") {
+        // Headings (GFM ATX: up to 3 leading spaces allowed)
+        let trimmed_line = line.trim_start();
+        if let Some(rest) = trimmed_line.strip_prefix("### ") {
             body.push_str(&docx_heading(rest, 3));
             i += 1;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("## ") {
+        if let Some(rest) = trimmed_line.strip_prefix("## ") {
             body.push_str(&docx_heading(rest, 2));
             i += 1;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("# ") {
+        if let Some(rest) = trimmed_line.strip_prefix("# ") {
             body.push_str(&docx_heading(rest, 1));
             i += 1;
             continue;
@@ -696,18 +697,19 @@ pub fn markdown_to_html_body(markdown: &str) -> String {
             continue;
         }
 
-        // Headings
-        if let Some(rest) = line.strip_prefix("### ") {
+        // Headings (GFM ATX: up to 3 leading spaces allowed)
+        let trimmed_line = line.trim_start();
+        if let Some(rest) = trimmed_line.strip_prefix("### ") {
             html.push_str(&format!("<h3>{}</h3>\n", inline_md(rest)));
             i += 1;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("## ") {
+        if let Some(rest) = trimmed_line.strip_prefix("## ") {
             html.push_str(&format!("<h2>{}</h2>\n", inline_md(rest)));
             i += 1;
             continue;
         }
-        if let Some(rest) = line.strip_prefix("# ") {
+        if let Some(rest) = trimmed_line.strip_prefix("# ") {
             html.push_str(&format!("<h1>{}</h1>\n", inline_md(rest)));
             i += 1;
             continue;
@@ -855,9 +857,15 @@ pub fn export_markdown_to_marp(markdown: &str, title: &str, output_path: &Path) 
         yaml_title = yaml_title
     );
 
-    // Title slide — also escape for Markdown body (backslash-escape # and other
-    // Markdown-special chars that could break heading structure).
-    let body_title = title.replace('#', "\\#");
+    // Title slide — escape Markdown-special characters for the body heading.
+    // Only `#` would break heading structure, but `*`, `_`, `[`, `` ` `` would
+    // be interpreted as inline formatting in the rendered slide.
+    let body_title = title
+        .replace('#', "\\#")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
+        .replace('[', "\\[")
+        .replace('`', "\\`");
     output.push_str(&format!("# {}\n\n", body_title));
 
     let lines: Vec<&str> = markdown.lines().collect();
@@ -865,7 +873,9 @@ pub fn export_markdown_to_marp(markdown: &str, title: &str, output_path: &Path) 
     let mut first_h2 = true;
 
     for line in &lines {
-        if let Some(rest) = line.strip_prefix("## ") {
+        // GFM ATX: up to 3 leading spaces allowed before heading marker
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("## ") {
             // Start new slide
             if !first_h2 && !current_slide.trim().is_empty() {
                 output.push_str(&current_slide);
@@ -874,9 +884,8 @@ pub fn export_markdown_to_marp(markdown: &str, title: &str, output_path: &Path) 
             current_slide.clear();
             current_slide.push_str(&format!("## {}\n\n", rest));
             first_h2 = false;
-        } else if let Some(rest) = line.strip_prefix("# ") {
+        } else if let Some(_rest) = trimmed.strip_prefix("# ") {
             // H1 as title - skip (already in title slide)
-            let _ = rest;
         } else {
             current_slide.push_str(line);
             current_slide.push('\n');
@@ -960,19 +969,38 @@ fn inline_md(text: &str) -> String {
 }
 
 /// Replace **text** with <strong>text</strong>.
+///
+/// Uses CommonMark-inspired flanking rules: a valid bold span must have
+/// non-whitespace immediately after the opening `**` and non-whitespace
+/// immediately before the closing `**`. Unmatched or flanking-violating `**`
+/// markers are treated as literal text rather than greedily consuming the
+/// next valid span's opening marker.
 fn apply_bold(s: &str) -> String {
     let mut result = String::new();
     let mut rest = s;
     while let Some(start) = rest.find("**") {
         let after = &rest[start + 2..];
         if let Some(end) = after.find("**") {
-            result.push_str(&rest[..start]);
-            result.push_str("<strong>");
-            result.push_str(&after[..end]);
-            result.push_str("</strong>");
-            rest = &after[end + 2..];
+            let content = &after[..end];
+            // Flanking check: opening ** must be followed by non-whitespace,
+            // closing ** must be preceded by non-whitespace.
+            let left_flank = content.chars().next().is_some_and(|c| !c.is_whitespace());
+            let right_flank = content.chars().last().is_some_and(|c| !c.is_whitespace());
+            if left_flank && right_flank {
+                result.push_str(&rest[..start]);
+                result.push_str("<strong>");
+                result.push_str(content);
+                result.push_str("</strong>");
+                rest = &after[end + 2..];
+            } else {
+                // Flanking violation — treat this ** as literal, continue scanning
+                result.push_str(&rest[..start + 2]);
+                rest = &rest[start + 2..];
+            }
         } else {
-            break;
+            // No closing ** found — treat as literal, continue scanning
+            result.push_str(&rest[..start + 2]);
+            rest = &rest[start + 2..];
         }
     }
     result.push_str(rest);
@@ -1016,6 +1044,9 @@ fn apply_italic(s: &str) -> String {
 }
 
 /// Replace `text` with <code>text</code>.
+///
+/// When no closing backtick is found, the opening backtick is treated as
+/// literal text rather than breaking the scan and dumping the remainder.
 fn apply_code(s: &str) -> String {
     let mut result = String::new();
     let mut rest = s;
@@ -1028,7 +1059,9 @@ fn apply_code(s: &str) -> String {
             result.push_str("</code>");
             rest = &after[end + 1..];
         } else {
-            break;
+            // No closing ` found — treat as literal, continue scanning
+            result.push_str(&rest[..start + 1]);
+            rest = &rest[start + 1..];
         }
     }
     result.push_str(rest);
@@ -1852,5 +1885,178 @@ Some text between tables.
             "should be regular blockquote: {html}"
         );
         assert!(!html.contains("callout"), "should NOT be a callout");
+    }
+
+    // ── #3351: greedy bold/italic/code marker matching ──────────────────
+
+    #[test]
+    fn inline_md_unmatched_bold_before_valid_bold() {
+        // Unmatched ** before a valid **bold** should not corrupt the valid span
+        let result = inline_md("unmatched ** but **valid** here");
+        assert!(
+            result.contains("<strong>valid</strong>"),
+            "valid bold should be preserved: {result}"
+        );
+        assert!(
+            !result.contains("<strong> but </strong>"),
+            "unmatched ** should not greedily wrap intervening text: {result}"
+        );
+    }
+
+    #[test]
+    fn inline_md_trailing_unmatched_bold() {
+        // Trailing ** with no closing pair should appear as literal, not be lost
+        let result = inline_md("text with trailing **");
+        assert!(
+            result.contains("**"),
+            "trailing unmatched ** should remain as literal: {result}"
+        );
+    }
+
+    #[test]
+    fn inline_md_unmatched_code_preserves_valid_code() {
+        // A valid `code` span should be preserved when followed by a trailing
+        // unmatched backtick (the old code would `break` and lose the remainder).
+        let result = inline_md("see `code` then trailing `");
+        assert!(
+            result.contains("<code>code</code>"),
+            "valid code span should be preserved: {result}"
+        );
+        assert!(
+            result.contains('`'),
+            "trailing unmatched backtick should remain as literal: {result}"
+        );
+    }
+
+    #[test]
+    fn inline_md_trailing_unmatched_code() {
+        // Trailing ` with no closing should appear as literal
+        let result = inline_md("text with trailing `");
+        assert!(
+            result.contains('`'),
+            "trailing unmatched backtick should remain as literal: {result}"
+        );
+    }
+
+    #[test]
+    fn inline_md_flanking_whitespace_bold() {
+        // ** ** has whitespace flanking → should be literal, not a bold span
+        let result = inline_md("before ** ** after");
+        assert!(
+            !result.contains("<strong>"),
+            "whitespace-flanked ** should not produce <strong>: {result}"
+        );
+    }
+
+    // ── #3352: indented headings (GFM ATX) ──────────────────────────────
+
+    #[test]
+    fn html_indented_h1_up_to_3_spaces() {
+        let md = "   # Indented Title\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("<h1>Indented Title</h1>"),
+            "3-space indented H1 should be recognized: {html}"
+        );
+    }
+
+    #[test]
+    fn html_indented_h2_up_to_3_spaces() {
+        let md = "  ## Sub Heading\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("<h2>Sub Heading</h2>"),
+            "2-space indented H2 should be recognized: {html}"
+        );
+    }
+
+    #[test]
+    fn html_indented_h3_up_to_3_spaces() {
+        let md = "   ### Deep Heading\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("<h3>Deep Heading</h3>"),
+            "3-space indented H3 should be recognized: {html}"
+        );
+    }
+
+    #[test]
+    fn docx_recognizes_indented_heading() {
+        let md = "   # Indented Docx Heading\n";
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-docx-indented-h-{}.docx",
+            std::process::id()
+        ));
+        export_markdown_to_docx(md, &tmp).expect("should succeed");
+
+        let file = std::fs::File::open(&tmp).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut doc = archive
+            .by_name("word/document.xml")
+            .expect("document.xml should exist");
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut doc, &mut buf).unwrap();
+        let xml = String::from_utf8_lossy(&buf);
+        assert!(
+            xml.contains("Heading"),
+            "DOCX should contain heading text: {xml}"
+        );
+        assert!(
+            xml.contains("w:pStyle"),
+            "DOCX heading should have w:pStyle: {xml}"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn marp_recognizes_indented_h2_slide() {
+        let md = "   ## Slide Title\nContent here.\n";
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-marp-indented-{}.md",
+            std::process::id()
+        ));
+        export_markdown_to_marp(md, "Test", &tmp).expect("should succeed");
+        let output = std::fs::read_to_string(&tmp).unwrap();
+        // The indented H2 should start a new slide section
+        assert!(
+            output.contains("## Slide Title"),
+            "Marp should recognize indented H2 as slide: {output}"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── #3353: Marp body title Markdown-special char escaping ───────────
+
+    #[test]
+    fn marp_body_title_escapes_special_chars() {
+        let md = "## Slide\nContent.\n";
+        let title = "Test*Title_With[Special`Chars";
+        let tmp = std::env::temp_dir().join(format!(
+            "vaultpilot-marp-title-escape-{}.md",
+            std::process::id()
+        ));
+        export_markdown_to_marp(md, title, &tmp).expect("should succeed");
+        let output = std::fs::read_to_string(&tmp).unwrap();
+        // Each special char should be backslash-escaped in the body heading
+        assert!(
+            output.contains("\\*"),
+            "body title * should be escaped: {output}"
+        );
+        assert!(
+            output.contains("\\_"),
+            "body title _ should be escaped: {output}"
+        );
+        assert!(
+            output.contains("\\["),
+            "body title [ should be escaped: {output}"
+        );
+        assert!(
+            output.contains("\\`"),
+            "body title ` should be escaped: {output}"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }

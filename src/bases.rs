@@ -711,6 +711,133 @@ pub fn base_sort_from_arg(arg: &str) -> BaseSort {
     }
 }
 
+// ── Terminal-width-aware text table (#3343) ──────────────────────────────
+
+/// Detect terminal width from environment, or return None if unavailable.
+fn terminal_width() -> Option<usize> {
+    if let Ok(cols) = std::env::var("COLUMNS") {
+        if let Ok(w) = cols.parse::<usize>() {
+            if w > 0 {
+                return Some(w);
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        unsafe {
+            let mut ws: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(1, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+                return Some(ws.ws_col as usize);
+            }
+        }
+    }
+    None
+}
+
+/// Format a BaseResult as a terminal-width-aware text table (#3343).
+pub fn format_bases_table(result: &BaseResult) -> String {
+    let term_width = terminal_width().unwrap_or(80);
+    let columns = &result.columns;
+    let rows = &result.rows;
+
+    let col_count = columns.len();
+    if col_count == 0 {
+        return "(no columns)".to_string();
+    }
+
+    let headers: Vec<String> = columns
+        .iter()
+        .map(|c| c.label.clone().unwrap_or_else(|| c.field.clone()))
+        .collect();
+
+    let mut max_widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+    for row in rows {
+        for (i, val) in row.values.iter().enumerate() {
+            if i < col_count {
+                let w = val.chars().count();
+                if w > max_widths[i] {
+                    max_widths[i] = w;
+                }
+            }
+        }
+    }
+
+    let max_widths: Vec<usize> = max_widths.iter().map(|&w| w.clamp(3, 60)).collect();
+
+    let separator_chars = (col_count + 1) + col_count * 2;
+    let available = if term_width > separator_chars {
+        term_width - separator_chars
+    } else {
+        col_count
+    };
+
+    let total_max: usize = max_widths.iter().sum();
+    let col_widths: Vec<usize> = if total_max <= available {
+        max_widths.clone()
+    } else {
+        max_widths
+            .iter()
+            .map(|&m| {
+                let prop = (m as f64 / total_max as f64 * available as f64).floor() as usize;
+                prop.max(3)
+            })
+            .collect()
+    };
+
+    let border: String = col_widths
+        .iter()
+        .map(|w| format!("+{}-", "-".repeat(*w)))
+        .collect::<Vec<_>>()
+        .join("")
+        + "+";
+
+    let header_row = format_table_row(&headers, &col_widths);
+    let separator = border.clone();
+
+    let data_rows: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            let cells: Vec<String> = (0..col_count)
+                .map(|i| row.values.get(i).cloned().unwrap_or_default())
+                .collect();
+            format_table_row(&cells, &col_widths)
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    out.push(border.clone());
+    out.push(header_row);
+    out.push(separator);
+    out.extend(data_rows);
+    out.push(border);
+    out.push(format!(
+        "{} rows ({} scanned)",
+        result.matched, result.scanned
+    ));
+    out.join("\n")
+}
+
+/// Format a single table row: pad/truncate each cell to its column width.
+fn format_table_row(cells: &[String], widths: &[usize]) -> String {
+    cells
+        .iter()
+        .enumerate()
+        .map(|(i, cell)| {
+            let w = widths[i];
+            let cell_width = cell.chars().count();
+            if cell_width <= w {
+                format!("| {:w$} ", cell, w = w)
+            } else if w >= 3 {
+                let truncated: String = cell.chars().take(w - 1).collect();
+                format!("| {}… ", truncated)
+            } else {
+                "|  ".to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

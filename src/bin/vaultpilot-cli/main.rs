@@ -1771,6 +1771,12 @@ enum BasesActions {
         /// final `未分组` column.
         #[arg(long)]
         kanban_columns: Option<String>,
+
+        /// Output as a terminal-width-aware text table instead of JSON (#3343).
+        /// Column widths size to terminal width (default 80), with truncation
+        /// for long cells. Uses simple ASCII borders.
+        #[arg(long)]
+        table: bool,
     },
 }
 
@@ -6389,6 +6395,7 @@ fn handle_bases(context: &StorageContext, action: &BasesActions) -> Result<Value
             sort,
             group_by,
             kanban_columns,
+            table,
         } => {
             // Build config from file or inline args.
             let mut config = if !file.is_empty() {
@@ -6430,26 +6437,32 @@ fn handle_bases(context: &StorageContext, action: &BasesActions) -> Result<Value
             }
 
             let result = run_base(context, &config)?;
-            // Serialize BaseResult: rows are the primary output.
-            // Include config metadata for UI consumption.  `kanban_groups`
-            // is only populated for view=kanban and is omitted otherwise
-            // (Vec::is_empty skip rule on BaseResult itself).
-            Ok(serde_json::json!({
-                "view": match result.view {
-                    BaseView::Table => "table",
-                    BaseView::Cards => "cards",
-                    BaseView::List => "list",
-                    BaseView::Kanban => "kanban",
-                },
-                "columns": result.columns.iter().map(|c| serde_json::json!({
-                    "field": c.field,
-                    "label": c.label,
-                })).collect::<Vec<_>>(),
-                "rows": result.rows,
-                "matched": result.matched,
-                "scanned": result.scanned,
-                "kanbanGroups": result.kanban_groups,
-            }))
+            if *table {
+                // Terminal-width-aware text table (#3343).
+                let table_str = vaultpilot_lib::bases::format_bases_table(&result);
+                Ok(serde_json::json!({"text": table_str}))
+            } else {
+                // Serialize BaseResult: rows are the primary output.
+                // Include config metadata for UI consumption.  `kanban_groups`
+                // is only populated for view=kanban and is omitted otherwise
+                // (Vec::is_empty skip rule on BaseResult itself).
+                Ok(serde_json::json!({
+                    "view": match result.view {
+                        BaseView::Table => "table",
+                        BaseView::Cards => "cards",
+                        BaseView::List => "list",
+                        BaseView::Kanban => "kanban",
+                    },
+                    "columns": result.columns.iter().map(|c| serde_json::json!({
+                        "field": c.field,
+                        "label": c.label,
+                    })).collect::<Vec<_>>(),
+                    "rows": result.rows,
+                    "matched": result.matched,
+                    "scanned": result.scanned,
+                    "kanbanGroups": result.kanban_groups,
+                }))
+            }
         }
     }
 }

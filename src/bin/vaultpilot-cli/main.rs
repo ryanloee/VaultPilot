@@ -938,6 +938,10 @@ enum MeetingActions {
 #[derive(Subcommand)]
 enum VoiceActions {
     /// Transcribe an audio file (or stdin) and save it as a voice note
+    ///
+    /// By default the transcript is saved as a standalone voice-note document.
+    /// Use `--target daily` (or `--target inbox`) with `--section` to append
+    /// the transcript into an existing note instead (#3333).
     Capture {
         /// Path to the audio file to transcribe, or `-` to read raw audio
         /// bytes from stdin (e.g. `vp voice capture - < recording.wav`).
@@ -948,6 +952,14 @@ enum VoiceActions {
         /// Optional language code (e.g. "en", "zh")
         #[arg(long)]
         language: Option<String>,
+        /// Capture target: "daily" or "inbox" — appends transcript as a
+        /// timestamped entry instead of creating a standalone voice note (#3333)
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(["daily", "inbox"]))]
+        target: Option<String>,
+        /// Section heading under which to place the voice capture entry
+        /// (default: "Voice Capture" when --target is used)
+        #[arg(long)]
+        section: Option<String>,
     },
 }
 
@@ -8026,13 +8038,15 @@ fn resolve_audio_input(audio_path: &str) -> Result<PathBuf> {
     Ok(temp_path)
 }
 
-/// Handle `vp voice` sub-commands — capture a voice note (#2012).
+/// Handle `vp voice` sub-commands — capture a voice note (#2012, #3333).
 async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result<Value> {
     match action {
         VoiceActions::Capture {
             audio_path,
             title,
             language,
+            target,
+            section,
         } => {
             let settings = load_settings_with_context(context)?;
 
@@ -8042,33 +8056,71 @@ async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("audio path is not valid UTF-8"))?;
 
-            // 1. Transcribe + persist as a voice note in one call.
             eprintln!("🔊 Transcribing voice audio…");
-            let result = vaultpilot_lib::ai::transcription::transcribe_voice_note(
-                path_str,
-                settings.effective_provider(),
-                language.as_deref(),
-                context,
-                title.as_deref(),
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("Voice capture failed: {e}"))?;
 
-            // Clean up the temp file if we created one from stdin.
-            if audio_path.trim() == "-" {
-                let _ = std::fs::remove_file(path_str);
+            if let Some(target_val) = target {
+                // Voice capture → append transcript to daily/inbox note (#3333).
+                let section_val = section
+                    .clone()
+                    .unwrap_or_else(|| "Voice Capture".to_string());
+                let result = vaultpilot_lib::ai::transcription::transcribe_and_capture_to_target(
+                    path_str,
+                    settings.effective_provider(),
+                    language.as_deref(),
+                    context,
+                    target_val,
+                    &section_val,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("Voice capture failed: {e}"))?;
+
+                // Clean up the temp file if we created one from stdin.
+                if audio_path.trim() == "-" {
+                    let _ = std::fs::remove_file(path_str);
+                }
+
+                eprintln!(
+                    "🎤 Voice captured to {} › {}: \"{}\" ({} chars)",
+                    target_val,
+                    section_val,
+                    result.title,
+                    result.transcript.chars().count()
+                );
+                to_json(&serde_json::json!({
+                    "noteId": result.note_id,
+                    "target": target_val,
+                    "section": section_val,
+                    "title": result.title,
+                    "transcript": result.transcript,
+                }))
+            } else {
+                // Default: transcribe + persist as a standalone voice note.
+                let result = vaultpilot_lib::ai::transcription::transcribe_voice_note(
+                    path_str,
+                    settings.effective_provider(),
+                    language.as_deref(),
+                    context,
+                    title.as_deref(),
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("Voice capture failed: {e}"))?;
+
+                // Clean up the temp file if we created one from stdin.
+                if audio_path.trim() == "-" {
+                    let _ = std::fs::remove_file(path_str);
+                }
+
+                eprintln!(
+                    "🎤 Voice note saved: \"{}\" ({} chars)",
+                    result.title,
+                    result.transcript.chars().count()
+                );
+                to_json(&serde_json::json!({
+                    "noteId": result.note_id,
+                    "title": result.title,
+                    "transcript": result.transcript,
+                }))
             }
-
-            eprintln!(
-                "🎤 Voice note saved: \"{}\" ({} chars)",
-                result.title,
-                result.transcript.chars().count()
-            );
-            to_json(&serde_json::json!({
-                "noteId": result.note_id,
-                "title": result.title,
-                "transcript": result.transcript,
-            }))
         }
     }
 }

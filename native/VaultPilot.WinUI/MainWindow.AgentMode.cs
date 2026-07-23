@@ -127,6 +127,13 @@ public sealed partial class MainWindow : Window
                 AppendMessage("Agent", answer);
             }
 
+            // #3363: Dispose _agentCts in the single-step fallback path.
+            // The agentCompleted handler does this for full agent mode,
+            // but this fallback path (backend returns a direct answer instead
+            // of "started") was silently leaking the CTS.
+            var fallbackCts = Interlocked.Exchange(ref _agentCts, null);
+            fallbackCts?.Dispose();
+
             DispatcherQueue.TryEnqueue(() =>
             {
                 _agentModeActive = false;

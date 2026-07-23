@@ -65,6 +65,10 @@ pub fn health_check(context: &StorageContext) -> Result<HealthReport> {
 
     // ── 6. Duplicate detection ─────────────────────────────────────────
     let duplicate_clusters = detect_duplicate_clusters(&all_notes);
+    // Phase 4 (#3349): content-based exact dedup — catches notes with
+    // different titles but identical/very similar body content
+    let content_clusters = detect_content_duplicate_clusters(&conn, &all_notes)?;
+    let duplicate_clusters = merge_duplicate_clusters(duplicate_clusters, content_clusters);
 
     // ── 7. Broken link detection (#3294) ───────────────────────────────
     let broken_links = find_broken_links(&conn, &all_notes)?;
@@ -456,6 +460,146 @@ fn detect_duplicate_clusters(all_notes: &[NoteMeta]) -> Vec<Vec<String>> {
     }
 
     clusters
+}
+
+/// Phase 4 (#3349): Detect notes with identical or near-identical body content.
+///
+/// This catches the common case of copy-paste duplicates or AI-generated
+/// variants that have *different titles* but the same body. We normalize
+/// the body (strip markdown, lowercase, collapse whitespace) and hash it;
+/// notes sharing the same hash form a cluster.
+///
+/// Uses `note_fts` to retrieve body text without re-reading files.
+fn detect_content_duplicate_clusters(
+    conn: &rusqlite::Connection,
+    all_notes: &[NoteMeta],
+) -> Result<Vec<Vec<String>>> {
+    // Build a map: content_hash → Vec<note_id>
+    let mut content_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    for note in all_notes {
+        let body: String = match conn.query_row(
+            "SELECT body FROM note_fts WHERE note_id = ?1",
+            [&note.id],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(b) => b,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(e) => {
+                warn!(error = %e, note_id = %note.id, "failed to query note_fts for content dedup");
+                continue;
+            }
+        };
+        let normalized = normalize_body_for_hash(&body);
+        if normalized.is_empty() {
+            continue;
+        }
+        let hash = simple_hash(&normalized);
+        content_map.entry(hash).or_default().push(note.id.clone());
+    }
+
+    // Only keep groups with >= 2 members
+    Ok(content_map
+        .into_values()
+        .filter(|ids| ids.len() >= 2)
+        .collect())
+}
+
+/// Merge two lists of duplicate clusters, deduplicating note ids.
+/// If a note appears in both a title-based and content-based cluster,
+/// the clusters are unioned (transitive closure via union-find style merge).
+fn merge_duplicate_clusters(
+    title_clusters: Vec<Vec<String>>,
+    content_clusters: Vec<Vec<String>>,
+) -> Vec<Vec<String>> {
+    use std::collections::HashMap as StdMap;
+
+    // Union-Find: note_id → parent
+    let mut parent: StdMap<String, String> = StdMap::new();
+
+    fn find(parent: &mut StdMap<String, String>, id: &str) -> String {
+        let root = parent
+            .entry(id.to_string())
+            .or_insert_with(|| id.to_string())
+            .clone();
+        if root == id {
+            return root;
+        }
+        let new_root = find(parent, &root);
+        parent.insert(id.to_string(), new_root.clone());
+        new_root
+    }
+
+    fn union(parent: &mut StdMap<String, String>, a: &str, b: &str) {
+        let ra = find(parent, a);
+        let rb = find(parent, b);
+        if ra != rb {
+            parent.insert(ra, rb);
+        }
+    }
+
+    for cluster in title_clusters.iter().chain(content_clusters.iter()) {
+        if cluster.len() >= 2 {
+            let first = &cluster[0];
+            for id in &cluster[1..] {
+                union(&mut parent, first, id);
+            }
+        }
+    }
+
+    // Collect groups by root
+    let mut groups: StdMap<String, Vec<String>> = StdMap::new();
+    let all_ids: HashSet<String> = title_clusters
+        .iter()
+        .chain(content_clusters.iter())
+        .flatten()
+        .cloned()
+        .collect();
+    for id in &all_ids {
+        let root = find(&mut parent, id);
+        groups.entry(root).or_default().push(id.clone());
+    }
+
+    let mut result: Vec<Vec<String>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+    // Sort for deterministic output
+    for cluster in &mut result {
+        cluster.sort();
+    }
+    result.sort();
+    result
+}
+
+/// Normalize a note body for content hashing (#3349).
+///
+/// Strips markdown syntax, lowercases, and collapses all whitespace
+/// to single spaces so that cosmetic differences don't prevent dedup.
+fn normalize_body_for_hash(body: &str) -> String {
+    // Strip markdown headers, emphasis, code fences, links
+    let stripped = body
+        .replace("```", "")
+        .replace(['#', '*', '_', '`', '~', '>'], " ")
+        .replace("[[", "")
+        .replace("]]", "")
+        .replace(['[', ']', '(', ')'], " ")
+        .replace("---", " ");
+    // Lowercase and collapse whitespace
+    let lower = stripped.to_lowercase();
+    lower
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+/// Simple non-cryptographic hash for content dedup grouping.
+/// Uses the std DefaultHasher — fast and sufficient for in-process grouping.
+fn simple_hash(s: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Normalize a tag for clustering comparison: strips leading `#`, lowercases,
@@ -1601,5 +1745,176 @@ mod tests {
                 .any(|s| s.contains("tag clusters") && s.contains("7 notes")),
             "should mention tag clusters and affected note count"
         );
+    }
+
+    // ── #3349: Content-based duplicate detection tests ──────────────────
+
+    /// Helper: create an in-memory DB with note_fts for content dedup tests
+    fn setup_content_dedup_db(notes: &[(&str, &str, &str)]) -> Connection {
+        // notes: Vec of (id, title, body)
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL,
+                keywords TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                board TEXT NOT NULL,
+                kernel TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                summary TEXT NOT NULL,
+                body_hash TEXT NOT NULL,
+                semantic_vector TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        for (i, (id, title, body)) in notes.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel,
+                 status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+                 VALUES (?1, ?2, '[]', '[]', '', '', '', '', '', '', '', ?3, '', '', '')",
+                params![id, title, format!("/note{i}.md")],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+                params![id, body],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn detect_content_duplicates_finds_identical_bodies_3349() {
+        let conn = setup_content_dedup_db(&[
+            ("a", "Rust Guide", "# Rust\n\nLearn Rust basics"),
+            ("b", "Different Title", "# Rust\n\nLearn Rust basics"),
+            (
+                "c",
+                "Unique Note",
+                "# Unique\n\nCompletely different content",
+            ),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert_eq!(
+            clusters.len(),
+            1,
+            "should find exactly 1 content-dup cluster"
+        );
+        assert_eq!(clusters[0].len(), 2, "cluster should have 2 notes");
+        // Both a and b should be in the cluster despite different titles
+        assert!(clusters[0].contains(&"a".to_string()));
+        assert!(clusters[0].contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn detect_content_duplicates_normalizes_whitespace_3349() {
+        // Same content but different whitespace formatting should still match
+        let conn = setup_content_dedup_db(&[
+            ("a", "Note A", "# Title\n\nParagraph one\n\nParagraph two"),
+            (
+                "b",
+                "Note B",
+                "#   Title\n\n\nParagraph   one\n\nParagraph   two",
+            ),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert_eq!(
+            clusters.len(),
+            1,
+            "whitespace differences should not prevent dedup"
+        );
+    }
+
+    #[test]
+    fn detect_content_duplicates_strips_markdown_3349() {
+        // Same text but one has extra markdown should NOT match (different content)
+        let conn = setup_content_dedup_db(&[
+            ("a", "Note A", "This is important content about Rust"),
+            ("b", "Note B", "This is important content about Rust"),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert_eq!(clusters.len(), 1, "identical plain text should match");
+    }
+
+    #[test]
+    fn detect_content_duplicates_no_false_positive_3349() {
+        let conn = setup_content_dedup_db(&[
+            ("a", "Alpha", "Content about Rust programming language"),
+            ("b", "Beta", "Content about Python programming language"),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert!(clusters.is_empty(), "different content should not cluster");
+    }
+
+    #[test]
+    fn detect_content_duplicates_empty_body_skipped_3349() {
+        let conn = setup_content_dedup_db(&[
+            ("a", "Empty A", ""),
+            ("b", "Empty B", ""),
+            ("c", "Real", "Real content here"),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        // Empty bodies are skipped (normalized to empty string)
+        assert!(
+            clusters.is_empty(),
+            "empty bodies should not form duplicate clusters"
+        );
+    }
+
+    #[test]
+    fn merge_clusters_unions_overlapping_3349() {
+        // Title cluster: [a, b], content cluster: [b, c]
+        // Should merge into [a, b, c] since b appears in both
+        let title_clusters = vec![vec!["a".into(), "b".into()]];
+        let content_clusters = vec![vec!["b".into(), "c".into()]];
+        let merged = merge_duplicate_clusters(title_clusters, content_clusters);
+        assert_eq!(merged.len(), 1, "overlapping clusters should merge into 1");
+        assert_eq!(merged[0].len(), 3, "merged cluster should have all 3 notes");
+        assert!(merged[0].contains(&"a".to_string()));
+        assert!(merged[0].contains(&"b".to_string()));
+        assert!(merged[0].contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn merge_clusters_keeps_disjoint_separate_3349() {
+        // Title cluster: [a, b], content cluster: [c, d]
+        // No overlap → should stay as 2 separate clusters
+        let title_clusters = vec![vec!["a".into(), "b".into()]];
+        let content_clusters = vec![vec!["c".into(), "d".into()]];
+        let merged = merge_duplicate_clusters(title_clusters, content_clusters);
+        assert_eq!(merged.len(), 2, "disjoint clusters should stay separate");
+    }
+
+    #[test]
+    fn normalize_body_for_hash_strips_markdown_3349() {
+        let a = normalize_body_for_hash("# Hello **World**\n\n`code` here");
+        let b = normalize_body_for_hash("Hello World code here");
+        assert_eq!(
+            a, b,
+            "markdown syntax should be stripped, leaving plain text"
+        );
+    }
+
+    #[test]
+    fn normalize_body_for_hash_collapses_whitespace_3349() {
+        let a = normalize_body_for_hash("hello\n\n\n   world");
+        let b = normalize_body_for_hash("hello world");
+        assert_eq!(a, b, "whitespace should be collapsed to single spaces");
     }
 }

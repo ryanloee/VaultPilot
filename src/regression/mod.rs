@@ -64,4 +64,5 @@ mod issue_3271_suggest_links;
 mod issue_3276_export_documents;
 mod issue_3320_tag_merge;
 mod issue_3342_callouts;
+mod issue_3350_savenote_created_at;
 mod issue_914_related_notes;

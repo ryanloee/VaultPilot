@@ -1111,39 +1111,69 @@ mod tests {
     fn test_github_token_not_configured() {
         // Ensure GITHUB_TOKEN is not in env for this test
         let result = github_api("/repos/foo/bar/issues");
-        assert!(result.get("isError").and_then(Value::as_bool).unwrap_or(false),
-            "should return isError=true when no token configured");
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return isError=true when no token configured"
+        );
     }
 
     #[test]
     fn test_github_list_issues_missing_owner() {
         let result = handle_github_list_issues(json!({"repo": "bar"}));
-        assert!(result.get("isError").and_then(Value::as_bool).unwrap_or(false),
-            "should return error for missing owner");
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return error for missing owner"
+        );
     }
 
     #[test]
     fn test_github_list_issues_missing_repo() {
         let result = handle_github_list_issues(json!({"owner": "foo"}));
-        assert!(result.get("isError").and_then(Value::as_bool).unwrap_or(false),
-            "should return error for missing repo");
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return error for missing repo"
+        );
     }
 
     #[test]
     fn test_github_get_issue_missing_number() {
         let result = handle_github_get_issue(json!({"owner": "foo", "repo": "bar"}));
-        assert!(result.get("isError").and_then(Value::as_bool).unwrap_or(false),
-            "should return error when issue_number=0");
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return error when issue_number=0"
+        );
     }
 
     #[test]
     fn test_github_tool_definitions_present() {
         let tools = mcp_tools();
-        let names: Vec<&str> = tools.iter()
+        let names: Vec<&str> = tools
+            .iter()
             .filter_map(|t| t.get("name").and_then(Value::as_str))
             .collect();
-        assert!(names.contains(&"github_list_issues"), "github_list_issues tool should be present");
-        assert!(names.contains(&"github_get_issue"), "github_get_issue tool should be present");
-        assert!(names.contains(&"vault_search"), "vault tools should still be present");
+        assert!(
+            names.contains(&"github_list_issues"),
+            "github_list_issues tool should be present"
+        );
+        assert!(
+            names.contains(&"github_get_issue"),
+            "github_get_issue tool should be present"
+        );
+        assert!(
+            names.contains(&"vault_search"),
+            "vault tools should still be present"
+        );
     }
 }

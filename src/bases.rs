@@ -51,7 +51,9 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
+use crate::bases_formula::{self, FmlEnv, FmlValue};
 use crate::models::NoteMeta;
 use crate::storage::{list_all_notes_with_context, StorageContext};
 
@@ -142,6 +144,20 @@ pub struct BaseConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub kanban_columns: Option<Vec<String>>,
+    /// Formula properties (#3331).
+    ///
+    /// Maps a virtual column name to an expression string. The expression is
+    /// evaluated per row using the note's frontmatter fields as variables.
+    /// Cross-formula references are supported; circular references are detected.
+    ///
+    /// Example:
+    /// ```yaml
+    /// formulas:
+    ///   overdue: 'if(updated_at < today() && status != "Done", "!", "")'
+    ///   score: 'priority * 2 + urgency'
+    /// ```
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub formulas: HashMap<String, String>,
 }
 
 impl Default for BaseConfig {
@@ -153,6 +169,7 @@ impl Default for BaseConfig {
             columns: Vec::new(),
             group_by: None,
             kanban_columns: None,
+            formulas: HashMap::new(),
         }
     }
 }
@@ -363,12 +380,34 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         config.columns.clone()
     };
 
+    // Build a set of formula column names for quick lookup.
+    let formula_keys: std::collections::HashSet<&str> =
+        config.formulas.keys().map(|s| s.as_str()).collect();
+    let has_formulas = !config.formulas.is_empty();
+
     let rows: Vec<BaseRow> = notes
         .iter()
-        .map(|meta| BaseRow {
-            note_id: meta.id.clone(),
-            title: meta.title.clone(),
-            values: columns.iter().map(|c| field_str(meta, &c.field)).collect(),
+        .map(|meta| {
+            // Compute formula values for this row (if formulas exist).
+            let formula_values = if has_formulas {
+                compute_formula_values(&config.formulas, meta)
+            } else {
+                HashMap::new()
+            };
+            BaseRow {
+                note_id: meta.id.clone(),
+                title: meta.title.clone(),
+                values: columns
+                    .iter()
+                    .map(|c| {
+                        if formula_keys.contains(c.field.as_str()) {
+                            formula_values.get(&c.field).cloned().unwrap_or_default()
+                        } else {
+                            field_str(meta, &c.field)
+                        }
+                    })
+                    .collect(),
+            }
         })
         .collect();
 
@@ -438,6 +477,114 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         scanned,
         kanban_groups,
     })
+}
+
+/// Evaluate all formulas for a single note and return a map of formula name
+/// to string value (#3331).
+///
+/// Cycles are gracefully handled: formulas in a cycle get empty values.
+/// Cross-references are resolved via topological order: a formula that
+/// depends on others is evaluated only after its dependencies are ready.
+fn compute_formula_values(
+    formulas: &HashMap<String, String>,
+    meta: &NoteMeta,
+) -> HashMap<String, String> {
+    use std::collections::{HashSet, VecDeque};
+
+    // Detect cycles first — formulas in a cycle get empty values.
+    let cycle_names: HashSet<String> = bases_formula::detect_cycles(formulas).into_iter().collect();
+
+    let mut results: HashMap<String, String> = HashMap::new();
+
+    // Give cycle formulas empty values immediately.
+    for name in formulas.keys() {
+        if cycle_names.contains(name.as_str()) {
+            results.insert(name.clone(), String::new());
+        }
+    }
+
+    // Build dependency graph for non-cycle formulas.
+    let non_cycle: Vec<&String> = formulas
+        .keys()
+        .filter(|n| !cycle_names.contains(n.as_str()))
+        .collect();
+
+    // For each formula, find which other formulas it references.
+    let deps_of: HashMap<&String, HashSet<&String>> = non_cycle
+        .iter()
+        .map(|name| {
+            let expr_str = &formulas[name.as_str()];
+            let refs: HashSet<&String> = non_cycle
+                .iter()
+                .filter(|other| {
+                    other.as_str() != name.as_str()
+                        && bases_formula::extract_formula_refs(expr_str, formulas)
+                            .contains(other.as_str())
+                })
+                .copied()
+                .collect();
+            (*name, refs)
+        })
+        .collect();
+
+    // Kahn's algorithm: start with formulas that have no deps or whose deps
+    // are already resolved (cycle participants).
+    let mut in_degree: HashMap<&String, usize> = non_cycle
+        .iter()
+        .map(|n| (*n, deps_of.get(n).map(|d| d.len()).unwrap_or(0)))
+        .collect();
+
+    let mut queue: VecDeque<&String> = VecDeque::new();
+    for name in &non_cycle {
+        if *in_degree.get(name).unwrap_or(&0) == 0 {
+            queue.push_back(*name);
+        }
+    }
+
+    while let Some(name) = queue.pop_front() {
+        let expr = &formulas[name.as_str()];
+        let env = FmlEnv {
+            note: meta,
+            formula_values: &results
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        match v.parse::<f64>() {
+                            Ok(n) => FmlValue::Number(n),
+                            Err(_) => FmlValue::String(v.clone()),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let value = bases_formula::evaluate(expr, &env);
+        results.insert(name.to_string(), value.to_string());
+
+        // Reduce in-degree for all formulas that depend on this one.
+        for other in &non_cycle {
+            if let Some(deps) = deps_of.get(other) {
+                if deps.contains(name) {
+                    if let Some(deg) = in_degree.get_mut(other) {
+                        *deg = deg.saturating_sub(1);
+                        if *deg == 0 {
+                            queue.push_back(other);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Any remaining non-cycle formulas that couldn't be resolved get empty.
+    // (Should not happen since we already handled cycles, but as safety.)
+    for name in &non_cycle {
+        if !results.contains_key(name.as_str()) {
+            results.insert(name.to_string(), String::new());
+        }
+    }
+
+    results
 }
 
 /// Bucket pre-projected rows into ordered Kanban swimlanes (#3247).
@@ -961,5 +1108,81 @@ filters:
         // silently break the UI contract documented in BaseConfig.group_by.
         assert_eq!(DEFAULT_KANBAN_UNGROUPED, "未分组");
         assert!(!DEFAULT_KANBAN_UNGROUPED.is_empty());
+    }
+
+    // ── Formula tests (#3331) ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_formulas_in_yaml() {
+        let yaml = r#"
+view: table
+formulas:
+  overdue: 'if(updated_at < today() && status != "Done", "!", "")'
+  score: "priority * 2"
+columns:
+  - field: title
+  - field: overdue
+"#;
+        let cfg = BaseConfig::from_yaml(yaml).expect("parse with formulas");
+        assert_eq!(cfg.formulas.len(), 2);
+        let overdue = cfg.formulas.get("overdue").unwrap();
+        assert!(overdue.contains("if(updated_at < today()"));
+        assert_eq!(cfg.formulas.get("score").unwrap(), "priority * 2");
+    }
+
+    #[test]
+    fn test_compute_formula_simple_arithmetic() {
+        let mut formulas = HashMap::new();
+        formulas.insert("double".into(), "score * 2".into());
+        let meta = NoteMeta {
+            id: "n1".into(),
+            ..Default::default()
+        };
+        let result = compute_formula_values(&formulas, &meta);
+        assert_eq!(result.get("double").unwrap(), "0");
+    }
+
+    #[test]
+    fn test_compute_formula_with_field_ref() {
+        let mut formulas = HashMap::new();
+        formulas.insert(
+            "is_active".into(),
+            "if(status == \"done\", \"No\", \"Yes\")".into(),
+        );
+        let meta = NoteMeta {
+            id: "n1".into(),
+            status: "in-progress".into(),
+            ..Default::default()
+        };
+        let result = compute_formula_values(&formulas, &meta);
+        assert_eq!(result.get("is_active").unwrap(), "Yes");
+    }
+
+    #[test]
+    fn test_compute_formula_with_cross_ref() {
+        let mut formulas = HashMap::new();
+        formulas.insert("base_score".into(), "5".into());
+        formulas.insert("final_score".into(), "base_score * 2".into());
+        let meta = NoteMeta {
+            id: "n1".into(),
+            ..Default::default()
+        };
+        let result = compute_formula_values(&formulas, &meta);
+        assert_eq!(result.get("base_score").unwrap(), "5");
+        assert_eq!(result.get("final_score").unwrap(), "10");
+    }
+
+    #[test]
+    fn test_compute_formula_cycle_handled() {
+        let mut formulas = HashMap::new();
+        formulas.insert("a".into(), "b + 1".into());
+        formulas.insert("b".into(), "a + 1".into());
+        let meta = NoteMeta {
+            id: "n1".into(),
+            ..Default::default()
+        };
+        let result = compute_formula_values(&formulas, &meta);
+        assert_eq!(result.get("a").unwrap(), "");
+        assert_eq!(result.get("b").unwrap(), "");
     }
 }

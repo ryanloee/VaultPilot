@@ -657,6 +657,29 @@ enum Commands {
         weekly: bool,
     },
 
+    /// Merge variant tags into a canonical tag (#3320)
+    ///
+    /// Finds all notes with any of the `--from` tags and replaces them with
+    /// the `--to` tag, deduplicating if the note already has the target tag.
+    /// Use `--dry-run` to preview how many notes would be affected.
+    ///
+    /// Examples:
+    ///   vp tag merge --from "#meeting,#meetings" --to "#meeting"
+    ///   vp tag merge --from "#ai,#AI" --to "#AI" --dry-run
+    TagMerge {
+        /// Comma-separated source tags to merge from
+        #[arg(long)]
+        from: String,
+
+        /// Target canonical tag to merge into
+        #[arg(long)]
+        to: String,
+
+        /// Preview the number of affected notes without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Serendipity — discover forgotten notes (#1943)
     ///
     /// Surfaces 1-3 old notes you may have forgotten about, scored against
@@ -2835,6 +2858,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Voice { action } => handle_voice(context, action).await,
         Commands::Health { json, weekly } => {
             tokio::task::block_in_place(|| handle_health(context, *json, *weekly))
+        }
+        Commands::TagMerge { from, to, dry_run } => {
+            tokio::task::block_in_place(|| handle_tag_merge(context, from, to, *dry_run))
         }
         Commands::Serendipity { count, json } => {
             tokio::task::block_in_place(|| handle_serendipity(context, *count, *json))
@@ -8399,6 +8425,121 @@ fn handle_health(context: &StorageContext, json: bool, weekly: bool) -> Result<V
         eprintln!();
         to_json(&report)
     }
+}
+
+/// Handle `vp tag merge` — merge variant tags into a canonical tag (#3320).
+fn handle_tag_merge(
+    context: &StorageContext,
+    from: &str,
+    to: &str,
+    dry_run: bool,
+) -> Result<Value> {
+    use vaultpilot_lib::storage::bulk_update_tags_with_context;
+
+    let conn = context.get_connection()?;
+
+    // Strip leading # if present
+    let from_tags: Vec<String> = from
+        .split(',')
+        .map(|t| t.trim().trim_start_matches('#').to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let to_tag = to.trim().trim_start_matches('#');
+
+    if from_tags.is_empty() {
+        anyhow::bail!("--from requires at least one tag");
+    }
+    if to_tag.is_empty() {
+        anyhow::bail!("--to requires a tag name");
+    }
+
+    // Find all note IDs that have any of the from-tags.
+    // Tags are stored as JSON arrays; use json_each for reliable matching.
+    let placeholders: Vec<String> = (0..from_tags.len())
+        .map(|i| format!("?{}", i + 1))
+        .collect();
+    let sql = format!(
+        "SELECT DISTINCT id FROM notes \
+         WHERE EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) \
+                       WHERE LOWER(json_each.value) IN ({}))",
+        placeholders.join(",")
+    );
+
+    let lower_from: Vec<String> = from_tags.iter().map(|t| t.to_lowercase()).collect();
+    let params: Vec<&dyn rusqlite::types::ToSql> = lower_from
+        .iter()
+        .map(|t| t as &dyn rusqlite::types::ToSql)
+        .collect();
+
+    let mut stmt = conn.prepare(&sql)?;
+    let note_ids: Vec<String> = stmt
+        .query_map(params.as_slice(), |row| row.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if note_ids.is_empty() {
+        let msg = format!("No notes found with tag(s): #{}", from_tags.join(", #"));
+        eprintln!("{}", msg);
+        return Ok(serde_json::json!({
+            "status": "noop",
+            "message": msg,
+            "affected": 0
+        }));
+    }
+
+    if dry_run {
+        let msg = format!(
+            "[DRY RUN] Would merge #{} → #{}: {} note(s) affected",
+            from_tags.join(", #"),
+            to_tag,
+            note_ids.len()
+        );
+        eprintln!("{}", msg);
+        return Ok(serde_json::json!({
+            "status": "dry_run",
+            "message": msg,
+            "affected": note_ids.len(),
+            "note_ids": note_ids
+        }));
+    }
+
+    // Apply the merge: remove from-tags, add to-tag
+    eprintln!(
+        "Merging #{} → #{}: {} note(s)...",
+        from_tags.join(", #"),
+        to_tag,
+        note_ids.len()
+    );
+
+    let remove_tags: Vec<String> = from_tags.iter().map(|t| format!("#{}", t)).collect();
+    let add_tags = vec![format!("#{}", to_tag)];
+
+    let result = bulk_update_tags_with_context(context, &note_ids, &add_tags, &remove_tags)?;
+
+    let msg = format!(
+        "Merged #{} → #{}: {} affected, {} skipped, {} failures",
+        from_tags.join(", #"),
+        to_tag,
+        result.affected,
+        result.skipped,
+        result.failures.len()
+    );
+    eprintln!("{}", msg);
+
+    if !result.failures.is_empty() {
+        eprintln!("Failures:");
+        for f in &result.failures {
+            eprintln!("  • {}: {}", f.id, f.reason);
+        }
+    }
+
+    Ok(serde_json::json!({
+        "status": "merged",
+        "message": msg,
+        "affected": result.affected,
+        "skipped": result.skipped,
+        "failures": result.failures.len()
+    }))
 }
 
 /// Generate serendipity — forgotten note suggestions (#1943).

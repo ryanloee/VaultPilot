@@ -2949,14 +2949,15 @@ mod pure_function_tests {
         assert!(paths.is_empty());
     }
 
-    // Use setup from the parent module
+    // Local copy of setup() — pure_function_tests is a sibling (not a child)
+    // of `mod tests`, so it cannot reuse tests::setup(). Use a distinct temp
+    // dir prefix to avoid colliding with mod tests' dir name when tests run in
+    // parallel (both used `vaultpilot_agent_test_{pid}_{n}` and the
+    // remove_dir_all in one module wiped the other module's live directory).
     fn setup() -> (PathBuf, AgentConfig) {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp = std::env::temp_dir().join(format!(
-            "vaultpilot_agent_test_{}_{}",
-            std::process::id(),
-            n
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("vaultpilot_agent_pft_{}_{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("hello.md"), "# Hello\nWorld").unwrap();

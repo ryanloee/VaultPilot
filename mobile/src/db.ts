@@ -755,8 +755,29 @@ export const DEFAULT_TEMPLATES: Array<{ title: string; content: string }> = [
   },
 ];
 
-/** Idempotently seed built-in templates on first launch. */
+/**
+ * Promise for an in-flight ensureDefaultTemplates() call — dedup concurrent
+ * callers so the seeding logic runs exactly once, preventing a TOCTOU race
+ * where two concurrent calls both pass the empty-templates check and seed
+ * duplicates (#3373).
+ */
+let ensureDefaultTemplatesPromise: Promise<void> | null = null;
+
+/**
+ * Idempotently seed built-in templates on first launch.
+ *
+ * #3373: Uses a module-level promise to dedup concurrent callers. The actual
+ * work runs in `_doEnsureDefaultTemplates`, which also sets the AsyncStorage
+ * flag *before* seeding (check-and-set) so that even if the dedup is bypassed,
+ * a concurrent caller will see the flag and skip.
+ */
 export async function ensureDefaultTemplates(): Promise<void> {
+  if (ensureDefaultTemplatesPromise) return ensureDefaultTemplatesPromise;
+  ensureDefaultTemplatesPromise = _doEnsureDefaultTemplates();
+  return ensureDefaultTemplatesPromise;
+}
+
+async function _doEnsureDefaultTemplates(): Promise<void> {
   try {
     const flagged = await AsyncStorage.getItem(DEFAULT_TEMPLATES_SEEDED_KEY);
     if (flagged === '1') return;
@@ -765,12 +786,24 @@ export async function ensureDefaultTemplates(): Promise<void> {
       await AsyncStorage.setItem(DEFAULT_TEMPLATES_SEEDED_KEY, '1');
       return;
     }
+    // Set the flag BEFORE seeding so a concurrent caller that somehow bypasses
+    // the promise dedup will see flagged==='1' and return early (#3373).
+    // If seeding fails, the catch block removes the flag so the next launch
+    // can retry.
+    await AsyncStorage.setItem(DEFAULT_TEMPLATES_SEEDED_KEY, '1');
     for (const t of DEFAULT_TEMPLATES) {
       await createTemplate(t.title, t.content);
     }
-    await AsyncStorage.setItem(DEFAULT_TEMPLATES_SEEDED_KEY, '1');
   } catch (e) {
+    // Seeding failed — clear the flag so the next launch retries from scratch
+    try {
+      await AsyncStorage.removeItem(DEFAULT_TEMPLATES_SEEDED_KEY);
+    } catch {
+      // best-effort cleanup
+    }
     console.warn('[DB] ensureDefaultTemplates failed:', e);
+  } finally {
+    ensureDefaultTemplatesPromise = null;
   }
 }
 

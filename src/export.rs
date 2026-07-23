@@ -530,6 +530,23 @@ tr:nth-child(even) {{ background-color: #f9f9f9; }}
 code {{ background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.9em; }}
 pre {{ background: #f4f4f4; padding: 1rem; border-radius: 5px; overflow-x: auto; }}
 blockquote {{ border-left: 4px solid #ddd; margin: 1rem 0; padding: 0.5rem 1rem; color: #666; }}
+/* ── Obsidian-style Callouts ─────── */
+.callout {{ border-radius: 6px; margin: 1rem 0; padding: 0.75rem 1rem; border-left: 5px solid; }}
+.callout-title {{ font-weight: 600; margin-bottom: 0.25rem; }}
+.callout-body {{ }}
+/* Callout color themes */
+.callout-note {{ background: #e8f0fe; border-color: #448aff; }}
+.callout-abstract {{ background: #e8f5e9; border-color: #00c853; }}
+.callout-info {{ background: #e3f2fd; border-color: #0288d1; }}
+.callout-tip {{ background: #e0f7fa; border-color: #00acc1; }}
+.callout-success {{ background: #e8f5e9; border-color: #2e7d32; }}
+.callout-question {{ background: #fce4ec; border-color: #c62828; }}
+.callout-warning {{ background: #fff3e0; border-color: #ef6c00; }}
+.callout-failure {{ background: #fbe9e7; border-color: #bf360c; }}
+.callout-danger {{ background: #ffebee; border-color: #c62828; }}
+.callout-bug {{ background: #fce4ec; border-color: #ad1457; }}
+.callout-example {{ background: #e8eaf6; border-color: #3949ab; }}
+.callout-quote {{ background: #f3e5f5; border-color: #8e24aa; }}
 </style>
 </head>
 <body>
@@ -549,8 +566,109 @@ blockquote {{ border-left: 4px solid #ddd; margin: 1rem 0; padding: 0.5rem 1rem;
     Ok(())
 }
 
+// ── Callout helpers ────────────────────────────────────────────────────
+
+/// Known Obsidian callout types and their CSS class names.
+const CALLOUT_TYPES: &[(&str, &str)] = &[
+    ("note", "callout-note"),
+    ("abstract", "callout-abstract"),
+    ("summary", "callout-abstract"),
+    ("tldr", "callout-abstract"),
+    ("info", "callout-info"),
+    ("todo", "callout-info"),
+    ("tip", "callout-tip"),
+    ("hint", "callout-tip"),
+    ("important", "callout-tip"),
+    ("success", "callout-success"),
+    ("check", "callout-success"),
+    ("done", "callout-success"),
+    ("question", "callout-question"),
+    ("help", "callout-question"),
+    ("faq", "callout-question"),
+    ("warning", "callout-warning"),
+    ("caution", "callout-warning"),
+    ("attention", "callout-warning"),
+    ("failure", "callout-failure"),
+    ("fail", "callout-failure"),
+    ("missing", "callout-failure"),
+    ("danger", "callout-danger"),
+    ("error", "callout-danger"),
+    ("bug", "callout-bug"),
+    ("example", "callout-example"),
+    ("quote", "callout-quote"),
+    ("cite", "callout-quote"),
+];
+
+/// Map a callout type string (case-insensitive) to its CSS class.
+pub fn callout_css_class(callout_type: &str) -> &'static str {
+    let lower = callout_type.to_lowercase();
+    for (alias, css_class) in CALLOUT_TYPES {
+        if lower == *alias {
+            return css_class;
+        }
+    }
+    "callout-note" // default fallback
+}
+
+/// Parse the opening line of a blockquote to detect Obsidian-style callouts.
+///
+/// Returns `(is_callout, callout_type, callout_title, collapse)`.
+/// - `is_callout`: true if the line starts with `> [!TYPE]`
+/// - `callout_type`: the type string (e.g. "note", "warning")
+/// - `callout_title`: optional title text after `]`
+/// - `collapse`: true if the modifier `-` is present (i.e. `> [!TYPE]-`)
+pub fn parse_callout_line(line: &str) -> (bool, String, String, bool) {
+    // Strip leading `> ` or `>`
+    let content = if let Some(rest) = line.strip_prefix("> ") {
+        rest.trim_start()
+    } else if let Some(rest) = line.strip_prefix(">") {
+        rest.trim_start()
+    } else {
+        return (false, String::new(), String::new(), false);
+    };
+
+    // Must start with "[!"
+    if !content.starts_with("[!") {
+        return (false, String::new(), String::new(), false);
+    }
+
+    // Find the closing "]"
+    let bracket_close = match content.find(']') {
+        Some(pos) => pos,
+        None => return (false, String::new(), String::new(), false),
+    };
+
+    // Extract type and optional collapse modifier: "[!NOTE]-" or "[!NOTE]+"
+    let inner = &content[2..bracket_close]; // skip "[!"
+    let (callout_type, collapse_inside) = if let Some(rest) = inner.strip_suffix('-') {
+        (rest.to_string(), true)
+    } else if let Some(rest) = inner.strip_suffix('+') {
+        (rest.to_string(), false)
+    } else {
+        (inner.to_string(), false)
+    };
+
+    // After "]": check for collapse modifier right after bracket
+    let after_bracket = &content[bracket_close + 1..];
+    let (title_text, collapse_after) = if let Some(rest) = after_bracket.strip_prefix("- ") {
+        (rest.trim_start().to_string(), true)
+    } else if let Some(rest) = after_bracket.strip_prefix("+ ") {
+        (rest.trim_start().to_string(), false)
+    } else if let Some(rest) = after_bracket.strip_prefix('-') {
+        (rest.trim_start().to_string(), true)
+    } else if let Some(rest) = after_bracket.strip_prefix('+') {
+        (rest.trim_start().to_string(), false)
+    } else {
+        (after_bracket.trim_start().to_string(), collapse_inside)
+    };
+
+    let collapse = collapse_inside || collapse_after;
+
+    (true, callout_type, title_text, collapse)
+}
+
 /// Convert Markdown to HTML body content.
-fn markdown_to_html_body(markdown: &str) -> String {
+pub fn markdown_to_html_body(markdown: &str) -> String {
     let mut html = String::new();
     let lines: Vec<&str> = markdown.lines().collect();
     let mut i = 0;
@@ -624,10 +742,57 @@ fn markdown_to_html_body(markdown: &str) -> String {
             continue;
         }
 
-        // Blockquote
-        if let Some(rest) = line.strip_prefix("> ") {
-            html.push_str(&format!("<blockquote>{}</blockquote>\n", inline_md(rest)));
-            i += 1;
+        // Blockquote / Callout (multi-line)
+        if line.starts_with("> ") || line.starts_with(">") {
+            let (is_callout, callout_type, callout_title, collapse) = parse_callout_line(line);
+            let mut body_lines: Vec<&str> = Vec::new();
+
+            // Collect all consecutive blockquote lines (including nested > >)
+            while i < lines.len()
+                && (lines[i].starts_with("> ") || lines[i] == ">" || lines[i].starts_with(">\t"))
+            {
+                let bline = lines[i];
+                // Strip one level of "> " or ">" prefix
+                let content = if let Some(rest) = bline.strip_prefix("> ") {
+                    rest
+                } else if bline == ">" {
+                    ""
+                } else {
+                    bline.strip_prefix(">").unwrap_or(bline).trim_start()
+                };
+                // Skip empty continuation lines
+                if !content.is_empty() || !body_lines.is_empty() {
+                    body_lines.push(content);
+                }
+                i += 1;
+            }
+
+            if is_callout {
+                // Obsidian-style callout: > [!NOTE] Title
+                let body_md = body_lines.join("\n");
+                let css_class = callout_css_class(&callout_type);
+                let collapse_class = if collapse { " callout-collapsed" } else { "" };
+                html.push_str(&format!(
+                    "<div class=\"callout {css_class}{collapse_class}\">\n"
+                ));
+                if !callout_title.is_empty() {
+                    html.push_str(&format!(
+                        "<div class=\"callout-title\">{}</div>\n",
+                        inline_md(&callout_title)
+                    ));
+                }
+                html.push_str(&format!(
+                    "<div class=\"callout-body\">{}</div>\n</div>\n",
+                    inline_md(&body_md)
+                ));
+            } else {
+                // Regular blockquote
+                let body_md = body_lines.join("\n");
+                html.push_str(&format!(
+                    "<blockquote>{}</blockquote>\n",
+                    inline_md(&body_md)
+                ));
+            }
             continue;
         }
 
@@ -1558,5 +1723,134 @@ Some text between tables.
         assert!(names.contains(&"word/document.xml".to_string()));
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── Callout tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_callout_basic_note() {
+        let (is_callout, typ, title, collapse) = parse_callout_line("> [!NOTE]");
+        assert!(is_callout);
+        assert_eq!(typ, "NOTE");
+        assert!(title.is_empty());
+        assert!(!collapse);
+    }
+
+    #[test]
+    fn parse_callout_with_title() {
+        let (is_callout, typ, title, collapse) = parse_callout_line("> [!WARNING] 请注意");
+        assert!(is_callout);
+        assert_eq!(typ, "WARNING");
+        assert_eq!(title, "请注意");
+        assert!(!collapse);
+    }
+
+    #[test]
+    fn parse_callout_collapsed() {
+        let (is_callout, typ, title, collapse) = parse_callout_line("> [!TIP]- 小技巧");
+        assert!(is_callout);
+        assert_eq!(typ, "TIP");
+        assert_eq!(title, "小技巧");
+        assert!(collapse);
+    }
+
+    #[test]
+    fn parse_callout_expanded_explicit() {
+        let (is_callout, typ, title, collapse) = parse_callout_line("> [!INFO]+");
+        assert!(is_callout);
+        assert_eq!(typ, "INFO");
+        assert!(title.is_empty());
+        assert!(!collapse);
+    }
+
+    #[test]
+    fn parse_callout_case_insensitive() {
+        let (is_callout, typ, _title, _collapse) = parse_callout_line("> [!note]");
+        assert!(is_callout);
+        assert_eq!(typ, "note");
+    }
+
+    #[test]
+    fn parse_callout_not_callout() {
+        let (is_callout, _typ, _title, _collapse) = parse_callout_line("> This is a quote");
+        assert!(!is_callout);
+    }
+
+    #[test]
+    fn parse_callout_plain_text_not_callout() {
+        let (is_callout, _typ, _title, _collapse) = parse_callout_line("Some text");
+        assert!(!is_callout);
+    }
+
+    #[test]
+    fn callout_css_maps_aliases() {
+        assert_eq!(callout_css_class("note"), "callout-note");
+        assert_eq!(callout_css_class("summary"), "callout-abstract");
+        assert_eq!(callout_css_class("abstract"), "callout-abstract");
+        assert_eq!(callout_css_class("info"), "callout-info");
+        assert_eq!(callout_css_class("warning"), "callout-warning");
+        assert_eq!(callout_css_class("danger"), "callout-danger");
+        assert_eq!(callout_css_class("UNKNOWN"), "callout-note"); // fallback
+    }
+
+    #[test]
+    fn markdown_to_html_callout_note() {
+        let md = "> [!NOTE]\n> This is a simple note.\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("callout-note"),
+            "should have callout-note class: {html}"
+        );
+        assert!(html.contains("This is a simple note."));
+    }
+
+    #[test]
+    fn markdown_to_html_callout_warning_with_title() {
+        let md = "> [!WARNING] 注意安全\n> 请勿删除此文件。\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("callout-warning"),
+            "should have callout-warning class"
+        );
+        assert!(html.contains("注意安全"), "should include title: {html}");
+        assert!(
+            html.contains("请勿删除此文件"),
+            "should include body: {html}"
+        );
+    }
+
+    #[test]
+    fn markdown_to_html_callout_collapsed() {
+        let md = "> [!TIP]- 折叠提示\n> 这是一条折叠内容。\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("callout-tip"),
+            "should have callout-tip class"
+        );
+        assert!(
+            html.contains("callout-collapsed"),
+            "should have collapsed class"
+        );
+    }
+
+    #[test]
+    fn markdown_to_html_multi_line_callout() {
+        let md = "> [!INFO]\n> Line one.\n> Line two.\n> Line three.\n";
+        let html = markdown_to_html_body(md);
+        assert!(html.contains("Line one"), "{html}");
+        assert!(html.contains("Line two"));
+        assert!(html.contains("Line three"));
+    }
+
+    #[test]
+    fn markdown_to_html_blockquote_unchanged() {
+        // Regular blockquotes without [!TYPE] should still render as <blockquote>
+        let md = "> A simple quote.\n> Second line.";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("<blockquote>"),
+            "should be regular blockquote: {html}"
+        );
+        assert!(!html.contains("callout"), "should NOT be a callout");
     }
 }

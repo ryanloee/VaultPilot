@@ -15,25 +15,44 @@ use crate::export::{
 #[test]
 fn regression_3342_all_callout_types_parsed() {
     let types = [
-        "NOTE", "ABSTRACT", "SUMMARY", "TLDR",
-        "INFO", "TODO",
-        "TIP", "HINT", "IMPORTANT",
-        "SUCCESS", "CHECK", "DONE",
-        "QUESTION", "HELP", "FAQ",
-        "WARNING", "CAUTION", "ATTENTION",
-        "FAILURE", "FAIL", "MISSING",
-        "DANGER", "ERROR",
+        "NOTE",
+        "ABSTRACT",
+        "SUMMARY",
+        "TLDR",
+        "INFO",
+        "TODO",
+        "TIP",
+        "HINT",
+        "IMPORTANT",
+        "SUCCESS",
+        "CHECK",
+        "DONE",
+        "QUESTION",
+        "HELP",
+        "FAQ",
+        "WARNING",
+        "CAUTION",
+        "ATTENTION",
+        "FAILURE",
+        "FAIL",
+        "MISSING",
+        "DANGER",
+        "ERROR",
         "BUG",
         "EXAMPLE",
-        "QUOTE", "CITE",
+        "QUOTE",
+        "CITE",
     ];
 
     for callout_type in types {
         let line = format!("> [!{callout_type}]");
         let (is_callout, typ, _title, _collapse) = parse_callout_line(&line);
         assert!(is_callout, "should detect [!{callout_type}] as callout");
-        assert_eq!(typ.to_uppercase(), callout_type.to_uppercase(),
-            "type mismatch for [!{callout_type}]");
+        assert_eq!(
+            typ.to_uppercase(),
+            callout_type.to_uppercase(),
+            "type mismatch for [!{callout_type}]"
+        );
     }
 }
 
@@ -70,8 +89,11 @@ fn regression_3342_all_callout_css_classes_exist() {
     ];
 
     for (alias, expected_class) in aliases {
-        assert_eq!(callout_css_class(alias), expected_class,
-            "CSS class mismatch for '{alias}'");
+        assert_eq!(
+            callout_css_class(alias),
+            expected_class,
+            "CSS class mismatch for '{alias}'"
+        );
     }
 
     // Unknown type falls back to callout-note
@@ -120,13 +142,19 @@ Some text after callout.
     let html = markdown_to_html_body(md);
 
     // Callout div structure
-    assert!(html.contains("class=\"callout callout-warning\""),
-        "should have callout + callout-warning classes");
-    assert!(html.contains("class=\"callout-title\""),
-        "should have title div");
+    assert!(
+        html.contains("class=\"callout callout-warning\""),
+        "should have callout + callout-warning classes"
+    );
+    assert!(
+        html.contains("class=\"callout-title\""),
+        "should have title div"
+    );
     assert!(html.contains("重要提示"), "should include title text");
-    assert!(html.contains("class=\"callout-body\""),
-        "should have body div");
+    assert!(
+        html.contains("class=\"callout-body\""),
+        "should have body div"
+    );
     assert!(html.contains("请勿在生产环境中使用此功能"));
     assert!(html.contains("这可能导致数据丢失"));
 
@@ -134,8 +162,10 @@ Some text after callout.
     assert!(html.contains("<p>Some text after callout.</p>"));
 
     // Should NOT contain <blockquote> (callouts are divs, not blockquotes)
-    assert!(!html.contains("<blockquote>"),
-        "callouts should NOT render as blockquote: {html}");
+    assert!(
+        !html.contains("<blockquote>"),
+        "callouts should NOT render as blockquote: {html}"
+    );
 }
 
 #[test]
@@ -151,10 +181,14 @@ fn regression_3342_mixed_callouts_and_blockquotes() {
 
     let html = markdown_to_html_body(md);
 
-    assert!(html.contains("class=\"callout callout-info\""),
-        "should contain callout div");
-    assert!(html.contains("<blockquote>"),
-        "should contain regular blockquote");
+    assert!(
+        html.contains("class=\"callout callout-info\""),
+        "should contain callout div"
+    );
+    assert!(
+        html.contains("<blockquote>"),
+        "should contain regular blockquote"
+    );
     assert!(html.contains("regular blockquote"));
 }
 
@@ -171,10 +205,19 @@ fn regression_3342_callout_in_html_export_file() {
     let content = std::fs::read_to_string(&tmp).unwrap();
 
     // CSS classes should be present in the style block
-    assert!(content.contains(".callout-note"), "CSS callout-note missing");
-    assert!(content.contains(".callout-warning"), "CSS callout-warning missing");
+    assert!(
+        content.contains(".callout-note"),
+        "CSS callout-note missing"
+    );
+    assert!(
+        content.contains(".callout-warning"),
+        "CSS callout-warning missing"
+    );
     assert!(content.contains(".callout-tip"), "CSS callout-tip missing");
-    assert!(content.contains(".callout-danger"), "CSS callout-danger missing");
+    assert!(
+        content.contains(".callout-danger"),
+        "CSS callout-danger missing"
+    );
     assert!(content.contains(".callout"), "base callout CSS missing");
 
     // HTML body should contain the callout div
@@ -195,8 +238,10 @@ fn regression_3342_callout_via_unified_export() {
     export_markdown(md, ExportFormat::Html, "Test", &tmp).expect("should succeed");
     let content = std::fs::read_to_string(&tmp).unwrap();
 
-    assert!(content.contains("callout-example"),
-        "callout-example class not in exported HTML");
+    assert!(
+        content.contains("callout-example"),
+        "callout-example class not in exported HTML"
+    );
     assert!(content.contains("Example callout"));
 
     let _ = std::fs::remove_file(&tmp);

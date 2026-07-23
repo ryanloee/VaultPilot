@@ -77,15 +77,7 @@ public sealed partial class MainWindow : Window
         old?.Dispose();
         _agentCts = new CancellationTokenSource();
 
-        // Update UI state (elements may be null if removed from XAML)
-        if (AgentModeButton is not null) AgentModeButton.Visibility = Visibility.Collapsed;
-        if (StopAgentButton is not null) StopAgentButton.Visibility = Visibility.Visible;
-        if (AgentToolCallPanel is not null) AgentToolCallPanel.Visibility = Visibility.Visible;
-        AgentToolCallList?.Children.Clear();
-        if (AgentStatusText is not null) AgentStatusText.Text = "Agent 启动中...";
-        if (AgentStepCount is not null) AgentStepCount.Text = $"步骤: 0/{maxSteps}";
-        if (AgentTokenCount is not null) AgentTokenCount.Text = "Token: 0";
-
+        AppendMessage("系统", $"🤖 Agent 模式启动 — 最多 {maxSteps} 步");
         UpdateStatusBar("info", "Agent 模式", "正在执行自主工具调用循环...");
 
         // Send agent request to backend
@@ -98,10 +90,7 @@ public sealed partial class MainWindow : Window
         old?.Cancel();
         _agentModeActive = false;
 
-        if (AgentModeButton is not null) AgentModeButton.Visibility = Visibility.Visible;
-        if (StopAgentButton is not null) StopAgentButton.Visibility = Visibility.Collapsed;
-        if (AgentStatusText is not null) AgentStatusText.Text = $"Agent 已停止: {reason}";
-
+        AppendMessage("系统", $"🛑 Agent 已停止: {reason}");
         UpdateStatusBar("info", "Agent 模式", $"已停止: {reason}");
     }
 
@@ -141,9 +130,7 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(() =>
             {
                 _agentModeActive = false;
-                if (AgentModeButton is not null) AgentModeButton.Visibility = Visibility.Visible;
-                if (StopAgentButton is not null) StopAgentButton.Visibility = Visibility.Collapsed;
-                if (AgentStatusText is not null) AgentStatusText.Text = "Agent 完成";
+                AppendMessage("系统", "✅ Agent 完成");
                 UpdateStatusBar("success", "Agent 模式", "任务完成");
             });
         }
@@ -170,8 +157,6 @@ public sealed partial class MainWindow : Window
                 if (status.Step is { } step)
                 {
                     _agentCurrentStep = step;
-                    if (AgentStepCount is not null) AgentStepCount.Text = $"步骤: {_agentCurrentStep}/{_agentMaxSteps}";
-                    if (AgentStatusText is not null) AgentStatusText.Text = "Agent 思考中...";
                 }
                 break;
 
@@ -179,7 +164,6 @@ public sealed partial class MainWindow : Window
                 var tool = status.Tool ?? "unknown";
                 var args = status.Args ?? "";
                 AddToolCallEntry(tool, args, isRunning: true);
-                if (AgentStatusText is not null) AgentStatusText.Text = $"执行工具: {tool}";
                 break;
 
             case "toolResult":
@@ -196,7 +180,6 @@ public sealed partial class MainWindow : Window
                 break;
 
             case "finalAnswer":
-                if (AgentStatusText is not null) AgentStatusText.Text = "Agent 生成最终回答...";
                 break;
 
             case "agentCompleted":
@@ -204,11 +187,6 @@ public sealed partial class MainWindow : Window
                 if (status.StepsUsed is { } stepsUsed)
                 {
                     _agentCurrentStep = stepsUsed;
-                    if (AgentStepCount is not null) AgentStepCount.Text = $"步骤: {_agentCurrentStep}/{_agentMaxSteps}";
-                }
-                if (status.TokensUsed is { } tokensUsed)
-                {
-                    if (AgentTokenCount is not null) AgentTokenCount.Text = $"Token: {tokensUsed}";
                 }
                 // #3149: Clean up the CTS from the completed agent to prevent
                 // resource leak (kernel timer). agentCompleted always runs on UI
@@ -217,9 +195,6 @@ public sealed partial class MainWindow : Window
                 var completedCts = Interlocked.Exchange(ref _agentCts, null);
                 completedCts?.Dispose();
                 _agentModeActive = false;
-                if (AgentModeButton is not null) AgentModeButton.Visibility = Visibility.Visible;
-                if (StopAgentButton is not null) StopAgentButton.Visibility = Visibility.Collapsed;
-                if (AgentStatusText is not null) AgentStatusText.Text = "Agent 完成";
                 UpdateStatusBar("success", "Agent 模式", "任务完成");
                 break;
 
@@ -252,7 +227,6 @@ public sealed partial class MainWindow : Window
                     ? reason
                     : $"{reason}\n\n建议: {suggestion}";
                 AppendMessage("⚠️ Agent 警告", warningBody);
-                if (AgentStatusText is not null) AgentStatusText.Text = "Agent 可能陷入循环";
                 UpdateStatusBar("warning", "Agent 模式", reason);
                 break;
         }
@@ -260,68 +234,16 @@ public sealed partial class MainWindow : Window
 
     private void AddToolCallEntry(string tool, string args, bool isRunning)
     {
-        var panel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Padding = new Thickness(8, 4, 8, 4),
-            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)
-        };
-
-        var icon = new FontIcon
-        {
-            Glyph = isRunning ? "\uE768" : "\uE73E", // Running: play, Done: checkmark
-            FontSize = 12,
-            Foreground = isRunning
-                ? GetThemeBrush("SystemFillColorAttentionBrush")
-                : GetThemeBrush("VaultAccentGreen")
-        };
-
-        var toolText = new TextBlock
-        {
-            Text = tool,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            FontSize = 12
-        };
-
-        var argsText = new TextBlock
-        {
-            Text = TruncateString(args, 80),
-            Opacity = 0.7,
-            FontSize = 11,
-            TextTrimming = Microsoft.UI.Xaml.TextTrimming.CharacterEllipsis,
-            MaxWidth = 300
-        };
-
-        panel.Children.Add(icon);
-        panel.Children.Add(toolText);
-        panel.Children.Add(argsText);
-
-        AgentToolCallList?.Children.Add(panel);
+        var icon = isRunning ? "🔄" : "✅";
+        var status = isRunning ? "开始执行" : "已完成";
+        var preview = TruncateString(args, 120);
+        AppendMessage("🛠️ Agent 工具", $"{icon} **{tool}** — {status}\n`{preview}`");
     }
 
     private void UpdateLastToolCallResult(string tool, string preview, bool isError)
     {
-        if (AgentToolCallList is null) return;
-        // Find the last tool call entry and update its icon
-        for (int i = AgentToolCallList.Children.Count - 1; i >= 0; i--)
-        {
-            if (AgentToolCallList.Children[i] is StackPanel panel)
-            {
-                foreach (var child in panel.Children)
-                {
-                    if (child is FontIcon icon)
-                    {
-                        icon.Glyph = isError ? "\uE783" : "\uE73E"; // Error: X, Success: checkmark
-                        icon.Foreground = isError
-                            ? GetThemeBrush("VaultAccentRed")
-                            : GetThemeBrush("VaultAccentGreen");
-                        break;
-                    }
-                }
-                break;
-            }
-        }
+        var icon = isError ? "❌" : "✅";
+        AppendMessage("🛠️ Agent 工具", $"{icon} **{tool}** — {(isError ? "执行失败" : "结果")}\n`{TruncateString(preview, 120)}`");
     }
 
     private async void ShowWriteApprovalDialog(string tool, string args)

@@ -291,7 +291,7 @@ public sealed partial class MainWindow : Window
             // #X: increased buffer from 30s to 90s to prevent premature timeout
             // when the agent has a 120s internal timeout.
             var aiTimeout = TimeSpan.FromMilliseconds(
-                (_settings?.Provider.RequestTimeoutMs ?? 60_000) + 90_000);
+                (ResolveActiveProvider().RequestTimeoutMs ?? 60_000) + 90_000);
             var answer = await _backendClient.SendAsync<GroundedAnswer>(
                     "askWithAi",
                     new

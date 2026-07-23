@@ -81,15 +81,20 @@ jobs:
           # versionCode: major*10000 + minor*100 + patch (monotonically increasing)
           # 0.3.55 -> 3055, 0.4.9 -> 409 — always increasing
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_BASE"
-          VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          BASE_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
 
-          # For pre-release tags, offset versionCode to avoid collision with release (#2536)
-          if [ -n "$PRERELEASE" ]; then
-            # Extract numeric suffix (e.g., rc1 -> 1)
+          if [ -z "$PRERELEASE" ]; then
+            # Release: use a high offset to leave room for pre-releases below
+            VERSION_CODE=$((BASE_CODE * 10 + 10))
+          else
+            # Pre-release: keep versionCode below the release version
             PR_NUM="${PRERELEASE##*[!0-9]}"
             [[ "$PR_NUM" =~ ^[0-9]+$ ]] || PR_NUM=0
-            # Multiply and add pre-release number to ensure unique, monotonic versionCode
-            VERSION_CODE=$((VERSION_CODE * 100 + PR_NUM))
+            # Limit PR_NUM to single digits to ensure space for future pre-releases
+            if [ "$PR_NUM" -gt 9 ]; then
+              PR_NUM=9
+            fi
+            VERSION_CODE=$((BASE_CODE * 10 + PR_NUM))
           fi
 
           echo "VERSION_NAME=$VERSION VERSION_CODE=$VERSION_CODE"

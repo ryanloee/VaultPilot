@@ -239,7 +239,7 @@ async fn run_mcp_stdio(vault_dir: Option<String>) -> Result<()> {
                                 "title": "VaultPilot MCP Connector",
                                 "version": env!("CARGO_PKG_VERSION")
                             },
-                            "instructions": "VaultPilot MCP Connector provides tools to search, read, write, list, and find related notes in your vault."
+                            "instructions": "VaultPilot MCP Connector provides tools to search, read, write, list, and find related notes in your vault. Also includes GitHub connector tools (list/get issues) when GITHUB_TOKEN is configured."
                         }),
                     ))
                 } else {
@@ -407,6 +407,26 @@ async fn handle_request(
                             })
                         })
                 }
+                "github_list_issues" => tokio::task::spawn_blocking(move || {
+                    handle_github_list_issues(arguments)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    serde_json::json!({
+                        "isError": true,
+                        "content": [{"type": "text", "text": format!("task join failed: {e}")}],
+                    })
+                }),
+                "github_get_issue" => tokio::task::spawn_blocking(move || {
+                    handle_github_get_issue(arguments)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    serde_json::json!({
+                        "isError": true,
+                        "content": [{"type": "text", "text": format!("task join failed: {e}")}],
+                    })
+                }),
                 _ => {
                     return Some(McpResponse::error(
                         id,
@@ -598,6 +618,56 @@ fn mcp_tools() -> Vec<Value> {
                     }
                 },
                 "required": ["note_id"]
+            }
+        }),
+        serde_json::json!({
+            "name": "github_list_issues",
+            "description": "List GitHub issues for a repository. Requires GITHUB_TOKEN env var or --github-token CLI arg.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner (username or org)"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": "Filter by state: open, closed, or all (default: open)",
+                        "default": "open"
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of issues to return (default: 10, max: 30)",
+                        "default": 10
+                    }
+                },
+                "required": ["owner", "repo"]
+            }
+        }),
+        serde_json::json!({
+            "name": "github_get_issue",
+            "description": "Get details of a specific GitHub issue by number. Requires GITHUB_TOKEN env var or --github-token CLI arg.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "owner": {
+                        "type": "string",
+                        "description": "Repository owner (username or org)"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name"
+                    },
+                    "issue_number": {
+                        "type": "number",
+                        "description": "The issue number to fetch"
+                    }
+                },
+                "required": ["owner", "repo", "issue_number"]
             }
         }),
     ]
@@ -921,5 +991,189 @@ fn handle_vault_related(context: &StorageContext, arguments: Value) -> Value {
                 "content": [{"type": "text", "text": format!("failed to find related notes: {e}")}],
             })
         }
+    }
+}
+
+// --- GitHub Connector Handlers ---
+
+/// Resolve GitHub token: CLI arg --github-token first, then GITHUB_TOKEN env var.
+fn github_token_from_args() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--github-token") {
+        if let Some(token) = args.get(pos + 1) {
+            if !token.is_empty() {
+                return Some(token.clone());
+            }
+        }
+    }
+    std::env::var("GITHUB_TOKEN").ok()
+}
+
+/// Call GitHub REST API with ureq and return MCP-style result Value.
+fn github_api(path: &str) -> Value {
+    let token = match github_token_from_args() {
+        Some(t) => t,
+        None => {
+            return serde_json::json!({
+                "isError": true,
+                "content": [{"type": "text", "text": "GitHub token not configured. Set GITHUB_TOKEN env var or pass --github-token."}],
+            })
+        }
+    };
+
+    let url = format!("https://api.github.com{}", path);
+    let mut resp = match ureq::get(&url)
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "vaultpilot-mcp")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .call()
+    {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(code)) => {
+            return serde_json::json!({
+                "isError": true,
+                "content": [{"type": "text", "text": format!("GitHub API HTTP {} for {}", code, path)}],
+            })
+        }
+        Err(e) => {
+            return serde_json::json!({
+                "isError": true,
+                "content": [{"type": "text", "text": format!("GitHub API request failed: {e}")}],
+            })
+        }
+    };
+
+    match resp.body_mut().read_json::<Value>() {
+        Ok(v) => serde_json::json!({
+            "content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}],
+        }),
+        Err(e) => serde_json::json!({
+            "isError": true,
+            "content": [{"type": "text", "text": format!("Failed to parse GitHub response: {e}")}],
+        }),
+    }
+}
+
+fn handle_github_list_issues(arguments: Value) -> Value {
+    let owner = arguments.get("owner").and_then(Value::as_str).unwrap_or("");
+    let repo = arguments.get("repo").and_then(Value::as_str).unwrap_or("");
+    let state = arguments
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("open");
+    let limit = arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(10)
+        .min(30);
+
+    if owner.is_empty() || repo.is_empty() {
+        return serde_json::json!({
+            "isError": true,
+            "content": [{"type": "text", "text": "owner and repo are required"}],
+        });
+    }
+
+    github_api(&format!(
+        "/repos/{}/{}/issues?state={}&per_page={}&sort=updated&direction=desc",
+        owner, repo, state, limit
+    ))
+}
+
+fn handle_github_get_issue(arguments: Value) -> Value {
+    let owner = arguments.get("owner").and_then(Value::as_str).unwrap_or("");
+    let repo = arguments.get("repo").and_then(Value::as_str).unwrap_or("");
+    let issue_number = arguments
+        .get("issue_number")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    if owner.is_empty() || repo.is_empty() || issue_number == 0 {
+        return serde_json::json!({
+            "isError": true,
+            "content": [{"type": "text", "text": "owner, repo, and issue_number are required"}],
+        });
+    }
+
+    github_api(&format!(
+        "/repos/{}/{}/issues/{}",
+        owner, repo, issue_number
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_github_token_not_configured() {
+        // Ensure GITHUB_TOKEN is not in env for this test
+        let result = github_api("/repos/foo/bar/issues");
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return isError=true when no token configured"
+        );
+    }
+
+    #[test]
+    fn test_github_list_issues_missing_owner() {
+        let result = handle_github_list_issues(json!({"repo": "bar"}));
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return error for missing owner"
+        );
+    }
+
+    #[test]
+    fn test_github_list_issues_missing_repo() {
+        let result = handle_github_list_issues(json!({"owner": "foo"}));
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return error for missing repo"
+        );
+    }
+
+    #[test]
+    fn test_github_get_issue_missing_number() {
+        let result = handle_github_get_issue(json!({"owner": "foo", "repo": "bar"}));
+        assert!(
+            result
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "should return error when issue_number=0"
+        );
+    }
+
+    #[test]
+    fn test_github_tool_definitions_present() {
+        let tools = mcp_tools();
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .collect();
+        assert!(
+            names.contains(&"github_list_issues"),
+            "github_list_issues tool should be present"
+        );
+        assert!(
+            names.contains(&"github_get_issue"),
+            "github_get_issue tool should be present"
+        );
+        assert!(
+            names.contains(&"vault_search"),
+            "vault tools should still be present"
+        );
     }
 }

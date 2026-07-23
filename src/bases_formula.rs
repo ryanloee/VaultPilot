@@ -708,7 +708,7 @@ fn eval_function(name: &str, args: &[Expr], env: &FmlEnv) -> FmlValue {
             }
         }
         "length" | "len" => {
-            if args.len() >= 1 {
+            if !args.is_empty() {
                 let s = to_string(&eval_expr(&args[0], env));
                 FmlValue::Number(s.len() as f64)
             } else {
@@ -716,7 +716,7 @@ fn eval_function(name: &str, args: &[Expr], env: &FmlEnv) -> FmlValue {
             }
         }
         "round" => {
-            if args.len() >= 1 {
+            if !args.is_empty() {
                 let n = to_number(&eval_expr(&args[0], env));
                 if args.len() >= 2 {
                     let places = to_number(&eval_expr(&args[1], env)) as i32;
@@ -730,7 +730,7 @@ fn eval_function(name: &str, args: &[Expr], env: &FmlEnv) -> FmlValue {
             }
         }
         "trim" => {
-            if args.len() >= 1 {
+            if !args.is_empty() {
                 let s = to_string(&eval_expr(&args[0], env));
                 FmlValue::String(s.trim().to_string())
             } else {
@@ -738,7 +738,7 @@ fn eval_function(name: &str, args: &[Expr], env: &FmlEnv) -> FmlValue {
             }
         }
         "upper" | "uppercase" => {
-            if args.len() >= 1 {
+            if !args.is_empty() {
                 let s = to_string(&eval_expr(&args[0], env));
                 FmlValue::String(s.to_uppercase())
             } else {
@@ -746,7 +746,7 @@ fn eval_function(name: &str, args: &[Expr], env: &FmlEnv) -> FmlValue {
             }
         }
         "lower" | "lowercase" => {
-            if args.len() >= 1 {
+            if !args.is_empty() {
                 let s = to_string(&eval_expr(&args[0], env));
                 FmlValue::String(s.to_lowercase())
             } else {
@@ -754,7 +754,7 @@ fn eval_function(name: &str, args: &[Expr], env: &FmlEnv) -> FmlValue {
             }
         }
         "abs" => {
-            if args.len() >= 1 {
+            if !args.is_empty() {
                 FmlValue::Number(to_number(&eval_expr(&args[0], env)).abs())
             } else {
                 FmlValue::Number(0.0)
@@ -975,9 +975,9 @@ fn detect_cycles_dfs<'a>(
 }
 
 /// Extract names of other formulas referenced in an expression string.
-pub fn extract_formula_refs<'a>(
+pub fn extract_formula_refs(
     expr_str: &str,
-    formulas: &'a std::collections::HashMap<String, String>,
+    formulas: &std::collections::HashMap<String, String>,
 ) -> std::collections::HashSet<String> {
     let mut refs = std::collections::HashSet::new();
     let mut tok = Tokenizer::new(expr_str);
@@ -1015,10 +1015,6 @@ mod tests {
             platform: "linux".into(),
             ..Default::default()
         }
-    }
-
-    fn empty_env() -> HashMap<String, FmlValue> {
-        HashMap::new()
     }
 
     fn env_for<'a>(

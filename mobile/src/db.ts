@@ -691,6 +691,8 @@ export async function instantiateTemplate(
 }
 
 const DEFAULT_TEMPLATES_SEEDED_KEY = 'templates_seeded_v1';
+/** Promise for an in-flight ensureDefaultTemplates() call — dedup concurrent callers (#3373). */
+let defaultTemplatesPromise: Promise<void> | null = null;
 
 /** Built-in starter templates (会议纪要 / 读书笔记 / 周报). */
 export const DEFAULT_TEMPLATES: Array<{ title: string; content: string }> = [
@@ -755,8 +757,20 @@ export const DEFAULT_TEMPLATES: Array<{ title: string; content: string }> = [
   },
 ];
 
-/** Idempotently seed built-in templates on first launch. */
+/**
+ * Idempotently seed built-in templates on first launch.
+ *
+ * Dedups concurrent callers via a module-level promise (#3373 TOCTOU fix):
+ * if another call is already in-flight, subsequent callers await the same
+ * promise instead of racing through the AsyncStorage check-and-set.
+ */
 export async function ensureDefaultTemplates(): Promise<void> {
+  if (defaultTemplatesPromise) return defaultTemplatesPromise;
+  defaultTemplatesPromise = _doEnsureDefaultTemplates();
+  return defaultTemplatesPromise;
+}
+
+async function _doEnsureDefaultTemplates(): Promise<void> {
   try {
     const flagged = await AsyncStorage.getItem(DEFAULT_TEMPLATES_SEEDED_KEY);
     if (flagged === '1') return;
@@ -771,6 +785,8 @@ export async function ensureDefaultTemplates(): Promise<void> {
     await AsyncStorage.setItem(DEFAULT_TEMPLATES_SEEDED_KEY, '1');
   } catch (e) {
     console.warn('[DB] ensureDefaultTemplates failed:', e);
+  } finally {
+    defaultTemplatesPromise = null;
   }
 }
 

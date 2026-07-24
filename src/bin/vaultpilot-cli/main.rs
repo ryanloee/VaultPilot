@@ -322,6 +322,26 @@ enum Commands {
         json: bool,
     },
 
+    /// Render a note's heading hierarchy as an interactive mindmap (#3430).
+    ///
+    /// Parses the Markdown headings (h1–h6) of the specified note into a tree
+    /// and outputs it in the requested format.  The backend parser lives in
+    /// `src/mindmap.rs`; this command exposes it to the CLI.  WinUI/Mobile
+    /// rendering is tracked separately.
+    ///
+    /// Examples:
+    ///   vp mindmap my-note           # human-readable indented tree (default)
+    ///   vp mindmap my-note --format json     # MindmapNode JSON for frontends
+    ///   vp mindmap my-note --format mermaid  # Mermaid mindmap diagram
+    Mindmap {
+        /// Note ID or path of the note to render.
+        note_id: String,
+
+        /// Output format: text, json, or mermaid.
+        #[arg(long, value_enum, default_value_t = vaultpilot_lib::mindmap::MindmapFormat::Text)]
+        format: vaultpilot_lib::mindmap::MindmapFormat,
+    },
+
     /// Open or create today's daily note with optional template (#1843)
     ///
     /// Creates a structured daily note at `Daily/YYYY-MM-DD.md` using a template.
@@ -2633,6 +2653,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         })),
         Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
         Commands::Canvas { action } => handle_canvas(context, action),
+        Commands::Mindmap { note_id, format } => handle_mindmap(context, note_id, *format),
         Commands::Calendar {
             year,
             month,
@@ -4736,6 +4757,55 @@ fn handle_canvas(context: &StorageContext, action: &CanvasActions) -> Result<Val
             }))
         }
     }
+}
+
+/// Handle `vp mindmap <note-id> [--format text|json|mermaid]` (#3430).
+///
+/// Loads the note by ID/path, parses its Markdown headings into a tree, and
+/// renders the result in the requested format.
+fn handle_mindmap(
+    context: &StorageContext,
+    note_id: &str,
+    format: vaultpilot_lib::mindmap::MindmapFormat,
+) -> Result<Value> {
+    use vaultpilot_lib::mindmap;
+
+    let note = vaultpilot_lib::storage::load_note_with_context(context, note_id)?;
+    let nodes = mindmap::parse_markdown_headings(&note.body);
+
+    let node_count = count_nodes(&nodes);
+
+    match format {
+        mindmap::MindmapFormat::Text => {
+            let text = mindmap::render_text(&nodes);
+            println!("{text}");
+        }
+        mindmap::MindmapFormat::Json => {
+            let json_str =
+                serde_json::to_string_pretty(&nodes).context("serializing mindmap tree")?;
+            println!("{json_str}");
+        }
+        mindmap::MindmapFormat::Mermaid => {
+            let md = mindmap::render_mermaid(&nodes);
+            println!("{md}");
+        }
+    }
+
+    Ok(serde_json::json!({
+        "note_id": note_id,
+        "format": match format {
+            mindmap::MindmapFormat::Text => "text",
+            mindmap::MindmapFormat::Json => "json",
+            mindmap::MindmapFormat::Mermaid => "mermaid",
+        },
+        "node_count": node_count,
+        "root_count": nodes.len(),
+    }))
+}
+
+/// Recursively count all nodes in a forest (roots + descendants).
+fn count_nodes(nodes: &[vaultpilot_lib::mindmap::MindmapNode]) -> usize {
+    nodes.iter().map(|n| 1 + count_nodes(&n.children)).sum()
 }
 
 fn handle_calendar(

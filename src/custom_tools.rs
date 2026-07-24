@@ -490,7 +490,7 @@ mod tests {
         let tool = make_tool("echo_tool", "echo hello-from-tool");
         #[cfg(windows)]
         let tool = make_tool("echo_tool", "cmd /C echo hello-from-tool");
-        let result = tool.execute("{}", Path::new("/tmp")).await;
+        let result = tool.execute("{}", &std::env::temp_dir()).await;
         assert!(result.is_ok());
         assert!(
             result.unwrap().contains("hello-from-tool"),
@@ -506,7 +506,9 @@ mod tests {
         let tool = make_tool("passthrough", "cat");
         #[cfg(windows)]
         let tool = make_tool("passthrough", "findstr .");
-        let result = tool.execute(r#"{"key":"value"}"#, Path::new("/tmp")).await;
+        let result = tool
+            .execute(r#"{"key":"value"}"#, &std::env::temp_dir())
+            .await;
         assert!(result.is_ok());
         assert!(
             result.unwrap().contains("key"),
@@ -523,7 +525,7 @@ mod tests {
         #[cfg(windows)]
         let mut tool = make_tool("slow_tool", "ping -n 100 127.0.0.1");
         tool.timeout_seconds = 1;
-        let result = tool.execute("{}", Path::new("/tmp")).await;
+        let result = tool.execute("{}", &std::env::temp_dir()).await;
         assert!(result.is_err());
         assert!(
             result.unwrap_err().to_string().contains("timed out"),
@@ -535,6 +537,10 @@ mod tests {
     /// not orphaned. Uses a marker file — the process writes it after a
     /// delay; if kill_on_drop works, the file should NOT exist after
     /// the timeout fires.
+    // The sh/sleep/touch marker-file mechanism is Unix-only; kill_on_drop
+    // itself is cross-platform (same Rust std impl) and is exercised here
+    // on Unix runners. Skipped on Windows where sh is unavailable.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_execute_timeout_kills_subprocess() {
         let marker =
@@ -548,7 +554,7 @@ mod tests {
         let mut tool = make_tool("slow_marker", &format!("sh -c '{}'", script));
         tool.timeout_seconds = 1;
 
-        let result = tool.execute("{}", Path::new("/tmp")).await;
+        let result = tool.execute("{}", &std::env::temp_dir()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("timed out"));
 
@@ -574,7 +580,7 @@ mod tests {
             "fail_tool",
             r#"powershell -NoProfile -Command "[Console]::Error.WriteLine('error'); exit 1""#,
         );
-        let result = tool.execute("{}", Path::new("/tmp")).await;
+        let result = tool.execute("{}", &std::env::temp_dir()).await;
         assert!(result.is_err());
         assert!(
             result.unwrap_err().to_string().contains("error"),

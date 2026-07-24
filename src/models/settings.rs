@@ -265,6 +265,11 @@ pub struct AppSettings {
     /// The PIN itself is never stored in plaintext.
     #[serde(default)]
     pub app_lock_pin_hash: Option<String>,
+    /// Custom agent tools (#3384). Each entry defines a user-registered
+    /// shell command that the AI agent can invoke as a tool. Empty by
+    /// default; users add tools via settings or `.vaultpilot/tools/*.toml`.
+    #[serde(default)]
+    pub custom_tools: Vec<crate::custom_tools::CustomTool>,
 }
 
 fn default_privacy_mode() -> bool {
@@ -320,6 +325,7 @@ impl Default for AppSettings {
             proxy_url: None,
             app_lock_enabled: false,
             app_lock_pin_hash: None,
+            custom_tools: Vec::new(),
         }
     }
 }
@@ -666,6 +672,7 @@ mod tests {
             proxy_url: None,
             app_lock_enabled: false,
             app_lock_pin_hash: None,
+            custom_tools: Vec::new(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

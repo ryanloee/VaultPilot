@@ -223,9 +223,12 @@ pub async fn select_tool_call(
     prior_tool_results: &[String],
 ) -> Result<ToolSelectionResult> {
     let system = format!(
-        "{}{}",
+        "{}{}{}",
         with_active_prompt(settings, &prompting::tool_call_system_prompt()),
         prompting::response_style_suffix(settings.response_style),
+        // #3384: Append custom tool descriptions so the model knows about them.
+        crate::custom_tools::CustomToolRegistry::from_tools(&settings.custom_tools)
+            .prompt_description(),
     );
     let prompt = prompting::tool_call_user_prompt(
         question,
@@ -236,7 +239,16 @@ pub async fn select_tool_call(
     let response =
         send_request_with_temperature(settings, &system, &prompt, image_paths, 0.1).await?;
 
-    let (tool_call, usage) = match parse_tool_call(&response.text, question) {
+    // #3384: Build the list of custom tool names so the parser can recognize
+    // them and route them to AssistantToolCall::Custom.
+    let custom_tool_names: Vec<&str> = settings
+        .custom_tools
+        .iter()
+        .filter(|t| t.enabled)
+        .map(|t| t.name.as_str())
+        .collect();
+
+    let (tool_call, usage) = match parse_tool_call(&response.text, question, &custom_tool_names) {
         Ok(tool_call) => (tool_call, response.usage),
         Err(_) => {
             let retry_prompt = prompting::tool_call_retry_user_prompt(
@@ -249,12 +261,13 @@ pub async fn select_tool_call(
             let retry_response =
                 send_request_with_temperature(settings, &system, &retry_prompt, image_paths, 0.1)
                     .await?;
-            let tool_call = parse_tool_call(&retry_response.text, question).with_context(|| {
-                format!(
-                    "model did not return a valid tool call after retry; last response: {}",
-                    crate::sanitize_error(retry_response.text.trim())
-                )
-            })?;
+            let tool_call = parse_tool_call(&retry_response.text, question, &custom_tool_names)
+                .with_context(|| {
+                    format!(
+                        "model did not return a valid tool call after retry; last response: {}",
+                        crate::sanitize_error(retry_response.text.trim())
+                    )
+                })?;
             let combined_usage = RequestUsage {
                 input_tokens: match (
                     response.usage.input_tokens,
@@ -662,6 +675,7 @@ mod tests {
         let tool = parse_tool_call(
             "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
             "list notes",
+            &[],
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
@@ -672,6 +686,7 @@ mod tests {
         let tool = parse_tool_call(
             "{\"tool\":\"list_notes\",\"query\":\"\",\"limit\":5,\"noteDraft\":null}",
             "资料库里有什么",
+            &[],
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ListNotes { limit: 5 }));
@@ -682,6 +697,7 @@ mod tests {
         let tool = parse_tool_call(
             "{\"tool\":\"search_notes\",\"query\":\"mmc timeout\",\"limit\":6,\"noteDraft\":null}",
             "mmc超时",
+            &[],
         )
         .expect("tool");
         assert!(
@@ -694,6 +710,7 @@ mod tests {
         let tool = parse_tool_call(
             "{\"tool\":\"read_file\",\"path\":\"C:\\\\\\\\Users\\\\\\\\test\\\\\\\\log.txt\",\"noteDraft\":null}",
             "看下日志",
+            &[],
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ReadFile { path } if path.contains("log.txt")));
@@ -704,6 +721,7 @@ mod tests {
         let tool = parse_tool_call(
             r#"{"tool":"read_file","query":"","path":"\\?\C:\Users\test\log.txt","limit":6,"noteDraft":null}"#,
             "read the file",
+            &[],
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::ReadFile { path } if path.contains("log.txt")));
@@ -714,6 +732,7 @@ mod tests {
         assert!(parse_tool_call(
             "{\"tool\":\"run_command\",\"command\":\"dir\",\"cwd\":\"\",\"noteDraft\":null}",
             "列出文件",
+            &[],
         )
         .is_err());
     }
@@ -723,6 +742,7 @@ mod tests {
         let tool = parse_tool_call(
             "{\"tool\":\"none\",\"query\":\"\",\"limit\":0,\"noteDraft\":null}",
             "你好",
+            &[],
         )
         .expect("tool");
         assert!(matches!(tool, AssistantToolCall::None));
@@ -733,6 +753,7 @@ mod tests {
         assert!(parse_tool_call(
             "{\"tool\":\"fly_to_moon\",\"query\":\"\",\"limit\":0,\"noteDraft\":null}",
             "去月球",
+            &[],
         )
         .is_err());
     }

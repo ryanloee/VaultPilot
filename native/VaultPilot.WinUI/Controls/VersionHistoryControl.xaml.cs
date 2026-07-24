@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Text;
+using Windows.UI.Text;
 using System;
 using System.Collections.Generic;
 using System.Linq;

@@ -9,7 +9,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { saveSettings } from '../api/client';
-import { ApiFormat, ThemeMode, ProviderConfig } from '../store';
+import { ApiFormat, ThemeMode, ProviderConfig, isValidThemeMode } from '../store';
 
 const SECURE_KEYS_ID = 'vaultpilot_provider_keys';
 
@@ -103,7 +103,7 @@ export async function importSettings(json: string): Promise<{ providersImported:
   }
   const state = stored?.state ?? stored;
 
-  state.themeMode = data.themeMode;
+  state.themeMode = isValidThemeMode(data.themeMode) ? data.themeMode : 'system';
   state.accentColor = data.accentColor;
   state.activeProviderIndex = data.providers.length > 0
     ? Math.min(data.activeProviderIndex, data.providers.length - 1)
@@ -161,7 +161,7 @@ export async function importSettings(json: string): Promise<{ providersImported:
   const { useAppStore } = await import('../store');
   const fresh = useAppStore.getState();
   useAppStore.setState({
-    themeMode: data.themeMode as ThemeMode,
+    themeMode: isValidThemeMode(data.themeMode) ? data.themeMode : 'system',
     accentColor: data.accentColor,
     // #3242: Normalize apiKey to '' (string) — exports with includeKeys=false
     // omit apiKey (becomes undefined), but ProviderConfig.apiKey is typed as

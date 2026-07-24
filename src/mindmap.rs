@@ -165,6 +165,79 @@ fn strip_trailing_heading_markers(s: &str) -> String {
     trimmed.to_string()
 }
 
+/// Output format for the mindmap CLI command (#3430).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum MindmapFormat {
+    /// Human-readable indented text tree (default).
+    Text,
+    /// `MindmapNode` JSON tree (for frontend consumption).
+    Json,
+    /// Mermaid `mindmap` diagram syntax.
+    Mermaid,
+}
+
+/// Render the heading tree as a human-readable indented text outline.
+///
+/// Each node is printed on its own line with an indentation proportional to its
+/// depth in the tree.  This is the default output format for `vp mindmap`.
+pub fn render_text(nodes: &[MindmapNode]) -> String {
+    let mut buf = String::new();
+    for root in nodes {
+        render_text_node(root, 0, &mut buf);
+    }
+    // Trim trailing newline
+    if buf.ends_with('\n') {
+        buf.pop();
+    }
+    buf
+}
+
+fn render_text_node(node: &MindmapNode, depth: usize, buf: &mut String) {
+    let indent = "  ".repeat(depth);
+    buf.push_str(&format!("{}{}\n", indent, node.title));
+    for child in &node.children {
+        render_text_node(child, depth + 1, buf);
+    }
+}
+
+/// Render the heading tree as a [Mermaid `mindmap` diagram](https://mermaid.js.org/syntax/mindmap.html).
+///
+/// Produces a complete ```` ```mermaid ```` fenced block ready for Markdown embedding.
+/// Mermind mindmap syntax uses indentation to indicate nesting.
+pub fn render_mermaid(nodes: &[MindmapNode]) -> String {
+    let mut buf = String::new();
+    buf.push_str("```mermaid\nmindmap\n");
+    for root in nodes {
+        render_mermaid_node(root, 1, &mut buf);
+    }
+    buf.push_str("```\n");
+    buf
+}
+
+fn render_mermaid_node(node: &MindmapNode, depth: usize, buf: &mut String) {
+    let indent = "  ".repeat(depth);
+    buf.push_str(&format!(
+        "{}({})\n",
+        indent,
+        sanitize_mermaid_label(&node.title)
+    ));
+    for child in &node.children {
+        render_mermaid_node(child, depth + 1, buf);
+    }
+}
+
+/// Escape characters that are problematic inside Mermaid mindmap node labels.
+/// Mermaid uses `()` for rounded nodes; parentheses in the title need stripping
+/// to avoid breaking the diagram syntax.
+fn sanitize_mermaid_label(s: &str) -> String {
+    // Mermaid mindmap node labels can't contain unescaped parentheses or brackets.
+    // Replace them with visually similar unicode characters.
+    s.replace('(', "（")
+        .replace(')', "）")
+        .replace('[', "【")
+        .replace(']', "】")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +418,82 @@ Some text
         let json = serde_json::to_string(&nodes).expect("serialize");
         let parsed: Vec<MindmapNode> = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, nodes);
+    }
+
+    // ── render_text tests (#3430) ──────────────────────────────────
+
+    /// Text rendering produces an indented outline.
+    #[test]
+    fn render_text_basic_tree() {
+        let md = "# Root\n## Child A\n### Grandchild\n## Child B\n";
+        let nodes = parse_markdown_headings(md);
+        let text = render_text(&nodes);
+        let expected = "Root\n  Child A\n    Grandchild\n  Child B";
+        assert_eq!(text, expected);
+    }
+
+    /// Text rendering handles multiple roots.
+    #[test]
+    fn render_text_multiple_roots() {
+        let md = "# Root1\n## Sub1\n# Root2\n";
+        let nodes = parse_markdown_headings(md);
+        let text = render_text(&nodes);
+        let expected = "Root1\n  Sub1\nRoot2";
+        assert_eq!(text, expected);
+    }
+
+    /// Text rendering of empty input is empty string.
+    #[test]
+    fn render_text_empty() {
+        let text = render_text(&[]);
+        assert_eq!(text, "");
+    }
+
+    // ── render_mermaid tests (#3430) ──────────────────────────────
+
+    /// Mermaid output is well-formed for a simple tree.
+    #[test]
+    fn render_mermaid_basic_tree() {
+        let md = "# Root\n## Child\n### Grandchild\n";
+        let nodes = parse_markdown_headings(md);
+        let out = render_mermaid(&nodes);
+        assert!(out.starts_with("```mermaid\nmindmap\n"));
+        assert!(out.ends_with("```\n"));
+        assert!(out.contains("  (Root)"), "root should be at depth 1");
+        assert!(out.contains("    (Child)"), "child at depth 2");
+        assert!(out.contains("      (Grandchild)"), "grandchild at depth 3");
+    }
+
+    /// Parentheses in heading titles are sanitized for Mermaid.
+    #[test]
+    fn render_mermaid_sanitizes_parens() {
+        let md = "# API (v2)\n";
+        let nodes = parse_markdown_headings(md);
+        let out = render_mermaid(&nodes);
+        assert!(
+            out.contains("（v2）"),
+            "parens should be replaced with fullwidth"
+        );
+        assert!(
+            !out.contains("(v2)"),
+            "no halfwidth parens should remain in label"
+        );
+    }
+
+    /// Mermaid output for empty input is just the empty block.
+    #[test]
+    fn render_mermaid_empty() {
+        let out = render_mermaid(&[]);
+        assert_eq!(out, "```mermaid\nmindmap\n```\n");
+    }
+
+    // ── MindmapFormat enum smoke test ─────────────────────────────
+
+    /// MindmapFormat derives PartialEq and has exactly 3 variants.
+    #[test]
+    fn mindmap_format_variants() {
+        assert_eq!(MindmapFormat::Text, MindmapFormat::Text);
+        assert_ne!(MindmapFormat::Text, MindmapFormat::Json);
+        assert_ne!(MindmapFormat::Json, MindmapFormat::Mermaid);
     }
 }

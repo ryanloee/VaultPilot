@@ -17,16 +17,17 @@ use vaultpilot_lib::agent::{
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
+use vaultpilot_lib::diff::compute_diff;
 use vaultpilot_lib::models::{
     AppSettings, ChatState, ConversationSummary, ConversationTurn, NoteDocument,
 };
 use vaultpilot_lib::storage::{
     create_subscription_async, delete_note_async, delete_subscription_async,
-    find_related_notes_async, get_subscription_async, import_markdown_async,
-    initialize_storage_async, list_notes_async, list_subscriptions_async, load_chat_state_async,
-    load_note_async, rebuild_index_async, save_chat_state_async, save_note_async,
-    save_settings_async, set_subscription_enabled_with_context, update_subscription_async,
-    StorageContext,
+    find_related_notes_async, get_snapshot_async, get_subscription_async, import_markdown_async,
+    initialize_storage_async, list_notes_async, list_snapshots_for_note_async,
+    list_subscriptions_async, load_chat_state_async, load_note_async, rebuild_index_async,
+    restore_snapshot_async, save_chat_state_async, save_note_async, save_settings_async,
+    set_subscription_enabled_with_context, update_subscription_async, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
@@ -419,6 +420,33 @@ async fn handle_request(
             serialize_result(import_markdown_async(context, &params.paths).await)
         }
         "rebuildIndex" => serialize_result(rebuild_index_async(context).await),
+        "listSnapshots" => {
+            let params: ListSnapshotsParams = parse_params(&request.params)?;
+            serialize_result(list_snapshots_for_note_async(context, &params.note_id).await)
+        }
+        "getSnapshot" => {
+            let params: ListSnapshotsParams = parse_params(&request.params)?;
+            serialize_result(get_snapshot_async(context, &params.note_id).await)
+        }
+        "restoreSnapshot" => {
+            let params: RestoreSnapshotParams = parse_params(&request.params)?;
+            serialize_result(
+                restore_snapshot_async(context, &params.note_id, &params.snapshot_id).await,
+            )
+        }
+        "diffSnapshot" => {
+            let params: DiffSnapshotParams = parse_params(&request.params)?;
+            // Load the snapshot to get its body, and load the current note to compare.
+            let snapshot = get_snapshot_async(context, &params.snapshot_id)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?
+                .ok_or_else(|| "snapshot not found".to_string())?;
+            let current_note = load_note_async(context, &params.note_id)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let diff = compute_diff(&snapshot.body, &current_note.body, 3);
+            serde_json::to_value(&diff).map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
         "readImagePreview" => {
             let params: PathParams = parse_params(&request.params)?;
             let settings = initialize_storage_async(context)
@@ -1237,6 +1265,26 @@ struct RunAgentParams {
 #[serde(rename_all = "camelCase")]
 struct RespondToWriteApprovalParams {
     approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListSnapshotsParams {
+    note_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreSnapshotParams {
+    note_id: String,
+    snapshot_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffSnapshotParams {
+    note_id: String,
+    snapshot_id: String,
 }
 
 impl AgentResponse {

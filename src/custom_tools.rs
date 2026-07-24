@@ -158,10 +158,23 @@ impl CustomTool {
             )
         })?;
 
-        // Write arguments to stdin
+        // Write arguments to stdin with timeout protection (#3417).
+        // Without this, a child that never reads stdin can cause write_all to
+        // block forever if args_json exceeds the pipe buffer (~64 KB).
+        // kill_on_drop(true) ensures the child is killed when we bail.
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(args_json.as_bytes()).await.ok();
+            let stdin_timeout = Duration::from_secs(self.timeout_seconds.clamp(1, 10));
+            let write_result =
+                tokio::time::timeout(stdin_timeout, stdin.write_all(args_json.as_bytes())).await;
+            if write_result.is_err() {
+                anyhow::bail!(
+                    "custom tool '{}' stdin write timed out after {}s \
+                     (child process may not be reading stdin)",
+                    self.name,
+                    stdin_timeout.as_secs()
+                );
+            }
             stdin.shutdown().await.ok();
         }
 
@@ -566,6 +579,27 @@ mod tests {
         assert!(
             !marker.exists(),
             "subprocess was not killed on timeout — orphan process created marker file (regression #3413)"
+        );
+    }
+
+    /// Regression test for #3417: stdin write must be protected by a timeout.
+    /// A child that never reads stdin would cause write_all to block forever
+    /// if args exceed the pipe buffer. Here we pass a tiny timeout and verify
+    /// the error message indicates a stdin write timeout (not the execution
+    /// timeout).  Uses `sleep` which does not read stdin at all.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_execute_stdin_write_timeout() {
+        // Create a large payload that exceeds the pipe buffer (~64 KB).
+        let large_payload = "x".repeat(128 * 1024);
+        let mut tool = make_tool("no_stdin_reader", "sleep 100");
+        tool.timeout_seconds = 2; // stdin timeout will be min(2,10)=2s
+        let result = tool.execute(&large_payload, &std::env::temp_dir()).await;
+        assert!(result.is_err(), "expected an error for stdin write timeout");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("stdin write timed out"),
+            "expected stdin write timeout error, got: {err}"
         );
     }
 

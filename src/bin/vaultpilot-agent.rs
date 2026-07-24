@@ -425,8 +425,8 @@ async fn handle_request(
             serialize_result(list_snapshots_for_note_async(context, &params.note_id).await)
         }
         "getSnapshot" => {
-            let params: ListSnapshotsParams = parse_params(&request.params)?;
-            serialize_result(get_snapshot_async(context, &params.note_id).await)
+            let params: GetSnapshotParams = parse_params(&request.params)?;
+            serialize_result(get_snapshot_async(context, &params.snapshot_id).await)
         }
         "restoreSnapshot" => {
             let params: RestoreSnapshotParams = parse_params(&request.params)?;
@@ -1275,6 +1275,12 @@ struct ListSnapshotsParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GetSnapshotParams {
+    snapshot_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RestoreSnapshotParams {
     note_id: String,
     snapshot_id: String,
@@ -1570,5 +1576,46 @@ mod tests {
         assert_eq!(params.text, "meeting at 3pm");
         assert_eq!(params.target, "daily");
         assert_eq!(params.section, "Today");
+    }
+
+    #[test]
+    fn get_snapshot_params_deserializes_snapshot_id() {
+        // Regression for #3410: getSnapshot must accept { snapshotId } not { noteId }.
+        // A client sending { "snapshotId": "abc-123" } should deserialize
+        // into GetSnapshotParams without error.
+        let json = json!({ "snapshotId": "abc-123" });
+        let params: GetSnapshotParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.snapshot_id, "abc-123");
+    }
+
+    #[test]
+    fn get_snapshot_params_rejects_note_id_only() {
+        // Regression for #3410: the old buggy handler used ListSnapshotsParams
+        // (noteId), so a correct getSnapshot call with snapshotId would fail.
+        // Verify that sending { "noteId": "..." } (the old wrong format) is
+        // now rejected by GetSnapshotParams — it requires snapshotId.
+        let json = json!({ "noteId": "some-note-uuid" });
+        let result: Result<GetSnapshotParams, _> = serde_json::from_value(json);
+        assert!(
+            result.is_err(),
+            "GetSnapshotParams should NOT accept noteId — it requires snapshotId"
+        );
+    }
+
+    #[test]
+    fn get_snapshot_request_through_agent_request() {
+        // End-to-end wire-format check for #3410: a getSnapshot request with
+        // { snapshotId } must deserialize through AgentRequest → GetSnapshotParams.
+        let wire = json!({
+            "id": "req-getsnap",
+            "method": "getSnapshot",
+            "params": {
+                "snapshotId": "snap-uuid-001"
+            }
+        });
+        let request: AgentRequest = serde_json::from_value(wire).unwrap();
+        assert_eq!(request.method, "getSnapshot");
+        let params: GetSnapshotParams = serde_json::from_value(request.params).unwrap();
+        assert_eq!(params.snapshot_id, "snap-uuid-001");
     }
 }

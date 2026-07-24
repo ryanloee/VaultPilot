@@ -135,6 +135,7 @@ impl CustomTool {
         let workdir = self.resolve_workdir(vault_dir);
 
         let mut cmd = Command::new(&program);
+        cmd.kill_on_drop(true); // Ensure subprocess is killed on timeout/drop (#3413)
         cmd.args(&args);
         cmd.current_dir(&workdir);
         cmd.stdin(std::process::Stdio::piped());
@@ -527,6 +528,38 @@ mod tests {
         assert!(
             result.unwrap_err().to_string().contains("timed out"),
             "expected a timeout error from the long-running tool"
+        );
+    }
+
+    /// Regression test for #3413: subprocess must be killed on timeout,
+    /// not orphaned. Uses a marker file — the process writes it after a
+    /// delay; if kill_on_drop works, the file should NOT exist after
+    /// the timeout fires.
+    #[tokio::test]
+    async fn test_execute_timeout_kills_subprocess() {
+        let marker =
+            std::env::temp_dir().join(format!("vp-regression-3413-{}.tmp", std::process::id()));
+        // Clean up any leftover from a previous run
+        let _ = std::fs::remove_file(&marker);
+
+        // Script: sleep 5s, then create marker file. Timeout is 1s.
+        // If the process is killed on timeout, the file will never be created.
+        let script = format!("sleep 5 && touch {}", marker.to_string_lossy());
+        let mut tool = make_tool("slow_marker", &format!("sh -c '{}'", script));
+        tool.timeout_seconds = 1;
+
+        let result = tool.execute("{}", Path::new("/tmp")).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+
+        // Wait 7 seconds — enough time for the orphaned process (if still
+        // running) to have created the marker file.
+        tokio::time::sleep(Duration::from_secs(7)).await;
+
+        // The marker file must NOT exist — proving the subprocess was killed.
+        assert!(
+            !marker.exists(),
+            "subprocess was not killed on timeout — orphan process created marker file (regression #3413)"
         );
     }
 

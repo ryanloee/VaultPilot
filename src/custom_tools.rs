@@ -614,10 +614,9 @@ mod tests {
         // - `cmd /C "echo error 1>&2 & exit /b 1"` also unreliable
         // On Windows we only assert the error is surfaced (is_err + exit code).
         #[cfg(unix)]
-        let tool = make_tool("fail_tool", "sh -c 'echo error >&2; exit 1'");
-        let result = tool.execute("{}", &std::env::temp_dir()).await;
-        #[cfg(unix)]
         {
+            let tool = make_tool("fail_tool", "sh -c 'echo error >&2; exit 1'");
+            let result = tool.execute("{}", &std::env::temp_dir()).await;
             assert!(result.is_err());
             assert!(
                 result.unwrap_err().to_string().contains("error"),

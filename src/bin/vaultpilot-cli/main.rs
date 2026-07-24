@@ -1192,6 +1192,44 @@ enum NotesActions {
         meeting: bool,
     },
 
+    /// Create a new note from a template (#3383)
+    ///
+    /// Renders a template from .vaultpilot/templates/ with built-in variables
+    /// (title, date, time, tags, …) and saves it as a new note.
+    ///
+    /// Examples:
+    ///   vp notes new --template meeting --title "Weekly Standup"
+    ///   vp notes new --title "Quick Note" --tags journal,idea
+    ///   vp notes new --template sprint --title "Sprint 42" --var goal=Ship_v1 --dry-run
+    New {
+        /// Template name (from .vaultpilot/templates/<name>.md). Defaults to "blank".
+        #[arg(long)]
+        template: Option<String>,
+
+        /// Note title (required)
+        #[arg(long)]
+        title: String,
+
+        /// Note ID or path (default: derived from title via slug)
+        #[arg(long)]
+        id: Option<String>,
+
+        /// Tags (comma-separated)
+        #[arg(long)]
+        tags: Option<String>,
+
+        /// User-defined template variables: --var key=value (repeatable)
+        #[arg(long = "var", value_name = "KEY=VALUE")]
+        vars: Vec<String>,
+
+        /// Show rendered output without saving
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// List available note templates (#3383)
+    Templates {},
+
     /// Delete a note by ID
     Delete {
         /// Note ID
@@ -3934,6 +3972,23 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             let saved = save_note_with_context(context, note)?;
             to_json(&saved)
         }
+        NotesActions::New {
+            template,
+            title,
+            id,
+            tags,
+            vars,
+            dry_run,
+        } => handle_note_new(
+            context,
+            template.as_deref(),
+            title,
+            id.as_deref(),
+            tags.as_deref(),
+            vars,
+            *dry_run,
+        ),
+        NotesActions::Templates {} => handle_note_templates(context),
         NotesActions::Delete { id } => {
             let deleted = delete_note_with_context(context, id, None)?;
             Ok(serde_json::json!({ "deleted": deleted, "id": id }))
@@ -4132,6 +4187,128 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             },
         ),
     }
+}
+
+/// Handle `notes new` — create a note from a template (#3383).
+fn handle_note_new(
+    context: &StorageContext,
+    template_name: Option<&str>,
+    title: &str,
+    note_id: Option<&str>,
+    tags: Option<&str>,
+    vars: &[String],
+    dry_run: bool,
+) -> Result<Value> {
+    use vaultpilot_lib::template_store;
+
+    // Resolve template name (default: "blank" = just title + body)
+    let tpl_name = template_name.unwrap_or("blank");
+
+    // Parse user-supplied variables (--var key=value)
+    let mut user_vars = std::collections::HashMap::new();
+    for pair in vars {
+        if let Some(eq_pos) = pair.find('=') {
+            let (k, v) = pair.split_at(eq_pos);
+            user_vars.insert(k.to_string(), v[1..].to_string());
+        } else {
+            // Treat as key=true
+            user_vars.insert(pair.clone(), "true".to_string());
+        }
+    }
+
+    // Load template body
+    let body = if tpl_name == "blank" || tpl_name.is_empty() {
+        // Built-in blank template
+        "# {{title}}\n".to_string()
+    } else {
+        let entry =
+            template_store::get_template(context.vault_dir(), tpl_name)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "template '{}' not found in {}/.vaultpilot/templates/",
+                    tpl_name,
+                    context.vault_dir().display()
+                )
+            })?;
+        entry.content
+    };
+
+    // Parse tags
+    let tag_list: Vec<String> = tags
+        .map(|t| {
+            t.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Build template context and render
+    let ctx = template_store::build_note_context(title, &tag_list, &user_vars);
+    let rendered = template_store::render_template(&body, &ctx);
+
+    // Derive note ID from title if not provided
+    let final_id = note_id
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| vaultpilot_lib::utils::slugify(title));
+
+    // Dry-run: return rendered content without saving
+    if dry_run {
+        return Ok(serde_json::json!({
+            "status": "dry_run",
+            "note_id": final_id,
+            "title": title,
+            "template": tpl_name,
+            "body": rendered,
+        }));
+    }
+
+    // Create and save the note
+    let note = NoteDocument {
+        meta: NoteMeta {
+            id: final_id.clone(),
+            title: title.to_string(),
+            tags: tag_list,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
+        },
+        body: rendered,
+        search_snippet: None,
+        search_score: None,
+    };
+
+    let saved = save_note_with_context(context, note)?;
+    Ok(serde_json::json!({
+        "status": "created",
+        "note_id": final_id,
+        "title": saved.meta.title,
+        "template": tpl_name,
+    }))
+}
+
+/// Handle `notes templates` — list available templates (#3383).
+fn handle_note_templates(context: &StorageContext) -> Result<Value> {
+    use vaultpilot_lib::template_store;
+
+    let entries = template_store::list_templates(context.vault_dir())?;
+    let templates: Vec<Value> = entries
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "name": e.name,
+                "description": e.description,
+                "variables": e.variables,
+            })
+        })
+        .collect();
+
+    let templates_dir = template_store::templates_dir(context.vault_dir());
+    Ok(serde_json::json!({
+        "templates": templates,
+        "count": templates.len(),
+        "dir": templates_dir.display().to_string(),
+        "builtin": ["blank"],
+    }))
 }
 
 /// Resolve a [`BatchSelector`] to the list of concrete note IDs that match

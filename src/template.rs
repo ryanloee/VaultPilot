@@ -45,7 +45,7 @@ impl Value {
         }
     }
 
-    fn to_display(&self) -> String {
+    pub fn to_display(&self) -> String {
         match self {
             Value::Null => "".to_string(),
             Value::Bool(b) => b.to_string(),

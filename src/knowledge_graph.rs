@@ -217,6 +217,8 @@ pub fn score_pair(a: &NoteMeta, b: &NoteMeta) -> Option<InferredRelation> {
 /// This is a pure, database-free function suitable for unit testing.
 pub fn infer_relations(notes: &[NoteMeta], config: &InferenceConfig) -> Vec<InferredRelation> {
     let mut all: Vec<InferredRelation> = Vec::new();
+    // Dedup before per-source truncation: track seen unordered pairs globally.
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
 
     for i in 0..notes.len() {
         let mut per_source: Vec<InferredRelation> = Vec::new();
@@ -228,11 +230,20 @@ pub fn infer_relations(notes: &[NoteMeta], config: &InferenceConfig) -> Vec<Infe
             // the max-direction score (symmetric enough for similarity).
             if let Some(rel) = score_pair(&notes[i], &notes[j]) {
                 if rel.confidence >= config.min_confidence {
-                    per_source.push(rel);
+                    // Dedup at insertion time: if this unordered pair is already
+                    // tracked by another source, keep the higher-confidence version.
+                    let key = if rel.source <= rel.target {
+                        (rel.source.clone(), rel.target.clone())
+                    } else {
+                        (rel.target.clone(), rel.source.clone())
+                    };
+                    if seen.insert(key) {
+                        per_source.push(rel);
+                    }
                 }
             }
         }
-        // Keep only top-N per source.
+        // Keep only top-N unique pairs per source.
         per_source.sort_by(|a, b| {
             b.confidence
                 .partial_cmp(&a.confidence)
@@ -241,17 +252,6 @@ pub fn infer_relations(notes: &[NoteMeta], config: &InferenceConfig) -> Vec<Infe
         per_source.truncate(config.max_per_note);
         all.extend(per_source);
     }
-
-    // Deduplicate: for each unordered pair {a, b}, keep only the highest-confidence direction.
-    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
-    all.retain(|rel| {
-        let key = if rel.source <= rel.target {
-            (rel.source.clone(), rel.target.clone())
-        } else {
-            (rel.target.clone(), rel.source.clone())
-        };
-        seen.insert(key)
-    });
 
     // Final sort by confidence descending.
     all.sort_by(|a, b| {
@@ -936,5 +936,74 @@ mod tests {
         let graph = KnowledgeGraph::default();
         let result = render(&graph, GraphOutputFormat::Json).unwrap();
         assert!(result.starts_with('{'));
+    }
+
+    /// Regression: infer_relations must dedup BEFORE per-source truncation.
+    /// When max_per_note=1 and B→A is the top score for source B but (A,B) was
+    /// already claimed by source A, the next unique pair B→C must survive.
+    /// (Issue #3387)
+    #[test]
+    fn test_infer_relations_dedup_before_truncation() {
+        // Create 3 notes where A→B has the best score, A→C and B→C less so.
+        // Tags and keywords are tuned to produce: A→B > A→C = B→C.
+        let notes = vec![
+            NoteMeta {
+                id: "A".into(),
+                title: "Alpha".into(),
+                tags: vec!["common".into()],
+                keywords: vec!["common_kw".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "B".into(),
+                title: "Beta".into(),
+                tags: vec!["common".into()],
+                keywords: vec!["common_kw".into(), "extra_b".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "C".into(),
+                title: "Gamma".into(),
+                tags: vec!["common".into()],
+                keywords: vec!["extra_c".into()],
+                ..Default::default()
+            },
+        ];
+
+        let config = InferenceConfig {
+            min_confidence: 0.0, // accept everything
+            max_per_note: 1,     // aggressive truncation exposes the bug
+        };
+
+        let relations = infer_relations(&notes, &config);
+
+        // Must have 2 unique relations, not 1:
+        //   A→B (or B→A) from source A
+        //   B→C (the unique pair that would have been lost under the old per-source-then-dedup ordering)
+        assert_eq!(
+            relations.len(),
+            2,
+            "expected 2 unique relations (A↔B and B↔C), got {}: {:?}",
+            relations.len(),
+            relations
+        );
+
+        // Verify the unordered pairs are exactly {A,B} and {B,C}.
+        let pairs: Vec<(&str, &str)> = relations
+            .iter()
+            .map(|r| {
+                if r.source <= r.target {
+                    (r.source.as_str(), r.target.as_str())
+                } else {
+                    (r.target.as_str(), r.source.as_str())
+                }
+            })
+            .collect();
+        assert!(pairs.contains(&("A", "B")), "missing pair A-B");
+        assert!(pairs.contains(&("B", "C")), "missing pair B-C");
+        assert!(
+            !pairs.contains(&("A", "C")),
+            "unexpected pair A-C (max_per_note=1 should drop it)"
+        );
     }
 }

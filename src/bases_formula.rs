@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 use crate::models::NoteMeta;
 
@@ -290,12 +291,20 @@ enum UnaryOp {
 struct Parser<'a> {
     tok: &'a mut Tokenizer<'a>,
     peek: Token,
+    /// Set when a parsing error is detected (e.g., missing expected token).
+    /// Allows callers to detect silent parse failures without cascading Result
+    /// through the entire recursive-descent chain.
+    error: Option<String>,
 }
 
 impl<'a> Parser<'a> {
     fn new(tok: &'a mut Tokenizer<'a>) -> Self {
         let peek = tok.next_token();
-        Self { tok, peek }
+        Self {
+            tok,
+            peek,
+            error: None,
+        }
     }
 
     fn advance(&mut self) -> Token {
@@ -308,7 +317,10 @@ impl<'a> Parser<'a> {
         if std::mem::discriminant(&self.peek) == std::mem::discriminant(expected) {
             self.advance()
         } else {
-            // Mismatch — skip and continue
+            // Record the error but still advance to avoid infinite loops.
+            if self.error.is_none() {
+                self.error = Some(format!("expected {:?}, found {:?}", expected, self.peek));
+            }
             self.advance()
         }
     }
@@ -907,6 +919,9 @@ pub fn evaluate(expression: &str, env: &FmlEnv) -> FmlValue {
     let mut tok = Tokenizer::new(expression);
     let mut parser = Parser::new(&mut tok);
     let expr = parser.parse_expression();
+    if let Some(err) = &parser.error {
+        warn!("bases_formula parse error: {err} (expression: {expression:?})");
+    }
     eval_expr(&expr, env)
 }
 
@@ -916,7 +931,11 @@ pub fn parse_formula(expression: &str) -> Option<()> {
     let mut tok = Tokenizer::new(expression);
     let mut parser = Parser::new(&mut tok);
     parser.parse_expression();
-    Some(())
+    if parser.error.is_some() {
+        None
+    } else {
+        Some(())
+    }
 }
 
 /// Detect circular references in formulas.
@@ -1360,5 +1379,27 @@ mod tests {
     fn test_parse_formula_valid() {
         assert!(parse_formula("1 + 2 * 3").is_some());
         assert!(parse_formula("title == \"done\"").is_some());
+    }
+
+    /// Regression: expect() must report syntax errors instead of silently skipping.
+    /// Missing closing parenthesis should cause parse_formula to return None.
+    /// (Issue #3388)
+    #[test]
+    fn test_parse_formula_missing_paren_reports_error() {
+        // Missing `)` after `if` condition
+        assert!(
+            parse_formula("if(x > 5, \"yes\", \"no\"").is_none(),
+            "missing closing paren in if() should return None"
+        );
+        // Missing `)` after parenthesized expression
+        assert!(
+            parse_formula("(1 + 2").is_none(),
+            "missing closing paren in (expr) should return None"
+        );
+        // Valid expression still parses correctly
+        assert!(
+            parse_formula("if(x > 5, \"yes\", \"no\")").is_some(),
+            "valid expression should still parse"
+        );
     }
 }

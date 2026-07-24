@@ -118,7 +118,7 @@ describe('#2927: checkApi() avoids unsafe as-cast on getSettings() return', () =
     expect(mockFetch).toHaveBeenCalled();
   });
 
-  it('checkApi() Anthropic format with explicit model uses params.model', async () => {
+  it('checkApi() Anthropic format uses GET /v1/models endpoint (#3421)', async () => {
     mockFetch.mockResolvedValue(new Response(null, { status: 200 }));
 
     const result = await checkApi({
@@ -129,13 +129,13 @@ describe('#2927: checkApi() avoids unsafe as-cast on getSettings() return', () =
     });
 
     expect(result.ok).toBe(true);
-    // Verify the fetch body includes the explicitly-provided model
-    const fetchInit = mockFetch.mock.calls[0][1] as RequestInit;
-    const body = JSON.parse(fetchInit.body as string);
-    expect(body.model).toBe('claude-haiku-20241022');
+    // Verify the URL uses /v1/models (free GET endpoint), not /v1/messages
+    const fetchUrl = mockFetch.mock.calls[0][0] as string;
+    expect(fetchUrl).toContain('/v1/models');
+    expect(fetchUrl).not.toContain('/v1/messages');
   });
 
-  it('checkApi() Anthropic format without model param uses stored model', async () => {
+  it('checkApi() Anthropic format without model param still uses /v1/models', async () => {
     // Set Anthropic format in store
     useAppStore.setState({
       apiFormat: 'anthropic',
@@ -147,9 +147,8 @@ describe('#2927: checkApi() avoids unsafe as-cast on getSettings() return', () =
     const result = await checkApi();
 
     expect(result.ok).toBe(true);
-    // Verify stored model was used
-    const fetchInit = mockFetch.mock.calls[0][1] as RequestInit;
-    const body = JSON.parse(fetchInit.body as string);
-    expect(body.model).toBe('stored-model-name');
+    // Verify uses /v1/models endpoint
+    const fetchUrl = mockFetch.mock.calls[0][0] as string;
+    expect(fetchUrl).toContain('/v1/models');
   });
 });

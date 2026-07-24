@@ -103,10 +103,12 @@ describe('checkApi', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('returns ok when Anthropic returns 400 (reachable but bad request)', async () => {
+  it('returns error when Anthropic returns 400 (bad API key or request)', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 400 });
     const result = await checkApi({ apiBase: 'https://api.anthropic.com', apiKey: 'key', apiFormat: 'anthropic' });
-    expect(result.ok).toBe(true);
+    // Anthropic checkApi now uses GET /v1/models and returns res.ok directly (#3421)
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('400');
   });
 
   it('returns error when no apiKey configured', async () => {
@@ -162,11 +164,12 @@ describe('checkApi', () => {
     expect(calledUrl).toContain('opencode.ai');
   });
 
-  it('strips trailing slashes from Anthropic base before appending /v1/messages', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 400, text: jest.fn().mockResolvedValue('') });
+  it('strips trailing slashes from Anthropic base before appending /v1/models', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
     await checkApi({ apiBase: 'https://api.anthropic.com/', apiKey: 'sk-ant-test', apiFormat: 'anthropic' });
     const calledUrl = mockFetch.mock.calls[0][0];
-    expect(calledUrl).toContain('/v1/messages');
+    // Anthropic checkApi now uses GET /v1/models (free endpoint, #3421)
+    expect(calledUrl).toContain('/v1/models');
     expect(calledUrl).not.toMatch(/\/\/v1/); // no double slash before v1
   });
 });

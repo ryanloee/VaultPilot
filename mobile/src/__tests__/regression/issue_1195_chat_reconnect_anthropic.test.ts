@@ -2,7 +2,7 @@
  * Regression test for #1195:
  * - chatWithReconnect must respect apiFormat (Anthropic vs OpenAI)
  * - Anthropic users should hit /v1/messages, not /chat/completions
- * - checkApi should use the user's configured model, not a hardcoded one
+ * - checkApi should use Anthropic GET /v1/models (free endpoint, #3421)
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
@@ -176,7 +176,7 @@ describe('issue #1195 — checkApi uses configured model', () => {
     invalidateSettingsCache();
   });
 
-  it('uses user-configured model for Anthropic health check instead of hardcoded value', async () => {
+  it('uses Anthropic GET /v1/models (free endpoint) for health check', async () => {
     (AsyncStorage.getItem as jest.Mock).mockImplementation((key: string) => {
       if (key === 'cfg_api_base') return Promise.resolve('https://api.anthropic.com');
       if (key === 'cfg_api_format') return Promise.resolve('anthropic');
@@ -185,17 +185,17 @@ describe('issue #1195 — checkApi uses configured model', () => {
     });
     (SecureStore.getItemAsync as jest.Mock).mockResolvedValue('sk-test');
 
-    let capturedBody: Record<string, unknown> = {};
-    const mockFetch = jest.fn().mockImplementation((_url: string, init: RequestInit) => {
-      capturedBody = JSON.parse(init.body as string);
+    let capturedUrl = '';
+    const mockFetch = jest.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
       return Promise.resolve({ ok: true, status: 200 });
     });
     jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
     await checkApi();
 
-    expect(capturedBody.model).toBe('claude-3-haiku-20240307');
-    expect(capturedBody.model).not.toBe('claude-sonnet-4-20250514');
+    // Anthropic checkApi now uses free GET /v1/models endpoint (#3421)
+    expect(capturedUrl).toBe('https://api.anthropic.com/v1/models');
   });
 
   it('falls back to default model when none configured', async () => {
@@ -207,15 +207,16 @@ describe('issue #1195 — checkApi uses configured model', () => {
     });
     (SecureStore.getItemAsync as jest.Mock).mockResolvedValue('sk-test');
 
-    let capturedBody: Record<string, unknown> = {};
-    const mockFetch = jest.fn().mockImplementation((_url: string, init: RequestInit) => {
-      capturedBody = JSON.parse(init.body as string);
+    let capturedUrl = '';
+    const mockFetch = jest.fn().mockImplementation((url: string) => {
+      capturedUrl = url;
       return Promise.resolve({ ok: true, status: 200 });
     });
     jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
     await checkApi();
 
-    expect(capturedBody.model).toBe('deepseek-v4-flash-free'); // getSettings() default
+    // Should still use /v1/models endpoint when no model configured
+    expect(capturedUrl).toContain('/v1/models');
   });
 });

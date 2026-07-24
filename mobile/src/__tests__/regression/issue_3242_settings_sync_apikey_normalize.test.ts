@@ -5,7 +5,7 @@
  * `apiKey` is undefined on the source objects. `importSettings` previously
  * spread `...p` directly into the Zustand `providers` array, propagating
  * `apiKey: undefined`. `ProviderConfig.apiKey` is typed as `string`
- * (required), so any downstream consumer using `.trim()` / `.length`
+ * (required), so any downstream consumer using `.trim()` / `.length()`
  * would throw `TypeError: Cannot read properties of undefined`.
  *
  * Fix: normalize `apiKey` to `''` in the providers map inside
@@ -53,6 +53,8 @@ jest.mock('../../store', () => ({
   ApiFormat: {},
   ThemeMode: {},
   ProviderConfig: {},
+  // settingsSync.ts imports isValidThemeMode (#3423) — must provide it in the mock.
+  isValidThemeMode: (v: string) => ['light', 'dark', 'system'].includes(v),
   __esModule: true,
 }));
 

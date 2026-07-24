@@ -571,15 +571,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_failure_exit_code() {
-        // Exit non-zero with "error" on stderr: `sh -c` on Unix; PowerShell on
-        // Windows (avoids cmd.exe `/C` quote-stripping quirks around `>`/`&`).
+        // Exit non-zero with "error" on stderr: `sh -c` on Unix; cmd.exe on
+        // Windows. `/S /C` + explicit `1>&2` redirect gives reliable stderr
+        // capture (PowerShell's [Console]::Error.WriteLine did not flush to
+        // the piped stderr).
         #[cfg(unix)]
         let tool = make_tool("fail_tool", "sh -c 'echo error >&2; exit 1'");
         #[cfg(windows)]
-        let tool = make_tool(
-            "fail_tool",
-            r#"powershell -NoProfile -Command "[Console]::Error.WriteLine('error'); exit 1""#,
-        );
+        let tool = make_tool("fail_tool", r#"cmd /S /C "echo error 1>&2 & exit /b 1""#);
         let result = tool.execute("{}", &std::env::temp_dir()).await;
         assert!(result.is_err());
         assert!(

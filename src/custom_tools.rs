@@ -483,36 +483,70 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_simple_echo() {
+        // `echo` is a standalone binary on Unix but only a cmd.exe built-in on
+        // Windows, so route through `cmd /C` there.
+        #[cfg(unix)]
         let tool = make_tool("echo_tool", "echo hello-from-tool");
+        #[cfg(windows)]
+        let tool = make_tool("echo_tool", "cmd /C echo hello-from-tool");
         let result = tool.execute("{}", Path::new("/tmp")).await;
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("hello-from-tool"));
+        assert!(
+            result.unwrap().contains("hello-from-tool"),
+            "expected the echoed argument in tool output"
+        );
     }
 
     #[tokio::test]
     async fn test_execute_with_stdin_args() {
-        // Use cat to echo back the stdin (tool args)
+        // Echo stdin back: `cat` on Unix; `findstr .` on Windows prints any
+        // stdin line containing at least one character.
+        #[cfg(unix)]
         let tool = make_tool("passthrough", "cat");
+        #[cfg(windows)]
+        let tool = make_tool("passthrough", "findstr .");
         let result = tool.execute(r#"{"key":"value"}"#, Path::new("/tmp")).await;
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("key"));
+        assert!(
+            result.unwrap().contains("key"),
+            "expected the stdin arguments echoed back on stdout"
+        );
     }
 
     #[tokio::test]
     async fn test_execute_timeout() {
+        // A long-running command that exceeds the 1s timeout: `sleep` on Unix,
+        // a `ping` loop on Windows.
+        #[cfg(unix)]
         let mut tool = make_tool("slow_tool", "sleep 100");
+        #[cfg(windows)]
+        let mut tool = make_tool("slow_tool", "ping -n 100 127.0.0.1");
         tool.timeout_seconds = 1;
         let result = tool.execute("{}", Path::new("/tmp")).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("timed out"));
+        assert!(
+            result.unwrap_err().to_string().contains("timed out"),
+            "expected a timeout error from the long-running tool"
+        );
     }
 
     #[tokio::test]
     async fn test_execute_failure_exit_code() {
+        // Exit non-zero with "error" on stderr: `sh -c` on Unix; PowerShell on
+        // Windows (avoids cmd.exe `/C` quote-stripping quirks around `>`/`&`).
+        #[cfg(unix)]
         let tool = make_tool("fail_tool", "sh -c 'echo error >&2; exit 1'");
+        #[cfg(windows)]
+        let tool = make_tool(
+            "fail_tool",
+            r#"powershell -NoProfile -Command "[Console]::Error.WriteLine('error'); exit 1""#,
+        );
         let result = tool.execute("{}", Path::new("/tmp")).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("error"));
+        assert!(
+            result.unwrap_err().to_string().contains("error"),
+            "expected the subprocess stderr to be surfaced in the error"
+        );
     }
 
     #[test]

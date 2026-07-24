@@ -68,5 +68,6 @@ mod issue_3343_bases_table;
 mod issue_3350_savenote_created_at;
 mod issue_3359_undo_redo;
 mod issue_3375_auto_plan_mode;
+mod issue_3378_table_border_alignment;
 mod issue_3379_formula_precedence;
 mod issue_914_related_notes;

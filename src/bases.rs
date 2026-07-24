@@ -786,7 +786,7 @@ pub fn format_bases_table(result: &BaseResult) -> String {
 
     let border: String = col_widths
         .iter()
-        .map(|w| format!("+{}-", "-".repeat(*w)))
+        .map(|w| format!("+{}", "-".repeat(*w + 2)))
         .collect::<Vec<_>>()
         .join("")
         + "+";
@@ -836,6 +836,7 @@ fn format_table_row(cells: &[String], widths: &[usize]) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+        + "|"
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

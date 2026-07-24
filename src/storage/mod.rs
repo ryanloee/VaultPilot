@@ -464,6 +464,44 @@ pub async fn load_note_async(ctx: &StorageContext, note_id: &str) -> Result<Note
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }
 
+/// Spawn-blocking wrapper for [`snapshots::list_snapshots_for_note`].
+pub async fn list_snapshots_for_note_async(
+    ctx: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<NoteSnapshot>> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    tokio::task::spawn_blocking(move || snapshots::list_snapshots_for_note(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`snapshots::get_snapshot`].
+pub async fn get_snapshot_async(
+    ctx: &StorageContext,
+    snapshot_id: &str,
+) -> Result<Option<NoteSnapshot>> {
+    let ctx = ctx.clone();
+    let snapshot_id = snapshot_id.to_owned();
+    tokio::task::spawn_blocking(move || snapshots::get_snapshot(&ctx, &snapshot_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`snapshots::restore_snapshot`].
+pub async fn restore_snapshot_async(
+    ctx: &StorageContext,
+    note_id: &str,
+    snapshot_id: &str,
+) -> Result<NoteDocument> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    let snapshot_id = snapshot_id.to_owned();
+    tokio::task::spawn_blocking(move || snapshots::restore_snapshot(&ctx, &note_id, &snapshot_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::pool::AppPaths;

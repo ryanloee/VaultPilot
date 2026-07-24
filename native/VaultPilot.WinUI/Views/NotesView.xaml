@@ -33,6 +33,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <AutoSuggestBox
                 x:Name="SearchBox"
@@ -78,6 +79,14 @@
                     <FontIcon Glyph="&#xE74D;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                     <TextBlock Text="删除" VerticalAlignment="Center" />
                 </StackPanel>
+            </Button>
+            <Button
+                x:Name="HistoryButton"
+                Grid.Column="5"
+                IsEnabled="False"
+                AutomationProperties.Name="版本历史"
+                AutomationProperties.HelpText="查看当前笔记的版本历史">
+                <FontIcon Glyph="&#xE81E;" FontSize="14" />
             </Button>
         </Grid>
 

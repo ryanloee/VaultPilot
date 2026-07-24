@@ -43,6 +43,7 @@ public sealed partial class NotesView : UserControl
         CopyNoteButton.Click += OnCopyNoteClicked;
         PasteNoteButton.Click += OnPasteNoteClicked;
         RelatedNotesList.SelectionChanged += OnRelatedNoteSelectionChanged;
+        HistoryButton.Click += OnHistoryClicked;
         Loaded += OnLoaded;
 
         // Register Ctrl+C / Ctrl+V keyboard shortcuts on the NotesList (#3094)
@@ -169,6 +170,7 @@ public sealed partial class NotesView : UserControl
             _selectedNote = item.Meta;
             DeleteNoteButton.IsEnabled = true;
             CopyNoteButton.IsEnabled = true;
+            HistoryButton.IsEnabled = true;
             _loadDetailCts?.Cancel();
             _loadDetailCts?.Dispose();
             _loadDetailCts = new CancellationTokenSource();
@@ -182,6 +184,7 @@ public sealed partial class NotesView : UserControl
             _selectedNote = null;
             DeleteNoteButton.IsEnabled = false;
             CopyNoteButton.IsEnabled = false;
+            HistoryButton.IsEnabled = false;
         }
     }
 
@@ -281,6 +284,7 @@ public sealed partial class NotesView : UserControl
             _selectedNote = null;
             DeleteNoteButton.IsEnabled = false;
             CopyNoteButton.IsEnabled = false;
+            HistoryButton.IsEnabled = false;
             ApplyFilter();
             UpdateNotesCount();
 
@@ -293,6 +297,37 @@ public sealed partial class NotesView : UserControl
         finally
         {
             ShowLoading(false);
+        }
+    }
+
+    // ─── Version History ─────────────────────────────────────────────────
+    // #3305: Open version history dialog for the selected note.
+    private async void OnHistoryClicked(object sender, RoutedEventArgs e)
+    {
+        if (_selectedNote is null) return;
+
+        try
+        {
+            var control = new Controls.VersionHistoryControl(_backendClient, _selectedNote.Id);
+            control.NoteRestored += (_, _) => _ = RefreshNotesAsync();
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = $"版本历史 — {_selectedNote.Title}",
+                Content = control,
+                PrimaryButtonText = "关闭",
+                IsPrimaryButtonEnabled = true,
+                DefaultButton = ContentDialogButton.Primary,
+                MinWidth = 800,
+                MinHeight = 600,
+            };
+
+            _ = await dialog.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowError("打开版本历史失败", ex);
         }
     }
 

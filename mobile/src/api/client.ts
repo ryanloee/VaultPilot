@@ -597,20 +597,17 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
 
   try {
     if (format === 'anthropic') {
-      // Anthropic doesn't have a /models endpoint; just verify the base URL is reachable
+      // Anthropic GET /v1/models is free (no token cost), matching OpenAI's /models pattern (#3421)
       const base = normalizeAnthropicBase(normalizeApiBase(apiBase));
-      const res = await fetch(`${base}/v1/messages`, {
-        method: 'POST',
+      const res = await fetch(`${base}/v1/models`, {
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
         },
-        body: JSON.stringify({ model: model ?? 'claude-sonnet-4-20250514', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
         signal: effectiveSignal,
       });
-      // 400 = bad request but API is reachable; 200 = ok; anything else = auth/network error
-      return { ok: res.ok || res.status === 400, error: res.ok || res.status === 400 ? undefined : `HTTP ${res.status}` };
+      return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
     }
 
     const res = await fetch(`${normalizeApiBase(apiBase)}/models`, {

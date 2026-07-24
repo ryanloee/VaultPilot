@@ -2070,6 +2070,30 @@ async fn execute_tool(
                 Err(e) => (format!("tool error: save_note failed: {}", e), true),
             }
         }
+        ai::AssistantToolCall::Custom { name, args } => {
+            let tool = settings
+                .custom_tools
+                .iter()
+                .find(|t| t.name == *name && t.enabled);
+            match tool {
+                Some(tool) => {
+                    let vault_dir = PathBuf::from(&settings.vault_dir);
+                    let args_str =
+                        serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+                    match tool.execute(&args_str, &vault_dir).await {
+                        Ok(output) => (output, false),
+                        Err(e) => (
+                            format!("tool error: custom tool '{}' failed: {}", name, e),
+                            true,
+                        ),
+                    }
+                }
+                None => (
+                    format!("tool error: custom tool '{}' not found or disabled", name),
+                    true,
+                ),
+            }
+        }
     }
 }
 
@@ -2172,7 +2196,7 @@ fn slugify(title: &str) -> String {
     crate::utils::slugify(title)
 }
 
-fn tool_display_name(tool: &ai::AssistantToolCall) -> &'static str {
+fn tool_display_name(tool: &ai::AssistantToolCall) -> &str {
     match tool {
         ai::AssistantToolCall::None => "none",
         ai::AssistantToolCall::SearchNotes { .. } => "search_notes",
@@ -2180,6 +2204,7 @@ fn tool_display_name(tool: &ai::AssistantToolCall) -> &'static str {
         ai::AssistantToolCall::ListDirectory { .. } => "list_directory",
         ai::AssistantToolCall::ReadFile { .. } => "read_file",
         ai::AssistantToolCall::SaveNote { .. } => "save_note",
+        ai::AssistantToolCall::Custom { name, .. } => name.as_str(),
     }
 }
 
@@ -2194,6 +2219,9 @@ fn tool_args_summary(tool: &ai::AssistantToolCall) -> String {
         ai::AssistantToolCall::ReadFile { path } => format!("path={}", path),
         ai::AssistantToolCall::SaveNote { draft, .. } => {
             format!("title={} body_len={}", draft.title, draft.body.len())
+        }
+        ai::AssistantToolCall::Custom { name, args } => {
+            format!("name={} args={}", name, args)
         }
     }
 }
@@ -2220,6 +2248,7 @@ fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
                               "body": truncate_preview(&draft.body, 500)})
             .to_string()
         }
+        ai::AssistantToolCall::Custom { name: _, args } => args.to_string(),
     }
 }
 

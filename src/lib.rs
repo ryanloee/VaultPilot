@@ -14,6 +14,7 @@ pub mod clipper;
 pub mod connector;
 pub mod context_surface;
 pub mod crypto;
+pub mod custom_tools;
 pub mod diff;
 pub mod export;
 pub mod file_parsing;

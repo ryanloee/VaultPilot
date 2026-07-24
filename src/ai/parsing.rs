@@ -46,6 +46,12 @@ pub enum AssistantToolCall {
         draft: Box<StructuredNoteDraft>,
         note_id: String,
     },
+    /// A user-defined custom tool (#3384). `name` is the tool name, `args`
+    /// is the JSON arguments from the model.
+    Custom {
+        name: String,
+        args: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -473,10 +479,13 @@ pub(super) fn parse_record_response(
     ))
 }
 
-pub(super) fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToolCall> {
-    let parsed = extract_json(text)
-        .ok()
-        .and_then(|json| parse_tool_call_response(&json))
+pub(super) fn parse_tool_call(
+    text: &str,
+    question: &str,
+    custom_tool_names: &[&str],
+) -> Result<AssistantToolCall> {
+    let raw_json = extract_json(text)?;
+    let parsed = parse_tool_call_response(&raw_json)
         .ok_or_else(|| anyhow!("model did not return a valid tool call"))?;
 
     let limit = parsed.limit.clamp(3, 8);
@@ -508,10 +517,24 @@ pub(super) fn parse_tool_call(text: &str, question: &str) -> Result<AssistantToo
                 note_id: uuid::Uuid::new_v4().to_string(),
             })
         }
-        other => Err(anyhow!(
-            "unknown tool selected by model: {}",
-            crate::sanitize_error(other)
-        )),
+        other => {
+            // #3384: Check if the tool name is a registered custom tool.
+            if custom_tool_names.contains(&other) {
+                // Pass the entire parsed JSON as args so the custom tool
+                // can extract whatever fields the model sent.
+                let args = serde_json::from_str::<serde_json::Value>(&raw_json)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                Ok(AssistantToolCall::Custom {
+                    name: other.to_string(),
+                    args,
+                })
+            } else {
+                Err(anyhow!(
+                    "unknown tool selected by model: {}",
+                    crate::sanitize_error(other)
+                ))
+            }
+        }
     }
 }
 
@@ -961,14 +984,14 @@ mod tests {
     #[test]
     fn parse_tool_call_none() {
         let text = r#"{"tool":"none","query":"","limit":5}"#;
-        let result = parse_tool_call(text, "some question").unwrap();
+        let result = parse_tool_call(text, "some question", &[]).unwrap();
         assert!(matches!(result, AssistantToolCall::None));
     }
 
     #[test]
     fn parse_tool_call_search_notes() {
         let text = r#"{"tool":"search_notes","query":"rust tips","limit":5}"#;
-        let result = parse_tool_call(text, "fallback").unwrap();
+        let result = parse_tool_call(text, "fallback", &[]).unwrap();
         match result {
             AssistantToolCall::SearchNotes { query, limit } => {
                 assert_eq!(query, "rust tips");
@@ -981,7 +1004,7 @@ mod tests {
     #[test]
     fn parse_tool_call_search_notes_empty_query_uses_question() {
         let text = r#"{"tool":"search_notes","query":"","limit":5}"#;
-        let result = parse_tool_call(text, "my question").unwrap();
+        let result = parse_tool_call(text, "my question", &[]).unwrap();
         match result {
             AssistantToolCall::SearchNotes { query, .. } => {
                 assert_eq!(query, "my question");
@@ -993,14 +1016,14 @@ mod tests {
     #[test]
     fn parse_tool_call_list_notes() {
         let text = r#"{"tool":"list_notes","limit":4}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         assert!(matches!(result, AssistantToolCall::ListNotes { limit: 4 }));
     }
 
     #[test]
     fn parse_tool_call_list_directory() {
         let text = r#"{"tool":"list_directory","path":"/tmp","limit":5}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::ListDirectory { path } => assert_eq!(path, "/tmp"),
             _ => panic!("Expected ListDirectory"),
@@ -1010,7 +1033,7 @@ mod tests {
     #[test]
     fn parse_tool_call_read_file() {
         let text = r#"{"tool":"read_file","path":"/tmp/f.txt","limit":5}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::ReadFile { path } => assert_eq!(path, "/tmp/f.txt"),
             _ => panic!("Expected ReadFile"),
@@ -1020,7 +1043,7 @@ mod tests {
     #[test]
     fn parse_tool_call_save_note() {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"B"}}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::SaveNote { draft, .. } => {
                 assert_eq!(draft.title, "T");
@@ -1032,19 +1055,44 @@ mod tests {
     #[test]
     fn parse_tool_call_save_note_missing_draft_returns_err() {
         let text = r#"{"tool":"save_note","limit":5}"#;
-        assert!(parse_tool_call(text, "q").is_err());
+        assert!(parse_tool_call(text, "q", &[]).is_err());
     }
 
     #[test]
     fn parse_tool_call_unknown_tool_returns_err() {
         let text = r#"{"tool":"unknown_tool","limit":5}"#;
-        assert!(parse_tool_call(text, "q").is_err());
+        assert!(parse_tool_call(text, "q", &[]).is_err());
+    }
+
+    #[test]
+    fn parse_tool_call_custom_tool_recognized() {
+        // #3384: when the tool name matches a registered custom tool,
+        // the parser should produce AssistantToolCall::Custom.
+        let text = r#"{"tool":"my_custom_tool","some_arg":"value","limit":5}"#;
+        let result = parse_tool_call(text, "q", &["my_custom_tool"]).unwrap();
+        match result {
+            AssistantToolCall::Custom { name, args } => {
+                assert_eq!(name, "my_custom_tool");
+                assert_eq!(args["some_arg"], "value");
+            }
+            _ => panic!("expected Custom variant"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_custom_tool_not_in_registry_returns_err() {
+        // #3384: a tool name that isn't built-in AND isn't in the custom
+        // tool list should still error.
+        let text = r#"{"tool":"my_custom_tool","limit":5}"#;
+        assert!(parse_tool_call(text, "q", &[]).is_err());
+        // And with a different custom tool registered, still errors:
+        assert!(parse_tool_call(text, "q", &["other_tool"]).is_err());
     }
 
     #[test]
     fn parse_tool_call_limit_clamped() {
         let text = r#"{"tool":"list_notes","limit":100}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::ListNotes { limit } => assert_eq!(limit, 8), // clamped to max 8
             _ => panic!(),
@@ -1054,7 +1102,7 @@ mod tests {
     #[test]
     fn parse_tool_call_limit_clamped_min() {
         let text = r#"{"tool":"list_notes","limit":0}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::ListNotes { limit } => assert_eq!(limit, 3), // clamped to min 3
             _ => panic!(),
@@ -1441,7 +1489,7 @@ mod tests {
     #[test]
     fn parse_tool_call_save_note_empty_body_uses_heuristic() {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":""}}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::SaveNote { draft, .. } => {
                 // empty body triggers heuristic fallback
@@ -1454,7 +1502,7 @@ mod tests {
     #[test]
     fn parse_tool_call_save_note_whitespace_title_uses_fallback() {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"   ","summary":"S","tags":[],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"some content"}}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::SaveNote { draft, .. } => {
                 // whitespace-only title gets heuristic fallback
@@ -1468,7 +1516,7 @@ mod tests {
     #[test]
     fn parse_tool_call_save_note_duplicate_tags_deduped() {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"S","tags":["rust","rust"," coding ","coding"],"keywords":[],"platform":"","board":"","kernel":"","status":"","source":"captured","body":"B"}}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::SaveNote { draft, .. } => {
                 // tags should be deduped and trimmed
@@ -1483,7 +1531,7 @@ mod tests {
     #[test]
     fn parse_tool_call_save_note_missing_optional_fields() {
         let text = r#"{"tool":"save_note","limit":5,"noteDraft":{"title":"T","summary":"","tags":[],"keywords":[],"status":"","source":"","body":"content"}}"#;
-        let result = parse_tool_call(text, "q").unwrap();
+        let result = parse_tool_call(text, "q", &[]).unwrap();
         match result {
             AssistantToolCall::SaveNote { draft, .. } => {
                 assert_eq!(draft.title, "T");

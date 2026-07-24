@@ -1063,6 +1063,7 @@ mod tests {
             proxy_url: None,
             app_lock_enabled: false,
             app_lock_pin_hash: None,
+            custom_tools: Vec::new(),
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

@@ -409,6 +409,51 @@ pub async fn ask_with_ai_with_context(
                     }
                 }
             }
+            AssistantToolCall::Custom { name, args } => {
+                let tool_identity = format!("custom:{}", name);
+                emit_status("executing", format!("Running custom tool: {}", name));
+                let tool_def = settings
+                    .custom_tools
+                    .iter()
+                    .find(|t| t.name == name && t.enabled);
+                match tool_def {
+                    Some(tool) => {
+                        let vault_dir = std::path::PathBuf::from(&settings.vault_dir);
+                        let args_str =
+                            serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+                        match tool.execute(&args_str, &vault_dir).await {
+                            Ok(output) => {
+                                tool_results.push(ToolExecution::new(
+                                    &name,
+                                    tool_identity,
+                                    output,
+                                    false,
+                                ));
+                            }
+                            Err(e) => {
+                                let error_msg =
+                                    format!("tool error: custom tool '{}' failed: {}", name, e);
+                                tool_results.push(ToolExecution::new(
+                                    &name,
+                                    tool_identity,
+                                    error_msg,
+                                    true,
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        tool_results.push(ToolExecution::new(
+                            &name,
+                            tool_identity,
+                            format!("tool error: custom tool '{}' not found or disabled", name),
+                            true,
+                        ));
+                    }
+                }
+                // selection.usage already merged at line 105
+                continue;
+            }
         }
     }
 
@@ -545,6 +590,7 @@ fn planned_tool_identity(tool_call: &AssistantToolCall) -> Option<(&'static str,
         AssistantToolCall::SaveNote { draft, .. } => {
             Some(("save_note", format!("save_note:{}", draft.title)))
         }
+        AssistantToolCall::Custom { name, .. } => Some(("custom", format!("custom:{}", name))),
     }
 }
 

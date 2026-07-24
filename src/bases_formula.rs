@@ -313,23 +313,26 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // expression: term (("&&" | "||") term)*
+    // expression: logic_and ("||" logic_and)*
+    // || has lower precedence than &&
     fn parse_expression(&mut self) -> Expr {
+        let mut left = self.parse_logic_and();
+        while let Token::Or = &self.peek {
+            self.advance();
+            let right = self.parse_logic_and();
+            left = Expr::BinOp(Box::new(left), BinOp::Or, Box::new(right));
+        }
+        left
+    }
+
+    // logic_and: comparison ("&&" comparison)*
+    // && has higher precedence than ||
+    fn parse_logic_and(&mut self) -> Expr {
         let mut left = self.parse_comparison();
-        loop {
-            match &self.peek {
-                Token::And => {
-                    self.advance();
-                    let right = self.parse_comparison();
-                    left = Expr::BinOp(Box::new(left), BinOp::And, Box::new(right));
-                }
-                Token::Or => {
-                    self.advance();
-                    let right = self.parse_comparison();
-                    left = Expr::BinOp(Box::new(left), BinOp::Or, Box::new(right));
-                }
-                _ => break,
-            }
+        while let Token::And = &self.peek {
+            self.advance();
+            let right = self.parse_comparison();
+            left = Expr::BinOp(Box::new(left), BinOp::And, Box::new(right));
         }
         left
     }
@@ -494,9 +497,28 @@ fn eval_expr(expr: &Expr, env: &FmlEnv) -> FmlValue {
             resolve_field(env.note, name)
         }
         Expr::BinOp(left, op, right) => {
-            let lv = eval_expr(left, env);
-            let rv = eval_expr(right, env);
-            eval_binop(lv, *op, rv)
+            // Short-circuit evaluation for && (false → skip right) and || (true → skip right)
+            match op {
+                BinOp::And => {
+                    let lv = eval_expr(left, env);
+                    if !is_truthy(&lv) {
+                        return FmlValue::Bool(false);
+                    }
+                    FmlValue::Bool(is_truthy(&eval_expr(right, env)))
+                }
+                BinOp::Or => {
+                    let lv = eval_expr(left, env);
+                    if is_truthy(&lv) {
+                        return FmlValue::Bool(true);
+                    }
+                    FmlValue::Bool(is_truthy(&eval_expr(right, env)))
+                }
+                _ => {
+                    let lv = eval_expr(left, env);
+                    let rv = eval_expr(right, env);
+                    eval_binop(lv, *op, rv)
+                }
+            }
         }
         Expr::UnaryOp(op, expr) => {
             let v = eval_expr(expr, env);

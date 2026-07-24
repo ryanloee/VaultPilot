@@ -15,7 +15,7 @@ use crate::models::{NoteMeta, WikilinkRef};
 use crate::storage::{self, StorageContext};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// A node in the knowledge graph representing a single note.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -74,6 +74,224 @@ pub struct KnowledgeGraph {
     pub edge_count: usize,
     /// Number of unresolved (dangling) wikilinks.
     pub dangling_link_count: usize,
+}
+
+// ── Inferred Relations (#3370) ───────────────────────────────────────────
+// AI-style latent relationship detection: discovers hidden connections between
+// notes that don't have explicit [[wikilinks]] by analysing tag, keyword, and
+// title-word overlap. Produces typed, confidence-scored relationships that can
+// be visualised in the graph alongside wikilink and mention edges.
+
+/// Type of inferred relationship between two notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RelationType {
+    /// Notes share significant topical overlap (tags + keywords).
+    #[default]
+    Related,
+    /// Notes mention the same named entity (high title-word overlap).
+    SameEntity,
+    /// Notes belong to the same conceptual cluster (very high overall similarity).
+    SameTopic,
+}
+
+/// An inferred relationship between two notes — discovered through content
+/// similarity rather than explicit `[[wikilinks]]` or plain-text mentions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferredRelation {
+    /// Source note ID.
+    pub source: String,
+    /// Target note ID.
+    pub target: String,
+    /// Type of relationship inferred.
+    #[serde(default)]
+    pub relation_type: RelationType,
+    /// Confidence score in [0.0, 1.0] — higher means more certain.
+    pub confidence: f64,
+    /// Human-readable explanation of why this relation was inferred.
+    pub reason: String,
+}
+
+/// Configuration for relation inference.
+#[derive(Debug, Clone)]
+pub struct InferenceConfig {
+    /// Minimum confidence threshold to include a relation.
+    pub min_confidence: f64,
+    /// Maximum relations to emit per source note (top-N by confidence).
+    pub max_per_note: usize,
+}
+
+impl Default for InferenceConfig {
+    fn default() -> Self {
+        Self {
+            min_confidence: 0.3,
+            max_per_note: 5,
+        }
+    }
+}
+
+/// Score the similarity between two notes and infer a typed relationship.
+///
+/// This is a **pure function** — it takes two `NoteMeta` references and returns
+/// an `InferredRelation` if the confidence exceeds zero, or `None` if the notes
+/// are unrelated.
+///
+/// Scoring weights (mirrors `serendipity.rs` weighting but normalised to [0, 1]):
+/// - Tag overlap: 40 % of confidence
+/// - Keyword overlap: 35 % of confidence
+/// - Title-word overlap: 25 % of confidence
+pub fn score_pair(a: &NoteMeta, b: &NoteMeta) -> Option<InferredRelation> {
+    // Skip self-comparison.
+    if a.id == b.id {
+        return None;
+    }
+
+    // Compute overlap sets.
+    let a_tags: HashSet<&str> = a.tags.iter().map(|s| s.as_str()).collect();
+    let b_tags: HashSet<&str> = b.tags.iter().map(|s| s.as_str()).collect();
+    let a_kws: HashSet<&str> = a.keywords.iter().map(|s| s.as_str()).collect();
+    let b_kws: HashSet<&str> = b.keywords.iter().map(|s| s.as_str()).collect();
+
+    let a_title_words = title_word_set(&a.title);
+    let b_title_words = title_word_set(&b.title);
+
+    // Jaccard similarity for each dimension.
+    let tag_sim = jaccard(&a_tags, &b_tags);
+    let kw_sim = jaccard(&a_kws, &b_kws);
+    let title_sim = jaccard(&a_title_words, &b_title_words);
+
+    // Weighted confidence.
+    let confidence = tag_sim * 0.40 + kw_sim * 0.35 + title_sim * 0.25;
+
+    if confidence < f64::EPSILON {
+        return None;
+    }
+
+    // Determine relation type based on dominant signal.
+    let (relation_type, reason) = if title_sim >= 0.5 && tag_sim >= 0.3 {
+        (
+            RelationType::SameEntity,
+            format!(
+                "Strong title-word and tag overlap (title: {:.0}%, tags: {:.0}%)",
+                title_sim * 100.0,
+                tag_sim * 100.0
+            ),
+        )
+    } else if tag_sim >= 0.5 || (tag_sim + kw_sim) / 2.0 >= 0.4 {
+        (
+            RelationType::SameTopic,
+            format!(
+                "High topical overlap (tags: {:.0}%, keywords: {:.0}%)",
+                tag_sim * 100.0,
+                kw_sim * 100.0
+            ),
+        )
+    } else {
+        (
+            RelationType::Related,
+            format!(
+                "Moderate overlap (tags: {:.0}%, keywords: {:.0}%, title: {:.0}%)",
+                tag_sim * 100.0,
+                kw_sim * 100.0,
+                title_sim * 100.0
+            ),
+        )
+    };
+
+    Some(InferredRelation {
+        source: a.id.clone(),
+        target: b.id.clone(),
+        relation_type,
+        confidence,
+        reason,
+    })
+}
+
+/// Infer latent relationships among a set of notes.
+///
+/// Compares every unordered pair of notes, computes similarity, and returns
+/// relationships that exceed the confidence threshold. Results are sorted by
+/// confidence (descending). Each source note contributes at most
+/// `config.max_per_note` relations.
+///
+/// This is a pure, database-free function suitable for unit testing.
+pub fn infer_relations(notes: &[NoteMeta], config: &InferenceConfig) -> Vec<InferredRelation> {
+    let mut all: Vec<InferredRelation> = Vec::new();
+
+    for i in 0..notes.len() {
+        let mut per_source: Vec<InferredRelation> = Vec::new();
+        for j in 0..notes.len() {
+            if i == j {
+                continue;
+            }
+            // score_pair checks a→b; we want unordered pairs so we take
+            // the max-direction score (symmetric enough for similarity).
+            if let Some(rel) = score_pair(&notes[i], &notes[j]) {
+                if rel.confidence >= config.min_confidence {
+                    per_source.push(rel);
+                }
+            }
+        }
+        // Keep only top-N per source.
+        per_source.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        per_source.truncate(config.max_per_note);
+        all.extend(per_source);
+    }
+
+    // Deduplicate: for each unordered pair {a, b}, keep only the highest-confidence direction.
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    all.retain(|rel| {
+        let key = if rel.source <= rel.target {
+            (rel.source.clone(), rel.target.clone())
+        } else {
+            (rel.target.clone(), rel.source.clone())
+        };
+        seen.insert(key)
+    });
+
+    // Final sort by confidence descending.
+    all.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    all
+}
+
+/// Convenience wrapper with default config.
+pub fn infer_relations_default(notes: &[NoteMeta]) -> Vec<InferredRelation> {
+    infer_relations(notes, &InferenceConfig::default())
+}
+
+/// Compute the Jaccard similarity between two sets: |A ∩ B| / |A ∪ B|.
+fn jaccard<T: std::hash::Hash + Eq>(a: &HashSet<T>, b: &HashSet<T>) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let intersection = a.intersection(b).count();
+    let union = a.union(b).count();
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    }
+}
+
+/// Extract significant words from a title (lowercased, punctuation-trimmed, len > 1).
+fn title_word_set(title: &str) -> HashSet<String> {
+    title
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| c.is_ascii_punctuation())
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty() && w.len() > 1)
+        .collect()
 }
 
 /// Output format for the graph.

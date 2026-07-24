@@ -24,6 +24,7 @@ pub mod health;
 pub mod keychain;
 pub mod knowledge_graph;
 pub mod mail;
+pub mod mindmap;
 pub mod mirror;
 pub mod models;
 pub mod orchestration;

@@ -26,6 +26,7 @@ pub mod knowledge_graph;
 pub mod mail;
 pub mod mirror;
 pub mod models;
+pub mod note_templates;
 pub mod orchestration;
 pub mod people_index;
 pub mod plugin;

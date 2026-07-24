@@ -1365,6 +1365,42 @@ enum NotesActions {
         snapshot: String,
     },
 
+    /// Create a new note from a user-defined template (#3383).
+    ///
+    /// Templates are Markdown files in `.vaultpilot/templates/*.md` with
+    /// optional YAML frontmatter declaring `description` and `variables`.
+    /// Built-in template variables: `{{title}}`, `{{date}}`, `{{time}}`,
+    /// `{{datetime}}`, `{{tags}}`, plus any custom variables passed via
+    /// `--var key=value`.
+    ///
+    /// Examples:
+    ///   vp notes from-template meeting --title "Sprint Planning"
+    ///   vp notes from-template bug_report --title "Crash" --var severity=High --var component=ui
+    ///   vp notes from-template meeting --title "Demo" --dry-run
+    FromTemplate {
+        /// Template name (file stem in `.vaultpilot/templates/`)
+        template: String,
+
+        /// Title for the new note
+        #[arg(long)]
+        title: String,
+
+        /// Comma-separated tags
+        #[arg(long)]
+        tags: Option<String>,
+
+        /// Custom variables as key=value pairs (repeatable)
+        #[arg(long = "var", value_name = "KEY=VALUE")]
+        vars: Vec<String>,
+
+        /// Preview rendered template without saving
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// List all available note templates in `.vaultpilot/templates/` (#3383).
+    ListTemplates {},
+
     /// Show diff between current note and a snapshot (#2855)
     Diff {
         /// Note ID
@@ -4131,7 +4167,141 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                 limit: *limit,
             },
         ),
+        NotesActions::FromTemplate {
+            template,
+            title,
+            tags,
+            vars,
+            dry_run,
+        } => handle_note_from_template(context, template, title, tags.as_deref(), vars, *dry_run),
+        NotesActions::ListTemplates {} => handle_list_templates(context),
     }
+}
+
+/// Handle `vp notes from-template` — create a note from a user template (#3383).
+fn handle_note_from_template(
+    context: &StorageContext,
+    template_name: &str,
+    title: &str,
+    tags: Option<&str>,
+    vars: &[String],
+    dry_run: bool,
+) -> Result<Value> {
+    use vaultpilot_lib::note_templates;
+
+    // Load template
+    let template = note_templates::load_template(context.vault_dir(), template_name)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    // Parse tags
+    let note_tags: Vec<String> = tags
+        .map(|t| {
+            t.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Parse custom variables from --var key=value
+    let mut custom_vars = std::collections::HashMap::new();
+    for var in vars {
+        if let Some((k, v)) = var.split_once('=') {
+            custom_vars.insert(k.trim().to_string(), v.trim().to_string());
+        } else {
+            return Err(anyhow::anyhow!(
+                "invalid --var '{}': expected key=value format",
+                var
+            ));
+        }
+    }
+
+    // Build context and render
+    let ctx = note_templates::build_context(title, &note_tags, &custom_vars);
+    let body = note_templates::render_template(&template, &ctx);
+
+    // Dry-run: return preview without saving
+    if dry_run {
+        return Ok(serde_json::json!({
+            "status": "dry_run",
+            "template": template_name,
+            "title": title,
+            "tags": note_tags,
+            "body": body,
+            "variables": template.variables,
+        }));
+    }
+
+    // Generate note ID from title (slugify)
+    let note_id = slugify(title);
+
+    // Create the note
+    let note = NoteDocument {
+        meta: NoteMeta {
+            id: note_id.clone(),
+            title: title.to_string(),
+            tags: note_tags.clone(),
+            summary: String::new(),
+            source: String::new(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
+        },
+        body,
+        search_snippet: None,
+        search_score: None,
+    };
+    let saved = save_note_with_context(context, note)?;
+
+    Ok(serde_json::json!({
+        "status": "created",
+        "note_id": saved.meta.id,
+        "title": saved.meta.title,
+        "template": template_name,
+        "tags": saved.meta.tags,
+    }))
+}
+
+/// Handle `vp notes list-templates` — list available note templates (#3383).
+fn handle_list_templates(context: &StorageContext) -> Result<Value> {
+    use vaultpilot_lib::note_templates;
+
+    let names = note_templates::list_template_names(context.vault_dir());
+    let templates: Vec<Value> = names
+        .iter()
+        .filter_map(
+            |name| match note_templates::load_template(context.vault_dir(), name) {
+                Ok(t) => Some(serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "variables": t.variables,
+                })),
+                Err(_) => None,
+            },
+        )
+        .collect();
+
+    Ok(serde_json::json!({
+        "templates": templates,
+        "count": templates.len(),
+    }))
+}
+
+/// Convert a title to a URL-safe note ID (slugify).
+fn slugify(s: &str) -> String {
+    s.trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
 }
 
 /// Resolve a [`BatchSelector`] to the list of concrete note IDs that match

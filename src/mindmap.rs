@@ -267,6 +267,164 @@ fn sanitize_mermaid_label(s: &str) -> String {
         .replace(']', "】")
 }
 
+// ── Reverse direction: tree → Markdown outline (#3442) ──────────────────────
+
+/// Convert a heading tree back into a Markdown heading outline (#3442).
+///
+/// This is the reverse of [`parse_markdown_headings`]: it takes a forest of
+/// [`MindmapNode`]s and emits a Markdown string with `#` headings whose nesting
+/// mirrors the tree structure.  Each node's `level` field determines the number
+/// of `#` characters (clamped to 1..=6).
+///
+/// Enables the "导图 → 大纲" direction of the mindmap ↔ outline round-trip.
+/// Combined with `parse_markdown_headings`, this closes the loop:
+///
+/// ```text
+/// Markdown → parse_markdown_headings → Vec<MindmapNode>
+///                                         ↓ mindmap_to_outline
+/// Markdown ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+/// ```
+///
+/// # Round-trip property
+/// `mindmap_to_outline(parse_markdown_headings(md))` produces a canonicalized
+/// version of the heading structure (same titles and nesting, normalized
+/// whitespace, no trailing `#` markers, no code-fence ambiguity).
+pub fn mindmap_to_outline(nodes: &[MindmapNode]) -> String {
+    let mut buf = String::new();
+    for root in nodes {
+        outline_node(root, &mut buf);
+    }
+    // Trim trailing newline for a clean single-document output.
+    if buf.ends_with('\n') {
+        buf.pop();
+    }
+    buf
+}
+
+fn outline_node(node: &MindmapNode, buf: &mut String) {
+    let level = node.level.clamp(1, 6) as usize;
+    let hashes = "#".repeat(level);
+    // ATX heading: `#` + space + title
+    buf.push_str(&hashes);
+    buf.push(' ');
+    buf.push_str(&node.title);
+    buf.push('\n');
+    for child in &node.children {
+        outline_node(child, buf);
+    }
+}
+
+// ── Tree validation for AI-generated / externally-supplied trees (#3442) ─────
+
+/// Compute the maximum depth (number of nesting levels) in a forest.
+///
+/// An empty forest has depth 0.  A forest containing only root nodes (no
+/// children) has depth 1.  Each additional level of children increments the
+/// depth by 1.
+///
+/// # Example
+/// ```
+/// # use vaultpilot_lib::mindmap::*;
+/// let nodes = parse_markdown_headings("# Root\n## Child\n### Grandchild\n");
+/// assert_eq!(max_depth(&nodes), 3);
+/// ```
+pub fn max_depth(nodes: &[MindmapNode]) -> usize {
+    nodes
+        .iter()
+        .map(|n| 1 + max_depth(&n.children))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Count all nodes in a forest, including roots and every descendant.
+///
+/// This is the total node count used for size validation.  Unlike
+/// `nodes.len()` (which only counts roots), this recursively sums the entire
+/// tree.
+///
+/// # Example
+/// ```
+/// # use vaultpilot_lib::mindmap::*;
+/// let nodes = parse_markdown_headings("# Root\n## A\n## B\n");
+/// assert_eq!(count_total_nodes(&nodes), 3);
+/// ```
+pub fn count_total_nodes(nodes: &[MindmapNode]) -> usize {
+    nodes
+        .iter()
+        .map(|n| 1 + count_total_nodes(&n.children))
+        .sum()
+}
+
+/// Errors that can occur when validating an AI-generated or externally-supplied
+/// mindmap tree (#3442).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MindmapValidationError {
+    /// The tree's nesting depth exceeds the configured maximum.
+    DepthExceeded { actual: usize, max: usize },
+    /// The total number of nodes exceeds the configured maximum.
+    NodeCountExceeded { actual: usize, max: usize },
+}
+
+impl std::fmt::Display for MindmapValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DepthExceeded { actual, max } => {
+                write!(f, "mindmap depth {actual} exceeds maximum {max}")
+            }
+            Self::NodeCountExceeded { actual, max } => {
+                write!(f, "mindmap node count {actual} exceeds maximum {max}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MindmapValidationError {}
+
+/// Recommended default constraints for AI-generated mindmaps (#3442).
+///
+/// These prevent LLM-generated trees from being too deep or too large,
+/// which would cause rendering issues (especially in Mermaid diagrams).
+pub const DEFAULT_MAX_DEPTH: usize = 4;
+pub const DEFAULT_MAX_NODES: usize = 200;
+
+/// Validate a mindmap tree against size and depth constraints (#3442).
+///
+/// AI-generated trees (or trees deserialized from untrusted JSON) should be
+/// validated before rendering to prevent excessively deep or large structures
+/// from causing rendering issues.
+///
+/// # Defaults
+/// The recommended limits from the design spec are depth ≤
+/// [`DEFAULT_MAX_DEPTH`] (4) and nodes ≤ [`DEFAULT_MAX_NODES`] (200).
+///
+/// # Example
+/// ```
+/// # use vaultpilot_lib::mindmap::*;
+/// let nodes = parse_markdown_headings("# A\n## B\n");
+/// assert!(validate_mindmap(&nodes, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES).is_ok());
+/// ```
+pub fn validate_mindmap(
+    nodes: &[MindmapNode],
+    max_depth_limit: usize,
+    max_nodes_limit: usize,
+) -> Result<(), MindmapValidationError> {
+    let depth = max_depth(nodes);
+    if depth > max_depth_limit {
+        return Err(MindmapValidationError::DepthExceeded {
+            actual: depth,
+            max: max_depth_limit,
+        });
+    }
+    let count = count_total_nodes(nodes);
+    if count > max_nodes_limit {
+        return Err(MindmapValidationError::NodeCountExceeded {
+            actual: count,
+            max: max_nodes_limit,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,5 +745,264 @@ content
         assert_eq!(MindmapFormat::Text, MindmapFormat::Text);
         assert_ne!(MindmapFormat::Text, MindmapFormat::Json);
         assert_ne!(MindmapFormat::Json, MindmapFormat::Mermaid);
+    }
+
+    // ── mindmap_to_outline tests (#3442) ───────────────────────────
+
+    /// `mindmap_to_outline` produces valid Markdown headings for a simple tree.
+    #[test]
+    fn to_outline_basic_tree() {
+        let md = "# Root\n## Child A\n### Grandchild\n## Child B\n";
+        let nodes = parse_markdown_headings(md);
+        let out = mindmap_to_outline(&nodes);
+        assert_eq!(out, "# Root\n## Child A\n### Grandchild\n## Child B");
+    }
+
+    /// `mindmap_to_outline` handles multiple roots.
+    #[test]
+    fn to_outline_multiple_roots() {
+        let md = "# Root1\n## Sub1\n# Root2\n";
+        let nodes = parse_markdown_headings(md);
+        let out = mindmap_to_outline(&nodes);
+        assert_eq!(out, "# Root1\n## Sub1\n# Root2");
+    }
+
+    /// `mindmap_to_outline` of empty input is empty string.
+    #[test]
+    fn to_outline_empty() {
+        assert_eq!(mindmap_to_outline(&[]), "");
+    }
+
+    /// Round-trip: parse → to_outline → parse produces the same tree.
+    #[test]
+    fn round_trip_parse_outline_parse() {
+        let md = "# Root\n## Child A\n### Grandchild\n## Child B\n";
+        let nodes1 = parse_markdown_headings(md);
+        let outline = mindmap_to_outline(&nodes1);
+        let nodes2 = parse_markdown_headings(&outline);
+        assert_eq!(
+            nodes1, nodes2,
+            "round-trip should be idempotent (ignoring line numbers)"
+        );
+    }
+
+    /// Round-trip with deeper nesting and multiple roots.
+    #[test]
+    fn round_trip_deep_tree() {
+        let md = "# A\n## B\n### C\n#### D\n# E\n## F\n";
+        let nodes1 = parse_markdown_headings(md);
+        let outline = mindmap_to_outline(&nodes1);
+        let nodes2 = parse_markdown_headings(&outline);
+        // Compare titles and levels (line numbers will differ)
+        assert_eq!(nodes1.len(), nodes2.len());
+        for (n1, n2) in nodes1.iter().zip(nodes2.iter()) {
+            assert_eq!(n1.title, n2.title);
+            assert_eq!(n1.level, n2.level);
+            assert_eq!(n1.children.len(), n2.children.len());
+        }
+    }
+
+    /// `mindmap_to_outline` clamps out-of-range levels to 1..=6.
+    #[test]
+    fn to_outline_clamps_level() {
+        let nodes = vec![MindmapNode {
+            level: 99,
+            title: "Way too deep".to_string(),
+            line: 0,
+            children: vec![],
+        }];
+        let out = mindmap_to_outline(&nodes);
+        assert_eq!(out, "###### Way too deep");
+    }
+
+    /// `mindmap_to_outline` handles a tree whose roots start at h2.
+    #[test]
+    fn to_outline_h2_roots() {
+        let md = "## A\n### A.1\n## B\n";
+        let nodes = parse_markdown_headings(md);
+        let out = mindmap_to_outline(&nodes);
+        assert_eq!(out, "## A\n### A.1\n## B");
+    }
+
+    // ── max_depth tests (#3442) ────────────────────────────────────
+
+    /// `max_depth` of empty forest is 0.
+    #[test]
+    fn max_depth_empty() {
+        assert_eq!(max_depth(&[]), 0);
+    }
+
+    /// `max_depth` of a flat tree (roots only) is 1.
+    #[test]
+    fn max_depth_flat() {
+        let md = "# A\n# B\n# C\n";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(max_depth(&nodes), 1);
+    }
+
+    /// `max_depth` counts nesting levels correctly.
+    #[test]
+    fn max_depth_nested() {
+        let md = "# Root\n## Child\n### Grandchild\n";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(max_depth(&nodes), 3);
+    }
+
+    /// `max_depth` takes the max across multiple roots.
+    #[test]
+    fn max_depth_multiple_roots() {
+        let md = "# Shallow\n# Deep\n## A\n### B\n#### C\n";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(max_depth(&nodes), 4);
+    }
+
+    // ── count_total_nodes tests (#3442) ────────────────────────────
+
+    /// `count_total_nodes` of empty forest is 0.
+    #[test]
+    fn count_total_nodes_empty() {
+        assert_eq!(count_total_nodes(&[]), 0);
+    }
+
+    /// `count_total_nodes` counts roots + descendants.
+    #[test]
+    fn count_total_nodes_basic() {
+        let md = "# Root\n## A\n## B\n### B.1\n";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(count_total_nodes(&nodes), 4);
+    }
+
+    /// `count_total_nodes` handles multiple roots.
+    #[test]
+    fn count_total_nodes_multiple_roots() {
+        let md = "# A\n## A.1\n# B\n## B.1\n### B.1.1\n";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(count_total_nodes(&nodes), 5);
+    }
+
+    // ── validate_mindmap tests (#3442) ────────────────────────────
+
+    /// A small, shallow tree passes validation with default limits.
+    #[test]
+    fn validate_ok() {
+        let md = "# Root\n## A\n### B\n";
+        let nodes = parse_markdown_headings(md);
+        assert!(validate_mindmap(&nodes, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES).is_ok());
+    }
+
+    /// A tree exceeding the depth limit is rejected.
+    #[test]
+    fn validate_depth_exceeded() {
+        // Depth 5 tree: # → ## → ### → #### → #####
+        let md = "# a\n## b\n### c\n#### d\n##### e\n";
+        let nodes = parse_markdown_headings(md);
+        let err = validate_mindmap(&nodes, 4, 200).unwrap_err();
+        assert_eq!(
+            err,
+            MindmapValidationError::DepthExceeded { actual: 5, max: 4 }
+        );
+    }
+
+    /// A tree exceeding the node-count limit is rejected.
+    #[test]
+    fn validate_node_count_exceeded() {
+        // Build a tree with 6 root nodes
+        let md = "# a\n# b\n# c\n# d\n# e\n# f\n";
+        let nodes = parse_markdown_headings(md);
+        let err = validate_mindmap(&nodes, 10, 5).unwrap_err();
+        assert_eq!(
+            err,
+            MindmapValidationError::NodeCountExceeded { actual: 6, max: 5 }
+        );
+    }
+
+    /// `validate_mindmap` passes on an empty tree (0 depth, 0 nodes).
+    #[test]
+    fn validate_empty_ok() {
+        assert!(validate_mindmap(&[], 4, 200).is_ok());
+    }
+
+    /// An empty tree passes even with limits of 0.
+    #[test]
+    fn validate_empty_with_zero_limits() {
+        assert!(validate_mindmap(&[], 0, 0).is_ok());
+    }
+
+    // ── AI-generated JSON deserialization + validation (#3442) ─────
+
+    /// Deserialize a JSON tree (as an AI agent would produce), validate it,
+    /// and verify it can be rendered in all formats.
+    #[test]
+    fn ai_generated_json_round_trip() {
+        let json = r#"[
+          {
+            "level": 1,
+            "title": "Asynchronous Runtime",
+            "line": 0,
+            "children": [
+              {
+                "level": 2,
+                "title": "Tokio",
+                "line": 0,
+                "children": [
+                  { "level": 3, "title": "Task scheduling", "line": 0 }
+                ]
+              },
+              {
+                "level": 2,
+                "title": "async-std",
+                "line": 0
+              }
+            ]
+          }
+        ]"#;
+
+        // Deserialize
+        let nodes: Vec<MindmapNode> = serde_json::from_str(json).expect("deserialize");
+
+        // Validate with default limits
+        validate_mindmap(&nodes, DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES).expect("valid");
+
+        // Render as outline (导图 → 大纲)
+        let outline = mindmap_to_outline(&nodes);
+        assert!(outline.contains("# Asynchronous Runtime"));
+        assert!(outline.contains("## Tokio"));
+        assert!(outline.contains("### Task scheduling"));
+        assert!(outline.contains("## async-std"));
+
+        // Render as Mermaid
+        let mermaid = render_mermaid(&nodes);
+        assert!(mermaid.contains("(Asynchronous Runtime)"));
+
+        // Render as text
+        let text = render_text(&nodes);
+        assert!(text.contains("Asynchronous Runtime"));
+        assert!(text.contains("  Tokio"));
+    }
+
+    /// Deserialized JSON with malformed level is still clamped on outline output.
+    #[test]
+    fn ai_json_malformed_level_clamped() {
+        let json = r#"[{"level": 0, "title": "Zero level", "line": 0}]"#;
+        let nodes: Vec<MindmapNode> = serde_json::from_str(json).expect("deserialize");
+        let outline = mindmap_to_outline(&nodes);
+        // level 0 is clamped to 1
+        assert_eq!(outline, "# Zero level");
+    }
+
+    /// `MindmapValidationError` implements Display correctly.
+    #[test]
+    fn validation_error_display() {
+        let depth_err = MindmapValidationError::DepthExceeded { actual: 5, max: 4 };
+        assert_eq!(depth_err.to_string(), "mindmap depth 5 exceeds maximum 4");
+
+        let count_err = MindmapValidationError::NodeCountExceeded {
+            actual: 201,
+            max: 200,
+        };
+        assert_eq!(
+            count_err.to_string(),
+            "mindmap node count 201 exceeds maximum 200"
+        );
     }
 }

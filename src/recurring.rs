@@ -338,7 +338,6 @@ fn remove_emoji_segment(s: &mut String, emoji: char) {
         let skip = rest
             .trim_start()
             .find(char::is_whitespace)
-            .map(|w| rest.trim_start().len() - w)
             .unwrap_or(rest.trim_start().len());
         let end = after + rest.len() - rest.trim_start().len() + skip;
         // Also consume one trailing space for cleanliness.
@@ -669,6 +668,26 @@ mod tests {
     }
 
     // ── Edge cases ───────────────────────────────────────────────────
+
+    /// Regression #3467: remove_emoji_segment skip inverted — ✅ before 📅
+    /// caused garbage fragments when done marker appeared before due marker.
+    #[test]
+    fn remove_emoji_segment_with_trailing_content() {
+        let line = "- [x] task 🔁 every week ✅ 2026-07-18 📅 2026-07-18";
+        let opts = GenerateOptions {
+            completed_date: Some(NaiveDate::from_ymd_opt(2026, 7, 18).unwrap()),
+            semantics: None,
+        };
+        let next = generate_next_instance_with(line, opts).unwrap();
+        assert!(
+            next.contains("📅 2026-07-25"),
+            "📅 marker should be preserved, got: {next}"
+        );
+        assert!(
+            !next.contains('✅'),
+            "✅ done marker should be removed, got: {next}"
+        );
+    }
 
     #[test]
     fn month_clamp_handles_february() {

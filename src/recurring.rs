@@ -135,7 +135,7 @@ impl std::fmt::Display for RecurringRule {
 /// accepted and normalised to `interval = 1`.
 ///
 /// ```
-/// use vaultpilot::recurring::{parse_recurring_rule, RecurUnit};
+/// use vaultpilot_lib::recurring::{parse_recurring_rule, RecurUnit};
 ///
 /// let r = parse_recurring_rule("- [ ] 喝水 🔁 every day").unwrap();
 /// assert_eq!(r.interval, 1);

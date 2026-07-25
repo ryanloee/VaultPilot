@@ -332,6 +332,14 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         )?;
         ensure_attachment_columns(connection)?;
         ensure_note_columns(connection)?;
+        // #3440: ensure_trigger_rule_columns was only reachable during initial
+        // schema creation (version 0 → 1). Databases created by older builds
+        // (already at user_version = 1) that predate these columns would never
+        // receive them, crashing at runtime with "no such column: last_fired_at".
+        // The function is idempotent (checks PRAGMA table_info before each ALTER),
+        // so calling it on every open is safe and cheap — same pattern as
+        // ensure_attachment_columns / ensure_note_columns above.
+        ensure_trigger_rule_columns(connection)?;
         return Ok(());
     }
 
@@ -805,6 +813,51 @@ mod tests {
 
         ensure_note_columns(&conn).unwrap();
         ensure_note_columns(&conn).unwrap();
+    }
+
+    // ── Regression test for #3440 ─────────────────────────────────
+
+    #[test]
+    fn ensure_trigger_rule_columns_runs_on_schema_fast_path() {
+        // Regression test for #3440: ensure_trigger_rule_columns was placed
+        // after the `if version >= 1 { return Ok(()) }` fast-path early return,
+        // so databases created by older builds (user_version = 1) that predate
+        // the trigger-rule columns would never receive them on upgrade.
+        let conn = in_memory_conn();
+        // Simulate an old DB: create trigger_rules without the 6 extra columns.
+        conn.execute_batch(
+            "CREATE TABLE trigger_rules (id TEXT PRIMARY KEY, label TEXT NOT NULL, \
+             action TEXT NOT NULL, trigger TEXT NOT NULL, enabled INTEGER NOT NULL, \
+             custom_prompt TEXT NOT NULL DEFAULT '', \
+             created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA user_version = 1;").unwrap();
+
+        // Fast path should now also call ensure_trigger_rule_columns.
+        ensure_schema(&conn).unwrap();
+
+        let columns: HashSet<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(trigger_rules)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+
+        for col in [
+            "last_fired_at",
+            "next_fire_at",
+            "run_count",
+            "last_status",
+            "last_error",
+            "conditions",
+        ] {
+            assert!(
+                columns.contains(col),
+                "column '{col}' missing after ensure_schema fast path — #3440 regression"
+            );
+        }
     }
 
     // ── Regression test for #2851 ─────────────────────────────────

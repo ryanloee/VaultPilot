@@ -119,6 +119,35 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
 /** Timeout (ms) if no progress for this duration. */
 const STALL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+/**
+ * Open system settings for "Install unknown apps" permission (Android 8+).
+ * On Android 26+, the app needs REQUEST_INSTALL_PACKAGES permission to
+ * launch the system package installer. This redirects the user to the
+ * specific settings page where they can enable it for this app.
+ */
+export async function requestInstallPermission(): Promise<void> {
+  if (Platform.OS !== 'android' || (Platform.Version as number) < 26) return;
+
+  try {
+    // Opens Android Settings → Apps → Special app access → Install unknown apps
+    // with this app pre-selected.
+    await IntentLauncher.startActivityAsync(
+      'android.settings.MANAGE_UNKNOWN_APP_SOURCES_SETTINGS',
+      { data: 'package:com.vaultpilot.mobile' },
+    );
+  } catch (e) {
+    console.warn('[UpdateChecker] Failed to launch install permission settings:', e);
+    // Fallback: try general application details settings
+    try {
+      await IntentLauncher.startActivityAsync('android.settings.APPLICATION_DETAILS_SETTINGS', {
+        data: 'package:com.vaultpilot.mobile',
+      });
+    } catch (e2) {
+      console.warn('[UpdateChecker] Fallback settings also failed:', e2);
+    }
+  }
+}
+
 export async function downloadAndInstall(
   apkUrl: string,
   version: string,

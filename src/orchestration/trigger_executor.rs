@@ -554,6 +554,7 @@ mod tests {
             action,
             enabled: true,
             custom_prompt: None,
+            conditions: vec![],
         }
     }
 
@@ -668,6 +669,7 @@ mod tests {
             action: TriggerAction::SummarizeAndTag,
             enabled: true,
             custom_prompt: None,
+            conditions: vec![],
         };
         assert!(!is_rule_due(&rule, None, fixed_time()));
     }

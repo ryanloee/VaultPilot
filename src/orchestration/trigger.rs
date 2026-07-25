@@ -7,8 +7,12 @@
 //!
 //! Each rule specifies:
 //! - A **trigger** (cron expression or event name + optional filter)
+//! - **Conditions** (optional constraints that must be satisfied for the rule to fire)
 //! - An **action** (predefined prompt-template id)
 //! - Whether it is **enabled**
+//!
+//! Conditions are evaluated when the trigger fires. If all conditions match,
+//! the action is executed. Empty conditions list means unconditional.
 //!
 //! Rules are stored as JSON/YAML in the vault alongside settings, but the
 //! active set is parsed into this struct.
@@ -34,6 +38,78 @@ pub struct AgentTriggerRule {
     /// output when `None` for backward compatibility (#2842).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_prompt: Option<String>,
+    /// Optional conditions that must be satisfied for this rule to fire.
+    /// Evaluated when the trigger fires. All conditions must match.
+    /// Empty (default) means unconditional — always fire when triggered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+}
+
+/// A condition that must be satisfied for a trigger rule to fire.
+///
+/// All conditions in a rule's `conditions` list must match. The condition
+/// is evaluated against the current vault state or event context depending
+/// on the trigger type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Condition {
+    /// The event target (e.g., note) must have the specified tag.
+    TagContains {
+        /// Tag to check for (without # prefix).
+        tag: String,
+    },
+    /// A frontmatter field must equal the specified value.
+    FrontmatterEquals {
+        /// Frontmatter field name.
+        field: String,
+        /// Expected value.
+        value: String,
+    },
+    /// Always matches — unconditional.
+    Always,
+}
+
+impl Condition {
+    /// Evaluate this condition in the given context.
+    ///
+    /// Returns `true` if the condition is satisfied.
+    pub fn matches(&self, _context: &ConditionContext) -> bool {
+        match self {
+            // Always matches regardless of context.
+            Condition::Always => true,
+            // Tag conditions require context with tags.
+            Condition::TagContains { tag } => _context.tags.iter().any(|t| t == tag),
+            // Frontmatter conditions require context with matching field.
+            Condition::FrontmatterEquals { field, value } => {
+                _context.frontmatter.get(field).is_some_and(|v| v == value)
+            }
+        }
+    }
+}
+
+/// Context available when evaluating trigger rule conditions.
+///
+/// Populated from the event payload (for event triggers) or current vault
+/// state (for cron triggers).
+#[derive(Debug, Clone, Default)]
+pub struct ConditionContext {
+    /// Tags associated with the triggering event / current context.
+    pub tags: Vec<String>,
+    /// Frontmatter fields and values associated with the context.
+    pub frontmatter: std::collections::HashMap<String, String>,
+}
+
+impl AgentTriggerRule {
+    /// Check whether all conditions on this rule are satisfied.
+    ///
+    /// Returns `true` if the rule has no conditions (unconditional) or all
+    /// conditions match. Returns `false` if any condition fails.
+    pub fn conditions_met(&self, context: &ConditionContext) -> bool {
+        if self.conditions.is_empty() {
+            return true;
+        }
+        self.conditions.iter().all(|c| c.matches(context))
+    }
 }
 
 impl AgentTriggerRule {
@@ -257,6 +333,7 @@ mod tests {
             action: TriggerAction::DailyReview,
             enabled: true,
             custom_prompt: None,
+            conditions: vec![],
         };
         let json = serde_json::to_string(&rule).unwrap();
         let parsed: AgentTriggerRule = serde_json::from_str(&json).unwrap();
@@ -277,6 +354,7 @@ mod tests {
             action: TriggerAction::Custom,
             enabled: true,
             custom_prompt: Some("Summarize the meeting notes for {{date}}".into()),
+            conditions: vec![],
         };
 
         // The prompt is reachable via effective_prompt for Custom actions.
@@ -305,6 +383,7 @@ mod tests {
             action: TriggerAction::DailyReview,
             enabled: true,
             custom_prompt: None,
+            conditions: vec![],
         };
         assert_eq!(daily.effective_prompt(), None);
     }
@@ -390,5 +469,240 @@ mod tests {
 
         let json = serde_json::to_string(&ExecutorStatus::Connected).unwrap();
         assert_eq!(json, "\"connected\"");
+    }
+
+    // ─── Condition matching tests ────────────────────────────
+
+    #[test]
+    fn condition_always_matches() {
+        let ctx = ConditionContext::default();
+        assert!(Condition::Always.matches(&ctx));
+    }
+
+    #[test]
+    fn condition_tag_contains_matches() {
+        let ctx = ConditionContext {
+            tags: vec!["urgent".into(), "meeting".into()],
+            ..Default::default()
+        };
+        assert!(Condition::TagContains {
+            tag: "urgent".into()
+        }
+        .matches(&ctx));
+        assert!(Condition::TagContains {
+            tag: "meeting".into()
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_tag_contains_no_match() {
+        let ctx = ConditionContext {
+            tags: vec!["meeting".into()],
+            ..Default::default()
+        };
+        assert!(!Condition::TagContains {
+            tag: "urgent".into()
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_tag_contains_empty_context() {
+        let ctx = ConditionContext::default();
+        assert!(!Condition::TagContains {
+            tag: "anything".into()
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_frontmatter_equals_matches() {
+        let mut ctx = ConditionContext::default();
+        ctx.frontmatter.insert("status".into(), "done".into());
+        assert!(Condition::FrontmatterEquals {
+            field: "status".into(),
+            value: "done".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_frontmatter_equals_no_match() {
+        let mut ctx = ConditionContext::default();
+        ctx.frontmatter.insert("status".into(), "todo".into());
+        assert!(!Condition::FrontmatterEquals {
+            field: "status".into(),
+            value: "done".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_frontmatter_equals_missing_field() {
+        let ctx = ConditionContext::default();
+        assert!(!Condition::FrontmatterEquals {
+            field: "status".into(),
+            value: "done".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn rule_conditions_met_empty_list() {
+        let rule = AgentTriggerRule {
+            id: "test-1".into(),
+            label: "Test".into(),
+            trigger: TriggerKind::Cron {
+                expression: "0 8 * * *".into(),
+            },
+            action: TriggerAction::DailyReview,
+            enabled: true,
+            custom_prompt: None,
+            conditions: vec![],
+        };
+        // Empty conditions means unconditional.
+        assert!(rule.conditions_met(&ConditionContext::default()));
+    }
+
+    #[test]
+    fn rule_conditions_met_all_pass() {
+        let rule = AgentTriggerRule {
+            id: "test-2".into(),
+            label: "Urgent Review".into(),
+            trigger: TriggerKind::Cron {
+                expression: "0 8 * * *".into(),
+            },
+            action: TriggerAction::SummarizeAndTag,
+            enabled: true,
+            custom_prompt: None,
+            conditions: vec![Condition::TagContains {
+                tag: "urgent".into(),
+            }],
+        };
+        let ctx = ConditionContext {
+            tags: vec!["urgent".into()],
+            ..Default::default()
+        };
+        assert!(rule.conditions_met(&ctx));
+    }
+
+    #[test]
+    fn rule_conditions_met_one_fails() {
+        let rule = AgentTriggerRule {
+            id: "test-3".into(),
+            label: "Tagged Review".into(),
+            trigger: TriggerKind::Cron {
+                expression: "0 8 * * *".into(),
+            },
+            action: TriggerAction::SummarizeAndTag,
+            enabled: true,
+            custom_prompt: None,
+            conditions: vec![
+                Condition::TagContains {
+                    tag: "urgent".into(),
+                },
+                Condition::FrontmatterEquals {
+                    field: "status".into(),
+                    value: "done".into(),
+                },
+            ],
+        };
+        // Only tag matches, not frontmatter
+        let ctx = ConditionContext {
+            tags: vec!["urgent".into()],
+            ..Default::default()
+        };
+        assert!(!rule.conditions_met(&ctx));
+    }
+
+    #[test]
+    fn condition_serialization_roundtrip() {
+        let conditions = vec![
+            Condition::Always,
+            Condition::TagContains {
+                tag: "urgent".into(),
+            },
+            Condition::FrontmatterEquals {
+                field: "status".into(),
+                value: "done".into(),
+            },
+        ];
+        for cond in &conditions {
+            let json = serde_json::to_string(cond).unwrap();
+            let parsed: Condition = serde_json::from_str(&json).unwrap();
+            assert_eq!(*cond, parsed, "round-trip failed for {cond:?} -> {json}");
+        }
+    }
+
+    #[test]
+    fn rule_conditions_serialized_with_default_skip() {
+        // A rule with no conditions should not include "conditions" in JSON
+        // (backward-compatible with older consumers).
+        let rule = AgentTriggerRule {
+            id: "no-conds".into(),
+            label: "No Conds".into(),
+            trigger: TriggerKind::Cron {
+                expression: "0 8 * * *".into(),
+            },
+            action: TriggerAction::DailyReview,
+            enabled: true,
+            custom_prompt: None,
+            conditions: vec![],
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        assert!(
+            !json.contains("conditions"),
+            "empty conditions should be skipped: {json}"
+        );
+    }
+
+    #[test]
+    fn rule_with_conditions_serializes_and_deserializes() {
+        let rule = AgentTriggerRule {
+            id: "with-conds".into(),
+            label: "With Conds".into(),
+            trigger: TriggerKind::Event {
+                name: "note_created".into(),
+                filter: None,
+            },
+            action: TriggerAction::Custom,
+            enabled: true,
+            custom_prompt: Some("Process urgent notes".into()),
+            conditions: vec![Condition::TagContains {
+                tag: "urgent".into(),
+            }],
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        assert!(
+            json.contains("conditions"),
+            "rule with conditions must include field"
+        );
+        assert!(
+            json.contains("tag_contains"),
+            "condition type must be in JSON"
+        );
+
+        let parsed: AgentTriggerRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, rule);
+        assert_eq!(parsed.conditions.len(), 1);
+    }
+
+    #[test]
+    fn backward_compat_missing_conditions_field() {
+        // Older persisted rules had no "conditions" field — must deserialize
+        // to an empty vec (serde default).
+        let json = r#"{
+            "id": "legacy-2",
+            "label": "Legacy Rule",
+            "trigger": {"type": "cron", "expression": "0 8 * * *"},
+            "action": "daily_review",
+            "enabled": true
+        }"#;
+        let parsed: AgentTriggerRule = serde_json::from_str(json).unwrap();
+        assert!(
+            parsed.conditions.is_empty(),
+            "legacy rules must deserialize with empty conditions"
+        );
     }
 }

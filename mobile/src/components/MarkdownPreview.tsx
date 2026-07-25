@@ -1,12 +1,12 @@
-import React, { memo, useState, useCallback } from 'react';
+import React, { memo, useState, useCallback, useMemo } from 'react';
 import { Text, View, StyleSheet, ScrollView, TouchableOpacity, Image as RNImage } from 'react-native';
 import { renderLatex, parseLatexSegments } from '../utils/latex';
 import Icon from './Icon';
 import { findNoteReferences, splitLineByNoteRefs } from '../utils/noteRefs';
 import Lightbox from './Lightbox';
 import {
-  extractImagesFromContent,
   extractImagesFromLine,
+  extractStandaloneImages,
   isStandaloneImageLine,
   MarkdownImage,
 } from '../utils/imageMarkdown';
@@ -63,8 +63,15 @@ function processLatexSegments(text: string, textColor: string, accentColor: stri
  * with a chart icon instead of a plain code block (#2805).
  */
 const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap }: Props) {
-  // Collect all images for Lightbox navigation (#3030)
-  const allImages: MarkdownImage[] = extractImagesFromContent(content);
+  // Collect standalone images for Lightbox navigation (#3030).
+  // #3454: Must mirror the population rendered as tappable image blocks —
+  // only standalone-line images get a `globalIdx` from `imageCounter`, so
+  // `allImages` must contain only those images to keep indices aligned.
+  // Inline images (e.g. `Hello ![emoji](e.png)`) are excluded.
+  const allImages: MarkdownImage[] = useMemo(
+    () => extractStandaloneImages(content),
+    [content],
+  );
   const [lightboxIndex, setLightboxIndex] = useState(-1);
   const handleImagePress = useCallback((idx: number) => setLightboxIndex(idx), []);
   const handleCloseLightbox = useCallback(() => setLightboxIndex(-1), []);

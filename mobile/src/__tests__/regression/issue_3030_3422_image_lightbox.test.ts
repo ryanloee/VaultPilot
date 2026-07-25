@@ -7,6 +7,7 @@
 import {
   extractImagesFromLine,
   extractImagesFromContent,
+  extractStandaloneImages,
   isStandaloneImageLine,
   shouldDismissOnSwipe,
   nextZoomOnDoubleTap,
@@ -133,6 +134,103 @@ describe('imageMarkdown — image parsing (#3030)', () => {
 
   it('returns false for non-image content', () => {
     expect(isStandaloneImageLine('just text')).toBe(false);
+  });
+});
+
+describe('extractStandaloneImages — Lightbox index alignment (#3454)', () => {
+  // ── Core regression: inline images must not pollute the Lightbox list ──
+
+  it('excludes inline images, keeping indices aligned with imageCounter', () => {
+    // Repro from #3454: a note with an inline image followed by a
+    // standalone image. extractImagesFromContent would return both
+    // (indices 0, 1), but only the standalone image gets a globalIdx
+    // (0), so tapping it would open allImages[0] = the inline image.
+    const content = [
+      'Hello world ![emoji](https://e.com/emoji.png)',
+      '',
+      '![screenshot](https://e.com/screenshot.png)',
+    ].join('\n');
+
+    const allImages = extractImagesFromContent(content);
+    expect(allImages).toHaveLength(2); // both inline + standalone
+
+    const standalone = extractStandaloneImages(content);
+    expect(standalone).toHaveLength(1); // only the standalone image
+    expect(standalone[0].alt).toBe('screenshot');
+    // Index 0 now correctly maps to the screenshot — the only tappable image
+  });
+
+  it('returns all images when every image is on its own line', () => {
+    const content = [
+      '# Title',
+      '',
+      '![first](https://e.com/a.png)',
+      '![second](https://e.com/b.png)',
+    ].join('\n');
+
+    expect(extractStandaloneImages(content)).toHaveLength(2);
+    expect(extractStandaloneImages(content)[0].alt).toBe('first');
+    expect(extractStandaloneImages(content)[1].alt).toBe('second');
+  });
+
+  it('handles multiple standalone images on the same line', () => {
+    const content = '![a](u1) ![b](u2)';
+    const result = extractStandaloneImages(content);
+    expect(result).toHaveLength(2);
+    expect(result[0].alt).toBe('a');
+    expect(result[1].alt).toBe('b');
+  });
+
+  it('skips images inside fenced code blocks', () => {
+    const content = [
+      '![real](https://e.com/real.png)',
+      '```',
+      '![fake](https://e.com/fake.png)',
+      '```',
+    ].join('\n');
+
+    expect(extractStandaloneImages(content)).toHaveLength(1);
+    expect(extractStandaloneImages(content)[0].alt).toBe('real');
+  });
+
+  it('returns empty for content with only inline images', () => {
+    const content = 'Text ![inline](u.png) more text';
+    expect(extractStandaloneImages(content)).toEqual([]);
+  });
+
+  it('returns empty for content with no images', () => {
+    expect(extractStandaloneImages('# Title\n\nJust text')).toEqual([]);
+    expect(extractStandaloneImages('')).toEqual([]);
+  });
+
+  it('handles mixed inline + standalone across multiple paragraphs', () => {
+    const content = [
+      'See ![inline1](u1.png) here.',
+      '',
+      '![standalone1](u2.png)',
+      '',
+      'Another ![inline2](u3.png) mid-sentence.',
+      '',
+      '![standalone2](u4.png)',
+    ].join('\n');
+
+    const result = extractStandaloneImages(content);
+    expect(result).toHaveLength(2);
+    expect(result[0].alt).toBe('standalone1');
+    expect(result[1].alt).toBe('standalone2');
+  });
+
+  it('indices match the order images are rendered (top-to-bottom)', () => {
+    const content = [
+      '![top](u-top.png)',
+      'inline ![skip](u-skip.png) text',
+      '![bottom](u-bottom.png)',
+    ].join('\n');
+
+    const result = extractStandaloneImages(content);
+    expect(result).toHaveLength(2);
+    expect(result[0].alt).toBe('top');
+    expect(result[1].alt).toBe('bottom');
   });
 });
 

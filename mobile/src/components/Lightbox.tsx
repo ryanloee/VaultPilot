@@ -138,9 +138,13 @@ export default function Lightbox({
       },
 
       onPanResponderGrant: (_evt, _gestureState) => {
-        startDismissY = 0;
-        startPanX = 0;
-        startPanY = 0;
+        // #3455: Capture the current animated offsets so each gesture
+        // continues from where the last one left off. Resetting to 0
+        // discards accumulated pan, making the zoomed image snap to
+        // center at the start of every new pan gesture.
+        startDismissY = (dismissY as any)._value || 0;
+        startPanX = (panX as any)._value || 0;
+        startPanY = (panY as any)._value || 0;
       },
 
       onPanResponderMove: (_evt, gestureState) => {

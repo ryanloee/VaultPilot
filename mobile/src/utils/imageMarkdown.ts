@@ -80,6 +80,43 @@ export function extractImagesFromContent(content: string): MarkdownImage[] {
 }
 
 /**
+ * Extract images ONLY from standalone image lines (lines that contain
+ * nothing but image markdown and whitespace).
+ *
+ * This mirrors the population of images actually rendered as tappable
+ * `<TouchableOpacity>` in MarkdownPreview, so the resulting array's
+ * indices align with the `imageCounter` / `globalIdx` used by tap
+ * handlers (#3454).
+ *
+ * Inline images (images embedded mid-sentence, e.g.
+ * `Hello ![emoji](e.png) world`) are excluded — they are never rendered
+ * as clickable image blocks, so they must not appear in the Lightbox
+ * image list.
+ *
+ * Images inside fenced code blocks (```) are ignored, same as
+ * {@link extractImagesFromContent}.
+ */
+export function extractStandaloneImages(content: string): MarkdownImage[] {
+  const lines = content.split('\n');
+  const images: MarkdownImage[] = [];
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    if (line.trimStart().startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) continue;
+
+    if (isStandaloneImageLine(line)) {
+      images.push(...extractImagesFromLine(line));
+    }
+  }
+
+  return images;
+}
+
+/**
  * Check if a line is a standalone image paragraph (the line contains
  * ONLY one or more images, possibly with surrounding whitespace).
  *

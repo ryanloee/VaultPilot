@@ -83,6 +83,8 @@ pub(super) async fn run_http_bridge(
         .route("/api/notes/{note_id}", get(http_get_note))
         // Vault Health Dashboard (#2014)
         .route("/api/vault/health", get(http_vault_health))
+        // Knowledge Graph API (#3460) — expose vault note link graph as JSON
+        .route("/api/graph", get(http_graph))
         // Subscriptions API (#2167)
         .route(
             "/api/subscriptions",
@@ -2079,6 +2081,62 @@ async fn http_vault_health(
         tracing::warn!("http_vault_health: serialization failed: {e}");
         openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Serialization failed")
     })?;
+    Ok(Json(value))
+}
+
+/// GET /api/graph: knowledge graph as JSON (headless server #3460).
+///
+/// Returns the full vault knowledge graph (nodes + edges) in JSON format,
+/// enabling scripts, CI, and headless agents to query note link relationships
+/// without invoking the CLI.
+///
+/// Query parameters:
+/// - mentions (bool, optional): include plain-text mention edges (#2832)
+/// - inferred (bool, optional): include AI-inferred relationships (#3370)
+//   Note: inferred is accepted but not yet implemented; needs NoteMeta.
+async fn http_graph(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    let include_mentions = params
+        .get("mentions")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+
+    let graph = tokio::task::spawn_blocking({
+        let ctx = state.context.clone();
+        move || {
+            if include_mentions {
+                vaultpilot_lib::knowledge_graph::build_knowledge_graph_with_mentions(&ctx)
+            } else {
+                vaultpilot_lib::knowledge_graph::build_knowledge_graph(&ctx)
+            }
+        }
+    })
+    .await
+    .map_err(|e| {
+        tracing::warn!("graph: spawn_blocking failed: {e}");
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Knowledge graph generation failed",
+        )
+    })?
+    .map_err(|e| {
+        tracing::warn!("graph: build failed: {e}");
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Knowledge graph generation failed",
+        )
+    })?;
+
+    let value = serde_json::to_value(&graph).map_err(|e| {
+        tracing::warn!("graph: serialization failed: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Serialization failed")
+    })?;
+
     Ok(Json(value))
 }
 

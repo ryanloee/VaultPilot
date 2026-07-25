@@ -17,6 +17,7 @@
 //! Rules are stored as JSON/YAML in the vault alongside settings, but the
 //! active set is parsed into this struct.
 
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 
 /// A single user-defined trigger rule for the agent.
@@ -67,6 +68,25 @@ pub enum Condition {
     },
     /// Always matches — unconditional.
     Always,
+    /// Current time must fall within the specified window (#3441).
+    ///
+    /// Both `start` and `end` are `HH:MM` (24-hour). Overnight windows are
+    /// supported (e.g. `start = "22:00"`, `end = "06:00"` matches 22:00–23:59
+    /// and 00:00–06:00).
+    TimeWindow {
+        /// Window start in `HH:MM` (24-hour).
+        start: String,
+        /// Window end in `HH:MM` (24-hour, exclusive).
+        end: String,
+    },
+    /// Note body text must contain the specified substring (#3441).
+    ///
+    /// Case-sensitive substring match. For regex matching, see future
+    /// `ContentMatches` variant (requires `regex` crate dependency).
+    ContentContains {
+        /// Substring to search for in the note body.
+        substring: String,
+    },
 }
 
 impl Condition {
@@ -83,8 +103,46 @@ impl Condition {
             Condition::FrontmatterEquals { field, value } => {
                 _context.frontmatter.get(field).is_some_and(|v| v == value)
             }
+            // Time-window condition: current time must fall within [start, end).
+            Condition::TimeWindow { start, end } => _context
+                .now
+                .is_some_and(|now| time_in_window(now, start, end)),
+            // Content-contains condition: note text must contain substring.
+            Condition::ContentContains { substring } => _context
+                .note_text
+                .as_deref()
+                .is_some_and(|text| text.contains(substring.as_str())),
         }
     }
+}
+
+/// Check whether `now` falls within the daily time window `[start, end)`.
+///
+/// `start` and `end` are `HH:MM` (24-hour). Overnight windows (start > end)
+/// are supported: `22:00`–`06:00` matches 22:00–23:59 and 00:00–05:59.
+/// Returns `false` if either boundary fails to parse.
+fn time_in_window(now: chrono::DateTime<chrono::Utc>, start: &str, end: &str) -> bool {
+    let (Ok(s), Ok(e)) = (parse_hhmm(start), parse_hhmm(end)) else {
+        return false;
+    };
+    // Extract current time as minutes since midnight directly from the
+    // DateTime, avoiding string format/parse round-trips.
+    let cur_min = now.hour() * 60 + now.minute();
+    if s <= e {
+        // Normal window: e.g. 09:00–18:00.
+        cur_min >= s && cur_min < e
+    } else {
+        // Overnight window: e.g. 22:00–06:00.
+        cur_min >= s || cur_min < e
+    }
+}
+
+/// Parse a `HH:MM` string into total minutes since midnight.
+fn parse_hhmm(s: &str) -> Result<u32, std::num::ParseIntError> {
+    let (h, m) = s.split_once(':').unwrap_or((s, "0"));
+    let hours: u32 = h.parse()?;
+    let minutes: u32 = m.parse()?;
+    Ok(hours * 60 + minutes)
 }
 
 /// Context available when evaluating trigger rule conditions.
@@ -97,6 +155,14 @@ pub struct ConditionContext {
     pub tags: Vec<String>,
     /// Frontmatter fields and values associated with the context.
     pub frontmatter: std::collections::HashMap<String, String>,
+    /// Current timestamp — populated by the cron executor from its `now`
+    /// clock parameter. Used by [`Condition::TimeWindow`]. `None` means
+    /// "not available" (e.g. tests that don't exercise time conditions).
+    pub now: Option<chrono::DateTime<chrono::Utc>>,
+    /// Body text of the triggering note (for event triggers) or `None`
+    /// (for cron triggers with no note context). Used by
+    /// [`Condition::ContentContains`].
+    pub note_text: Option<String>,
 }
 
 impl AgentTriggerRule {
@@ -627,12 +693,167 @@ mod tests {
                 field: "status".into(),
                 value: "done".into(),
             },
+            // #3441: new variants
+            Condition::TimeWindow {
+                start: "09:00".into(),
+                end: "18:00".into(),
+            },
+            Condition::ContentContains {
+                substring: "TODO".into(),
+            },
         ];
         for cond in &conditions {
             let json = serde_json::to_string(cond).unwrap();
             let parsed: Condition = serde_json::from_str(&json).unwrap();
             assert_eq!(*cond, parsed, "round-trip failed for {cond:?} -> {json}");
         }
+    }
+
+    // ── TimeWindow condition tests (#3441) ──
+
+    #[test]
+    fn condition_time_window_within_window_matches() {
+        let ctx = ConditionContext {
+            now: Some(
+                chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 25, 10, 30, 0).unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(Condition::TimeWindow {
+            start: "09:00".into(),
+            end: "18:00".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_time_window_outside_window_no_match() {
+        let ctx = ConditionContext {
+            now: Some(
+                chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 25, 20, 0, 0).unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(!Condition::TimeWindow {
+            start: "09:00".into(),
+            end: "18:00".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_time_window_overnight_matches() {
+        // 22:00–06:00 overnight window. 23:00 should match.
+        let late = ConditionContext {
+            now: Some(
+                chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 25, 23, 0, 0).unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(Condition::TimeWindow {
+            start: "22:00".into(),
+            end: "06:00".into(),
+        }
+        .matches(&late));
+
+        // 03:00 should also match (early morning).
+        let early = ConditionContext {
+            now: Some(
+                chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 25, 3, 0, 0).unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(Condition::TimeWindow {
+            start: "22:00".into(),
+            end: "06:00".into(),
+        }
+        .matches(&early));
+
+        // 12:00 should NOT match (middle of day).
+        let noon = ConditionContext {
+            now: Some(
+                chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 25, 12, 0, 0).unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(!Condition::TimeWindow {
+            start: "22:00".into(),
+            end: "06:00".into(),
+        }
+        .matches(&noon));
+    }
+
+    #[test]
+    fn condition_time_window_no_now_returns_false() {
+        let ctx = ConditionContext::default();
+        assert!(!Condition::TimeWindow {
+            start: "09:00".into(),
+            end: "18:00".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_time_window_invalid_format_returns_false() {
+        let ctx = ConditionContext {
+            now: Some(
+                chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 25, 10, 0, 0).unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert!(!Condition::TimeWindow {
+            start: "bad".into(),
+            end: "18:00".into(),
+        }
+        .matches(&ctx));
+    }
+
+    // ── ContentContains condition tests (#3441) ──
+
+    #[test]
+    fn condition_content_contains_match() {
+        let ctx = ConditionContext {
+            note_text: Some("This note has a TODO item".into()),
+            ..Default::default()
+        };
+        assert!(Condition::ContentContains {
+            substring: "TODO".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_content_contains_no_match() {
+        let ctx = ConditionContext {
+            note_text: Some("Nothing to see here".into()),
+            ..Default::default()
+        };
+        assert!(!Condition::ContentContains {
+            substring: "TODO".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_content_contains_empty_note_text() {
+        let ctx = ConditionContext::default();
+        assert!(!Condition::ContentContains {
+            substring: "anything".into(),
+        }
+        .matches(&ctx));
+    }
+
+    #[test]
+    fn condition_content_contains_case_sensitive() {
+        let ctx = ConditionContext {
+            note_text: Some("todo item".into()),
+            ..Default::default()
+        };
+        // Case-sensitive: "TODO" != "todo"
+        assert!(!Condition::ContentContains {
+            substring: "TODO".into(),
+        }
+        .matches(&ctx));
     }
 
     #[test]

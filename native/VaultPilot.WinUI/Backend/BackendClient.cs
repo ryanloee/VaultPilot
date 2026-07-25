@@ -597,7 +597,11 @@ public sealed class BackendClient : IAsyncDisposable
         }
         finally
         {
-            Interlocked.Exchange(ref _readerCts, null)?.Cancel();
+            // Issue #3437: Cancel AND Dispose the CancellationTokenSource
+            // to avoid kernel handle leak during reconnection cycles.
+            var oldCts = Interlocked.Exchange(ref _readerCts, null);
+            oldCts?.Cancel();
+            oldCts?.Dispose();
             process.Dispose();
             ConnectionStateChanged?.Invoke(false);
         }

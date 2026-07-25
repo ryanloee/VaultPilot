@@ -34,6 +34,7 @@ pub mod prompt_store;
 pub mod prompting;
 pub mod quick_switcher;
 pub mod recovery;
+pub mod recurring;
 pub mod search_rules;
 pub mod semantic;
 pub mod settings_schema;

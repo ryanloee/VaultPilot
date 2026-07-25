@@ -572,6 +572,10 @@ fn ensure_trigger_rule_columns(connection: &Connection) -> Result<()> {
             "last_error",
             "ALTER TABLE trigger_rules ADD COLUMN last_error TEXT NOT NULL DEFAULT ''",
         ),
+        (
+            "conditions",
+            "ALTER TABLE trigger_rules ADD COLUMN conditions TEXT NOT NULL DEFAULT '[]'",
+        ),
     ] {
         if !columns.contains(column) {
             connection.execute_batch(ddl)?;

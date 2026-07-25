@@ -36,8 +36,8 @@ pub fn create_trigger_rule_with_context(
     let enabled: i32 = 1;
 
     connection.execute(
-        "INSERT INTO trigger_rules (id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, now, now],
+        "INSERT INTO trigger_rules (id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at, conditions) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, now, now, "[]"],
     ).with_context(|| format!("failed to create trigger rule '{label}'"))?;
 
     Ok(build_rule(
@@ -51,6 +51,7 @@ pub fn create_trigger_rule_with_context(
         custom_prompt,
         &now,
         &now,
+        None,
     ))
 }
 
@@ -61,7 +62,7 @@ pub fn list_trigger_rules_with_context(context: &StorageContext) -> Result<Vec<A
 
     let mut stmt = connection.prepare(
         r#"
-        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at
+        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at, conditions
         FROM trigger_rules
         ORDER BY created_at DESC
         "#,
@@ -79,6 +80,7 @@ pub fn list_trigger_rules_with_context(context: &StorageContext) -> Result<Vec<A
             let custom_prompt: Option<String> = row.get(7)?;
             let created_at: String = row.get(8)?;
             let updated_at: String = row.get(9)?;
+            let conditions: Option<String> = row.get(10)?;
             Ok(build_rule(
                 &id,
                 &label,
@@ -90,6 +92,7 @@ pub fn list_trigger_rules_with_context(context: &StorageContext) -> Result<Vec<A
                 custom_prompt.as_deref(),
                 &created_at,
                 &updated_at,
+                conditions.as_deref(),
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -108,7 +111,7 @@ pub fn get_trigger_rule_with_context(
 
     let mut stmt = connection.prepare(
         r#"
-        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at
+        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at, conditions
         FROM trigger_rules
         WHERE id = ?1
         "#,
@@ -126,6 +129,7 @@ pub fn get_trigger_rule_with_context(
             let custom_prompt: Option<String> = row.get(7)?;
             let created_at: String = row.get(8)?;
             let updated_at: String = row.get(9)?;
+            let conditions: Option<String> = row.get(10)?;
             Ok(build_rule(
                 &id,
                 &label,
@@ -137,6 +141,7 @@ pub fn get_trigger_rule_with_context(
                 custom_prompt.as_deref(),
                 &created_at,
                 &updated_at,
+                conditions.as_deref(),
             ))
         })
         .optional()?;
@@ -201,6 +206,7 @@ fn build_rule(
     custom_prompt: Option<&str>,
     _created_at: &str,
     _updated_at: &str,
+    conditions_json: Option<&str>,
 ) -> AgentTriggerRule {
     let trigger = match trigger_type {
         "event" => TriggerKind::Event {
@@ -214,6 +220,10 @@ fn build_rule(
 
     let parsed_action = TriggerAction::from_arg(action).unwrap_or(TriggerAction::Custom);
 
+    let conditions: Vec<crate::orchestration::trigger::Condition> = conditions_json
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+
     AgentTriggerRule {
         id: id.to_string(),
         label: label.to_string(),
@@ -221,6 +231,7 @@ fn build_rule(
         action: parsed_action,
         enabled,
         custom_prompt: custom_prompt.map(|s| s.to_string()),
+        conditions,
     }
 }
 

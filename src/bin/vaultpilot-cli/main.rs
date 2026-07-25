@@ -641,6 +641,26 @@ enum Commands {
         action: FeedActions,
     },
 
+    /// Manage crash-recovery snapshots — the File Recovery safety net (#3451).
+    ///
+    /// Recovery snapshots are auto-saved copies of your *unsaved edit buffer*,
+    /// stored **outside** the vault so they survive vault corruption/deletion.
+    /// They are distinct from modification-history snapshots (`vp notes
+    /// history`): recovery captures unsaved work on a timer; history captures
+    /// old versions on save.
+    ///
+    /// Examples:
+    ///   vp recovery list                 — list all recovery points
+    ///   vp recovery list --note a.md     — list recovery points for one note
+    ///   vp recovery show <id>            — print a snapshot's content
+    ///   vp recovery restore <id>         — write content to stdout (redirect to a file)
+    ///   vp recovery cleanup              — delete snapshots older than 7 days
+    ///   vp recovery cleanup --days 3     — custom retention window
+    Recovery {
+        #[command(subcommand)]
+        action: RecoveryActions,
+    },
+
     /// People-aware context — index vault notes by person (#1807 Phase 1)
     ///
     /// Builds an in-memory reverse index mapping canonical person names to the
@@ -2150,6 +2170,41 @@ enum FeedActions {
     },
 }
 
+/// Sub-commands for the `vp recovery` command (#3451 — File Recovery).
+#[derive(Subcommand)]
+enum RecoveryActions {
+    /// List recovery snapshots (newest first), optionally filtered to one note.
+    List {
+        /// Only show recovery points for this vault-relative note path.
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// Print the full content of a recovery snapshot to stdout.
+    Show {
+        /// Recovery snapshot ID.
+        id: String,
+    },
+
+    /// Restore a recovery snapshot by writing its content to stdout.
+    ///
+    /// Redirect to a file to recover the buffer, e.g.
+    /// `vp recovery restore <id> > recovered.md`.
+    Restore {
+        /// Recovery snapshot ID.
+        id: String,
+    },
+
+    /// Delete recovery snapshots older than the retention window.
+    ///
+    /// Defaults to 7 days; override with `--days`. Returns the count removed.
+    Cleanup {
+        /// Retention window in days (snapshots older than this are deleted).
+        #[arg(long, default_value_t = vaultpilot_lib::recovery::DEFAULT_RECOVERY_RETENTION_DAYS)]
+        days: i64,
+    },
+}
+
 /// Sub-commands for the `vp people` command (#1807 Phase 1).
 #[derive(Subcommand)]
 enum PeopleActions {
@@ -2982,6 +3037,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         }
         Commands::Mail { action } => handle_mail(context, action).await,
         Commands::Feed { action } => handle_feed(context, action).await,
+        Commands::Recovery { action } => {
+            tokio::task::block_in_place(|| handle_recovery(context, action))
+        }
         Commands::People { action } => {
             tokio::task::block_in_place(|| handle_people(context, action))
         }
@@ -7252,6 +7310,82 @@ async fn handle_feed(context: &StorageContext, action: &FeedActions) -> Result<V
             Ok(serde_json::json!({
                 "exported": feeds.len(),
                 "path": path,
+            }))
+        }
+    }
+}
+
+/// Handler for the `vp recovery` subcommand (#3451 — File Recovery).
+///
+/// Recovery snapshots are auto-saved copies of the *unsaved edit buffer*,
+/// stored in a vault-external SQLite DB so they survive vault corruption.
+fn handle_recovery(context: &StorageContext, action: &RecoveryActions) -> Result<Value> {
+    use vaultpilot_lib::recovery as recovery_mod;
+    let vault_dir = context.vault_dir().to_path_buf();
+
+    match action {
+        RecoveryActions::List { note } => {
+            let snaps = recovery_mod::list_recovery_snapshots(&vault_dir, note.as_deref())?;
+            let count = snaps.len();
+            eprintln!("Found {count} recovery snapshot(s).");
+            for s in &snaps {
+                eprintln!(
+                    "  {}  {}  ({} bytes)  [{}]  {}",
+                    &s.id[..8],
+                    s.note_path,
+                    s.content_size,
+                    s.created_at,
+                    if s.title.is_empty() { "" } else { &s.title }
+                );
+            }
+            Ok(serde_json::json!({
+                "count": count,
+                "snapshots": snaps,
+            }))
+        }
+        RecoveryActions::Show { id } => {
+            let snap = recovery_mod::get_recovery_snapshot(&vault_dir, id)?
+                .ok_or_else(|| anyhow::anyhow!("recovery snapshot '{id}' not found"))?;
+            // Print the raw content to stdout so it can be inspected or piped.
+            print!("{}", snap.content);
+            Ok(serde_json::json!({
+                "id": snap.id,
+                "note_path": snap.note_path,
+                "title": snap.title,
+                "content_size": snap.content_size,
+                "created_at": snap.created_at,
+            }))
+        }
+        RecoveryActions::Restore { id } => {
+            let snap = recovery_mod::get_recovery_snapshot(&vault_dir, id)?
+                .ok_or_else(|| anyhow::anyhow!("recovery snapshot '{id}' not found"))?;
+            // Write content to stdout for redirection into a file, e.g.
+            //   vp recovery restore <id> > recovered.md
+            // A trailing newline is added only if the content lacks one, so the
+            // recovered file is well-formed Markdown.
+            let content = snap.content.clone();
+            if content.ends_with('\n') {
+                print!("{content}");
+            } else {
+                println!("{content}");
+            }
+            eprintln!(
+                "✅ Recovered {} bytes for '{}' (snapshot {}).",
+                snap.content_size, snap.note_path, snap.id
+            );
+            Ok(serde_json::json!({
+                "restored": true,
+                "id": snap.id,
+                "note_path": snap.note_path,
+                "content_size": snap.content_size,
+            }))
+        }
+        RecoveryActions::Cleanup { days } => {
+            let removed = recovery_mod::cleanup_expired(&vault_dir, *days)?;
+            eprintln!("Deleted {removed} recovery snapshot(s) older than {days} day(s).");
+            Ok(serde_json::json!({
+                "removed": removed,
+                "retention_days": days,
             }))
         }
     }

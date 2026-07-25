@@ -48,6 +48,17 @@ export const TextInput = (props: any) => {
 };
 export const useColorScheme = () => 'light';
 export const StatusBar = createComponent('StatusBar');
+export const Image = createComponent('Image');
+export const Modal = (props: any) => {
+  const React = require('react');
+  return React.createElement('Modal', props, props.visible ? props.children : null);
+};
+export const Dimensions = {
+  get: (_dim: 'window' | 'screen') => ({ width: 375, height: 812 }),
+};
+export const PanResponder = {
+  create: (config: any) => ({ panHandlers: {} }),
+};
 export const FlatList = require('react').forwardRef((props: any, ref: any) => {
   const React = require('react');
   // Expose imperative scroll methods so components calling

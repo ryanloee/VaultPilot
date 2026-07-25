@@ -1,8 +1,15 @@
-import React, { memo } from 'react';
-import { Text, View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { memo, useState, useCallback } from 'react';
+import { Text, View, StyleSheet, ScrollView, TouchableOpacity, Image as RNImage } from 'react-native';
 import { renderLatex, parseLatexSegments } from '../utils/latex';
 import Icon from './Icon';
 import { findNoteReferences, splitLineByNoteRefs } from '../utils/noteRefs';
+import Lightbox from './Lightbox';
+import {
+  extractImagesFromContent,
+  extractImagesFromLine,
+  isStandaloneImageLine,
+  MarkdownImage,
+} from '../utils/imageMarkdown';
 
 interface Props {
   content: string;
@@ -56,12 +63,21 @@ function processLatexSegments(text: string, textColor: string, accentColor: stri
  * with a chart icon instead of a plain code block (#2805).
  */
 const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap }: Props) {
+  // Collect all images for Lightbox navigation (#3030)
+  const allImages: MarkdownImage[] = extractImagesFromContent(content);
+  const [lightboxIndex, setLightboxIndex] = useState(-1);
+  const handleImagePress = useCallback((idx: number) => setLightboxIndex(idx), []);
+  const handleCloseLightbox = useCallback(() => setLightboxIndex(-1), []);
+  const handleIndexChange = useCallback((idx: number) => setLightboxIndex(idx), []);
+
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let inCodeBlock = false;
   let codeLang: string | null = null;
   let codeLines: string[] = [];
   let codeKey = 0;
+  // Global image counter for Lightbox index tracking (#3030)
+  let imageCounter = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -149,6 +165,39 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
       continue;
     }
 
+    // Image line (#3030): render ![alt](url) as clickable images that open Lightbox
+    const lineImages = extractImagesFromLine(line);
+    if (lineImages.length > 0 && isStandaloneImageLine(line)) {
+      const imgElements = lineImages.map((img, imgIdx) => {
+        const globalIdx = imageCounter++;
+        return (
+          <TouchableOpacity
+            key={`img-${i}-${imgIdx}`}
+            activeOpacity={0.85}
+            onPress={() => handleImagePress(globalIdx)}
+            testID={`md-image-${globalIdx}`}
+          >
+            <RNImage
+              source={{ uri: img.uri }}
+              style={[
+                styles.inlineImage,
+                lineImages.length > 1 && styles.inlineImageGrid,
+              ]}
+              resizeMode="cover"
+              accessibilityLabel={img.alt || 'Image'}
+            />
+          </TouchableOpacity>
+        );
+      });
+
+      elements.push(
+        <View key={`imgblock-${i}`} style={styles.imageBlock}>
+          {imgElements}
+        </View>
+      );
+      continue;
+    }
+
     // Empty line = spacing
     if (!line.trim()) {
       elements.push(<View key={`br-${i}`} style={{ height: 8 }} />);
@@ -200,7 +249,20 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     }
   }
 
-  return <>{elements}</>;
+  return (
+    <>
+      {elements}
+      {allImages.length > 0 && lightboxIndex >= 0 && (
+        <Lightbox
+          visible={lightboxIndex >= 0}
+          images={allImages}
+          index={Math.min(lightboxIndex, allImages.length - 1)}
+          onClose={handleCloseLightbox}
+          onIndexChange={handleIndexChange}
+        />
+      )}
+    </>
+  );
 });
 
 export default MarkdownPreview;
@@ -410,5 +472,22 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     textDecorationLine: 'underline',
     fontWeight: '500',
+  },
+  // #3030: Image rendering styles
+  imageBlock: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    marginVertical: 8,
+    gap: 4,
+  },
+  inlineImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+  },
+  inlineImageGrid: {
+    width: '48%',
+    height: 140,
   },
 });

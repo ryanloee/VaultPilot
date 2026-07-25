@@ -36,7 +36,7 @@ fn main() -> Result<()> {
 
 fn discover_vault_dir_from_config() -> Option<String> {
     let candidates = [
-        std::env::current_dir().ok()?,
+        std::env::current_dir().unwrap_or_default(),
         dirs_or_home().join("Documents").join("VaultPilotVault"),
         dirs_or_home().join(".vaultpilot"),
     ];
@@ -1109,8 +1109,15 @@ mod tests {
 
     #[test]
     fn test_github_token_not_configured() {
-        // Ensure GITHUB_TOKEN is not in env for this test
+        // Ensure GITHUB_TOKEN is not in env for this test (and restore it after).
+        // Without this, the test makes a real network call and only passes by
+        // coincidence because "foo/bar" is a 404.
+        let saved = std::env::var_os("GITHUB_TOKEN");
+        std::env::remove_var("GITHUB_TOKEN");
         let result = github_api("/repos/foo/bar/issues");
+        if let Some(v) = saved {
+            std::env::set_var("GITHUB_TOKEN", v);
+        }
         assert!(
             result
                 .get("isError")

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, StyleSheet, ActivityIndicator, Linking } from 'react-native';
 import type { UpdateInfo } from '../../utils/updateChecker';
-import { downloadAndInstall } from '../../utils/updateChecker';
+import { downloadAndInstall, requestInstallPermission } from '../../utils/updateChecker';
 import Icon from '../../components/Icon';
 
 interface UpdateModalProps {
@@ -119,19 +119,28 @@ export default function UpdateModal({
             </View>
           ) : error ? (
             <View style={{ marginTop: 16 }}>
-              <Text style={{ color: '#ff4444', textAlign: 'center', marginBottom: 12 }}>{error}</Text>
+              <Text style={{ color: '#ff4444', textAlign: 'center', marginBottom: 4 }}>{error}</Text>
+              <Text style={{ color: textColorSecondary, textAlign: 'center', fontSize: 13, marginBottom: 12 }}>
+                需要开启「安装未知来源应用」权限
+              </Text>
               <View style={{ flexDirection: 'row', gap: 12 }}>
                 <TouchableOpacity
                   style={[styles.modalClose, { borderColor, flex: 1 }]}
-                  onPress={() => { setError(null); handleClose(); }}
+                  onPress={() => { setError(null); handleDownload(); }}
                 >
-                  <Text style={{ color: textColorSecondary, textAlign: 'center' }}>关闭</Text>
+                  <Text style={{ color: textColorSecondary, textAlign: 'center' }}>重新安装</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalClose, { borderColor: accentColor, backgroundColor: accentColor + '15', flex: 1 }]}
+                  onPress={() => { requestInstallPermission(); }}
+                >
+                  <Text style={{ color: accentColor, fontWeight: '600', textAlign: 'center' }}>去设置</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalClose, { borderColor, flex: 1 }]}
                   onPress={() => Linking.openURL(updateInfo.releaseUrl)}
                 >
-                  <Text style={{ color: accentColor, fontWeight: '600', textAlign: 'center' }}>手动下载</Text>
+                  <Text style={{ color: textColorSecondary, textAlign: 'center' }}>手动下载</Text>
                 </TouchableOpacity>
               </View>
             </View>

@@ -57,28 +57,57 @@ pub fn parse_markdown_headings(text: &str) -> Vec<MindmapNode> {
     // navigating the tree at insertion time.
     let mut stack: Vec<(u8, usize)> = Vec::new(); // (level, index in parent's children)
     let mut in_code_fence = false;
+    let mut fence_char: u8 = 0; // 0 = none, b'`' = backtick, b'~' = tilde
+    let mut fence_len: usize = 3;
 
     for (line_num, raw_line) in text.lines().enumerate() {
         let line = raw_line.trim_end_matches('\r');
 
-        // Track code fences (``` or ~~~) to skip headings inside code blocks
-        let trimmed = line.trim_start_matches(' ');
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_code_fence = !in_code_fence;
-            continue;
-        }
+        // Count leading spaces — CommonMark allows 0-3 before headings & fence markers
+        let leading_spaces = line.chars().take_while(|&c| c == ' ').count();
+        let trimmed = &line[leading_spaces..];
+
         if in_code_fence {
+            // Inside a code fence: check for matching closing fence
+            // (same fence char, length >= opening length, 0-3 leading spaces)
+            if leading_spaces <= 3 {
+                if let Some(f_char) = trimmed.chars().next() {
+                    if f_char as u8 == fence_char {
+                        let count = trimmed.chars().take_while(|&c| c == f_char).count();
+                        if count >= fence_len {
+                            in_code_fence = false;
+                        }
+                    }
+                }
+            }
+            continue; // All lines inside a fence are code content
+        }
+
+        // Not inside a code fence: 4+ leading spaces = indented code block
+        if leading_spaces > 3 {
             continue;
         }
 
-        // Must start with '#' (possibly preceded by up to 3 spaces per CommonMark)
-        let trimmed_start = line.trim_start_matches(' ');
-        if !trimmed_start.starts_with('#') {
+        // Track code fences with correct char and length matching (CommonMark)
+        if let Some(f_char) = trimmed.chars().next() {
+            if f_char == '`' || f_char == '~' {
+                let count = trimmed.chars().take_while(|&c| c == f_char).count();
+                if count >= 3 {
+                    in_code_fence = true;
+                    fence_char = f_char as u8;
+                    fence_len = count;
+                    continue;
+                }
+            }
+        }
+
+        // Must start with '#' (up to 3 leading spaces already stripped)
+        if !trimmed.starts_with('#') {
             continue;
         }
 
         // Count leading '#' characters
-        let hash_count = trimmed_start.chars().take_while(|&c| c == '#').count();
+        let hash_count = trimmed.chars().take_while(|&c| c == '#').count();
         // Clamp: 1..=6 per CommonMark ATX spec.  7+ '#' is a paragraph.
         if hash_count == 0 || hash_count > 6 {
             continue;
@@ -86,7 +115,7 @@ pub fn parse_markdown_headings(text: &str) -> Vec<MindmapNode> {
         let level = hash_count as u8;
 
         // After the #s, optional space(s), then the heading text
-        let after_hashes = &trimmed_start[hash_count..];
+        let after_hashes = &trimmed[hash_count..];
         // CommonMark: at least one space required after #s, unless heading is empty
         let title_raw = if after_hashes.is_empty() {
             String::new()
@@ -408,6 +437,69 @@ Some text
         let nodes = parse_markdown_headings(md);
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].title, "");
+    }
+
+    /// 4+ leading spaces before `#` is an indented code block, not a heading (#3432 Bug 1).
+    #[test]
+    fn four_plus_indent_not_heading() {
+        let md = "    # Indented code comment\n# Real heading\n";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].title, "Real heading");
+    }
+
+    /// 4+ leading spaces before ``` is an indented code block, not a fence open (#3432 Bug 1).
+    #[test]
+    fn four_plus_indent_skips_fence() {
+        let md = "    ```\n    # code\n    ```\n# Real heading\n";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].title, "Real heading");
+    }
+
+    /// Mismatched fence chars: `~~~` with inner ``` should not toggle (#3432 Bug 2).
+    #[test]
+    fn mismatched_fence_chars() {
+        let md = "\
+~~~~
+use ```python to open a block
+~~~~
+# After the fence
+";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].title, "After the fence");
+    }
+
+    /// Shorter fence does not close a longer one (#3432 Bug 2).
+    #[test]
+    fn shorter_fence_does_not_close_longer() {
+        let md = "\
+`````
+```
+content
+`````
+# Real heading
+";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].title, "Real heading");
+    }
+
+    /// Inside a matching fence, headings are correctly skipped.
+    #[test]
+    fn headings_inside_fence_skipped() {
+        let md = "\
+# Outer
+```
+## Inside code
+```
+# After
+";
+        let nodes = parse_markdown_headings(md);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].title, "Outer");
+        assert_eq!(nodes[1].title, "After");
     }
 
     /// Serialization round-trip via serde_json.

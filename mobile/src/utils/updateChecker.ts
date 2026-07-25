@@ -132,7 +132,7 @@ export async function requestInstallPermission(): Promise<void> {
     // Opens Android Settings → Apps → Special app access → Install unknown apps
     // with this app pre-selected.
     await IntentLauncher.startActivityAsync(
-      'android.settings.MANAGE_UNKNOWN_APP_SOURCES_SETTINGS',
+      'android.settings.MANAGE_UNKNOWN_APP_SOURCES',
       { data: 'package:com.vaultpilot.mobile' },
     );
   } catch (e) {

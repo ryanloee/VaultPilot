@@ -20,7 +20,8 @@
         "READ_EXTERNAL_STORAGE",
         "READ_MEDIA_IMAGES",
         "READ_MEDIA_VIDEO",
-        "READ_MEDIA_VISUAL_USER_SELECTED"
+        "READ_MEDIA_VISUAL_USER_SELECTED",
+        "REQUEST_INSTALL_PACKAGES"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#1E3A5F",

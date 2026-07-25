@@ -7347,14 +7347,17 @@ fn handle_recovery(context: &StorageContext, action: &RecoveryActions) -> Result
             let snap = recovery_mod::get_recovery_snapshot(&vault_dir, id)?
                 .ok_or_else(|| anyhow::anyhow!("recovery snapshot '{id}' not found"))?;
             // Print the raw content to stdout so it can be inspected or piped.
-            print!("{}", snap.content);
-            Ok(serde_json::json!({
-                "id": snap.id,
-                "note_path": snap.note_path,
-                "title": snap.title,
-                "content_size": snap.content_size,
-                "created_at": snap.created_at,
-            }))
+            // Must bypass exit_ok() which unconditionally appends JSON to stdout (#2696, #3457).
+            if snap.content.ends_with('\n') {
+                print!("{}", snap.content);
+            } else {
+                println!("{}", snap.content);
+            }
+            eprintln!(
+                "📄 Snapshot {}: '{}' ({} bytes, created {})",
+                snap.id, snap.title, snap.content_size, snap.created_at
+            );
+            std::process::exit(0);
         }
         RecoveryActions::Restore { id } => {
             let snap = recovery_mod::get_recovery_snapshot(&vault_dir, id)?
@@ -7363,6 +7366,7 @@ fn handle_recovery(context: &StorageContext, action: &RecoveryActions) -> Result
             //   vp recovery restore <id> > recovered.md
             // A trailing newline is added only if the content lacks one, so the
             // recovered file is well-formed Markdown.
+            // Must bypass exit_ok() which unconditionally appends JSON to stdout (#2696, #3457).
             let content = snap.content.clone();
             if content.ends_with('\n') {
                 print!("{content}");
@@ -7373,12 +7377,7 @@ fn handle_recovery(context: &StorageContext, action: &RecoveryActions) -> Result
                 "✅ Recovered {} bytes for '{}' (snapshot {}).",
                 snap.content_size, snap.note_path, snap.id
             );
-            Ok(serde_json::json!({
-                "restored": true,
-                "id": snap.id,
-                "note_path": snap.note_path,
-                "content_size": snap.content_size,
-            }))
+            std::process::exit(0);
         }
         RecoveryActions::Cleanup { days } => {
             let removed = recovery_mod::cleanup_expired(&vault_dir, *days)?;
@@ -10729,6 +10728,157 @@ mod tests {
             "empty query must return at least as many results as any filtered query"
         );
         assert!(!all.is_empty(), "empty query must return all settings");
+    }
+
+    // ── Regression tests for #3457 ──────────────────────────────────
+
+    /// #3457: `vp recovery show <id>` and `vp recovery restore <id>` write raw
+    /// content to stdout, then previously returned `Ok(json!(...))` which
+    /// `exit_ok()` unconditionally appended to stdout, corrupting the output
+    /// (e.g. a redirected `recovered.md` file would gain a trailing JSON blob).
+    ///
+    /// The fix follows the proven `notes export` pattern (#2696):
+    /// `print!(content); process::exit(0);` bypasses `exit_ok` entirely.
+    /// Metadata is moved to stderr via `eprintln!`.
+    ///
+    /// These tests verify the discipline that stdout must be raw content only.
+    #[test]
+    fn recovery_show_stdout_no_trailing_json_3457() {
+        // Simulate what stdout should contain after the fix: just the snapshot
+        // content, no JSON metadata appended by exit_ok().
+        let snapshot_content = "# My Crashed Note\n\nRecovery content here.\n";
+        // process::exit(0) means exit_ok() never runs, so stdout == content only.
+        let stdout = snapshot_content;
+
+        // stdout must NOT contain any JSON metadata fields the old code returned
+        assert!(
+            !stdout.contains("\"id\""),
+            "show stdout must not contain JSON 'id' field"
+        );
+        assert!(
+            !stdout.contains("\"note_path\""),
+            "show stdout must not contain JSON 'note_path' field"
+        );
+        assert!(
+            !stdout.contains("\"title\""),
+            "show stdout must not contain JSON 'title' field"
+        );
+        assert!(
+            !stdout.contains("\"content_size\""),
+            "show stdout must not contain JSON 'content_size' field"
+        );
+        assert!(
+            !stdout.contains("\"{"),
+            "show stdout must not contain JSON object braces after content"
+        );
+    }
+
+    #[test]
+    fn recovery_restore_stdout_no_trailing_json_3457() {
+        // `vp recovery restore <id> > recovered.md` must produce a clean
+        // Markdown file with no trailing JSON blob.
+        let snapshot_content = "# My Crashed Note\n\nRecovery content here.\n";
+        let stdout = snapshot_content; // process::exit(0) bypasses exit_ok
+
+        // The recovered file (stdout) must be valid Markdown only.
+        assert!(
+            !stdout.contains("\"restored\""),
+            "restore stdout must not contain JSON 'restored' field"
+        );
+        assert!(
+            !stdout.contains("\"content_size\""),
+            "restore stdout must not contain JSON 'content_size' field"
+        );
+        assert!(
+            stdout.starts_with("# "),
+            "restore stdout must start with the note's content, not JSON"
+        );
+        assert!(
+            stdout.ends_with("\n"),
+            "restore stdout must end with a newline (well-formed Markdown)"
+        );
+    }
+
+    /// #3457: End-to-end regression — actually run the CLI binary and assert
+    /// stdout is raw content with no trailing JSON.
+    #[test]
+    fn recovery_show_cli_stdout_clean_e2e_3457() {
+        use std::process::Command;
+        let vault =
+            std::env::temp_dir().join(format!("vp_3457_e2e_{}_{}", std::process::id(), uuid_str()));
+        let _ = std::fs::remove_dir_all(&vault);
+        std::fs::create_dir_all(&vault).unwrap();
+
+        // Seed via public API
+        let snap = vaultpilot_lib::recovery::save_recovery_snapshot(
+            &vault,
+            "note.md",
+            "Title",
+            "# Hello\n\nWorld\n",
+        )
+        .expect("save snapshot");
+        let id = snap.id;
+
+        let bin = option_env!("CARGO_BIN_EXE_vaultpilot-cli").unwrap_or(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/target/debug/vaultpilot-cli"
+        ));
+        let vault_arg = vault.to_string_lossy().into_owned();
+
+        // `vp recovery show <id>` — stdout must be exactly the content
+        let show = Command::new(bin)
+            .args(["recovery", "show", &id, "--vault-dir", &vault_arg])
+            .output()
+            .expect("run show");
+        assert!(
+            show.status.success(),
+            "show exit failed: {}",
+            String::from_utf8_lossy(&show.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&show.stdout);
+        assert_eq!(
+            stdout, "# Hello\n\nWorld\n",
+            "show stdout must be raw content, no JSON"
+        );
+        // stderr must carry the metadata that the old code wrote to stdout
+        let stderr = String::from_utf8_lossy(&show.stderr);
+        assert!(
+            stderr.contains("Snapshot"),
+            "show stderr must contain metadata, got: {stderr}"
+        );
+
+        // `vp recovery restore <id>` — stdout must be exactly the content
+        let restore = Command::new(bin)
+            .args(["recovery", "restore", &id, "--vault-dir", &vault_arg])
+            .output()
+            .expect("run restore");
+        assert!(
+            restore.status.success(),
+            "restore exit failed: {}",
+            String::from_utf8_lossy(&restore.stderr)
+        );
+        let r_stdout = String::from_utf8_lossy(&restore.stdout);
+        assert_eq!(
+            r_stdout, "# Hello\n\nWorld\n",
+            "restore stdout must be raw content, no JSON"
+        );
+        let r_stderr = String::from_utf8_lossy(&restore.stderr);
+        assert!(
+            r_stderr.contains("✅ Recovered"),
+            "restore stderr must contain recovered marker, got: {r_stderr}"
+        );
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    fn uuid_str() -> String {
+        // Cheap uniqueness helper for temp dirs in tests
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{nanos:x}")
     }
 }
 

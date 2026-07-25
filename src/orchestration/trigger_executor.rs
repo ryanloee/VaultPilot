@@ -44,7 +44,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::orchestration::trigger::{AgentTriggerRule, TriggerKind};
+use crate::orchestration::trigger::{AgentTriggerRule, ConditionContext, TriggerKind};
 use crate::storage::pool::open_connection;
 use crate::storage::trigger_rules::list_trigger_rules_with_context;
 use crate::storage::StorageContext;
@@ -376,6 +376,10 @@ pub struct FireStepOutcome {
     pub evaluated: usize,
     pub fired: usize,
     pub failed: usize,
+    /// Rules that were schedule-due but skipped because their conditions
+    /// were not met (evaluated against an empty context for cron triggers).
+    /// See #3439.
+    pub skipped: usize,
 }
 
 /// One tick of the executor: load enabled cron rules, evaluate due-ness
@@ -401,6 +405,27 @@ pub fn fire_due_rules_at(context: &StorageContext, now: DateTime<Utc>) -> Result
         ..Default::default()
     };
     for d in due {
+        // #3439: Evaluate rule conditions before firing. Cron triggers have
+        // no inherent event context, so conditions are checked against an
+        // empty ConditionContext. Rules with context-dependent conditions
+        // (TagContains, FrontmatterEquals) will not fire — this is far less
+        // misleading than the previous behavior of firing unconditionally
+        // while silently ignoring stored conditions.
+        //
+        // Rules with no conditions, or only `Always` conditions, pass
+        // through normally.
+        if !d.rule.conditions_met(&ConditionContext::default()) {
+            outcome.skipped += 1;
+            warn!(
+                rule_id = %d.rule.id,
+                label = %d.rule.label,
+                due_at = %d.due_at.to_rfc3339(),
+                "cron rule is due but conditions not met (evaluated against \
+                 empty context — TagContains/FrontmatterEquals conditions \
+                 cannot be satisfied for cron triggers); skipping fire"
+            );
+            continue;
+        }
         let detail = d
             .rule
             .effective_prompt()
@@ -1181,7 +1206,154 @@ mod tests {
         assert!(
             elapsed.as_millis() < 100,
             "100 is_rule_due('* * * * *', never-fired) calls took {elapsed:?} (>100ms) — \
-             narrow-window resolver regressed (#3058)",
+             narrow-window resolver regressed (#3058)"
         );
+    }
+
+    // ── Regression tests for #3439 ─────────────────────────────────
+
+    #[test]
+    fn fire_due_rules_at_skips_rule_with_unsatisfied_tag_condition() {
+        // #3439: a cron rule with a TagContains condition should NOT fire
+        // when conditions are evaluated against an empty (cron) context.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Urgent Daily Review",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        // Inject a TagContains condition that cannot be satisfied with an
+        // empty cron context.
+        {
+            let (conn, _) = open_connection(&ctx).unwrap();
+            conn.execute(
+                "UPDATE trigger_rules SET conditions = ?1 WHERE id = ?2",
+                params![r#"[{"type":"tag_contains","tag":"urgent"}]"#, &rule.id],
+            )
+            .unwrap();
+        }
+
+        let outcome = fire_due_rules_at(&ctx, fixed_time()).expect("fire step");
+        assert_eq!(
+            outcome.fired, 0,
+            "rule with unsatisfied TagContains condition must NOT fire"
+        );
+        assert_eq!(
+            outcome.skipped, 1,
+            "rule should be counted as skipped due to conditions"
+        );
+
+        // No execution row should exist.
+        let (conn, _) = open_connection(&ctx).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM trigger_executions WHERE rule_id = ?1",
+                params![&rule.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "no execution should be recorded for skipped rule");
+    }
+
+    #[test]
+    fn fire_due_rules_at_fires_rule_with_always_condition() {
+        // #3439: a cron rule with an Always condition should fire normally
+        // (Always passes against any context, including empty).
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Unconditional Review",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        {
+            let (conn, _) = open_connection(&ctx).unwrap();
+            conn.execute(
+                "UPDATE trigger_rules SET conditions = ?1 WHERE id = ?2",
+                params![r#"[{"type":"always"}]"#, &rule.id],
+            )
+            .unwrap();
+        }
+
+        let outcome = fire_due_rules_at(&ctx, fixed_time()).expect("fire step");
+        assert_eq!(
+            outcome.fired, 1,
+            "rule with Always condition must fire normally"
+        );
+        assert_eq!(
+            outcome.skipped, 0,
+            "no rules should be skipped when conditions are Always"
+        );
+    }
+
+    #[test]
+    fn fire_due_rules_at_fires_rule_with_no_conditions() {
+        // #3439: a cron rule with no conditions (empty list) should fire
+        // normally — this is the existing behavior, now explicitly guarded.
+        let (_tmp, ctx) = setup_context();
+        let _rule = create_trigger_rule_with_context(
+            &ctx,
+            "No Conditions",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        let outcome = fire_due_rules_at(&ctx, fixed_time()).expect("fire step");
+        assert_eq!(
+            outcome.fired, 1,
+            "rule with empty conditions must fire normally"
+        );
+        assert_eq!(outcome.skipped, 0);
+    }
+
+    #[test]
+    fn fire_due_rules_at_skips_rule_with_frontmatter_condition() {
+        // #3439: a cron rule with a FrontmatterEquals condition should NOT
+        // fire — the empty cron context has no frontmatter to match.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Status Review",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        {
+            let (conn, _) = open_connection(&ctx).unwrap();
+            conn.execute(
+                "UPDATE trigger_rules SET conditions = ?1 WHERE id = ?2",
+                params![
+                    r#"[{"type":"frontmatter_equals","field":"status","value":"done"}]"#,
+                    &rule.id
+                ],
+            )
+            .unwrap();
+        }
+
+        let outcome = fire_due_rules_at(&ctx, fixed_time()).expect("fire step");
+        assert_eq!(
+            outcome.fired, 0,
+            "rule with unsatisfied FrontmatterEquals must NOT fire"
+        );
+        assert_eq!(outcome.skipped, 1);
     }
 }

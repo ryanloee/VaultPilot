@@ -33,6 +33,16 @@ export default function SettingsScreen() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const testControllerRef = useRef<AbortController | null>(null);
 
+  // #3435 — Settings search state
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Check if a section matches the current search query
+  function matchesSearch(...terms: string[]): boolean {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return terms.some(term => term.toLowerCase().includes(q));
+  }
+
   // #3158 — Background sync state
   const [bgSyncEnabled, setBgSyncEnabled] = useState(false);
   const [bgSyncInterval, setBgSyncInterval] = useState<BackgroundSyncInterval>(30);
@@ -257,8 +267,41 @@ export default function SettingsScreen() {
     <SafeAreaView style={[s.container, { backgroundColor: c.bg }]}>
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
 
+      {/* ── Search Bar (#3435) ── */}
+      <View style={[s.searchBar, { backgroundColor: c.inputBg, borderColor: c.border }]}>
+        <Ionicons name="search-outline" size={18} color={c.textSecondary} style={{ marginRight: 8 }} />
+        <TextInput
+          style={[s.searchInput, { color: c.text }]}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="搜索设置..."
+          placeholderTextColor={c.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          clearButtonMode="while-editing"
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="close-circle" size={18} color={c.textSecondary} />
+          </TouchableOpacity>
+        )}
+      </View>
+      {searchQuery.trim().length > 0 && !matchesSearch(
+        'API', '提供商', 'provider', 'apiBase', 'apiKey', '模型', 'model', '格式', 'format',
+        '连接', '测试', 'test', '保存', 'save',
+        '外观', '主题', 'theme', '亮色', '暗色', 'dark', 'light', '系统', 'system', '主色调', 'accent', 'color',
+        '专注', '阅读', 'focus', 'reading', '沉浸', '写作',
+        '数据同步', '同步', 'sync', 'background', '后台', '间隔', 'interval',
+        '检查更新', '更新', 'update', '版本', 'version',
+      ) && (
+        <Text style={[s.noResults, { color: c.textSecondary }]}>
+          没有匹配的设置项
+        </Text>
+      )}
+
       {/* ── Provider List ── */}
-      <View style={s.sectionHeader}>
+      {matchesSearch('API', '提供商', 'provider', 'apiBase', 'apiKey', '模型', 'model', '格式', 'format', '连接', '测试', 'test', '保存', 'save') && (
+      <><View style={s.sectionHeader}>
         <Text style={[s.sectionTitle, { color: c.text }]}>API 提供商</Text>
         <TouchableOpacity onPress={() => setShowAddModal(true)} style={[s.addBtn, { borderColor: store.accentColor }]}>
           <Text style={{ color: store.accentColor, fontWeight: '600' }}>+ 添加</Text>
@@ -390,9 +433,12 @@ export default function SettingsScreen() {
           {testResult && <Text style={[s.testResult, { color: testResult.includes('连接成功') ? '#10B981' : '#EF4444' }]}>{testResult}</Text>}
         </View>
       )}
+      </>
+      )}
 
       {/* ── Theme Section ── */}
-      <Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>外观</Text>
+      {matchesSearch('外观', '主题', 'theme', '亮色', '暗色', 'dark', 'light', '系统', 'system', '主色调', 'accent', 'color') && (
+      <><Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>外观</Text>
 
       <Text style={[s.label, { color: c.textSecondary }]}>主题</Text>
       <View style={s.themeRow}>
@@ -440,8 +486,10 @@ export default function SettingsScreen() {
           />
         ))}
       </View>
+      </>)}
 
       {/* ── Focus / Reading Mode (#2894) ── */}
+      {matchesSearch('专注', '阅读', 'focus', 'reading', '沉浸', '写作', 'mode', 'AI', '命令', '助手') && (
       <View style={[s.toggleRow, { borderColor: c.border }]}>
         <View style={{ flex: 1 }}>
           <Text style={[s.toggleTitle, { color: c.text }]}>专注 / 阅读模式</Text>
@@ -456,9 +504,11 @@ export default function SettingsScreen() {
           accessibilityState={{ checked: store.focusMode }}
         />
       </View>
+      )}
 
       {/* ── Background Sync (#3158) ── */}
-      <Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>数据同步</Text>
+      {matchesSearch('数据同步', '同步', 'sync', 'background', '后台', '间隔', 'interval') && (
+      <><Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>数据同步</Text>
       <View style={[s.toggleRow, { borderColor: c.border }]}>
         <View style={{ flex: 1 }}>
           <Text style={[s.toggleTitle, { color: c.text }]}>后台自动同步</Text>
@@ -497,8 +547,10 @@ export default function SettingsScreen() {
           </View>
         </View>
       )}
+      </>)}
 
-      <TouchableOpacity
+      {matchesSearch('检查更新', '更新', 'update', '版本', 'version', 'check') && (
+      <><TouchableOpacity
         style={[s.updateBtn, { borderColor: store.accentColor }]}
         onPress={handleCheckUpdate}
         disabled={checkingUpdate}
@@ -511,6 +563,8 @@ export default function SettingsScreen() {
       </TouchableOpacity>
 
       <Text style={[s.version, { color: c.textSecondary }]}>VaultPilot Mobile v{appJson.expo.version}</Text>
+      </>
+      )}
     </ScrollView>
 
     {/* ── Update Modal ── */}
@@ -569,6 +623,26 @@ export default function SettingsScreen() {
 
 const s = StyleSheet.create({
   container: { flex: 1 },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 16,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    padding: 0,
+  },
+  noResults: {
+    textAlign: 'center',
+    fontSize: 14,
+    marginBottom: 20,
+    marginTop: 4,
+  },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sectionTitle: { fontSize: 20, fontWeight: '700' },
   addBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, borderWidth: 1 },

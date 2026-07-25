@@ -4804,8 +4804,10 @@ fn handle_mindmap(
 }
 
 /// Recursively count all nodes in a forest (roots + descendants).
+///
+/// Thin wrapper around the library's [`count_total_nodes`](vaultpilot_lib::mindmap::count_total_nodes).
 fn count_nodes(nodes: &[vaultpilot_lib::mindmap::MindmapNode]) -> usize {
-    nodes.iter().map(|n| 1 + count_nodes(&n.children)).sum()
+    vaultpilot_lib::mindmap::count_total_nodes(nodes)
 }
 
 fn handle_calendar(

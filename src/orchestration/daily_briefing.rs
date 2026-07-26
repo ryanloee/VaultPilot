@@ -77,10 +77,13 @@ pub async fn generate_daily_briefing(
         .iter()
         .filter(|n| {
             let updated = parse_iso_timestamp(&n.meta.updated_at)
-                .or_else(|| parse_iso_timestamp(&n.meta.created_at))
-                .unwrap_or(cutoff);
-            let created = parse_iso_timestamp(&n.meta.created_at).unwrap_or(cutoff);
-            updated >= cutoff || created >= cutoff
+                .or_else(|| parse_iso_timestamp(&n.meta.created_at));
+            let created = parse_iso_timestamp(&n.meta.created_at);
+            match (updated, created) {
+                (Some(u), _) if u >= cutoff => true,
+                (_, Some(c)) if c >= cutoff => true,
+                _ => false,
+            }
         })
         .collect();
 
@@ -218,6 +221,31 @@ mod tests {
     #[test]
     fn parse_iso_timestamp_garbage() {
         assert!(parse_iso_timestamp("not-a-date").is_none());
+    }
+
+    #[test]
+    fn filter_excludes_unparseable_timestamps() {
+        // Regression test for #3476: when both updated_at and created_at
+        // fail to parse, the note should be excluded, not silently included.
+        let cutoff = Utc::now() - Duration::hours(24);
+        let meta = crate::models::NoteMeta {
+            id: "garbage".into(),
+            created_at: "garbage".into(),
+            updated_at: "garbage".into(),
+            ..Default::default()
+        };
+        let updated =
+            parse_iso_timestamp(&meta.updated_at).or_else(|| parse_iso_timestamp(&meta.created_at));
+        let created = parse_iso_timestamp(&meta.created_at);
+        let should_include = match (updated, created) {
+            (Some(u), _) if u >= cutoff => true,
+            (_, Some(c)) if c >= cutoff => true,
+            _ => false,
+        };
+        assert!(
+            !should_include,
+            "notes with unparseable timestamps should be excluded"
+        );
     }
 
     #[test]

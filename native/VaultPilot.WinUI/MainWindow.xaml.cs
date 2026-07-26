@@ -164,6 +164,10 @@ public sealed partial class MainWindow : Window
             await LogStartup("Startup complete");
             ApplyAutoWakeSettings();
             ShowNextWakeTime();
+            if (_settings is not null)
+            {
+                ApplyAlwaysOnTop(_settings.IsAlwaysOnTop);
+            }
             if (_settings?.AutoCheckUpdates ?? true)
             {
                 _ = CheckForAppUpdatesAsync();
@@ -215,6 +219,19 @@ public sealed partial class MainWindow : Window
         if (RootGrid.RequestedTheme != theme)
         {
             RootGrid.RequestedTheme = theme;
+        }
+    }
+
+    /// <summary>
+    /// Applies the Always-on-Top window pinning (#3473).
+    /// When enabled, the window stays above all other windows
+    /// via AppWindow.IsAlwaysOnTop.
+    /// </summary>
+    private void ApplyAlwaysOnTop(bool enabled)
+    {
+        if (_appWindow is not null)
+        {
+            _appWindow.IsAlwaysOnTop = enabled;
         }
     }
 
@@ -300,6 +317,8 @@ public sealed partial class MainWindow : Window
                 ShowNextWakeTime();
                 // Apply theme change immediately so the user sees it without restart.
                 ApplyTheme(dialog.ThemeMode);
+                // Apply Always-on-Top immediately (#3473).
+                ApplyAlwaysOnTop(updated.IsAlwaysOnTop);
             }
         }
         catch (Exception error)

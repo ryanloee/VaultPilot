@@ -58,6 +58,11 @@ public sealed record AppSettings
     /// </summary>
     public string AutoWakePrompt { get; init; } = string.Empty;
     public string? ProxyUrl { get; init; }
+    /// <summary>
+    /// Always-on-Top window pinning (#3473). When enabled, the main window
+    /// stays above all other windows via AppWindow.IsAlwaysOnTop.
+    /// </summary>
+    public bool IsAlwaysOnTop { get; init; }
 
     [JsonConstructor]
     public AppSettings() { }

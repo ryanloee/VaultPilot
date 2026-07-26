@@ -194,6 +194,11 @@
                         Content="启动时自动检查更新"
                         HorizontalAlignment="Left"
                         AutomationProperties.Name="启动时自动检查更新" />
+                    <CheckBox
+                        x:Name="AlwaysOnTopBox"
+                        Content="窗口置顶 / Always on Top"
+                        HorizontalAlignment="Left"
+                        AutomationProperties.Name="窗口置顶 / Always on Top" />
                     <StackPanel Spacing="4">
                         <TextBlock Text="主题" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
                         <RadioButtons x:Name="ThemeModeRadio" MaxColumns="1">

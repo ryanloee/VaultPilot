@@ -371,6 +371,26 @@ enum Commands {
         dry_run: bool,
     },
 
+    /// Generate an AI-powered daily briefing summarising yesterday's vault activity (#3459)
+    ///
+    /// Scans notes created/modified in the last 24 hours, calls the configured
+    /// AI to produce a structured digest (昨日回顾 / 待办提醒 / 相关推荐 / AI 洞察),
+    /// and saves the result as a vault note under the Daily/Briefing/ path.
+    ///
+    /// Examples:
+    ///   vaultpilot daily-briefing                          # full generation + save
+    ///   vaultpilot daily-briefing --dry-run                # preview without saving
+    ///   vaultpilot daily-briefing --no-ai                  # skip AI, show assembled notes
+    DailyBriefing {
+        /// Preview what would be generated without calling the AI or saving
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip AI call and just print the collected recent notes (debugging)
+        #[arg(long)]
+        no_ai: bool,
+    },
+
     /// Quick-capture a one-line note into today's daily note or the inbox (#2833)
     ///
     /// Zero-friction "think it, log it" text capture: appends a timestamped
@@ -2727,6 +2747,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             target,
             section,
         } => handle_capture(context, text, target, section),
+        Commands::DailyBriefing { dry_run, no_ai } => {
+            handle_daily_briefing(context, *dry_run, *no_ai).await
+        }
         Commands::Present {
             note_id,
             output,
@@ -6510,6 +6533,114 @@ fn handle_daily(
             }))
         }
     }
+}
+
+/// Handle the `daily-briefing` subcommand — generate an AI-powered daily briefing (#3459).
+async fn handle_daily_briefing(
+    context: &StorageContext,
+    dry_run: bool,
+    no_ai: bool,
+) -> Result<Value> {
+    use vaultpilot_lib::orchestration::daily_briefing::parse_iso_timestamp;
+
+    let settings = vaultpilot_lib::storage::initialize_storage_async(context).await?;
+
+    if no_ai {
+        // Show recent notes without calling AI (debug mode)
+        let recent =
+            vaultpilot_lib::storage::load_recent_notes_for_overview_async(context, 50).await?;
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+        let filtered: Vec<_> = recent
+            .iter()
+            .filter(|n| {
+                let updated = parse_iso_timestamp(&n.meta.updated_at)
+                    .or_else(|| parse_iso_timestamp(&n.meta.created_at))
+                    .unwrap_or(cutoff);
+                let created = parse_iso_timestamp(&n.meta.created_at).unwrap_or(cutoff);
+                updated >= cutoff || created >= cutoff
+            })
+            .collect();
+
+        let notes_list: Vec<serde_json::Value> = filtered
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "title": n.meta.title,
+                    "tags": n.meta.tags,
+                    "updated_at": n.meta.updated_at,
+                    "created_at": n.meta.created_at,
+                    "body_preview": &n.body[..n.body.len().min(200)],
+                })
+            })
+            .collect();
+
+        return Ok(serde_json::json!({
+            "note_count": filtered.len(),
+            "notes": notes_list,
+            "message": if filtered.is_empty() {
+                "No recent notes found in the last 24 hours."
+            } else {
+                "Use `vaultpilot daily-briefing` without --no-ai to generate the briefing."
+            },
+        }));
+    }
+
+    if dry_run {
+        // Preview: show what notes would be included without calling AI or saving
+        let recent =
+            vaultpilot_lib::storage::load_recent_notes_for_overview_async(context, 50).await?;
+        let cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+        let filtered: Vec<_> = recent
+            .iter()
+            .filter(|n| {
+                let updated = parse_iso_timestamp(&n.meta.updated_at)
+                    .or_else(|| parse_iso_timestamp(&n.meta.created_at))
+                    .unwrap_or(cutoff);
+                let created = parse_iso_timestamp(&n.meta.created_at).unwrap_or(cutoff);
+                updated >= cutoff || created >= cutoff
+            })
+            .collect();
+
+        let notes_list: Vec<serde_json::Value> = filtered
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "title": n.meta.title,
+                    "tags": n.meta.tags,
+                    "updated_at": n.meta.updated_at,
+                    "body_length": n.body.len(),
+                })
+            })
+            .collect();
+
+        return Ok(serde_json::json!({
+            "dry_run": true,
+            "note_count": filtered.len(),
+            "notes": notes_list,
+            "message": "Run without --dry-run to generate and save the briefing.",
+        }));
+    }
+
+    // Full generation: call AI and save
+    eprintln!("📋 Scanning notes from the last 24 hours...");
+    let result =
+        vaultpilot_lib::orchestration::daily_briefing::generate_daily_briefing(context, &settings)
+            .await?;
+
+    eprintln!(
+        "✅ Daily briefing generated from {} notes ({} tokens)",
+        result.note_count,
+        result.usage.input_tokens.unwrap_or(0) + result.usage.output_tokens.unwrap_or(0)
+    );
+
+    Ok(serde_json::json!({
+        "briefing": result.briefing,
+        "note_count": result.note_count,
+        "usage": {
+            "input_tokens": result.usage.input_tokens,
+            "output_tokens": result.usage.output_tokens,
+        },
+    }))
 }
 
 /// Render a daily note template with variable substitution.

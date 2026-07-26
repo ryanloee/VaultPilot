@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueHint};
 use clap_complete::{generate, Shell};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
@@ -1536,6 +1536,43 @@ enum NotesActions {
         /// (clamped to 1..=2000 to avoid runaway operations).
         #[arg(long, default_value_t = 500)]
         limit: usize,
+    },
+
+    /// Extract selected text from a source note into a new note (#3479).
+    ///
+    /// Replaces the selection in the source note with a wikilink pointing to
+    /// the new note.  This is the Note Composer extract operation.
+    ///
+    /// Examples:
+    ///   vp notes extract <source_id> --selection "text to extract" --title "New Note Title"
+    Extract {
+        /// Note ID or path of the source note.
+        id: String,
+
+        /// Text to extract from the source note body.
+        #[arg(long)]
+        selection: String,
+
+        /// Title for the new note that will contain the extracted text.
+        #[arg(long)]
+        title: String,
+    },
+
+    /// Merge two notes into one (#3479).
+    ///
+    /// Appends the source note's body to the target note, then deletes the
+    /// source note. All wikilinks that pointed to the source note are updated
+    /// to point to the target note.
+    ///
+    /// Examples:
+    ///   vp notes merge <source_id> <target_id>
+    Merge {
+        /// ID or path of the source note (this note will be deleted after merge).
+        source: String,
+
+        /// ID or path of the target note (the source content is appended here).
+        #[arg(long)]
+        target: String,
     },
 }
 
@@ -4288,6 +4325,57 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                 limit: *limit,
             },
         ),
+        NotesActions::Extract {
+            id,
+            selection,
+            title,
+        } => {
+            let source_note = load_note_with_context(context, id)?;
+            let source_id = source_note.meta.id.clone();
+            let result =
+                vaultpilot_lib::note_composer::extract_text(&source_note, selection, title)?;
+
+            // Save the new note
+            let metadata =
+                serde_json::from_value::<NoteMeta>(json!({ "title": title })).unwrap_or_default();
+            let mut new_note = result.new_note;
+            new_note.meta = metadata;
+            let saved_new = save_note_with_context(context, new_note)?;
+
+            // Update the source note body
+            let mut updated_source = source_note;
+            updated_source.body = result.updated_source_body;
+            save_note_with_context(context, updated_source)?;
+
+            to_json(&json!({
+                "ok": true,
+                "source_id": source_id,
+                "new_note_id": saved_new.meta.id,
+                "new_note_title": title,
+            }))
+        }
+        NotesActions::Merge { source, target } => {
+            let source_note = load_note_with_context(context, source)?;
+            let source_id = source_note.meta.id.clone();
+            let mut target_note = load_note_with_context(context, target)?;
+            let target_id = target_note.meta.id.clone();
+
+            let merged_body =
+                vaultpilot_lib::note_composer::merge_notes(&source_note, &target_note)?;
+
+            // Update target note body
+            target_note.body = merged_body;
+            save_note_with_context(context, target_note)?;
+
+            // Delete the source note (without deleting attachments)
+            delete_note_with_context(context, &source_id, None)?;
+
+            to_json(&json!({
+                "ok": true,
+                "deleted_source_id": source_id,
+                "merged_into_target_id": target_id,
+            }))
+        }
     }
 }
 

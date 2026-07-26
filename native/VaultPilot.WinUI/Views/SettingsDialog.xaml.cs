@@ -701,7 +701,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
         try
         {
-            using var cts = new CancellationTokenSource(Math.Max(timeoutMs + 5_000, 10_000));
+            using var cts = new CancellationTokenSource((int)Math.Max(timeoutMs + 5_000, 10_000));
             var request = new ProviderConnectionRequest
             {
                 ApiBase = baseUrl,

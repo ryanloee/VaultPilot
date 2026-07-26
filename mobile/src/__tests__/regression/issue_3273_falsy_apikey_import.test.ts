@@ -1,14 +1,18 @@
 /**
- * Regression test for issue #3273:
- * importSettings falsy check on apiKey prevents clearing keys (settingsSync.ts).
+ * Regression test for issue #3273 / #3483:
+ * importSettings apiKey handling in settingsSync.ts.
  *
- * Root cause: `if (p.apiKey)` at lines 129 and 154 treats empty string ""
- * the same as undefined, so when an import explicitly sets apiKey to ""
- * (to clear a key), the SecureStore key is preserved and the saveSettings
- * call omits apiKey, preventing the clearing from taking effect.
+ * History:
+ *   #3273 originally changed `if (p.apiKey)` → `if (p.apiKey !== undefined)`
+ *   so that an explicit `apiKey: ""` would clear SecureStore keys on import.
+ *   However #3483 revealed this causes data loss: an export with includeKeys=true
+ *   from a device that has NO key produces `apiKey: ""`, and importing that on
+ *   a device WITH a real key would silently overwrite it with "".
  *
- * Fix: change both checks to `if (p.apiKey !== undefined)` so that ""
- * is treated as an intentional value (clearing the key).
+ * Resolution: truthiness check (`if (p.apiKey)`) is the correct behavior.
+ * An empty-string apiKey in an export means "no key on source device", NOT an
+ * intentional clear. Empty/undefined apiKeys are both skipped to preserve
+ * existing SecureStore keys. Users who want to clear a key should do so via UI.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -39,7 +43,7 @@ const mockAsyncStorage = AsyncStorage as jest.Mocked<typeof AsyncStorage>;
 const mockSecureStore = SecureStore as jest.Mocked<typeof SecureStore>;
 const mockSaveSettings = saveSettings as jest.MockedFunction<typeof saveSettings>;
 
-/** Import data where active provider explicitly clears its key (apiKey: ""). */
+/** Import data where the provider has apiKey: "" (e.g. exported from a device with no key set). */
 const IMPORT_WITH_EMPTY_KEY = JSON.stringify({
   version: 1,
   exportedAt: new Date().toISOString(),
@@ -84,28 +88,28 @@ beforeEach(() => {
   });
 });
 
-describe('importSettings allows clearing keys with empty string (#3273)', () => {
-  it('writes empty-string apiKey to SecureStore when import has apiKey: ""', async () => {
+describe('importSettings skips empty-string apiKey to preserve existing keys (#3273 / #3483)', () => {
+  it('does NOT write to SecureStore when import has apiKey: "" (no existing keys)', async () => {
     await importSettings(IMPORT_WITH_EMPTY_KEY);
 
-    // SecureStore must have been written with the empty key (""), not skipped.
+    // #3483: An empty-string apiKey means "no key on source device", NOT an
+    // intentional clear. It must be skipped to avoid overwriting existing
+    // SecureStore keys with "" on devices that DO have a real key.
+    // When there are no existing keys either, SecureStore.setItemAsync should
+    // not be called at all (nothing to write).
     const setCalls = mockSecureStore.setItemAsync.mock.calls;
-    expect(setCalls.length).toBeGreaterThan(0);
-
-    const keysArg = setCalls.find(c => c[0] === 'vaultpilot_provider_keys');
-    expect(keysArg).toBeDefined();
-    const keysRecord = JSON.parse(keysArg![1] as string);
-    expect(keysRecord['OpenAI']).toBe('');
+    const keysCalls = setCalls.filter(c => c[0] === 'vaultpilot_provider_keys');
+    expect(keysCalls.length).toBe(0);
   });
 
-  it('calls saveSettings with apiKey: "" when import has apiKey: ""', async () => {
+  it('does NOT include apiKey in saveSettings when import has apiKey: ""', async () => {
     await importSettings(IMPORT_WITH_EMPTY_KEY);
 
-    // saveSettings must be called WITH apiKey set to "" (explicit clear).
-    // Before the fix, the falsy check skipped this entirely.
+    // #3483: empty-string apiKey is skipped (truthiness check), so
+    // saveSettings must NOT include apiKey — preserving existing cfg_* value.
     expect(mockSaveSettings).toHaveBeenCalled();
     const callArg = mockSaveSettings.mock.calls[0][0];
-    expect(callArg.apiKey).toBe('');
+    expect(callArg.apiKey).toBeUndefined();
   });
 
   it('skips saveSettings apiKey when apiKey is undefined (no field at all)', async () => {

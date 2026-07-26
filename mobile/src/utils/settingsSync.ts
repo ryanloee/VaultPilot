@@ -126,7 +126,10 @@ export async function importSettings(json: string): Promise<{ providersImported:
   }
   const keys: Record<string, string> = { ...existingKeys };
   for (const p of data.providers) {
-    if (p.apiKey !== undefined) keys[p.name] = p.apiKey;
+    // #3483: Guard against empty string — `!== undefined` passes '' which
+    // would overwrite an existing SecureStore key with empty, silently
+    // losing the real API key. Truthiness check skips empty strings.
+    if (p.apiKey) keys[p.name] = p.apiKey;
   }
   if (Object.keys(keys).length > 0) {
     await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
@@ -151,7 +154,8 @@ export async function importSettings(json: string): Promise<{ providersImported:
       model: active.model,
       apiFormat: active.apiFormat as ApiFormat,
     };
-    if (active.apiKey !== undefined) {
+    if (active.apiKey) {
+      // #3483: Only propagate non-empty keys to cfg_* settings.
       settings.apiKey = active.apiKey;
     }
     await saveSettings(settings);

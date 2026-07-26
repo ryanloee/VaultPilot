@@ -302,7 +302,8 @@ public sealed partial class MainWindow : Window
                 ResolveDisplayVersion(),
                 RootGrid.XamlRoot,
                 OpenVaultDirectoryAsync,
-                OpenProjectHomepageAsync);
+                OpenProjectHomepageAsync,
+                CheckProviderConnectionAsync);
 
             await dialog.ShowAsync();
 
@@ -533,6 +534,37 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             ShowError("打开项目地址失败", error, addMessage: false);
+        }
+    }
+
+    /// <summary>
+    /// #3480: Invoked by SettingsDialog when the user clicks "测试连接".
+    /// Forwards the provider config to the Rust backend's
+    /// `checkProviderConnection` IPC method and returns the probe result.
+    /// </summary>
+    private async Task<Models.ProviderConnectionResult?> CheckProviderConnectionAsync(
+        Models.ProviderConnectionRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // The backend's IPC layer expects camelCase field names, which is the
+            // default JSON-RPC convention. System.Text.Json with camelCase
+            // PropertyNamingPolicy handles the casing on serialization.
+            return await _backendClient.SendAsync<Models.ProviderConnectionResult>(
+                "checkProviderConnection",
+                request,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Surface as a failed result so the dialog can show a friendly error
+            // instead of a raw IPC stack trace.
+            return new Models.ProviderConnectionResult
+            {
+                Ok = false,
+                Error = ex.Message,
+            };
         }
     }
 

@@ -178,6 +178,33 @@
                         FontSize="12"
                         Visibility="Collapsed"
                         AutomationProperties.LiveSetting="Polite" />
+                    <!-- #3480: Test connection button + result display -->
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button
+                            x:Name="TestConnectionButton"
+                            Click="OnTestConnectionClick"
+                            AutomationProperties.Name="测试连接">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE9D9;" FontSize="12" />
+                                <TextBlock Text="测试连接" FontSize="12" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <ProgressRing
+                            x:Name="TestConnectionProgress"
+                            IsActive="False"
+                            Width="18"
+                            Height="18"
+                            Visibility="Collapsed" />
+                    </StackPanel>
+                    <InfoBar
+                        x:Name="TestConnectionResult"
+                        IsOpen="False"
+                        IsClosable="True"
+                        Severity="Informational"
+                        Title="测试连接"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="测试连接结果"
+                        AutomationProperties.LiveSetting="Polite" />
                 </StackPanel>
             </Border>
 

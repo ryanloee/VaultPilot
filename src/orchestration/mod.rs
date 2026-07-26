@@ -2,6 +2,7 @@ pub mod ask;
 pub mod auto_organize;
 pub mod chat;
 pub mod compress;
+pub mod daily_briefing;
 pub mod deep_research;
 pub mod event_bus;
 pub mod scheduled_research;

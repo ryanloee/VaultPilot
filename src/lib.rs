@@ -27,6 +27,7 @@ pub mod mail;
 pub mod mindmap;
 pub mod mirror;
 pub mod models;
+pub mod note_composer;
 pub mod orchestration;
 pub mod people_index;
 pub mod plugin;

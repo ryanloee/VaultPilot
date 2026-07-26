@@ -783,6 +783,15 @@ struct ProviderConnectionResult {
     /// The probe URL that was hit, for diagnostics.
     #[serde(skip_serializing_if = "Option::is_none")]
     probe_url: Option<String>,
+    /// Available model names discovered during the probe (#3489).
+    ///
+    /// Populated from Ollama `/api/tags` (`.models[].name`) or
+    /// OpenAI-compatible `/models` (`data[].id`). Empty when the probe
+    /// failed or the response body could not be parsed. This powers the
+    /// "自动模型检测" requirement: the UI can offer a model picker without
+    /// the user typing the model tag by hand.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    models: Vec<String>,
 }
 
 /// Probes the configured provider by hitting its `/models` endpoint.
@@ -808,6 +817,7 @@ async fn check_provider_connection(
             status: None,
             error: Some("API Key 未填写".to_string()),
             probe_url: None,
+            models: vec![],
         };
     }
     if params.api_key == MASK_SENTINEL {
@@ -816,6 +826,7 @@ async fn check_provider_connection(
             status: None,
             error: Some("API Key 已掩码，无法测试；请重新输入完整 Key".to_string()),
             probe_url: None,
+            models: vec![],
         };
     }
 
@@ -828,6 +839,7 @@ async fn check_provider_connection(
                 status: None,
                 error: Some(format!("构造 HTTP 客户端失败: {e}")),
                 probe_url: None,
+                models: vec![],
             }
         }
     };
@@ -868,21 +880,30 @@ async fn check_provider_connection(
     match resp_result {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            if resp.status().is_success() {
+            // Read the body once and reuse it for both status reporting and
+            // model-list extraction (#3489 auto-detection).
+            let body = resp.text().await.unwrap_or_default();
+            if (200..300).contains(&status) {
+                let models = match ptype.as_str() {
+                    "ollama" => parse_ollama_tags_response(&body),
+                    "anthropic" => parse_openai_models_response(&body),
+                    _ => parse_openai_models_response(&body),
+                };
                 ProviderConnectionResult {
                     ok: true,
                     status: Some(status),
                     error: None,
                     probe_url: Some(probe_url),
+                    models,
                 }
             } else {
-                let body = resp.text().await.unwrap_or_default();
                 let snippet = body.chars().take(200).collect::<String>();
                 ProviderConnectionResult {
                     ok: false,
                     status: Some(status),
                     error: Some(format!("HTTP {status}: {snippet}")),
                     probe_url: Some(probe_url),
+                    models: vec![],
                 }
             }
         }
@@ -899,9 +920,74 @@ async fn check_provider_connection(
                 status: None,
                 error: Some(msg),
                 probe_url: Some(probe_url),
+                models: vec![],
             }
         }
     }
+}
+
+// ── Model auto-detection parsers (#3489) ───────────────────────
+
+/// Parse an Ollama `/api/tags` response body and return the list of
+/// installed model names.
+///
+/// Ollama's response shape:
+/// ```json
+/// { "models": [ { "name": "llama3.2:latest", ... }, { "name": "mistral:7b", ... } ] }
+/// ```
+///
+/// Returns an empty `Vec` on any parse failure (never panics) so that a
+/// malformed upstream body degrades gracefully — the connection probe still
+/// reports `ok: true` with the HTTP status, just without a model list.
+fn parse_ollama_tags_response(body: &str) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct TagsResponse {
+        #[serde(default)]
+        models: Vec<TagsModel>,
+    }
+    #[derive(serde::Deserialize)]
+    struct TagsModel {
+        name: String,
+    }
+
+    serde_json::from_str::<TagsResponse>(body)
+        .map(|r| {
+            r.models
+                .into_iter()
+                .map(|m| m.name)
+                .filter(|n| !n.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse an OpenAI-compatible (and Anthropic) `/models` (or `/v1/models`)
+/// response body and return the list of model ids.
+///
+/// OpenAI shape: `{ "data": [ { "id": "gpt-4o-mini", ... } ] }`
+/// Anthropic shape: `{ "data": [ { "id": "claude-3-5-sonnet-20241022", ... } ] }`
+///
+/// Returns an empty `Vec` on any parse failure (never panics).
+fn parse_openai_models_response(body: &str) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct ModelsResponse {
+        #[serde(default)]
+        data: Vec<ModelsEntry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ModelsEntry {
+        id: String,
+    }
+
+    serde_json::from_str::<ModelsResponse>(body)
+        .map(|r| {
+            r.data
+                .into_iter()
+                .map(|m| m.id)
+                .filter(|n| !n.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1858,6 +1944,7 @@ mod tests {
             status: Some(200),
             error: None,
             probe_url: Some("https://api.openai.com/v1/models".into()),
+            models: vec![],
         };
         let v: Value = serde_json::to_value(&r).unwrap();
         assert_eq!(v["ok"], true);
@@ -1865,5 +1952,103 @@ mod tests {
         assert_eq!(v["probeUrl"], "https://api.openai.com/v1/models");
         // error should be skipped because it's None
         assert!(v.get("error").is_none() || v["error"].is_null());
+        // empty models should be skipped (skip_serializing_if = "Vec::is_empty")
+        assert!(v.get("models").is_none() || v["models"].is_null());
+    }
+
+    // ── #3489: Ollama / OpenAI model auto-detection ──────────────
+
+    #[test]
+    fn parse_ollama_tags_response_extracts_model_names() {
+        let body = r#"{
+            "models": [
+                { "name": "llama3.2:latest", "size": 2000000000 },
+                { "name": "mistral:7b", "size": 4100000000 },
+                { "name": "qwen2.5:14b", "size": 9000000000 }
+            ]
+        }"#;
+        let names = parse_ollama_tags_response(body);
+        assert_eq!(names, vec!["llama3.2:latest", "mistral:7b", "qwen2.5:14b"]);
+    }
+
+    #[test]
+    fn parse_ollama_tags_response_empty_models() {
+        let body = r#"{ "models": [] }"#;
+        assert!(parse_ollama_tags_response(body).is_empty());
+    }
+
+    #[test]
+    fn parse_ollama_tags_response_missing_models_key() {
+        // A server that returns an unexpected shape should not panic — we
+        // degrade to an empty list so the connection probe still reports ok.
+        let body = r#"{ "error": "something else" }"#;
+        assert!(parse_ollama_tags_response(body).is_empty());
+    }
+
+    #[test]
+    fn parse_ollama_tags_response_malformed_json() {
+        assert!(parse_ollama_tags_response("not json at all").is_empty());
+        assert!(parse_ollama_tags_response("").is_empty());
+    }
+
+    #[test]
+    fn parse_ollama_tags_response_skips_empty_names() {
+        let body = r#"{ "models": [ { "name": "" }, { "name": "real:latest" } ] }"#;
+        assert_eq!(parse_ollama_tags_response(body), vec!["real:latest"]);
+    }
+
+    #[test]
+    fn parse_openai_models_response_extracts_ids() {
+        let body = r#"{
+            "data": [
+                { "id": "gpt-4o-mini", "object": "model" },
+                { "id": "gpt-4o", "object": "model" }
+            ]
+        }"#;
+        let ids = parse_openai_models_response(body);
+        assert_eq!(ids, vec!["gpt-4o-mini", "gpt-4o"]);
+    }
+
+    #[test]
+    fn parse_openai_models_response_anthropic_shape() {
+        // Anthropic /v1/models uses the same { data: [ { id } ] } shape.
+        let body = r#"{
+            "data": [
+                { "id": "claude-3-5-sonnet-20241022", "type": "model" },
+                { "id": "claude-3-5-haiku-20241022", "type": "model" }
+            ]
+        }"#;
+        let ids = parse_openai_models_response(body);
+        assert_eq!(
+            ids,
+            vec!["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"]
+        );
+    }
+
+    #[test]
+    fn parse_openai_models_response_empty_and_malformed() {
+        assert!(parse_openai_models_response(r#"{ "data": [] }"#).is_empty());
+        assert!(parse_openai_models_response("garbage").is_empty());
+        // Missing "data" key entirely
+        assert!(parse_openai_models_response(r#"{ "object": "list" }"#).is_empty());
+    }
+
+    #[test]
+    fn provider_connection_result_with_models_serializes() {
+        // When models is non-empty it should appear in the JSON payload so the
+        // WinUI / mobile client can render a model picker (#3489).
+        let r = ProviderConnectionResult {
+            ok: true,
+            status: Some(200),
+            error: None,
+            probe_url: Some("http://localhost:11434/api/tags".into()),
+            models: vec!["llama3.2:latest".into(), "mistral:7b".into()],
+        };
+        let v: Value = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(
+            v["models"],
+            serde_json::json!(["llama3.2:latest", "mistral:7b"])
+        );
     }
 }

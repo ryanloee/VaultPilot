@@ -735,7 +735,172 @@ async fn handle_request(
                     .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
             serde_json::to_value(result).map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
+        // ── Provider connection test (#3480) ──────────────────────
+        "checkProviderConnection" => {
+            let params: CheckProviderConnectionParams = parse_params(&request.params)?;
+            let result = check_provider_connection(&params).await;
+            serde_json::to_value(&result)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
         method => Err(format!("unknown method: {method}")),
+    }
+}
+
+// ── Provider connection test (#3480) ────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckProviderConnectionParams {
+    /// API base URL (e.g. https://api.openai.com/v1)
+    api_base: String,
+    /// API key (may be masked for round-trip; if so, return an error so the
+    /// caller knows to use the real key)
+    api_key: String,
+    /// Provider type string: "openai", "anthropic", "ollama"
+    #[serde(default)]
+    provider_type: String,
+    /// Optional model name (not strictly needed for /models probe, but kept
+    /// for future use such as a targeted chat-completion ping).
+    #[serde(default)]
+    #[allow(dead_code)]
+    model: Option<String>,
+    /// Optional timeout in milliseconds (default 8000)
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderConnectionResult {
+    /// True when the upstream returned HTTP 2xx for the probe request.
+    ok: bool,
+    /// HTTP status code if we got an HTTP response, else null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<u16>,
+    /// Human-readable error message when ok=false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    /// The probe URL that was hit, for diagnostics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    probe_url: Option<String>,
+}
+
+/// Probes the configured provider by hitting its `/models` endpoint.
+///
+/// This mirrors the mobile client's `checkApi()` logic so WinUI gets the same
+/// "test connection" UX described in #3480. OpenAI-compatible providers answer
+/// `GET /v1/models` with Bearer auth; Anthropic answers `GET /v1/models` with
+/// `x-api-key`. Ollama has no auth on `/api/tags`.
+async fn check_provider_connection(
+    params: &CheckProviderConnectionParams,
+) -> ProviderConnectionResult {
+    use std::time::Duration;
+
+    const DEFAULT_TIMEOUT_MS: u64 = 8_000;
+    const MASK_SENTINEL: &str = "********";
+
+    // Masked key indicates the caller sent the stored (masked) settings rather
+    // than the live dialog input — reject so the WinUI client knows to send the
+    // freshly typed key.
+    if params.api_key.is_empty() {
+        return ProviderConnectionResult {
+            ok: false,
+            status: None,
+            error: Some("API Key 未填写".to_string()),
+            probe_url: None,
+        };
+    }
+    if params.api_key == MASK_SENTINEL {
+        return ProviderConnectionResult {
+            ok: false,
+            status: None,
+            error: Some("API Key 已掩码，无法测试；请重新输入完整 Key".to_string()),
+            probe_url: None,
+        };
+    }
+
+    let timeout = Duration::from_millis(params.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => {
+            return ProviderConnectionResult {
+                ok: false,
+                status: None,
+                error: Some(format!("构造 HTTP 客户端失败: {e}")),
+                probe_url: None,
+            }
+        }
+    };
+
+    let ptype = params.provider_type.to_ascii_lowercase();
+    let base = params.api_base.trim_end_matches('/').to_string();
+
+    let result = match ptype.as_str() {
+        "anthropic" => {
+            let url = format!("{}/v1/models", base);
+            let resp = client
+                .get(&url)
+                .header("x-api-key", &params.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .send()
+                .await;
+            (url, resp)
+        }
+        "ollama" => {
+            // Ollama exposes /api/tags without auth
+            let url = format!("{}/api/tags", base);
+            let resp = client.get(&url).send().await;
+            (url, resp)
+        }
+        // Default: OpenAI-compatible
+        _ => {
+            let url = format!("{}/models", base);
+            let resp = client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", params.api_key))
+                .send()
+                .await;
+            (url, resp)
+        }
+    };
+
+    let (probe_url, resp_result) = result;
+    match resp_result {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            if resp.status().is_success() {
+                ProviderConnectionResult {
+                    ok: true,
+                    status: Some(status),
+                    error: None,
+                    probe_url: Some(probe_url),
+                }
+            } else {
+                let body = resp.text().await.unwrap_or_default();
+                let snippet = body.chars().take(200).collect::<String>();
+                ProviderConnectionResult {
+                    ok: false,
+                    status: Some(status),
+                    error: Some(format!("HTTP {status}: {snippet}")),
+                    probe_url: Some(probe_url),
+                }
+            }
+        }
+        Err(e) => {
+            let msg = if e.is_connect() {
+                "无法连接到供应商（连接被拒绝/DNS 失败）".to_string()
+            } else if e.is_timeout() {
+                "连接超时（请检查网络或增大超时设置）".to_string()
+            } else {
+                format!("{e}")
+            };
+            ProviderConnectionResult {
+                ok: false,
+                status: None,
+                error: Some(msg),
+                probe_url: Some(probe_url),
+            }
+        }
     }
 }
 
@@ -1617,5 +1782,88 @@ mod tests {
         assert_eq!(request.method, "getSnapshot");
         let params: GetSnapshotParams = serde_json::from_value(request.params).unwrap();
         assert_eq!(params.snapshot_id, "snap-uuid-001");
+    }
+
+    // ── #3480: Provider connection test ───────────────────────────
+
+    #[test]
+    fn check_provider_connection_params_camel_case_roundtrip() {
+        let wire = json!({
+            "apiBase": "https://api.openai.com/v1",
+            "apiKey": "sk-test-123",
+            "providerType": "openai",
+            "model": "gpt-4o-mini",
+            "timeoutMs": 5000
+        });
+        let params: CheckProviderConnectionParams = serde_json::from_value(wire).unwrap();
+        assert_eq!(params.api_base, "https://api.openai.com/v1");
+        assert_eq!(params.api_key, "sk-test-123");
+        assert_eq!(params.provider_type, "openai");
+        assert_eq!(params.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(params.timeout_ms, Some(5000));
+    }
+
+    #[test]
+    fn check_provider_connection_params_accepts_minimal_payload() {
+        // Only apiBase + apiKey are required; the rest default.
+        let wire = json!({
+            "apiBase": "https://opencode.ai/zen/v1",
+            "apiKey": "sk-min"
+        });
+        let params: CheckProviderConnectionParams = serde_json::from_value(wire).unwrap();
+        assert_eq!(params.provider_type, ""); // serde default
+        assert_eq!(params.model, None);
+        assert_eq!(params.timeout_ms, None);
+    }
+
+    #[test]
+    fn check_provider_connection_rejects_empty_api_key() {
+        let params = CheckProviderConnectionParams {
+            api_base: "https://api.openai.com/v1".into(),
+            api_key: "".into(),
+            provider_type: "openai".into(),
+            model: None,
+            timeout_ms: Some(1000),
+        };
+        // We can't easily await in #[test] without a runtime; exercise the
+        // early-return path via a tokio runtime block_on.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(check_provider_connection(&params));
+        assert!(!result.ok);
+        assert!(result.error.unwrap_or_default().contains("API Key"));
+    }
+
+    #[test]
+    fn check_provider_connection_rejects_masked_api_key() {
+        let params = CheckProviderConnectionParams {
+            api_base: "https://api.openai.com/v1".into(),
+            api_key: "********".into(),
+            provider_type: "openai".into(),
+            model: None,
+            timeout_ms: Some(1000),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(check_provider_connection(&params));
+        assert!(!result.ok);
+        assert!(
+            result.error.unwrap_or_default().contains("掩码"),
+            "masked key should yield a masked-error message"
+        );
+    }
+
+    #[test]
+    fn provider_connection_result_serializes_camel_case() {
+        let r = ProviderConnectionResult {
+            ok: true,
+            status: Some(200),
+            error: None,
+            probe_url: Some("https://api.openai.com/v1/models".into()),
+        };
+        let v: Value = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["status"], 200);
+        assert_eq!(v["probeUrl"], "https://api.openai.com/v1/models");
+        // error should be skipped because it's None
+        assert!(v.get("error").is_none() || v["error"].is_null());
     }
 }

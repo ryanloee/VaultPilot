@@ -28,6 +28,13 @@ public sealed partial class SettingsDialog : ContentDialog
     private List<ProviderConfig> _providers = new();
     private int _activeProviderIndex;
 
+    // ── #3480: Provider connection test ───────────────────────────
+    // The dialog receives a delegate that invokes the Rust backend's
+    // `checkProviderConnection` IPC method. This keeps SettingsDialog
+    // decoupled from BackendClient while still letting it test the provider
+    // configuration the user is editing.
+    private readonly Func<ProviderConnectionRequest, CancellationToken, Task<ProviderConnectionResult?>>? _checkConnectionAsync;
+
     // Canonical provider-type set. The ProviderTypeBox ComboBox exposes exactly
     // these three known providers. Any other string is a custom / future provider
     // that must be round-tripped verbatim so it is not silently overwritten (#3133).
@@ -83,11 +90,13 @@ public sealed partial class SettingsDialog : ContentDialog
         string versionText,
         XamlRoot xamlRoot,
         Func<Task> openVaultDirectoryAsync,
-        Func<Task> openProjectHomepageAsync)
+        Func<Task> openProjectHomepageAsync,
+        Func<ProviderConnectionRequest, CancellationToken, Task<ProviderConnectionResult?>>? checkConnectionAsync = null)
     {
         _openVaultDirectoryAsync = openVaultDirectoryAsync;
         _openProjectHomepageAsync = openProjectHomepageAsync;
         _originalSettings = settings;
+        _checkConnectionAsync = checkConnectionAsync;
 
         InitializeComponent();
         XamlRoot = xamlRoot;
@@ -650,6 +659,105 @@ public sealed partial class SettingsDialog : ContentDialog
         }
         else
             ClearFieldError(ContextWindowBox, ContextWindowError);
+    }
+
+    // ──────────────────────────────────────────────
+    //  Test connection (#3480)
+    // ──────────────────────────────────────────────
+
+    private async void OnTestConnectionClick(object sender, RoutedEventArgs e)
+    {
+        if (_checkConnectionAsync is null)
+        {
+            ShowTestConnectionResult(InfoBarSeverity.Warning, "无法测试连接",
+                "后端未连接，请先确保 VaultPilot 后端已启动。");
+            return;
+        }
+
+        // Gather live input values from the dialog fields.
+        var apiKey = ApiKeyBox.Password;
+        var baseUrl = BaseUrlBox.Text.Trim();
+        var providerType = (ProviderTypeBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "OpenAI";
+        var timeoutMs = ParseTimeoutOrDefault(TimeoutBox.Text.Trim());
+
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            ShowTestConnectionResult(InfoBarSeverity.Error, "缺少接口地址",
+                "请先填写接口地址（例如 https://api.openai.com/v1）");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            ShowTestConnectionResult(InfoBarSeverity.Error, "缺少 API Key",
+                "请先填写 API Key 后再测试连接。");
+            return;
+        }
+
+        // Disable the button + show spinner while the probe is in flight.
+        TestConnectionButton.IsEnabled = false;
+        TestConnectionProgress.IsActive = true;
+        TestConnectionProgress.Visibility = Visibility.Visible;
+        TestConnectionResult.IsOpen = false;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(Math.Max(timeoutMs + 5_000, 10_000));
+            var request = new ProviderConnectionRequest
+            {
+                ApiBase = baseUrl,
+                ApiKey = apiKey,
+                ProviderType = providerType,
+                Model = string.IsNullOrWhiteSpace(ModelBox.Text) ? null : ModelBox.Text.Trim(),
+                TimeoutMs = timeoutMs
+            };
+            var result = await _checkConnectionAsync(request, cts.Token);
+            if (result is null)
+            {
+                ShowTestConnectionResult(InfoBarSeverity.Error, "测试失败",
+                    "后端未返回结果（可能进程已断开）。");
+            }
+            else if (result.Ok)
+            {
+                var status = result.Status > 0 ? $"（HTTP {result.Status}）" : string.Empty;
+                ShowTestConnectionResult(InfoBarSeverity.Success, "连接成功 ✅",
+                    $"供应商响应正常{status}。" + (string.IsNullOrEmpty(result.ProbeUrl) ? string.Empty : $" 探测端点: {result.ProbeUrl}"));
+            }
+            else
+            {
+                var detail = result.Error ?? "未知错误";
+                if (result.Status > 0) detail = $"HTTP {result.Status}: {detail}";
+                ShowTestConnectionResult(InfoBarSeverity.Error, "连接失败 ❌", detail);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ShowTestConnectionResult(InfoBarSeverity.Error, "连接超时",
+                "请求在等待期限内未收到供应商响应，请检查网络或增大超时设置。");
+        }
+        catch (Exception ex)
+        {
+            ShowTestConnectionResult(InfoBarSeverity.Error, "测试失败", ex.Message);
+        }
+        finally
+        {
+            TestConnectionButton.IsEnabled = true;
+            TestConnectionProgress.IsActive = false;
+            TestConnectionProgress.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private static ulong ParseTimeoutOrDefault(string text)
+    {
+        if (ulong.TryParse(text.Trim(), out var v) && v >= 1_000) return v;
+        return 8_000;
+    }
+
+    private void ShowTestConnectionResult(InfoBarSeverity severity, string title, string message)
+    {
+        TestConnectionResult.Severity = severity;
+        TestConnectionResult.Title = title;
+        TestConnectionResult.Message = message;
+        TestConnectionResult.IsOpen = true;
     }
 
     private void OnAutoWakeIntervalLostFocus(object sender, RoutedEventArgs e)

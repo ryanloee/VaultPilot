@@ -225,13 +225,13 @@ public sealed partial class MainWindow : Window
     /// <summary>
     /// Applies the Always-on-Top window pinning (#3473).
     /// When enabled, the window stays above all other windows
-    /// via AppWindow.IsAlwaysOnTop.
+    /// via OverlappedPresenter.IsAlwaysOnTop.
     /// </summary>
     private void ApplyAlwaysOnTop(bool enabled)
     {
-        if (_appWindow is not null)
+        if (_appWindow?.Presenter is OverlappedPresenter presenter)
         {
-            _appWindow.IsAlwaysOnTop = enabled;
+            presenter.IsAlwaysOnTop = enabled;
         }
     }
 

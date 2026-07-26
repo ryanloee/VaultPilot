@@ -13,11 +13,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # Single source of truth for the Zig toolchain version + hash.
-      # Update both values together when bumping Zig (issue #2457).
-      ZIG_VERSION: "0.14.0"
-      ZIG_SHA256: "473ec26806133cf4d1918caf1a410f8403a13d979726a9045b421b685031a982"
 
     steps:
       - name: Checkout
@@ -26,7 +21,7 @@ jobs:
       - name: Install Linux packaging prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y xz-utils dpkg-dev
+          sudo apt-get install -y xz-utils dpkg-dev libssl-dev pkg-config
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -35,18 +30,6 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
-
-      - name: Install Zig
-        run: |
-          mkdir -p "$HOME/.local/zig"
-          cd "$HOME/.local/zig"
-          curl -L "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
-          echo "${ZIG_SHA256}  zig.tar.xz" | sha256sum -c -
-          tar -xf zig.tar.xz
-          echo "$HOME/.local/zig/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
 
       - name: Build Linux CLI artifacts
         run: |

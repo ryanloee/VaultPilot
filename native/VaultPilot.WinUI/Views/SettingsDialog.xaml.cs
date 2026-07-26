@@ -120,6 +120,7 @@ public sealed partial class SettingsDialog : ContentDialog
 
         // General section
         AutoCheckUpdatesBox.IsChecked = settings.AutoCheckUpdates;
+        AlwaysOnTopBox.IsChecked = settings.IsAlwaysOnTop;
         ProxyUrlBox.Text = settings.ProxyUrl ?? string.Empty;
 
         // Auto-wake section
@@ -866,7 +867,10 @@ public sealed partial class SettingsDialog : ContentDialog
                 AutoWakePromptBox.Text?.Trim() ?? string.Empty,
                 ProxyUrlBox.Text?.Trim(),
                 _providers,
-                _activeProviderIndex);
+                _activeProviderIndex)
+            {
+                IsAlwaysOnTop = AlwaysOnTopBox.IsChecked ?? false,
+            };
 
             // Persist theme preference client-side and expose it so MainWindow
             // can apply it immediately after the dialog closes.

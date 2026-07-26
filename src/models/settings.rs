@@ -270,6 +270,12 @@ pub struct AppSettings {
     /// default; users add tools via settings or `.vaultpilot/tools/*.toml`.
     #[serde(default)]
     pub custom_tools: Vec<crate::custom_tools::CustomTool>,
+    /// WinUI: Always on Top (#3473). When enabled, the application window
+    /// stays above all other windows. The actual pinning is applied by the
+    /// WinUI client via AppWindow.IsAlwaysOnTop; this flag provides the
+    /// persisted toggle state.
+    #[serde(default)]
+    pub is_always_on_top: bool,
 }
 
 fn default_privacy_mode() -> bool {
@@ -326,6 +332,7 @@ impl Default for AppSettings {
             app_lock_enabled: false,
             app_lock_pin_hash: None,
             custom_tools: Vec::new(),
+            is_always_on_top: false,
         }
     }
 }
@@ -673,6 +680,7 @@ mod tests {
             app_lock_enabled: false,
             app_lock_pin_hash: None,
             custom_tools: Vec::new(),
+            is_always_on_top: false,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

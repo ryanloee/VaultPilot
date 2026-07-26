@@ -1571,7 +1571,6 @@ enum NotesActions {
         source: String,
 
         /// ID or path of the target note (the source content is appended here).
-        #[arg(long)]
         target: String,
     },
 }
@@ -4357,8 +4356,10 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
         NotesActions::Merge { source, target } => {
             let source_note = load_note_with_context(context, source)?;
             let source_id = source_note.meta.id.clone();
+            let source_title = source_note.meta.title.clone();
             let mut target_note = load_note_with_context(context, target)?;
             let target_id = target_note.meta.id.clone();
+            let target_title = target_note.meta.title.clone();
 
             let merged_body =
                 vaultpilot_lib::note_composer::merge_notes(&source_note, &target_note)?;
@@ -4370,10 +4371,34 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             // Delete the source note (without deleting attachments)
             delete_note_with_context(context, &source_id, None)?;
 
+            // Rewrite wikilinks across the vault: [[source_title]] → [[target_title]]
+            // so links don't dangle now that the source note is deleted (#3486).
+            let mut rewritten_notes: u64 = 0;
+            if !source_title.trim().is_empty() && source_title != target_title {
+                let all_metas = list_all_notes_with_context(context)?;
+                for meta in all_metas {
+                    let mut note = match load_note_with_context(context, &meta.id) {
+                        Ok(n) => n,
+                        Err(_) => continue, // note may have been removed concurrently
+                    };
+                    let new_body = vaultpilot_lib::note_composer::rewrite_wikilinks(
+                        &note.body,
+                        &source_title,
+                        &target_title,
+                    );
+                    if new_body != note.body {
+                        note.body = new_body;
+                        save_note_with_context(context, note)?;
+                        rewritten_notes += 1;
+                    }
+                }
+            }
+
             to_json(&json!({
                 "ok": true,
                 "deleted_source_id": source_id,
                 "merged_into_target_id": target_id,
+                "rewritten_notes": rewritten_notes,
             }))
         }
     }

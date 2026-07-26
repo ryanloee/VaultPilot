@@ -140,10 +140,12 @@ pub fn rewrite_wikilinks(body: &str, old_title: &str, new_title: &str) -> String
     result
 }
 
-/// Merge `source_note` body into `target_note` body; appends at the end with a
-/// double-newline + `---` separator.
+/// Merge `source_note` body into `target_note` body; the source body is
+/// **appended after** the target body, separated by a double-newline and a
+/// `---` horizontal rule (#3485).
 ///
-/// Returns the merged body.
+/// The target remains the primary content; the source content follows the
+/// separator. Returns the merged body.
 pub fn merge_notes(source_note: &NoteDocument, target_note: &NoteDocument) -> Result<String> {
     if source_note.body.is_empty() {
         return Ok(target_note.body.clone());
@@ -154,7 +156,7 @@ pub fn merge_notes(source_note: &NoteDocument, target_note: &NoteDocument) -> Re
 
     Ok(format!(
         "{}\n\n---\n\n{}",
-        source_note.body, target_note.body
+        target_note.body, source_note.body
     ))
 }
 
@@ -215,6 +217,19 @@ mod tests {
         let merged = merge_notes(&source, &target).unwrap();
         assert!(merged.contains("Source body"));
         assert!(merged.contains("Target body"));
+        // Order assertion (#3485): target body first, source body after separator.
+        let target_pos = merged.find("Target body").expect("target body present");
+        let source_pos = merged.find("Source body").expect("source body present");
+        assert!(
+            target_pos < source_pos,
+            "target body must appear before source body, got target@{} source@{}",
+            target_pos,
+            source_pos
+        );
+        assert!(
+            merged.starts_with("Target body"),
+            "merged body should start with the target body"
+        );
     }
 
     #[test]
@@ -260,5 +275,40 @@ mod tests {
         let source = NoteDocument::default();
         let err = extract_text(&source, "   ", "New Note").unwrap_err();
         assert!(err.to_string().contains("must not be empty"));
+    }
+
+    /// Regression test for #3485 — merge_notes must place the **target** body
+    /// first and the **source** body after the separator (source appended to
+    /// target), not the other way around.
+    #[test]
+    fn test_merge_notes_target_first_regression_3485() {
+        let source = NoteDocument {
+            body: "Appended content".to_string(),
+            ..Default::default()
+        };
+        let target = NoteDocument {
+            body: "Primary content".to_string(),
+            ..Default::default()
+        };
+        let merged = merge_notes(&source, &target).unwrap();
+        assert_eq!(
+            merged, "Primary content\n\n---\n\nAppended content",
+            "target body must come first, source appended after separator"
+        );
+    }
+
+    /// Regression test for #3486 — rewrite_wikilinks must update every
+    /// `[[source_title]]` to `[[target_title]]` (including alias-preserving
+    /// links) so that links don't dangle after the source note is deleted.
+    #[test]
+    fn test_rewrite_wikilinks_for_merge_scenario_3486() {
+        let body = "See [[Source Note]] and [[Source Note|alias]] for more.";
+        let rewritten = rewrite_wikilinks(body, "Source Note", "Target Note");
+        assert_eq!(
+            rewritten,
+            "See [[Target Note]] and [[Target Note|alias]] for more."
+        );
+        // Unrelated links must be untouched.
+        assert!(!rewritten.contains("[[Source Note"));
     }
 }

@@ -974,8 +974,25 @@ fn parse_image_token_at(markdown: &str, start: usize) -> Option<(String, String,
     // Must be followed by `(`
     let after_bracket = &rest[bracket_end + 1..];
     let paren_start = after_bracket.strip_prefix('(').ok_or(()).ok()?;
-    // Find the closing `)`.
-    let paren_end = paren_start.find(')')?;
+    // Find the *matching* closing `)`, tracking depth so URLs that contain
+    // parentheses (e.g. Windows screenshot filenames like "Screenshot (1).png")
+    // are not truncated.
+    let mut depth = 0u32;
+    let mut paren_end: Option<usize> = None;
+    for (j, c) in paren_start.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    paren_end = Some(j);
+                    break;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    let paren_end = paren_end?;
     let url = paren_start[..paren_end].trim();
 
     if url.is_empty() {

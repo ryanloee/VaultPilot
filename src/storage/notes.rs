@@ -587,6 +587,33 @@ fn move_one_note_with_connection(
         })
         .with_context(|| format!("moving {} -> {}", old_path.display(), new_path.display()))?;
     index_note_file_with_connection(connection, &new_path, vault_dir)?;
+    // ── Clean up stale DB entry left at the old path ──────────────────
+    // For notes with an *explicit* frontmatter `id`, the UPSERT inside
+    // `index_note_file_with_connection` already updated the existing row's
+    // path to the new location, so these deletes are no-ops (0 rows).
+    //
+    // For notes whose `id` was *derived* from the file path
+    // (`derived_note_id` = SHA-256 of path), the re-index above inserted a
+    // brand-new row under the new path-derived id, leaving the old row as a
+    // "ghost" pointing at the now-deleted old path. Without this cleanup,
+    // the ghost lingers in search results / FTS / listings and breaks
+    // `load_note_with_context` until a full `rebuild_index` runs.
+    // (#3509: ghost entries after bulk move.)
+    //
+    // Mirrors the cleanup pattern used by `rebuild_index` below. The
+    // `attachments` and `note_collections` child rows are removed by their
+    // `ON DELETE CASCADE` FK once the parent `notes` row goes, but FTS5
+    // virtual tables cannot have FK constraints, so they are cleaned
+    // explicitly before the parent row.
+    connection.execute(
+        "DELETE FROM note_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
+        [&old_path_str],
+    )?;
+    connection.execute(
+        "DELETE FROM attachment_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
+        [&old_path_str],
+    )?;
+    connection.execute("DELETE FROM notes WHERE path = ?1", [&old_path_str])?;
     Ok(MoveOutcome::Moved)
 }
 
@@ -3372,5 +3399,157 @@ mod tests {
         let tree = extract_heading_tree(body);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].text, "Indented H2");
+    }
+
+    // ── #3509: bulk_move must not leave stale DB "ghost" entries for notes
+    //    whose id is derived from the file path (i.e. no explicit frontmatter
+    //    `id`). Before the fix, the re-index at the new path inserted a new
+    //    row under the new path-derived id while the old row lingered. ──
+    #[test]
+    fn regression_3509_bulk_move_no_ghost_for_path_derived_id() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-3509-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let vault = temp.join("vault");
+        let source_dir = vault.join("notes");
+        std::fs::create_dir_all(&source_dir).expect("create source dir");
+        let ctx = crate::storage::StorageContext::for_test(&temp);
+        crate::storage::initialize_storage_with_context(&ctx).expect("init storage");
+
+        // Note WITHOUT an explicit `id` frontmatter field → indexing assigns a
+        // path-derived id (SHA-256 of the canonical path).
+        let old_path = source_dir.join("ghost-test.md");
+        std::fs::write(&old_path, "# Ghost Test\n\nBody before move.\n").expect("write note");
+
+        // Index the file so a row exists under the path-derived id.
+        rebuild_index_with_context(&ctx).expect("index");
+        let (connection, _settings) = open_connection(&ctx).expect("open conn");
+
+        // Capture the path-derived id assigned at the old location.
+        let old_id: String = connection
+            .query_row(
+                "SELECT id FROM notes WHERE path = ?1",
+                [&old_path.to_string_lossy().to_string()],
+                |row| row.get(0),
+            )
+            .expect("note row exists before move");
+        // Sanity: the id really is path-derived (not a UUID), i.e. it changes
+        // when the path changes — this is the precondition for the bug.
+        let new_path = vault.join("archive").join("ghost-test.md");
+        assert_ne!(
+            old_id,
+            crate::storage::search::derived_note_id(&new_path),
+            "test precondition: id must be path-derived"
+        );
+
+        // Move the note into a subdirectory of the vault.
+        let result = bulk_move_notes_with_context(&ctx, std::slice::from_ref(&old_id), "archive")
+            .expect("bulk move");
+        assert_eq!(result.affected, 1, "exactly one note should be moved");
+        assert_eq!(result.failures.len(), 0, "no move failures");
+
+        // Reopen to see the post-move DB state.
+        let (connection, _settings) = open_connection(&ctx).expect("reopen conn");
+
+        // ── The ghost: no row may still point at the old path. ──
+        let ghost_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE path = ?1",
+                [&old_path.to_string_lossy().to_string()],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(
+            ghost_count, 0,
+            "ghost entry must not remain at the old path after bulk move"
+        );
+
+        // ── No orphan FTS row for the stale path-derived id. ──
+        let fts_orphan_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM note_fts WHERE note_id = ?1",
+                [&old_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(
+            fts_orphan_count, 0,
+            "note_fts must not retain an orphan row for the old path-derived id"
+        );
+
+        // ── Exactly one notes row exists (the freshly-indexed new-path row),
+        //    not two. ──
+        let total_rows: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE path = ?1",
+                [&new_path.to_string_lossy().to_string()],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(
+            total_rows, 1,
+            "exactly one row should exist at the new path"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ── #3509 companion: notes WITH an explicit frontmatter `id` must still
+    //    move correctly (the cleanup deletes 0 rows — no false removal). ──
+    #[test]
+    fn regression_3509_bulk_move_explicit_id_unaffected_by_cleanup() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-3509-explicit-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let vault = temp.join("vault");
+        let source_dir = vault.join("notes");
+        std::fs::create_dir_all(&source_dir).expect("create source dir");
+        let ctx = crate::storage::StorageContext::for_test(&temp);
+        crate::storage::initialize_storage_with_context(&ctx).expect("init storage");
+
+        // Note WITH an explicit `id` field — the UPSERT updates the existing
+        // row's path in place, so the cleanup is a 0-row no-op.
+        let old_path = source_dir.join("explicit-id.md");
+        std::fs::write(
+            &old_path,
+            "---\nid: my-explicit-id\ntitle: Explicit\n---\n\nBody.\n",
+        )
+        .expect("write note");
+        rebuild_index_with_context(&ctx).expect("index");
+
+        // Move the note into a subdirectory of the vault.
+        let result = bulk_move_notes_with_context(&ctx, &["my-explicit-id".to_string()], "archive")
+            .expect("bulk move");
+        assert_eq!(result.affected, 1, "explicit-id note should move");
+
+        let (connection, _settings) = open_connection(&ctx).expect("reopen conn");
+        let new_path = vault.join("archive").join("explicit-id.md");
+        let row_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE id = ?1 AND path = ?2",
+                params!["my-explicit-id", &new_path.to_string_lossy().to_string()],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(
+            row_count, 1,
+            "explicit-id note must exist once at the new path"
+        );
+
+        // Total notes rows for this id should be exactly 1 (not duplicated).
+        let total: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE id = ?1",
+                params!["my-explicit-id"],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(total, 1, "no duplicate rows for explicit-id note");
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

@@ -31,8 +31,8 @@ use vaultpilot_lib::storage::{
     list_subscriptions_async, set_subscription_enabled_async, update_subscription_async,
 };
 use vaultpilot_lib::storage::{
-    deep_search_notes_async, load_note_async, load_settings_async, save_note_async,
-    search_notes_async, typeahead_search_async, NoteNotFound, StorageContext,
+    deep_search_notes_async, import_markdown_async, load_note_async, load_settings_async,
+    save_note_async, search_notes_async, typeahead_search_async, NoteNotFound, StorageContext,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path, run_single_subscription};
 
@@ -72,6 +72,10 @@ pub(super) async fn run_http_bridge(
         .route("/v1/models", get(http_models))
         .route("/v1/chat/completions", post(http_chat_completions))
         .route("/api/notes", get(http_list_notes).post(http_create_note))
+        // #3478: Batch folder import — recursively walk a directory and import
+        // all .md files as notes. Enables WinUI drag-folder-into-window UX
+        // without needing a dedicated batch-import protocol.
+        .route("/api/notes/import-folder", post(http_import_folder))
         // #3034 Web Clipper: server-side URL → Markdown note (Plan B)
         .route("/api/clip", post(http_clip_url))
         .route("/api/notes/search", get(http_search_notes))
@@ -870,6 +874,79 @@ async fn http_create_note(
     Ok(Json(CreateNoteResponse {
         id: saved.meta.id,
         title: saved.meta.title,
+    }))
+}
+
+// ─── Folder import (#3478) — recursive directory → batch note import ──
+
+/// Request body for POST /api/notes/import-folder.
+///
+/// WinUI (or any client) sends a local filesystem path to a directory; the
+/// bridge recursively walks it and imports every `.md` file as a note,
+/// preserving the existing import semantics (frontmatter parsing, tag inference).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportFolderRequest {
+    /// Absolute (or vault-relative) path to the directory to import.
+    folder_path: String,
+}
+
+/// Response body for POST /api/notes/import-folder.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportFolderResponse {
+    /// Number of `.md` files successfully imported.
+    imported: usize,
+    /// Number of `.md` files skipped (e.g. duplicates).
+    skipped: usize,
+    /// Per-file error messages (path: reason).
+    errors: Vec<String>,
+}
+
+/// `POST /api/notes/import-folder` — recursively imports all Markdown files
+/// under the given directory as vault notes.
+///
+/// This backs the WinUI "drag folder into window" UX (#3478): the front-end
+/// collects the dropped folder path and POSTs it here; the existing
+/// `import_markdown_async` service handles the recursive walk + per-file
+/// ingestion (frontmatter parsing, title detection, FTS indexing).
+async fn http_import_folder(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(request): Json<ImportFolderRequest>,
+) -> Result<Json<ImportFolderResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    let folder_path = request.folder_path.trim().to_string();
+    if folder_path.is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "folderPath is required",
+        ));
+    }
+
+    let path = PathBuf::from(&folder_path);
+    if !path.is_dir() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "folderPath is not a directory or does not exist: {}",
+                folder_path
+            ),
+        ));
+    }
+
+    let result = import_markdown_async(&state.context, &[folder_path])
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_import_folder: import failed: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Folder import failed")
+        })?;
+
+    Ok(Json(ImportFolderResponse {
+        imported: result.imported,
+        skipped: result.skipped,
+        errors: result.errors,
     }))
 }
 
@@ -4199,5 +4276,35 @@ mod tests {
     fn clip_source_falls_back_to_web_sentinel() {
         assert_eq!(build_clip_source(""), "web");
         assert_eq!(build_clip_source("   "), "web");
+    }
+
+    // ── #3478: folder import endpoint validation ──────────────────
+
+    /// `ImportFolderRequest` should deserialize from camelCase JSON, matching
+    /// the wire format sent by WinUI / mobile clients.
+    #[test]
+    fn import_folder_request_parses_camel_case() {
+        let json = serde_json::json!({ "folderPath": "/tmp/notes" });
+        let req: ImportFolderRequest = serde_json::from_value(json).expect("parse");
+        assert_eq!(req.folder_path, "/tmp/notes");
+    }
+
+    /// Empty `folderPath` must still deserialize (the HTTP handler rejects it,
+    /// not the deserializer) — ensures clients can send the field and get a
+    /// proper 400 rather than a 422 parse error.
+    #[test]
+    fn import_folder_request_parses_empty_path() {
+        let json = serde_json::json!({ "folderPath": "" });
+        let req: ImportFolderRequest = serde_json::from_value(json).expect("parse empty");
+        assert_eq!(req.folder_path, "");
+    }
+
+    /// Missing `folderPath` field must fail to deserialize (the handler relies
+    /// on serde rejecting the request, not a manual check).
+    #[test]
+    fn import_folder_request_rejects_missing_field() {
+        let json = serde_json::json!({ "path": "/tmp/notes" });
+        let res: Result<ImportFolderRequest, _> = serde_json::from_value(json);
+        assert!(res.is_err());
     }
 }

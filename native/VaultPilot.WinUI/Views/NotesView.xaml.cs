@@ -15,6 +15,7 @@ namespace VaultPilot.WinUI.Views;
 public sealed partial class NotesView : UserControl
 {
     private readonly BackendClient _backendClient;
+    private readonly MainWindow _mainWindow;
     private IReadOnlyList<NoteMeta> _allNotes = Array.Empty<NoteMeta>();
     private NoteMeta? _selectedNote;
     private string _searchQuery = string.Empty;
@@ -22,6 +23,7 @@ public sealed partial class NotesView : UserControl
     private CancellationTokenSource? _loadDetailCts;
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _relatedCts;
+    private string? _currentBodyText;
 
     /// <summary>
     /// In-memory clipboard for note copy/paste (#3094).
@@ -30,9 +32,10 @@ public sealed partial class NotesView : UserControl
     /// </summary>
     private static NoteMeta? s_clipboardNote;
 
-    public NotesView(BackendClient backendClient)
+    public NotesView(BackendClient backendClient, MainWindow mainWindow)
     {
         _backendClient = backendClient;
+        _mainWindow = mainWindow;
         InitializeComponent();
 
         SearchBox.QuerySubmitted += OnSearchQuerySubmitted;
@@ -207,12 +210,12 @@ public sealed partial class NotesView : UserControl
 
             if (doc is not null && !string.IsNullOrEmpty(doc.Body))
             {
-                DetailBody.Text = doc.Body;
+                SetDetailBody(doc.Body);
             }
             else
             {
                 // Fallback: show summary if full body unavailable
-                DetailBody.Text = meta.Summary ?? "（无法加载笔记正文）";
+                SetDetailBody(meta.Summary ?? "（无法加载笔记正文）");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -223,9 +226,9 @@ public sealed partial class NotesView : UserControl
         {
             // loadNote may not be implemented; show what we have from metadata
             System.Diagnostics.Debug.WriteLine($"loadNote failed: {error.Message}");
-            DetailBody.Text = !string.IsNullOrEmpty(meta.Summary)
+            SetDetailBody(!string.IsNullOrEmpty(meta.Summary)
                 ? meta.Summary
-                : "（笔记正文加载失败，请确认后端支持 loadNote 方法）";
+                : "（笔记正文加载失败，请确认后端支持 loadNote 方法）");
         }
 
         // Kick off related notes lookup in the background (debounced via _relatedCts)
@@ -491,7 +494,7 @@ public sealed partial class NotesView : UserControl
     private void ClearDetail()
     {
         DetailTitle.Text = "选择一篇笔记";
-        DetailBody.Text = string.Empty;
+        SetDetailBody(null);
         DetailTags.Text = string.Empty;
         DetailUpdated.Text = string.Empty;
         DetailPath.Text = string.Empty;
@@ -635,8 +638,39 @@ public sealed partial class NotesView : UserControl
     /// </summary>
     public string? GetSelectedNoteBody()
     {
-        var body = DetailBody.Text?.Trim();
+        var body = _currentBodyText?.Trim();
         return !string.IsNullOrWhiteSpace(body) ? body : null;
+    }
+
+    /// <summary>
+    /// Sets the detail body content. If the text is non-empty and the MainWindow
+    /// Markdown renderer is available, renders the body as Markdown; otherwise
+    /// falls back to a plain TextBlock.
+    /// </summary>
+    private void SetDetailBody(string? body)
+    {
+        _currentBodyText = body;
+        DetailBodyContainer.Children.Clear();
+
+        if (string.IsNullOrEmpty(body))
+            return;
+
+        try
+        {
+            var rendered = _mainWindow.CreateMarkdownContent(body);
+            DetailBodyContainer.Children.Add(rendered);
+        }
+        catch
+        {
+            // Fallback: plain text if markdown rendering fails
+            var tb = new TextBlock
+            {
+                Text = body,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true
+            };
+            DetailBodyContainer.Children.Add(tb);
+        }
     }
 
     /// <summary>

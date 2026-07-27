@@ -33,6 +33,7 @@ pub mod people_index;
 pub mod plugin;
 pub mod prompt_store;
 pub mod prompting;
+pub mod property_schema;
 pub mod quick_switcher;
 pub mod recovery;
 pub mod recurring;

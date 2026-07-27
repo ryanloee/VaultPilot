@@ -433,7 +433,7 @@ public sealed partial class MainWindow : Window
             NotesViewHost.Visibility = Visibility.Visible;
             if (!_notesViewLoaded)
             {
-                _notesView = new Views.NotesView(_backendClient);
+                _notesView = new Views.NotesView(_backendClient, this);
                 NotesViewHost.Children.Add(_notesView);
                 _notesViewLoaded = true;
             }

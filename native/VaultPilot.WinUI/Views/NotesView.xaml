@@ -231,11 +231,9 @@
                     <ScrollViewer
                         Grid.Row="3"
                         VerticalScrollBarVisibility="Auto">
-                        <TextBlock
-                            x:Name="DetailBody"
-                            TextWrapping="Wrap"
-                            IsTextSelectionEnabled="True"
-                            LineHeight="24"
+                        <StackPanel
+                            x:Name="DetailBodyContainer"
+                            Spacing="8"
                             AutomationProperties.Name="笔记内容"
                             AutomationProperties.HelpText="笔记的正文内容" />
                     </ScrollViewer>

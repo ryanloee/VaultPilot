@@ -32,7 +32,7 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private FrameworkElement CreateMarkdownContent(string markdown)
+    internal FrameworkElement CreateMarkdownContent(string markdown)
     {
         var stack = new StackPanel
         {

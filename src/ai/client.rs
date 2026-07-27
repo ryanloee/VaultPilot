@@ -1396,6 +1396,41 @@ fn retry_after_secs(headers: &HeaderMap) -> Option<u64> {
     Some(secs.min(60))
 }
 
+/// Fetch the list of available models from an Ollama instance via `/api/tags`.
+///
+/// Returns the raw [`OllamaModel`] entries so the caller can present model
+/// names in a dropdown. Returns an empty vec on any error (connection refused,
+/// non-Ollama endpoint, etc.) so the UI degrades gracefully to the
+/// hardcoded known-model list.
+///
+/// # Arguments
+///
+/// * `base_url` — The Ollama server base URL (e.g. `http://localhost:11434`).
+///   The `/api/tags` path is appended automatically.
+pub async fn fetch_ollama_models(base_url: &str) -> Vec<crate::models::provider::OllamaModel> {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let url = format!("{}/api/tags", base_url.trim().trim_end_matches('/'));
+
+    let resp = match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Vec::new(),
+    };
+
+    let body: crate::models::provider::OllamaTagsResponse = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
+    };
+
+    body.models
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1855,6 +1890,21 @@ mod tests {
         assert!(
             msg.contains("VAULTPILOT_ALLOW_LOCAL_ENDPOINT=1"),
             "non-fakeip private error should mention LOCAL_ENDPOINT, got: {msg}"
+        );
+    }
+
+    // ── fetch_ollama_models (#3489) ──
+
+    #[tokio::test]
+    async fn fetch_ollama_models_unreachable_returns_empty() {
+        // When the Ollama server is not running (connection refused),
+        // the function must return an empty vec (graceful degradation)
+        // instead of panicking.
+        let models = fetch_ollama_models("http://127.0.0.1:1").await;
+        assert!(
+            models.is_empty(),
+            "expected empty vec for unreachable endpoint, got {} models",
+            models.len()
         );
     }
 }

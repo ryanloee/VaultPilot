@@ -859,6 +859,140 @@ pub fn set_image_size(
     out
 }
 
+// ── Image Lightbox support (#3469) ───────────────────────────────────────
+
+/// A reference to an image embedded in a markdown note.
+///
+/// Used by the Image Lightbox feature (#3469) to build the list of images
+/// available for fullscreen viewing and keyboard navigation (arrow keys,
+/// pinch-zoom, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageRef {
+    /// The image target — relative path, vault link, or URL.
+    pub url: String,
+    /// Alt text (without the `|WxH` size suffix).
+    pub alt: String,
+    /// Byte offset of the `![` token in the source markdown.
+    pub byte_offset: usize,
+    /// Whether this is an Obsidian wikilink embed (`![[file]]`) rather than
+    /// a standard markdown image (`![alt](url)`).
+    pub is_wikilink: bool,
+}
+
+/// Collect all image references from a markdown body.
+///
+/// Supports both standard markdown images (`![alt](url)`) and Obsidian
+/// wikilink embeds (`![[file.png]]`).  Returns references in source order
+/// (the order they appear in the document).
+///
+/// Non-image content (links, plain text) is ignored.  Image file extensions
+/// recognized for wikilink embeds: `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`,
+/// `.webp`, `.avif`, `.bmp`, `.ico`.
+pub fn collect_image_references(markdown: &str) -> Vec<ImageRef> {
+    let mut refs = Vec::new();
+    let bytes = markdown.as_bytes();
+    let mut i = 0;
+
+    while i < markdown.len() {
+        // Look for `![` at the current position.
+        if i + 1 < bytes.len() && bytes[i] == b'!' && bytes[i + 1] == b'[' {
+            // Check for Obsidian wikilink embed: `![[...]]`
+            if i + 2 < bytes.len() && bytes[i + 2] == b'[' {
+                if let Some(ref_url) = parse_wikilink_embed(&markdown[i..]) {
+                    if is_image_extension(&ref_url) {
+                        refs.push(ImageRef {
+                            url: ref_url,
+                            alt: String::new(),
+                            byte_offset: i,
+                            is_wikilink: true,
+                        });
+                    }
+                    // Skip past the wikilink regardless of whether it's an image.
+                    // Find the closing `]]` and advance.
+                    if let Some(close) = markdown[i..].find("]]") {
+                        i += close + 2;
+                        continue;
+                    }
+                }
+            }
+
+            // Standard markdown image: `![alt](url)`
+            // Find the matching closing ')' for this token.
+            if let Some(img) = parse_image_token_at(markdown, i) {
+                refs.push(ImageRef {
+                    url: img.0,
+                    alt: img.1,
+                    byte_offset: i,
+                    is_wikilink: false,
+                });
+                i += img.2; // advance past the token
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    refs
+}
+
+/// Parse an Obsidian wikilink embed `![[target]]` and return the target string.
+///
+/// Returns `None` if the text doesn't start with `![[` or doesn't contain `]]`.
+fn parse_wikilink_embed(text: &str) -> Option<String> {
+    let rest = text.strip_prefix("![[")?;
+    let end = rest.find("]]")?;
+    let target = &rest[..end];
+    if target.is_empty() {
+        return None;
+    }
+    // Strip any alias or heading: `![[file#heading]]` → `file`, `![[file|alias]]` → `file`
+    let target = target.split(['#', '|']).next().unwrap_or(target);
+    Some(target.trim().to_string())
+}
+
+/// Check whether a filename/path has an image extension.
+fn is_image_extension(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    const EXTS: &[&str] = &[
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".bmp", ".ico",
+    ];
+    EXTS.iter().any(|ext| lower.ends_with(ext))
+}
+
+/// Parse a standard markdown image token `![alt](url)` starting at byte offset `start`.
+///
+/// Returns `(url, alt, token_length)` or `None` if not a valid image token.
+fn parse_image_token_at(markdown: &str, start: usize) -> Option<(String, String, usize)> {
+    let rest = &markdown[start..];
+    // Must start with `![`
+    if !rest.starts_with("![") {
+        return None;
+    }
+    // Find the closing `]`.
+    let bracket_end = rest.find(']')?;
+    let alt_part = &rest[2..bracket_end];
+    // Must be followed by `(`
+    let after_bracket = &rest[bracket_end + 1..];
+    let paren_start = after_bracket.strip_prefix('(').ok_or(()).ok()?;
+    // Find the closing `)`.
+    let paren_end = paren_start.find(')')?;
+    let url = paren_start[..paren_end].trim();
+
+    if url.is_empty() {
+        return None;
+    }
+
+    // Separate alt text from size suffix.
+    let alt = if let Some(bar_pos) = alt_part.find('|') {
+        alt_part[..bar_pos].trim()
+    } else {
+        alt_part.trim()
+    };
+
+    let token_len = bracket_end + 1 + 1 + paren_end + 1; // `]`+`(`+url+`)`
+    Some((url.to_string(), alt.to_string(), token_len))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,5 +1197,119 @@ mod tests {
         assert_eq!(img.alt, "300");
         assert_eq!(img.width, Some(200));
         assert_eq!(img.height, None);
+    }
+
+    // ── collect_image_references tests (#3469) ─────────────────────────────
+
+    #[test]
+    fn test_collect_images_markdown_standard() {
+        let md = "Some text\n![cat photo](assets/cat.png)\nMore text";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].url, "assets/cat.png");
+        assert_eq!(refs[0].alt, "cat photo");
+        assert!(!refs[0].is_wikilink);
+    }
+
+    #[test]
+    fn test_collect_images_wikilink_embed() {
+        let md = "Text\n![[dog.jpg]]\nEnd";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].url, "dog.jpg");
+        assert!(refs[0].is_wikilink);
+    }
+
+    #[test]
+    fn test_collect_images_mixed_syntax() {
+        let md = "![first](a.png)\n![[second.jpg]]\n![third](c.gif)";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0].url, "a.png");
+        assert_eq!(refs[1].url, "second.jpg");
+        assert_eq!(refs[2].url, "c.gif");
+        assert!(!refs[0].is_wikilink);
+        assert!(refs[1].is_wikilink);
+        assert!(!refs[2].is_wikilink);
+    }
+
+    #[test]
+    fn test_collect_images_no_images() {
+        let md = "Just text\n[a link](page.md)\nNo images here";
+        let refs = collect_image_references(md);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_collect_images_ignores_non_image_wikilinks() {
+        let md = "![[note.md]]\n![[image.png]]";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].url, "image.png");
+    }
+
+    #[test]
+    fn test_collect_images_wikilink_with_heading() {
+        let md = "![[page.md#section]]\n![[photo.jpg#center]]";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].url, "photo.jpg");
+    }
+
+    #[test]
+    fn test_collect_images_wikilink_with_alias() {
+        let md = "![[photo.jpg|My Photo]]";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].url, "photo.jpg");
+    }
+
+    #[test]
+    fn test_collect_images_preserves_source_order() {
+        let md = "![z](z.png)\n![a](a.png)\n![m](m.png)";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0].url, "z.png");
+        assert_eq!(refs[1].url, "a.png");
+        assert_eq!(refs[2].url, "m.png");
+    }
+
+    #[test]
+    fn test_collect_images_byte_offsets() {
+        let md = "xx![cat](c.png)";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].byte_offset, 2);
+    }
+
+    #[test]
+    fn test_collect_images_size_suffix_stripped_from_alt() {
+        let md = "![photo|300x200](c.png)";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].alt, "photo");
+        assert_eq!(refs[0].url, "c.png");
+    }
+
+    #[test]
+    fn test_collect_images_all_extensions() {
+        let md = "![](a.png)![](b.jpg)![](c.jpeg)![](d.gif)![](e.svg)![](f.webp)![](g.avif)![](h.bmp)![](i.ico)";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 9);
+    }
+
+    #[test]
+    fn test_collect_images_empty_body() {
+        assert!(collect_image_references("").is_empty());
+        assert!(collect_image_references("no images").is_empty());
+    }
+
+    #[test]
+    fn test_collect_images_obsidian_external_syntax() {
+        // Obsidian 1.13.2 external image syntax: ![200](url) or ![200x150](url)
+        let md = "![200](https://example.com/img.png)";
+        let refs = collect_image_references(md);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].url, "https://example.com/img.png");
     }
 }

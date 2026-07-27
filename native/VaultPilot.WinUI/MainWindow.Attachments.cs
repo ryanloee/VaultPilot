@@ -257,42 +257,39 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowImagePreviewDialogAsync(ChatAttachment attachment, bool removable = false)
     {
-        var image = new Image
+        // #3469: route through the full-screen Image Lightbox (zoom / pan /
+        // keyboard navigation) instead of the previous basic preview dialog.
+        // Build the navigable image list from the current attachments so the
+        // user can arrow-key between all attached images.
+        var imagePaths = _attachments
+            .Where(a => IsSupportedImagePath(a.Path))
+            .Select(a => a.Path)
+            .ToList();
+        if (imagePaths.Count == 0)
         {
-            MaxWidth = 960,
-            MaxHeight = 680,
-            Stretch = Stretch.Uniform
-        };
-
-        try
-        {
-            image.Source = await LoadPreviewBitmapAsync(attachment.Path);
-        }
-        catch
-        {
-            image.Opacity = 0.35;
+            imagePaths.Add(attachment.Path);
         }
 
-        var dialog = new ContentDialog
+        var startIndex = Math.Max(0, imagePaths.IndexOf(attachment.Path));
+        _removeAttachmentByPathAction = removable ? RemoveAttachmentByPathAsync : null;
+
+        await ShowImageLightboxAsync(
+            imagePaths,
+            startIndex,
+            LoadPreviewBitmapAsync,
+            removable: removable);
+    }
+
+    private async Task RemoveAttachmentByPathAsync(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
         {
-            XamlRoot = RootGrid.XamlRoot,
-            Title = "图片预览",
-            Content = new ScrollViewer
-            {
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = image
-            },
-            CloseButtonText = "关闭",
-            SecondaryButtonText = removable ? "移除" : string.Empty
-        };
-        var result = await dialog.ShowAsync();
-        if (removable && result == ContentDialogResult.Secondary)
-        {
-            _attachments.RemoveAll(item => item.Path == attachment.Path);
-            RefreshAttachments();
-            UpdateStatusBar("info", "图片已移除", $"当前还剩 {_attachments.Count} 张图片。");
+            return;
         }
+        _attachments.RemoveAll(item => item.Path == path);
+        RefreshAttachments();
+        UpdateStatusBar("info", "图片已移除", $"当前还剩 {_attachments.Count} 张图片。");
+        await Task.CompletedTask;
     }
 
     private async Task<BitmapImage?> LoadPreviewBitmapAsync(string path)

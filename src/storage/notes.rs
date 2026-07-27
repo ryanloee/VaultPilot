@@ -3469,10 +3469,14 @@ mod tests {
         let (connection, _settings) = open_connection(&ctx).expect("open conn");
 
         // Capture the path-derived id assigned at the old location.
+        // canonicalize: on Windows, `index_note_file_with_connection` stores the
+        // canonical form (e.g. with \\?\ prefix), so queries must also use the
+        // canonical path to match.
+        let old_path_canonical = old_path.canonicalize().expect("canonicalize old path");
         let old_id: String = connection
             .query_row(
                 "SELECT id FROM notes WHERE path = ?1",
-                [&old_path.to_string_lossy().to_string()],
+                [&old_path_canonical.to_string_lossy().to_string()],
                 |row| row.get(0),
             )
             .expect("note row exists before move");
@@ -3498,7 +3502,7 @@ mod tests {
         let ghost_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM notes WHERE path = ?1",
-                [&old_path.to_string_lossy().to_string()],
+                [&old_path_canonical.to_string_lossy().to_string()],
                 |row| row.get(0),
             )
             .unwrap_or(0);
@@ -3522,10 +3526,11 @@ mod tests {
 
         // ── Exactly one notes row exists (the freshly-indexed new-path row),
         //    not two. ──
+        let new_path_canonical = new_path.canonicalize().expect("canonicalize new path");
         let total_rows: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM notes WHERE path = ?1",
-                [&new_path.to_string_lossy().to_string()],
+                [&new_path_canonical.to_string_lossy().to_string()],
                 |row| row.get(0),
             )
             .unwrap_or(0);
@@ -3569,10 +3574,12 @@ mod tests {
 
         let (connection, _settings) = open_connection(&ctx).expect("reopen conn");
         let new_path = vault.join("archive").join("explicit-id.md");
+        // canonicalize: on Windows, the DB stores canonical paths (may include \\?\ prefix)
+        let new_path_canonical = new_path.canonicalize().expect("canonicalize new path");
         let row_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM notes WHERE id = ?1 AND path = ?2",
-                params!["my-explicit-id", &new_path.to_string_lossy().to_string()],
+                params!["my-explicit-id", &new_path_canonical.to_string_lossy().to_string()],
                 |row| row.get(0),
             )
             .unwrap_or(0);

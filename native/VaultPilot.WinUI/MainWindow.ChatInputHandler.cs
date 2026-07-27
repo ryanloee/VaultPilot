@@ -279,7 +279,7 @@ public sealed partial class MainWindow : Window
             await CompressCurrentSessionIfNeededAsync(requestSessionId, prompt, pendingAttachments, cancellationToken);
             var history = GetConversationHistory(requestSessionId);
             await AddTurnAsync("user", userDisplay, attachments: pendingAttachments, sessionId: requestSessionId);
-            RenderCurrentSession();
+            AppendNewTurns(); // #3508: incremental — avoids full O(n) rebuild
             ScrollToLatest();
             await SaveChatStateAsync();
 
@@ -307,7 +307,7 @@ public sealed partial class MainWindow : Window
             _lastAiAnswer = answer;
 
             await AddTurnAsync("assistant", answer?.Answer ?? string.Empty, answer, sessionId: requestSessionId);
-            RenderCurrentSession();
+            AppendNewTurns(); // #3508: incremental — avoids full O(n) rebuild
             ScrollToLatest();
             await SaveChatStateAsync();
         }
@@ -319,7 +319,7 @@ public sealed partial class MainWindow : Window
             RefreshAttachments();
             var message = LocalizeError(error.Message);
             await AddTurnAsync("assistant", message, sessionId: requestSessionId);
-            RenderCurrentSession();
+            AppendNewTurns(); // #3508: incremental — avoids full O(n) rebuild
             ScrollToLatest();
             if (!_isShuttingDown)
             {

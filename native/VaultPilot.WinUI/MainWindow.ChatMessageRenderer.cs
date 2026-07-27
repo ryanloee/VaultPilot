@@ -23,6 +23,8 @@ public sealed partial class MainWindow : Window
         var session = CurrentSession();
         if (session is null || session.Turns.Count == 0)
         {
+            _lastRenderedSessionId = session?.Id;
+            _lastRenderedTurnCount = 0;
             ShowEmptyState();
             RefreshContextStatus();
             return;
@@ -30,35 +32,81 @@ public sealed partial class MainWindow : Window
 
         foreach (var turn in session.Turns)
         {
-            var isScheduledWake = turn.Source == "scheduled_wake";
-            var author = turn.Role == "user"
-                ? (isScheduledWake ? "⏰ 定时唤醒" : "你")
-                : (isScheduledWake && turn.Text.StartsWith("⏰") ? "⏰ 定时唤醒" : "助手");
-            AppendMessage(author, turn.Text, turn.CreatedAt);
-            if (turn.Attachments is { Count: > 0 })
+            RenderSingleTurn(turn);
+        }
+        // #3508: track what we rendered so AppendNewTurns can incremental-update.
+        _lastRenderedSessionId = session.Id;
+        _lastRenderedTurnCount = session.Turns.Count;
+        RefreshContextStatus();
+    }
+
+    /// <summary>
+    /// Incrementally append only newly-added turns to the message panel,
+    /// avoiding the O(n) full rebuild of RenderCurrentSession on every
+    /// message send (#3508). Falls back to full render if the session
+    /// changed, turns were truncated (compression), or the panel was
+    /// showing the empty-state placeholder.
+    /// </summary>
+    private void AppendNewTurns()
+    {
+        var session = CurrentSession();
+        if (session is null || session.Turns.Count == 0)
+            return;
+
+        // Session switched, panel out of sync, or was showing empty-state
+        // placeholder (turnCount==0) — full rebuild needed to clear placeholder.
+        if (_lastRenderedSessionId != session.Id ||
+            _lastRenderedTurnCount > session.Turns.Count ||
+            _lastRenderedTurnCount == 0)
+        {
+            RenderCurrentSession();
+            return;
+        }
+
+        // Append only turns that were added since last render.
+        for (int i = _lastRenderedTurnCount; i < session.Turns.Count; i++)
+        {
+            RenderSingleTurn(session.Turns[i]);
+        }
+        _lastRenderedSessionId = session.Id;
+        _lastRenderedTurnCount = session.Turns.Count;
+        RefreshContextStatus();
+    }
+
+    /// <summary>
+    /// Render a single chat turn (message bubble, attachments, thinking trace,
+    /// citations, saved-note notice) and append it to MessagesPanel.
+    /// Extracted from RenderCurrentSession for incremental rendering (#3508).
+    /// </summary>
+    private void RenderSingleTurn(ChatTurn turn)
+    {
+        var isScheduledWake = turn.Source == "scheduled_wake";
+        var author = turn.Role == "user"
+            ? (isScheduledWake ? "⏰ 定时唤醒" : "你")
+            : (isScheduledWake && turn.Text.StartsWith("⏰") ? "⏰ 定时唤醒" : "助手");
+        AppendMessage(author, turn.Text, turn.CreatedAt);
+        if (turn.Attachments is { Count: > 0 })
+        {
+            AppendAttachmentPreviews(turn.Attachments, turn.Role);
+        }
+
+        if (turn.Role == "assistant")
+        {
+            if (turn.ThinkingTrace is { Steps.Count: > 0 } trace)
             {
-                AppendAttachmentPreviews(turn.Attachments, turn.Role);
+                AppendThinkingTrace(trace);
             }
 
-            if (turn.Role == "assistant")
+            if (turn.Citations is { Count: > 0 } citations)
             {
-                if (turn.ThinkingTrace is { Steps.Count: > 0 } trace)
-                {
-                    AppendThinkingTrace(trace);
-                }
+                AppendCitationCards(citations);
+            }
 
-                if (turn.Citations is { Count: > 0 } citations)
-                {
-                    AppendCitationCards(citations);
-                }
-
-                if (turn.SavedNote is not null)
-                {
-                    AppendMessage("系统", $"已保存笔记：{turn.SavedNote.Title}", turn.CreatedAt);
-                }
+            if (turn.SavedNote is not null)
+            {
+                AppendMessage("系统", $"已保存笔记：{turn.SavedNote.Title}", turn.CreatedAt);
             }
         }
-        RefreshContextStatus();
     }
 
     private void ShowEmptyState()

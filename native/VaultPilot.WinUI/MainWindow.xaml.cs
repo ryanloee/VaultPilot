@@ -998,7 +998,7 @@ public sealed partial class MainWindow : Window
             // Add the wake prompt as a user message with ⏰ marker
             var requestSessionId = _currentSessionId;
             await AddTurnAsync("user", $"⏰ {wakePrompt}", sessionId: requestSessionId, source: "scheduled_wake");
-            RenderCurrentSession();
+            AppendNewTurns(); // #3508: incremental
             ScrollToLatest();
             await SaveChatStateAsync();
 
@@ -1024,7 +1024,7 @@ public sealed partial class MainWindow : Window
 
             // Add the AI response as an assistant message
             await AddTurnAsync("assistant", answer?.Answer ?? "(无回复)", answer, sessionId: requestSessionId, source: "scheduled_wake");
-            RenderCurrentSession();
+            AppendNewTurns(); // #3508: incremental
             ScrollToLatest();
             await SaveChatStateAsync();
 
@@ -1046,7 +1046,7 @@ public sealed partial class MainWindow : Window
                 var msg = $"⏰ 自动唤醒失败 {AutoWakeMaxFailures} 次，已暂停自动唤醒。请修复后重启或重新启用。";
                 var failSessionId = _currentSessionId;
                 await AddTurnAsync("assistant", msg, sessionId: failSessionId, source: "scheduled_wake");
-                RenderCurrentSession();
+                AppendNewTurns(); // #3508: incremental
                 ScrollToLatest();
                 if (!_isShuttingDown)
                 {
@@ -1060,7 +1060,7 @@ public sealed partial class MainWindow : Window
                 // Add error as assistant message so user can see what happened
                 var errorSessionId = _currentSessionId;
                 await AddTurnAsync("assistant", $"⏰ 自动唤醒失败: {LocalizeError(error.Message)}", sessionId: errorSessionId, source: "scheduled_wake");
-                RenderCurrentSession();
+                AppendNewTurns(); // #3508: incremental
                 ScrollToLatest();
                 if (!_isShuttingDown)
                 {

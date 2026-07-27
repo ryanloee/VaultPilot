@@ -39,6 +39,12 @@ public sealed partial class MainWindow : Window
     private GroundedAnswer? _lastAiAnswer;
     private TextBlock? _composerMeasureBlock;
 
+    // #3508: Incremental render tracking — avoids full O(n) panel rebuild on
+    // every message send. RenderCurrentSession updates these after a full
+    // rebuild; AppendNewTurns uses them to append only newly-added turns.
+    private string? _lastRenderedSessionId;
+    private int _lastRenderedTurnCount;
+
     // ── Chat session loading ──
 
     private async Task<ChatState> TryLoadChatStateAsync()

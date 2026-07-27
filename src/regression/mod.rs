@@ -71,4 +71,5 @@ mod issue_3370_inferred_relations;
 mod issue_3375_auto_plan_mode;
 mod issue_3378_table_border_alignment;
 mod issue_3379_formula_precedence;
+mod issue_3478_folder_import;
 mod issue_914_related_notes;

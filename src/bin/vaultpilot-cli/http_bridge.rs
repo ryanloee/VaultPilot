@@ -2809,23 +2809,28 @@ fn openai_error(status: StatusCode, message: &str) -> (StatusCode, Json<OpenAiEr
     )
 }
 
-/// Returns true iff `origin` is a loopback origin (localhost or 127.0.0.1)
-/// over either http or https, on any port. Used by the CORS `allow_origin`
-/// predicate so that HTTPS-fronted local clients (TLS-terminating dev proxy,
-/// Electron/Obsidian frontends served over https) are not rejected.
+/// Returns true iff `origin` is a loopback origin (localhost, 127.0.0.1,
+/// or IPv6 [::1]) over either http or https, on any port. Used by the CORS
+/// `allow_origin` predicate so that HTTPS-fronted local clients (TLS-terminating
+/// dev proxy, Electron/Obsidian frontends served over https) are not rejected.
 ///
 /// The bridge always binds to loopback and is never exposed, so allowing
-/// `https://localhost` / `https://127.0.0.1` introduces no security risk.
+/// `https://localhost` / `https://127.0.0.1` / `https://[::1]` introduces
+/// no security risk.
 pub(crate) fn is_loopback_origin(origin: &axum::http::HeaderValue) -> bool {
     let o = origin.to_str().unwrap_or("");
     let is_loopback_http = o.starts_with("http://localhost:")
         || o.starts_with("http://127.0.0.1:")
+        || o.starts_with("http://[::1]:")
         || o == "http://localhost"
-        || o == "http://127.0.0.1";
+        || o == "http://127.0.0.1"
+        || o == "http://[::1]";
     let is_loopback_https = o.starts_with("https://localhost:")
         || o.starts_with("https://127.0.0.1:")
+        || o.starts_with("https://[::1]:")
         || o == "https://localhost"
-        || o == "https://127.0.0.1";
+        || o == "https://127.0.0.1"
+        || o == "https://[::1]";
     is_loopback_http || is_loopback_https
 }
 
@@ -2883,6 +2888,30 @@ mod tests {
     fn loopback_rejects_garbage_origin() {
         assert!(!is_loopback_origin(&hv("not a valid origin")));
         assert!(!is_loopback_origin(&hv("ftp://localhost:21")));
+    }
+
+    // ── IPv6 loopback [::1] (#3495) ──────────────────────────────
+
+    #[test]
+    fn loopback_allows_http_ipv6_with_port() {
+        assert!(is_loopback_origin(&hv("http://[::1]:3000")));
+        assert!(is_loopback_origin(&hv("http://[::1]:8080")));
+    }
+
+    #[test]
+    fn loopback_allows_https_ipv6_with_port() {
+        assert!(is_loopback_origin(&hv("https://[::1]:8443")));
+        assert!(is_loopback_origin(&hv("https://[::1]:443")));
+    }
+
+    #[test]
+    fn loopback_allows_exact_http_ipv6() {
+        assert!(is_loopback_origin(&hv("http://[::1]")));
+    }
+
+    #[test]
+    fn loopback_allows_exact_https_ipv6() {
+        assert!(is_loopback_origin(&hv("https://[::1]")));
     }
 
     // ── constant_time_eq ──────────────────────────────────────────

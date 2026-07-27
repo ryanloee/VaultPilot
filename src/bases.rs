@@ -55,6 +55,7 @@ use std::collections::HashMap;
 
 use crate::bases_formula::{self, FmlEnv, FmlValue};
 use crate::models::NoteMeta;
+use crate::property_schema::{cmp_typed, typed_equals, PropertySchema, PropertyType};
 use crate::storage::{list_all_notes_with_context, StorageContext};
 
 // ── Filter / Sort / View types ───────────────────────────────────────────
@@ -233,7 +234,11 @@ fn cmp_strings(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// Evaluate a single filter against a note.  Unknown operators → no match.
-fn matches_filter(meta: &NoteMeta, filter: &BaseFilter) -> bool {
+///
+/// When a [`PropertySchema`] declares the field's type (e.g. `number`,
+/// `date`, `checkbox`), comparisons use type-aware semantics so that
+/// `"10" > "2"` holds numerically rather than failing lexicographically (#3501).
+fn matches_filter(meta: &NoteMeta, filter: &BaseFilter, schema: &PropertySchema) -> bool {
     let actual = field_str(meta, &filter.field);
     let value_str = filter
         .value
@@ -249,25 +254,27 @@ fn matches_filter(meta: &NoteMeta, filter: &BaseFilter) -> bool {
         })
         .unwrap_or_default();
 
+    let field_ty = schema.type_of(&filter.field);
+
     match filter.op.as_str() {
-        "equals" | "eq" | "=" => actual == value_str,
-        "not_equals" | "ne" | "!=" => actual != value_str,
+        "equals" | "eq" | "=" => typed_equals(field_ty, &actual, &value_str),
+        "not_equals" | "ne" | "!=" => !typed_equals(field_ty, &actual, &value_str),
         "contains" => {
             array_contains(meta, &filter.field, &value_str) || actual.contains(&value_str)
         }
         "starts_with" => actual.starts_with(&value_str),
         "ends_with" => actual.ends_with(&value_str),
-        "gt" => cmp_strings(&actual, &value_str) == std::cmp::Ordering::Greater,
-        "lt" => cmp_strings(&actual, &value_str) == std::cmp::Ordering::Less,
+        "gt" => cmp_typed(field_ty, &actual, &value_str) == std::cmp::Ordering::Greater,
+        "lt" => cmp_typed(field_ty, &actual, &value_str) == std::cmp::Ordering::Less,
         "gte" | "ge" => {
             matches!(
-                cmp_strings(&actual, &value_str),
+                cmp_typed(field_ty, &actual, &value_str),
                 std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
             )
         }
         "lte" | "le" => {
             matches!(
-                cmp_strings(&actual, &value_str),
+                cmp_typed(field_ty, &actual, &value_str),
                 std::cmp::Ordering::Less | std::cmp::Ordering::Equal
             )
         }
@@ -278,22 +285,30 @@ fn matches_filter(meta: &NoteMeta, filter: &BaseFilter) -> bool {
 }
 
 /// Evaluate all filters (AND logic).  Empty filter list → match all.
-fn matches_all_filters(meta: &NoteMeta, filters: &[BaseFilter]) -> bool {
-    filters.iter().all(|f| matches_filter(meta, f))
+fn matches_all_filters(meta: &NoteMeta, filters: &[BaseFilter], schema: &PropertySchema) -> bool {
+    filters.iter().all(|f| matches_filter(meta, f, schema))
 }
 
 // ── Sort ────────────────────────────────────────────────────────────────
 
 /// Apply the sort directives to a list of notes (stable, multi-key).
-fn sort_notes(notes: &mut [NoteMeta], sort: &[BaseSort]) {
+///
+/// Type-aware: fields declared as `number` or `date` in the schema are
+/// compared using numeric / date semantics (#3501).
+fn sort_notes(notes: &mut [NoteMeta], sort: &[BaseSort], schema: &PropertySchema) {
     // Sort by each key in reverse order so the primary key wins.
     for directive in sort.iter().rev() {
         let field = directive.field.clone();
+        let field_ty = schema.type_of(&field);
         let descending = directive.order.eq_ignore_ascii_case("desc");
         notes.sort_by(|a, b| {
             let va = field_str(a, &field);
             let vb = field_str(b, &field);
-            let ord = cmp_strings(&va, &vb);
+            let ord = if field_ty != PropertyType::Text {
+                cmp_typed(field_ty, &va, &vb)
+            } else {
+                cmp_strings(&va, &vb)
+            };
             if descending {
                 ord.reverse()
             } else {
@@ -355,14 +370,17 @@ pub struct BaseResult {
 /// future WinUI/Mobile integrations.  It loads all notes, applies the filter
 /// chain, sorts, and projects the configured columns.
 pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseResult> {
+    // Load the vault's property type schema (if .vp/property-schema.yml exists).
+    let schema = PropertySchema::load_from_vault(context.vault_dir());
+
     let mut notes = list_all_notes_with_context(context)?;
     let scanned = notes.len();
 
     // Filter
-    notes.retain(|meta| matches_all_filters(meta, &config.filters));
+    notes.retain(|meta| matches_all_filters(meta, &config.filters, &schema));
 
     // Sort
-    sort_notes(&mut notes, &config.sort);
+    sort_notes(&mut notes, &config.sort, &schema);
 
     // Project columns (default: title + id)
     let columns: Vec<BaseColumn> = if config.columns.is_empty() {
@@ -904,14 +922,14 @@ columns:
             op: "equals".into(),
             value: Some(serde_yaml_ng::Value::String("done".into())),
         };
-        assert!(matches_filter(&m, &f));
+        assert!(matches_filter(&m, &f, &PropertySchema::empty()));
 
         let f2 = BaseFilter {
             field: "status".into(),
             op: "equals".into(),
             value: Some(serde_yaml_ng::Value::String("todo".into())),
         };
-        assert!(!matches_filter(&m, &f2));
+        assert!(!matches_filter(&m, &f2, &PropertySchema::empty()));
     }
 
     #[test]
@@ -922,14 +940,14 @@ columns:
             op: "contains".into(),
             value: Some(serde_yaml_ng::Value::String("rust".into())),
         };
-        assert!(matches_filter(&m, &f));
+        assert!(matches_filter(&m, &f, &PropertySchema::empty()));
 
         let f2 = BaseFilter {
             field: "tags".into(),
             op: "contains".into(),
             value: Some(serde_yaml_ng::Value::String("python".into())),
         };
-        assert!(!matches_filter(&m, &f2));
+        assert!(!matches_filter(&m, &f2, &PropertySchema::empty()));
     }
 
     #[test]
@@ -940,10 +958,10 @@ columns:
             op: "is_empty".into(),
             value: None,
         };
-        assert!(matches_filter(&m, &f));
+        assert!(matches_filter(&m, &f, &PropertySchema::empty()));
 
         let m2 = meta("n2", "Note", "active", &[], "2026-01-01");
-        assert!(!matches_filter(&m2, &f));
+        assert!(!matches_filter(&m2, &f, &PropertySchema::empty()));
     }
 
     #[test]
@@ -954,7 +972,7 @@ columns:
             op: "regex".into(),
             value: Some(serde_yaml_ng::Value::String(".*".into())),
         };
-        assert!(!matches_filter(&m, &f));
+        assert!(!matches_filter(&m, &f, &PropertySchema::empty()));
     }
 
     #[test]
@@ -970,6 +988,7 @@ columns:
                 field: "updated_at".into(),
                 order: "desc".into(),
             }],
+            &PropertySchema::empty(),
         );
         assert_eq!(notes[0].id, "n2"); // 2026-03
         assert_eq!(notes[1].id, "n3"); // 2026-02
@@ -996,6 +1015,7 @@ columns:
                     order: "asc".into(),
                 },
             ],
+            &PropertySchema::empty(),
         );
         assert_eq!(notes[0].id, "n3"); // done first
         assert_eq!(notes[1].id, "n2"); // todo, 01-01
@@ -1017,7 +1037,7 @@ columns:
                 value: Some(serde_yaml_ng::Value::String("rust".into())),
             },
         ];
-        assert!(matches_all_filters(&m, &filters));
+        assert!(matches_all_filters(&m, &filters, &PropertySchema::empty()));
 
         // Failing one filter → false
         let filters2 = vec![
@@ -1032,7 +1052,11 @@ columns:
                 value: Some(serde_yaml_ng::Value::String("rust".into())),
             },
         ];
-        assert!(!matches_all_filters(&m, &filters2));
+        assert!(!matches_all_filters(
+            &m,
+            &filters2,
+            &PropertySchema::empty()
+        ));
     }
 
     #[test]
@@ -1312,5 +1336,140 @@ columns:
         let result = compute_formula_values(&formulas, &meta);
         assert_eq!(result.get("a").unwrap(), "");
         assert_eq!(result.get("b").unwrap(), "");
+    }
+
+    // ── Type-aware filter / sort integration (#3501) ──────────────────────
+
+    fn meta_with_summary(id: &str, title: &str, status: &str, summary: &str) -> NoteMeta {
+        NoteMeta {
+            id: id.into(),
+            title: title.into(),
+            status: status.into(),
+            summary: summary.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_filter_gt_numeric_with_schema() {
+        // Without a schema, "gt" on summary does lexicographic comparison:
+        //   "10" > "2" → false (lexicographic "10" < "2")
+        // With a schema declaring summary as Number:
+        //   10 > 2 → true (numeric)
+        let m = meta_with_summary("n1", "Note", "active", "10");
+        let f = BaseFilter {
+            field: "summary".into(),
+            op: "gt".into(),
+            value: Some(serde_yaml_ng::Value::String("2".into())),
+        };
+
+        // Without schema: lexicographic → "10" > "2" is false
+        assert!(!matches_filter(&m, &f, &PropertySchema::empty()));
+
+        // With schema: numeric → 10 > 2 is true
+        let schema = PropertySchema::empty().with("summary", PropertyType::Number);
+        assert!(matches_filter(&m, &f, &schema));
+    }
+
+    #[test]
+    fn test_sort_numeric_with_schema() {
+        let mut notes = vec![
+            meta_with_summary("n1", "A", "x", "2"),
+            meta_with_summary("n2", "B", "x", "10"),
+            meta_with_summary("n3", "C", "x", "1"),
+        ];
+
+        // Without schema: lexicographic sort → "1", "10", "2"
+        sort_notes(
+            &mut notes,
+            &[BaseSort {
+                field: "summary".into(),
+                order: "asc".into(),
+            }],
+            &PropertySchema::empty(),
+        );
+        assert_eq!(notes[0].id, "n3"); // "1"
+        assert_eq!(notes[1].id, "n2"); // "10" (lexicographically before "2")
+        assert_eq!(notes[2].id, "n1"); // "2"
+
+        // With schema: numeric sort → 1, 2, 10
+        let mut notes2 = vec![
+            meta_with_summary("n1", "A", "x", "2"),
+            meta_with_summary("n2", "B", "x", "10"),
+            meta_with_summary("n3", "C", "x", "1"),
+        ];
+        let schema = PropertySchema::empty().with("summary", PropertyType::Number);
+        sort_notes(
+            &mut notes2,
+            &[BaseSort {
+                field: "summary".into(),
+                order: "asc".into(),
+            }],
+            &schema,
+        );
+        assert_eq!(notes2[0].id, "n3"); // 1
+        assert_eq!(notes2[1].id, "n1"); // 2
+        assert_eq!(notes2[2].id, "n2"); // 10
+    }
+
+    #[test]
+    fn test_filter_date_gt_with_builtin_type() {
+        // updated_at is Date by default (builtin_type), so date comparison kicks in
+        // even without a schema file.
+        let m = meta("n1", "Note", "x", &[], "2026-07-27");
+        let f = BaseFilter {
+            field: "updated_at".into(),
+            op: "gt".into(),
+            value: Some(serde_yaml_ng::Value::String("2026-07-26".into())),
+        };
+
+        // With empty schema, updated_at is still Date by builtin default
+        assert!(matches_filter(&m, &f, &PropertySchema::empty()));
+    }
+
+    #[test]
+    fn test_sort_date_with_unpadded_dates() {
+        // Before #3501: "2026-7-3" sorted lexicographically AFTER "2026-07-20"
+        // After #3501: date normalization fixes this
+        let mut notes = vec![
+            meta("n1", "A", "x", &[], "2026-7-3"),
+            meta("n2", "B", "x", &[], "2026-07-20"),
+        ];
+
+        // updated_at is Date by builtin default → normalized comparison
+        sort_notes(
+            &mut notes,
+            &[BaseSort {
+                field: "updated_at".into(),
+                order: "asc".into(),
+            }],
+            &PropertySchema::empty(),
+        );
+
+        // 2026-07-03 should come before 2026-07-20
+        assert_eq!(notes[0].id, "n1"); // 2026-07-03
+        assert_eq!(notes[1].id, "n2"); // 2026-07-20
+    }
+
+    #[test]
+    fn test_filter_equals_checkbox_with_schema() {
+        let m_true = meta_with_summary("n1", "A", "x", "true");
+        let m_yes = meta_with_summary("n2", "B", "x", "yes");
+
+        let f = BaseFilter {
+            field: "summary".into(),
+            op: "equals".into(),
+            value: Some(serde_yaml_ng::Value::String("true".into())),
+        };
+
+        let schema = PropertySchema::empty().with("summary", PropertyType::Checkbox);
+
+        // "true" equals "true"
+        assert!(matches_filter(&m_true, &f, &schema));
+        // "yes" equals "true" (both are truthy)
+        assert!(matches_filter(&m_yes, &f, &schema));
+
+        // Without schema (Text type): "yes" != "true"
+        assert!(!matches_filter(&m_yes, &f, &PropertySchema::empty()));
     }
 }

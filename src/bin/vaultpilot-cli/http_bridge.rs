@@ -112,6 +112,8 @@ pub(super) async fn run_http_bridge(
         .route("/api/settings/definitions", get(http_settings_definitions))
         // Vault file serving (#1767) — serve PDF/images from vault directory
         .route("/api/vault/files/{*path}", get(http_serve_vault_file))
+        // Thumbnail serving (#3371) — auto-generated image previews for Asset Picker
+        .route("/api/vault/thumbnails/{*path}", get(http_serve_thumbnail))
         // #790: Rate limiter placed before body limit and timeout so
         // rate-limited requests are rejected immediately without reading
         // the body or consuming timeout budget. In Axum .layer() ordering,
@@ -2186,6 +2188,59 @@ async fn http_serve_vault_file(
         .map_err(|e| {
             tracing::warn!("http_serve_vault_file: failed to build response: {e}");
             openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to serve file")
+        })
+}
+
+/// GET /api/vault/thumbnails/{*path} — serve or generate a cached thumbnail
+/// for a vault image (#3371).
+async fn http_serve_thumbnail(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(rel): AxumPath<String>,
+) -> Result<Response, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    let settings = load_settings_async(&state.context).await.map_err(|e| {
+        tracing::warn!("http_serve_thumbnail: failed to load settings: {e}");
+        openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to load settings")
+    })?;
+
+    let vault_root = PathBuf::from(&settings.vault_dir);
+    let Some(real) = resolve_vault_file_path(&vault_root, &rel) else {
+        return Err(openai_error(StatusCode::NOT_FOUND, "File not found"));
+    };
+
+    let thumb_path =
+        match vaultpilot_lib::thumbnail::get_or_create_thumbnail(&vault_root, &real, None) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "http_serve_thumbnail: failed to generate thumbnail for {real:?}: {e}"
+                );
+                return Err(openai_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to generate thumbnail",
+                ));
+            }
+        };
+
+    let bytes = tokio::fs::read(&thumb_path).await.map_err(|e| {
+        tracing::warn!("http_serve_thumbnail: failed to read thumbnail {thumb_path:?}: {e}");
+        openai_error(StatusCode::NOT_FOUND, "Thumbnail not found")
+    })?;
+
+    let body = Body::from(bytes);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CACHE_CONTROL, "public, max-age=86400") // 24h cache
+        .body(body)
+        .map_err(|e| {
+            tracing::warn!("http_serve_thumbnail: failed to build response: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to serve thumbnail",
+            )
         })
 }
 

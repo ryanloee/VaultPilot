@@ -21,6 +21,7 @@
 //! file path and content-addressed by a SHA-256 hash of the raw bytes.  See
 //! [`parse_and_cache`] for the cache-hit semantics.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -484,6 +485,44 @@ CREATE INDEX IF NOT EXISTS idx_parsed_files_content_hash ON parsed_files(content
 /// callers (and tests) need not wire it into the central schema bootstrap.
 pub(crate) fn ensure_parsing_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(FILE_PARSING_SCHEMA_DDL)?;
+    // #3527: For databases created before v0.6.29 (when the `needs_native_parser`
+    // and `byte_size` columns were added in #3523), `CREATE TABLE IF NOT EXISTS`
+    // above is a no-op and the two new columns are never added. Mirror the
+    // `ensure_trigger_rule_columns` pattern in `src/storage/pool.rs` (#3440):
+    // probe `PRAGMA table_info` and conditionally `ALTER TABLE ... ADD COLUMN`
+    // so legacy DBs end up with the columns too.
+    ensure_parsed_files_columns(conn)?;
+    Ok(())
+}
+
+/// Conditionally add columns to a legacy `parsed_files` table.
+///
+/// Idempotent: checks `PRAGMA table_info(parsed_files)` before each
+/// `ALTER TABLE ... ADD COLUMN`, so fresh databases (which already have the
+/// columns via [`FILE_PARSING_SCHEMA_DDL`]) are untouched. Mirrors the
+/// established migration pattern (`ensure_trigger_rule_columns`,
+/// `ensure_attachment_columns`) in `src/storage/pool.rs`.
+fn ensure_parsed_files_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(parsed_files)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    drop(stmt);
+
+    for (column, ddl) in [
+        (
+            "needs_native_parser",
+            "ALTER TABLE parsed_files ADD COLUMN needs_native_parser INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "byte_size",
+            "ALTER TABLE parsed_files ADD COLUMN byte_size INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !columns.contains(column) {
+            conn.execute_batch(ddl)?;
+        }
+    }
     Ok(())
 }
 
@@ -1028,6 +1067,79 @@ fn parse_image_token_at(markdown: &str, start: usize) -> Option<(String, String,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_parsing_tables_adds_columns_to_legacy_db() {
+        // #3527: Simulate a database created before v0.6.29 — the `parsed_files`
+        // table exists but WITHOUT the `needs_native_parser` / `byte_size`
+        // columns that #3523 introduced. `CREATE TABLE IF NOT EXISTS` is a
+        // no-op here, so the columns would never be added without migration.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+        // Legacy 7-column schema (pre-v0.6.29).
+        conn.execute_batch(
+            "CREATE TABLE parsed_files (
+                path TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                extension TEXT,
+                text TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                parser_used TEXT NOT NULL,
+                parsed_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        // Sanity: legacy schema lacks the two new columns.
+        let legacy_cols = column_names(&conn);
+        assert!(
+            !legacy_cols.contains(&"needs_native_parser".to_string()),
+            "legacy schema should not have needs_native_parser"
+        );
+        assert!(
+            !legacy_cols.contains(&"byte_size".to_string()),
+            "legacy schema should not have byte_size"
+        );
+
+        // Run the migration (as ensure_parsing_tables would).
+        ensure_parsed_files_columns(&conn).unwrap();
+
+        let cols = column_names(&conn);
+        assert!(
+            cols.contains(&"needs_native_parser".to_string()),
+            "needs_native_parser should be present after migration"
+        );
+        assert!(
+            cols.contains(&"byte_size".to_string()),
+            "byte_size should be present after migration"
+        );
+
+        // Idempotency: running again must not error.
+        ensure_parsed_files_columns(&conn).unwrap();
+
+        // The full `ensure_parsing_tables` entrypoint must also be idempotent on a
+        // legacy DB.
+        ensure_parsing_tables(&conn).unwrap();
+    }
+
+    #[test]
+    fn ensure_parsing_tables_idempotent_on_fresh_db() {
+        // Fresh DB: CREATE TABLE adds all columns; migration must be a no-op.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        ensure_parsing_tables(&conn).unwrap();
+        ensure_parsing_tables(&conn).unwrap(); // idempotent
+
+        let cols = column_names(&conn);
+        assert!(cols.contains(&"needs_native_parser".to_string()));
+        assert!(cols.contains(&"byte_size".to_string()));
+    }
+
+    fn column_names(conn: &rusqlite::Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("PRAGMA table_info(parsed_files)").unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
 
     #[test]
     fn content_hash_is_stable_and_hex() {

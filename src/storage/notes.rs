@@ -3579,7 +3579,10 @@ mod tests {
         let row_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM notes WHERE id = ?1 AND path = ?2",
-                params!["my-explicit-id", &new_path_canonical.to_string_lossy().to_string()],
+                params![
+                    "my-explicit-id",
+                    &new_path_canonical.to_string_lossy().to_string()
+                ],
                 |row| row.get(0),
             )
             .unwrap_or(0);

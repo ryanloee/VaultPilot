@@ -470,7 +470,9 @@ CREATE TABLE IF NOT EXISTS parsed_files (
     text TEXT NOT NULL,
     metadata_json TEXT NOT NULL,
     parser_used TEXT NOT NULL,
-    parsed_at TEXT NOT NULL
+    parsed_at TEXT NOT NULL,
+    needs_native_parser INTEGER NOT NULL DEFAULT 0,
+    byte_size INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_parsed_files_content_hash ON parsed_files(content_hash);
@@ -506,9 +508,9 @@ pub fn parse_and_cache(context: &StorageContext, path: &Path) -> Result<ParsedFi
     let key = path_string(path);
 
     // Cache-hit probe: reuse cached text when the content hash is unchanged.
-    let cached: Option<(String, String, String, String)> = conn
+    let cached: Option<(String, String, String, String, bool)> = conn
         .query_row(
-            "SELECT content_hash, text, metadata_json, parser_used
+            "SELECT content_hash, text, metadata_json, parser_used, needs_native_parser
              FROM parsed_files WHERE path = ?1",
             rusqlite::params![key],
             |row| {
@@ -517,11 +519,19 @@ pub fn parse_and_cache(context: &StorageContext, path: &Path) -> Result<ParsedFi
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, bool>(4)?,
                 ))
             },
         )
         .optional()?;
-    if let Some((cached_hash, cached_text, cached_metadata_json, cached_parser_used)) = cached {
+    if let Some((
+        cached_hash,
+        cached_text,
+        cached_metadata_json,
+        cached_parser_used,
+        cached_needs_native,
+    )) = cached
+    {
         if cached_hash == hash {
             let ext = extension_of(path);
             let metadata = serde_json::from_str(&cached_metadata_json)
@@ -534,7 +544,7 @@ pub fn parse_and_cache(context: &StorageContext, path: &Path) -> Result<ParsedFi
                 byte_size: bytes.len() as u64,
                 metadata,
                 parser_used: cached_parser_used,
-                needs_native_parser: is_native_format(&ext),
+                needs_native_parser: cached_needs_native,
             });
         }
     }
@@ -548,15 +558,18 @@ pub fn parse_and_cache(context: &StorageContext, path: &Path) -> Result<ParsedFi
         .to_string();
     conn.execute(
         "INSERT INTO parsed_files
-            (path, content_hash, extension, text, metadata_json, parser_used, parsed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            (path, content_hash, extension, text, metadata_json, parser_used, parsed_at,
+             needs_native_parser, byte_size)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(path) DO UPDATE SET
-            content_hash = excluded.content_hash,
-            extension    = excluded.extension,
-            text         = excluded.text,
-            metadata_json= excluded.metadata_json,
-            parser_used  = excluded.parser_used,
-            parsed_at    = excluded.parsed_at",
+            content_hash          = excluded.content_hash,
+            extension             = excluded.extension,
+            text                  = excluded.text,
+            metadata_json         = excluded.metadata_json,
+            parser_used           = excluded.parser_used,
+            parsed_at             = excluded.parsed_at,
+            needs_native_parser   = excluded.needs_native_parser,
+            byte_size             = excluded.byte_size",
         rusqlite::params![
             key,
             hash,
@@ -565,6 +578,8 @@ pub fn parse_and_cache(context: &StorageContext, path: &Path) -> Result<ParsedFi
             metadata_json,
             parsed.parser_used,
             now,
+            parsed.needs_native_parser,
+            parsed.byte_size,
         ],
     )?;
     Ok(parsed)
@@ -573,17 +588,18 @@ pub fn parse_and_cache(context: &StorageContext, path: &Path) -> Result<ParsedFi
 /// Return a previously cached parse for `path` without parsing.
 ///
 /// Reads only from the `parsed_files` cache table; returns `None` if the path
-/// has not been cached.  `byte_size` is recovered from the file's current
-/// metadata (a cheap `stat`) since the cache table does not store it.
+/// has not been cached.  `byte_size` and `needs_native_parser` come from the
+/// cache — they are stored at parse time and may differ from the current file
+/// metadata if the file changed without being re-parsed.
 #[instrument(skip(context))]
 pub fn cached_parse(context: &StorageContext, path: &Path) -> Result<Option<ParsedFile>> {
     let conn = db_conn(context)?;
     ensure_parsing_tables(&conn)?;
     let key = path_string(path);
 
-    let row: Option<(String, String, String, String)> = conn
+    let row: Option<(String, String, String, String, bool, u64)> = conn
         .query_row(
-            "SELECT extension, text, metadata_json, parser_used
+            "SELECT extension, text, metadata_json, parser_used, needs_native_parser, byte_size
              FROM parsed_files WHERE path = ?1",
             rusqlite::params![key],
             |row| {
@@ -592,17 +608,16 @@ pub fn cached_parse(context: &StorageContext, path: &Path) -> Result<Option<Pars
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, bool>(4)?,
+                    row.get::<_, u64>(5)?,
                 ))
             },
         )
         .optional()?;
     match row {
-        Some((ext, text, metadata_json, parser_used)) => {
+        Some((ext, text, metadata_json, parser_used, needs_native, byte_size)) => {
             let metadata =
                 serde_json::from_str(&metadata_json).unwrap_or_else(|_| serde_json::json!({}));
-            let byte_size = std::fs::metadata(path)
-                .map(|m| m.len())
-                .unwrap_or(text.len() as u64);
             Ok(Some(ParsedFile {
                 path: key,
                 extension: ext.clone(),
@@ -611,7 +626,7 @@ pub fn cached_parse(context: &StorageContext, path: &Path) -> Result<Option<Pars
                 byte_size,
                 metadata,
                 parser_used,
-                needs_native_parser: is_native_format(&ext),
+                needs_native_parser: needs_native,
             }))
         }
         None => Ok(None),

@@ -67,7 +67,7 @@ public sealed partial class AiCommandPalette : UserControl
         _lastResult = null;
         FooterHint.Text = "↑↓ 选择 · Enter 执行 · Esc 关闭";
 
-        FocusSearchBox();
+        try { FocusSearchBox(); } catch { /* Focus failure is non-fatal */ }
 
         if (Backend is null) return;
 
@@ -160,6 +160,8 @@ public sealed partial class AiCommandPalette : UserControl
             if (actionType == AiActionType.Translate && string.IsNullOrWhiteSpace(request.TargetLanguage))
             {
                 request.TargetLanguage = await ShowLanguagePickerAsync();
+                // If Dismiss() cancelled us while the dialog was open, stop restoring UI
+                if (ct.IsCancellationRequested) return;
                 if (request.TargetLanguage is null)
                 {
                     // User cancelled

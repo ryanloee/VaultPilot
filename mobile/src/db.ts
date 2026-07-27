@@ -345,8 +345,24 @@ export async function createNote(
   await db.runAsync(
     'INSERT INTO notes (id, title, content, is_template, folder, updated_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime(\'%s\',\'now\'))) ON CONFLICT(id) DO UPDATE SET title = excluded.title, content = excluded.content, is_template = excluded.is_template, folder = excluded.folder, updated_at = COALESCE(excluded.updated_at, strftime(\'%s\',\'now\'))',
     [noteId, title, content, isTemplate, folder, updatedAt]);
-  invalidateNoteTitleCache();
-  if (!options?.skipQueue) await queuePendingSync(noteId);
+  // Post-INSERT side-effects are best-effort: the note row is already committed,
+  // so cache invalidation or sync-queue write failures must never turn a
+  // successful save into a false "保存失败" for the caller (#3502).
+  try {
+    invalidateNoteTitleCache();
+  } catch (cacheErr) {
+    console.warn('[db] createNote: invalidateNoteTitleCache failed (non-fatal):', cacheErr);
+  }
+  if (!options?.skipQueue) {
+    try {
+      await queuePendingSync(noteId);
+    } catch (queueErr) {
+      // queuePendingSync is for offline cloud-sync push and has its own
+      // retry_count mechanism; a missed queue entry just delays sync, it does
+      // NOT mean the local note was not saved.
+      console.warn('[db] createNote: queuePendingSync failed (note still saved):', queueErr);
+    }
+  }
   return noteId;
 }
 
@@ -371,9 +387,22 @@ export async function updateNote(
     'UPDATE notes SET title = ?, content = ?, is_template = COALESCE(?, is_template), folder = ?, updated_at = COALESCE(?, strftime(\'%s\',\'now\')) WHERE id = ?',
     [title, content, isTemplate, folder, updatedAt, id]
   );
-  invalidateNoteTitleCache();
+  // Post-UPDATE side-effects are best-effort: the note row is already written,
+  // so cache invalidation or sync-queue failures must never turn a successful
+  // edit into a false "保存失败" (#3502). Mirrors the createNote fix.
+  try {
+    invalidateNoteTitleCache();
+  } catch (cacheErr) {
+    console.warn('[db] updateNote: invalidateNoteTitleCache failed (non-fatal):', cacheErr);
+  }
   // Queue note for offline sync push (#2372)
-  if (!options?.skipQueue) await queuePendingSync(id);
+  if (!options?.skipQueue) {
+    try {
+      await queuePendingSync(id);
+    } catch (queueErr) {
+      console.warn('[db] updateNote: queuePendingSync failed (note still saved):', queueErr);
+    }
+  }
 }
 
 export async function deleteNote(id: string): Promise<void> {

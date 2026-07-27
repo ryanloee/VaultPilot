@@ -2543,6 +2543,45 @@ pub async fn load_recent_notes_for_overview_async(
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }
 
+/// Find an existing note by exact title and tag match.
+///
+/// Returns `(id, created_at)` of the most recently updated matching note, or `None`
+/// if no note matches. Used for idempotency checks — e.g., ensuring a daily
+/// briefing is upserted rather than duplicated on repeated runs (#3499).
+///
+/// The `tags` column stores a JSON array (e.g. `["daily-briefing","auto-generated"]`),
+/// so the tag is matched with a `LIKE` pattern `"tag"`.
+pub fn find_note_by_title_and_tag(
+    context: &StorageContext,
+    title: &str,
+    tag: &str,
+) -> Result<Option<(String, String)>> {
+    let (connection, _) = open_connection(context)?;
+    let tag_pattern = format!("%\"{}\"%", tag);
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT id, created_at FROM notes \
+             WHERE title = ?1 AND tags LIKE ?2 \
+             ORDER BY updated_at DESC LIMIT 1",
+            params![title, tag_pattern],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// Async wrapper for [`find_note_by_title_and_tag`].
+pub async fn find_note_by_title_and_tag_async(
+    ctx: &StorageContext,
+    title: String,
+    tag: String,
+) -> Result<Option<(String, String)>> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || find_note_by_title_and_tag(&ctx, &title, &tag))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
 // ────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────

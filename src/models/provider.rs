@@ -524,6 +524,38 @@ pub fn models_for_provider(provider: ProviderType) -> Vec<KnownModel> {
         .collect()
 }
 
+// ── Ollama auto-detection support (#3489) ──
+
+/// A single model entry from the Ollama `/api/tags` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaModel {
+    pub name: String,
+    pub modified_at: String,
+    pub size: u64,
+}
+
+/// The top-level response from Ollama's `/api/tags` endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaTagsResponse {
+    pub models: Vec<OllamaModel>,
+}
+
+/// Return a default `ProviderConfig` pre-configured for a local Ollama instance.
+///
+/// Uses the standard localhost URL (`http://localhost:11434`) and a commonly
+/// available model (`llama3.2:latest`). The user can change the model after
+/// the connection is established. See #3489.
+pub fn default_ollama_config() -> ProviderConfig {
+    ProviderConfig {
+        name: "Local Ollama".into(),
+        base_url: "http://localhost:11434".into(),
+        model: "llama3.2:latest".into(),
+        request_timeout_ms: 120_000,
+        provider_type: Some(ProviderType::Ollama),
+        ..ProviderConfig::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1071,5 +1103,79 @@ mod tests {
         let ollama = models_for_provider(ProviderType::Ollama);
         assert_eq!(ollama.len(), 6, "expected 6 local Ollama presets");
         assert!(ollama.iter().all(|m| m.provider == ProviderType::Ollama));
+    }
+
+    // ── default_ollama_config (#3489) ──
+
+    #[test]
+    fn default_ollama_config_sets_correct_provider_type() {
+        let cfg = default_ollama_config();
+        assert_eq!(
+            cfg.effective_provider_type(),
+            ProviderType::Ollama,
+            "default Ollama config must have Ollama provider type"
+        );
+    }
+
+    #[test]
+    fn default_ollama_config_has_no_api_key() {
+        let cfg = default_ollama_config();
+        assert!(
+            cfg.api_key.is_empty(),
+            "Ollama config must not require an API key"
+        );
+    }
+
+    #[test]
+    fn default_ollama_config_uses_localhost_url() {
+        let cfg = default_ollama_config();
+        assert!(
+            cfg.base_url.contains("localhost:11434"),
+            "expected localhost:11434, got: {}",
+            cfg.base_url
+        );
+    }
+
+    #[test]
+    fn default_ollama_config_allows_local_endpoint() {
+        let cfg = default_ollama_config();
+        assert!(
+            cfg.effective_provider_type().allows_local_endpoint(),
+            "Ollama must allow local endpoints"
+        );
+    }
+
+    // ── Ollama API response deserialization (#3489) ──
+
+    #[test]
+    fn ollama_tags_response_deserializes_correctly() {
+        let json = r#"{
+            "models": [
+                {
+                    "name": "llama3.2:latest",
+                    "modified_at": "2026-07-01T12:00:00Z",
+                    "size": 4718592000
+                },
+                {
+                    "name": "mistral:7b",
+                    "modified_at": "2026-06-15T08:30:00Z",
+                    "size": 4294967296
+                }
+            ]
+        }"#;
+        let resp: OllamaTagsResponse =
+            serde_json::from_str(json).expect("valid Ollama /api/tags response must deserialize");
+        assert_eq!(resp.models.len(), 2);
+        assert_eq!(resp.models[0].name, "llama3.2:latest");
+        assert_eq!(resp.models[0].size, 4_718_592_000);
+        assert_eq!(resp.models[1].name, "mistral:7b");
+    }
+
+    #[test]
+    fn ollama_tags_response_empty_models() {
+        let json = r#"{"models": []}"#;
+        let resp: OllamaTagsResponse =
+            serde_json::from_str(json).expect("empty models list must deserialize");
+        assert!(resp.models.is_empty());
     }
 }

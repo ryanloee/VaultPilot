@@ -182,9 +182,13 @@ public sealed partial class MainWindow : Window
             text = $"请将刚才讨论的内容整理记录到知识库";
         }
 
-        var prompt = $"请将以下内容记录到知识库：{text}";
+        // If user has attachments but no text, use attachment-aware fallback
+        // (matching SendCurrentMessageAsync behavior for consistency).
+        var prompt = string.IsNullOrWhiteSpace(text)
+            ? "请结合我发送的图片理解并记录到知识库。"
+            : $"请将以下内容记录到知识库：{text}";
         var userDisplay = string.IsNullOrWhiteSpace(ComposerBox.Text)
-            ? "（记录了当前对话内容）"
+            ? (pendingAttachments.Length > 0 ? "（发送了一张图片并记录）" : "（记录了当前对话内容）")
             : ComposerBox.Text.Trim();
 
         await ExecuteAiRequestAsync(

@@ -909,9 +909,9 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
          FROM messages m
          INNER JOIN messages_fts fts ON m.rowid = fts.rowid
          INNER JOIN sessions s ON m.session_id = s.id
-         WHERE fts MATCH ?
+         WHERE fts MATCH ? OR s.title LIKE ? ESCAPE '\\'
          ORDER BY m.created_at DESC LIMIT ?`,
-        [ftsQuery, limit]
+        [ftsQuery, `%${escaped}%`, limit]
       );
     } catch (e) {
       console.warn('[DB] FTS5 globalSearch sessions MATCH failed, falling back to LIKE:', e);

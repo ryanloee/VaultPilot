@@ -43,6 +43,7 @@ pub mod skills;
 pub mod storage;
 pub mod template;
 pub mod template_store;
+pub mod thumbnail;
 pub mod utils;
 pub mod vault_query;
 pub mod web_publish;

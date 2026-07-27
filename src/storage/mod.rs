@@ -58,6 +58,8 @@ pub use notes::{
     extract_wikilinks,
     find_backlinks_async,
     find_backlinks_with_context,
+    find_note_by_title_and_tag,
+    find_note_by_title_and_tag_async,
     find_related_notes_async,
     find_related_notes_for_text_with_context,
     find_related_notes_with_context,

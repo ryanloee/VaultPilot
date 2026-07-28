@@ -265,9 +265,13 @@ public sealed partial class MainWindow : Window
             .Where(a => IsSupportedImagePath(a.Path))
             .Select(a => a.Path)
             .ToList();
-        if (imagePaths.Count == 0)
+
+        // #3531: If the clicked attachment is NOT from the current input queue
+        // (e.g. a chat history image), show it standalone rather than wrongly
+        // showing the input attachments.
+        if (!imagePaths.Contains(attachment.Path))
         {
-            imagePaths.Add(attachment.Path);
+            imagePaths = new List<string> { attachment.Path };
         }
 
         var startIndex = Math.Max(0, imagePaths.IndexOf(attachment.Path));

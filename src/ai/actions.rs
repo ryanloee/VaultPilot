@@ -57,6 +57,10 @@ pub enum AiActionType {
     /// Export note content to a structured file format (XLSX/DOCX/HTML/PPTX).
     /// The `instruction` field carries the target format (#3276).
     ExportDocument,
+    /// Generate an interactive HTML/JS widget block that can be embedded in a note
+    /// (ROI calculator, quiz, org chart, etc.). The AI produces self-contained
+    /// HTML with inline JS/CSS, sandboxed for safe rendering (#3042).
+    GenerateWidget,
 }
 
 impl AiActionType {
@@ -82,6 +86,7 @@ impl AiActionType {
             Self::SuggestLinks => "智能推荐链接",
             Self::SynthesizeNotes => "笔记综合",
             Self::ExportDocument => "导出文档",
+            Self::GenerateWidget => "交互组件",
         }
     }
 
@@ -107,6 +112,7 @@ impl AiActionType {
             Self::SuggestLinks => "suggestLinks",
             Self::SynthesizeNotes => "synthesizeNotes",
             Self::ExportDocument => "exportDocument",
+            Self::GenerateWidget => "generateWidget",
         }
     }
 
@@ -136,6 +142,7 @@ impl AiActionType {
                 Some(Self::SynthesizeNotes)
             }
             "exportDocument" | "export_document" | "export" => Some(Self::ExportDocument),
+            "generateWidget" | "generate_widget" | "widget" => Some(Self::GenerateWidget),
             _ => None,
         }
     }
@@ -162,6 +169,7 @@ impl AiActionType {
             Self::SuggestLinks,
             Self::SynthesizeNotes,
             Self::ExportDocument,
+            Self::GenerateWidget,
         ]
     }
 }
@@ -413,6 +421,25 @@ pub(crate) fn system_prompt(action: AiActionType) -> String {
              Output only the restructured content in Markdown, no extra commentary."
                 .to_string()
         }
+        AiActionType::GenerateWidget => {
+            "You are an interactive widget generator. Your task is to create a \
+             self-contained interactive HTML widget based on the user's description. \
+             Guidelines:\n\
+             - Output ONLY the raw HTML code inside a ```html code block.\n\
+             - Include all CSS and JavaScript inline within a single <!DOCTYPE html> document.\n\
+             - NO external dependencies (no CDN links, no external fonts, no external libraries).\n\
+             - Use vanilla JS only. For complex functionality you may inline a minimal library \
+               via a <script> block if it is <= 5 KB after minification.\n\
+             - The widget must be self-contained and work without a network connection.\n\
+             - Follow accessibility best practices (aria labels, keyboard navigation, focus management).\n\
+             - Use responsive design so it works on both desktop and mobile viewports.\n\
+             - The widget must be safe to embed: no network requests (fetch/XHR/WebSocket), \
+               no access to parent page DOM, no localStorage/cookies, no navigation.\n\
+             - Input fields must have appropriate types and validation.\n\
+             - Provide clear visual feedback on user interactions (hover, focus, click, error states).\
+             Output only the code block with the complete HTML document."
+                .to_string()
+        }
     }
 }
 
@@ -582,6 +609,15 @@ pub(crate) fn user_prompt(action: AiActionType, request: &AiActionRequest) -> St
                  Preserve all factual content.\n\n{content}",
                 fmt = fmt,
                 content = request.text
+            )
+        }
+        AiActionType::GenerateWidget => {
+            format!(
+                "Create an interactive HTML widget based on the following \
+                 description. The widget should be self-contained with all \
+                 CSS and JS inline. Output only the raw HTML code inside \
+                 a ```html code block.\n\n{}",
+                request.text
             )
         }
     }
@@ -1954,6 +1990,102 @@ mod tests {
             RequestUsage::default(),
         );
         assert_eq!(result.result, "## Summary\ncombined text");
+        assert!(result.error.is_none());
+    }
+
+    // ─── GenerateWidget tests (#3042) ─────────────────────────────────
+
+    #[test]
+    fn generate_widget_roundtrip() {
+        let id = AiActionType::GenerateWidget.id();
+        let parsed = AiActionType::from_id(id);
+        assert_eq!(parsed, Some(AiActionType::GenerateWidget));
+    }
+
+    #[test]
+    fn generate_widget_from_id_aliases() {
+        assert_eq!(
+            AiActionType::from_id("generateWidget"),
+            Some(AiActionType::GenerateWidget)
+        );
+        assert_eq!(
+            AiActionType::from_id("generate_widget"),
+            Some(AiActionType::GenerateWidget)
+        );
+        assert_eq!(
+            AiActionType::from_id("widget"),
+            Some(AiActionType::GenerateWidget)
+        );
+    }
+
+    #[test]
+    fn generate_widget_label_is_not_empty() {
+        assert!(!AiActionType::GenerateWidget.label().is_empty());
+    }
+
+    #[test]
+    fn generate_widget_in_all_list() {
+        let all = AiActionType::all();
+        assert!(
+            all.contains(&AiActionType::GenerateWidget),
+            "GenerateWidget missing from all()"
+        );
+    }
+
+    #[test]
+    fn generate_widget_system_prompt_has_expected_structure() {
+        let prompt = system_prompt(AiActionType::GenerateWidget);
+        assert!(!prompt.is_empty());
+        assert!(
+            prompt.contains("widget"),
+            "system prompt should mention widget"
+        );
+        assert!(prompt.contains("HTML"), "system prompt should mention HTML");
+    }
+
+    #[test]
+    fn generate_widget_user_prompt_contains_input_text() {
+        let req = AiActionRequest {
+            action: AiActionType::GenerateWidget,
+            text: "Create an ROI calculator".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let prompt = user_prompt(AiActionType::GenerateWidget, &req);
+        assert!(prompt.contains("ROI calculator"));
+    }
+
+    #[test]
+    fn generate_widget_empty_text_fails_validation() {
+        let req = AiActionRequest {
+            action: AiActionType::GenerateWidget,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let result = validate_request(&req);
+        assert!(
+            result.is_some(),
+            "GenerateWidget with empty text should fail validation"
+        );
+    }
+
+    #[test]
+    fn generate_widget_process_action_result_trims() {
+        let result = process_action_result(
+            AiActionType::GenerateWidget,
+            "  ```html\n<div>Hello</div>\n```  ",
+            RequestUsage::default(),
+        );
+        assert!(!result.result.is_empty());
         assert!(result.error.is_none());
     }
 }

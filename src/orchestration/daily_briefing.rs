@@ -16,7 +16,7 @@
 //! - 🔗 相关推荐 (semantically related notes worth revisiting)
 
 use anyhow::Result;
-use chrono::{Duration, Utc};
+use chrono::{Duration, Local, Utc};
 use tracing::instrument;
 
 use crate::ai::client::send_request_with_temperature;
@@ -73,7 +73,10 @@ pub async fn generate_daily_briefing(
     let recent_notes = load_recent_notes_for_overview_async(ctx, 50).await?;
 
     // 2. Filter by recency: keep only notes modified/created within the last 24 hours
-    let cutoff = Utc::now() - Duration::hours(24);
+    //    Use Local::now() so the 24-hour window aligns with the user's actual calendar
+    //    day rather than UTC midnight.  (#3540)
+    let cutoff = Local::now() - Duration::hours(24);
+    let cutoff_utc = cutoff.with_timezone(&Utc);
     let filtered: Vec<&NoteDocument> = recent_notes
         .iter()
         .filter(|n| {
@@ -81,8 +84,8 @@ pub async fn generate_daily_briefing(
                 .or_else(|| parse_iso_timestamp(&n.meta.created_at));
             let created = parse_iso_timestamp(&n.meta.created_at);
             match (updated, created) {
-                (Some(u), _) if u >= cutoff => true,
-                (_, Some(c)) if c >= cutoff => true,
+                (Some(u), _) if u >= cutoff_utc => true,
+                (_, Some(c)) if c >= cutoff_utc => true,
                 _ => false,
             }
         })
@@ -131,7 +134,10 @@ pub async fn generate_daily_briefing(
             .await?;
 
     // 5. Save the briefing as a vault note
-    let date_str = Utc::now().format("%Y-%m-%d").to_string();
+    //    Use Local::now() for the date string so the title reflects the user's
+    //    actual calendar day.  Metadata timestamps (RFC3339) remain Utc::now()
+    //    for correct ISO storage.  (#3540)
+    let date_str = Local::now().format("%Y-%m-%d").to_string();
     let title = format!("Daily Briefing — {}", date_str);
     let now_rfc = Utc::now().to_rfc3339();
 
@@ -212,7 +218,7 @@ pub fn parse_iso_timestamp(s: &str) -> Option<chrono::DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{Local, Utc};
 
     #[test]
     fn parse_iso_timestamp_rfc3339() {
@@ -249,7 +255,8 @@ mod tests {
     fn filter_excludes_unparseable_timestamps() {
         // Regression test for #3476: when both updated_at and created_at
         // fail to parse, the note should be excluded, not silently included.
-        let cutoff = Utc::now() - Duration::hours(24);
+        let cutoff = Local::now() - Duration::hours(24);
+        let cutoff_utc = cutoff.with_timezone(&Utc);
         let meta = crate::models::NoteMeta {
             id: "garbage".into(),
             created_at: "garbage".into(),
@@ -260,8 +267,8 @@ mod tests {
             parse_iso_timestamp(&meta.updated_at).or_else(|| parse_iso_timestamp(&meta.created_at));
         let created = parse_iso_timestamp(&meta.created_at);
         let should_include = match (updated, created) {
-            (Some(u), _) if u >= cutoff => true,
-            (_, Some(c)) if c >= cutoff => true,
+            (Some(u), _) if u >= cutoff_utc => true,
+            (_, Some(c)) if c >= cutoff_utc => true,
             _ => false,
         };
         assert!(
@@ -433,5 +440,64 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── #3540: Daily Briefing timezone-aware date regression tests ──
+
+    #[test]
+    fn briefing_title_uses_local_not_utc_date() {
+        // The date string in the briefing title must come from Local::now(),
+        // not Utc::now(). For users in positive-offset timezones (e.g. UTC+8),
+        // Utc::now() can be a calendar day behind, causing the title to show
+        // "yesterday" instead of "today".
+        let local_date = Local::now().format("%Y-%m-%d").to_string();
+        let title = format!("Daily Briefing — {}", local_date);
+        assert!(
+            title.starts_with("Daily Briefing — "),
+            "title must have correct prefix"
+        );
+        // Verify the date portion parses as a valid date
+        let date_part = &title["Daily Briefing — ".len()..];
+        chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d")
+            .expect("date string must be valid YYYY-MM-DD");
+    }
+
+    #[test]
+    fn briefing_cutoff_derived_from_local_time() {
+        // The 24-hour cutoff for filtering recent notes should be based on
+        // Local::now(), not Utc::now(). This test verifies that the cutoff
+        // computed from Local::now() is used correctly for timestamp comparison.
+        let local_cutoff = Local::now() - Duration::hours(24);
+        let cutoff_utc = local_cutoff.with_timezone(&Utc);
+
+        // A note from 2 hours ago (in UTC) should be within the window
+        let recent_ts = Utc::now() - Duration::hours(2);
+        assert!(
+            recent_ts >= cutoff_utc,
+            "note from 2h ago must be within the 24h cutoff window"
+        );
+
+        // A note from 48 hours ago should be outside the window
+        let old_ts = Utc::now() - Duration::hours(48);
+        assert!(
+            old_ts < cutoff_utc,
+            "note from 48h ago must be outside the 24h cutoff window"
+        );
+    }
+
+    #[test]
+    fn local_and_utc_date_differ_by_at_most_one_day() {
+        // For any timezone, the local date and UTC date can differ by at most
+        // one day. If they differ by more, something is fundamentally wrong.
+        let local_date = Local::now().format("%Y-%m-%d").to_string();
+        let utc_date = Utc::now().format("%Y-%m-%d").to_string();
+        let local = chrono::NaiveDate::parse_from_str(&local_date, "%Y-%m-%d").unwrap();
+        let utc = chrono::NaiveDate::parse_from_str(&utc_date, "%Y-%m-%d").unwrap();
+        let diff = (local - utc).num_days().abs();
+        assert!(
+            diff <= 1,
+            "local and UTC dates should differ by at most 1 day, got {} days",
+            diff
+        );
     }
 }

@@ -51,7 +51,10 @@ pub async fn chat_with_ai_with_context(
 
     let prompt = build_effective_question(&trimmed_question, &images).await;
     // Resolve @-mention references to notes and inject their content (#3548).
-    let prompt = inject_mention_context(context, prompt).await;
+    // Parse mentions from the *original* user text only, not the fully-assembled
+    // prompt — tweet/OCR content routinely contains `@handle` patterns that must
+    // not be treated as note mentions (#3552).
+    let prompt = inject_mention_context(context, prompt, &trimmed_question).await;
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {
@@ -144,7 +147,10 @@ pub async fn prepare_chat_for_ai(
 
     let prompt = build_effective_question(&trimmed_question, &images).await;
     // Resolve @-mention references to notes and inject their content (#3548).
-    let prompt = inject_mention_context(context, prompt).await;
+    // Parse mentions from the *original* user text only, not the fully-assembled
+    // prompt — tweet/OCR content routinely contains `@handle` patterns that must
+    // not be treated as note mentions (#3552).
+    let prompt = inject_mention_context(context, prompt, &trimmed_question).await;
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {

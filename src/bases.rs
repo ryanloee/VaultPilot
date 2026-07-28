@@ -109,6 +109,9 @@ pub struct BaseColumn {
     /// Optional display label (defaults to the field name).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Optional column width in pixels (#3513).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
 }
 
 /// A parsed `.base` configuration file.
@@ -187,6 +190,56 @@ impl BaseConfig {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read .base file: {}", path.display()))?;
         Self::from_yaml(&content)
+    }
+
+    /// Serialize to YAML string.
+    pub fn to_yaml_string(&self) -> Result<String> {
+        serde_yaml_ng::to_string(self).with_context(|| "failed to serialize .base config to YAML")
+    }
+
+    /// Save to a `.base` file on disk.
+    pub fn save_to_file(&self, path: &std::path::Path) -> Result<()> {
+        let yaml = self.to_yaml_string()?;
+        std::fs::write(path, &yaml)
+            .with_context(|| format!("failed to write .base file: {}", path.display()))
+    }
+
+    /// Set the width (in pixels) for a column identified by field name.
+    /// If the column does not exist, it is appended with the given width.
+    /// Pass `width = None` to reset to auto-width.
+    pub fn set_column_width(&mut self, field: &str, width: Option<u32>) {
+        if let Some(col) = self.columns.iter_mut().find(|c| c.field == field) {
+            col.width = width;
+        } else {
+            self.columns.push(BaseColumn {
+                field: field.to_string(),
+                label: None,
+                width,
+            });
+        }
+    }
+
+    /// Reorder columns to match the given list of field names.
+    /// Fields not in `new_order` are appended at the end in their original order.
+    /// Fields in `new_order` that don't exist as columns are created.
+    pub fn reorder_columns(&mut self, new_order: &[String]) {
+        let mut reordered: Vec<BaseColumn> = Vec::with_capacity(new_order.len());
+        let mut remaining: Vec<BaseColumn> = self.columns.drain(..).collect();
+
+        for field in new_order {
+            if let Some(pos) = remaining.iter().position(|c| c.field == *field) {
+                reordered.push(remaining.remove(pos));
+            } else {
+                reordered.push(BaseColumn {
+                    field: field.clone(),
+                    label: None,
+                    width: None,
+                });
+            }
+        }
+        // Append any columns not mentioned in new_order
+        reordered.extend(remaining);
+        self.columns = reordered;
     }
 }
 
@@ -388,10 +441,12 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
             BaseColumn {
                 field: "title".into(),
                 label: None,
+                width: None,
             },
             BaseColumn {
                 field: "updated_at".into(),
                 label: None,
+                width: None,
             },
         ]
     } else {
@@ -1471,5 +1526,126 @@ columns:
 
         // Without schema (Text type): "yes" != "true"
         assert!(!matches_filter(&m_yes, &f, &PropertySchema::empty()));
+    }
+
+    #[test]
+    fn regression_3513_column_width_round_trip() {
+        // Verify that width is serialized/deserialized correctly
+        let cfg = BaseConfig {
+            columns: vec![
+                BaseColumn {
+                    field: "title".into(),
+                    label: None,
+                    width: Some(300),
+                },
+                BaseColumn {
+                    field: "status".into(),
+                    label: Some("Status".into()),
+                    width: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let yaml = cfg.to_yaml_string().expect("serialize");
+        assert!(
+            yaml.contains("width: 300"),
+            "width should be serialized: {yaml}"
+        );
+
+        let parsed = BaseConfig::from_yaml(&yaml).expect("parse");
+        assert_eq!(parsed.columns[0].width, Some(300));
+        assert_eq!(parsed.columns[1].width, None);
+    }
+
+    #[test]
+    fn regression_3513_set_column_width_adds_new_column() {
+        let mut cfg = BaseConfig::default();
+        assert!(cfg.columns.is_empty());
+        cfg.set_column_width("title", Some(250));
+        assert_eq!(cfg.columns.len(), 1);
+        assert_eq!(cfg.columns[0].field, "title");
+        assert_eq!(cfg.columns[0].width, Some(250));
+    }
+
+    #[test]
+    fn regression_3513_set_column_width_updates_existing() {
+        let mut cfg = BaseConfig {
+            columns: vec![
+                BaseColumn {
+                    field: "title".into(),
+                    label: None,
+                    width: None,
+                },
+                BaseColumn {
+                    field: "status".into(),
+                    label: None,
+                    width: None,
+                },
+            ],
+            ..Default::default()
+        };
+        cfg.set_column_width("title", Some(400));
+        assert_eq!(cfg.columns[0].width, Some(400));
+        assert_eq!(cfg.columns[1].width, None);
+    }
+
+    #[test]
+    fn regression_3513_set_column_width_resets_to_auto() {
+        let mut cfg = BaseConfig {
+            columns: vec![BaseColumn {
+                field: "title".into(),
+                label: None,
+                width: Some(300),
+            }],
+            ..Default::default()
+        };
+        cfg.set_column_width("title", None);
+        assert!(cfg.columns[0].width.is_none());
+    }
+
+    #[test]
+    fn regression_3513_reorder_columns_basic() {
+        let mut cfg = BaseConfig {
+            columns: vec![
+                BaseColumn {
+                    field: "status".into(),
+                    label: None,
+                    width: None,
+                },
+                BaseColumn {
+                    field: "title".into(),
+                    label: None,
+                    width: None,
+                },
+                BaseColumn {
+                    field: "updated_at".into(),
+                    label: None,
+                    width: None,
+                },
+            ],
+            ..Default::default()
+        };
+        cfg.reorder_columns(&["title".into(), "status".into()]);
+        assert_eq!(cfg.columns.len(), 3);
+        assert_eq!(cfg.columns[0].field, "title");
+        assert_eq!(cfg.columns[1].field, "status");
+        assert_eq!(cfg.columns[2].field, "updated_at");
+    }
+
+    #[test]
+    fn regression_3513_reorder_columns_creates_missing_fields() {
+        let mut cfg = BaseConfig {
+            columns: vec![BaseColumn {
+                field: "title".into(),
+                label: None,
+                width: None,
+            }],
+            ..Default::default()
+        };
+        cfg.reorder_columns(&["tags".into(), "title".into()]);
+        assert_eq!(cfg.columns.len(), 2);
+        assert_eq!(cfg.columns[0].field, "tags");
+        assert_eq!(cfg.columns[0].width, None);
+        assert_eq!(cfg.columns[1].field, "title");
     }
 }

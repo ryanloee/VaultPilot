@@ -360,12 +360,19 @@ async function runWithConcurrency<T>(
 ): Promise<void> {
   let index = 0;
   let aborted = false;
+  const innerController = new AbortController();
+  // Propagate outer signal to inner controller
+  signal?.addEventListener('abort', () => innerController.abort(), { once: true });
+  const innerSignal = innerController.signal;
+
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (index < items.length) {
-      if (signal?.aborted) { aborted = true; return; }
+      if (innerSignal.aborted) { aborted = true; return; }
       const i = index++;
       try { await fn(items[i]); } catch (e) {
-        if (signal?.aborted) { aborted = true; return; }
+        if (innerSignal.aborted) { aborted = true; return; }
+        // Cancel other workers when one fails (#3534)
+        innerController.abort();
         throw e;
       }
     }

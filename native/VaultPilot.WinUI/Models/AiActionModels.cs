@@ -48,6 +48,12 @@ public enum AiActionType
     /// <summary>Ad-hoc multi-note synthesis (#3270).</summary>
     [JsonPropertyName("synthesizeNotes")]
     SynthesizeNotes,
+    /// <summary>Export note content to a structured file format (XLSX/DOCX/HTML/PPTX).</summary>
+    [JsonPropertyName("exportDocument")]
+    ExportDocument,
+    /// <summary>Generate interactive HTML/JS widget block (#3042).</summary>
+    [JsonPropertyName("generateWidget")]
+    GenerateWidget,
 }
 
 /// <summary>
@@ -184,6 +190,8 @@ public static class AiActionTypeExtensions
         AiActionType.TranscribeAudio => "音频转写",
         AiActionType.SuggestLinks => "智能推荐链接",
         AiActionType.SynthesizeNotes => "笔记综合",
+        AiActionType.ExportDocument => "导出文档",
+        AiActionType.GenerateWidget => "交互组件",
         _ => "未知操作"
     };
 }

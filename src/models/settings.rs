@@ -276,10 +276,20 @@ pub struct AppSettings {
     /// persisted toggle state.
     #[serde(default)]
     pub is_always_on_top: bool,
+    /// Smart Paste (#3547): When enabled and the user has text selected in
+    /// the editor, pasting a URL (http:// or https://) auto-wraps the
+    /// selected text as a Markdown link: `[selected text](url)`. Enabled by
+    /// default to match Obsidian/Notion/Slack/Figma behaviour.
+    #[serde(default = "default_smart_paste_enabled")]
+    pub smart_paste_enabled: bool,
 }
 
 fn default_privacy_mode() -> bool {
     false
+}
+
+fn default_smart_paste_enabled() -> bool {
+    true
 }
 
 /// Compare two byte slices in constant time to mitigate timing attacks.
@@ -333,6 +343,7 @@ impl Default for AppSettings {
             app_lock_pin_hash: None,
             custom_tools: Vec::new(),
             is_always_on_top: false,
+            smart_paste_enabled: default_smart_paste_enabled(),
         }
     }
 }
@@ -681,6 +692,7 @@ mod tests {
             app_lock_pin_hash: None,
             custom_tools: Vec::new(),
             is_always_on_top: false,
+            smart_paste_enabled: true,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

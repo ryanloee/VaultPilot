@@ -1071,6 +1071,7 @@ mod tests {
             app_lock_pin_hash: None,
             custom_tools: Vec::new(),
             is_always_on_top: false,
+            smart_paste_enabled: true,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

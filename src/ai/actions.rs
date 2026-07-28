@@ -433,8 +433,10 @@ pub(crate) fn system_prompt(action: AiActionType) -> String {
              - The widget must be self-contained and work without a network connection.\n\
              - Follow accessibility best practices (aria labels, keyboard navigation, focus management).\n\
              - Use responsive design so it works on both desktop and mobile viewports.\n\
-             - The widget must be safe to embed: no network requests (fetch/XHR/WebSocket), \
-               no access to parent page DOM, no localStorage/cookies, no navigation.\n\
+             - SECURITY: The output is automatically sanitized server-side (#3545). Scripts \
+               containing fetch/XHR/WebSocket/localStorage/eval/Function() will be stripped. \
+               Do NOT use inline event handlers (onclick, onload, etc.) — they will be removed. \
+               Use addEventListener instead. The javascript: protocol is also blocked.\n\
              - Input fields must have appropriate types and validation.\n\
              - Provide clear visual feedback on user interactions (hover, focus, click, error states).\
              Output only the code block with the complete HTML document."
@@ -678,6 +680,16 @@ pub(crate) fn process_action_result(
                     crate::sanitize_error(&e.to_string())
                 )),
             },
+        }
+    } else if action == AiActionType::GenerateWidget {
+        // Defense-in-depth XSS sanitization (#3545): strip network-exfiltration
+        // scripts, event-handler attributes, dangerous tags, and javascript:
+        // protocols before the HTML reaches any client renderer.
+        let sanitized = crate::ai::html_sanitize::sanitize_widget_html(raw_text.trim());
+        AiActionResult {
+            result: sanitized,
+            usage,
+            error: None,
         }
     } else {
         AiActionResult {
@@ -1095,6 +1107,53 @@ mod tests {
         // Other actions must NOT strip fences — verbatim trimmed text.
         assert!(result.error.is_none());
         assert_eq!(result.result, fenced.trim());
+    }
+
+    // ── GenerateWidget HTML sanitization (#3545) ──────────────────────
+
+    #[test]
+    fn generate_widget_strips_xss_payloads() {
+        let html = r#"<div onclick="alert(1)"><script>fetch('https://evil.com')</script></div>"#;
+        let result =
+            process_action_result(AiActionType::GenerateWidget, html, RequestUsage::default());
+        assert!(result.error.is_none());
+        assert!(
+            !result.result.contains("fetch("),
+            "fetch should be stripped"
+        );
+        assert!(
+            !result.result.to_ascii_lowercase().contains("onclick"),
+            "event handler should be stripped"
+        );
+        assert!(
+            result.result.contains("<div"),
+            "safe tag structure preserved"
+        );
+    }
+
+    #[test]
+    fn generate_widget_neutralizes_javascript_href() {
+        let html = r#"<a href="javascript:alert(1)">click</a>"#;
+        let result =
+            process_action_result(AiActionType::GenerateWidget, html, RequestUsage::default());
+        assert!(result.error.is_none());
+        assert!(
+            !result.result.contains("javascript:"),
+            "javascript: protocol should be neutralized"
+        );
+    }
+
+    #[test]
+    fn generate_widget_preserves_safe_widget_html() {
+        let html = r#"<button id="btn">Click</button>"#;
+        let result =
+            process_action_result(AiActionType::GenerateWidget, html, RequestUsage::default());
+        assert!(result.error.is_none());
+        assert!(result.result.contains("Click"), "safe content preserved");
+        assert!(
+            result.result.contains("id=\"btn\""),
+            "safe attribute preserved"
+        );
     }
 
     // ── GenerateOutline tests (#1830) ────────────────────────────────

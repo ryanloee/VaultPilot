@@ -242,7 +242,7 @@ fn issue_3276_html_export_basic() {
     let content = std::fs::read_to_string(&tmp).unwrap();
     assert!(content.contains("<!DOCTYPE html>"));
     assert!(content.contains("<title>Test Doc</title>"));
-    assert!(content.contains("<h1>"));
+    assert!(content.contains("<h1"));
     assert!(content.contains("<strong>bold</strong>"));
     assert!(content.contains("<em>italic</em>"));
     assert!(content.contains("<ul>"));

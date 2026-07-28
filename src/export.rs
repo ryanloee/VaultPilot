@@ -700,17 +700,20 @@ pub fn markdown_to_html_body(markdown: &str) -> String {
         // Headings (GFM ATX: up to 3 leading spaces allowed)
         let trimmed_line = line.trim_start();
         if let Some(rest) = trimmed_line.strip_prefix("### ") {
-            html.push_str(&format!("<h3>{}</h3>\n", inline_md(rest)));
+            let id = heading_id(rest);
+            html.push_str(&format!("<h3 id=\"{id}\">{}</h3>\n", inline_md(rest)));
             i += 1;
             continue;
         }
         if let Some(rest) = trimmed_line.strip_prefix("## ") {
-            html.push_str(&format!("<h2>{}</h2>\n", inline_md(rest)));
+            let id = heading_id(rest);
+            html.push_str(&format!("<h2 id=\"{id}\">{}</h2>\n", inline_md(rest)));
             i += 1;
             continue;
         }
         if let Some(rest) = trimmed_line.strip_prefix("# ") {
-            html.push_str(&format!("<h1>{}</h1>\n", inline_md(rest)));
+            let id = heading_id(rest);
+            html.push_str(&format!("<h1 id=\"{id}\">{}</h1>\n", inline_md(rest)));
             i += 1;
             continue;
         }
@@ -956,6 +959,198 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Process inline Markdown formatting (bold, italic, code) to HTML.
+/// Generate a stable HTML-safe id from heading text for anchor linking.
+///
+/// Based on GitHub Flavored Markdown's heading ID algorithm:
+/// 1. Convert to lowercase
+/// 2. Strip punctuation, emoji, and Markdown formatting characters
+/// 3. Replace spaces and multiple consecutive hyphens with a single hyphen
+/// 4. Strip leading/trailing hyphens
+///
+/// Handles Unicode characters (Chinese, Japanese, etc.) by keeping
+/// non-ASCII word characters. Inline Markdown syntax (`**bold**`,
+/// `*italic*`, `` `code` ``) is stripped before ID generation.
+pub fn heading_id(text: &str) -> String {
+    // Strip inline Markdown formatting first
+    let cleaned = strip_inline_formatting(text);
+
+    let mut id = String::with_capacity(cleaned.len());
+    let mut prev_is_sep = false;
+
+    for ch in cleaned.chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+            id.push(ch.to_ascii_lowercase());
+            prev_is_sep = false;
+        } else if ch.is_whitespace() || ch.is_ascii_punctuation() {
+            // Collapse consecutive separators
+            if !prev_is_sep {
+                id.push('-');
+                prev_is_sep = true;
+            }
+        }
+        // Skip all other characters (emoji, symbols, non-ASCII punctuation)
+    }
+
+    // Strip leading/trailing hyphens
+    let trimmed = id.trim_matches('-');
+    // Ensure non-empty (fallback for headings that are ALL punctuation/emoji)
+    if trimmed.is_empty() {
+        "section"
+    } else {
+        trimmed
+    }
+    .to_string()
+}
+
+/// Strip inline Markdown formatting for plain-text extraction.
+/// Removes **bold**, *italic*, `code`, ~~strikethrough~~, [links](url), and ![images](url).
+fn strip_inline_formatting(s: &str) -> String {
+    let mut result = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        // Bold/italic: ** or *
+        if i + 1 < len && chars[i] == '*' && chars[i + 1] == '*' {
+            i += 2;
+            // Skip until closing **
+            while i + 1 < len && !(chars[i] == '*' && chars[i + 1] == '*') {
+                result.push(chars[i]);
+                i += 1;
+            }
+            if i + 1 < len {
+                i += 2; // skip closing **
+            }
+            continue;
+        }
+        if chars[i] == '*' && i + 1 < len && chars[i + 1].is_alphanumeric() {
+            i += 1;
+            // Skip until closing *
+            while i < len && chars[i] != '*' {
+                result.push(chars[i]);
+                i += 1;
+            }
+            if i < len {
+                i += 1; // skip closing *
+            }
+            continue;
+        }
+        // Inline code: `
+        if chars[i] == '`' {
+            i += 1;
+            // Skip until closing `
+            while i < len && chars[i] != '`' {
+                result.push(chars[i]);
+                i += 1;
+            }
+            if i < len {
+                i += 1; // skip closing `
+            }
+            continue;
+        }
+        // Strikethrough: ~~
+        if i + 1 < len && chars[i] == '~' && chars[i + 1] == '~' {
+            i += 2;
+            while i + 1 < len && !(chars[i] == '~' && chars[i + 1] == '~') {
+                result.push(chars[i]);
+                i += 1;
+            }
+            if i + 1 < len {
+                i += 2;
+            }
+            continue;
+        }
+        // Wikilinks / images / links: [[text]] or [text](url) or ![alt](url)
+        if chars[i] == '[' || chars[i] == '!' {
+            let is_image = chars[i] == '!';
+            if is_image {
+                i += 1;
+                if i >= len {
+                    result.push('[');
+                    break;
+                }
+            }
+            // Find matching ]
+            let mut j = i;
+            while j < len && chars[j] != ']' {
+                result.push(chars[j]);
+                j += 1;
+            }
+            i = j;
+            if i < len {
+                i += 1; // skip ]
+            }
+            // Skip URL part (url) if present
+            if i < len && chars[i] == '(' {
+                while i < len && chars[i] != ')' {
+                    i += 1;
+                }
+                if i < len {
+                    i += 1; // skip )
+                }
+            }
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
+/// Generate a Table of Contents (TOC) from Markdown headings.
+///
+/// Returns an HTML unordered list with anchor links to each heading.
+/// Uses `heading_id()` for consistent ID generation.
+/// Only includes H1-H3 headings (matches the heading rendering logic).
+pub fn generate_toc(markdown: &str) -> String {
+    let mut toc = String::from("<nav class=\"toc\">\n<ul>\n");
+    let mut found_any = false;
+    let mut in_code_block = false;
+
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+
+        // Skip fenced code blocks (```)
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("### ") {
+            let id = heading_id(rest);
+            toc.push_str(&format!(
+                "  <li class=\"toc-h3\"><a href=\"#{id}\">{}</a></li>\n",
+                xml_escape(rest)
+            ));
+            found_any = true;
+        } else if let Some(rest) = trimmed.strip_prefix("## ") {
+            let id = heading_id(rest);
+            toc.push_str(&format!(
+                "  <li class=\"toc-h2\"><a href=\"#{id}\">{}</a></li>\n",
+                xml_escape(rest)
+            ));
+            found_any = true;
+        } else if let Some(rest) = trimmed.strip_prefix("# ") {
+            let id = heading_id(rest);
+            toc.push_str(&format!(
+                "  <li class=\"toc-h1\"><a href=\"#{id}\">{}</a></li>\n",
+                xml_escape(rest)
+            ));
+            found_any = true;
+        }
+    }
+
+    toc.push_str("</ul>\n</nav>\n");
+    if found_any {
+        toc
+    } else {
+        String::new()
+    }
+}
+
 fn inline_md(text: &str) -> String {
     // First escape XML special chars
     let escaped = xml_escape(text);
@@ -1605,7 +1800,8 @@ Some text between tables.
         export_markdown_to_html(md, "Test Title", &tmp).expect("html export should succeed");
         assert!(tmp.exists());
         let content = std::fs::read_to_string(&tmp).unwrap();
-        assert!(content.contains("<h1>"));
+        eprintln!("HTML content: {}", content);
+        assert!(content.contains("<h1"));
         assert!(content.contains("<strong>bold</strong>"));
         assert!(content.contains("<em>italic</em>"));
         assert!(content.contains("<ul>"));
@@ -1955,7 +2151,7 @@ Some text between tables.
         let md = "   # Indented Title\n";
         let html = markdown_to_html_body(md);
         assert!(
-            html.contains("<h1>Indented Title</h1>"),
+            html.contains("<h1 id=\"indented-title\">Indented Title</h1>"),
             "3-space indented H1 should be recognized: {html}"
         );
     }
@@ -1965,7 +2161,7 @@ Some text between tables.
         let md = "  ## Sub Heading\n";
         let html = markdown_to_html_body(md);
         assert!(
-            html.contains("<h2>Sub Heading</h2>"),
+            html.contains("<h2 id=\"sub-heading\">Sub Heading</h2>"),
             "2-space indented H2 should be recognized: {html}"
         );
     }
@@ -1975,7 +2171,7 @@ Some text between tables.
         let md = "   ### Deep Heading\n";
         let html = markdown_to_html_body(md);
         assert!(
-            html.contains("<h3>Deep Heading</h3>"),
+            html.contains("<h3 id=\"deep-heading\">Deep Heading</h3>"),
             "3-space indented H3 should be recognized: {html}"
         );
     }
@@ -2058,5 +2254,128 @@ Some text between tables.
         );
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── #3563: heading anchor IDs and TOC generation ──────────────────
+
+    #[test]
+    fn heading_id_basic() {
+        assert_eq!(heading_id("Hello World"), "hello-world");
+        assert_eq!(heading_id("My Title"), "my-title");
+        assert_eq!(heading_id("UPPERCASE"), "uppercase");
+    }
+
+    #[test]
+    fn heading_id_strips_formatting() {
+        assert_eq!(heading_id("**Bold** Title"), "bold-title");
+        assert_eq!(heading_id("*Italic* Text"), "italic-text");
+        assert_eq!(heading_id("`Code` Example"), "code-example");
+    }
+
+    #[test]
+    fn heading_id_collapses_separators() {
+        assert_eq!(heading_id("Hello   World"), "hello-world");
+        assert_eq!(
+            heading_id("Section: Subtitle — Part 2"),
+            "section-subtitle-part-2"
+        );
+    }
+
+    #[test]
+    fn heading_id_handles_empty() {
+        assert_eq!(heading_id("!@#$%"), "section");
+        assert_eq!(heading_id("..."), "section");
+    }
+
+    #[test]
+    fn heading_id_trims_leading_trailing_hyphens() {
+        assert_eq!(heading_id("--Title"), "title");
+        assert_eq!(heading_id("Title--"), "title");
+        assert_eq!(heading_id("? Question ?"), "question");
+    }
+
+    #[test]
+    fn html_heading_has_id_attr() {
+        let md = "# My Title\n## Sub Section\nContent.\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("<h1 id=\"my-title\">My Title</h1>"),
+            "H1 should have id: {html}"
+        );
+        assert!(
+            html.contains("<h2 id=\"sub-section\">Sub Section</h2>"),
+            "H2 should have id: {html}"
+        );
+    }
+
+    #[test]
+    fn html_heading_with_formatting_has_clean_id() {
+        let md = "## **Bold** Heading\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("id=\"bold-heading\""),
+            "ID should strip formatting, got: {html}"
+        );
+    }
+
+    #[test]
+    fn toc_generates_links() {
+        let md = "# Intro\n## Chapter 1\nBody.\n### Section 1.1\nMore.\n";
+        let toc = generate_toc(md);
+        assert!(toc.contains("<nav class=\"toc\">"), "TOC: {toc}");
+        assert!(
+            toc.contains("<a href=\"#intro\">Intro</a>"),
+            "TOC link: {toc}"
+        );
+        assert!(
+            toc.contains("<a href=\"#chapter-1\">Chapter 1</a>"),
+            "TOC link: {toc}"
+        );
+        assert!(
+            toc.contains("<a href=\"#section-1-1\">Section 1.1</a>"),
+            "TOC link: {toc}"
+        );
+    }
+
+    #[test]
+    fn toc_empty_markdown_returns_empty() {
+        let toc = generate_toc("No headings here.\nJust text.");
+        assert!(toc.is_empty(), "Empty doc should give empty TOC: {toc}");
+    }
+
+    #[test]
+    fn toc_nested_code_block_not_treated_as_heading() {
+        let md = "# Real Heading\n```\n# not a heading\n## just code\n```\n## Second Heading\n";
+        let toc = generate_toc(md);
+        assert!(
+            toc.contains("real-heading"),
+            "TOC should include real heading: {toc}"
+        );
+        assert!(
+            toc.contains("second-heading"),
+            "TOC should include second real heading: {toc}"
+        );
+        assert!(
+            !toc.contains("not-a-heading"),
+            "TOC should NOT include code-block '#': {toc}"
+        );
+        assert!(
+            !toc.contains("just-code"),
+            "TOC should NOT include code-block '##': {toc}"
+        );
+    }
+
+    #[test]
+    fn heading_indented_has_id() {
+        let md = "   # Indented H1\n  ## Indented H2\n";
+        let html = markdown_to_html_body(md);
+        assert!(
+            html.contains("<h1 id=\"indented-h1\">"),
+            "Indented H1 should have id: {html}"
+        );
+        assert!(
+            html.contains("<h2 id=\"indented-h2\">"),
+            "Indented H2 should have id: {html}"
+        );
     }
 }

@@ -112,8 +112,13 @@ async function loadProviderKeysSecure(): Promise<Record<string, string> | null> 
       const fallback = await AsyncStorage.getItem(ASYNC_FALLBACK_KEYS_ID);
       if (fallback) {
         const keys = JSON.parse(deobfuscate(fallback)) as Record<string, string>;
-        // Re-save to SecureStore so next restart reads from primary storage
-        await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+        // Re-save to SecureStore so next restart reads from primary storage.
+        // If re-promotion fails, still return the keys — they were read successfully (#3557).
+        try {
+          await SecureStore.setItemAsync(SECURE_KEYS_ID, JSON.stringify(keys));
+        } catch (promoErr) {
+          console.warn('[Store] SecureStore re-promotion failed, but fallback keys were read:', promoErr);
+        }
         return keys;
       }
     } catch (fb) {

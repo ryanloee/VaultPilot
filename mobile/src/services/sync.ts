@@ -281,6 +281,7 @@ async function doSync(
           if (lastFetchError.name === 'AbortError' && !abortedDueToTimeout) break;
           // network error or timeout → retry
         } finally {
+          clearTimeout(timer);
           noteCleanup();
         }
       }

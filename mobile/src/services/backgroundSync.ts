@@ -83,8 +83,9 @@ function registerTaskBody(): void {
     if (!TaskManager.isTaskDefined(BACKGROUND_SYNC_TASK_ID)) {
       TaskManager.defineTask(BACKGROUND_SYNC_TASK_ID, backgroundSyncTaskBody);
     }
-  } catch {
-    /* already defined — ignore */
+  } catch (e) {
+    /* already defined — only suppress duplicate-registration, warn for real failures */
+    console.warn('[BgSync] Failed to register background task:', e);
   }
 }
 

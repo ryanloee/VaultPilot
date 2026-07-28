@@ -224,7 +224,7 @@ async function chatAnthropic(
       break;
     }
 
-    if (!res) throw new Error('请求失败，已重试多次');
+    if (!res) throw lastError ?? new Error('请求失败，已重试多次');
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -609,6 +609,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
         },
         signal: effectiveSignal,
       });
+      await res.body?.cancel().catch(() => {});
       return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
     }
 
@@ -616,6 +617,7 @@ export async function checkApi(params?: { apiBase?: string; apiKey?: string; mod
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: effectiveSignal,
     });
+    await res.body?.cancel().catch(() => {});
     return { ok: res.ok, error: res.ok ? undefined : `HTTP ${res.status}` };
   } catch (e: unknown) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };

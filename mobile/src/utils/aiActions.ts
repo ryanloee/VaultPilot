@@ -277,12 +277,21 @@ export async function executeAiAction(
       get isSuccess() { return true; },
     };
   } catch (e: any) {
-    // AbortError from user cancellation
-    if ((e as Error).name === 'AbortError') {
+    // AbortError from user cancellation (signal is aborted before we enter the catch)
+    if ((e as Error).name === 'AbortError' && signal?.aborted) {
       return {
         result: '',
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         error: undefined,
+        get isSuccess() { return false; },
+      };
+    }
+    // AbortError without signal.aborted → internal timeout, treat as real error
+    if ((e as Error).name === 'AbortError') {
+      return {
+        result: '',
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        error: 'AI 操作超时（内部 2 分钟超时），请重试',
         get isSuccess() { return false; },
       };
     }

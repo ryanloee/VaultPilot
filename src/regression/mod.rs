@@ -71,6 +71,7 @@ mod issue_3370_inferred_relations;
 mod issue_3375_auto_plan_mode;
 mod issue_3378_table_border_alignment;
 mod issue_3379_formula_precedence;
+mod issue_3458_auto_semantic_links;
 mod issue_3478_folder_import;
 mod issue_3512_paren_url;
 mod issue_3514_bulk_ops_http_bridge;

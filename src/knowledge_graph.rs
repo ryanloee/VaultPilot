@@ -626,6 +626,252 @@ pub fn graph_summary(graph: &KnowledgeGraph) -> String {
     )
 }
 
+// ── Semantic-enhanced relation inference (#3458 Phase 1) ─────────────────
+// Adds semantic vector similarity to the existing metadata-overlap scoring.
+// Uses the HashEmbedder from src/semantic/mod.rs to compute cosine similarity
+// between note content vectors, then combines it with tag/keyword/title
+// overlap for a richer confidence score.
+
+use crate::semantic::{cosine_similarity, default_embedder, SemanticEmbedder};
+
+/// Weight of semantic vector similarity in the combined confidence score.
+const SEMANTIC_WEIGHT: f64 = 0.45;
+/// Weight of metadata overlap (tags + keywords + title) in the combined score.
+const METADATA_WEIGHT: f64 = 0.55;
+
+/// A link suggestion produced by the auto-discovery engine — a note that is
+/// semantically related to the source note but not yet linked via `[[wikilink]]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoLinkSuggestion {
+    /// The note that should be linked FROM (source).
+    pub source_id: String,
+    /// The note that should be linked TO (suggested target).
+    pub target_id: String,
+    /// Title of the suggested target note (for `[[Title]]` insertion).
+    pub target_title: String,
+    /// Combined confidence score [0.0, 1.0].
+    pub confidence: f64,
+    /// Semantic vector similarity component [0.0, 1.0].
+    pub semantic_similarity: f64,
+    /// Metadata overlap component [0.0, 1.0].
+    pub metadata_similarity: f64,
+    /// Human-readable reason for the suggestion.
+    pub reason: String,
+}
+
+/// Score the similarity between two notes using **both** metadata overlap and
+/// semantic vector similarity of their content.
+///
+/// This enhances [`score_pair`] by adding content-level semantic similarity,
+/// catching related notes that share no tags/keywords but discuss the same
+/// topic in different words (#3458).
+pub fn score_pair_semantic(
+    a: &NoteMeta,
+    a_body: &str,
+    b: &NoteMeta,
+    b_body: &str,
+    embedder: &dyn SemanticEmbedder,
+) -> Option<InferredRelation> {
+    if a.id == b.id {
+        return None;
+    }
+
+    // Metadata overlap score (same as score_pair).
+    let a_tags: HashSet<&str> = a.tags.iter().map(|s| s.as_str()).collect();
+    let b_tags: HashSet<&str> = b.tags.iter().map(|s| s.as_str()).collect();
+    let a_kws: HashSet<&str> = a.keywords.iter().map(|s| s.as_str()).collect();
+    let b_kws: HashSet<&str> = b.keywords.iter().map(|s| s.as_str()).collect();
+    let a_title_words = title_word_set(&a.title);
+    let b_title_words = title_word_set(&b.title);
+
+    let tag_sim = jaccard(&a_tags, &b_tags);
+    let kw_sim = jaccard(&a_kws, &b_kws);
+    let title_sim = jaccard(&a_title_words, &b_title_words);
+    let metadata_score = tag_sim * 0.40 + kw_sim * 0.35 + title_sim * 0.25;
+
+    // Semantic vector similarity from content bodies.
+    let semantic_score: f64 = {
+        let a_vec = embedder.embed(&format!("{} {}", a.title, a_body));
+        let b_vec = embedder.embed(&format!("{} {}", b.title, b_body));
+        match (a_vec, b_vec) {
+            (Some(av), Some(bv)) => {
+                let cos = cosine_similarity(&av, &bv);
+                // cosine_similarity returns f32; normalize to [0, 1] and cast to f64.
+                (((cos as f64) + 1.0) / 2.0).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
+        }
+    };
+
+    // Combined confidence.
+    let confidence = semantic_score * SEMANTIC_WEIGHT + metadata_score * METADATA_WEIGHT;
+
+    if confidence < f64::EPSILON {
+        return None;
+    }
+
+    let (relation_type, reason) = if semantic_score >= 0.6 && metadata_score >= 0.3 {
+        (
+            RelationType::SameTopic,
+            format!(
+                "Strong semantic + metadata match (semantic: {:.0}%, metadata: {:.0}%)",
+                semantic_score * 100.0,
+                metadata_score * 100.0
+            ),
+        )
+    } else if semantic_score >= 0.5 {
+        (
+            RelationType::Related,
+            format!(
+                "Content-level semantic similarity ({:.0}%) with some metadata overlap ({:.0}%)",
+                semantic_score * 100.0,
+                metadata_score * 100.0
+            ),
+        )
+    } else if metadata_score >= 0.3 {
+        (
+            RelationType::Related,
+            format!(
+                "Metadata overlap (tags: {:.0}%, keywords: {:.0}%) reinforced by semantic signal ({:.0}%)",
+                tag_sim * 100.0,
+                kw_sim * 100.0,
+                semantic_score * 100.0
+            ),
+        )
+    } else {
+        return None;
+    };
+
+    Some(InferredRelation {
+        source: a.id.clone(),
+        target: b.id.clone(),
+        relation_type,
+        confidence,
+        reason,
+    })
+}
+
+/// Suggest auto-links for a single note: find the most semantically similar
+/// notes in the vault that are NOT already linked via `[[wikilink]]`.
+///
+/// This is the core backend function for the "Heads Up" / auto-link feature
+/// (#3458). It:
+/// 1. Loads all note metas and bodies.
+/// 2. Computes semantic + metadata similarity for each pair.
+/// 3. Excludes notes already linked from the source note's body.
+/// 4. Returns top-N suggestions sorted by confidence.
+///
+/// Returns suggestions sorted by confidence (descending).
+pub fn suggest_auto_links(
+    context: &StorageContext,
+    source_note_id: &str,
+    max_suggestions: usize,
+) -> Result<Vec<AutoLinkSuggestion>> {
+    let (connection, _) = storage::pool::open_connection(context)?;
+    let all_metas = storage::list_all_note_metas(&connection)?;
+    let embedder = default_embedder();
+
+    // Find the source note.
+    let source_meta = all_metas
+        .iter()
+        .find(|m| m.id == source_note_id)
+        .ok_or_else(|| anyhow::anyhow!("source note not found: {}", source_note_id))?;
+
+    // Load source note body and extract existing wikilink targets.
+    let source_doc = storage::notes::load_note_with_context(context, source_note_id)?;
+    let existing_links: HashSet<String> = storage::notes::extract_wikilinks(&source_doc.body)
+        .into_iter()
+        .map(|(target, _)| target.to_lowercase())
+        .collect();
+
+    let source_body = &source_doc.body;
+
+    // Score against every other note.
+    let mut suggestions: Vec<AutoLinkSuggestion> = Vec::new();
+
+    for target_meta in &all_metas {
+        if target_meta.id == source_note_id {
+            continue;
+        }
+
+        // Skip if already linked.
+        if existing_links.contains(&target_meta.title.to_lowercase()) {
+            continue;
+        }
+
+        let target_doc = match storage::notes::load_note_with_context(context, &target_meta.id) {
+            Ok(doc) => doc,
+            Err(_) => continue,
+        };
+
+        // Compute combined score.
+        let a_tags: HashSet<&str> = source_meta.tags.iter().map(|s| s.as_str()).collect();
+        let b_tags: HashSet<&str> = target_meta.tags.iter().map(|s| s.as_str()).collect();
+        let a_kws: HashSet<&str> = source_meta.keywords.iter().map(|s| s.as_str()).collect();
+        let b_kws: HashSet<&str> = target_meta.keywords.iter().map(|s| s.as_str()).collect();
+        let a_title = title_word_set(&source_meta.title);
+        let b_title = title_word_set(&target_meta.title);
+
+        let tag_sim = jaccard(&a_tags, &b_tags);
+        let kw_sim = jaccard(&a_kws, &b_kws);
+        let title_sim = jaccard(&a_title, &b_title);
+        let metadata_score = tag_sim * 0.40 + kw_sim * 0.35 + title_sim * 0.25;
+
+        let semantic_score: f64 = {
+            let a_vec = embedder.embed(&format!("{} {}", source_meta.title, source_body));
+            let b_vec = embedder.embed(&format!("{} {}", target_meta.title, target_doc.body));
+            match (a_vec, b_vec) {
+                (Some(av), Some(bv)) => {
+                    let cos = cosine_similarity(&av, &bv);
+                    (((cos as f64) + 1.0) / 2.0).clamp(0.0, 1.0)
+                }
+                _ => 0.0,
+            }
+        };
+
+        let confidence = semantic_score * SEMANTIC_WEIGHT + metadata_score * METADATA_WEIGHT;
+
+        // Only suggest notes with meaningful similarity.
+        if confidence < 0.15 {
+            continue;
+        }
+
+        let reason = if semantic_score >= 0.5 {
+            format!(
+                "Content-level similarity ({:.0}%) with metadata overlap ({:.0}%)",
+                semantic_score * 100.0,
+                metadata_score * 100.0
+            )
+        } else {
+            format!(
+                "Shared metadata (tags: {:.0}%, keywords: {:.0}%)",
+                tag_sim * 100.0,
+                kw_sim * 100.0
+            )
+        };
+
+        suggestions.push(AutoLinkSuggestion {
+            source_id: source_note_id.to_string(),
+            target_id: target_meta.id.clone(),
+            target_title: target_meta.title.clone(),
+            confidence,
+            semantic_similarity: semantic_score,
+            metadata_similarity: metadata_score,
+            reason,
+        });
+    }
+
+    // Sort by confidence descending and truncate.
+    suggestions.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    suggestions.truncate(max_suggestions);
+
+    Ok(suggestions)
+}
+
 // ────────────────────────────────────────────────────────
 // Tests
 // ────────────────────────────────────────────────────────

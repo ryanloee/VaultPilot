@@ -157,7 +157,7 @@ describe('issue #1172 — Anthropic abort listener cleanup', () => {
     const addSpy = jest.spyOn(controller.signal, 'addEventListener');
     const removeSpy = jest.spyOn(controller.signal, 'removeEventListener');
 
-    await expect(chat([{ role: 'user', content: 'hi' }], controller.signal)).rejects.toThrow('请求失败，已重试多次');
+    await expect(chat([{ role: 'user', content: 'hi' }], controller.signal)).rejects.toThrow('Network error');
 
     // Listener should have been added and then removed
     expect(addSpy).toHaveBeenCalled();

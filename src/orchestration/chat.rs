@@ -50,8 +50,17 @@ pub async fn chat_with_ai_with_context(
     }
 
     let prompt = build_effective_question(&trimmed_question, &images).await;
-    // Resolve @-mention references to notes and inject their content (#3548).
-    let prompt = inject_mention_context(context, prompt).await;
+    // Resolve @-mention references from the ORIGINAL trimmed_question only (#3552)
+    // — parsing the augmented prompt would produce false positives from tweet content.
+    let mention_context = inject_mention_context(context, trimmed_question.clone()).await;
+    // The resolved mention context contains the original question + appended note blocks.
+    // Strip out the original question (already present in prompt) and keep only the notes.
+    let prompt = if mention_context.len() > trimmed_question.len() {
+        let notes = &mention_context[trimmed_question.len()..];
+        format!("{}{}", prompt, notes)
+    } else {
+        prompt
+    };
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {
@@ -143,8 +152,17 @@ pub async fn prepare_chat_for_ai(
     }
 
     let prompt = build_effective_question(&trimmed_question, &images).await;
-    // Resolve @-mention references to notes and inject their content (#3548).
-    let prompt = inject_mention_context(context, prompt).await;
+    // Resolve @-mention references from the ORIGINAL trimmed_question only (#3552)
+    // — parsing the augmented prompt would produce false positives from tweet content.
+    let mention_context = inject_mention_context(context, trimmed_question.clone()).await;
+    // The resolved mention context contains the original question + appended note blocks.
+    // Strip out the original question (already present in prompt) and keep only the notes.
+    let prompt = if mention_context.len() > trimmed_question.len() {
+        let notes = &mention_context[trimmed_question.len()..];
+        format!("{}{}", prompt, notes)
+    } else {
+        prompt
+    };
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {

@@ -786,6 +786,9 @@ pub fn suggest_auto_links(
 
     let source_body = &source_doc.body;
 
+    // Pre-compute the source embedding once (was O(N) redundant calls before fix #3561).
+    let source_vec = embedder.embed(&format!("{} {}", source_meta.title, source_body));
+
     // Score against every other note.
     let mut suggestions: Vec<AutoLinkSuggestion> = Vec::new();
 
@@ -818,11 +821,10 @@ pub fn suggest_auto_links(
         let metadata_score = tag_sim * 0.40 + kw_sim * 0.35 + title_sim * 0.25;
 
         let semantic_score: f64 = {
-            let a_vec = embedder.embed(&format!("{} {}", source_meta.title, source_body));
             let b_vec = embedder.embed(&format!("{} {}", target_meta.title, target_doc.body));
-            match (a_vec, b_vec) {
+            match (source_vec.as_ref(), b_vec) {
                 (Some(av), Some(bv)) => {
-                    let cos = cosine_similarity(&av, &bv);
+                    let cos = cosine_similarity(av, &bv);
                     (((cos as f64) + 1.0) / 2.0).clamp(0.0, 1.0)
                 }
                 _ => 0.0,

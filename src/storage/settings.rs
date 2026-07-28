@@ -304,14 +304,27 @@ pub fn save_settings_with_context(
     });
     match &existing_settings {
         Ok(existing_settings) => {
+            // #3566: when the raw-JSON fallback path is taken, the existing
+            // key is still encrypted (e.g. "ENC:v1:…"), so is_masked_form_of
+            // fails because the mask "sk-a…qrst" doesn't match the encrypted
+            // string. Fall back to is_masked_key + is_encrypted: if the
+            // incoming value looks like a mask and the existing value is
+            // encrypted, preserve the encrypted key.
             if existing_settings.provider.api_key != settings.provider.api_key
-                && is_masked_form_of(
-                    &settings.provider.api_key,
-                    &existing_settings.provider.api_key,
-                )
                 && !settings.provider.api_key.is_empty()
             {
-                settings.provider.api_key = existing_settings.provider.api_key.clone();
+                if is_masked_form_of(
+                    &settings.provider.api_key,
+                    &existing_settings.provider.api_key,
+                ) {
+                    settings.provider.api_key = existing_settings.provider.api_key.clone();
+                } else if is_masked_key(&settings.provider.api_key)
+                    && crate::crypto::is_encrypted(&existing_settings.provider.api_key)
+                {
+                    // Fallback path: raw JSON has encrypted key, incoming is
+                    // a display mask — preserve the encrypted real key (#3566).
+                    settings.provider.api_key = existing_settings.provider.api_key.clone();
+                }
             }
             for p in settings.providers.iter_mut() {
                 // Match by (name, base_url) first — handles reordering (#2514).
@@ -338,11 +351,16 @@ pub fn save_settings_with_context(
                             .find(|ep| ep.base_url == p.base_url)
                     });
                 if let Some(existing) = existing {
-                    if p.api_key != existing.api_key
-                        && is_masked_form_of(&p.api_key, &existing.api_key)
-                        && !p.api_key.is_empty()
-                    {
-                        p.api_key = existing.api_key.clone();
+                    if p.api_key != existing.api_key && !p.api_key.is_empty() {
+                        if is_masked_form_of(&p.api_key, &existing.api_key) {
+                            p.api_key = existing.api_key.clone();
+                        } else if is_masked_key(&p.api_key)
+                            && crate::crypto::is_encrypted(&existing.api_key)
+                        {
+                            // #3566: raw-JSON fallback has encrypted key;
+                            // incoming mask won't match via is_masked_form_of.
+                            p.api_key = existing.api_key.clone();
+                        }
                     }
                 }
             }
@@ -781,6 +799,103 @@ mod tests {
         assert_eq!(
             reloaded.provider.api_key, new_key,
             "the plaintext ellipsis key must be persisted, not replaced by the stale key"
+        );
+    }
+
+    // ── #3566: raw-JSON fallback must preserve encrypted key when incoming
+    // value is a display mask ──
+
+    #[test]
+    fn masked_key_preserved_in_raw_json_fallback() {
+        // When load_settings_raw fails (e.g. machine key changed) and the
+        // raw-JSON fallback loads encrypted keys directly from the file,
+        // is_masked_form_of compares the display mask ("sk-a…qrst") against
+        // the encrypted string ("ENC:v1:…"), which never matches. Without
+        // the fallback guard, the masked value overwrites the encrypted
+        // real key on disk (#3566).
+        let temp = unique_temp("3566");
+        let ctx = StorageContext::for_test(&temp);
+        let vault = temp.join("vault").to_string_lossy().to_string();
+
+        // First, save a real key normally. save_settings_with_context
+        // encrypts it, so the on-disk file contains an ENC:v1:… value.
+        let real_key = "sk-real-api-key-for-testing";
+        let initial = AppSettings {
+            vault_dir: vault.clone(),
+            provider: ProviderConfig {
+                api_key: real_key.to_string(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        save_settings_with_context(&ctx, initial).expect("initial save");
+
+        let raw_before = std::fs::read_to_string(&ctx.paths.settings_path).unwrap();
+        assert!(
+            raw_before.contains("ENC:v1:"),
+            "first save must produce encrypted key on disk"
+        );
+
+        // Simulate a settings file whose ENC:v1 key cannot be decrypted
+        // (e.g. machine key changed). Use invalid base64 payload so
+        // decrypt_secret returns an error, triggering the raw-JSON fallback
+        // in save_settings_with_context.
+        let bad_encrypted = "ENC:v1:not-valid-base64!!!";
+        // Build JSON with serde_json; use camelCase for both AppSettings and
+        // ProviderConfig (both have #[serde(rename_all = "camelCase")]).
+        let fake_settings = serde_json::json!({
+            "vaultDir": vault,
+            "model": "gpt-4",
+            "provider": {
+                "apiKey": bad_encrypted,
+                "baseUrl": "https://api.example.com",
+                "name": "Test",
+                "providerType": serde_json::Value::Null
+            }
+        });
+        std::fs::write(
+            &ctx.paths.settings_path,
+            serde_json::to_string(&fake_settings).expect("serialize"),
+        )
+        .expect("write fake settings");
+
+        // Verify load_settings_raw fails (decrypt of bad payload fails).
+        let load_result = load_settings_raw(&ctx);
+        assert!(
+            load_result.is_err(),
+            "load_settings_raw must fail on bad encrypted payload, got: {:?}",
+            load_result.ok()
+        );
+
+        // Now save with a masked key — the raw-JSON fallback should detect the
+        // masked incoming value and preserve the encrypted string on disk.
+        let masked_key = crate::models::provider::mask_secret(real_key);
+        let incoming = AppSettings {
+            vault_dir: vault,
+            provider: ProviderConfig {
+                api_key: masked_key,
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let save_result = save_settings_with_context(&ctx, incoming);
+        assert!(
+            save_result.is_ok(),
+            "saving masked key over raw-JSON fallback should succeed: {:?}",
+            save_result.err()
+        );
+
+        // The on-disk key must still be the (undecryptable) encrypted
+        // value, not the masked display string.
+        let after_raw = std::fs::read_to_string(&ctx.paths.settings_path).unwrap();
+        let after_parsed: serde_json::Value =
+            serde_json::from_str(&after_raw).expect("parse saved settings");
+        let saved_key = after_parsed["provider"]["apiKey"]
+            .as_str()
+            .expect("api_key field");
+        assert_eq!(
+            saved_key, bad_encrypted,
+            "masked key must not overwrite encrypted key via raw-JSON fallback (#3566)"
         );
     }
 }

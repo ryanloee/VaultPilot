@@ -5,6 +5,7 @@ pub mod compress;
 pub mod daily_briefing;
 pub mod deep_research;
 pub mod event_bus;
+pub mod mention;
 pub mod scheduled_research;
 pub mod serendipity;
 pub mod table;

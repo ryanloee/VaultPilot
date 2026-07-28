@@ -16,6 +16,7 @@ use crate::ai;
 
 use super::ask::ask_with_ai_with_context;
 use super::compress::compress_chat_history_with_context;
+use super::mention::inject_mention_context;
 use super::tweet_import::{detect_tweet_url, fetch_tweet_context};
 
 /// Default compression threshold (80% of the model context window) used when
@@ -49,10 +50,12 @@ pub async fn chat_with_ai_with_context(
     }
 
     let prompt = build_effective_question(&trimmed_question, &images).await;
+    // Resolve @-mention references to notes and inject their content (#3548).
+    let prompt = inject_mention_context(context, prompt).await;
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {
-        trimmed_question
+        trimmed_question.clone()
     };
     let attachments = build_chat_attachments(&images);
     let (active_session_id, created_session) =
@@ -140,10 +143,12 @@ pub async fn prepare_chat_for_ai(
     }
 
     let prompt = build_effective_question(&trimmed_question, &images).await;
+    // Resolve @-mention references to notes and inject their content (#3548).
+    let prompt = inject_mention_context(context, prompt).await;
     let user_display = if trimmed_question.is_empty() {
         "（发送了一张图片）".to_string()
     } else {
-        trimmed_question
+        trimmed_question.clone()
     };
     let attachments = build_chat_attachments(&images);
     let (active_session_id, created_session) =

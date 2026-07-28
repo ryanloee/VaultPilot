@@ -181,8 +181,12 @@ fn find_bracket_close(chars: &[char], start: usize) -> Option<usize> {
 /// If no mentions are found, or no notes match, the prompt is returned
 /// unchanged. Errors during note lookup are logged and silently skipped
 /// (best-effort: a missing note should not abort the chat).
-pub async fn inject_mention_context(context: &StorageContext, mut prompt: String) -> String {
-    let mentions = parse_at_mentions(&prompt);
+pub async fn inject_mention_context(
+    context: &StorageContext,
+    mut prompt: String,
+    mention_source: &str,
+) -> String {
+    let mentions = parse_at_mentions(mention_source);
     if mentions.is_empty() {
         return prompt;
     }
@@ -432,8 +436,64 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let context = StorageContext::for_test(&dir);
         let prompt = "Hello world, no mentions here".to_string();
-        let result = rt.block_on(async { inject_mention_context(&context, prompt).await });
+        let mention_source = prompt.clone();
+        let result =
+            rt.block_on(async { inject_mention_context(&context, prompt, &mention_source).await });
         assert_eq!(result, "Hello world, no mentions here");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── #3552: tweet/OCR @handles must NOT be parsed as mentions ──
+
+    #[test]
+    fn test_tweet_mention_not_injected_into_prompt() {
+        // Regression: inject_mention_context parses mentions from the user's
+        // original text (mention_source), NOT the fully-assembled prompt that
+        // may contain tweet context blocks with `@handle` patterns.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "vp-mention-3552-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let context = StorageContext::for_test(&dir);
+
+        // Simulate the fully-assembled prompt containing tweet content with @handles
+        let prompt =
+            "What do you think?\n\n[引用推文 - 作者: @NASA]: Hello from @NASA and @SpaceX!"
+                .to_string();
+        // The user's ORIGINAL text has no mentions
+        let mention_source = "What do you think?".to_string();
+
+        let result =
+            rt.block_on(async { inject_mention_context(&context, prompt, &mention_source).await });
+        // No mention context block should be appended because the user didn't type any @mentions
+        assert!(
+            !result.contains(MENTION_CONTEXT_HEADER),
+            "Tweet @handles should not trigger mention injection"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_user_mention_still_works_with_tweet_context() {
+        // Ensure that when the user DOES type a real mention, it still resolves
+        // even when tweet context is present in the assembled prompt.
+        // Here we just verify parse_at_mentions sees the user mention.
+        let user_text = "@MyNote what about this tweet?";
+        let mentions = parse_at_mentions(user_text);
+        assert_eq!(mentions, vec!["MyNote"]);
+
+        // And that tweet handles in the assembled prompt are NOT parsed
+        let assembled = "What about this tweet?\n\n[引用推文 - 作者: @NASA]";
+        let assembled_mentions = parse_at_mentions(assembled);
+        // The @NASA here IS parsed by parse_at_mentions (it's a valid word mention)
+        // but inject_mention_context now only parses from user text, so this is fine.
+        // We're just documenting the behavior difference.
+        assert!(assembled_mentions.contains(&"NASA".to_string()));
     }
 }

@@ -330,6 +330,13 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         connection.execute_batch(
             "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;",
         )?;
+        // #3541: create image_text_fts for existing databases that predate it
+        connection.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS image_text_fts USING fts5(\
+               note_id UNINDEXED, attachment_id UNINDEXED, ocr_text,\
+               tokenize = 'unicode61'\
+             );",
+        )?;
         ensure_attachment_columns(connection)?;
         ensure_note_columns(connection)?;
         // #3440: ensure_trigger_rule_columns was only reachable during initial
@@ -400,6 +407,17 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             file_name,
             stem,
             path,
+            tokenize = 'unicode61'
+        );
+
+        -- Dedicated FTS5 table for image OCR text (#3541).
+        -- Separated from attachment_fts because the latter is created once
+        -- and cannot be ALTERed in-place; this table is additive and safe
+        -- to create on every schema init.
+        CREATE VIRTUAL TABLE IF NOT EXISTS image_text_fts USING fts5(
+            note_id UNINDEXED,
+            attachment_id UNINDEXED,
+            ocr_text,
             tokenize = 'unicode61'
         );
 
@@ -708,6 +726,10 @@ mod tests {
         assert!(
             vtables.iter().any(|t| t.contains("attachment_fts")),
             "attachment_fts missing"
+        );
+        assert!(
+            vtables.iter().any(|t| t.contains("image_text_fts")),
+            "image_text_fts missing"
         );
 
         let version: i32 = conn

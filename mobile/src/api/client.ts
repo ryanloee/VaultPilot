@@ -456,6 +456,8 @@ function wrapAnthropicBody(body: ReadableStream<Uint8Array>): ReadableStream<Uin
             if (!line.startsWith('data:')) continue;
             const data = line.slice(5).trimStart();
             const result = convertAnthropicEvent(currentEvent, data);
+            // Reset currentEvent after use to prevent cross-line residual (#3535)
+            currentEvent = '';
             if (result === 'data: [DONE]\n\n') {
               ctrl.enqueue(encoder.encode(result));
               reader.cancel().catch(() => {});

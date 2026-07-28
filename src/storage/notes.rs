@@ -280,6 +280,10 @@ pub fn delete_note_with_context(
         [resolved_note_id.as_str()],
     )?;
     tx.execute(
+        "DELETE FROM image_text_fts WHERE note_id = ?1",
+        [resolved_note_id.as_str()],
+    )?;
+    tx.execute(
         "DELETE FROM attachments WHERE note_id = ?1",
         [resolved_note_id.as_str()],
     )?;
@@ -613,6 +617,10 @@ fn move_one_note_with_connection(
         "DELETE FROM attachment_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
         [&old_path_str],
     )?;
+    connection.execute(
+        "DELETE FROM image_text_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
+        [&old_path_str],
+    )?;
     connection.execute("DELETE FROM notes WHERE path = ?1", [&old_path_str])?;
     Ok(MoveOutcome::Moved)
 }
@@ -810,6 +818,10 @@ pub fn rebuild_index_with_context(context: &StorageContext) -> Result<super::Ind
                 )?;
                 tx.execute(
                     "DELETE FROM attachment_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
+                    [&existing],
+                )?;
+                tx.execute(
+                    "DELETE FROM image_text_fts WHERE note_id IN (SELECT id FROM notes WHERE path = ?1)",
                     [&existing],
                 )?;
                 stats.removed += tx.execute("DELETE FROM notes WHERE path = ?1", [&existing])?;
@@ -1537,6 +1549,44 @@ pub(super) fn extract_image_text(path: &Path) -> Result<String> {
 
 pub fn ocr_image_text(path: &Path) -> Result<String> {
     extract_image_text(path)
+}
+
+/// Manually set OCR text for an attachment by its database path (#3541).
+///
+/// This is useful for CLI tools or external OCR pipelines that extract text
+/// outside the automatic note-save flow (e.g., a cloud OCR API or manual
+/// transcription). The text is stored in the `attachments.ocr_text` column
+/// and indexed into `image_text_fts` for full-text search.
+pub fn set_attachment_ocr_text(
+    context: &super::StorageContext,
+    attachment_path: &str,
+    ocr_text: &str,
+) -> Result<()> {
+    let (connection, _) = open_connection(context)?;
+    let trimmed = ocr_text.trim();
+    // Update the attachments table.
+    let affected = connection.execute(
+        "UPDATE attachments SET ocr_text = ?1 WHERE path = ?2",
+        params![trimmed, attachment_path],
+    )?;
+    if affected == 0 {
+        return Ok(()); // No matching attachment — nothing to do.
+    }
+
+    // Sync the image_text_fts: remove old entries for this attachment, then
+    // re-insert if there is non-empty OCR text.
+    connection.execute(
+        "DELETE FROM image_text_fts WHERE attachment_id IN (SELECT id FROM attachments WHERE path = ?1)",
+        params![attachment_path],
+    )?;
+    if !trimmed.is_empty() {
+        connection.execute(
+            "INSERT INTO image_text_fts (note_id, attachment_id, ocr_text)
+             SELECT note_id, id, ?1 FROM attachments WHERE path = ?2",
+            params![trimmed, attachment_path],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -2303,6 +2353,7 @@ fn sync_note_attachments_with_connection(
     vault_dir: &Path,
 ) -> Result<()> {
     connection.execute("DELETE FROM attachment_fts WHERE note_id = ?1", [note_id])?;
+    connection.execute("DELETE FROM image_text_fts WHERE note_id = ?1", [note_id])?;
     connection.execute("DELETE FROM attachments WHERE note_id = ?1", [note_id])?;
 
     if image_refs.is_empty() {
@@ -2394,6 +2445,15 @@ fn sync_note_attachments_with_connection(
                 absolute.to_string_lossy().to_string()
             ],
         )?;
+        // #3541: Index OCR text into dedicated FTS table for efficient
+        // full-text search of text embedded in images.
+        if !ocr_text.trim().is_empty() {
+            connection.execute(
+                "INSERT INTO image_text_fts (note_id, attachment_id, ocr_text)
+                 VALUES (?1, ?2, ?3)",
+                params![note_id, attachment_id, &ocr_text],
+            )?;
+        }
     }
 
     Ok(())

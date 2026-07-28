@@ -972,6 +972,51 @@ fn query_attachment_fts_note_ids(
     Ok(note_ids)
 }
 
+/// Query the dedicated OCR text FTS table for notes whose embedded image
+/// text matches the search query (#3541).
+fn query_image_text_fts_note_ids(
+    connection: &Connection,
+    text: &str,
+    limit: usize,
+) -> Result<Vec<String>> {
+    let fts_query = make_fts_query(text);
+    if fts_query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT note_id
+         FROM image_text_fts
+         WHERE image_text_fts MATCH ?1
+         ORDER BY bm25(image_text_fts)
+         LIMIT ?2",
+    )?;
+    let rows = match statement.query_map(
+        params![fts_query, (limit.saturating_mul(3)) as i64],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "Image text FTS5 query failed, returning empty results");
+            return Ok(Vec::new());
+        }
+    };
+
+    let mut note_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for row in rows {
+        let note_id = row?;
+        if seen.insert(note_id.clone()) {
+            note_ids.push(note_id);
+        }
+        if note_ids.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(note_ids)
+}
+
 pub(super) fn load_note_meta_by_id(
     connection: &Connection,
     note_id: &str,
@@ -1288,6 +1333,9 @@ pub(super) fn rank_documents(
         &attachment_query,
         limit.saturating_mul(4).max(12),
     )?;
+    // #3541: Also search OCR text FTS for image-embedded text matches.
+    let image_text_fts_ids =
+        query_image_text_fts_note_ids(connection, query, limit.saturating_mul(4).max(12))?;
     let visual_scores = query_visual_candidate_scores(connection, image_paths)?;
     let attachment_semantic = query_attachment_semantic_scores(connection, &attachment_query)?;
     let note_semantic = query_note_semantic_scores(connection, &attachment_query)?;
@@ -1307,6 +1355,7 @@ pub(super) fn rank_documents(
     let candidate_ids = build_candidate_note_ids(
         &note_fts_ids,
         &attachment_fts_ids,
+        &image_text_fts_ids,
         &semantic_scores,
         &visual_scores,
         &recent_ids,
@@ -1338,6 +1387,10 @@ pub(super) fn rank_documents(
         if let Some(index) = attachment_fts_ids.iter().position(|id| id == &note_id) {
             score += 150_i64.saturating_sub(index as i64 * 8);
         }
+        // #3541: Boost notes whose OCR image text matches the query.
+        if let Some(index) = image_text_fts_ids.iter().position(|id| id == &note_id) {
+            score += 130_i64.saturating_sub(index as i64 * 7);
+        }
         if let Some(semantic_score) = semantic_scores.get(&note_id) {
             score += *semantic_score;
         }
@@ -1364,6 +1417,7 @@ pub(super) fn rank_documents(
 fn build_candidate_note_ids(
     note_fts_ids: &[String],
     attachment_fts_ids: &[String],
+    image_text_fts_ids: &[String],
     semantic_scores: &HashMap<String, i64>,
     visual_scores: &HashMap<String, i64>,
     recent_ids: &[String],
@@ -1380,6 +1434,9 @@ fn build_candidate_note_ids(
         push_candidate_note_id(note_id, &mut seen, &mut ids);
     }
     for note_id in attachment_fts_ids {
+        push_candidate_note_id(note_id, &mut seen, &mut ids);
+    }
+    for note_id in image_text_fts_ids {
         push_candidate_note_id(note_id, &mut seen, &mut ids);
     }
     for (note_id, _) in semantic_ranked {
@@ -2400,6 +2457,7 @@ mod tests {
         let ids = build_candidate_note_ids(
             &["a".to_string(), "b".to_string()],
             &["b".to_string(), "c".to_string()],
+            &[],
             &HashMap::new(),
             &HashMap::new(),
             &["c".to_string(), "d".to_string()],
@@ -2416,7 +2474,8 @@ mod tests {
     #[test]
     fn build_candidates_truncates_to_limit() {
         let many: Vec<String> = (0..100).map(|i| format!("id{i}")).collect();
-        let result = build_candidate_note_ids(&many, &[], &HashMap::new(), &HashMap::new(), &[], 2);
+        let result =
+            build_candidate_note_ids(&many, &[], &[], &HashMap::new(), &HashMap::new(), &[], 2);
         assert!(result.len() <= 24); // limit*8.max(24) with limit=2 → 24
     }
     // ── 1.20 cosine_similarity / normalize_vector ──

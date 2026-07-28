@@ -88,6 +88,7 @@ pub use notes::{
     save_note_with_images_with_context,
     search_candidate_notes_async,
     search_candidate_notes_with_context,
+    set_attachment_ocr_text,
     vault_export_async,
     vault_export_with_context,
     BulkNoteOpFailure,

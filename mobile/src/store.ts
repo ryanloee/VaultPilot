@@ -424,6 +424,11 @@ export const useAppStore = create<AppState>()(
           const fresh = useAppStore.getState();
           if (keys === null) {
             // SecureStore read failed — preserve existing keys to avoid wiping (#1629)
+            // Still invalidate settings cache so getSettings() reads fresh store
+            // values instead of stale pre-hydration cache (#3533).
+            import('./api/settingsCache').then(m => m.invalidateSettingsCache()).catch(e => {
+              console.warn('[Store] failed to invalidate settings cache after rehydration (null keys):', e);
+            });
             Alert.alert(
               '密钥加载失败',
               '无法从安全存储读取 API Key，已保留当前会话中的密钥。重启应用后可能需要重新输入。',

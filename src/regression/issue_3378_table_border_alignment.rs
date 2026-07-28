@@ -14,6 +14,7 @@ mod tests {
             .map(|(field, label)| BaseColumn {
                 field: (*field).into(),
                 label: label.map(|s| s.to_string()),
+                width: None,
             })
             .collect();
         let matched = data.len();

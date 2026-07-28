@@ -13,10 +13,12 @@ mod tests {
                 BaseColumn {
                     field: "title".into(),
                     label: Some("Title".into()),
+                    width: None,
                 },
                 BaseColumn {
                     field: "status".into(),
                     label: None,
+                    width: None,
                 },
             ],
             rows: vec![
@@ -73,6 +75,7 @@ mod tests {
             columns: vec![BaseColumn {
                 field: "content".into(),
                 label: None,
+                width: None,
             }],
             rows: vec![BaseRow {
                 note_id: "n1".into(),

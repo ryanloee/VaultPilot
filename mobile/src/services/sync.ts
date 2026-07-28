@@ -360,18 +360,31 @@ async function runWithConcurrency<T>(
 ): Promise<void> {
   let index = 0;
   let aborted = false;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (index < items.length) {
-      if (signal?.aborted) { aborted = true; return; }
-      const i = index++;
-      try { await fn(items[i]); } catch (e) {
-        if (signal?.aborted) { aborted = true; return; }
-        throw e;
+  const innerController = new AbortController();
+  // Propagate outer signal to inner controller
+  const onOuterAbort = () => innerController.abort();
+  signal?.addEventListener('abort', onOuterAbort, { once: true });
+  const innerSignal = innerController.signal;
+
+  try {
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (index < items.length) {
+        if (innerSignal.aborted) { aborted = true; return; }
+        const i = index++;
+        try { await fn(items[i]); } catch (e) {
+          if (innerSignal.aborted) { aborted = true; return; }
+          // Cancel other workers when one fails (#3534)
+          innerController.abort();
+          throw e;
+        }
       }
-    }
-  });
-  await Promise.all(workers);
-  if (aborted) return;  // Return partial results instead of throwing (#2451)
+    });
+    await Promise.all(workers);
+    if (aborted) return;  // Return partial results instead of throwing (#2451)
+  } finally {
+    // Clean up the outer-signal listener to prevent listener leak (#3536)
+    signal?.removeEventListener('abort', onOuterAbort);
+  }
 }
 
 /**

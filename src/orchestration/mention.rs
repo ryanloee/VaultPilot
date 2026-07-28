@@ -53,7 +53,7 @@ pub(crate) const MAX_NOTE_CONTENT_CHARS: usize = 2000;
 /// # Examples
 ///
 /// ```
-/// # use vaultpilot::orchestration::mention::parse_at_mentions;
+/// # use vaultpilot_lib::orchestration::mention::parse_at_mentions;
 /// assert_eq!(parse_at_mentions("Hello @world"), vec!["world"]);
 /// assert_eq!(parse_at_mentions("@[Meeting Notes] summary"), vec!["Meeting Notes"]);
 /// assert_eq!(parse_at_mentions("@a @b @a"), vec!["a", "b"]);

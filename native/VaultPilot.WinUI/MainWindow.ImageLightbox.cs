@@ -219,6 +219,9 @@ public sealed partial class MainWindow
         try
         {
             var bitmap = await _lightboxImageLoader(_lightboxPaths[index]);
+            // Staleness check: if the user navigated away while we were loading,
+            // discard this result (issue #3530).
+            if (_lightboxIndex != index) return;
             if (bitmap is not null)
             {
                 _lightboxImage.Source = bitmap;
@@ -229,6 +232,10 @@ public sealed partial class MainWindow
         {
             _lightboxImage.Opacity = 0.35;
         }
+
+        // Re-check staleness after catch — the index may have changed during the
+        // exception handler (unlikely but consistent).
+        if (_lightboxIndex != index) return;
 
         Lightbox_ResetZoom();
         UpdateLightboxNavButtons();

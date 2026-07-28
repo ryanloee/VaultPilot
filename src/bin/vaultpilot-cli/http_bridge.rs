@@ -27,12 +27,14 @@ use vaultpilot_lib::ai::actions::{
 };
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
-    create_subscription_async, delete_subscription_async, get_subscription_async,
-    list_subscriptions_async, set_subscription_enabled_async, update_subscription_async,
+    bulk_delete_notes_async, bulk_move_notes_async, bulk_update_tags_async,
+    deep_search_notes_async, delete_note_async, import_markdown_async, load_note_async,
+    load_settings_async, save_note_async, search_notes_async, typeahead_search_async, NoteNotFound,
+    StorageContext,
 };
 use vaultpilot_lib::storage::{
-    deep_search_notes_async, import_markdown_async, load_note_async, load_settings_async,
-    save_note_async, search_notes_async, typeahead_search_async, NoteNotFound, StorageContext,
+    create_subscription_async, delete_subscription_async, get_subscription_async,
+    list_subscriptions_async, set_subscription_enabled_async, update_subscription_async,
 };
 use vaultpilot_lib::{ask_with_ai_with_context, normalize_tool_path, run_single_subscription};
 
@@ -84,7 +86,14 @@ pub(super) async fn run_http_bridge(
             "/api/notes/search/progressive",
             get(http_progressive_search),
         )
-        .route("/api/notes/{note_id}", get(http_get_note))
+        .route(
+            "/api/notes/{note_id}",
+            get(http_get_note).delete(http_delete_note),
+        )
+        // #3514: Bulk note operations for file-browser multi-select.
+        .route("/api/notes/bulk-delete", post(http_bulk_delete_notes))
+        .route("/api/notes/bulk-move", post(http_bulk_move_notes))
+        .route("/api/notes/bulk-tags", post(http_bulk_update_tags))
         // Vault Health Dashboard (#2014)
         .route("/api/vault/health", get(http_vault_health))
         // Knowledge Graph API (#3460) — expose vault note link graph as JSON
@@ -494,6 +503,141 @@ fn classify_note_load_error(e: &anyhow::Error) -> StatusCode {
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     }
+}
+
+// ─── #3514: Single & bulk note operations for file-browser multi-select ───
+
+/// DELETE /api/notes/{note_id} — Delete a single note (#3514).
+async fn http_delete_note(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    AxumPath(note_id): AxumPath<String>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    let deleted = delete_note_async(&state.context, &note_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_delete_note: failed to delete note {note_id}: {e}");
+            openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete note")
+        })?;
+    if deleted {
+        Ok(Json(serde_json::json!({ "deleted": true, "id": note_id })))
+    } else {
+        Err(openai_error(StatusCode::NOT_FOUND, "Note not found"))
+    }
+}
+
+/// Request body for `POST /api/notes/bulk-delete` (#3514).
+#[derive(Deserialize)]
+struct BulkDeleteRequest {
+    note_ids: Vec<String>,
+    #[serde(default)]
+    delete_attachments: Option<bool>,
+}
+
+/// POST /api/notes/bulk-delete — Delete multiple notes (#3514).
+async fn http_bulk_delete_notes(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(req): Json<BulkDeleteRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    if req.note_ids.is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "note_ids must not be empty",
+        ));
+    }
+    let result = bulk_delete_notes_async(&state.context, req.note_ids, req.delete_attachments)
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_bulk_delete_notes: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to bulk delete notes",
+            )
+        })?;
+    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
+}
+
+/// Request body for `POST /api/notes/bulk-move` (#3514).
+#[derive(Deserialize)]
+struct BulkMoveRequest {
+    note_ids: Vec<String>,
+    target_dir: String,
+}
+
+/// POST /api/notes/bulk-move — Move multiple notes to a target directory (#3514).
+async fn http_bulk_move_notes(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(req): Json<BulkMoveRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    if req.note_ids.is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "note_ids must not be empty",
+        ));
+    }
+    if req.target_dir.trim().is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "target_dir must not be empty",
+        ));
+    }
+    let result = bulk_move_notes_async(&state.context, req.note_ids, req.target_dir)
+        .await
+        .map_err(|e| {
+            tracing::warn!("http_bulk_move_notes: {e}");
+            openai_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to bulk move notes",
+            )
+        })?;
+    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
+}
+
+/// Request body for `POST /api/notes/bulk-tags` (#3514).
+#[derive(Deserialize)]
+struct BulkTagsRequest {
+    note_ids: Vec<String>,
+    #[serde(default)]
+    add_tags: Vec<String>,
+    #[serde(default)]
+    remove_tags: Vec<String>,
+}
+
+/// POST /api/notes/bulk-tags — Add/remove tags on multiple notes (#3514).
+async fn http_bulk_update_tags(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Json(req): Json<BulkTagsRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+    if req.note_ids.is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "note_ids must not be empty",
+        ));
+    }
+    if req.add_tags.is_empty() && req.remove_tags.is_empty() {
+        return Err(openai_error(
+            StatusCode::BAD_REQUEST,
+            "At least one of add_tags / remove_tags must be non-empty",
+        ));
+    }
+    let result =
+        bulk_update_tags_async(&state.context, req.note_ids, req.add_tags, req.remove_tags)
+            .await
+            .map_err(|e| {
+                tracing::warn!("http_bulk_update_tags: {e}");
+                openai_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to bulk update tags",
+                )
+            })?;
+    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
 }
 
 async fn http_search_notes(

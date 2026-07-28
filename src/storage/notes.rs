@@ -2536,6 +2536,47 @@ pub async fn find_related_notes_async(
         .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }
 
+/// Spawn-blocking wrapper for [`bulk_delete_notes_with_context`] (#3514).
+pub async fn bulk_delete_notes_async(
+    ctx: &StorageContext,
+    note_ids: Vec<String>,
+    delete_attachments: Option<bool>,
+) -> Result<BulkNoteOpResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || {
+        bulk_delete_notes_with_context(&ctx, &note_ids, delete_attachments)
+    })
+    .await
+    .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`bulk_move_notes_with_context`] (#3514).
+pub async fn bulk_move_notes_async(
+    ctx: &StorageContext,
+    note_ids: Vec<String>,
+    target_dir: String,
+) -> Result<BulkNoteOpResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || bulk_move_notes_with_context(&ctx, &note_ids, &target_dir))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`bulk_update_tags_with_context`] (#3514).
+pub async fn bulk_update_tags_async(
+    ctx: &StorageContext,
+    note_ids: Vec<String>,
+    add_tags: Vec<String>,
+    remove_tags: Vec<String>,
+) -> Result<BulkNoteOpResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || {
+        bulk_update_tags_with_context(&ctx, &note_ids, &add_tags, &remove_tags)
+    })
+    .await
+    .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
 /// Spawn-blocking wrapper for [`load_context_notes_with_context`].
 pub async fn load_context_notes_async(
     ctx: &StorageContext,

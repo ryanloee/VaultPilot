@@ -46,8 +46,11 @@ pub use instant_search::{
 };
 // Re-export notes public API so callers see no difference.
 pub use notes::{
+    bulk_delete_notes_async,
     bulk_delete_notes_with_context,
+    bulk_move_notes_async,
     bulk_move_notes_with_context,
+    bulk_update_tags_async,
     bulk_update_tags_with_context,
     delete_note_async,
     delete_note_with_context,

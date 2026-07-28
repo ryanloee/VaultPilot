@@ -73,4 +73,5 @@ mod issue_3378_table_border_alignment;
 mod issue_3379_formula_precedence;
 mod issue_3478_folder_import;
 mod issue_3512_paren_url;
+mod issue_3514_bulk_ops_http_bridge;
 mod issue_914_related_notes;

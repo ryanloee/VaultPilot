@@ -11,6 +11,11 @@ namespace VaultPilot.WinUI.Utils;
 /// </summary>
 public static class NoteRefs
 {
+    // #3581: Static cache for sorted title list — avoids O(n log n) sort +
+    // ToLowerInvariant on every call to FindNoteReferences.
+    private static Dictionary<string, string>? _lastTitleMap;
+    private static (string Lower, string Title)[]? _sortedTitlesCache;
+
     /// <summary>
     /// A detected note reference in text with position info.
     /// </summary>
@@ -58,6 +63,10 @@ public static class NoteRefs
     /// Find auto-detected note title references in text using greedy longest-match.
     /// Titles are checked longest-first to avoid substring false positives.
     /// Boundary checks prevent matching inside Latin words (e.g. "React" != "Reactor").
+    ///
+    /// Performance (#3581): Sorted title list is cached at the static level and
+    /// rebuilt only when titleMap reference changes. Short texts (&lt;4 chars) also
+    /// skip the scan entirely since no meaningful title can match.
     /// </summary>
     /// <param name="text">Raw text to scan</param>
     /// <param name="titleMap">title -> noteId dictionary (from LoadNoteTitleMapAsync)</param>
@@ -68,18 +77,32 @@ public static class NoteRefs
         if (titleMap is null || titleMap.Count == 0 || string.IsNullOrEmpty(text))
             return refs;
 
+        // #3581: Very short text can't match any meaningful title. Avoid the
+        // cost of building lowerText + scanning through all titles.
+        if (text.Length < 4)
+            return refs;
+
         var lowerText = text.ToLowerInvariant();
 
-        // Sort titles by length descending for greedy longest-match
-        var sortedTitles = titleMap.Keys
-            .Where(t => !string.IsNullOrWhiteSpace(t))
-            .OrderByDescending(t => t.Length)
-            .ToArray();
-
-        foreach (var title in sortedTitles)
+        // #3581: Static cache for sorted title list — rebuilt only when the
+        // titleMap reference changes (practically never within a 30s TTL).
+        if (_lastTitleMap != titleMap || _sortedTitlesCache is null)
         {
+            _lastTitleMap = titleMap;
+            _sortedTitlesCache = titleMap.Keys
+                .Where(t => !string.IsNullOrWhiteSpace(t) && t.Length >= 2)
+                .OrderByDescending(t => t.Length)
+                .Select(t => (Lower: t.ToLowerInvariant(), Title: t))
+                .ToArray();
+        }
+
+        foreach (var (lowerTitle, title) in _sortedTitlesCache)
+        {
+            // #3581: Skip titles that can't possibly fit in remaining text.
+            if (lowerTitle.Length > text.Length)
+                continue;
+
             var noteId = titleMap[title];
-            var lowerTitle = title.ToLowerInvariant();
             var searchFrom = 0;
 
             while (true)

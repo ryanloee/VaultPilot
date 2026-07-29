@@ -300,6 +300,13 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrEmpty(text))
             return;
 
+        // #3581: Very short text can't match any meaningful note title.
+        if (text.Length < 4)
+        {
+            inlines.Add(new Run { Text = text });
+            return;
+        }
+
         // Only check for note refs if the title map has been loaded
         var titleMap = _noteTitleMap;
         if (titleMap is null || titleMap.Count == 0)

@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::ai::client::{send_request_with_temperature, RequestUsage};
 use crate::capture::handle_capture;
 use crate::models::{AppSettings, NoteDocument, NoteMeta, ProviderConfig};
+use crate::people_index::PersonAliasMap;
 use crate::storage::{save_note_with_context, StorageContext};
 
 // ── Data types ────────────────────────────────────────────────────────────
@@ -80,6 +81,28 @@ pub struct MeetingTranscriptionResult {
     /// Path to the saved note in the vault (populated after saving).
     #[serde(default)]
     pub note_path: Option<String>,
+}
+
+/// A single speaker-labeled segment of a diarized transcript.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizedSegment {
+    /// Speaker identifier (e.g. "Speaker A", or a resolved name like "Alice").
+    pub speaker: String,
+    /// The text spoken by this speaker in this segment.
+    pub text: String,
+}
+
+/// Result of speaker diarization: a list of segments each tagged with a speaker label.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizationResult {
+    /// Segments in chronological order, each annotated with a speaker.
+    pub segments: Vec<DiarizedSegment>,
+    /// The full annotated transcript (with speaker labels inline).
+    pub annotated_transcript: String,
+    /// Raw speaker names extracted (pre-mapping to vault people).
+    pub raw_speakers: Vec<String>,
 }
 
 // ── Transcribe Audio ──────────────────────────────────────────────────────
@@ -328,6 +351,138 @@ fn extract_json_from_response(text: &str) -> Option<String> {
     }
 
     None
+}
+
+// ── Speaker Diarization (#3588) ────────────────────────────────────────────
+
+/// Use the LLM to identify speakers in a raw transcript and annotate it with speaker labels.
+///
+/// The LLM is prompted to split the transcript into segments, assigning a speaker label
+/// to each (e.g. "Speaker A", "Speaker B", or inferred names like "Alice"). This does
+/// **not** use audio-based diarization; it relies on the LLM's ability to infer speaker
+/// changes from conversational context.
+///
+/// Returns the diarized result with raw speaker labels (not yet mapped to vault people).
+#[instrument(skip(settings))]
+pub async fn diarize_transcript(
+    transcript: &str,
+    settings: &AppSettings,
+) -> Result<DiarizationResult> {
+    let system = "You are a meeting transcription assistant. Your task is to annotate a raw \
+                  transcript with speaker labels. Analyze the conversation flow to identify \
+                  distinct speakers and label them consistently.\n\
+                  Return ONLY valid JSON with no markdown fences or extra text.";
+
+    let user_prompt = format!(
+        r#"Analyze the following meeting transcript and annotate it with speaker labels.
+
+Transcript:
+```
+{transcript}
+```
+
+Identify distinct speakers from the conversation. Label speakers consistently —
+use real names if they can be inferred from context (e.g. "Alice", "Bob"), otherwise
+use "Speaker A", "Speaker B", etc. Do NOT create more distinct speakers than the
+conversation warrants.
+
+Respond with a JSON object:
+{{
+  "segments": [
+    {{ "speaker": "Speaker A", "text": "Hello, let's start the meeting." }},
+    {{ "speaker": "Speaker B", "text": "Sounds good, what's on the agenda?" }}
+  ],
+  "rawSpeakers": ["Speaker A", "Speaker B"]
+}}
+
+IMPORTANT: The "rawSpeakers" list should contain the UNIQUE speaker labels used in the
+segments, in order of first appearance.
+Output ONLY valid JSON — no markdown fences, no extra text."#,
+        transcript = transcript
+    );
+
+    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.1)
+        .await
+        .context("LLM call for speaker diarization failed")?;
+
+    // Try to extract JSON from the response (handles possible markdown fences)
+    let json_text = extract_json_from_response(&response.text).ok_or_else(|| {
+        anyhow::anyhow!(
+            "model did not return valid JSON for diarization. Response: {}",
+            crate::sanitize_error(&response.text.chars().take(300).collect::<String>())
+        )
+    })?;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DiarizationResponse {
+        segments: Vec<DiarizedSegment>,
+        #[serde(default)]
+        raw_speakers: Vec<String>,
+    }
+
+    let parsed: DiarizationResponse = serde_json::from_str(&json_text).with_context(|| {
+        format!(
+            "failed to parse diarization JSON. First 200 chars: {}",
+            crate::sanitize_error(&json_text.chars().take(200).collect::<String>())
+        )
+    })?;
+
+    if parsed.segments.is_empty() {
+        anyhow::bail!("model returned a diarization result with no segments");
+    }
+
+    // Build the annotated transcript from the segments
+    let annotated_transcript = parsed
+        .segments
+        .iter()
+        .map(|seg| format!("{}: {}", seg.speaker, seg.text))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Ok(DiarizationResult {
+        segments: parsed.segments,
+        annotated_transcript,
+        raw_speakers: parsed.raw_speakers,
+    })
+}
+
+/// Map raw speaker labels (e.g. "Speaker A", "Alice") to known vault people
+/// using the alias map from the people index.
+///
+/// Speaker labels that match a known person (or alias) are replaced with the
+/// canonical name. Unknown speakers are left as-is.
+pub fn map_speakers_to_people(result: &mut DiarizationResult, alias_map: &PersonAliasMap) {
+    for segment in &mut result.segments {
+        let resolved = alias_map.resolve(&segment.speaker);
+        if resolved != segment.speaker {
+            segment.speaker = resolved.clone();
+        }
+    }
+
+    // Also resolve the raw_speakers list
+    result.raw_speakers = result
+        .raw_speakers
+        .iter()
+        .map(|s| alias_map.resolve(s))
+        .collect();
+
+    // Rebuild the annotated transcript with resolved speaker names
+    result.annotated_transcript = result
+        .segments
+        .iter()
+        .map(|seg| format!("{}: {}", seg.speaker, seg.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+}
+
+/// Build the annotated transcript string from diarized segments.
+pub fn annotated_transcript_to_string(segments: &[DiarizedSegment]) -> String {
+    segments
+        .iter()
+        .map(|seg| format!("{}: {}", seg.speaker, seg.text))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ── Create Meeting Note ───────────────────────────────────────────────────
@@ -931,5 +1086,124 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ── Speaker Diarization Tests (#3588) ──────────────────────────────
+
+    #[test]
+    fn diarized_segment_serialization_roundtrip() {
+        let segment = DiarizedSegment {
+            speaker: "Alice".to_string(),
+            text: "Let's review the Q3 results.".to_string(),
+        };
+        let json = serde_json::to_string(&segment).unwrap();
+        let deserialized: DiarizedSegment = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.speaker, "Alice");
+        assert_eq!(deserialized.text, "Let's review the Q3 results.");
+    }
+
+    #[test]
+    fn diarization_result_defaults() {
+        let result = DiarizationResult {
+            segments: vec![
+                DiarizedSegment {
+                    speaker: "Speaker A".to_string(),
+                    text: "Hello".to_string(),
+                },
+                DiarizedSegment {
+                    speaker: "Speaker B".to_string(),
+                    text: "Hi there".to_string(),
+                },
+            ],
+            annotated_transcript: "Speaker A: Hello\nSpeaker B: Hi there".to_string(),
+            raw_speakers: vec!["Speaker A".to_string(), "Speaker B".to_string()],
+        };
+        assert_eq!(result.segments.len(), 2);
+        assert_eq!(result.raw_speakers.len(), 2);
+        assert!(!result.annotated_transcript.is_empty());
+    }
+
+    #[test]
+    fn map_speakers_to_people_resolves_known_speakers() {
+        let mut aliases = PersonAliasMap::new();
+        aliases.add_alias("老王", "王明");
+        aliases.add_alias("Speaker A", "Alice");
+        aliases.add_alias("Speaker B", "Bob");
+
+        let mut result = DiarizationResult {
+            segments: vec![
+                DiarizedSegment {
+                    speaker: "Speaker A".to_string(),
+                    text: "Let's start.".to_string(),
+                },
+                DiarizedSegment {
+                    speaker: "Speaker B".to_string(),
+                    text: "I agree.".to_string(),
+                },
+                DiarizedSegment {
+                    speaker: "老王".to_string(),
+                    text: "没问题。".to_string(),
+                },
+            ],
+            annotated_transcript: String::new(),
+            raw_speakers: vec![
+                "Speaker A".to_string(),
+                "Speaker B".to_string(),
+                "老王".to_string(),
+            ],
+        };
+
+        map_speakers_to_people(&mut result, &aliases);
+
+        // Speaker A → Alice
+        assert_eq!(result.segments[0].speaker, "Alice");
+        // Speaker B → Bob
+        assert_eq!(result.segments[1].speaker, "Bob");
+        // 老王 → 王明
+        assert_eq!(result.segments[2].speaker, "王明");
+
+        // raw_speakers should also be resolved
+        assert_eq!(result.raw_speakers, vec!["Alice", "Bob", "王明"]);
+
+        // annotated_transcript should be rebuilt with resolved names
+        assert!(result.annotated_transcript.contains("Alice:"));
+        assert!(result.annotated_transcript.contains("Bob:"));
+        assert!(result.annotated_transcript.contains("王明:"));
+    }
+
+    #[test]
+    fn map_speakers_to_people_leaves_unknown_unchanged() {
+        let aliases = PersonAliasMap::new(); // empty — no aliases registered
+
+        let mut result = DiarizationResult {
+            segments: vec![DiarizedSegment {
+                speaker: "Unknown Person".to_string(),
+                text: "Hello world".to_string(),
+            }],
+            annotated_transcript: String::new(),
+            raw_speakers: vec!["Unknown Person".to_string()],
+        };
+
+        map_speakers_to_people(&mut result, &aliases);
+
+        // Unknown speaker stays as-is (trimmed)
+        assert_eq!(result.segments[0].speaker, "Unknown Person");
+        assert_eq!(result.raw_speakers[0], "Unknown Person");
+    }
+
+    #[test]
+    fn annotated_transcript_to_string_formats_correctly() {
+        let segments = vec![
+            DiarizedSegment {
+                speaker: "Alice".to_string(),
+                text: "First point.".to_string(),
+            },
+            DiarizedSegment {
+                speaker: "Bob".to_string(),
+                text: "Second point.".to_string(),
+            },
+        ];
+        let output = annotated_transcript_to_string(&segments);
+        assert_eq!(output, "Alice: First point.\nBob: Second point.");
     }
 }

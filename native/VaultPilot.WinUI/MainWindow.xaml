@@ -221,42 +221,38 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <!-- Message thread -->
-                        <ScrollViewer
-                            x:Name="ChatScrollViewer"
-                            Grid.Row="0"
-                            Padding="24,20,24,12"
-                            VerticalScrollBarVisibility="Auto">
-                            <Grid>
-                                <StackPanel
-                                    x:Name="MessagesPanel"
-                                    Spacing="18"
-                                    HorizontalAlignment="Stretch"
-                                    ChildrenTransitions="{StaticResource AppChildrenTransitions}">
-                                    <TextBlock Text="对话" FontSize="{StaticResource VaultFontSizeMedium}"
-                                               FontWeight="SemiBold" Foreground="{ThemeResource VaultTextPrimary}" />
-                                    <TextBlock Text="正在接入原生 Windows 界面。" TextWrapping="Wrap"
-                                               FontSize="{StaticResource VaultFontSizeBody}"
-                                               Foreground="{ThemeResource VaultTextSecondary}" />
-                                </StackPanel>
+                        <!-- ══ Message thread (virtualized via ItemsRepeater, #3581) ══ -->
+                        <Grid Grid.Row="0">
+                            <ScrollViewer
+                                x:Name="ChatScrollViewer"
+                                Padding="24,20,24,12"
+                                VerticalScrollBarVisibility="Auto">
+                                <ItemsRepeater
+                                    x:Name="MessagesRepeater"
+                                    ElementPrepared="OnMessageElementPrepared"
+                                    ElementClearing="OnMessageElementClearing">
+                                    <ItemsRepeater.Layout>
+                                        <StackLayout Orientation="Vertical" Spacing="18"/>
+                                    </ItemsRepeater.Layout>
+                                </ItemsRepeater>
+                            </ScrollViewer>
 
-                                <!-- Jump-to-latest floating button -->
-                                <Button
-                                    x:Name="JumpLatestButton"
-                                    Margin="0,0,0,12"
-                                    Padding="12,6,12,6"
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Bottom"
-                                    CornerRadius="{StaticResource VaultRadiusPill}"
-                                    Background="{ThemeResource VaultCardElevatedBg}"
-                                    BorderBrush="{ThemeResource VaultBorder}"
-                                    BorderThickness="1"
-                                    Content="回到最新对话"
-                                    FontSize="{StaticResource VaultFontSizeCaption}"
-                                    Visibility="Collapsed"
-                                    AutomationProperties.Name="回到最新对话" AutomationProperties.HelpText="滚动到最新的聊天消息" />
-                            </Grid>
-                        </ScrollViewer>
+                            <!-- Jump-to-latest floating button -->
+                            <Button
+                                x:Name="JumpLatestButton"
+                                Margin="0,0,0,12"
+                                Padding="12,6,12,6"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Bottom"
+                                CornerRadius="{StaticResource VaultRadiusPill}"
+                                Background="{ThemeResource VaultCardElevatedBg}"
+                                BorderBrush="{ThemeResource VaultBorder}"
+                                BorderThickness="1"
+                                Content="回到最新对话"
+                                FontSize="{StaticResource VaultFontSizeCaption}"
+                                Visibility="Collapsed"
+                                AutomationProperties.Name="回到最新对话" AutomationProperties.HelpText="滚动到最新的聊天消息" />
+                        </Grid>
 
                         <!-- ══ Capsule composer (bottom) ══ -->
                         <Grid Grid.Row="1" Padding="24,8,24,16">

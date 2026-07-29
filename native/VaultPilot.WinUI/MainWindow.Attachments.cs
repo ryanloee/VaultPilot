@@ -18,30 +18,6 @@ namespace VaultPilot.WinUI;
 /// </summary>
 public sealed partial class MainWindow : Window
 {
-    private void AppendAttachmentPreviews(IReadOnlyList<ChatAttachment> attachments, string role)
-    {
-        if (attachments.Count == 0)
-        {
-            return;
-        }
-
-        var wrap = new WrapPanel
-        {
-            Orientation = Orientation.Horizontal,
-            ItemWidth = 142,
-            ItemHeight = 178,
-            HorizontalAlignment = role == "user" ? HorizontalAlignment.Right : HorizontalAlignment.Left,
-            Margin = new Thickness(0, 2, 0, 0)
-        };
-
-        foreach (var attachment in attachments)
-        {
-            wrap.Children.Add(CreateChatAttachmentPreview(attachment, removable: false));
-        }
-
-        MessagesPanel.Children.Add(wrap);
-    }
-
     private void RefreshAttachments()
     {
         AttachmentPanel.Children.Clear();

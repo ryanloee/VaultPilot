@@ -65,7 +65,7 @@ public sealed partial class MainWindow : Window
         UpdateStatusBar("error", title, LocalizeError(error.Message));
         if (addMessage)
         {
-            AppendMessage("错误", LocalizeError(error.Message));
+            AddSystemMessage("错误", LocalizeError(error.Message));
         }
     }
 

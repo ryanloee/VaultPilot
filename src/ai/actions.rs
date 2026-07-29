@@ -2315,7 +2315,10 @@ mod tests {
             export_format: None,
         };
         let result = validate_request(&request);
-        assert!(result.is_some(), "whitespace-only transcript should fail validation");
+        assert!(
+            result.is_some(),
+            "whitespace-only transcript should fail validation"
+        );
     }
 
     #[test]
@@ -2344,10 +2347,7 @@ mod tests {
             "  ## Summary\nDiscussed Q3 plans.  ",
             RequestUsage::default(),
         );
-        assert_eq!(
-            result.result.trim(),
-            "## Summary\nDiscussed Q3 plans."
-        );
+        assert_eq!(result.result.trim(), "## Summary\nDiscussed Q3 plans.");
         assert!(result.error.is_none());
     }
 }

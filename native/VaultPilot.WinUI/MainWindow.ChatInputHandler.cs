@@ -20,6 +20,10 @@ public sealed partial class MainWindow : Window
 {
     // ── Chat event handlers ──
 
+    // #3581: Debounce composer height calc so repeated key-up events don't
+    // trigger redundant layout passes on every keystroke.
+    private readonly DispatcherTimer _composerDebounceTimer = new();
+
     private async void OnSendClicked(object sender, RoutedEventArgs e)
     {
         try
@@ -44,14 +48,30 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // #3581: Debounce timer callback — actually applies the height calc.
+    private void OnComposerDebounceTick(object? sender, object? e)
+    {
+        _composerDebounceTimer.Stop();
+        ApplyComposerHeight(ComposerBox);
+    }
+
     private void OnComposerTextChanged(object sender, TextChangedEventArgs e)
     {
         var textBox = (TextBox)sender;
         if (textBox.ActualWidth <= 0) return;
 
-        // #X: Simple line-count estimation instead of expensive TextBlock.Measure().
-        // The old code created a TextBlock and called Measure() on every keystroke,
-        // which caused severe lag with long text (#X).
+        // #3581: Debounce — wait 120ms after the last keystroke before
+        // recalculating height. Avoids redundant layout passes on every
+        // character while still feeling responsive.
+        _composerDebounceTimer.Stop();
+        _composerDebounceTimer.Interval = TimeSpan.FromMilliseconds(120);
+        _composerDebounceTimer.Tick -= OnComposerDebounceTick;
+        _composerDebounceTimer.Tick += OnComposerDebounceTick;
+        _composerDebounceTimer.Start();
+    }
+
+    private void ApplyComposerHeight(TextBox textBox)
+    {
         var text = textBox.Text ?? string.Empty;
         if (string.IsNullOrEmpty(text))
         {
@@ -59,10 +79,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // Approximate: count explicit newlines + wrap estimate
+        // Simple line-count estimation instead of expensive TextBlock.Measure().
         var newlineCount = text.Count(c => c == '\n');
-        // Estimate visible line width: ~80 chars per line for the configured font
-        var wrapLines = text.Length / 80;
+        var wrapLines = text.Length / 80; // ~80 chars per line
         var estimatedLines = Math.Max(1, newlineCount + wrapLines);
         var lineHeight = textBox.FontSize + 6; // ~26px for 14pt font
         var estimatedHeight = Math.Max(40, Math.Min(140, estimatedLines * lineHeight));
@@ -153,7 +172,7 @@ public sealed partial class MainWindow : Window
 
         if (_lastAiAnswer?.SavedNote is not null)
         {
-            AppendMessage("系统", $"已保存笔记：{_lastAiAnswer.SavedNote.Title}");
+            AddSystemMessage("系统", $"已保存笔记：{_lastAiAnswer.SavedNote.Title}");
             ScrollToLatest();
         }
 
@@ -211,7 +230,7 @@ public sealed partial class MainWindow : Window
         }
 
         var savedNote = _lastAiAnswer.SavedNote;
-        AppendMessage("系统", $"已保存笔记：{savedNote.Title}");
+        AddSystemMessage("系统", $"已保存笔记：{savedNote.Title}");
         ScrollToLatest();
         try
         {

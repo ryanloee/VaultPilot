@@ -246,7 +246,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            AppendMessage("错误", $"笔记列表读取失败：{LocalizeError(error.Message)}");
+            AddSystemMessage("错误", $"笔记列表读取失败：{LocalizeError(error.Message)}");
             return 0;
         }
     }

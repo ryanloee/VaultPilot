@@ -58,7 +58,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            AppendMessage("错误", $"聊天记录读取失败，已使用空会话：{LocalizeError(error.Message)}");
+            AddSystemMessage("错误", $"聊天记录读取失败，已使用空会话：{LocalizeError(error.Message)}");
             return new ChatState(string.Empty, Array.Empty<ChatSession>());
         }
     }
@@ -318,6 +318,7 @@ public sealed partial class MainWindow : Window
         }
         await SaveChatStateAsync();
         RefreshSessions();
+        ClearRenderCache();
         RenderCurrentSession();
     }
 
@@ -435,7 +436,7 @@ public sealed partial class MainWindow : Window
 
     private void RefreshSessions()
     {
-        SessionList.ItemsSource = _chatState.Sessions
+        var items = _chatState.Sessions
             .Select(session => new SessionListItem(
                 session.Id,
                 session.Title,
@@ -446,6 +447,19 @@ public sealed partial class MainWindow : Window
                     ? (summary.Length <= 50 ? summary : $"{summary[..50]}...")
                     : string.Empty))
             .ToList();
+
+        // #3581: Skip full ItemsSource reassignment if the list structure
+        // hasn't changed (same session count, same IDs in order). On every
+        // send the current session's turn count ticks up — avoid cascading
+        // a full ListView re-render just for that.
+        if (SessionList.ItemsSource is IReadOnlyList<SessionListItem> current
+            && current.Count == items.Count
+            && current.Select(i => i.Id).SequenceEqual(items.Select(i => i.Id)))
+        {
+            return;
+        }
+
+        SessionList.ItemsSource = items;
         SessionList.SelectedItem = SessionList.Items
             .OfType<SessionListItem>()
             .FirstOrDefault(item => item.Id == _currentSessionId);

@@ -55,7 +55,7 @@ public sealed partial class MainWindow : Window
         var prompt = ComposerBox.Text?.Trim();
         if (string.IsNullOrEmpty(prompt))
         {
-            AppendMessage("系统", "请输入提示词再启动 Agent 模式。");
+            AddSystemMessage("系统", "请输入提示词再启动 Agent 模式。");
             return;
         }
 
@@ -77,7 +77,7 @@ public sealed partial class MainWindow : Window
         old?.Dispose();
         _agentCts = new CancellationTokenSource();
 
-        AppendMessage("系统", $"🤖 Agent 模式启动 — 最多 {maxSteps} 步");
+        AddSystemMessage("系统", $"🤖 Agent 模式启动 — 最多 {maxSteps} 步");
         UpdateStatusBar("info", "Agent 模式", "正在执行自主工具调用循环...");
 
         // Send agent request to backend
@@ -90,7 +90,7 @@ public sealed partial class MainWindow : Window
         old?.Cancel();
         _agentModeActive = false;
 
-        AppendMessage("系统", $"🛑 Agent 已停止: {reason}");
+        AddSystemMessage("系统", $"🛑 Agent 已停止: {reason}");
         UpdateStatusBar("info", "Agent 模式", $"已停止: {reason}");
     }
 
@@ -124,7 +124,7 @@ public sealed partial class MainWindow : Window
             if (result.TryGetProperty("answer", out var answerEl))
             {
                 var answer = answerEl.GetString() ?? "Agent 未返回结果";
-                AppendMessage("Agent", answer);
+                AddSystemMessage("Agent", answer);
             }
 
             // #3363: Dispose _agentCts in the single-step fallback path.
@@ -137,7 +137,7 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(() =>
             {
                 _agentModeActive = false;
-                AppendMessage("系统", "✅ Agent 完成");
+                AddSystemMessage("系统", "✅ Agent 完成");
                 UpdateStatusBar("success", "Agent 模式", "任务完成");
             });
         }
@@ -149,7 +149,7 @@ public sealed partial class MainWindow : Window
         {
             DispatcherQueue.TryEnqueue(() =>
             {
-                AppendMessage("错误", $"Agent 执行失败: {LocalizeError(ex.Message)}");
+                AddSystemMessage("错误", $"Agent 执行失败: {LocalizeError(ex.Message)}");
                 StopAgentMode("执行出错");
             });
         }
@@ -190,7 +190,7 @@ public sealed partial class MainWindow : Window
                 break;
 
             case "agentCompleted":
-                AppendMessage("Agent", status.Detail);
+                AddSystemMessage("Agent", status.Detail);
                 if (status.StepsUsed is { } stepsUsed)
                 {
                     _agentCurrentStep = stepsUsed;
@@ -218,7 +218,7 @@ public sealed partial class MainWindow : Window
                 break;
 
             case "error":
-                AppendMessage("Agent 错误", status.Detail ?? "未知错误");
+                AddSystemMessage("Agent 错误", status.Detail ?? "未知错误");
                 StopAgentMode("执行出错");
                 break;
 
@@ -233,7 +233,7 @@ public sealed partial class MainWindow : Window
                 var warningBody = string.IsNullOrEmpty(suggestion)
                     ? reason
                     : $"{reason}\n\n建议: {suggestion}";
-                AppendMessage("⚠️ Agent 警告", warningBody);
+                AddSystemMessage("⚠️ Agent 警告", warningBody);
                 UpdateStatusBar("warning", "Agent 模式", reason);
                 break;
         }
@@ -244,13 +244,13 @@ public sealed partial class MainWindow : Window
         var icon = isRunning ? "🔄" : "✅";
         var status = isRunning ? "开始执行" : "已完成";
         var preview = TruncateString(args, 120);
-        AppendMessage("🛠️ Agent 工具", $"{icon} **{tool}** — {status}\n`{preview}`");
+        AddSystemMessage("🛠️ Agent 工具", $"{icon} **{tool}** — {status}\n`{preview}`");
     }
 
     private void UpdateLastToolCallResult(string tool, string preview, bool isError)
     {
         var icon = isError ? "❌" : "✅";
-        AppendMessage("🛠️ Agent 工具", $"{icon} **{tool}** — {(isError ? "执行失败" : "结果")}\n`{TruncateString(preview, 120)}`");
+        AddSystemMessage("🛠️ Agent 工具", $"{icon} **{tool}** — {(isError ? "执行失败" : "结果")}\n`{TruncateString(preview, 120)}`");
     }
 
     private async void ShowWriteApprovalDialog(string tool, string args)
@@ -294,7 +294,7 @@ public sealed partial class MainWindow : Window
         var result = await dialog.ShowAsync();
         var approved = result == ContentDialogResult.Primary;
 
-        AppendMessage("Agent", approved
+        AddSystemMessage("Agent", approved
             ? $"已批准写入操作: {tool}"
             : $"已拒绝写入操作: {tool}");
 
@@ -311,7 +311,7 @@ public sealed partial class MainWindow : Window
         var cts = Volatile.Read(ref _agentCts);
         if (cts is null || !_agentModeActive)
         {
-            AppendMessage("系统", "Agent 已停止，审批已取消。");
+            AddSystemMessage("系统", "Agent 已停止，审批已取消。");
             return;
         }
 
@@ -327,7 +327,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            AppendMessage("错误", $"发送审批决策失败: {LocalizeError(ex.Message)}");
+            AddSystemMessage("错误", $"发送审批决策失败: {LocalizeError(ex.Message)}");
         }
     }
 

@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -12,14 +13,72 @@ namespace VaultPilot.WinUI;
 /// <summary>
 /// Chat message rendering, thinking indicator, citation cards, and empty state —
 /// split from MainWindow.Chat.cs (#1344).
+///
+/// #3581: Uses ItemsRepeater + StackLayout (virtualizing) instead of a plain
+/// StackPanel. Only viewport-visible turns exist in the visual tree; off-screen
+/// turns have zero UI overhead. Rendered visuals are cached per turn so
+/// scrolling back doesn't re-create them.
 /// </summary>
 public sealed partial class MainWindow : Window
 {
+    // ── ItemsRepeater data source (#3581) ──
+    // The virtualized message list. Each item maps to one ChatTurn.
+    // _messageItems drives the ItemsRepeater; _itemRenderCache holds the
+    // actual FrameworkElement visuals so scrolling back hits the cache.
+    private readonly ObservableCollection<MessageItem> _messageItems = [];
+    private readonly Dictionary<string, FrameworkElement> _itemRenderCache = new(StringComparer.Ordinal);
+    private const string ThinkingItemKey = "__thinking__";
+
+    /// <summary>
+    /// ItemsRepeater handler: populate the ContentControl with the cached
+    /// visual tree for the data item. The visual tree is built once per turn
+    /// and cached; scrolling back reuses it.
+    /// </summary>
+    private void OnMessageElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
+    {
+        if (args.Element is not ContentControl container || args.Item is not MessageItem item)
+            return;
+
+        if (_itemRenderCache.TryGetValue(item.TurnId, out var cached))
+        {
+            container.Content = cached;
+            return;
+        }
+
+        var visual = item.TurnId == ThinkingItemKey
+            ? BuildThinkingVisual()
+            : BuildTurnVisual(item);
+        _itemRenderCache[item.TurnId] = visual;
+        container.Content = visual;
+    }
+
+    /// <summary>
+    /// ItemsRepeater handler: null the ContentControl's content so the
+    /// recycled turn's visual tree is detached. The cache keeps a reference
+    /// so scrolling back reuses it.
+    /// </summary>
+    private void OnMessageElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
+    {
+        if (args.Element is ContentControl container)
+            container.Content = null;
+    }
+
+    /// <summary>
+    /// Clears the render cache for the current session (called after
+    /// compression or session switch).
+    /// </summary>
+    private void ClearRenderCache()
+    {
+        _itemRenderCache.Clear();
+    }
+
     // ── Chat rendering ──
 
     private void RenderCurrentSession()
     {
-        MessagesPanel.Children.Clear();
+        _messageItems.Clear();
+        ClearRenderCache();
+
         var session = CurrentSession();
         if (session is null || session.Turns.Count == 0)
         {
@@ -32,7 +91,7 @@ public sealed partial class MainWindow : Window
 
         foreach (var turn in session.Turns)
         {
-            RenderSingleTurn(turn);
+            _messageItems.Add(TurnToMessageItem(turn));
         }
         // #3508: track what we rendered so AppendNewTurns can incremental-update.
         _lastRenderedSessionId = session.Id;
@@ -41,7 +100,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Incrementally append only newly-added turns to the message panel,
+    /// Incrementally append only newly-added turns to the message list,
     /// avoiding the O(n) full rebuild of RenderCurrentSession on every
     /// message send (#3508). Falls back to full render if the session
     /// changed, turns were truncated (compression), or the panel was
@@ -53,8 +112,7 @@ public sealed partial class MainWindow : Window
         if (session is null || session.Turns.Count == 0)
             return;
 
-        // Session switched, panel out of sync, or was showing empty-state
-        // placeholder (turnCount==0) — full rebuild needed to clear placeholder.
+        // Session switched, list out of sync — full rebuild.
         if (_lastRenderedSessionId != session.Id ||
             _lastRenderedTurnCount > session.Turns.Count ||
             _lastRenderedTurnCount == 0)
@@ -66,7 +124,7 @@ public sealed partial class MainWindow : Window
         // Append only turns that were added since last render.
         for (int i = _lastRenderedTurnCount; i < session.Turns.Count; i++)
         {
-            RenderSingleTurn(session.Turns[i]);
+            _messageItems.Add(TurnToMessageItem(session.Turns[i]));
         }
         _lastRenderedSessionId = session.Id;
         _lastRenderedTurnCount = session.Turns.Count;
@@ -74,40 +132,137 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Render a single chat turn (message bubble, attachments, thinking trace,
-    /// citations, saved-note notice) and append it to MessagesPanel.
-    /// Extracted from RenderCurrentSession for incremental rendering (#3508).
+    /// Converts a ChatTurn into a MessageItem (the data item for ItemsRepeater).
     /// </summary>
-    private void RenderSingleTurn(ChatTurn turn)
+    private static MessageItem TurnToMessageItem(ChatTurn turn)
     {
         var isScheduledWake = turn.Source == "scheduled_wake";
         var author = turn.Role == "user"
             ? (isScheduledWake ? "⏰ 定时唤醒" : "你")
             : (isScheduledWake && turn.Text.StartsWith("⏰") ? "⏰ 定时唤醒" : "助手");
-        AppendMessage(author, turn.Text, turn.CreatedAt);
-        if (turn.Attachments is { Count: > 0 })
+        return new MessageItem
         {
-            AppendAttachmentPreviews(turn.Attachments, turn.Role);
-        }
-
-        if (turn.Role == "assistant")
-        {
-            if (turn.ThinkingTrace is { Steps.Count: > 0 } trace)
-            {
-                AppendThinkingTrace(trace);
-            }
-
-            if (turn.Citations is { Count: > 0 } citations)
-            {
-                AppendCitationCards(citations);
-            }
-
-            if (turn.SavedNote is not null)
-            {
-                AppendMessage("系统", $"已保存笔记：{turn.SavedNote.Title}", turn.CreatedAt);
-            }
-        }
+            TurnId = turn.Id,
+            Role = turn.Role,
+            Text = turn.Text,
+            Author = author,
+            CreatedAt = turn.CreatedAt,
+            Citations = turn.Citations,
+            Attachments = turn.Attachments,
+            ThinkingTrace = turn.ThinkingTrace,
+            SavedNote = turn.SavedNote,
+            Source = turn.Source,
+        };
     }
+
+    /// <summary>
+    /// Adds a system/AI-message to the ItemsRepeater (replaces the old
+    /// AppendMessage which added directly to MessagesPanel.Children).
+    /// Callers include ShowError, AgentMode, and status notifications.
+    /// </summary>
+    private void AddSystemMessage(string author, string text)
+    {
+        _messageItems.Add(new MessageItem
+        {
+            TurnId = $"__msg__{Guid.NewGuid():N}",
+            Role = "system",
+            Text = text,
+            Author = author,
+        });
+    }
+
+    /// <summary>
+    /// Builds the complete visual tree for one turn (message bubble,
+    /// attachments, citations, thinking trace). Called once per turn;
+    /// result is cached in _itemRenderCache.
+    /// </summary>
+    private FrameworkElement BuildTurnVisual(MessageItem item)
+    {
+        var container = new StackPanel { Spacing = 2 };
+        AppendMessageTo(container, item.Author, item.Text, item.CreatedAt);
+        if (item.Attachments is { Count: > 0 })
+        {
+            AppendAttachmentPreviewsTo(container, item.Attachments, item.Role);
+        }
+        if (item.Role == "assistant")
+        {
+            if (item.ThinkingTrace is { Steps.Count: > 0 } trace)
+            {
+                AppendThinkingTraceTo(container, trace);
+            }
+            if (item.Citations is { Count: > 0 } citations)
+            {
+                AppendCitationCardsTo(container, citations);
+            }
+            if (item.SavedNote is not null)
+            {
+                AppendMessageTo(container, "系统", $"已保存笔记：{item.SavedNote.Title}", item.CreatedAt);
+            }
+        }
+        return container;
+    }
+
+    /// <summary>
+    /// Builds the thinking indicator visual (shown during AI request).
+    /// </summary>
+    private FrameworkElement BuildThinkingVisual()
+    {
+        var spinner = new ProgressRing
+        {
+            IsActive = true,
+            Width = 16,
+            Height = 16,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var thinkingLabel = new TextBlock
+        {
+            Text = "思考中…",
+            FontSize = 12,
+            Foreground = GetThemeBrush("VaultTextSecondary"),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var dotsPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Padding = new Thickness(2, 2, 2, 2),
+        };
+        dotsPanel.Children.Add(spinner);
+        dotsPanel.Children.Add(thinkingLabel);
+
+        var bubble = new Border
+        {
+            MaxWidth = 720,
+            Padding = new Thickness(14, 12, 14, 12),
+            CornerRadius = new CornerRadius(12),
+            Background = GetThemeBrush("VaultCardElevatedBg"),
+            BorderBrush = GetThemeBrush("VaultBorder"),
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Child = dotsPanel,
+        };
+
+        var label = new TextBlock
+        {
+            Text = "助手",
+            FontSize = 11,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = GetThemeBrush("VaultTextSecondary"),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+
+        var stack = new StackPanel
+        {
+            Spacing = 6,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        AutomationProperties.SetName(stack, "AI 正在思考");
+        stack.Children.Add(label);
+        stack.Children.Add(bubble);
+        return stack;
+    }
+
+    // ── Empty state ──
 
     private void ShowEmptyState()
     {
@@ -189,10 +344,15 @@ public sealed partial class MainWindow : Window
             container.Children.Add(settingsBtn);
         }
 
-        MessagesPanel.Children.Add(container);
+        // Add empty state as the only item in the repeater.
+        var emptyItem = new MessageItem { TurnId = "__empty__", Role = "system", Text = "" };
+        _itemRenderCache["__empty__"] = container;
+        _messageItems.Add(emptyItem);
     }
 
-    private void AppendMessage(string author, string text, string? createdAt = null)
+    // ── Message bubble builder (now takes a target Panel) ──
+
+    private void AppendMessageTo(Panel target, string author, string text, string? createdAt = null)
     {
         var isUser = author == "你";
         var isAssistant = author == "助手";
@@ -227,22 +387,16 @@ public sealed partial class MainWindow : Window
         // ── Timestamp ──
         DateTime displayTime;
         if (!string.IsNullOrEmpty(createdAt) && DateTime.TryParse(createdAt, out var parsed))
-        {
             displayTime = parsed;
-        }
         else
-        {
             displayTime = DateTime.Now;
-        }
         var timeStr = displayTime.ToString("HH:mm");
 
         // ── Bubble content ──
         var bubbleText = isUser || isAssistant ? text : $"{author}: {text}";
         var bubbleContent = CreateMessageContent(bubbleText, isAssistant, isUser);
 
-        // Card-style bubble. User: right-aligned with a max width (chat look).
-        // AI: stretches to fill the available message column so long markdown /
-        // code blocks / tables are not truncated by a narrow fixed MaxWidth.
+        // Card-style bubble.
         var bubble = new Border
         {
             Padding = new Thickness(14, 12, 14, 12),
@@ -256,10 +410,7 @@ public sealed partial class MainWindow : Window
             HorizontalAlignment = isUser ? HorizontalAlignment.Right : HorizontalAlignment.Stretch,
         };
         if (isUser)
-        {
-            // Keep user bubbles from spanning the whole column.
             bubble.MaxWidth = 560;
-        }
 
         // ── Author label row ──
         var authorText = new TextBlock
@@ -290,16 +441,9 @@ public sealed partial class MainWindow : Window
         messageRow.Children.Add(metaRow);
         messageRow.Children.Add(bubble);
 
-        // Use a Grid (not a horizontal StackPanel) for the outer row so that the
-        // AI message bubble can stretch to fill the available width. A horizontal
-        // StackPanel never constrains its children's width, so a long markdown
-        // body / wide code block would overflow and get clipped.
         Grid outerRow;
         if (isUser)
         {
-            // User: [content (right-aligned, capped)] [avatar]
-            // Use a single *-column so the bubble's own MaxWidth + Right alignment
-            // position it at the right edge.
             outerRow = new Grid { ColumnSpacing = 10 };
             outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -311,7 +455,6 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            // AI: [avatar] [content stretches to fill]
             outerRow = new Grid { ColumnSpacing = 10 };
             outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             outerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -326,114 +469,37 @@ public sealed partial class MainWindow : Window
 
         // Skip meta row for system messages
         if (!isUser && !isAssistant)
-        {
             messageRow.Children.Remove(metaRow);
-        }
 
         // Invalidate note title cache when a tool action has saved a note (#2035)
         if (author == "系统" && text.Contains("已保存笔记"))
-        {
             InvalidateNoteTitleCache();
-        }
 
-        MessagesPanel.Children.Add(outerRow);
+        target.Children.Add(outerRow);
     }
 
-    private void ShowThinkingIndicator()
-    {
-        RemoveThinkingIndicator();
+    // ── Sub-element builders (now take a target Panel) ──
 
-        // ChatGPT-style thinking card: small spinner + label inside a soft card.
-        // Uses the built-in ProgressRing (smooth, GPU-driven) instead of the
-        // legacy hand-rolled 3-dot TextBlock + DispatcherTimer animation.
-        var spinner = new ProgressRing
-        {
-            IsActive = true,
-            Width = 16,
-            Height = 16,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var thinkingLabel = new TextBlock
-        {
-            Text = "思考中…",
-            FontSize = 12,
-            Foreground = GetThemeBrush("VaultTextSecondary"),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        var dotsPanel = new StackPanel
+    private void AppendAttachmentPreviewsTo(Panel target, IReadOnlyList<ChatAttachment> attachments, string role)
+    {
+        if (attachments.Count == 0) return;
+
+        var wrap = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Padding = new Thickness(2, 2, 2, 2),
-        };
-        dotsPanel.Children.Add(spinner);
-        dotsPanel.Children.Add(thinkingLabel);
-
-        var bubble = new Border
-        {
-            MaxWidth = 720,
-            Padding = new Thickness(14, 12, 14, 12),
-            CornerRadius = new CornerRadius(12),
-            Background = GetThemeBrush("VaultCardElevatedBg"),
-            BorderBrush = GetThemeBrush("VaultBorder"),
-            BorderThickness = new Thickness(1),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Child = dotsPanel,
+            ItemWidth = 142,
+            ItemHeight = 178,
+            HorizontalAlignment = role == "user" ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+            Margin = new Thickness(0, 2, 0, 0),
         };
 
-        var label = new TextBlock
-        {
-            Text = "助手",
-            FontSize = 11,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = GetThemeBrush("VaultTextSecondary"),
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
+        foreach (var attachment in attachments)
+            wrap.Children.Add(CreateChatAttachmentPreview(attachment, removable: false));
 
-        var stack = new StackPanel
-        {
-            Spacing = 6,
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-        // Note: LiveSetting is not available in WinUI 3; using automation name only
-        AutomationProperties.SetName(stack, "AI 正在思考");
-        stack.Children.Add(label);
-        stack.Children.Add(bubble);
-
-        _thinkingIndicator = stack;
-        MessagesPanel.Children.Add(stack);
+        target.Children.Add(wrap);
     }
 
-    private void RemoveThinkingIndicator()
-    {
-        _thinkingDotsTimer?.Stop();
-        _thinkingDotsTimer = null;
-        _thinkingDotStep = 0;
-        if (_thinkingIndicator is not null)
-        {
-            MessagesPanel.Children.Remove(_thinkingIndicator);
-            _thinkingIndicator = null;
-        }
-    }
-
-    private void CopyTextToClipboard(string text)
-    {
-        try
-        {
-            var package = new DataPackage();
-            package.SetText(text);
-            Clipboard.SetContent(package);
-            Clipboard.Flush();
-            UpdateStatusBar("success", "已复制", "消息内容已复制到剪贴板。");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Clipboard copy failed: {ex.Message}");
-            UpdateStatusBar("warning", "复制失败", "无法写入剪贴板，可能被其他程序占用。");
-        }
-    }
-
-    private void AppendThinkingTrace(ThinkingTrace trace)
+    private void AppendThinkingTraceTo(Panel target, ThinkingTrace trace)
     {
         var stepsPanel = new StackPanel { Spacing = 4 };
         foreach (var step in trace.Steps)
@@ -443,7 +509,7 @@ public sealed partial class MainWindow : Window
                 Text = $"• {step.Title}: {step.Detail}",
                 FontSize = 12,
                 Opacity = 0.7,
-                TextWrapping = TextWrapping.Wrap
+                TextWrapping = TextWrapping.Wrap,
             };
             stepsPanel.Children.Add(stepBlock);
         }
@@ -453,20 +519,20 @@ public sealed partial class MainWindow : Window
             Header = $"思考过程 ({trace.Steps.Count} 步){(string.IsNullOrWhiteSpace(trace.Summary) ? "" : $" — {trace.Summary}")}",
             IsExpanded = false,
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Content = stepsPanel
+            Content = stepsPanel,
         };
         AutomationProperties.SetName(expander, $"思考过程: {trace.Steps.Count} 步");
 
-        MessagesPanel.Children.Add(expander);
+        target.Children.Add(expander);
     }
 
-    private void AppendCitationCards(IReadOnlyList<AnswerCitation> citations)
+    private void AppendCitationCardsTo(Panel target, IReadOnlyList<AnswerCitation> citations)
     {
         var citationsPanel = new StackPanel
         {
             Spacing = 6,
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Margin = new Thickness(0, 4, 0, 0)
+            Margin = new Thickness(0, 4, 0, 0),
         };
 
         var header = new TextBlock
@@ -474,7 +540,7 @@ public sealed partial class MainWindow : Window
             Text = $"引用 ({citations.Count})",
             FontSize = 12,
             Foreground = GetThemeBrush("VaultTextSecondary"),
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         };
         citationsPanel.Children.Add(header);
 
@@ -497,7 +563,7 @@ public sealed partial class MainWindow : Window
                             Text = citation.Title,
                             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                             FontSize = 12,
-                            Foreground = GetThemeBrush("VaultTextPrimary")
+                            Foreground = GetThemeBrush("VaultTextPrimary"),
                         },
                         new TextBlock
                         {
@@ -507,16 +573,63 @@ public sealed partial class MainWindow : Window
                             Foreground = GetThemeBrush("VaultTextSecondary"),
                             TextWrapping = TextWrapping.Wrap,
                             MaxLines = 3,
-                            TextTrimming = TextTrimming.CharacterEllipsis
-                        }
-                    }
-                }
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                        },
+                    },
+                },
             };
             citationsPanel.Children.Add(card);
         }
 
-        MessagesPanel.Children.Add(citationsPanel);
+        target.Children.Add(citationsPanel);
     }
+
+    // ── Thinking indicator ──
+
+    private void ShowThinkingIndicator()
+    {
+        RemoveThinkingIndicator();
+        _messageItems.Add(new MessageItem { TurnId = ThinkingItemKey, Role = "thinking", Author = "助手" });
+        ScrollToLatest();
+    }
+
+    private void RemoveThinkingIndicator()
+    {
+        _thinkingDotsTimer?.Stop();
+        _thinkingDotsTimer = null;
+        _thinkingDotStep = 0;
+
+        for (int i = _messageItems.Count - 1; i >= 0; i--)
+        {
+            if (_messageItems[i].TurnId == ThinkingItemKey)
+            {
+                _messageItems.RemoveAt(i);
+                _itemRenderCache.Remove(ThinkingItemKey);
+                break;
+            }
+        }
+    }
+
+    // ── Clipboard ──
+
+    private void CopyTextToClipboard(string text)
+    {
+        try
+        {
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
+            UpdateStatusBar("success", "已复制", "消息内容已复制到剪贴板。");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Clipboard copy failed: {ex.Message}");
+            UpdateStatusBar("warning", "复制失败", "无法写入剪贴板，可能被其他程序占用。");
+        }
+    }
+
+    // ── Scrolling ──
 
     private void OnChatScrollViewerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {

@@ -53,7 +53,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await checkApi({ apiBase, apiKey, model, apiFormat });
+      const res = await checkApi({ apiBase, apiKey, apiFormat });
       if (res.ok) {
         setTestResult('✅ 连接成功');
         // Save provider

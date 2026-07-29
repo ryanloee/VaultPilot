@@ -677,7 +677,7 @@ public sealed partial class SettingsDialog : ContentDialog
         // Gather live input values from the dialog fields.
         var apiKey = ApiKeyBox.Password;
         var baseUrl = BaseUrlBox.Text.Trim();
-        var providerType = (ProviderTypeBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "OpenAI";
+        var providerType = SelectedProviderType(ProviderTypeBox.SelectedIndex);
         var timeoutMs = ParseTimeoutOrDefault(TimeoutBox.Text.Trim());
 
         if (string.IsNullOrWhiteSpace(baseUrl))

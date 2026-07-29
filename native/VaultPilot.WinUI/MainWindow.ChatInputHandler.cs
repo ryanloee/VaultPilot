@@ -308,8 +308,9 @@ public sealed partial class MainWindow : Window
 
             // Issue #710: use the user-configured request timeout (plus buffer for
             // IPC overhead) instead of the hardcoded 90s default.
-            // #X: increased buffer from 30s to 90s to prevent premature timeout
-            // when the agent has a 120s internal timeout.
+            // The 90 s buffer (previously 30 s) prevents premature client-side
+            // timeout when the agent's internal timeout is ~120 s — without it
+            // long responses were truncated by a backend disconnect.
             var timeout = ResolveActiveProvider().RequestTimeoutMs;
                 var aiTimeout = TimeSpan.FromMilliseconds(
                 (timeout > 0 ? timeout : 60_000) + 90_000);

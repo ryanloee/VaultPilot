@@ -219,8 +219,12 @@ export default function OnboardingScreen({ onComplete }: Props) {
               <Text style={{ color: c.textSecondary }}>← 返回</Text>
             </TouchableOpacity>
             <TouchableOpacity
+              testID="onboarding-go-test-btn"
               style={[styles.primaryBtn, { backgroundColor: store.accentColor, flex: 1, opacity: apiKey ? 1 : 0.5 }]}
-              onPress={() => apiKey && setStep(3)}
+              onPress={() => {
+                setTestResult(null);
+                if (apiKey) setStep(3);
+              }}
               disabled={!apiKey}
             >
               <Text style={styles.primaryBtnText}>测试连接 →</Text>
@@ -257,6 +261,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
         )}
 
         <TouchableOpacity
+          testID="onboarding-test-btn"
           style={[styles.primaryBtn, { backgroundColor: testing ? c.textSecondary : store.accentColor }]}
           onPress={testResult?.startsWith('✅') ? onComplete : handleTestAndSave}
           disabled={testing}
@@ -268,7 +273,7 @@ export default function OnboardingScreen({ onComplete }: Props) {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.skipBtn, { marginTop: 16 }]} onPress={() => setStep(2)}>
+        <TouchableOpacity testID="onboarding-modify-btn" style={[styles.skipBtn, { marginTop: 16 }]} onPress={() => { setTestResult(null); setStep(2); }}>
           <Text style={[styles.skipText, { color: c.textSecondary }]}>← 修改配置</Text>
         </TouchableOpacity>
       </View>

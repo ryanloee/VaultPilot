@@ -337,6 +337,9 @@ public sealed partial class AiCommandPalette : UserControl
         "transcribeAudio" or "transcribe_audio" or "transcribe" => AiActionType.TranscribeAudio,
         "suggestLinks" or "suggest_links" or "suggest" => AiActionType.SuggestLinks,
         "synthesizeNotes" or "synthesize_notes" or "synNotes" => AiActionType.SynthesizeNotes,
+        "exportDocument" or "export_document" or "export" => AiActionType.ExportDocument,
+        "generateWidget" or "generate_widget" or "widget" or "generate" => AiActionType.GenerateWidget,
+        "meetingNotes" or "meeting_notes" or "meeting" => AiActionType.MeetingNotes,
         _ => AiActionType.Summarize
     };
 

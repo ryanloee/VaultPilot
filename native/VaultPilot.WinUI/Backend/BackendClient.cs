@@ -752,6 +752,9 @@ public sealed class BackendClient : IAsyncDisposable
                 AiActionType.TranscribeAudio => "transcribeAudio",
                 AiActionType.SuggestLinks => "suggestLinks",
                 AiActionType.SynthesizeNotes => "synthesizeNotes",
+                AiActionType.ExportDocument => "exportDocument",
+                AiActionType.GenerateWidget => "generateWidget",
+                AiActionType.MeetingNotes => "meetingNotes",
                 // #3362: non-exhaustive switch — future enum additions fall through
                 // without a default, causing CS8509 at build and SwitchExpressionException
                 // at runtime. The explicit exception preserves the diagnostic message.

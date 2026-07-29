@@ -54,6 +54,9 @@ public enum AiActionType
     /// <summary>Generate interactive HTML/JS widget block (#3042).</summary>
     [JsonPropertyName("generateWidget")]
     GenerateWidget,
+    /// <summary>AI meeting notes transcription with speaker diarization, summary, and action items (#3588).</summary>
+    [JsonPropertyName("meetingNotes")]
+    MeetingNotes,
 }
 
 /// <summary>
@@ -192,6 +195,7 @@ public static class AiActionTypeExtensions
         AiActionType.SynthesizeNotes => "笔记综合",
         AiActionType.ExportDocument => "导出文档",
         AiActionType.GenerateWidget => "交互组件",
+        AiActionType.MeetingNotes => "会议笔记",
         _ => "未知操作"
     };
 }

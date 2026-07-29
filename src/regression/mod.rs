@@ -76,6 +76,7 @@ mod issue_3478_folder_import;
 mod issue_3512_paren_url;
 mod issue_3514_bulk_ops_http_bridge;
 mod issue_3541_ocr_fts_index;
+mod issue_3547_smart_paste_setting;
 mod issue_3548_at_mention_injection;
 mod issue_3561_source_embed_cache;
 mod issue_914_related_notes;

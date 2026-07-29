@@ -44,6 +44,17 @@
                 HorizontalAlignment="Stretch"
                 AutomationProperties.Name="设置校验错误提示" />
 
+            <!-- No-results empty state (#3500): shown when search filters out all cards -->
+            <TextBlock
+                x:Name="NoResultsText"
+                Text="无匹配设置项"
+                FontSize="14"
+                Foreground="{ThemeResource VaultTextSecondary}"
+                HorizontalAlignment="Center"
+                Padding="0,24,0,8"
+                Visibility="Collapsed"
+                AutomationProperties.Name="搜索无结果提示" />
+
             <!-- ══ Card: 知识库 ══ -->
             <Border Background="{ThemeResource VaultCardBg}" CornerRadius="12"
                     BorderBrush="{ThemeResource VaultBorder}" BorderThickness="1" Padding="16">

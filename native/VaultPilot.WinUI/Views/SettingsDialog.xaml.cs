@@ -1082,20 +1082,34 @@ public sealed partial class SettingsDialog : ContentDialog
         var keyword = SettingsSearchBox.Text?.Trim() ?? string.Empty;
         // Collect searchable text from each card: the header TextBlock +
         // all child TextBlock/TextBox headers inside the card.
+        var visibleCount = 0;
         foreach (var child in Panel.Children)
         {
             if (child is not Border card) continue;
             if (string.IsNullOrEmpty(keyword))
             {
                 card.Visibility = Visibility.Visible;
+                visibleCount++;
                 continue;
             }
 
             var searchText = CollectSearchText(card);
-            card.Visibility = searchText.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            if (searchText.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            {
+                card.Visibility = Visibility.Visible;
+                visibleCount++;
+            }
+            else
+            {
+                card.Visibility = Visibility.Collapsed;
+            }
         }
+
+        // Show "no results" empty state when search yields zero visible cards (#3500).
+        // Only show when there is an active (non-empty) search keyword.
+        NoResultsText.Visibility = (!string.IsNullOrEmpty(keyword) && visibleCount == 0)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     /// <summary>

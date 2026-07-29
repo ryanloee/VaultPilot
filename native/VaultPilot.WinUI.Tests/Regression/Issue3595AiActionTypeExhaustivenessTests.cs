@@ -62,7 +62,7 @@ public class Issue3595AiActionTypeExhaustivenessTests
         Assert.Equal("meetingNotes", typeof(AiActionType)
             .GetField(nameof(AiActionType.MeetingNotes))!
             .GetCustomAttributes(typeof(System.Text.Json.Serialization.JsonPropertyNameAttribute), false)
-            .Cast<System.Text.Json.Serialization.JsonNamePropertyAttribute>()
+            .Cast<System.Text.Json.Serialization.JsonPropertyNameAttribute>()
             .First().Name);
     }
 

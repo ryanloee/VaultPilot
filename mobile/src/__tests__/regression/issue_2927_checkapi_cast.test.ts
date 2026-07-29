@@ -52,7 +52,6 @@ describe('#2927: checkApi() avoids unsafe as-cast on getSettings() return', () =
     const result = await checkApi({
       apiBase: 'https://custom.example.com/v1',
       apiKey: 'custom-key',
-      model: 'gpt-4',
       apiFormat: 'openai',
     });
 
@@ -125,7 +124,6 @@ describe('#2927: checkApi() avoids unsafe as-cast on getSettings() return', () =
       apiBase: 'https://api.anthropic.com',
       apiKey: 'sk-ant-test',
       apiFormat: 'anthropic',
-      model: 'claude-haiku-20241022',
     });
 
     expect(result.ok).toBe(true);

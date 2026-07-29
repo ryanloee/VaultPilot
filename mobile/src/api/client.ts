@@ -570,17 +570,18 @@ export async function chatWithReconnect(
 }
 
 // ── Health Check ──────────────────────────────────────────
-export async function checkApi(params?: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat; signal?: AbortSignal }): Promise<{ ok: boolean; error?: string }> {
+export async function checkApi(params?: { apiBase?: string; apiKey?: string; apiFormat?: ApiFormat; signal?: AbortSignal }): Promise<{ ok: boolean; error?: string }> {
   // Avoid unsafe type assertion: when params is not provided, getSettings()
-  // does not return signal or model fields. Use params for caller-provided
+  // does not return signal fields. Use params for caller-provided
   // fields and fall back to getSettings() for stored settings (#2927).
+  // model parameter removed: neither /v1/models (Anthropic) nor /models (OpenAI)
+  // health-check endpoints accept a model parameter (#3578).
   const provided = params;
   const stored = provided ? undefined : await getSettings();
   const apiKey = provided?.apiKey ?? stored?.apiKey ?? '';
   const signal = provided?.signal;
   const apiBase = provided?.apiBase ?? stored?.apiBase ?? '';
   const format = provided?.apiFormat ?? stored?.apiFormat ?? 'openai';
-  const model = provided?.model ?? stored?.model;
 
   if (!apiKey) return { ok: false, error: '未配置 API Key' };
 

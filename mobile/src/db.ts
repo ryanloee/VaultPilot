@@ -516,7 +516,13 @@ async function _doGetNoteTitleMap(): Promise<Map<string, string>> {
 export async function toggleStar(id: string, options?: { skipQueue?: boolean }): Promise<void> {
   const db = await getDb();
   await db.runAsync("UPDATE notes SET starred = 1 - starred, updated_at = strftime('%s','now') WHERE id = ?", [id]);
-  if (!options?.skipQueue) await queuePendingSync(id);
+  if (!options?.skipQueue) {
+    try {
+      await queuePendingSync(id);
+    } catch (queueErr) {
+      console.warn('[db] toggleStar: queuePendingSync failed (update still saved):', queueErr);
+    }
+  }
 }
 
 export async function getNoteCount(): Promise<number> {
@@ -560,7 +566,11 @@ export async function getFolders(): Promise<string[]> {
 export async function moveToFolder(id: string, folder: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('UPDATE notes SET folder = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?', [folder, id]);
-  await queuePendingSync(id);
+  try {
+    await queuePendingSync(id);
+  } catch (queueErr) {
+    console.warn('[db] moveToFolder: queuePendingSync failed (update still saved):', queueErr);
+  }
 }
 
 export async function getNoteTags(noteId: string): Promise<string[]> {
@@ -575,7 +585,13 @@ export async function addTag(noteId: string, tag: string, options?: { skipQueue?
     await db.runAsync('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)', [noteId, tag]);
     await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
   });
-  if (!options?.skipQueue) await queuePendingSync(noteId);
+  if (!options?.skipQueue) {
+    try {
+      await queuePendingSync(noteId);
+    } catch (queueErr) {
+      console.warn('[db] addTag: queuePendingSync failed (update still saved):', queueErr);
+    }
+  }
 }
 
 export async function removeTag(noteId: string, tag: string, options?: { skipQueue?: boolean }): Promise<void> {
@@ -584,7 +600,13 @@ export async function removeTag(noteId: string, tag: string, options?: { skipQue
     await db.runAsync('DELETE FROM note_tags WHERE note_id = ? AND tag = ?', [noteId, tag]);
     await db.runAsync("UPDATE notes SET updated_at = strftime('%s','now') WHERE id = ?", [noteId]);
   });
-  if (!options?.skipQueue) await queuePendingSync(noteId);
+  if (!options?.skipQueue) {
+    try {
+      await queuePendingSync(noteId);
+    } catch (queueErr) {
+      console.warn('[db] removeTag: queuePendingSync failed (update still saved):', queueErr);
+    }
+  }
 }
 
 export async function getAllTags(): Promise<string[]> {
@@ -696,8 +718,16 @@ export async function setTemplateFlag(noteId: string, isTemplate: boolean): Prom
     isTemplate ? 1 : 0,
     noteId,
   ]);
-  invalidateNoteTitleCache();
-  await queuePendingSync(noteId);
+  try {
+    invalidateNoteTitleCache();
+  } catch (cacheErr) {
+    console.warn('[db] setTemplateFlag: invalidateNoteTitleCache failed (non-fatal):', cacheErr);
+  }
+  try {
+    await queuePendingSync(noteId);
+  } catch (queueErr) {
+    console.warn('[db] setTemplateFlag: queuePendingSync failed (update still saved):', queueErr);
+  }
 }
 
 /**
@@ -933,13 +963,13 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
     try {
       sessionResults = await db.getAllAsync<GlobalSearchResult>(
         `SELECT 'session' as type, m.id, s.title,
-                SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
+                SUBSTR(m.content, 1, 120) as snippet, s.updated_at as updated_at,
                 s.id as sessionId
          FROM messages m
          INNER JOIN messages_fts fts ON m.rowid = fts.rowid
          INNER JOIN sessions s ON m.session_id = s.id
          WHERE fts MATCH ? OR s.title LIKE ? ESCAPE '\\'
-         ORDER BY m.created_at DESC LIMIT ?`,
+         ORDER BY s.updated_at DESC LIMIT ?`,
         [ftsQuery, `%${escaped}%`, limit]
       );
     } catch (e) {
@@ -949,24 +979,24 @@ export async function globalSearch(query: string): Promise<GlobalSearchResult[]>
     if (sessionResults.length === 0) {
       sessionResults = await db.getAllAsync<GlobalSearchResult>(
         `SELECT 'session' as type, m.id, s.title,
-                SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
+                SUBSTR(m.content, 1, 120) as snippet, s.updated_at as updated_at,
                 s.id as sessionId
          FROM messages m
          INNER JOIN sessions s ON m.session_id = s.id
          WHERE m.content LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
-         ORDER BY m.created_at DESC LIMIT ?`,
+         ORDER BY s.updated_at DESC LIMIT ?`,
         [`%${escaped}%`, `%${escaped}%`, limit]
       );
     }
   } else {
     sessionResults = await db.getAllAsync<GlobalSearchResult>(
       `SELECT 'session' as type, m.id, s.title,
-              SUBSTR(m.content, 1, 120) as snippet, m.created_at as updated_at,
+              SUBSTR(m.content, 1, 120) as snippet, s.updated_at as updated_at,
               s.id as sessionId
        FROM messages m
        INNER JOIN sessions s ON m.session_id = s.id
        WHERE m.content LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
-       ORDER BY m.created_at DESC LIMIT ?`,
+       ORDER BY s.updated_at DESC LIMIT ?`,
       [`%${escaped}%`, `%${escaped}%`, limit]
     );
   }

@@ -37,7 +37,15 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void OnMessageElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
     {
-        if (args.Element is not ContentControl container || args.Item is not MessageItem item)
+        if (args.Element is not ContentControl container)
+            return;
+
+        // WinAppSDK 1.6 doesn't expose args.Item, so we fetch the data item by index
+        // from the observable collection driving the ItemsRepeater.
+        var item = args.Index >= 0 && args.Index < _messageItems.Count
+            ? _messageItems[args.Index]
+            : null;
+        if (item is null)
             return;
 
         if (_itemRenderCache.TryGetValue(item.TurnId, out var cached))

@@ -54,6 +54,7 @@ For example, `scripts/clean.ps1` is a tracked script, not a build artifact.
 - `native/VaultPilot.WinUI/bin/`
 - `native/VaultPilot.WinUI/obj/`
 - `release-assets/`（仅在使用 `-IncludeReleaseAssets` 时生成）
+- 临时文件夹如 `tmp-icons/`
 
 ### 手动清理命令
 

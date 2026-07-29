@@ -41,6 +41,11 @@
       "expo-task-manager",
       "expo-background-task"
     ],
+    "install": {
+      "exclude": [
+        "expo-speech-recognition"
+      ]
+    },
     "extra": {
       "eas": {
         "projectId": "ec06327b-5d3d-4147-8d79-b86be2b2996f"

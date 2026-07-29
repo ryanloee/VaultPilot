@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private readonly ObservableCollection<MessageItem> _messageItems = [];
     private readonly Dictionary<string, FrameworkElement> _itemRenderCache = new(StringComparer.Ordinal);
     private const string ThinkingItemKey = "__thinking__";
+    private const int MaxRenderCacheSize = 300;
 
     /// <summary>
     /// ItemsRepeater handler: populate the ContentControl with the cached
@@ -65,7 +66,7 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Clears the render cache for the current session (called after
-    /// compression or session switch).
+    /// compression or session switch). Also enforces MaxRenderCacheSize.
     /// </summary>
     private void ClearRenderCache()
     {

@@ -442,7 +442,17 @@ public sealed partial class MainWindow : Window
 
     private void RefreshSessions()
     {
-        var items = _chatState.Sessions
+        // #3581: Quick structure check — avoid full LINQ projection + ItemsSource
+        // reassignment when only the current session's turn count changed.
+        var sessionList = _chatState.Sessions;
+        if (SessionList.ItemsSource is IReadOnlyList<SessionListItem> current
+            && current.Count == sessionList.Count
+            && current.Select(i => i.Id).SequenceEqual(sessionList.Select(s => s.Id)))
+        {
+            return;
+        }
+
+        var items = sessionList
             .Select(session => new SessionListItem(
                 session.Id,
                 session.Title,
@@ -453,17 +463,6 @@ public sealed partial class MainWindow : Window
                     ? (summary.Length <= 50 ? summary : $"{summary[..50]}...")
                     : string.Empty))
             .ToList();
-
-        // #3581: Skip full ItemsSource reassignment if the list structure
-        // hasn't changed (same session count, same IDs in order). On every
-        // send the current session's turn count ticks up — avoid cascading
-        // a full ListView re-render just for that.
-        if (SessionList.ItemsSource is IReadOnlyList<SessionListItem> current
-            && current.Count == items.Count
-            && current.Select(i => i.Id).SequenceEqual(items.Select(i => i.Id)))
-        {
-            return;
-        }
 
         SessionList.ItemsSource = items;
         SessionList.SelectedItem = SessionList.Items

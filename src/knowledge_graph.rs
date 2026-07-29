@@ -76,6 +76,319 @@ pub struct KnowledgeGraph {
     pub dangling_link_count: usize,
 }
 
+// ── Local Graph (#3570) ──────────────────────────────────────────────────
+// Extract a subgraph centered on a single note, up to N hops deep. This powers
+// the "Local Graph" view in the UI (like Obsidian's graph for the current note).
+
+/// Extract a local subgraph centered on `center_note_id`, including all notes
+/// reachable within `depth` hops (following edges in both directions).
+///
+/// The result is a [`KnowledgeGraph`] containing only the nodes and edges within
+/// the local neighborhood. This is useful for "Local Graph" views that show the
+/// context around a single note (#3570).
+///
+/// # Arguments
+/// * `graph` - The full knowledge graph to extract from.
+/// * `center_note_id` - The note ID at the center of the local graph.
+/// * `depth` - Maximum hop distance (1 = immediate neighbors, 2 = neighbors of
+///   neighbors, etc.).
+///
+/// # Returns
+/// A `KnowledgeGraph` containing only the local subgraph. If `center_note_id`
+/// is not found, an empty graph is returned.
+pub fn extract_local_graph(
+    graph: &KnowledgeGraph,
+    center_note_id: &str,
+    depth: usize,
+) -> KnowledgeGraph {
+    if depth == 0 {
+        // depth 0 = just the center node
+        return extract_single_node(graph, center_note_id);
+    }
+
+    // Build adjacency list (undirected for local graph: follow both in/out edges).
+    let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &graph.edges {
+        adjacency
+            .entry(edge.source.as_str())
+            .or_default()
+            .push(edge.target.as_str());
+        adjacency
+            .entry(edge.target.as_str())
+            .or_default()
+            .push(edge.source.as_str());
+    }
+
+    // BFS from center, up to `depth` hops.
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut frontier: Vec<String> = vec![center_note_id.to_string()];
+    visited.insert(center_note_id.to_string());
+
+    for _hop in 0..depth {
+        let mut next_frontier = Vec::new();
+        for node_id in &frontier {
+            if let Some(neighbors) = adjacency.get(node_id.as_str()) {
+                for &nb in neighbors {
+                    let nb_owned = nb.to_string();
+                    if visited.insert(nb_owned.clone()) {
+                        next_frontier.push(nb_owned);
+                    }
+                }
+            }
+        }
+        if next_frontier.is_empty() {
+            break;
+        }
+        frontier = next_frontier;
+    }
+
+    // Filter nodes and edges to only those in the visited set.
+    let nodes: Vec<GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| visited.contains(&n.id))
+        .cloned()
+        .collect();
+
+    let edges: Vec<GraphEdge> = graph
+        .edges
+        .iter()
+        .filter(|e| visited.contains(&e.source) && visited.contains(&e.target))
+        .cloned()
+        .collect();
+
+    let note_count = nodes.len();
+    let edge_count = edges.len();
+
+    // Recount dangling links within the subgraph is not meaningful; use 0.
+    KnowledgeGraph {
+        nodes,
+        edges,
+        note_count,
+        edge_count,
+        dangling_link_count: 0,
+    }
+}
+
+/// Extract a subgraph containing only a single node (depth=0 local graph).
+fn extract_single_node(graph: &KnowledgeGraph, node_id: &str) -> KnowledgeGraph {
+    let nodes: Vec<GraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.id == node_id)
+        .cloned()
+        .collect();
+    let note_count = nodes.len();
+    KnowledgeGraph {
+        nodes,
+        edges: vec![],
+        note_count,
+        edge_count: 0,
+        dangling_link_count: 0,
+    }
+}
+
+// ── Force-Directed Layout (#3570) ────────────────────────────────────────
+// Compute x/y coordinates for each node using a simplified Fruchterman-Reingold
+// force-directed algorithm. The layout is returned as a serializable struct that
+// UI clients (WinUI, mobile) can consume to render the graph as a canvas.
+
+/// A single node's computed position for force-directed layout.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GraphNodePosition {
+    /// Note ID (matches GraphNode::id).
+    pub id: String,
+    /// X coordinate in layout space (typically -1.0 to 1.0).
+    pub x: f64,
+    /// Y coordinate in layout space (typically -1.0 to 1.0).
+    pub y: f64,
+}
+
+/// Layout result: positions for every node in a graph.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GraphLayout {
+    /// One position per node.
+    pub positions: Vec<GraphNodePosition>,
+    /// Bounding box of the layout (for normalisation by the UI).
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
+}
+
+/// Configuration for the force-directed layout algorithm.
+#[derive(Debug, Clone)]
+pub struct LayoutConfig {
+    /// Width of the layout area (nodes spread within [-area/2, area/2]).
+    pub area: f64,
+    /// Number of iterations (more = more refined but slower).
+    pub iterations: usize,
+    /// Initial "temperature" controlling how far nodes move per step.
+    pub temperature: f64,
+    /// Cooling factor applied to temperature each iteration.
+    pub cooling: f64,
+}
+
+impl Default for LayoutConfig {
+    fn default() -> Self {
+        Self {
+            area: 10.0,
+            iterations: 100,
+            temperature: 1.0,
+            cooling: 0.95,
+        }
+    }
+}
+
+/// Compute a force-directed layout for the given graph using a simplified
+/// Fruchterman-Reingold algorithm (#3570).
+///
+/// This is a pure function that operates on an already-built [`KnowledgeGraph`]
+/// and returns 2D positions for each node. The positions are normalised to a
+/// bounding box so UI clients can map them to canvas coordinates.
+///
+/// # Algorithm
+/// 1. Place nodes at random positions.
+/// 2. Each iteration:
+///    - Repulsive force: every pair of nodes pushes apart (∝ 1/distance²).
+///    - Attractive force: connected nodes pull together (∝ distance²).
+/// 3. Cool down (reduce step size) each iteration.
+///
+/// For large graphs (>500 nodes), the O(N²) repulsion becomes expensive.
+/// In practice the local graph view keeps N small (≤100), so this is fine.
+pub fn compute_layout(graph: &KnowledgeGraph, config: &LayoutConfig) -> GraphLayout {
+    let n = graph.nodes.len();
+    if n == 0 {
+        return GraphLayout::default();
+    }
+
+    // Build edge set for fast lookup.
+    // BTreeSet guarantees deterministic iteration order (HashSet is random per process).
+    let mut edge_set: BTreeSet<(usize, usize)> = BTreeSet::new();
+    // Map node id → index.
+    let id_to_idx: HashMap<&str, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| (node.id.as_str(), i))
+        .collect();
+
+    for edge in &graph.edges {
+        if let (Some(&s), Some(&t)) = (
+            id_to_idx.get(edge.source.as_str()),
+            id_to_idx.get(edge.target.as_str()),
+        ) {
+            edge_set.insert((s.min(t), s.max(t)));
+        }
+    }
+
+    // Optimal spring length k = sqrt(area / n).
+    let k = (config.area / n.max(1) as f64).sqrt();
+    let k_sq = k * k;
+
+    // Initialise positions using a deterministic seed for reproducibility.
+    // Simple golden-angle distribution on a circle.
+    let golden_angle = std::f64::consts::PI * (3.0 - 5_f64.sqrt());
+    let mut pos_x = vec![0.0f64; n];
+    let mut pos_y = vec![0.0f64; n];
+    let radius = config.area * 0.4;
+    for i in 0..n {
+        let angle = golden_angle * i as f64;
+        pos_x[i] = radius * angle.cos();
+        pos_y[i] = radius * angle.sin();
+    }
+
+    let mut temp = config.temperature * config.area * 0.1;
+
+    // Iterative relaxation.
+    for _ in 0..config.iterations {
+        let mut disp_x = vec![0.0f64; n];
+        let mut disp_y = vec![0.0f64; n];
+
+        // Repulsive forces (all pairs).
+        for i in 0..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                let dx = pos_x[i] - pos_x[j];
+                let dy = pos_y[i] - pos_y[j];
+                let dist_sq = dx * dx + dy * dy;
+                let dist = dist_sq.sqrt().max(0.01);
+                // Repulsive force magnitude: k² / dist
+                let force = k_sq / dist;
+                let fx = (dx / dist) * force;
+                let fy = (dy / dist) * force;
+                disp_x[i] += fx;
+                disp_y[i] += fy;
+            }
+        }
+
+        // Attractive forces (edges only).
+        for &(s, t) in &edge_set {
+            let dx = pos_x[s] - pos_x[t];
+            let dy = pos_y[s] - pos_y[t];
+            let dist_sq = dx * dx + dy * dy;
+            let dist = dist_sq.sqrt().max(0.01);
+            // Attractive force magnitude: dist² / k
+            let force = dist_sq / k;
+            let fx = (dx / dist) * force;
+            let fy = (dy / dist) * force;
+            disp_x[s] -= fx;
+            disp_y[s] -= fy;
+            disp_x[t] += fx;
+            disp_y[t] += fy;
+        }
+
+        // Apply displacement, limited by temperature.
+        for i in 0..n {
+            let disp_mag = (disp_x[i] * disp_x[i] + disp_y[i] * disp_y[i])
+                .sqrt()
+                .max(0.01);
+            let limit = disp_mag.min(temp);
+            pos_x[i] += (disp_x[i] / disp_mag) * limit;
+            pos_y[i] += (disp_y[i] / disp_mag) * limit;
+
+            // Keep within bounds.
+            pos_x[i] = pos_x[i].clamp(-config.area, config.area);
+            pos_y[i] = pos_y[i].clamp(-config.area, config.area);
+        }
+
+        // Cool down.
+        temp *= config.cooling;
+        if temp < 0.001 {
+            break;
+        }
+    }
+
+    // Compute bounding box.
+    let (min_x, max_x) = pos_x
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
+    let (min_y, max_y) = pos_y
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(mn, mx), &v| (mn.min(v), mx.max(v)));
+
+    let positions: Vec<GraphNodePosition> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| GraphNodePosition {
+            id: node.id.clone(),
+            x: pos_x[i],
+            y: pos_y[i],
+        })
+        .collect();
+
+    GraphLayout {
+        positions,
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    }
+}
+
 // ── Inferred Relations (#3370) ───────────────────────────────────────────
 // AI-style latent relationship detection: discovers hidden connections between
 // notes that don't have explicit [[wikilinks]] by analysing tag, keyword, and
@@ -1253,5 +1566,261 @@ mod tests {
             !pairs.contains(&("A", "C")),
             "unexpected pair A-C (max_per_note=1 should drop it)"
         );
+    }
+
+    // ── #3570: Local Graph + Force-Directed Layout tests ──────────────────
+
+    /// Helper: build a small diamond-shaped graph for local-graph tests.
+    ///   A → B → D
+    ///   A → C → D
+    ///   B → C
+    fn diamond_graph() -> KnowledgeGraph {
+        KnowledgeGraph {
+            nodes: vec![
+                GraphNode {
+                    id: "A".into(),
+                    title: "Alpha".into(),
+                    tags: vec![],
+                    in_degree: 0,
+                    out_degree: 2,
+                },
+                GraphNode {
+                    id: "B".into(),
+                    title: "Beta".into(),
+                    tags: vec![],
+                    in_degree: 1,
+                    out_degree: 2,
+                },
+                GraphNode {
+                    id: "C".into(),
+                    title: "Gamma".into(),
+                    tags: vec![],
+                    in_degree: 2,
+                    out_degree: 1,
+                },
+                GraphNode {
+                    id: "D".into(),
+                    title: "Delta".into(),
+                    tags: vec![],
+                    in_degree: 2,
+                    out_degree: 0,
+                },
+                GraphNode {
+                    id: "Z".into(),
+                    title: "Zeta".into(),
+                    tags: vec![],
+                    in_degree: 0,
+                    out_degree: 0,
+                },
+            ],
+            edges: vec![
+                GraphEdge {
+                    source: "A".into(),
+                    target: "B".into(),
+                    label: "Beta".into(),
+                    kind: GraphEdgeKind::Wikilink,
+                },
+                GraphEdge {
+                    source: "A".into(),
+                    target: "C".into(),
+                    label: "Gamma".into(),
+                    kind: GraphEdgeKind::Wikilink,
+                },
+                GraphEdge {
+                    source: "B".into(),
+                    target: "D".into(),
+                    label: "Delta".into(),
+                    kind: GraphEdgeKind::Wikilink,
+                },
+                GraphEdge {
+                    source: "B".into(),
+                    target: "C".into(),
+                    label: "Gamma".into(),
+                    kind: GraphEdgeKind::Wikilink,
+                },
+                GraphEdge {
+                    source: "C".into(),
+                    target: "D".into(),
+                    label: "Delta".into(),
+                    kind: GraphEdgeKind::Wikilink,
+                },
+            ],
+            note_count: 5,
+            edge_count: 5,
+            dangling_link_count: 0,
+        }
+    }
+
+    #[test]
+    fn test_extract_local_graph_depth_0() {
+        let g = diamond_graph();
+        let local = extract_local_graph(&g, "A", 0);
+        assert_eq!(local.note_count, 1);
+        assert_eq!(local.nodes[0].id, "A");
+        assert!(local.edges.is_empty());
+    }
+
+    #[test]
+    fn test_extract_local_graph_depth_1() {
+        let g = diamond_graph();
+        let local = extract_local_graph(&g, "A", 1);
+        // depth 1: A + its direct neighbors B, C
+        let ids: Vec<&str> = local.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(
+            local.note_count, 3,
+            "expected 3 nodes at depth 1: {:?}",
+            ids
+        );
+        assert!(ids.contains(&"A"));
+        assert!(ids.contains(&"B"));
+        assert!(ids.contains(&"C"));
+        // Edges among A, B, C: A→B, A→C, B→C
+        assert_eq!(local.edge_count, 3);
+    }
+
+    #[test]
+    fn test_extract_local_graph_depth_2() {
+        let g = diamond_graph();
+        let local = extract_local_graph(&g, "A", 2);
+        // depth 2: A, B, C, D (D is reached via B→D and C→D)
+        let ids: Vec<&str> = local.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(
+            local.note_count, 4,
+            "expected 4 nodes at depth 2: {:?}",
+            ids
+        );
+        assert!(ids.contains(&"D"));
+        // Z is disconnected, should never appear
+        assert!(!ids.contains(&"Z"));
+    }
+
+    #[test]
+    fn test_extract_local_graph_center_not_found() {
+        let g = diamond_graph();
+        let local = extract_local_graph(&g, "nonexistent", 3);
+        assert_eq!(local.note_count, 0);
+        assert!(local.nodes.is_empty());
+    }
+
+    #[test]
+    fn test_extract_local_graph_is_bidirectional() {
+        let g = diamond_graph();
+        // Center on D (which only has incoming edges). Following edges backward
+        // should reach B and C at depth 1.
+        let local = extract_local_graph(&g, "D", 1);
+        let ids: Vec<&str> = local.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"D"));
+        assert!(
+            ids.contains(&"B") || ids.contains(&"C"),
+            "depth-1 from D must reach B or C"
+        );
+        assert_eq!(local.note_count, 3, "D, B, C at depth 1");
+    }
+
+    #[test]
+    fn test_compute_layout_empty_graph() {
+        let g = KnowledgeGraph::default();
+        let layout = compute_layout(&g, &LayoutConfig::default());
+        assert!(layout.positions.is_empty());
+    }
+
+    #[test]
+    fn test_compute_layout_single_node() {
+        let g = KnowledgeGraph {
+            nodes: vec![GraphNode {
+                id: "n1".into(),
+                title: "Solo".into(),
+                tags: vec![],
+                in_degree: 0,
+                out_degree: 0,
+            }],
+            edges: vec![],
+            note_count: 1,
+            edge_count: 0,
+            dangling_link_count: 0,
+        };
+        let layout = compute_layout(&g, &LayoutConfig::default());
+        assert_eq!(layout.positions.len(), 1);
+        assert_eq!(layout.positions[0].id, "n1");
+        // Single node has no forces — position stays at initial placement within area.
+        assert!(layout.positions[0].x.abs() <= 10.0);
+        assert!(layout.positions[0].y.abs() <= 10.0);
+    }
+
+    #[test]
+    fn test_compute_layout_connected_nodes() {
+        let g = diamond_graph();
+        let layout = compute_layout(&g, &LayoutConfig::default());
+        assert_eq!(layout.positions.len(), 5);
+
+        // Every position should be within the area bounds.
+        for pos in &layout.positions {
+            assert!(pos.x.abs() <= 10.0, "x out of bounds: {}", pos.x);
+            assert!(pos.y.abs() <= 10.0, "y out of bounds: {}", pos.y);
+        }
+
+        // Bounding box should be valid.
+        assert!(layout.min_x <= layout.max_x);
+        assert!(layout.min_y <= layout.max_y);
+
+        // All node IDs should be present.
+        let ids: HashSet<&str> = layout.positions.iter().map(|p| p.id.as_str()).collect();
+        for expected in &["A", "B", "C", "D", "Z"] {
+            assert!(
+                ids.contains(expected),
+                "missing node {} in layout",
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_compute_layout_deterministic() {
+        let g = diamond_graph();
+        let layout1 = compute_layout(&g, &LayoutConfig::default());
+        let layout2 = compute_layout(&g, &LayoutConfig::default());
+        // Same input should produce identical output (deterministic seed).
+        for (p1, p2) in layout1.positions.iter().zip(layout2.positions.iter()) {
+            assert_eq!(p1.id, p2.id);
+            assert!(
+                (p1.x - p2.x).abs() < 1e-10,
+                "non-deterministic x for {}",
+                p1.id
+            );
+            assert!(
+                (p1.y - p2.y).abs() < 1e-10,
+                "non-deterministic y for {}",
+                p1.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_graph_layout_serializes() {
+        let layout = GraphLayout {
+            positions: vec![GraphNodePosition {
+                id: "n1".into(),
+                x: 1.5,
+                y: -0.5,
+            }],
+            min_x: 1.5,
+            min_y: -0.5,
+            max_x: 1.5,
+            max_y: -0.5,
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        assert!(json.contains("\"id\":\"n1\""));
+        assert!(json.contains("1.5"));
+        let parsed: GraphLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.positions[0].id, "n1");
+        assert!((parsed.positions[0].x - 1.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_layout_config_default() {
+        let c = LayoutConfig::default();
+        assert!(c.area > 0.0);
+        assert!(c.iterations > 0);
+        assert!(c.cooling > 0.0 && c.cooling < 1.0);
     }
 }

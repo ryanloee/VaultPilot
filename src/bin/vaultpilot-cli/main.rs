@@ -868,7 +868,7 @@ enum Commands {
         action: SkillSavedActions,
     },
 
-    /// Generate a knowledge graph from vault wikilinks (#1913)
+    /// Generate a knowledge graph from vault wikilinks (#1913, #3570)
     ///
     /// Builds a node-edge graph by extracting `[[wikilink]]` references from
     /// every note and resolving them to note titles. Output can be rendered
@@ -880,6 +880,9 @@ enum Commands {
     ///   vp graph --json                   — JSON output
     ///   vp graph --summary                — statistics only
     ///   vp graph --dot | dot -Tsvg -o graph.svg
+    ///   vp graph --local note_123         — local graph centered on note_123
+    ///   vp graph --local note_123 --depth 2 — local graph with 2-hop neighborhood
+    ///   vp graph --json --layout          — JSON with force-directed layout coordinates
     Graph {
         /// Output format: dot (Graphviz DOT language)
         #[arg(long)]
@@ -897,6 +900,20 @@ enum Commands {
         /// By default only resolved `[[wikilink]]` edges are shown.
         #[arg(long)]
         mentions: bool,
+
+        /// Generate a local graph centered on the given note ID (#3570).
+        /// Only nodes within `--depth` hops of the center note are included.
+        #[arg(long)]
+        local: Option<String>,
+
+        /// Maximum hop distance for `--local` (default: 1). Ignored without --local.
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
+
+        /// Include force-directed layout (x/y coordinates) in JSON output (#3570).
+        /// Has no effect on DOT or summary output.
+        #[arg(long)]
+        layout: bool,
     },
     /// Manage spaced-repetition flashcards (#1912)
     Flashcard {
@@ -3130,7 +3147,19 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             json,
             summary,
             mentions,
-        } => handle_graph(context, *dot, *json, *summary, *mentions),
+            local,
+            depth,
+            layout,
+        } => handle_graph(
+            context,
+            *dot,
+            *json,
+            *summary,
+            *mentions,
+            local.as_deref(),
+            *depth,
+            *layout,
+        ),
         Commands::Flashcard { action } => {
             tokio::task::block_in_place(|| handle_flashcard(context, action))
         }
@@ -9603,30 +9632,71 @@ async fn handle_changelog(
 }
 
 /// Handle the `graph` command — build and output the vault knowledge graph (#1913).
+#[allow(clippy::too_many_arguments)]
 fn handle_graph(
     context: &StorageContext,
     dot: bool,
     json: bool,
     summary: bool,
     mentions: bool,
+    local: Option<&str>,
+    depth: usize,
+    include_layout: bool,
 ) -> Result<Value> {
     use vaultpilot_lib::knowledge_graph;
 
-    let graph = if mentions {
+    // Step 1: Build the full graph (or full+mentions).
+    let full_graph = if mentions {
         knowledge_graph::build_knowledge_graph_with_mentions(context)?
     } else {
         knowledge_graph::build_knowledge_graph(context)?
     };
 
-    // Determine output mode: explicit flags take priority, default = summary + dot.
+    // Step 2: If --local is specified, extract the local subgraph.
+    let graph = if let Some(center_id) = local {
+        knowledge_graph::extract_local_graph(&full_graph, center_id, depth)
+    } else {
+        full_graph
+    };
+
+    // Step 3: Compute layout if requested (only meaningful for JSON output).
+    let layout = if include_layout {
+        Some(knowledge_graph::compute_layout(
+            &graph,
+            &knowledge_graph::LayoutConfig::default(),
+        ))
+    } else {
+        None
+    };
+
+    // Step 4: Determine output mode.
     if json {
+        // For JSON + layout, we wrap the graph and layout into a combined JSON.
+        if let Some(ref layout_data) = layout {
+            let graph_json = serde_json::to_value(&graph)?;
+            let layout_json = serde_json::to_value(layout_data)?;
+            let combined = serde_json::json!({
+                "graph": graph_json,
+                "layout": layout_json,
+            });
+            let pretty = serde_json::to_string_pretty(&combined)?;
+            println!("{pretty}");
+            return Ok(serde_json::json!({
+                "format": "json+layout",
+                "note_count": graph.note_count,
+                "edge_count": graph.edge_count,
+                "local_center": local,
+                "local_depth": if local.is_some() { Some(depth) } else { None },
+            }));
+        }
+        // Plain JSON (no layout).
         let json_str = knowledge_graph::render(&graph, knowledge_graph::GraphOutputFormat::Json)?;
-        // Print to stdout for piping
         println!("{json_str}");
         return Ok(serde_json::json!({
             "format": "json",
             "note_count": graph.note_count,
             "edge_count": graph.edge_count,
+            "local_center": local,
         }));
     }
 
@@ -9637,24 +9707,32 @@ fn handle_graph(
             "format": "dot",
             "note_count": graph.note_count,
             "edge_count": graph.edge_count,
+            "local_center": local,
         }));
     }
 
     // Default / summary: print human-readable stats to stderr, DOT to stdout.
     let stats = knowledge_graph::graph_summary(&graph);
     eprintln!("{stats}");
+    if let Some(center_id) = local {
+        eprintln!(
+            "Local graph centered on '{}' (depth {}): {} notes, {} links",
+            center_id, depth, graph.note_count, graph.edge_count
+        );
+    }
     eprintln!();
     eprintln!("Use --dot for Graphviz output, --json for machine-readable JSON.");
     eprintln!("  vp graph --dot | dot -Tsvg -o graph.svg");
+    eprintln!("  vp graph --local <note_id> --json --layout  — local graph with coordinates");
 
     let result = serde_json::json!({
         "note_count": graph.note_count,
         "edge_count": graph.edge_count,
         "dangling_link_count": graph.dangling_link_count,
+        "local_center": local,
     });
 
     if !summary {
-        // Also print DOT to stdout in default mode.
         let dot_str = knowledge_graph::render_dot(&graph);
         println!("{dot_str}");
     }

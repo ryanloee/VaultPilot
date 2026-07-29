@@ -236,7 +236,7 @@ impl PropertySchema {
             }
             PropertyType::Date => {
                 let normalized = normalize_date(value);
-                if normalized.is_empty() || normalized == value.trim() && !is_date_like(value) {
+                if normalized == value.trim() && !is_date_like(value) {
                     // Double-check: if normalize returned the input unchanged
                     // and it doesn't look like a date, it's suspicious.
                     if !looks_like_date(value) {
@@ -791,6 +791,21 @@ enum_options:
         // Clearly not a date
         assert!(schema.validate_value("created", "hello").is_some());
         assert!(schema.validate_value("created", "abc-def-ghi").is_some());
+    }
+
+    // Regression for #3583: verify that removing the dead
+    // `normalized.is_empty()` branch doesn't change behavior —
+    // non-empty input that normalizes to a recognizable date is accepted.
+    #[test]
+    fn test_validate_date_nonempty_branch_coverage_3583() {
+        let schema = PropertySchema::empty().with("created", PropertyType::Date);
+        // Non-empty input with whitespace should still be processed
+        assert!(schema.validate_value("created", "  2026-07-27  ").is_none());
+        // Non-empty input that isn't date-like is rejected (dead branch removal
+        // must not affect this)
+        assert!(schema.validate_value("created", "12345").is_some());
+        // Non-empty input that is a valid date is accepted
+        assert!(schema.validate_value("created", "2026-07-27").is_none());
     }
 
     // ── validate_note_meta ──

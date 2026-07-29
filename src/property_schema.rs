@@ -1,4 +1,4 @@
-//! Property Type System — typed frontmatter fields (#3501).
+//! Property Type System — typed frontmatter fields (#3501, #3569).
 //!
 //! Inspired by Logseq DB `:asset`/`:date` property types and Obsidian Bases
 //! typed properties.  This module lets users declare the type of custom
@@ -15,6 +15,9 @@
 //!   participants: tags
 //!   attachment: asset
 //!   is_archived: checkbox
+//!   status: enum               # <-- Enum type for fixed-option fields
+//! enum_options:
+//!   status: [doing, done, blocked]  # Allowed values for the enum field
 //! ```
 //!
 //! Fields not listed in the schema default to [`PropertyType::Text`].
@@ -36,6 +39,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+
+use crate::models::NoteMeta;
 
 // ── PropertyType enum ────────────────────────────────────────────────────
 
@@ -66,6 +71,12 @@ pub enum PropertyType {
     Asset,
     /// Array of text values — like Tags but with different UI semantics.
     MultiText,
+    /// A string value that must match one of a predefined set of options.
+    ///
+    /// Allowed values are stored in [`PropertySchema::enum_options`] under
+    /// the field name.  When no options are defined, any string is accepted
+    /// (treated as free-text, same as [`PropertyType::Text`]).
+    Enum,
 }
 
 impl PropertyType {
@@ -83,6 +94,11 @@ impl PropertyType {
     pub fn is_array(self) -> bool {
         matches!(self, PropertyType::Tags | PropertyType::MultiText)
     }
+
+    /// Returns `true` if this type is an enum (select with predefined options).
+    pub fn is_enum(self) -> bool {
+        matches!(self, PropertyType::Enum)
+    }
 }
 
 impl std::fmt::Display for PropertyType {
@@ -95,6 +111,7 @@ impl std::fmt::Display for PropertyType {
             PropertyType::Tags => "tags",
             PropertyType::Asset => "asset",
             PropertyType::MultiText => "multitext",
+            PropertyType::Enum => "enum",
         };
         write!(f, "{s}")
     }
@@ -106,11 +123,20 @@ impl std::fmt::Display for PropertyType {
 ///
 /// Loaded from `.vp/property-schema.yml`.  Fields not present in the schema
 /// get a default type determined by [`PropertySchema::builtin_type`].
+///
+/// Supports `Enum` fields with predefined options stored in
+/// [`enum_options`](PropertySchema::enum_options).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PropertySchema {
     /// User-declared field → type mappings.
     #[serde(default)]
     pub properties: HashMap<String, PropertyType>,
+    /// Allowed values for [`PropertyType::Enum`] fields.
+    ///
+    /// Keyed by field name.  When a field is declared as `enum` but has no
+    /// entry here, any string value is accepted.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub enum_options: HashMap<String, Vec<String>>,
 }
 
 impl PropertySchema {
@@ -118,6 +144,7 @@ impl PropertySchema {
     pub fn empty() -> Self {
         Self {
             properties: HashMap::new(),
+            enum_options: HashMap::new(),
         }
     }
 
@@ -128,6 +155,9 @@ impl PropertySchema {
     /// properties:
     ///   priority: number
     ///   due_date: date
+    ///   status: enum
+    /// enum_options:
+    ///   status: [doing, done, blocked]
     /// ```
     pub fn from_yaml(yaml: &str) -> Result<Self> {
         if yaml.trim().is_empty() {
@@ -162,12 +192,153 @@ impl PropertySchema {
         self
     }
 
+    /// Declare a field type with enum options (convenience for tests/builders).
+    ///
+    /// Also sets the field's type to [`PropertyType::Enum`] if not already set.
+    pub fn with_enum(mut self, field: &str, options: Vec<String>) -> Self {
+        self.properties
+            .entry(field.to_string())
+            .or_insert(PropertyType::Enum);
+        self.enum_options.insert(field.to_string(), options);
+        self
+    }
+
     /// Get the declared type for a field, falling back to built-in defaults.
     pub fn type_of(&self, field: &str) -> PropertyType {
         if let Some(ty) = self.properties.get(field) {
             return *ty;
         }
         Self::builtin_type(field)
+    }
+
+    /// Returns the allowed values for an Enum field, if defined.
+    pub fn enum_options_for(&self, field: &str) -> Option<&[String]> {
+        self.enum_options.get(field).map(|v| v.as_slice())
+    }
+
+    /// Returns `true` if `value` is valid for the given field according to
+    /// its declared type.  Returns `None` when valid, or `Some(reason)` when
+    /// invalid.  Empty/blank values are always accepted (field may be unset).
+    pub fn validate_value(&self, field: &str, value: &str) -> Option<String> {
+        if value.trim().is_empty() {
+            return None;
+        }
+        let ty = self.type_of(field);
+        match ty {
+            PropertyType::Number => {
+                if value.trim().parse::<f64>().is_err() {
+                    Some(format!(
+                        "field '{field}' is declared as `number` but '{value}' is not a valid number"
+                    ))
+                } else {
+                    None
+                }
+            }
+            PropertyType::Date => {
+                let normalized = normalize_date(value);
+                if normalized.is_empty() || normalized == value.trim() && !is_date_like(value) {
+                    // Double-check: if normalize returned the input unchanged
+                    // and it doesn't look like a date, it's suspicious.
+                    if !looks_like_date(value) {
+                        Some(format!(
+                            "field '{field}' is declared as `date` but '{value}' does not look like a valid date (expected ISO-8601)"
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            PropertyType::Checkbox => {
+                if parse_bool(value).is_none() {
+                    Some(format!(
+                        "field '{field}' is declared as `checkbox` but '{value}' is not a valid boolean (expected true/false/yes/no/1/0)"
+                    ))
+                } else {
+                    None
+                }
+            }
+            PropertyType::Enum => {
+                if let Some(options) = self.enum_options.get(field) {
+                    if !options.iter().any(|o| o.eq_ignore_ascii_case(value.trim())) {
+                        Some(format!(
+                            "field '{field}' is declared as `enum` with options {options:?} but '{value}' is not one of the allowed values"
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    // Enum without options → free-text, any value accepted.
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Validate all declared frontmatter fields of a `NoteMeta` against the
+    /// schema.  Returns a list of validation warnings (non-empty means at
+    /// least one field had an invalid value).
+    ///
+    /// This is non-blocking: notes are always saved regardless of warnings.
+    /// Callers may log, display, or ignore the returned warnings.
+    pub fn validate_note_meta(&self, meta: &NoteMeta) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        // Only validate fields that are declared in the schema.
+        for field in self.properties.keys() {
+            let value = match field.as_str() {
+                "title" => &meta.title,
+                "status" => &meta.status,
+                "platform" => &meta.platform,
+                "board" => &meta.board,
+                "kernel" => &meta.kernel,
+                "source" => &meta.source,
+                "summary" => &meta.summary,
+                "created_at" => &meta.created_at,
+                "updated_at" => &meta.updated_at,
+                "id" => &meta.id,
+                "path" => &meta.path,
+                // Array fields are validated element-by-element.
+                "tags" => {
+                    for t in &meta.tags {
+                        if let Some(warn) = self.validate_value(field, t) {
+                            warnings.push(warn);
+                        }
+                    }
+                    continue;
+                }
+                "keywords" => {
+                    for t in &meta.keywords {
+                        if let Some(warn) = self.validate_value(field, t) {
+                            warnings.push(warn);
+                        }
+                    }
+                    continue;
+                }
+                "collections" => {
+                    for t in &meta.collections {
+                        if let Some(warn) = self.validate_value(field, t) {
+                            warnings.push(warn);
+                        }
+                    }
+                    continue;
+                }
+                _ => {
+                    // Unknown field — skip (may be a custom frontmatter field
+                    // outside NoteMeta).  The Bases engine handles these via
+                    // full frontmatter YAML parsing.
+                    continue;
+                }
+            };
+
+            if let Some(warn) = self.validate_value(field, value) {
+                warnings.push(warn);
+            }
+        }
+
+        warnings
     }
 
     /// The built-in default type for well-known NoteMeta fields.
@@ -190,6 +361,42 @@ impl PropertySchema {
     }
 }
 
+// ── Helper: relaxed date check ───────────────────────────────────────────
+
+/// Quick heuristic: does `s` look like it could be a date?
+///
+/// Accepts ISO-like patterns: `2026-07-27`, `2026/07/27`, `20260727`,
+/// and timestamps like `2026-07-27T10:30:00Z`.
+fn looks_like_date(s: &str) -> bool {
+    let s = s.trim();
+    if s.len() < 8 {
+        return false;
+    }
+    // Must start with a 4-digit year.
+    let year_chars: String = s.chars().take(4).collect();
+    if year_chars.len() < 4 || !year_chars.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    // Must contain '-' or '/' or be exactly 8 digits.
+    if s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    s.contains('-') || s.contains('/')
+}
+
+/// Check whether `s` is already in an expected date-like format.
+/// This is a stricter check than `looks_like_date` — it rejects strings
+/// that happen to contain a hyphen but are clearly not dates.
+fn is_date_like(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    // Check known patterns via normalize_date round-trip.
+    let normalized = normalize_date(s);
+    !normalized.is_empty() && normalized != s
+}
+
 // ── Type-aware comparison ────────────────────────────────────────────────
 
 /// Compare two string values according to a [`PropertyType`].
@@ -200,6 +407,8 @@ impl PropertySchema {
 /// - **Date**: normalize both to a date key (ISO `YYYY-MM-DD[THH:MM:SS]`)
 ///   and compare lexicographically on the normalized form.
 /// - **Checkbox**: compare boolean truthiness (`true > false`).
+/// - **Enum**: case-insensitive lexicographic comparison (option values are
+///   compared ignoring case, so "DONE" == "done").
 /// - **Text / Tags / Asset / MultiText**: plain lexicographic comparison.
 pub fn cmp_typed(ty: PropertyType, a: &str, b: &str) -> std::cmp::Ordering {
     match ty {
@@ -213,6 +422,10 @@ pub fn cmp_typed(ty: PropertyType, a: &str, b: &str) -> std::cmp::Ordering {
             let ba = parse_bool(a).unwrap_or(false);
             let bb = parse_bool(b).unwrap_or(false);
             ba.cmp(&bb)
+        }
+        PropertyType::Enum => {
+            // Case-insensitive comparison for enum values.
+            a.to_lowercase().cmp(&b.to_lowercase())
         }
         _ => a.cmp(b),
     }
@@ -313,6 +526,7 @@ fn pad2(s: &str) -> String {
 ///
 /// - Number: `parse(a) == parse(b)` (returns `false` if either fails to parse)
 /// - Checkbox: `parse_bool(a) == parse_bool(b)`
+/// - Enum: case-insensitive string equality
 /// - Everything else: string equality
 pub fn typed_equals(ty: PropertyType, a: &str, b: &str) -> bool {
     match ty {
@@ -324,6 +538,7 @@ pub fn typed_equals(ty: PropertyType, a: &str, b: &str) -> bool {
         }
         PropertyType::Checkbox => parse_bool(a) == parse_bool(b) && parse_bool(a).is_some(),
         PropertyType::Date => normalize_date(a) == normalize_date(b),
+        PropertyType::Enum => a.eq_ignore_ascii_case(b.trim()),
         _ => a == b,
     }
 }
@@ -345,6 +560,7 @@ mod tests {
         assert_eq!(PropertyType::Tags.to_string(), "tags");
         assert_eq!(PropertyType::Asset.to_string(), "asset");
         assert_eq!(PropertyType::MultiText.to_string(), "multitext");
+        assert_eq!(PropertyType::Enum.to_string(), "enum");
     }
 
     #[test]
@@ -355,6 +571,8 @@ mod tests {
         assert!(PropertyType::Tags.is_array());
         assert!(PropertyType::MultiText.is_array());
         assert!(!PropertyType::Text.is_array());
+        assert!(PropertyType::Enum.is_enum());
+        assert!(!PropertyType::Text.is_enum());
     }
 
     // ── Schema parsing ──
@@ -371,6 +589,71 @@ properties:
         assert_eq!(schema.type_of("priority"), PropertyType::Number);
         assert_eq!(schema.type_of("due_date"), PropertyType::Date);
         assert_eq!(schema.type_of("is_done"), PropertyType::Checkbox);
+    }
+
+    #[test]
+    fn test_schema_from_yaml_with_enum() {
+        let yaml = r#"
+properties:
+  status: enum
+enum_options:
+  status: [doing, done, blocked]
+"#;
+        let schema = PropertySchema::from_yaml(yaml).unwrap();
+        assert_eq!(schema.type_of("status"), PropertyType::Enum);
+        assert_eq!(
+            schema.enum_options_for("status"),
+            Some(
+                vec![
+                    "doing".to_string(),
+                    "done".to_string(),
+                    "blocked".to_string()
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
+    fn test_schema_from_yaml_with_multiple_enums() {
+        let yaml = r#"
+properties:
+  priority: enum
+  status: enum
+  title: text
+enum_options:
+  priority: [p0, p1, p2, p3]
+  status: [todo, doing, done, blocked]
+"#;
+        let schema = PropertySchema::from_yaml(yaml).unwrap();
+        assert_eq!(schema.type_of("priority"), PropertyType::Enum);
+        assert_eq!(schema.type_of("status"), PropertyType::Enum);
+        assert_eq!(schema.type_of("title"), PropertyType::Text);
+        assert_eq!(
+            schema.enum_options_for("priority"),
+            Some(
+                vec![
+                    "p0".to_string(),
+                    "p1".to_string(),
+                    "p2".to_string(),
+                    "p3".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            schema.enum_options_for("status"),
+            Some(
+                vec![
+                    "todo".to_string(),
+                    "doing".to_string(),
+                    "done".to_string(),
+                    "blocked".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert!(schema.enum_options_for("title").is_none());
     }
 
     #[test]
@@ -399,6 +682,182 @@ properties:
         assert_eq!(schema.type_of("priority"), PropertyType::Number);
         assert_eq!(schema.type_of("due_date"), PropertyType::Date);
         assert_eq!(schema.type_of("unknown"), PropertyType::Text);
+    }
+
+    #[test]
+    fn test_schema_builder_with_enum() {
+        let schema = PropertySchema::empty().with_enum(
+            "status",
+            vec!["todo".into(), "done".into(), "blocked".into()],
+        );
+        assert_eq!(schema.type_of("status"), PropertyType::Enum);
+        assert_eq!(
+            schema.enum_options_for("status"),
+            Some(
+                vec![
+                    "todo".to_string(),
+                    "done".to_string(),
+                    "blocked".to_string()
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    // ── Value validation ──
+
+    #[test]
+    fn test_validate_number_ok() {
+        let schema = PropertySchema::empty().with("score", PropertyType::Number);
+        assert!(schema.validate_value("score", "42").is_none());
+        assert!(schema.validate_value("score", "3.14").is_none());
+        assert!(schema.validate_value("score", "-7").is_none());
+        assert!(schema.validate_value("score", "0").is_none());
+        // Empty is always accepted
+        assert!(schema.validate_value("score", "").is_none());
+    }
+
+    #[test]
+    fn test_validate_number_fail() {
+        let schema = PropertySchema::empty().with("score", PropertyType::Number);
+        assert!(schema.validate_value("score", "abc").is_some());
+        assert!(schema.validate_value("score", "12a").is_some());
+    }
+
+    #[test]
+    fn test_validate_checkbox_ok() {
+        let schema = PropertySchema::empty().with("done", PropertyType::Checkbox);
+        assert!(schema.validate_value("done", "true").is_none());
+        assert!(schema.validate_value("done", "false").is_none());
+        assert!(schema.validate_value("done", "yes").is_none());
+        assert!(schema.validate_value("done", "no").is_none());
+        assert!(schema.validate_value("done", "1").is_none());
+        assert!(schema.validate_value("done", "0").is_none());
+        assert!(schema.validate_value("done", "on").is_none());
+        assert!(schema.validate_value("done", "off").is_none());
+        assert!(schema.validate_value("done", "").is_none());
+    }
+
+    #[test]
+    fn test_validate_checkbox_fail() {
+        let schema = PropertySchema::empty().with("done", PropertyType::Checkbox);
+        assert!(schema.validate_value("done", "maybe").is_some());
+        assert!(schema.validate_value("done", "2").is_some());
+    }
+
+    #[test]
+    fn test_validate_enum_ok() {
+        let schema = PropertySchema::empty()
+            .with_enum("status", vec!["todo".into(), "doing".into(), "done".into()]);
+        assert!(schema.validate_value("status", "todo").is_none());
+        assert!(schema.validate_value("status", "doing").is_none());
+        assert!(schema.validate_value("status", "done").is_none());
+        // Case-insensitive match
+        assert!(schema.validate_value("status", "TODO").is_none());
+        assert!(schema.validate_value("status", "Doing").is_none());
+        // Empty is always accepted
+        assert!(schema.validate_value("status", "").is_none());
+    }
+
+    #[test]
+    fn test_validate_enum_fail() {
+        let schema = PropertySchema::empty()
+            .with_enum("status", vec!["todo".into(), "doing".into(), "done".into()]);
+        assert!(schema.validate_value("status", "invalid").is_some());
+        assert!(schema.validate_value("status", "in_progress").is_some());
+    }
+
+    #[test]
+    fn test_validate_enum_no_options_accepts_any() {
+        // Enum without options defined should accept any value (treated as free-text).
+        let schema = PropertySchema::empty().with("status", PropertyType::Enum);
+        assert!(schema.validate_value("status", "anything").is_none());
+        assert!(schema.validate_value("status", "goes").is_none());
+    }
+
+    #[test]
+    fn test_validate_date_ok() {
+        let schema = PropertySchema::empty().with("created", PropertyType::Date);
+        assert!(schema.validate_value("created", "2026-07-27").is_none());
+        assert!(schema.validate_value("created", "2026/07/27").is_none());
+        assert!(schema.validate_value("created", "20260727").is_none());
+        assert!(schema.validate_value("created", "2026-7-3").is_none());
+        assert!(schema.validate_value("created", "").is_none());
+    }
+
+    #[test]
+    fn test_validate_date_suspicious() {
+        let schema = PropertySchema::empty().with("created", PropertyType::Date);
+        // Clearly not a date
+        assert!(schema.validate_value("created", "hello").is_some());
+        assert!(schema.validate_value("created", "abc-def-ghi").is_some());
+    }
+
+    // ── validate_note_meta ──
+
+    #[test]
+    fn test_validate_note_meta_no_warnings() {
+        let schema = PropertySchema::empty()
+            .with_enum("status", vec!["active".into(), "archived".into()])
+            .with("priority", PropertyType::Number);
+        let meta = NoteMeta {
+            status: "active".into(),
+            ..Default::default()
+        };
+        assert!(schema.validate_note_meta(&meta).is_empty());
+    }
+
+    #[test]
+    fn test_validate_note_meta_with_warnings() {
+        let schema = PropertySchema::empty()
+            .with_enum("status", vec!["active".into(), "archived".into()])
+            .with("summary", PropertyType::Number);
+        let meta = NoteMeta {
+            status: "invalid_status".into(),
+            summary: "not_a_number".into(),
+            ..Default::default()
+        };
+        let warnings = schema.validate_note_meta(&meta);
+        assert_eq!(warnings.len(), 2, "should have 2 warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn test_validate_note_meta_array_fields() {
+        let schema = PropertySchema::empty().with_enum(
+            "tags",
+            vec!["rust".into(), "typescript".into(), "docs".into()],
+        );
+        let meta = NoteMeta {
+            tags: vec!["rust".into(), "invalid_tag".into()],
+            ..Default::default()
+        };
+        let warnings = schema.validate_note_meta(&meta);
+        assert_eq!(
+            warnings.len(),
+            1,
+            "invalid tag should produce 1 warning: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_note_meta_skips_undeclared_fields() {
+        // Fields not in the schema should not be validated.
+        let schema = PropertySchema::empty().with("status", PropertyType::Number); // only status is declared
+        let meta = NoteMeta {
+            status: "42".into(),
+            title: "anything".into(), // not in schema
+            ..Default::default()
+        };
+        assert!(schema.validate_note_meta(&meta).is_empty());
+    }
+
+    #[test]
+    fn test_validate_note_meta_accepts_blank_fields() {
+        let schema = PropertySchema::empty()
+            .with_enum("status", vec!["active".into(), "archived".into()])
+            .with("priority", PropertyType::Number);
+        let meta = NoteMeta::default(); // all fields empty
+        assert!(schema.validate_note_meta(&meta).is_empty());
     }
 
     // ── Numeric comparison ──
@@ -561,6 +1020,28 @@ properties:
         assert_eq!(parse_bool("off"), Some(false));
         assert_eq!(parse_bool("maybe"), None);
         assert_eq!(parse_bool(""), None);
+    }
+
+    // ── Enum comparison ──
+
+    #[test]
+    fn test_cmp_enum_case_insensitive() {
+        // Enum comparison should be case-insensitive
+        assert_eq!(
+            cmp_typed(PropertyType::Enum, "TODO", "todo"),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            cmp_typed(PropertyType::Enum, "DONE", "doing"),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn test_typed_equals_enum_case_insensitive() {
+        assert!(typed_equals(PropertyType::Enum, "TODO", "todo"));
+        assert!(typed_equals(PropertyType::Enum, "DONE", "done"));
+        assert!(!typed_equals(PropertyType::Enum, "todo", "doing"));
     }
 
     // ── Text comparison (unchanged behaviour) ──

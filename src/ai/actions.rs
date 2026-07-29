@@ -61,6 +61,10 @@ pub enum AiActionType {
     /// (ROI calculator, quiz, org chart, etc.). The AI produces self-contained
     /// HTML with inline JS/CSS, sandboxed for safe rendering (#3042).
     GenerateWidget,
+    /// Process a meeting transcript into a structured meeting note with summary,
+    /// key decisions, action items (with assignees), and next steps (#3588).
+    /// The `text` field contains the raw transcript (optionally with speaker labels).
+    MeetingNotes,
 }
 
 impl AiActionType {
@@ -87,6 +91,7 @@ impl AiActionType {
             Self::SynthesizeNotes => "笔记综合",
             Self::ExportDocument => "导出文档",
             Self::GenerateWidget => "交互组件",
+            Self::MeetingNotes => "会议笔记",
         }
     }
 
@@ -113,6 +118,7 @@ impl AiActionType {
             Self::SynthesizeNotes => "synthesizeNotes",
             Self::ExportDocument => "exportDocument",
             Self::GenerateWidget => "generateWidget",
+            Self::MeetingNotes => "meetingNotes",
         }
     }
 
@@ -143,6 +149,7 @@ impl AiActionType {
             }
             "exportDocument" | "export_document" | "export" => Some(Self::ExportDocument),
             "generateWidget" | "generate_widget" | "widget" => Some(Self::GenerateWidget),
+            "meetingNotes" | "meeting_notes" | "meeting" => Some(Self::MeetingNotes),
             _ => None,
         }
     }
@@ -170,6 +177,7 @@ impl AiActionType {
             Self::SynthesizeNotes,
             Self::ExportDocument,
             Self::GenerateWidget,
+            Self::MeetingNotes,
         ]
     }
 }
@@ -442,6 +450,36 @@ pub(crate) fn system_prompt(action: AiActionType) -> String {
              Output only the code block with the complete HTML document."
                 .to_string()
         }
+        AiActionType::MeetingNotes => {
+            "You are a meeting notes assistant. Your task is to transform a raw meeting \
+             transcript (which may include speaker labels like 'Speaker A:', 'John:', etc.) \
+             into a well-structured meeting note in Markdown format. \n\
+             Analyze the transcript and produce the following sections:\n\n\
+             ## Summary\n\
+             A concise 2-3 paragraph overview of what was discussed.\n\n\
+             ## Key Decisions\n\
+             Bullet list of decisions made during the meeting, attributed to speakers \
+             where possible (e.g., '- **Alice** decided to postpone the launch').\n\n\
+             ## Action Items\n\
+             Bullet list of tasks and follow-ups. Each item should include:\n\
+             - The task description\n\
+             - The assignee (if identifiable from the transcript)\n\
+             - Any mentioned deadline\n\
+             Format: '- [ ] **@assignee**: task description (by <date>)'\n\n\
+             ## Attendees\n\
+             List of all speakers/participants identified in the transcript.\n\n\
+             ## Next Steps\n\
+             Brief list of what should happen next.\n\n\
+             Rules:\n\
+             - Preserve factual accuracy — do not invent decisions or action items not \
+               present in the transcript.\n\
+             - If speaker labels are present (e.g., 'Speaker A:', 'John:'), map them to \
+               the most likely participant names and use them consistently.\n\
+             - If the transcript has no speaker labels, infer context from the content.\n\
+             - Respond in the same language as the input transcript.\n\
+             Output only the structured meeting note in Markdown, no extra commentary."
+                .to_string()
+        }
     }
 }
 
@@ -619,6 +657,15 @@ pub(crate) fn user_prompt(action: AiActionType, request: &AiActionRequest) -> St
                  description. The widget should be self-contained with all \
                  CSS and JS inline. Output only the raw HTML code inside \
                  a ```html code block.\n\n{}",
+                request.text
+            )
+        }
+        AiActionType::MeetingNotes => {
+            format!(
+                "Transform the following meeting transcript into a structured \
+                 meeting note with summary, key decisions, action items (with \
+                 assignees and deadlines where identifiable), attendees list, \
+                 and next steps:\n\n{}",
                 request.text
             )
         }
@@ -2145,6 +2192,162 @@ mod tests {
             RequestUsage::default(),
         );
         assert!(!result.result.is_empty());
+        assert!(result.error.is_none());
+    }
+
+    // ── MeetingNotes (#3588) ───────────────────────────────────────────
+    #[test]
+    fn meeting_notes_roundtrip() {
+        let parsed = AiActionType::from_id("meetingNotes");
+        assert_eq!(parsed, Some(AiActionType::MeetingNotes));
+        assert_eq!(parsed.unwrap().id(), "meetingNotes");
+    }
+
+    #[test]
+    fn meeting_notes_aliases() {
+        assert_eq!(
+            AiActionType::from_id("meeting_notes"),
+            Some(AiActionType::MeetingNotes)
+        );
+        assert_eq!(
+            AiActionType::from_id("meeting"),
+            Some(AiActionType::MeetingNotes)
+        );
+    }
+
+    #[test]
+    fn meeting_notes_label_and_id() {
+        let action = AiActionType::MeetingNotes;
+        assert_eq!(action.label(), "会议笔记");
+        assert_eq!(action.id(), "meetingNotes");
+    }
+
+    #[test]
+    fn meeting_notes_in_all_list() {
+        assert!(AiActionType::all().contains(&AiActionType::MeetingNotes));
+    }
+
+    #[test]
+    fn meeting_notes_system_prompt_not_empty() {
+        let prompt = system_prompt(AiActionType::MeetingNotes);
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("meeting notes"));
+        assert!(prompt.contains("Summary"));
+        assert!(prompt.contains("Key Decisions"));
+        assert!(prompt.contains("Action Items"));
+        assert!(prompt.contains("Attendees"));
+        assert!(prompt.contains("Next Steps"));
+    }
+
+    #[test]
+    fn meeting_notes_system_prompt_contains_action_items_format() {
+        let prompt = system_prompt(AiActionType::MeetingNotes);
+        assert!(prompt.contains("@assignee"));
+        assert!(prompt.contains("by <date>"));
+    }
+
+    #[test]
+    fn meeting_notes_user_prompt_contains_transcript() {
+        let request = AiActionRequest {
+            action: AiActionType::MeetingNotes,
+            text: "Speaker A: Let's ship it. Speaker B: Agreed.".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let prompt = user_prompt(AiActionType::MeetingNotes, &request);
+        assert!(prompt.contains("Speaker A: Let's ship it."));
+        assert!(prompt.contains("structured"));
+        assert!(prompt.contains("meeting note"));
+    }
+
+    #[test]
+    fn meeting_notes_user_prompt_includes_all_sections() {
+        let request = AiActionRequest {
+            action: AiActionType::MeetingNotes,
+            text: "Discuss Q3 planning".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let prompt = user_prompt(AiActionType::MeetingNotes, &request);
+        assert!(prompt.contains("summary"));
+        assert!(prompt.contains("key decisions"));
+        assert!(prompt.contains("action items"));
+        assert!(prompt.contains("assignees"));
+        assert!(prompt.contains("attendees"));
+        assert!(prompt.contains("next steps"));
+    }
+
+    #[test]
+    fn empty_meeting_transcript_fails_validation() {
+        let request = AiActionRequest {
+            action: AiActionType::MeetingNotes,
+            text: String::new(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let result = validate_request(&request);
+        assert!(result.is_some(), "empty transcript should fail validation");
+        assert!(result.unwrap().error.unwrap().contains("空"));
+    }
+
+    #[test]
+    fn whitespace_meeting_transcript_fails_validation() {
+        let request = AiActionRequest {
+            action: AiActionType::MeetingNotes,
+            text: "   ".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let result = validate_request(&request);
+        assert!(result.is_some(), "whitespace-only transcript should fail validation");
+    }
+
+    #[test]
+    fn valid_meeting_transcript_passes_validation() {
+        let request = AiActionRequest {
+            action: AiActionType::MeetingNotes,
+            text: "Speaker A: Let's discuss Q3 budget.".to_string(),
+            target_language: None,
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        assert!(
+            validate_request(&request).is_none(),
+            "valid transcript should pass validation"
+        );
+    }
+
+    #[test]
+    fn meeting_notes_process_action_result_passthrough() {
+        // MeetingNotes is a passthrough action — returns trimmed text
+        let result = process_action_result(
+            AiActionType::MeetingNotes,
+            "  ## Summary\nDiscussed Q3 plans.  ",
+            RequestUsage::default(),
+        );
+        assert_eq!(
+            result.result.trim(),
+            "## Summary\nDiscussed Q3 plans."
+        );
         assert!(result.error.is_none());
     }
 }

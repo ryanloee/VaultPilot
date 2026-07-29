@@ -1780,6 +1780,186 @@ pub fn record_from_yaml(path: &str, mapping: &serde_yaml_ng::Mapping) -> Record 
     rec
 }
 
+// ── GROUP BY / Bases view grouping (#3568) ───────────────────────────────────
+
+/// A group produced by [`group_records_by`].
+///
+/// Each group represents one column in a Kanban view (or one bucket in any
+/// other Bases-style view): the group key (e.g. `"Todo"`, `"Doing"`, `"Done"`)
+/// and the records that fall into it.
+#[derive(Debug, Clone)]
+pub struct RecordGroup {
+    /// Human-readable group key (e.g. `"active"`, `"done"`, or `"Unfiled"`
+    /// for records missing the grouping property).
+    pub key: String,
+    /// The raw [`QValue`] used for grouping, enabling structured output.
+    pub value: QValue,
+    /// Number of records in this group.
+    pub count: usize,
+    /// The `$path` values of all records in this group, in input order.
+    pub paths: Vec<String>,
+}
+
+/// Group records by the value of a specified property (#3568).
+///
+/// This is the backend foundation for Bases Kanban / Gallery views: given a
+/// group-by field (e.g. `status`, `project`), records are partitioned into
+/// groups.  Records with a null or absent value for the field go into a
+/// special **"Unfiled"** group.
+///
+/// Group ordering is **deterministic**:
+/// - Non-null groups appear in alphabetical order by display key.
+/// - The "Unfiled" (null) group always appears **last**.
+///
+/// # Examples
+///
+/// ```
+/// use vaultpilot_lib::vault_query::{Record, QValue, group_records_by};
+///
+/// let records = vec![
+///     Record::new("a.md").with_prop("status", QValue::Text("active".into())),
+///     Record::new("b.md").with_prop("status", QValue::Text("done".into())),
+///     Record::new("c.md").with_prop("status", QValue::Text("active".into())),
+///     Record::new("d.md"), // no status — goes to Unfiled
+/// ];
+/// let groups = group_records_by(&records, "status");
+/// assert_eq!(groups.len(), 3);
+/// assert_eq!(groups[0].key, "active");
+/// assert_eq!(groups[0].count, 2);
+/// assert_eq!(groups[1].key, "done");
+/// assert_eq!(groups[2].key, "Unfiled");
+/// ```
+pub fn group_records_by(records: &[Record], field: &str) -> Vec<RecordGroup> {
+    use std::collections::BTreeMap;
+
+    // Partition into (key, value, paths) keyed by the display string.
+    // We use BTreeMap for automatic alphabetical ordering of string keys.
+    let mut groups: BTreeMap<String, (QValue, Vec<String>)> = BTreeMap::new();
+    let mut unfiled_paths: Vec<String> = Vec::new();
+
+    for r in records {
+        match r.props.get(field) {
+            Some(QValue::Null) | None => {
+                unfiled_paths.push(r.path.clone());
+            }
+            Some(val) => {
+                let display = qvalue_display_key(val);
+                groups
+                    .entry(display)
+                    .or_insert_with(|| (val.clone(), Vec::new()))
+                    .1
+                    .push(r.path.clone());
+            }
+        }
+    }
+
+    let mut result: Vec<RecordGroup> = groups
+        .into_iter()
+        .map(|(key, (value, paths))| RecordGroup {
+            count: paths.len(),
+            key,
+            value,
+            paths,
+        })
+        .collect();
+
+    // Unfiled group always last.
+    if !unfiled_paths.is_empty() {
+        result.push(RecordGroup {
+            key: "Unfiled".to_string(),
+            value: QValue::Null,
+            count: unfiled_paths.len(),
+            paths: unfiled_paths,
+        });
+    }
+
+    result
+}
+
+/// Produce a deterministic display key for a [`QValue`] used in grouping.
+///
+/// - `Text` → the string itself
+/// - `Number` → the number formatted (without trailing zeros)
+/// - `Bool` → `"true"` / `"false"`
+/// - `Date` → ISO date string
+/// - `List` → `"multi"` (each element is a sub-key; not expanded here)
+fn qvalue_display_key(val: &QValue) -> String {
+    match val {
+        QValue::Null => "Unfiled".to_string(),
+        QValue::Text(t) => t.clone(),
+        QValue::Number(n) => {
+            // Format without trailing `.0` for whole numbers.
+            if n.fract() == 0.0 {
+                format!("{}", *n as i64)
+            } else {
+                format!("{n}")
+            }
+        }
+        QValue::Bool(b) => b.to_string(),
+        QValue::Date(d) => d.to_string(),
+        QValue::List(_) => "multi".to_string(),
+    }
+}
+
+/// Format grouped records as JSON (for front-end Kanban/Gallery views).
+///
+/// Output shape:
+///
+/// ```json
+/// [
+///   {"key": "active", "value": "active", "count": 2, "paths": ["a.md", "c.md"]},
+///   {"key": "done",   "value": "done",   "count": 1, "paths": ["b.md"]},
+///   {"key": "Unfiled", "value": null,    "count": 1, "paths": ["d.md"]}
+/// ]
+/// ```
+pub fn format_groups_json(groups: &[RecordGroup]) -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = groups
+        .iter()
+        .map(|g| {
+            let value_json = match &g.value {
+                QValue::Null => serde_json::Value::Null,
+                QValue::Bool(b) => serde_json::Value::Bool(*b),
+                QValue::Number(n) => serde_json::json!(*n),
+                QValue::Date(d) => serde_json::Value::String(d.to_string()),
+                QValue::Text(t) => serde_json::Value::String(t.clone()),
+                QValue::List(items) => {
+                    let arr: Vec<serde_json::Value> = items
+                        .iter()
+                        .map(|i| match i {
+                            QValue::Null => serde_json::Value::Null,
+                            QValue::Bool(b) => serde_json::Value::Bool(*b),
+                            QValue::Number(n) => serde_json::json!(*n),
+                            QValue::Date(d) => serde_json::Value::String(d.to_string()),
+                            QValue::Text(t) => serde_json::Value::String(t.clone()),
+                            QValue::List(_) => serde_json::Value::String(i.to_string()),
+                        })
+                        .collect();
+                    serde_json::Value::Array(arr)
+                }
+            };
+            serde_json::json!({
+                "key": g.key,
+                "value": value_json,
+                "count": g.count,
+                "paths": g.paths,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(arr)
+}
+
+/// Format grouped records as a human-readable Markdown table.
+///
+/// Useful for CLI output and quick inspection.
+pub fn format_groups_md(groups: &[RecordGroup]) -> String {
+    let mut out = String::from("| Group | Count | Notes |\n|-------|-------|-------|\n");
+    for g in groups {
+        let paths = g.paths.join(", ");
+        out.push_str(&format!("| {} | {} | {} |\n", g.key, g.count, paths));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2351,5 +2531,217 @@ mod tests {
             summarize_column(&values, AggFunction::Sum),
             QValue::Number(42.0)
         );
+    }
+
+    // ── GROUP BY / Bases view tests (#3568) ─────────────────────────────────
+
+    #[test]
+    fn group_by_status_basic() {
+        let records = vec![
+            rec("a.md").with_prop("status", QValue::Text("active".into())),
+            rec("b.md").with_prop("status", QValue::Text("done".into())),
+            rec("c.md").with_prop("status", QValue::Text("active".into())),
+        ];
+        let groups = group_records_by(&records, "status");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].key, "active");
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[1].key, "done");
+        assert_eq!(groups[1].count, 1);
+    }
+
+    #[test]
+    fn group_by_with_unfiled() {
+        let records = vec![
+            rec("a.md").with_prop("status", QValue::Text("active".into())),
+            rec("b.md"),                                   // missing status
+            rec("c.md").with_prop("status", QValue::Null), // explicit null
+        ];
+        let groups = group_records_by(&records, "status");
+        assert_eq!(groups.len(), 2);
+        // Unfiled is always last
+        assert_eq!(groups[1].key, "Unfiled");
+        assert_eq!(groups[1].count, 2);
+        assert!(groups[1].paths.contains(&"b.md".to_string()));
+        assert!(groups[1].paths.contains(&"c.md".to_string()));
+    }
+
+    #[test]
+    fn group_by_alphabetical_order() {
+        let records = vec![
+            rec("a.md").with_prop("priority", QValue::Text("zenith".into())),
+            rec("b.md").with_prop("priority", QValue::Text("alpha".into())),
+            rec("c.md").with_prop("priority", QValue::Text("mid".into())),
+        ];
+        let groups = group_records_by(&records, "priority");
+        assert_eq!(groups.len(), 3);
+        // Alphabetical, not input order
+        assert_eq!(groups[0].key, "alpha");
+        assert_eq!(groups[1].key, "mid");
+        assert_eq!(groups[2].key, "zenith");
+    }
+
+    #[test]
+    fn group_by_number_field() {
+        let records = vec![
+            rec("a.md").with_prop("sprint", QValue::Number(1.0)),
+            rec("b.md").with_prop("sprint", QValue::Number(2.0)),
+            rec("c.md").with_prop("sprint", QValue::Number(1.0)),
+        ];
+        let groups = group_records_by(&records, "sprint");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].key, "1");
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[1].key, "2");
+    }
+
+    #[test]
+    fn group_by_bool_field() {
+        let records = vec![
+            rec("a.md").with_prop("archived", QValue::Bool(true)),
+            rec("b.md").with_prop("archived", QValue::Bool(false)),
+            rec("c.md").with_prop("archived", QValue::Bool(true)),
+        ];
+        let groups = group_records_by(&records, "archived");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].key, "false");
+        assert_eq!(groups[1].key, "true");
+    }
+
+    #[test]
+    fn group_by_date_field() {
+        let records = vec![
+            rec("a.md").with_prop(
+                "due",
+                QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()),
+            ),
+            rec("b.md").with_prop(
+                "due",
+                QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 2).unwrap()),
+            ),
+            rec("c.md").with_prop(
+                "due",
+                QValue::Date(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()),
+            ),
+        ];
+        let groups = group_records_by(&records, "due");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].key, "2026-07-01");
+        assert_eq!(groups[0].count, 2);
+        assert_eq!(groups[1].key, "2026-07-02");
+    }
+
+    #[test]
+    fn group_by_empty_records() {
+        let groups = group_records_by(&[], "status");
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn group_by_all_unfiled() {
+        let records = vec![rec("a.md"), rec("b.md"), rec("c.md")];
+        let groups = group_records_by(&records, "status");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].key, "Unfiled");
+        assert_eq!(groups[0].count, 3);
+    }
+
+    #[test]
+    fn group_by_preserves_paths_order() {
+        let records = vec![
+            rec("z.md").with_prop("status", QValue::Text("active".into())),
+            rec("a.md").with_prop("status", QValue::Text("active".into())),
+            rec("m.md").with_prop("status", QValue::Text("active".into())),
+        ];
+        let groups = group_records_by(&records, "status");
+        assert_eq!(groups.len(), 1);
+        // Paths in input order, not sorted
+        assert_eq!(groups[0].paths, vec!["z.md", "a.md", "m.md"]);
+    }
+
+    #[test]
+    fn group_by_list_value() {
+        // List-valued properties go into a single "multi" group.
+        let records = vec![
+            rec("a.md").with_prop(
+                "tags",
+                QValue::List(vec![QValue::Text("rust".into()), QValue::Text("ai".into())]),
+            ),
+            rec("b.md").with_prop("tags", QValue::List(vec![QValue::Text("rust".into())])),
+        ];
+        let groups = group_records_by(&records, "tags");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].key, "multi");
+        assert_eq!(groups[0].count, 2);
+    }
+
+    #[test]
+    fn format_groups_json_structure() {
+        let records = vec![
+            rec("a.md").with_prop("status", QValue::Text("active".into())),
+            rec("b.md").with_prop("status", QValue::Text("done".into())),
+            rec("c.md"), // unfiled
+        ];
+        let groups = group_records_by(&records, "status");
+        let json = format_groups_json(&groups);
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+        // active group
+        assert_eq!(arr[0]["key"], "active");
+        assert_eq!(arr[0]["count"], 1);
+        assert_eq!(arr[0]["value"], "active");
+        // done group
+        assert_eq!(arr[1]["key"], "done");
+        // unfiled group
+        assert_eq!(arr[2]["key"], "Unfiled");
+        assert_eq!(arr[2]["value"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn format_groups_md_basic() {
+        let groups = vec![RecordGroup {
+            key: "active".into(),
+            value: QValue::Text("active".into()),
+            count: 2,
+            paths: vec!["a.md".into(), "b.md".into()],
+        }];
+        let md = format_groups_md(&groups);
+        assert!(md.contains("| active | 2 | a.md, b.md |"));
+        assert!(md.contains("| Group | Count |"));
+    }
+
+    #[test]
+    fn group_by_with_query_filter_integration() {
+        // Demonstrate that GROUP BY works with query_records output:
+        // first filter via a Query, then group the matched records.
+        let records = [
+            rec("a.md")
+                .with_prop("status", QValue::Text("active".into()))
+                .with_prop("priority", QValue::Number(3.0)),
+            rec("b.md")
+                .with_prop("status", QValue::Text("active".into()))
+                .with_prop("priority", QValue::Number(5.0)),
+            rec("c.md")
+                .with_prop("status", QValue::Text("done".into()))
+                .with_prop("priority", QValue::Number(1.0)),
+        ];
+        // Filter to only active records, then group by priority.
+        let q = Query {
+            filter: Condition::Cmp {
+                field: "status".into(),
+                op: CmpOp::Eq,
+                value: Operand::Literal(QValue::Text("active".into())),
+            },
+            ..Default::default()
+        };
+        let matched: Vec<Record> = records
+            .iter()
+            .filter(|r| eval_cond(&q.filter, r))
+            .cloned()
+            .collect();
+        let groups = group_records_by(&matched, "priority");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].key, "3");
+        assert_eq!(groups[1].key, "5");
     }
 }

@@ -405,7 +405,6 @@ async function chatOpenAI(
       },
     });
   } catch (e: unknown) {
-    clearTimeout(timeout);
     if (e instanceof Error && e.name === 'AbortError' && !signal?.aborted) {
       throw new Error('请求超时（2 分钟），请检查网络或服务端状态');
     }

@@ -89,6 +89,7 @@ public sealed partial class MainWindow : Window
         RebuildButton.Click += OnRebuildClicked;
         ImportButton.Click += OnImportClicked;
         ComposerBox.KeyDown += OnComposerKeyDown;
+        _composerDebounceTimer.Tick += OnComposerDebounceTick; // #3581: register once
         SessionList.SelectionChanged += OnSessionSelectionChanged;
         DeleteSessionButton.Click += OnDeleteSessionClicked;
         NewSessionButton.Click += OnNewSessionClicked;
@@ -142,16 +143,19 @@ public sealed partial class MainWindow : Window
                 "ping");
             await LogStartup("Ping ok");
 
-            await UpdateStartupStepAsync("读取设置");
-            _settings = await SendWithTimeoutAsync(
+            await UpdateStartupStepAsync("读取配置");
+            // #3581: Parallelize independent backend calls
+            var settingsTask = SendWithTimeoutAsync(
                 (token) => _backendClient.SendAsync<AppSettings>("getSettings", new { }, token),
                 "getSettings");
+            var chatStateTask = TryLoadChatStateAsync();
+            var noteCountTask = TryLoadNoteCountAsync();
 
-            await UpdateStartupStepAsync("读取聊天记录");
-            _chatState = await TryLoadChatStateAsync();
+            await Task.WhenAll(settingsTask, chatStateTask, noteCountTask);
 
-            await UpdateStartupStepAsync("读取笔记列表");
-            _noteCount = await TryLoadNoteCountAsync();
+            _settings = settingsTask.Result;
+            _chatState = chatStateTask.Result;
+            _noteCount = noteCountTask.Result;
             EnsureCurrentSession();
 
             RefreshVaultSummary();

@@ -61,12 +61,9 @@ public sealed partial class MainWindow : Window
         if (textBox.ActualWidth <= 0) return;
 
         // #3581: Debounce — wait 120ms after the last keystroke before
-        // recalculating height. Avoids redundant layout passes on every
-        // character while still feeling responsive.
+        // recalculating height. Tick handler registered once in constructor.
         _composerDebounceTimer.Stop();
         _composerDebounceTimer.Interval = TimeSpan.FromMilliseconds(120);
-        _composerDebounceTimer.Tick -= OnComposerDebounceTick;
-        _composerDebounceTimer.Tick += OnComposerDebounceTick;
         _composerDebounceTimer.Start();
     }
 

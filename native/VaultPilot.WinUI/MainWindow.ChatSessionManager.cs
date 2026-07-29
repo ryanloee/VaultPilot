@@ -247,7 +247,7 @@ public sealed partial class MainWindow : Window
         }
 
         var contextWindow = ResolveContextWindowTokens();
-        var projectedTokens = EstimateSessionTokens(session) + EstimateTurnTokens(pendingText, pendingAttachments);
+        var projectedTokens = EstimateSessionTokensCached(session) + EstimateTurnTokens(pendingText, pendingAttachments);
         if (contextWindow == 0 || projectedTokens < (ulong)(contextWindow * ContextCompressionThreshold))
         {
             return;
@@ -311,6 +311,7 @@ public sealed partial class MainWindow : Window
                 .ToArray();
             _chatState = new ChatState(updated.Id, sessions);
             _currentSessionId = updated.Id;
+            InvalidateTokenEstimate(resolvedId);
         }
         finally
         {
@@ -393,13 +394,18 @@ public sealed partial class MainWindow : Window
                 ? BuildSessionTitle(text)
                 : session.Title;
             var updated = session with { Title = title, Turns = turns, UpdatedAt = now };
-            var sessions = _chatState.Sessions
-                .Select(item => item.Id == updated.Id ? updated : item)
-                .OrderByDescending(item => item.UpdatedAt)
-                .ToArray();
+            // #3581: O(n) prepend — the updated session is always the most recent.
+            var sessions = new List<ChatSession>(_chatState.Sessions.Count);
+            sessions.Add(updated);
+            foreach (var item in _chatState.Sessions)
+            {
+                if (item.Id != updated.Id)
+                    sessions.Add(item);
+            }
 
-            _chatState = new ChatState(updated.Id, sessions);
+            _chatState = new ChatState(updated.Id, sessions.ToArray());
             _currentSessionId = updated.Id;
+            InvalidateTokenEstimate(updated.Id);
         }
         finally
         {

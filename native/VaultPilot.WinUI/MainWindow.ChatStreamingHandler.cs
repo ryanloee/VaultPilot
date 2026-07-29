@@ -13,11 +13,28 @@ public sealed partial class MainWindow : Window
 {
     // ── Context status & token estimation ──
 
+    // #3581: cache token estimates per session so we don't re-iterate all
+    // turns on every RefreshContextStatus call. Invalidated on turn changes.
+    private readonly Dictionary<string, ulong> _tokenEstimateCache = new();
+
+    /// <summary>Invalidates the cached token estimate for the given session.</summary>
+    private void InvalidateTokenEstimate(string? sessionId)
+    {
+        if (sessionId is not null)
+            _tokenEstimateCache.Remove(sessionId);
+    }
+
     private void RefreshContextStatus()
     {
         var session = CurrentSession();
+        if (session is null)
+        {
+            _contextUsagePercent = 0;
+            UpdateContextUsageBarVisual();
+            return;
+        }
         var contextWindow = ResolveContextWindowTokens();
-        var usedTokens = session is null ? 0 : EstimateSessionTokens(session);
+        var usedTokens = EstimateSessionTokensCached(session);
         var remainingTokens = usedTokens >= contextWindow ? 0 : contextWindow - usedTokens;
         var remainingPercent = contextWindow == 0
             ? 100.0
@@ -56,7 +73,18 @@ public sealed partial class MainWindow : Window
         ContextUsageFill.Width = width * (_contextUsagePercent / 100.0);
     }
 
-    private ulong EstimateSessionTokens(ChatSession session)
+    private ulong EstimateSessionTokensCached(ChatSession session)
+    {
+        if (session.Id is not null && _tokenEstimateCache.TryGetValue(session.Id, out var cached))
+            return cached;
+
+        var total = EstimateSessionTokensUncached(session);
+        if (session.Id is not null)
+            _tokenEstimateCache[session.Id] = total;
+        return total;
+    }
+
+    private ulong EstimateSessionTokensUncached(ChatSession session)
     {
         var total = EstimateTokensForText(session.Summary?.Text);
         foreach (var turn in session.Turns)

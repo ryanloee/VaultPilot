@@ -54,6 +54,7 @@ mod issue_3083_changelog_limit;
 mod issue_3084_feed_dedup_preserve_created_at;
 mod issue_3103_agent_health_detection;
 mod issue_3104_notes_batch_operations;
+mod issue_3150_reader_mode;
 mod issue_3159_os_keychain;
 mod issue_3170_keychain_clear;
 mod issue_3189_web_clipper;

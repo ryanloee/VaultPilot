@@ -17,6 +17,10 @@ use vaultpilot_lib::agent::{
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
+use vaultpilot_lib::ai::transcription::{
+    create_meeting_note, generate_meeting_summary, transcribe_audio, MeetingTranscriptionResult,
+};
+use vaultpilot_lib::ai::RequestUsage;
 use vaultpilot_lib::diff::compute_diff;
 use vaultpilot_lib::models::{
     AppSettings, ChatState, ConversationSummary, ConversationTurn, NoteDocument,
@@ -594,6 +598,53 @@ async fn handle_request(
             serde_json::to_value(&actions)
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
+        // ── Meeting audio transcription (#3629) ─────────────────
+        "transcribeMeeting" => {
+            let params: TranscribeMeetingParams = parse_params(&request.params)?;
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let provider = settings.effective_provider();
+
+            // 1. Transcribe the audio file
+            let transcript =
+                transcribe_audio(&params.audio_path, provider, params.language.as_deref())
+                    .await
+                    .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+
+            // 2. Generate structured meeting summary
+            let mut summary = generate_meeting_summary(&transcript, &settings)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+
+            // Override title if provided
+            if let Some(ref t) = params.title {
+                if !t.trim().is_empty() {
+                    summary.title = t.clone();
+                }
+            }
+
+            // 3. Build the result
+            let mut result = MeetingTranscriptionResult {
+                transcript: transcript.clone(),
+                summary: summary.clone(),
+                usage: RequestUsage::default(),
+                note_path: None,
+            };
+
+            // 4. Save as a vault note
+            let saved = tokio::task::block_in_place(|| create_meeting_note(context, &result))
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+
+            result.note_path = Some(saved.meta.path.clone());
+
+            serde_json::to_value(serde_json::json!({
+                "transcript": transcript,
+                "summary": summary,
+                "note": saved,
+            }))
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
         // ── Subscription management (#2167) ──────────────────────
         "listSubscriptions" => {
             let subs = list_subscriptions_async(context)
@@ -1020,6 +1071,21 @@ struct ExecuteAiActionParams {
     instruction: Option<String>,
     #[serde(default)]
     model_override: Option<String>,
+}
+
+// ── Meeting audio transcription params (#3629) ─────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscribeMeetingParams {
+    /// Path to the audio file (e.g. mp3, m4a, wav, ogg, flac).
+    audio_path: String,
+    /// Optional language hint (ISO 639-1, e.g. "zh", "en").
+    #[serde(default)]
+    language: Option<String>,
+    /// Optional meeting title override.
+    #[serde(default)]
+    title: Option<String>,
 }
 
 // ── Subscription method params (#2167) ──────────────────────────

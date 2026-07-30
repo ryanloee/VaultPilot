@@ -250,9 +250,9 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
             .cached_settings
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if cache.is_some() {
+        if let Some(cached) = cache.as_ref() {
             // Another writer beat us — return its value.
-            return Ok(cache.as_ref().unwrap().clone());
+            return Ok(cached.clone());
         }
         *cache = Some(settings.clone());
     }

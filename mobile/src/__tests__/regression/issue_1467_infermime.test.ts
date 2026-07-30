@@ -31,6 +31,22 @@ describe('issue #1467 — inferMime pure function tests', () => {
     expect(inferMime('iphone-photo.heic', 'fallback')).toBe('image/heic');
   });
 
+  test('infers AVIF from .avif', () => {
+    expect(inferMime('photo.avif', 'fallback')).toBe('image/avif');
+  });
+
+  test('infers SVG from .svg', () => {
+    expect(inferMime('icon.svg', 'fallback')).toBe('image/svg+xml');
+  });
+
+  test('infers TIFF from .tiff', () => {
+    expect(inferMime('scan.tiff', 'fallback')).toBe('image/tiff');
+  });
+
+  test('infers TIFF from .tif', () => {
+    expect(inferMime('scan.tif', 'fallback')).toBe('image/tiff');
+  });
+
   test('infers PDF from .pdf', () => {
     expect(inferMime('document.pdf', 'fallback')).toBe('application/pdf');
   });

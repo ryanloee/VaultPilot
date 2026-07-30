@@ -116,6 +116,8 @@ export function inferMime(name: string, fallback: string): string {
     jpg: 'image/jpeg', jpeg: 'image/jpeg',
     pdf: 'application/pdf', doc: 'application/msword',
     txt: 'text/plain', md: 'text/markdown',
+    avif: 'image/avif', svg: 'image/svg+xml',
+    tiff: 'image/tiff', tif: 'image/tiff',
   };
   return ext && map[ext] ? map[ext] : fallback;
 }

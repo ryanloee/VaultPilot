@@ -422,7 +422,7 @@ public sealed class BackendClient : IAsyncDisposable
     public async Task<T?> SendAsync<T>(string method, object? parameters, CancellationToken cancellationToken = default, TimeSpan? requestTimeout = null)
     {
         var result = await SendAsync(method, parameters, cancellationToken, requestTimeout);
-        return result.ValueKind == JsonValueKind.Undefined || result.ValueKind == JsonValueKind.Null
+        return result.ValueKind == JsonValueKind.Undefined || result.ValueKind == JsonValueKind.Null || result.ValueKind == JsonValueKind.None
             ? default
             : result.Deserialize<T>(_jsonOptions);
     }

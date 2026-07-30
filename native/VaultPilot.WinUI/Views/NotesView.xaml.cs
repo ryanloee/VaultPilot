@@ -3,8 +3,10 @@ using VaultPilot.WinUI.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace VaultPilot.WinUI.Views;
 
@@ -244,6 +246,16 @@ public sealed partial class NotesView : UserControl
 
     private async void OnDeleteNoteClicked(object sender, RoutedEventArgs e)
     {
+        await DeleteSelectedNoteAsync();
+    }
+
+    /// <summary>
+    /// Deletes the currently selected note after showing a confirmation dialog.
+    /// Shared by the toolbar Delete button, the Delete/Backspace key shortcut,
+    /// and the context menu Delete item (#3361).
+    /// </summary>
+    private async Task DeleteSelectedNoteAsync()
+    {
         if (_selectedNote is null) return;
 
         // Cancel any in-flight detail load to prevent stale UI overwrite
@@ -303,21 +315,68 @@ public sealed partial class NotesView : UserControl
         }
     }
 
+    // ─── Context Menu / Right-Tap (#3361) ─────────────────────────────────
+    // Right-click on a note item opens a context menu with Delete, Copy, and
+    // Version History actions. Tapping a note item also selects it so the
+    // menu actions operate on the right note.
+
+    private void OnNotesListRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        // Select the note under the cursor so context menu actions target it
+        if (sender is ListView listView)
+        {
+            var element = e.OriginalSource as DependencyObject;
+            while (element is not null && element != listView)
+            {
+                if (element is ListViewItem item)
+                {
+                    listView.SelectedItem = item.DataContext;
+                    break;
+                }
+                element = VisualTreeHelper.GetParent(element);
+            }
+        }
+    }
+
+    private async void OnCtxDeleteClicked(object sender, RoutedEventArgs e)
+    {
+        await DeleteSelectedNoteAsync();
+    }
+
+    private void OnCtxCopyClicked(object sender, RoutedEventArgs e)
+    {
+        CopySelectedNote();
+    }
+
+    private async void OnCtxHistoryClicked(object sender, RoutedEventArgs e)
+    {
+        if (_selectedNote is null) return;
+        await ShowHistoryDialogAsync(_selectedNote);
+    }
+
     // ─── Version History ─────────────────────────────────────────────────
     // #3305: Open version history dialog for the selected note.
     private async void OnHistoryClicked(object sender, RoutedEventArgs e)
     {
         if (_selectedNote is null) return;
+        await ShowHistoryDialogAsync(_selectedNote);
+    }
 
+    /// <summary>
+    /// Opens the version history dialog for the given note.
+    /// Shared by the History toolbar button and the context menu item (#3361).
+    /// </summary>
+    private async Task ShowHistoryDialogAsync(NoteMeta note)
+    {
         try
         {
-            var control = new Controls.VersionHistoryControl(_backendClient, _selectedNote.Id);
+            var control = new Controls.VersionHistoryControl(_backendClient, note.Id);
             control.NoteRestored += (_, _) => _ = RefreshNotesAsync();
 
             var dialog = new ContentDialog
             {
                 XamlRoot = XamlRoot,
-                Title = $"版本历史 — {_selectedNote.Title}",
+                Title = $"版本历史 — {note.Title}",
                 Content = control,
                 PrimaryButtonText = "关闭",
                 IsPrimaryButtonEnabled = true,
@@ -340,6 +399,17 @@ public sealed partial class NotesView : UserControl
 
     private void OnNotesListKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // Delete / Backspace key: delete the currently selected note (#3361)
+        if (e.Key == Windows.System.VirtualKey.Delete || e.Key == Windows.System.VirtualKey.Back)
+        {
+            if (_selectedNote is not null)
+            {
+                _ = DeleteSelectedNoteAsync();
+                e.Handled = true;
+            }
+            return;
+        }
+
         var ctrlDown = Microsoft.UI.Input.InputKeyboardSource
             .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);

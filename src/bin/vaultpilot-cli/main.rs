@@ -160,6 +160,10 @@ enum Commands {
         /// Import mirror files back into the vault (#3605)
         #[arg(long)]
         import: bool,
+
+        /// Force re-import even when content is identical (#3607)
+        #[arg(long)]
+        force: bool,
     },
 
     /// Manage collections for multi-grouping notes (#2042)
@@ -2705,11 +2709,12 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             watch,
             interval,
             import,
+            force,
         } => {
             tokio::task::block_in_place(|| -> Result<Value> {
                 if *import {
                     let result =
-                        vaultpilot_lib::mirror::mirror_import_with_context(context, dir, false)?;
+                        vaultpilot_lib::mirror::mirror_import_with_context(context, dir, *force)?;
                     Ok(serde_json::json!({
                         "event": "mirror_import",
                         "imported": result.imported,

@@ -597,7 +597,7 @@ pub struct MirrorImportResult {
 pub fn mirror_import_with_context(
     context: &StorageContext,
     mirror_dir: &Path,
-    _force: bool,
+    force: bool,
 ) -> anyhow::Result<MirrorImportResult> {
     use crate::models::NoteDocument;
     use crate::models::NoteMeta;
@@ -661,6 +661,11 @@ pub fn mirror_import_with_context(
         if let Some(ref note_id) = vault_note_id {
             match load_note_with_context(context, note_id) {
                 Ok(existing) => {
+                    // #3607: skip if content is identical and force is not set
+                    if !force && existing.body.trim() == body.trim() {
+                        result.skipped += 1;
+                        continue;
+                    }
                     let mut updated = existing;
                     updated.body = body.to_string();
                     if let Some(ref t) = title {

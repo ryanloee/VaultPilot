@@ -102,13 +102,11 @@ mod tests {
     }
 
     #[test]
-    fn lookup_unchanged_still_updates() {
+    fn unchanged_content_gets_skipped() {
         let (ctx, _dir) = setup_test_context("skip_unchanged");
         let note_id = "670e8400-e29b-41d4-a716-446655440003".to_string();
 
         let body = "Unchanged body.";
-        let mirror_content = compose_mirror_markdown(body, &note_id);
-
         let original = NoteDocument {
             meta: NoteMeta {
                 id: note_id.clone(),
@@ -118,7 +116,12 @@ mod tests {
             body: body.to_string(),
             ..Default::default()
         };
-        save_note_with_context(&ctx, original).unwrap();
+        // Save and reload to get the actual vault body (which may include
+        // auto-generated summary sections from ensure_summary_section).
+        let saved = save_note_with_context(&ctx, original).unwrap();
+        let vault_body = saved.body.as_str();
+
+        let mirror_content = compose_mirror_markdown(vault_body, &note_id);
 
         let mirror_dir = std::env::temp_dir().join(format!("vp_3605_skip_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&mirror_dir);
@@ -126,12 +129,74 @@ mod tests {
 
         let result = mirror::mirror_import_with_context(&ctx, &mirror_dir, false).unwrap();
 
-        // Import always updates existing notes by anchor; it does NOT skip.
+        // #3607: identical content should now be skipped instead of updated.
+        assert_eq!(result.imported, 0);
+        assert_eq!(result.updated, 0, "identical content should not update");
+        assert_eq!(result.skipped, 1, "identical content should be skipped");
+    }
+
+    #[test]
+    fn force_flag_overrides_content_skip() {
+        let (ctx, _dir) = setup_test_context("force_override");
+        let note_id = "770e8400-e29b-41d4-a716-446655440004".to_string();
+
+        let body = "Force override body.";
+        let original = NoteDocument {
+            meta: NoteMeta {
+                id: note_id.clone(),
+                title: "ForceTest".to_string(),
+                ..Default::default()
+            },
+            body: body.to_string(),
+            ..Default::default()
+        };
+        let saved = save_note_with_context(&ctx, original).unwrap();
+        let vault_body = saved.body.as_str();
+
+        let mirror_content = compose_mirror_markdown(vault_body, &note_id);
+
+        let mirror_dir = std::env::temp_dir().join(format!("vp_3605_force_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&mirror_dir);
+        std::fs::write(mirror_dir.join(format!("{}.md", note_id)), &mirror_content).unwrap();
+
+        // With force=true, even identical content should be updated.
+        let result = mirror::mirror_import_with_context(&ctx, &mirror_dir, true).unwrap();
+
         assert_eq!(result.imported, 0);
         assert_eq!(
             result.updated, 1,
-            "existing note should be updated from mirror"
+            "force=true should update even identical content"
         );
+        assert_eq!(result.skipped, 0);
+    }
+
+    #[test]
+    fn different_content_always_updates() {
+        let (ctx, _dir) = setup_test_context("diff_content");
+        let note_id = "870e8400-e29b-41d4-a716-446655440005".to_string();
+
+        // Create a vault note with 'Old body.'
+        let original = NoteDocument {
+            meta: NoteMeta {
+                id: note_id.clone(),
+                title: "UpdateTest".to_string(),
+                ..Default::default()
+            },
+            body: "Old body.".to_string(),
+            ..Default::default()
+        };
+        save_note_with_context(&ctx, original).unwrap();
+
+        // Mirror file has different content
+        let mirror_content = compose_mirror_markdown("Updated body.", &note_id);
+        let mirror_dir = std::env::temp_dir().join(format!("vp_3605_diff_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&mirror_dir);
+        std::fs::write(mirror_dir.join(format!("{}.md", note_id)), &mirror_content).unwrap();
+
+        let result = mirror::mirror_import_with_context(&ctx, &mirror_dir, false).unwrap();
+
+        assert_eq!(result.imported, 0);
+        assert_eq!(result.updated, 1, "different content should update");
         assert_eq!(result.skipped, 0);
     }
 

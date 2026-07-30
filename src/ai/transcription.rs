@@ -473,7 +473,7 @@ pub fn map_speakers_to_people(result: &mut DiarizationResult, alias_map: &Person
         .iter()
         .map(|seg| format!("{}: {}", seg.speaker, seg.text))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
 }
 
 /// Build the annotated transcript string from diarized segments.
@@ -482,7 +482,7 @@ pub fn annotated_transcript_to_string(segments: &[DiarizedSegment]) -> String {
         .iter()
         .map(|seg| format!("{}: {}", seg.speaker, seg.text))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n\n")
 }
 
 // ── Create Meeting Note ───────────────────────────────────────────────────
@@ -1204,6 +1204,69 @@ mod tests {
             },
         ];
         let output = annotated_transcript_to_string(&segments);
-        assert_eq!(output, "Alice: First point.\nBob: Second point.");
+        assert_eq!(output, "Alice: First point.\n\nBob: Second point.");
+    }
+
+    /// Regression test for #3622: verify that map_speakers_to_people()
+    /// uses the same join separator ("\n\n") as diarize_transcript(),
+    /// so annotated_transcript is consistent regardless of whether
+    /// speaker-to-person mapping was applied.
+    #[test]
+    fn annotated_transcript_separator_consistent_after_map_speakers() {
+        let mut aliases = PersonAliasMap::new();
+        aliases.add_alias("Speaker A", "Alice");
+        aliases.add_alias("Speaker B", "Bob");
+
+        // Simulate what diarize_transcript() produces
+        let mut result = DiarizationResult {
+            segments: vec![
+                DiarizedSegment {
+                    speaker: "Speaker A".to_string(),
+                    text: "Hello there".to_string(),
+                },
+                DiarizedSegment {
+                    speaker: "Speaker B".to_string(),
+                    text: "Nice to meet you".to_string(),
+                },
+            ],
+            annotated_transcript: "Speaker A: Hello there\n\nSpeaker B: Nice to meet you"
+                .to_string(),
+            raw_speakers: vec!["Speaker A".to_string(), "Speaker B".to_string()],
+        };
+
+        let before_mapping = result.annotated_transcript.clone();
+
+        map_speakers_to_people(&mut result, &aliases);
+
+        // After mapping, the segment count is unchanged
+        let after_segments = result.segments.len();
+        assert_eq!(after_segments, 2, "segment count must not change");
+
+        // The annotated_transcript after mapping must use "\n\n" as separator,
+        // consistent with what diarize_transcript() produces
+        assert!(
+            result.annotated_transcript.contains("\n\n"),
+            "annotated_transcript after map_speakers should use \\n\\n separator, got: {:?}",
+            result.annotated_transcript
+        );
+        assert!(
+            !result.annotated_transcript.contains("\n\n\n"),
+            "annotated_transcript should not contain triple newlines"
+        );
+
+        // Before mapping already used "\n\n" (as diarize_transcript does)
+        assert!(
+            before_mapping.contains("\n\n"),
+            "before-mapping annotated_transcript must use \\n\\n separator"
+        );
+
+        // Both strings should have the exact same paragraph structure
+        let before_paras: Vec<&str> = before_mapping.split("\n\n").collect();
+        let after_paras: Vec<&str> = result.annotated_transcript.split("\n\n").collect();
+        assert_eq!(
+            before_paras.len(),
+            after_paras.len(),
+            "paragraph count must be identical before and after speaker mapping"
+        );
     }
 }

@@ -12063,10 +12063,7 @@ async fn handle_script(context: &StorageContext, action: &ScriptActions) -> Resu
             }
 
             // Print human-readable table
-            println!(
-                "{:<20} {:<8} {:<10} DESCRIPTION",
-                "NAME", "EXT", "TIMEOUT"
-            );
+            println!("{:<20} {:<8} {:<10} DESCRIPTION", "NAME", "EXT", "TIMEOUT");
             println!("{}", "-".repeat(70));
             for s in &scripts {
                 let desc = if s.meta.description.is_empty() {

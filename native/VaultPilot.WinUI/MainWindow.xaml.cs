@@ -99,6 +99,10 @@ public sealed partial class MainWindow : Window
         JumpLatestButton.Click += OnJumpLatestClicked;
         RootGrid.SizeChanged += OnRootGridSizeChanged;
 
+        // #3581: Bind the virtualized message list to the ItemsRepeater.
+        // Without this, _messageItems is populated but never rendered.
+        MessagesRepeater.ItemsSource = _messageItems;
+
         // KeyboardAccelerators for keys that the WinUI XamlCompiler cannot parse (OemComma, Number1, Number2)
         AddKeyboardAccelerator((VirtualKey)188 /* OemComma */, VirtualKeyModifiers.Control, OnSettingsAccelerator);
         AddKeyboardAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, OnNavChatAccelerator);

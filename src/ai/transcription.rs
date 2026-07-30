@@ -438,7 +438,7 @@ Output ONLY valid JSON — no markdown fences, no extra text."#,
         .iter()
         .map(|seg| format!("{}: {}", seg.speaker, seg.text))
         .collect::<Vec<_>>()
-        .join("\n\n");
+        .join("\n");
 
     Ok(DiarizationResult {
         segments: parsed.segments,

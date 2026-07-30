@@ -578,6 +578,12 @@ public sealed partial class NotesView : UserControl
     /// </summary>
     private async Task LoadRelatedNotesAsync(string noteId, CancellationToken cancellationToken)
     {
+        // Track whether *this* invocation produced items, so the finally
+        // block makes its visibility decision based on local state rather
+        // than the shared RelatedNotesList.ItemsSource — which may have been
+        // overwritten by a newer (later) overlapping call (#3625).
+        bool thisLoadProducedItems = false;
+
         try
         {
             RelatedNotesPanel.Visibility = Visibility.Visible;
@@ -592,6 +598,7 @@ public sealed partial class NotesView : UserControl
             {
                 var items = related.Select(r => new RelatedNoteItem(r)).ToList();
                 RelatedNotesList.ItemsSource = items;
+                thisLoadProducedItems = true;
             }
             else
             {
@@ -600,6 +607,7 @@ public sealed partial class NotesView : UserControl
                 {
                     new RelatedNoteItem(new RelatedNote(new NoteMeta { Title = "（暂无相关笔记）" }, 0, null))
                 };
+                thisLoadProducedItems = true;
             }
         }
         catch (OperationCanceledException)
@@ -614,14 +622,15 @@ public sealed partial class NotesView : UserControl
         {
             RelatedNotesLoading.IsActive = false;
             RelatedNotesLoading.Visibility = Visibility.Collapsed;
-            // Keep the panel visible only when the load completed and produced
-            // at least one entry (a real related note, or the "no related notes"
-            // placeholder). Cancellation or empty results collapse it.
-            // Previously the panel was collapsed unconditionally here, hiding
-            // successfully loaded results and breaking the feature (#2780).
+            // Decide panel visibility based on *this* invocation's local
+            // outcome, not the shared RelatedNotesList.ItemsSource which may
+            // have been set by a different (later) call (#3625).
+            // Previously checked RelatedNotesList.ItemsSource directly, which
+            // could show a later call's results even when this call was
+            // cancelled, or hide them when this cancelled call's finally ran.
             if (!ShouldKeepRelatedNotesPanelVisible(
                     cancellationToken.IsCancellationRequested,
-                    RelatedNotesList.ItemsSource))
+                    thisLoadProducedItems))
             {
                 RelatedNotesPanel.Visibility = Visibility.Collapsed;
             }
@@ -631,17 +640,22 @@ public sealed partial class NotesView : UserControl
     /// <summary>
     /// Determines whether the related-notes panel should remain visible after a
     /// load attempt. It stays visible only when the load was not cancelled and
-    /// at least one entry was produced (a real related note, or the
+    /// produced at least one entry (a real related note, or the
     /// "no related notes" placeholder). Fixes #2780 where the panel was
     /// collapsed unconditionally in the load's finally block, hiding
     /// successfully loaded results and making the feature unusable.
+    ///
+    /// Fix #3625: the caller now passes a local boolean tracking whether *this*
+    /// specific invocation produced items, rather than the shared
+    /// RelatedNotesList.ItemsSource which may belong to a different (later)
+    /// overlapping call.
     /// </summary>
     public static bool ShouldKeepRelatedNotesPanelVisible(
         bool isCancellationRequested,
-        object? itemsSource)
+        bool loadProducedItems)
     {
         if (isCancellationRequested) return false;
-        return itemsSource is IList<RelatedNoteItem> { Count: > 0 };
+        return loadProducedItems;
     }
 
     /// <summary>

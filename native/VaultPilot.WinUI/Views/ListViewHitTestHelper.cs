@@ -20,19 +20,17 @@ namespace VaultPilot.WinUI.Views;
 public static class ListViewHitTestHelper
 {
     /// <summary>
-    /// Finds the data item (DataContext) at the right-tap pointer position
+    /// Finds the data item (NoteItem) at the right-tap pointer position
     /// within the given ListView. Returns null if no item is found.
     /// </summary>
     public static object? FindItemFromPoint(ListView listView, RightTappedRoutedEventArgs e)
     {
         try
         {
-            // GetCurrentPoint returns position relative to the listView.
-            // FindElementsInHostCoordinates expects host (window-root) coordinates.
-            // Transform from listView-local to host coordinates.
-            var localPoint = e.GetCurrentPoint(listView).Position;
-            var transform = listView.TransformToVisual(null);
-            var hostPoint = transform.TransformPoint(localPoint);
+            // GetPosition(null) returns the pointer position in host
+            // (window-root) coordinates, which is what FindElementsInHostCoordinates
+            // expects.
+            var hostPoint = e.GetPosition(null);
 
             // FindElementsInHostCoordinates returns all elements at the given
             // point (in host/absolute coordinates), listed by inverse z-order.

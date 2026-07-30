@@ -155,10 +155,13 @@ public sealed partial class MainWindow : Window
 
     private void ShowLoadingOverlay(string message = "正在处理...")
     {
+        LoadingOverlayMessage.Text = message;
+        LoadingOverlay.Visibility = Visibility.Visible;
     }
 
     private void HideLoadingOverlay()
     {
+        LoadingOverlay.Visibility = Visibility.Collapsed;
     }
 
     // ── Logging ──

@@ -398,5 +398,30 @@
             Visibility="Collapsed"
             IsHitTestVisible="False" />
 
+        <!-- ══ Loading overlay — shown during AI requests (#3608) ══ -->
+        <Grid
+            x:Name="LoadingOverlay"
+            Visibility="Collapsed"
+            Background="#80000000"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch">
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="16">
+                <ProgressRing
+                    IsActive="True"
+                    Width="48"
+                    Height="48" />
+                <TextBlock
+                    x:Name="LoadingOverlayMessage"
+                    Text="正在处理..."
+                    FontSize="16"
+                    Foreground="White"
+                    HorizontalAlignment="Center"
+                    AutomationProperties.Name="AI 处理中" />
+            </StackPanel>
+        </Grid>
+
     </Grid>
 </Window>

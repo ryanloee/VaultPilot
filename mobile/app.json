@@ -30,6 +30,9 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       }
     },
+    "ios": {
+      "bundleIdentifier": "com.vaultpilot.mobile"
+    },
     "plugins": [
       "expo-sqlite",
       "expo-secure-store",

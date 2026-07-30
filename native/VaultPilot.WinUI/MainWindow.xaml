@@ -398,30 +398,24 @@
             Visibility="Collapsed"
             IsHitTestVisible="False" />
 
-        <!-- ══ Loading overlay — shown during AI requests (#3608) ══ -->
-        <Grid
-            x:Name="LoadingOverlay"
-            Visibility="Collapsed"
-            Background="#80000000"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Stretch">
-            <StackPanel
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Spacing="16">
-                <ProgressRing
-                    IsActive="True"
-                    Width="48"
-                    Height="48" />
-                <TextBlock
-                    x:Name="LoadingOverlayMessage"
-                    Text="正在处理..."
-                    FontSize="16"
-                    Foreground="White"
-                    HorizontalAlignment="Center"
-                    AutomationProperties.Name="AI 处理中" />
-            </StackPanel>
+        <!-- ══ Loading overlay (#3607, #3608) — shown during AI requests ══ -->
+        <Grid x:Name="LoadingOverlay" Visibility="Collapsed"
+              HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+              Background="#80000000" IsHitTestVisible="True">
+            <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="{ThemeResource VaultCardBg}"
+                    CornerRadius="{StaticResource VaultRadiusLarge}"
+                    Padding="32,24,32,24">
+                <StackPanel Spacing="12" HorizontalAlignment="Center">
+                    <ProgressRing IsActive="True" Width="40" Height="40"
+                                  Foreground="{ThemeResource SystemAccentColor}" />
+                    <TextBlock x:Name="LoadingOverlayText"
+                               FontSize="{StaticResource VaultFontSizeBody}"
+                               Foreground="{ThemeResource VaultTextPrimary}"
+                               TextAlignment="Center"
+                               Text="正在处理..." />
+                </StackPanel>
+            </Border>
         </Grid>
-
     </Grid>
 </Window>

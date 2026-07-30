@@ -589,11 +589,12 @@ pub struct MirrorImportResult {
 ///    newer). This is the "mirror → vault" import direction.
 /// 3. If no anchor exists, or the referenced note does not exist, the file is
 ///    treated as a new note and imported into the vault.
-/// 4. Files that are identical to their vault counterpart are skipped.
+/// 4. When `force` is `false`, files whose body is identical to their vault
+///    counterpart are skipped (counted in `skipped`).
 ///
-/// The `force` flag controls whether to overwrite vault content even when the
-/// vault note is newer than the mirror file. When `false` (default), import
-/// only happens when the mirror is newer.
+/// The `force` flag controls whether to always overwrite vault content. When
+/// `true`, every existing note is updated unconditionally. When `false`
+/// (default), notes whose body hasn't changed are skipped.
 pub fn mirror_import_with_context(
     context: &StorageContext,
     mirror_dir: &Path,
@@ -662,9 +663,23 @@ pub fn mirror_import_with_context(
             match load_note_with_context(context, note_id) {
                 Ok(existing) => {
                     // #3607: skip if content is identical and force is not set
-                    if !force && existing.body.trim() == body.trim() {
-                        result.skipped += 1;
-                        continue;
+                    // The storage layer prepends a "## 摘要\n\n{summary}\n\n" section,
+                    // so we strip that from existing.body before comparing.
+                    if !force {
+                        let existing_core =
+                            if let Some(rest) = existing.body.trim().strip_prefix("## 摘要\n\n") {
+                                if let Some(idx) = rest.find("\n\n") {
+                                    rest[idx + 2..].trim()
+                                } else {
+                                    existing.body.trim()
+                                }
+                            } else {
+                                existing.body.trim()
+                            };
+                        if existing_core == body.trim() {
+                            result.skipped += 1;
+                            continue;
+                        }
                     }
                     let mut updated = existing;
                     updated.body = body.to_string();

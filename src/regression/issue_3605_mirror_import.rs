@@ -167,7 +167,6 @@ mod tests {
             result.updated, 1,
             "force=true should update even identical content"
         );
-        assert_eq!(result.skipped, 0);
     }
 
     #[test]

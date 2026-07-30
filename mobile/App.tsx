@@ -21,6 +21,8 @@ import NoteEditorScreen from './src/screens/NoteEditorScreen';
 import SearchScreen from './src/screens/SearchScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
+import ShareReceiveScreen from './src/screens/ShareReceiveScreen';
+
 /**
  * Deep-link configuration for widget / Quick Settings tile (#2915).
  * Supports vaultpilot:// scheme with routes:
@@ -30,30 +32,36 @@ import SettingsScreen from './src/screens/SettingsScreen';
  *   vaultpilot://search    → global search
  */
 const linking: any = {
-  prefixes: ['vaultpilot://'],
+  prefixes: ['vaultpilot://', 'expo-sharing://'],
   config: {
     screens: {
-      Chat: {
+      Main: {
         screens: {
-          ChatMain: 'chat',
-          ChatNew: 'chat/new',
-          Sessions: 'chat/sessions',
+          Chat: {
+            screens: {
+              ChatMain: 'chat',
+              ChatNew: 'chat/new',
+              Sessions: 'chat/sessions',
+            },
+          },
+          Notes: {
+            screens: {
+              NotesList: 'note',
+              NoteEdit: 'note/:noteId',
+            },
+          },
+          Search: 'search',
+          Settings: 'settings',
         },
       },
-      Notes: {
-        screens: {
-          NotesList: 'note',
-          NoteEdit: 'note/:noteId',
-        },
-      },
-      Search: 'search',
-      Settings: 'settings',
+      ShareReceive: 'share-receive',
     },
   },
 };
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+const RootStack = createNativeStackNavigator();
 
 SplashScreen.preventAutoHideAsync();
 
@@ -202,7 +210,14 @@ export default function App() {
       <ErrorBoundary>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
         <NavigationContainer linking={linking}>
-          <MainTabs />
+          <RootStack.Navigator screenOptions={{ headerShown: false }}>
+            <RootStack.Screen name="Main" component={MainTabs} />
+            <RootStack.Screen
+              name="ShareReceive"
+              component={ShareReceiveScreen}
+              options={{ presentation: 'modal' }}
+            />
+          </RootStack.Navigator>
         </NavigationContainer>
       </ErrorBoundary>
     </SafeAreaProvider>

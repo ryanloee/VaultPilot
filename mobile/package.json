@@ -18,6 +18,7 @@
     "expo-image-picker": "^57.0.4",
     "expo-intent-launcher": "~57.0.0",
     "expo-secure-store": "~57.0.0",
+    "expo-sharing": "~57.0.8",
     "expo-speech-recognition": "^56.0.1",
     "expo-splash-screen": "~57.0.5",
     "expo-sqlite": "~57.0.0",

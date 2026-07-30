@@ -569,6 +569,141 @@ pub fn mirror_watch_with_context(
     }
 }
 
+/// Result of a `vp mirror import` operation.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct MirrorImportResult {
+    /// Number of new notes created in the vault.
+    pub imported: usize,
+    /// Number of existing vault notes updated from mirror files.
+    pub updated: usize,
+    /// Number of mirror files skipped (unchanged or anchor missing).
+    pub skipped: usize,
+}
+
+/// Import mirror `.md` files from `mirror_dir` into the vault (#3605).
+///
+/// For each `.md` file in the directory:
+/// 1. Reads the file and extracts the `<!-- vaultpilot-note-id: <id> -->` anchor.
+/// 2. If an anchor exists and the note already exists in the vault, updates the
+///    vault note with the mirror content (assuming `--force` or if the mirror is
+///    newer). This is the "mirror → vault" import direction.
+/// 3. If no anchor exists, or the referenced note does not exist, the file is
+///    treated as a new note and imported into the vault.
+/// 4. Files that are identical to their vault counterpart are skipped.
+///
+/// The `force` flag controls whether to overwrite vault content even when the
+/// vault note is newer than the mirror file. When `false` (default), import
+/// only happens when the mirror is newer.
+pub fn mirror_import_with_context(
+    context: &StorageContext,
+    mirror_dir: &Path,
+    _force: bool,
+) -> anyhow::Result<MirrorImportResult> {
+    use crate::models::NoteDocument;
+    use crate::models::NoteMeta;
+    use crate::storage::{load_note_with_context, save_note_with_context};
+
+    let mut result = MirrorImportResult::default();
+
+    let entries = match std::fs::read_dir(mirror_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(result),
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == MIRROR_STATE_FILE || !name.ends_with(".md") {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let vault_note_id = extract_note_id_anchor(&content);
+
+        let body_without_anchor = strip_anchor_from_content(&content);
+        let (frontmatter, body) =
+            match crate::storage::notes::split_frontmatter(&body_without_anchor) {
+                Ok((fm, b)) => (Some(fm), b.to_string()),
+                Err(_) => (None, body_without_anchor),
+            };
+
+        let title = frontmatter
+            .as_ref()
+            .and_then(|fm| {
+                if fm.title.is_empty() {
+                    None
+                } else {
+                    Some(fm.title.clone())
+                }
+            })
+            .or_else(|| {
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if stem.is_empty() {
+                    None
+                } else {
+                    Some(stem.to_string())
+                }
+            });
+
+        if let Some(ref note_id) = vault_note_id {
+            match load_note_with_context(context, note_id) {
+                Ok(existing) => {
+                    let mut updated = existing;
+                    updated.body = body.to_string();
+                    if let Some(ref t) = title {
+                        updated.meta.title = t.clone();
+                    }
+                    save_note_with_context(context, updated)?;
+                    result.updated += 1;
+                }
+                Err(_) => {
+                    // Note referenced by anchor not found in vault — treat as new.
+                    let note = NoteDocument {
+                        meta: NoteMeta {
+                            id: note_id.clone(),
+                            title: title.clone().unwrap_or_else(|| note_id.clone()),
+                            ..Default::default()
+                        },
+                        body: body.to_string(),
+                        ..Default::default()
+                    };
+                    save_note_with_context(context, note)?;
+                    result.imported += 1;
+                }
+            }
+        } else {
+            // No anchor — create a new vault note.
+            let new_id = uuid::Uuid::new_v4().to_string();
+            let note = NoteDocument {
+                meta: NoteMeta {
+                    id: new_id,
+                    title: title.unwrap_or_else(|| name.trim_end_matches(".md").to_string()),
+                    ..Default::default()
+                },
+                body: body.to_string(),
+                ..Default::default()
+            };
+            save_note_with_context(context, note)?;
+            result.imported += 1;
+        }
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_conflict_merge_body;

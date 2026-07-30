@@ -156,6 +156,10 @@ enum Commands {
         /// Polling interval in seconds for --watch mode
         #[arg(long, default_value_t = 5)]
         interval: u64,
+
+        /// Import mirror files back into the vault (#3605)
+        #[arg(long)]
+        import: bool,
     },
 
     /// Manage collections for multi-grouping notes (#2042)
@@ -2700,9 +2704,19 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             dir,
             watch,
             interval,
+            import,
         } => {
             tokio::task::block_in_place(|| -> Result<Value> {
-                if *watch {
+                if *import {
+                    let result =
+                        vaultpilot_lib::mirror::mirror_import_with_context(context, dir, false)?;
+                    Ok(serde_json::json!({
+                        "event": "mirror_import",
+                        "imported": result.imported,
+                        "updated": result.updated,
+                        "skipped": result.skipped,
+                    }))
+                } else if *watch {
                     vaultpilot_lib::mirror::mirror_watch_with_context(context, dir, *interval)?;
                     Ok(Value::Null) // unreachable: watch loops until terminated
                 } else {

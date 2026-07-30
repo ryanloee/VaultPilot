@@ -664,19 +664,23 @@ pub fn mirror_import_with_context(
                 Ok(existing) => {
                     // #3607: skip if content is identical and force is not set
                     // The storage layer prepends a "## 摘要\n\n{summary}\n\n" section,
-                    // so we strip that from existing.body before comparing.
+                    // so we strip that from BOTH sides before comparing.  The
+                    // incoming mirror body may also carry the summary when it was
+                    // composed from a previously-saved vault body.
                     if !force {
-                        let existing_core =
-                            if let Some(rest) = existing.body.trim().strip_prefix("## 摘要\n\n") {
+                        let strip_summary = |b: &str| -> String {
+                            let trimmed = b.trim();
+                            if let Some(rest) = trimmed.strip_prefix("## 摘要\n\n") {
                                 if let Some(idx) = rest.find("\n\n") {
-                                    rest[idx + 2..].trim()
+                                    rest[idx + 2..].trim().to_string()
                                 } else {
-                                    existing.body.trim()
+                                    trimmed.to_string()
                                 }
                             } else {
-                                existing.body.trim()
-                            };
-                        if existing_core == body.trim() {
+                                trimmed.to_string()
+                            }
+                        };
+                        if strip_summary(&existing.body) == strip_summary(&body) {
                             result.skipped += 1;
                             continue;
                         }

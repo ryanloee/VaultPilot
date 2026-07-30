@@ -1041,6 +1041,25 @@ enum Commands {
         #[arg(long)]
         save_to_vault: bool,
     },
+
+    /// Manage and run user scripts — custom automation scripts placed in
+    /// `.vaultpilot/scripts/` (#3562).
+    ///
+    /// Scripts are executable files (`.sh`, `.py`, `.js`, etc.) that users
+    /// create to extend VaultPilot without modifying core code — similar to
+    /// Notion Workers. Each script can declare metadata via companion `.toml`
+    /// manifests or inline `@vp-*` comment tags.
+    ///
+    /// Examples:
+    ///   vp script init                      — create scripts dir + example script
+    ///   vp script list                      — list all available scripts
+    ///   vp script run backup                — run a script by name
+    ///   vp script run weather --json-args '{"city":"Tokyo"}'
+    ///   vp script show backup               — show script metadata + path
+    Script {
+        #[command(subcommand)]
+        action: ScriptActions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1064,6 +1083,31 @@ enum MeetingActions {
         /// Optional specific event ID to brief about
         #[arg(long)]
         event_id: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScriptActions {
+    /// Initialize the scripts directory with an example script
+    Init,
+
+    /// List all available user scripts
+    List,
+
+    /// Show details for a specific script
+    Show {
+        /// Script name
+        name: String,
+    },
+
+    /// Run a user script by name
+    Run {
+        /// Script name to execute
+        name: String,
+
+        /// JSON arguments passed to the script via stdin
+        #[arg(long)]
+        json_args: Option<String>,
     },
 }
 
@@ -3200,6 +3244,8 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             edit,
             save_to_vault,
         } => handle_open_external(context, path, *edit, *save_to_vault),
+
+        Commands::Script { action } => handle_script(context, action).await,
     }
 }
 
@@ -11980,4 +12026,170 @@ _vp_skill_saved_completions() {{
     }
 
     Ok(serde_json::json!({ "status": "ok", "shell": shell.to_string() }))
+}
+
+/// Handle user script commands (#3562).
+///
+/// Provides a CLI-first script system: users place executable scripts in
+/// `.vaultpilot/scripts/` and run them via `vp script run <name>`.
+async fn handle_script(context: &StorageContext, action: &ScriptActions) -> Result<Value> {
+    use vaultpilot_lib::user_scripts;
+
+    let vault_dir = context.vault_dir();
+    let scripts_dir = vault_dir.join(user_scripts::SCRIPTS_DIR);
+
+    match action {
+        ScriptActions::Init => {
+            let created_dir = user_scripts::init_scripts_dir(vault_dir)?;
+            Ok(serde_json::json!({
+                "status": "ok",
+                "message": format!("Scripts directory initialized at {}", created_dir.display()),
+                "path": created_dir,
+            }))
+        }
+
+        ScriptActions::List => {
+            let scripts = user_scripts::discover_scripts(&scripts_dir)?;
+            if scripts.is_empty() {
+                eprintln!("No scripts found in {}", scripts_dir.display());
+                eprintln!(
+                    "Run 'vp script init' to create the scripts directory with an example script."
+                );
+                return Ok(serde_json::json!({
+                    "status": "ok",
+                    "count": 0,
+                    "scripts": [],
+                }));
+            }
+
+            // Print human-readable table
+            println!(
+                "{:<20} {:<8} {:<10} DESCRIPTION",
+                "NAME", "EXT", "TIMEOUT"
+            );
+            println!("{}", "-".repeat(70));
+            for s in &scripts {
+                let desc = if s.meta.description.is_empty() {
+                    "(no description)"
+                } else {
+                    &s.meta.description
+                };
+                println!(
+                    "{:<20} {:<8} {:<10}s {}",
+                    s.name, s.extension, s.meta.timeout_seconds, desc
+                );
+            }
+
+            let script_json: Vec<Value> = scripts
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "name": s.name,
+                        "extension": s.extension,
+                        "path": s.path,
+                        "description": s.meta.description,
+                        "timeoutSeconds": s.meta.timeout_seconds,
+                        "tags": s.meta.tags,
+                        "executable": s.is_executable,
+                        "interpreter": s.meta.interpreter,
+                    })
+                })
+                .collect();
+
+            Ok(serde_json::json!({
+                "status": "ok",
+                "count": scripts.len(),
+                "scripts": script_json,
+            }))
+        }
+
+        ScriptActions::Show { name } => {
+            let scripts = user_scripts::discover_scripts(&scripts_dir)?;
+            match user_scripts::find_script(&scripts, name) {
+                Some(script) => {
+                    let tags = if script.meta.tags.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        script.meta.tags.join(", ")
+                    };
+                    let desc = if script.meta.description.is_empty() {
+                        "(no description)"
+                    } else {
+                        &script.meta.description
+                    };
+                    let interp = script
+                        .meta
+                        .interpreter
+                        .as_deref()
+                        .unwrap_or("(auto-detected)");
+
+                    println!("Name:        {}", script.name);
+                    println!("Path:        {}", script.path.display());
+                    println!("Extension:   {}", script.extension);
+                    println!(
+                        "Executable:  {}",
+                        if script.is_executable { "yes" } else { "no" }
+                    );
+                    println!("Description: {}", desc);
+                    println!("Timeout:     {}s", script.meta.timeout_seconds);
+                    println!("Interpreter: {}", interp);
+                    println!("Tags:        {}", tags);
+
+                    Ok(serde_json::json!({
+                        "status": "ok",
+                        "script": {
+                            "name": script.name,
+                            "path": script.path,
+                            "extension": script.extension,
+                            "description": script.meta.description,
+                            "timeoutSeconds": script.meta.timeout_seconds,
+                            "tags": script.meta.tags,
+                            "executable": script.is_executable,
+                            "interpreter": script.meta.interpreter,
+                        }
+                    }))
+                }
+                None => {
+                    let available: Vec<&str> = scripts.iter().map(|s| s.name.as_str()).collect();
+                    Err(anyhow::anyhow!(
+                        "script '{}' not found. Available scripts: {}",
+                        name,
+                        if available.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            available.join(", ")
+                        }
+                    ))
+                }
+            }
+        }
+
+        ScriptActions::Run { name, json_args } => {
+            let scripts = user_scripts::discover_scripts(&scripts_dir)?;
+            let script = user_scripts::find_script(&scripts, name).ok_or_else(|| {
+                let available: Vec<&str> = scripts.iter().map(|s| s.name.as_str()).collect();
+                anyhow::anyhow!(
+                    "script '{}' not found. Available: {}",
+                    name,
+                    if available.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        available.join(", ")
+                    }
+                )
+            })?;
+
+            let args = json_args.as_deref().unwrap_or("");
+            let output = script.execute(args, vault_dir).await?;
+
+            // Print script output to stdout
+            print!("{}", output);
+
+            Ok(serde_json::json!({
+                "status": "ok",
+                "script": name,
+                "output": output,
+            }))
+        }
+    }
 }

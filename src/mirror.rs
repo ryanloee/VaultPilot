@@ -662,7 +662,7 @@ pub fn mirror_import_with_context(
         if let Some(ref note_id) = vault_note_id {
             match load_note_with_context(context, note_id) {
                 Ok(existing) => {
-                    // When force is false and content is identical, skip.
+                    // #3607: skip if content is identical and force is not set
                     // The storage layer prepends a "## 摘要\n\n{summary}\n\n" section,
                     // so we strip that from existing.body before comparing.
                     if !force {

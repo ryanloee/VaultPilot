@@ -398,7 +398,7 @@
             Visibility="Collapsed"
             IsHitTestVisible="False" />
 
-        <!-- ══ Loading overlay (#3607) — shown during AI requests ══ -->
+        <!-- ══ Loading overlay (#3607, #3608) — shown during AI requests ══ -->
         <Grid x:Name="LoadingOverlay" Visibility="Collapsed"
               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
               Background="#80000000" IsHitTestVisible="True">
@@ -417,6 +417,5 @@
                 </StackPanel>
             </Border>
         </Grid>
-
     </Grid>
 </Window>

@@ -398,5 +398,25 @@
             Visibility="Collapsed"
             IsHitTestVisible="False" />
 
+        <!-- ══ Loading overlay (#3607) — shown during AI requests ══ -->
+        <Grid x:Name="LoadingOverlay" Visibility="Collapsed"
+              HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+              Background="#80000000" IsHitTestVisible="True">
+            <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="{ThemeResource VaultCardBg}"
+                    CornerRadius="{StaticResource VaultRadiusLarge}"
+                    Padding="32,24,32,24">
+                <StackPanel Spacing="12" HorizontalAlignment="Center">
+                    <ProgressRing IsActive="True" Width="40" Height="40"
+                                  Foreground="{ThemeResource SystemAccentColor}" />
+                    <TextBlock x:Name="LoadingOverlayText"
+                               FontSize="{StaticResource VaultFontSizeBody}"
+                               Foreground="{ThemeResource VaultTextPrimary}"
+                               TextAlignment="Center"
+                               Text="正在处理..." />
+                </StackPanel>
+            </Border>
+        </Grid>
+
     </Grid>
 </Window>

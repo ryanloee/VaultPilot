@@ -126,13 +126,13 @@ mod tests {
 
         let result = mirror::mirror_import_with_context(&ctx, &mirror_dir, false).unwrap();
 
-        // Import always updates existing notes by anchor; it does NOT skip.
+        // With force=false and identical content, the note should be SKIPPED.
         assert_eq!(result.imported, 0);
         assert_eq!(
-            result.updated, 1,
-            "existing note should be updated from mirror"
+            result.skipped, 1,
+            "identical content should be skipped when force=false"
         );
-        assert_eq!(result.skipped, 0);
+        assert_eq!(result.updated, 0);
     }
 
     #[test]

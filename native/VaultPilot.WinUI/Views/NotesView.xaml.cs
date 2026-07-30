@@ -322,18 +322,35 @@ public sealed partial class NotesView : UserControl
 
     private void OnNotesListRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
-        // Select the note under the cursor so context menu actions target it
+        // Select the note under the cursor so context menu actions target it.
+        // For virtualized ListView items the ListViewItem container may not
+        // exist in the visual tree (it's been recycled or not yet
+        // materialized), so the visual-tree walk fails silently (#3626).
+        // We fall back to hit-testing by pointer position.
         if (sender is ListView listView)
         {
+            // Strategy 1: Walk the visual tree to find a ListViewItem ancestor
+            // of the tapped element (fast path for visible, materialized items).
             var element = e.OriginalSource as DependencyObject;
             while (element is not null && element != listView)
             {
                 if (element is ListViewItem item)
                 {
                     listView.SelectedItem = item.DataContext;
-                    break;
+                    return;
                 }
                 element = VisualTreeHelper.GetParent(element);
+            }
+
+            // Strategy 2: Visual-tree walk failed — the item is likely
+            // virtualized (scrolled out of view or at the viewport edge).
+            // Hit-test using the pointer position to find the element at that
+            // point, then resolve its DataContext to select the right item.
+            // This handles the virtualization gap (#3626).
+            var hitElement = ListViewHitTestHelper.FindItemFromPoint(listView, e);
+            if (hitElement is not null)
+            {
+                listView.SelectedItem = hitElement;
             }
         }
     }

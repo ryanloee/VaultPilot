@@ -164,6 +164,12 @@ public sealed partial class MainWindow : Window
         LoadingOverlay.Visibility = Visibility.Collapsed;
     }
 
+    // #3607: LoadingOverlay cancel button — same action as the composer CancelButton.
+    private void OnLoadingOverlayCancelClicked(object sender, RoutedEventArgs e)
+    {
+        CancelActiveRequest();
+    }
+
     // ── Logging ──
 
     private static string StartupLogPath()

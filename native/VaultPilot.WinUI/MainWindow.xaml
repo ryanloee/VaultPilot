@@ -399,9 +399,12 @@
             IsHitTestVisible="False" />
 
         <!-- ══ Loading overlay (#3607, #3608) — shown during AI requests ══ -->
+        <!-- Canvas.ZIndex ensures the overlay sits above all content but the
+             cancel button is embedded inside so it remains clickable. -->
         <Grid x:Name="LoadingOverlay" Visibility="Collapsed"
               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-              Background="#80000000" IsHitTestVisible="True">
+              Background="#80000000" IsHitTestVisible="True"
+              Canvas.ZIndex="100">
             <Border HorizontalAlignment="Center" VerticalAlignment="Center"
                     Background="{ThemeResource VaultCardBg}"
                     CornerRadius="{StaticResource VaultRadiusLarge}"
@@ -414,6 +417,10 @@
                                Foreground="{ThemeResource VaultTextPrimary}"
                                TextAlignment="Center"
                                Text="正在处理..." />
+                    <Button x:Name="LoadingOverlayCancelButton"
+                            HorizontalAlignment="Center"
+                            Content="取消请求"
+                            Click="OnLoadingOverlayCancelClicked" />
                 </StackPanel>
             </Border>
         </Grid>

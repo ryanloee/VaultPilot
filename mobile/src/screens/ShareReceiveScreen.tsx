@@ -47,31 +47,60 @@ export default function ShareReceiveScreen({ navigation }: any) {
     setTitle(suggestShareTitle(resolvedSharedPayloads[0]));
   }, [resolvedSharedPayloads]);
 
-  // Copy shared images/files into the vault directory
-  const copyToVault = useCallback(async (payloads: ResolvedSharePayload[]) => {
-    // Use legacy expo-file-system API (documentDirectory)
-    const legacyFs = FileSystem as any;
-    const vaultDir = `${legacyFs.documentDirectory}vault/`;
-    const dirInfo = await legacyFs.getInfoAsync(vaultDir);
-    if (!dirInfo.exists) {
-      await legacyFs.makeDirectoryAsync(vaultDir, { intermediates: true });
-    }
+  // Copy shared images/files into the vault directory.
+  // Returns { index, fileName }[] mapping payload index → actual saved filename,
+  // so that note embeds can reference the correct file (#3639).
+  const copyToVault = useCallback(
+    async (
+      payloads: ResolvedSharePayload[],
+    ): Promise<{ index: number; fileName: string }[]> => {
+      // Use legacy expo-file-system API (documentDirectory)
+      const legacyFs = FileSystem as any;
+      const vaultDir = `${legacyFs.documentDirectory}vault/`;
+      const dirInfo = await legacyFs.getInfoAsync(vaultDir);
+      if (!dirInfo.exists) {
+        await legacyFs.makeDirectoryAsync(vaultDir, { intermediates: true });
+      }
 
-    const copies: string[] = [];
-    for (const p of payloads) {
-      if ((p.shareType === 'image' || p.shareType === 'file') && p.contentUri) {
-        const fileName = p.originalName ?? `share-${Date.now()}.jpg`;
-        const dest = `${vaultDir}${fileName}`;
-        try {
-          await FileSystem.copyAsync({ from: p.contentUri, to: dest });
-          copies.push(fileName);
-        } catch (e) {
-          console.warn('[ShareReceive] copy failed for', p.contentUri, e);
+      const copies: { index: number; fileName: string }[] = [];
+      const usedNames = new Set<string>();
+
+      for (let i = 0; i < payloads.length; i++) {
+        const p = payloads[i];
+        if ((p.shareType === 'image' || p.shareType === 'file') && p.contentUri) {
+          // Fallback extension must match shareType (#3639 bug 2):
+          // image → .jpg, file → .bin (preserves non-image files like PDF)
+          const ext = p.shareType === 'image' ? 'jpg' : 'bin';
+          const baseName = p.originalName ?? `share-${Date.now()}.${ext}`;
+
+          // Dedup: append -2, -3, etc. when multiple payloads collide on the
+          // same name or same-ms timestamp (#3639 bug 3).
+          let finalName = baseName;
+          let dedupCounter = 2;
+          while (usedNames.has(finalName)) {
+            const dotIdx = baseName.lastIndexOf('.');
+            if (dotIdx > 0) {
+              finalName = `${baseName.slice(0, dotIdx)}-${dedupCounter}${baseName.slice(dotIdx)}`;
+            } else {
+              finalName = `${baseName}-${dedupCounter}`;
+            }
+            dedupCounter++;
+          }
+          usedNames.add(finalName);
+
+          const dest = `${vaultDir}${finalName}`;
+          try {
+            await FileSystem.copyAsync({ from: p.contentUri, to: dest });
+            copies.push({ index: i, fileName: finalName });
+          } catch (e) {
+            console.warn('[ShareReceive] copy failed for', p.contentUri, e);
+          }
         }
       }
-    }
-    return copies;
-  }, []);
+      return copies;
+    },
+    [],
+  );
 
   const handleSave = useCallback(async () => {
     if (!noteContent && resolvedSharedPayloads.length === 0) {
@@ -80,11 +109,22 @@ export default function ShareReceiveScreen({ navigation }: any) {
     }
     setSaving(true);
     try {
-      // Copy shared files to vault first
-      await copyToVault(resolvedSharedPayloads);
+      // Copy shared files to vault first, capturing actual saved filenames (#3639)
+      const copies = await copyToVault(resolvedSharedPayloads);
+
+      // Build a map: payload index → actual filename on disk.
+      // For image/file payloads, use the real saved filename so embeds resolve.
+      const fileNameMap = new Map<number, string>();
+      for (const c of copies) {
+        fileNameMap.set(c.index, c.fileName);
+      }
+
+      let finalContent = resolvedSharedPayloads
+        .map((p, i) => extractShareText(p, fileNameMap.get(i)))
+        .filter(Boolean)
+        .join('\n\n---\n\n');
 
       // Build content with source URL attribution
-      let finalContent = noteContent;
       const shareUrls = extractShareUrls(resolvedSharedPayloads);
       if (shareUrls.length > 0) {
         finalContent = `> 来源：${shareUrls.join('、')}\n\n` + finalContent;

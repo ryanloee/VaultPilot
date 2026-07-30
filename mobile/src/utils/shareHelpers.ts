@@ -40,19 +40,28 @@ export function suggestShareTitle(payload: ResolvedSharePayload): string {
   return '分享笔记';
 }
 
-/** Extract text content from a share payload based on shareType. */
-export function extractShareText(p: ResolvedSharePayload): string {
+/**
+ * Extract text content from a share payload based on shareType.
+ *
+ * @param actualFileName - When provided, overrides originalName for image/file
+ *   embed references. This is the real filename written to disk by copyToVault,
+ *   ensuring embeds like `![[name]]` resolve correctly (#3639).
+ */
+export function extractShareText(
+  p: ResolvedSharePayload,
+  actualFileName?: string,
+): string {
   switch (p.shareType) {
     case 'text':
       return p.value ?? '';
     case 'url':
       return p.value ?? '';
     case 'image': {
-      const name = p.originalName ?? 'shared-image';
+      const name = actualFileName ?? p.originalName ?? 'shared-image';
       return `![[${name}]]`;
     }
     case 'file': {
-      const name = p.originalName ?? 'shared-file';
+      const name = actualFileName ?? p.originalName ?? 'shared-file';
       return `📎 ${name}`;
     }
     default:

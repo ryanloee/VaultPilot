@@ -81,4 +81,5 @@ mod issue_3548_at_mention_injection;
 mod issue_3561_source_embed_cache;
 mod issue_3570_graph_view;
 mod issue_3605_mirror_import;
+mod issue_3620_title_preserved;
 mod issue_914_related_notes;

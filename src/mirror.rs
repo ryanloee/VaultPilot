@@ -641,23 +641,22 @@ pub fn mirror_import_with_context(
                 Err(_) => (None, body_without_anchor),
             };
 
-        let title = frontmatter
-            .as_ref()
-            .and_then(|fm| {
-                if fm.title.is_empty() {
-                    None
-                } else {
-                    Some(fm.title.clone())
-                }
-            })
-            .or_else(|| {
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                if stem.is_empty() {
-                    None
-                } else {
-                    Some(stem.to_string())
-                }
-            });
+        // Only the *explicit* frontmatter title may override an existing note's
+        // title.  The filename-stem fallback (usually a UUID) is reserved for
+        // *new* note creation — using it on the update path silently clobbers
+        // the existing human-readable title (#3620).
+        let explicit_title = frontmatter.as_ref().and_then(|fm| {
+            if fm.title.is_empty() {
+                None
+            } else {
+                Some(fm.title.clone())
+            }
+        });
+        let file_stem_title = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         if let Some(ref note_id) = vault_note_id {
             match load_note_with_context(context, note_id) {
@@ -687,7 +686,7 @@ pub fn mirror_import_with_context(
                     }
                     let mut updated = existing;
                     updated.body = body.to_string();
-                    if let Some(ref t) = title {
+                    if let Some(ref t) = explicit_title {
                         updated.meta.title = t.clone();
                     }
                     save_note_with_context(context, updated)?;
@@ -698,7 +697,10 @@ pub fn mirror_import_with_context(
                     let note = NoteDocument {
                         meta: NoteMeta {
                             id: note_id.clone(),
-                            title: title.clone().unwrap_or_else(|| note_id.clone()),
+                            title: explicit_title
+                                .clone()
+                                .or(file_stem_title.clone())
+                                .unwrap_or_else(|| note_id.clone()),
                             ..Default::default()
                         },
                         body: body.to_string(),
@@ -714,7 +716,9 @@ pub fn mirror_import_with_context(
             let note = NoteDocument {
                 meta: NoteMeta {
                     id: new_id,
-                    title: title.unwrap_or_else(|| name.trim_end_matches(".md").to_string()),
+                    title: explicit_title
+                        .or(file_stem_title)
+                        .unwrap_or_else(|| name.trim_end_matches(".md").to_string()),
                     ..Default::default()
                 },
                 body: body.to_string(),

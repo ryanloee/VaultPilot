@@ -14,24 +14,17 @@ namespace VaultPilot.WinUI.Tests.Regression;
 /// Fix: ShouldKeepRelatedNotesPanelVisible keeps the panel visible only when the
 /// load completed (not cancelled) and produced at least one entry (a real
 /// related note or the "no related notes" placeholder).
+///
+/// Updated for #3625: the method now accepts a bool (loadProducedItems) instead
+/// of the raw ItemsSource object, to avoid stale-state decisions when multiple
+/// overlapping LoadRelatedNotesAsync calls race.
 /// </summary>
 public class Issue2780NotesPanelTests
 {
-    private static List<RelatedNoteItem> MakeItems(int count)
-    {
-        var list = new List<RelatedNoteItem>();
-        for (int i = 0; i < count; i++)
-        {
-            list.Add(new RelatedNoteItem(new RelatedNote(new NoteMeta { Title = $"note {i}" }, 0, null)));
-        }
-        return list;
-    }
-
     [Fact]
     public void Regression_2780_PanelStaysVisibleWhenRelatedNotesLoaded()
     {
-        var items = MakeItems(3);
-        Assert.True(NotesView.ShouldKeepRelatedNotesPanelVisible(false, items));
+        Assert.True(NotesView.ShouldKeepRelatedNotesPanelVisible(false, true));
     }
 
     [Fact]
@@ -39,27 +32,25 @@ public class Issue2780NotesPanelTests
     {
         // The "no related notes" placeholder is a single-entry list, so the
         // panel should remain visible to show the message.
-        var items = MakeItems(1);
-        Assert.True(NotesView.ShouldKeepRelatedNotesPanelVisible(false, items));
+        Assert.True(NotesView.ShouldKeepRelatedNotesPanelVisible(false, true));
     }
 
     [Fact]
     public void Regression_2780_PanelCollapsesOnCancellation()
     {
-        var items = MakeItems(3);
-        Assert.False(NotesView.ShouldKeepRelatedNotesPanelVisible(true, items));
+        Assert.False(NotesView.ShouldKeepRelatedNotesPanelVisible(true, true));
     }
 
     [Fact]
     public void Regression_2780_PanelCollapsesWhenEmpty()
     {
-        var items = new List<RelatedNoteItem>();
-        Assert.False(NotesView.ShouldKeepRelatedNotesPanelVisible(false, items));
+        Assert.False(NotesView.ShouldKeepRelatedNotesPanelVisible(false, false));
     }
 
     [Fact]
     public void Regression_2780_PanelCollapsesWhenNull()
     {
-        Assert.False(NotesView.ShouldKeepRelatedNotesPanelVisible(false, null));
+        // loadProducedItems = false means no items were loaded
+        Assert.False(NotesView.ShouldKeepRelatedNotesPanelVisible(false, false));
     }
 }

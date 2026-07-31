@@ -19,7 +19,7 @@ import type { ResolvedSharePayload } from 'expo-sharing';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { createNote } from '../db';
-import { extractShareText, extractShareUrls, suggestShareTitle } from '../utils/shareHelpers';
+import { extractShareText, extractShareUrls, suggestShareTitle, resolveShareFileName } from '../utils/shareHelpers';
 
 /** Extract a suggested note title */
 
@@ -36,7 +36,7 @@ export default function ShareReceiveScreen({ navigation }: any) {
   const noteContent = useMemo(() => {
     if (!resolvedSharedPayloads || resolvedSharedPayloads.length === 0) return '';
     return resolvedSharedPayloads
-      .map((p) => extractShareText(p))
+      .map((p, i) => extractShareText(p, i))
       .filter(Boolean)
       .join('\n\n---\n\n');
   }, [resolvedSharedPayloads]);
@@ -58,9 +58,9 @@ export default function ShareReceiveScreen({ navigation }: any) {
     }
 
     const copies: string[] = [];
-    for (const p of payloads) {
+    for (const [index, p] of payloads.entries()) {
       if ((p.shareType === 'image' || p.shareType === 'file') && p.contentUri) {
-        const fileName = p.originalName ?? `share-${Date.now()}.jpg`;
+        const fileName = resolveShareFileName(p, index);
         const dest = `${vaultDir}${fileName}`;
         try {
           await FileSystem.copyAsync({ from: p.contentUri, to: dest });

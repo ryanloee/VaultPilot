@@ -8,6 +8,45 @@
  */
 import type { ResolvedSharePayload } from 'expo-sharing';
 
+/** Sanitize a shared filename — strip path traversal and return a safe base name. (#3643) */
+export function sanitizeShareFileName(name: string | null | undefined): string {
+  if (!name) return '';
+  // Take only the basename — strip all directory components to prevent path traversal.
+  const parts = name.split(/[/\\]/);
+  const baseName = parts[parts.length - 1] ?? '';
+  // Strip leading dots to prevent hidden-file / relative-path abuse.
+  return baseName.replace(/^\.+/, '');
+}
+
+/**
+ * Resolve a unique, safe vault filename for a shared payload.
+ *
+ * Must produce identical results when called from extractShareText (embed) and
+ * copyToVault (file write) for the same (payload, index) pair so that
+ * Obsidian-style `![[name]]` embeds always resolve to the saved file. (#3643)
+ *
+ * @param index - zero-based index of this payload within the full share batch.
+ *                Appended as a suffix to guarantee uniqueness.
+ */
+export function resolveShareFileName(
+  p: ResolvedSharePayload,
+  index: number,
+): string {
+  const sanitized = sanitizeShareFileName(p.originalName);
+  if (sanitized) {
+    // Append index suffix to prevent collision in multi-file shares.
+    // Insert before the extension: "photo.jpg" → "photo-1.jpg"
+    const dotIdx = sanitized.lastIndexOf('.');
+    if (dotIdx > 0) {
+      return `${sanitized.slice(0, dotIdx)}-${index + 1}${sanitized.slice(dotIdx)}`;
+    }
+    return `${sanitized}-${index + 1}`;
+  }
+  // Deterministic fallback — no Date.now() so embed and copy stay consistent.
+  const ext = p.shareType === 'image' ? '.jpg' : '';
+  return `share-${p.shareType}-${index + 1}${ext}`;
+}
+
 /** Extract share URLs from resolved payloads for template {{share_url}} usage. */
 export function extractShareUrls(payloads: ResolvedSharePayload[]): string[] {
   return payloads
@@ -40,19 +79,22 @@ export function suggestShareTitle(payload: ResolvedSharePayload): string {
   return '分享笔记';
 }
 
-/** Extract text content from a share payload based on shareType. */
-export function extractShareText(p: ResolvedSharePayload): string {
+/**
+ * Extract text content from a share payload based on shareType.
+ * @param index - zero-based index within the batch (for unique filename generation). (#3643)
+ */
+export function extractShareText(p: ResolvedSharePayload, index = 0): string {
   switch (p.shareType) {
     case 'text':
       return p.value ?? '';
     case 'url':
       return p.value ?? '';
     case 'image': {
-      const name = p.originalName ?? 'shared-image';
+      const name = resolveShareFileName(p, index);
       return `![[${name}]]`;
     }
     case 'file': {
-      const name = p.originalName ?? 'shared-file';
+      const name = resolveShareFileName(p, index);
       return `📎 ${name}`;
     }
     default:

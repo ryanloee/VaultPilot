@@ -123,17 +123,17 @@ describe('extractShareText', () => {
 
   it('formats image with markdown', () => {
     const result = extractShareText(makePayload({ shareType: 'image', originalName: 'photo.jpg' }));
-    expect(result).toBe('![[photo.jpg]]');
+    expect(result).toBe('![[photo-1.jpg]]');
   });
 
   it('falls back for image without name', () => {
     const result = extractShareText(makePayload({ shareType: 'image' }));
-    expect(result).toBe('![[shared-image]]');
+    expect(result).toBe('![[share-image-1.jpg]]');
   });
 
   it('formats file with emoji', () => {
     const result = extractShareText(makePayload({ shareType: 'file', originalName: 'doc.pdf' }));
-    expect(result).toBe('📎 doc.pdf');
+    expect(result).toBe('📎 doc-1.pdf');
   });
 
   it('returns empty for empty text', () => {

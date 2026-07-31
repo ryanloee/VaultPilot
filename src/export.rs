@@ -1218,6 +1218,8 @@ fn inline_md(text: &str) -> String {
 
 /// Replace `[^id]` with linked `<sup>` references (#3684).
 /// Mirrors GFM footnote syntax: [^1] → <sup id="fnref-1"><a href="#fn-1">[1]</a></sup>
+///
+/// [^1]: GFM footnote reference
 fn apply_footnote_refs(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut rest = text;

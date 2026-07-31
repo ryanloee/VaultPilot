@@ -87,7 +87,61 @@ fn default_sort_order() -> String {
     "asc".to_string()
 }
 
-/// The visual layout (purely declarative — rendering is UI-side).
+/// Supported aggregation functions for column summaries (#3666).
+///
+/// These mirror Obsidian Bases 1.10.0 Table View Summaries:
+/// <https://help.obsidian.md/bases/views/table>
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SummaryFunction {
+    /// Count of non-empty values.
+    Count,
+    /// Count of empty values.
+    Empty,
+    /// Count of distinct values.
+    Unique,
+    /// Sum of numeric values.
+    Sum,
+    /// Average of numeric values.
+    Average,
+    /// Maximum value (numeric or date lexicographic).
+    Max,
+    /// Minimum value (numeric or date lexicographic).
+    Min,
+}
+
+/// A single summary request: "aggregate field X using function F" (#3666).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnSummary {
+    /// The field to aggregate (e.g. "cost", "rating", "status").
+    pub field: String,
+    /// The aggregation function to apply.
+    #[serde(rename = "fn")]
+    pub function: SummaryFunction,
+}
+
+/// The computed result of a single summary (#3666).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnSummaryResult {
+    pub field: String,
+    pub function: SummaryFunction,
+    /// The computed value as a human-readable string (e.g. "42.5", "3", "2026-07-01").
+    pub value: String,
+}
+
+/// A per-group summary result, produced when `group_by` is active (#3666).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupSummary {
+    /// The group key (e.g. "doing", "done").
+    pub key: String,
+    /// Summaries computed for this group.
+    pub summaries: Vec<ColumnSummaryResult>,
+}
+
+/// The visual layout (purely declarative — are is UI-side).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BaseView {
@@ -162,6 +216,17 @@ pub struct BaseConfig {
     /// ```
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub formulas: HashMap<String, String>,
+    /// Column summaries — compute aggregate values on the result set (#3666).
+    ///
+    /// Example:
+    /// ```yaml
+    /// summaries:
+    ///   - { field: cost, fn: sum }
+    ///   - { field: rating, fn: average }
+    ///   - { field: status, fn: unique }
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summaries: Vec<ColumnSummary>,
 }
 
 impl Default for BaseConfig {
@@ -174,6 +239,7 @@ impl Default for BaseConfig {
             group_by: None,
             kanban_columns: None,
             formulas: HashMap::new(),
+            summaries: Vec::new(),
         }
     }
 }
@@ -415,6 +481,14 @@ pub struct BaseResult {
     /// (`DEFAULT_KANBAN_UNGROUPED`) always last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kanban_groups: Vec<KanbanGroup>,
+    /// Column-level aggregate summaries, computed when `BaseConfig.summaries` is
+    /// non-empty (#3666).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summaries: Vec<ColumnSummaryResult>,
+    /// Per-group summaries, populated when both `summaries` and `group_by` are
+    /// active (#3666).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_summaries: Vec<GroupSummary>,
 }
 
 /// Run a Base query against the vault and return the materialized rows.
@@ -542,6 +616,47 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         Vec::new()
     };
 
+    // Compute column summaries (#3666)
+    let summaries = if config.summaries.is_empty() {
+        Vec::new()
+    } else {
+        compute_summaries(config, &rows, &columns, &schema, None, &[])
+    };
+
+    // Compute per-group summaries when group_by is active (#3666)
+    let group_summaries = if !config.summaries.is_empty()
+        && config.group_by.as_ref().is_some_and(|g| !g.is_empty())
+    {
+        // Collect unique group keys from paired data
+        let group_field = config.group_by.as_deref().unwrap_or("status");
+        let mut group_keys: Vec<String> = notes
+            .iter()
+            .map(|meta| {
+                let val = field_str(meta, group_field).trim().to_string();
+                if val.is_empty() {
+                    DEFAULT_KANBAN_UNGROUPED.to_string()
+                } else {
+                    val
+                }
+            })
+            .collect();
+        group_keys.sort();
+        group_keys.dedup();
+
+        group_keys
+            .iter()
+            .map(|key| {
+                let summaries = compute_summaries(config, &rows, &columns, &schema, Some(key), &[]);
+                GroupSummary {
+                    key: key.clone(),
+                    summaries,
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(BaseResult {
         view: config.view,
         columns,
@@ -549,7 +664,163 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         matched: notes.len(),
         scanned,
         kanban_groups,
+        summaries,
+        group_summaries,
     })
+}
+
+/// Compute column-level aggregate summaries on the result rows (#3666).
+///
+/// For each summary in `config.summaries`, this extracts the field value from
+/// every row, applies the specified aggregation function, and returns a
+/// [`ColumnSummaryResult`].
+///
+/// When `group_key` is provided (for per-group summaries), only rows whose
+/// `group_by` value matches `group_key` are considered.
+pub fn compute_summaries(
+    config: &BaseConfig,
+    rows: &[BaseRow],
+    columns: &[BaseColumn],
+    schema: &PropertySchema,
+    group_key: Option<&str>,
+    all_notes_for_group_filter: &[&NoteMeta],
+) -> Vec<ColumnSummaryResult> {
+    if config.summaries.is_empty() {
+        return Vec::new();
+    }
+
+    // Build column index map: field name → column position in rows
+    let col_index: HashMap<&str, usize> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.field.as_str(), i))
+        .collect();
+
+    // For group filtering, we need row-to-note mapping
+    let filtered: Vec<(&BaseRow, Option<&NoteMeta>)> = if let Some(key) = group_key {
+        rows.iter()
+            .zip(all_notes_for_group_filter.iter().copied())
+            .filter(|(_, meta)| {
+                let field = config
+                    .group_by
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("status");
+                let val = field_str(meta, field).trim().to_string();
+                if val.is_empty() {
+                    DEFAULT_KANBAN_UNGROUPED == key
+                } else {
+                    val == key
+                }
+            })
+            .map(|(r, m)| (r, Some(m)))
+            .collect()
+    } else {
+        rows.iter().map(|r| (r, None)).collect()
+    };
+
+    config
+        .summaries
+        .iter()
+        .map(|s| {
+            let col_idx = col_index.get(s.field.as_str());
+            let values: Vec<&str> = filtered
+                .iter()
+                .filter_map(|(row, _)| col_idx.and_then(|&idx| row.values.get(idx)))
+                .map(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .collect();
+
+            let value = match s.function {
+                SummaryFunction::Count => values.len().to_string(),
+                SummaryFunction::Empty => {
+                    let total = filtered.len();
+                    let empty = total.saturating_sub(values.len());
+                    empty.to_string()
+                }
+                SummaryFunction::Unique => {
+                    let unique: std::collections::HashSet<&str> = values.iter().copied().collect();
+                    unique.len().to_string()
+                }
+                SummaryFunction::Sum => {
+                    let typed = schema.type_of(&s.field);
+                    if typed == PropertyType::Number {
+                        let sum: f64 = values.iter().filter_map(|v| v.parse::<f64>().ok()).sum();
+                        format!("{:.1}", sum)
+                            .trim_end_matches('0')
+                            .trim_end_matches('.')
+                            .to_string()
+                    } else {
+                        "N/A".to_string()
+                    }
+                }
+                SummaryFunction::Average => {
+                    let typed = schema.type_of(&s.field);
+                    if typed == PropertyType::Number {
+                        let nums: Vec<f64> = values
+                            .iter()
+                            .filter_map(|v| v.parse::<f64>().ok())
+                            .collect();
+                        if nums.is_empty() {
+                            "N/A".to_string()
+                        } else {
+                            let avg = nums.iter().sum::<f64>() / nums.len() as f64;
+                            format!("{:.2}", avg)
+                                .trim_end_matches('0')
+                                .trim_end_matches('.')
+                                .to_string()
+                        }
+                    } else {
+                        "N/A".to_string()
+                    }
+                }
+                SummaryFunction::Max => {
+                    if values.is_empty() {
+                        "N/A".to_string()
+                    } else {
+                        let typed = schema.type_of(&s.field);
+                        if typed == PropertyType::Number {
+                            let max: f64 = values
+                                .iter()
+                                .filter_map(|v| v.parse::<f64>().ok())
+                                .fold(f64::NEG_INFINITY, f64::max);
+                            format!("{:.2}", max)
+                                .trim_end_matches('0')
+                                .trim_end_matches('.')
+                                .to_string()
+                        } else {
+                            values.iter().max().unwrap_or(&"").to_string()
+                        }
+                    }
+                }
+                SummaryFunction::Min => {
+                    if values.is_empty() {
+                        "N/A".to_string()
+                    } else {
+                        let typed = schema.type_of(&s.field);
+                        if typed == PropertyType::Number {
+                            let min: f64 = values
+                                .iter()
+                                .filter_map(|v| v.parse::<f64>().ok())
+                                .fold(f64::INFINITY, f64::min);
+                            format!("{:.2}", min)
+                                .trim_end_matches('0')
+                                .trim_end_matches('.')
+                                .to_string()
+                        } else {
+                            values.iter().min().unwrap_or(&"").to_string()
+                        }
+                    }
+                }
+            };
+
+            ColumnSummaryResult {
+                field: s.field.clone(),
+                function: s.function,
+                value,
+            }
+        })
+        .collect()
 }
 
 /// Evaluate all formulas for a single note and return a map of formula name

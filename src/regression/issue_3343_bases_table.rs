@@ -36,6 +36,8 @@ mod tests {
             matched: 2,
             scanned: 10,
             kanban_groups: vec![],
+            summaries: vec![],
+            group_summaries: vec![],
         };
 
         let table = format_bases_table(&result);
@@ -63,6 +65,8 @@ mod tests {
             matched: 0,
             scanned: 0,
             kanban_groups: vec![],
+            summaries: vec![],
+            group_summaries: vec![],
         };
         let table = format_bases_table(&result);
         assert_eq!(table, "(no columns)");
@@ -87,6 +91,8 @@ mod tests {
             matched: 1,
             scanned: 5,
             kanban_groups: vec![],
+            summaries: vec![],
+            group_summaries: vec![],
         };
 
         let table = format_bases_table(&result);

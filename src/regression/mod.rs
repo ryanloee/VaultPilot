@@ -83,5 +83,6 @@ mod issue_3561_source_embed_cache;
 mod issue_3570_graph_view;
 mod issue_3605_mirror_import;
 mod issue_3620_title_preserved;
+mod issue_3666_bases_summaries;
 mod issue_3667_update_check_grace_period;
 mod issue_914_related_notes;

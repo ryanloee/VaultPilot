@@ -34,6 +34,8 @@ mod tests {
             matched,
             scanned: matched * 5,
             kanban_groups: vec![],
+            summaries: vec![],
+            group_summaries: vec![],
         }
     }
 

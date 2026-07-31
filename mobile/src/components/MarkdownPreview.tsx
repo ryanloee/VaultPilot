@@ -86,8 +86,29 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
   // Global image counter for Lightbox index tracking (#3030)
   let imageCounter = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  // ── First pass: collect footnote definitions (#3684) ──────────────────
+  // GFM-style footnotes: [^id]: text
+  // They appear as standalone lines (usually at the end) and should be
+  // hidden from normal rendering. References ([^id] inline) are handled
+  // in renderInline below.
+  const footnoteDefs = new Map<string, string>();
+  const ACTIVE_LINES: string[] = [];
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    const defMatch = trimmed.match(/^\[\^([^\]]+)\]:\s+(.*)$/);
+    if (defMatch) {
+      const id = defMatch[1].trim();
+      if (!footnoteDefs.has(id)) {
+        footnoteDefs.set(id, defMatch[2].trim());
+      }
+      // Don't add to active lines — footnote definitions are hidden
+    } else {
+      ACTIVE_LINES.push(rawLine);
+    }
+  }
+
+  for (let i = 0; i < ACTIVE_LINES.length; i++) {
+    const line = ACTIVE_LINES[i];
 
     // Fenced code block
     if (line.trimStart().startsWith('```')) {
@@ -256,6 +277,29 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     }
   }
 
+  // ── Render footnote definitions at end (#3684) ──────────────────────
+  if (footnoteDefs.size > 0) {
+    // Separator line
+    elements.push(
+      <View key="fn-sep" style={[styles.hr, { backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.1)' }]} />
+    );
+    const sortedIds = [...footnoteDefs.keys()].sort((a, b) => {
+      const an = parseInt(a, 10);
+      const bn = parseInt(b, 10);
+      if (!isNaN(an) && !isNaN(bn)) return an - bn;
+      return a.localeCompare(b);
+    });
+    for (const id of sortedIds) {
+      const text = footnoteDefs.get(id)!;
+      elements.push(
+        <View key={`fn-def-${id}`} style={styles.footnoteItem}>
+          <Text style={[styles.footnoteId, { color: accentColor }]}>[{id}]</Text>
+          <Text style={[styles.footnoteText, { color: textColor }]}>{renderInline(text, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap)}</Text>
+        </View>
+      );
+    }
+  }
+
   return (
     <>
       {elements}
@@ -364,6 +408,21 @@ function renderInline(
       if (linkMatch[1]) parts.push(...renderWithNoteRefs(linkMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
       parts.push(<Text key={`l${key++}`} style={{ color: accentColor, textDecorationLine: 'underline' }}>{linkMatch[2]}</Text>);
       remaining = linkMatch[4];
+      continue;
+    }
+
+    // Footnote reference [^id] (#3684) — must be after [link](url) to avoid
+    // confusing `[^id]` with the link capture group `([^\]]+)`
+    const fnMatch = remaining.match(/^(.*?)\[\^([^\]]+)\](.*)$/);
+    if (fnMatch) {
+      if (fnMatch[1]) parts.push(...renderWithNoteRefs(fnMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      // Render as superscript reference (e.g. [1], [note])
+      parts.push(
+        <Text key={`fn${key++}`} style={{ fontSize: 12, color: accentColor, fontWeight: '600', lineHeight: 20 }}>
+          [{fnMatch[2]}]
+        </Text>
+      );
+      remaining = fnMatch[3];
       continue;
     }
 
@@ -496,5 +555,22 @@ const styles = StyleSheet.create({
   inlineImageGrid: {
     width: '48%',
     height: 140,
+  },
+  // #3684: Footnote rendering
+  footnoteItem: {
+    flexDirection: 'row',
+    marginBottom: 6,
+    paddingRight: 8,
+  },
+  footnoteId: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginRight: 6,
+    lineHeight: 22,
+  },
+  footnoteText: {
+    fontSize: 14,
+    lineHeight: 22,
+    flex: 1,
   },
 });

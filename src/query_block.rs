@@ -9,15 +9,13 @@
 //! For simple queries a compact YAML form is supported without wrapping in
 //! `BaseConfig` boilerplate:
 //!
-//! ```markdown
-//! ```query
-//! status: todo
-//! tags: contains rust
-//! sort: updated_at:desc
-//! render: table
-//! limit: 5
-//! ```
-//! ```
+//!     ```query
+//!     status: todo
+//!     tags: contains rust
+//!     sort: updated_at:desc
+//!     render: table
+//!     limit: 5
+//!     ```
 //!
 //! This is expanded internally to the full `BaseConfig` YAML format before
 //! delegation to [`bases::BaseConfig::from_yaml`].  Existing `.base` file

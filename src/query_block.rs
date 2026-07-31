@@ -1,6 +1,6 @@
 //! Dynamic Query Blocks — embed live Bases queries inside markdown notes (#3640).
 //!
-//! Users write ` ```query ` fenced code blocks in their notes (like Obsidian
+//! Users write `` ```query `` fenced code blocks in their notes (like Obsidian
 //! Dataview / Tana Search Nodes) and the content is automatically resolved to
 //! a live list or table of matching vault notes at render time.
 //!
@@ -9,13 +9,15 @@
 //! For simple queries a compact YAML form is supported without wrapping in
 //! `BaseConfig` boilerplate:
 //!
-//!     ```query
-//!     status: todo
-//!     tags: contains rust
-//!     sort: updated_at:desc
-//!     render: table
-//!     limit: 5
-//!     ```
+//! ````markdown
+//! ```query
+//! status: todo
+//! tags: contains rust
+//! sort: updated_at:desc
+//! render: table
+//! limit: 5
+//! ```
+//! ````
 //!
 //! This is expanded internally to the full `BaseConfig` YAML format before
 //! delegation to [`bases::BaseConfig::from_yaml`].  Existing `.base` file
@@ -23,7 +25,7 @@
 //!
 //! ## Integration
 //!
-//! - **Parser** — [`extract_query_blocks`] finds all ` ```query ` blocks in raw
+//! - **Parser** — [`extract_query_blocks`] finds all `` ```query `` blocks in raw
 //!   markdown and returns their line ranges and raw content.
 //! - **Config parsing** — [`parse_query_config`] converts raw YAML to
 //!   `BaseConfig` (supporting the shorthand).
@@ -67,7 +69,7 @@ pub struct QueryBlockExecution {
 
 // ── Public functions ──────────────────────────────────────────────────────
 
-/// Extract all ` ```query ` and ` ~~~query ` fenced code blocks from markdown.
+/// Extract all `` ```query `` and ` ~~~query ` fenced code blocks from markdown.
 ///
 /// Returns a vec of `(start_line, end_line_exclusive, raw_content)` tuples.
 ///

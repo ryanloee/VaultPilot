@@ -153,6 +153,13 @@ pub enum BaseView {
     /// Use `BaseConfig.group_by` (default: `status`) to choose the column
     /// field, and `BaseConfig.kanban_columns` to declare column order.
     Kanban,
+    /// Calendar view: groups notes by a date field (default: `created_at`)
+    /// into date-based buckets (year-month or year-month-day) for a
+    /// timeline / calendar layout (#3568).
+    Calendar,
+    /// Gallery view: grid of note cards grouped by a field (default: `tags`),
+    /// suitable for browsing notes by visual thumbnail or cover image (#3568).
+    Gallery,
 }
 
 /// Column descriptor for table view.
@@ -461,6 +468,31 @@ pub struct KanbanGroup {
     pub notes: Vec<BaseRow>,
 }
 
+/// One date bucket in a Calendar view (#3568).
+///
+/// `key` is the date key (e.g. `"2026-08"` for year-month or `"2026-08-01"`
+/// for year-month-day), and `notes` are the notes whose date field falls
+/// within that bucket.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CalendarGroup {
+    /// Date key identifying this bucket.
+    pub key: String,
+    /// Rows in this calendar bucket, sorted by the date field.
+    pub notes: Vec<BaseRow>,
+}
+
+/// One group in a Gallery view (#3568).
+///
+/// `key` is the group_by value (e.g. tag name), and `notes` are the
+/// projected rows in that group, suitable for rendering as a card grid.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct GalleryGroup {
+    /// Group key (tag, category, etc.).
+    pub key: String,
+    /// Rows in this gallery group.
+    pub notes: Vec<BaseRow>,
+}
+
 /// Label used for the bucket that collects notes whose `group_by` value is
 /// empty, missing, or unrecognised.
 pub const DEFAULT_KANBAN_UNGROUPED: &str = "未分组";
@@ -481,6 +513,14 @@ pub struct BaseResult {
     /// (`DEFAULT_KANBAN_UNGROUPED`) always last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kanban_groups: Vec<KanbanGroup>,
+    /// Populated only when `view == Calendar`; empty for every other view (#3568).
+    /// Buckets are sorted by date key in ascending order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calendar_groups: Vec<CalendarGroup>,
+    /// Populated only when `view == Gallery`; empty for every other view (#3568).
+    /// Groups follow the config's sort order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gallery_groups: Vec<GalleryGroup>,
     /// Column-level aggregate summaries, computed when `BaseConfig.summaries` is
     /// non-empty (#3666).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -616,6 +656,88 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         Vec::new()
     };
 
+    // Calendar grouping (#3568). Groups notes by a date field into year-month
+    // (or year-month-day) buckets. Only populated when view == Calendar.
+    let calendar_groups = if config.view == BaseView::Calendar {
+        let date_field = config
+            .group_by
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("created_at");
+        let is_date_field = matches!(
+            date_field,
+            "created_at" | "updated_at" | "date" | "due" | "deadline" | "scheduled"
+        );
+        let mut buckets: std::collections::BTreeMap<String, Vec<BaseRow>> =
+            std::collections::BTreeMap::new();
+        for (meta, row) in notes.iter().zip(rows.iter()) {
+            let raw = field_str(meta, date_field).trim().to_string();
+            let key = if raw.is_empty() {
+                "无日期".to_string()
+            } else if is_date_field && raw.len() >= 10 {
+                raw[..10].to_string()
+            } else if raw.len() >= 7 {
+                raw[..7].to_string()
+            } else {
+                raw
+            };
+            buckets.entry(key).or_default().push(row.clone());
+        }
+        buckets
+            .into_iter()
+            .map(|(key, notes)| CalendarGroup { key, notes })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // Gallery grouping (#3568). Groups notes by a field (default: tags).
+    let gallery_groups = if config.view == BaseView::Gallery {
+        let group_field = config
+            .group_by
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("tags");
+        let is_array = matches!(group_field, "tags" | "keywords" | "collections");
+        let paired: Vec<(String, BaseRow)> = notes
+            .iter()
+            .zip(rows.iter())
+            .flat_map(|(meta, row)| {
+                let keys: Vec<String> = if is_array {
+                    let arr: &[String] = match group_field {
+                        "tags" => &meta.tags,
+                        "keywords" => &meta.keywords,
+                        "collections" => &meta.collections,
+                        _ => unreachable!(),
+                    };
+                    if arr.is_empty() {
+                        vec![DEFAULT_KANBAN_UNGROUPED.to_string()]
+                    } else {
+                        arr.iter()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    }
+                } else {
+                    let s = field_str(meta, group_field).trim().to_string();
+                    if s.is_empty() {
+                        vec![DEFAULT_KANBAN_UNGROUPED.to_string()]
+                    } else {
+                        vec![s]
+                    }
+                };
+                if keys.is_empty() {
+                    vec![(DEFAULT_KANBAN_UNGROUPED.to_string(), row.clone())]
+                } else {
+                    keys.into_iter().map(|k| (k, row.clone())).collect()
+                }
+            })
+            .collect();
+        build_gallery_groups(paired)
+    } else {
+        Vec::new()
+    };
+
     // Compute column summaries (#3666)
     let summaries = if config.summaries.is_empty() {
         Vec::new()
@@ -664,6 +786,8 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         matched: notes.len(),
         scanned,
         kanban_groups,
+        calendar_groups,
+        gallery_groups,
         summaries,
         group_summaries,
     })
@@ -1007,6 +1131,61 @@ pub fn build_kanban_groups(
                 ungrouped = Some(KanbanGroup { key: k, notes });
             } else {
                 ordered.push(KanbanGroup { key: k, notes });
+            }
+        }
+    }
+    if let Some(g) = ungrouped {
+        ordered.push(g);
+    }
+
+    ordered
+}
+
+/// Build gallery groups from (key, row) pairs, preserving first-seen order (#3568).
+///
+/// Unlike Kanban groups (which have a user-declared column order), Gallery
+/// groups simply appear in first-seen order, with the ungrouped bucket last.
+pub fn build_gallery_groups(pairs: Vec<(String, BaseRow)>) -> Vec<GalleryGroup> {
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut insertion_order: Vec<String> = Vec::new();
+    let mut buckets: Vec<(String, Vec<BaseRow>)> = Vec::new();
+    let index_of = |key: &str, slots: &mut Vec<(String, Vec<BaseRow>)>| -> usize {
+        for (i, (k, _)) in slots.iter().enumerate() {
+            if k == key {
+                return i;
+            }
+        }
+        slots.push((key.to_string(), Vec::new()));
+        slots.len() - 1
+    };
+
+    for (raw_key, row) in pairs {
+        let key = raw_key.trim();
+        let idx = index_of(key, &mut buckets);
+        buckets[idx].1.push(row);
+        if !insertion_order.iter().any(|s| s == key) {
+            insertion_order.push(key.to_string());
+        }
+    }
+
+    let mut ordered: Vec<GalleryGroup> = Vec::with_capacity(buckets.len());
+    let mut ungrouped: Option<GalleryGroup> = None;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for key in insertion_order {
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key.clone());
+        if let Some(pos) = buckets.iter().position(|(k, _)| *k == key) {
+            let (k, notes) = std::mem::take(&mut buckets[pos]);
+            if k == DEFAULT_KANBAN_UNGROUPED {
+                ungrouped = Some(GalleryGroup { key: k, notes });
+            } else {
+                ordered.push(GalleryGroup { key: k, notes });
             }
         }
     }

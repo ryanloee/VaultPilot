@@ -80,6 +80,7 @@ mod issue_3541_ocr_fts_index;
 mod issue_3547_smart_paste_setting;
 mod issue_3548_at_mention_injection;
 mod issue_3561_source_embed_cache;
+mod issue_3568_calendar_gallery_views;
 mod issue_3570_graph_view;
 mod issue_3605_mirror_import;
 mod issue_3620_title_preserved;

@@ -670,8 +670,36 @@ pub fn parse_callout_line(line: &str) -> (bool, String, String, bool) {
 
 /// Convert Markdown to HTML body content.
 pub fn markdown_to_html_body(markdown: &str) -> String {
+    // ── First pass: extract footnote definitions ────────────────────
+    // GFM-style footnotes: [^id]: some text
+    // Definitions are typically at the end of the document and are
+    // removed from the inline rendering pass.
+    let mut footnotes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let raw_lines: Vec<&str> = markdown.lines().collect();
+    let mut lines: Vec<&str> = Vec::with_capacity(raw_lines.len());
+    for raw in &raw_lines {
+        let trimmed = raw.trim();
+        // Match [^id]: text  (id = alphanumeric + hyphens/underscores)
+        if let Some(rest) = trimmed.strip_prefix("[^") {
+            if let Some((id, tail)) = rest.split_once("]: ") {
+                // Valid footnote definition
+                let id = id.trim().to_string();
+                let text = tail.trim().to_string();
+                footnotes.entry(id).or_insert(text);
+                continue; // skip — don't add to renderable lines
+            }
+            if let Some((id, tail)) = rest.split_once("]:\t") {
+                let id = id.trim().to_string();
+                let text = tail.trim().to_string();
+                footnotes.entry(id).or_insert(text);
+                continue;
+            }
+        }
+        lines.push(raw);
+    }
+
+    // ── Second pass: render body ───────────────────────────────────
     let mut html = String::new();
-    let lines: Vec<&str> = markdown.lines().collect();
     let mut i = 0;
     let mut in_code_block = false;
 
@@ -841,6 +869,30 @@ pub fn markdown_to_html_body(markdown: &str) -> String {
 
     if in_code_block {
         html.push_str("</code></pre>");
+    }
+
+    // ── Render footnote definitions at end of body (#3684) ─────────
+    if !footnotes.is_empty() {
+        html.push_str("\n<hr>\n<section class=\"footnotes\">\n<ol>\n");
+        // Sort by numeric id for stable output (handle both "1" and "note-1")
+        let mut sorted_ids: Vec<&String> = footnotes.keys().collect();
+        sorted_ids.sort_by(|a, b| {
+            // Try numeric, fall back to lexicographic
+            a.parse::<usize>()
+                .ok()
+                .zip(b.parse::<usize>().ok())
+                .map_or_else(|| a.cmp(b), |(x, y)| x.cmp(&y))
+        });
+        for id in sorted_ids {
+            if let Some(text) = footnotes.get(id) {
+                html.push_str(&format!(
+                    "<li id=\"fn-{id}\"><p>{text} <a href=\"#fnref-{id}\" aria-label=\"Back to content\">↩</a></p></li>\n",
+                    id = xml_escape(id),
+                    text = inline_md_footnote(text),
+                ));
+            }
+        }
+        html.push_str("</ol>\n</section>\n");
     }
 
     html
@@ -1152,11 +1204,61 @@ pub fn generate_toc(markdown: &str) -> String {
 }
 
 fn inline_md(text: &str) -> String {
-    // First escape XML special chars
+    // First escape XML special chars (also encodes [^id] -> &#91;^id&#93; — no,
+    // [ and ] are NOT escaped by xml_escape, so [^id] survives unescaped).
     let escaped = xml_escape(text);
 
-    // Apply inline formatting in order: bold, italic, code, wikilinks
-    // Each pass operates on the full string (not borrowing slices)
+    // Apply inline formatting in order: footnote refs, bold, italic, code, wikilinks
+    let after_footnotes = apply_footnote_refs(&escaped);
+    let after_bold = apply_bold(&after_footnotes);
+    let after_italic = apply_italic(&after_bold);
+    let after_code = apply_code(&after_italic);
+    apply_wikilinks(&after_code)
+}
+
+/// Replace `[^id]` with linked `<sup>` references (#3684).
+/// Mirrors GFM footnote syntax: [^1] → <sup id="fnref-1"><a href="#fn-1">[1]</a></sup>
+fn apply_footnote_refs(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find("[^") {
+        let before = &rest[..pos];
+        let after_open = &rest[pos + 2..];
+        if let Some(close) = after_open.find(']') {
+            let id = &after_open[..close];
+            // Only match alphanumeric id (not empty, no nested brackets)
+            if !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            {
+                result.push_str(before);
+                result.push_str(&format!(
+                    "<sup id=\"fnref-{id}\"><a href=\"#fn-{id}\">[{id}]</a></sup>",
+                    id = id
+                ));
+                rest = &after_open[close + 1..];
+            } else {
+                // Not a valid footnote ref — treat as literal
+                result.push_str(before);
+                result.push_str("[^");
+                rest = after_open;
+            }
+        } else {
+            // No closing ] — treat rest as literal (unescaped input)
+            result.push_str(before);
+            result.push_str("[^");
+            rest = after_open;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
+/// Inline Markdown rendering for footnote definition text.  This is the same
+/// as `inline_md` but without footnote reference expansion (to avoid cycles).
+fn inline_md_footnote(text: &str) -> String {
+    let escaped = xml_escape(text);
     let after_bold = apply_bold(&escaped);
     let after_italic = apply_italic(&after_bold);
     let after_code = apply_code(&after_italic);

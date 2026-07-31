@@ -18,6 +18,15 @@ public sealed partial class MainWindow : Window
     private int _agentCurrentStep;
     private int _agentMaxSteps = 20;
     private CancellationTokenSource? _agentCts;
+    /// <summary>
+    /// Monotonically increasing generation counter used to detect stale write
+    /// approval dialogs (#3670). Each StartAgentMode/StopAgentMode transition
+    /// increments this. ShowWriteApprovalDialog captures the generation at
+    /// dialog-open time; when the user responds, it re-reads the field. If the
+    /// generation changed, the approval is silently discarded instead of being
+    /// routed to the wrong agent session.
+    /// </summary>
+    private long _agentGeneration;
 
     private async void OnAgentModeClicked(object sender, RoutedEventArgs e)
     {
@@ -72,6 +81,7 @@ public sealed partial class MainWindow : Window
         _agentModeActive = true;
         _agentCurrentStep = 0;
         _agentMaxSteps = maxSteps;
+        Interlocked.Increment(ref _agentGeneration);
         var old = Interlocked.Exchange(ref _agentCts, null);
         old?.Cancel();
         old?.Dispose();
@@ -89,6 +99,7 @@ public sealed partial class MainWindow : Window
         var old = Interlocked.Exchange(ref _agentCts, null);
         old?.Cancel();
         _agentModeActive = false;
+        Interlocked.Increment(ref _agentGeneration);
 
         AddSystemMessage("系统", $"🛑 Agent 已停止: {reason}");
         UpdateStatusBar("info", "Agent 模式", $"已停止: {reason}");
@@ -137,6 +148,7 @@ public sealed partial class MainWindow : Window
             DispatcherQueue.TryEnqueue(() =>
             {
                 _agentModeActive = false;
+                Interlocked.Increment(ref _agentGeneration);
                 AddSystemMessage("系统", "✅ Agent 完成");
                 UpdateStatusBar("success", "Agent 模式", "任务完成");
             });
@@ -202,6 +214,7 @@ public sealed partial class MainWindow : Window
                 var completedCts = Interlocked.Exchange(ref _agentCts, null);
                 completedCts?.Dispose();
                 _agentModeActive = false;
+                Interlocked.Increment(ref _agentGeneration);
                 UpdateStatusBar("success", "Agent 模式", "任务完成");
                 break;
 
@@ -255,6 +268,10 @@ public sealed partial class MainWindow : Window
 
     private async void ShowWriteApprovalDialog(string tool, string args)
     {
+        // #3670: Capture the agent generation *before* the dialog opens.
+        // If the agent is stopped/restarted while the dialog is open, the
+        // generation changes and we can detect the stale dialog.
+        var dialogGeneration = Interlocked.Read(ref _agentGeneration);
         var (description, preview) = ParseWriteArgs(tool, args);
 
         var contentStack = new StackPanel { Spacing = 8 };
@@ -294,20 +311,25 @@ public sealed partial class MainWindow : Window
         var result = await dialog.ShowAsync();
         var approved = result == ContentDialogResult.Primary;
 
+        // #3670: Verify the agent session hasn't changed while the dialog was open.
+        // If StartAgentMode or StopAgentMode was called during the dialog lifetime,
+        // the generation counter will differ — the response belongs to a stale session
+        // and must not be routed to the current (different) agent.
+        var currentGeneration = Interlocked.Read(ref _agentGeneration);
+        if (currentGeneration != dialogGeneration || !_agentModeActive)
+        {
+            AddSystemMessage("系统", "Agent 会话已变更，审批已取消。");
+            return;
+        }
+
         AddSystemMessage("Agent", approved
             ? $"已批准写入操作: {tool}"
             : $"已拒绝写入操作: {tool}");
 
-        // #2784: Capture the CURRENT agent CTS *live*, after the dialog closes —
-        // do NOT capture it at dialog-open time. If the agent is stopped or
-        // restarted while the dialog is open, StartAgentMode/StopAgentMode rotate
-        // _agentCts (the old one is disposed). Sending the approval with a stale,
-        // disposed CancellationTokenSource throws OperationCanceledException and
-        // the response is silently lost. Re-reading here uses the live token.
-        // #3148: Use Volatile.Read to ensure latest _agentCts value is observed
-        // on all architectures (ARM included). Since StopAgentMode no longer
-        // disposes the CTS (only cancels it), a CTS reference captured here
-        // is safe to use even if StopAgentMode runs concurrently.
+        // #2784 / #3670: After the dialog closes and generation check passes,
+        // re-read the agent CTS live. If the agent is stopped or restarted while
+        // the dialog is open, StartAgentMode/StopAgentMode rotate _agentCts (the
+        // old one is disposed). #3148: Use Volatile.Read for ARM visibility.
         var cts = Volatile.Read(ref _agentCts);
         if (cts is null || !_agentModeActive)
         {

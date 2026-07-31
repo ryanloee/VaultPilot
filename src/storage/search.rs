@@ -1691,9 +1691,14 @@ pub(super) fn document_relevance_score(query: &str, doc: &NoteDocument) -> i64 {
     score += crate::search_rules::SearchRules::global()
         .domain_relevance_bonus(&terms, &collect_document_terms(doc));
 
-    // Recency boost: notes modified recently get a score bump.
-    // The boost decays over a 90-day window: 100 pts for today, 0 pts at 90+ days.
-    score += recency_score(&doc.meta.updated_at);
+    // Recency boost: notes that matched at least one search term get a
+    // recency bump so that more relevant (recent) results rank higher.
+    // The boost is NOT applied to notes with zero content matches —
+    // recency alone should not turn an irrelevant note into a match.
+    // Boost decays over a 90-day window: 100 pts for today, 0 pts at 90+ days.
+    if score > 0 {
+        score += recency_score(&doc.meta.updated_at);
+    }
 
     score
 }

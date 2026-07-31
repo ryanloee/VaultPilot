@@ -2709,19 +2709,40 @@ fn main() {
         return;
     }
 
-    // Fire-and-forget version self-check (#3648).
+    // Version self-check (#3648).
     // Runs concurrently with the command; 24 h cache keeps it instant on repeat.
-    if !cli.no_update_check {
+    //
+    // #3667: We keep the JoinHandle so we can give the spawned task a brief
+    // grace period (≤150 ms) after the command finishes.  Without this,
+    // `exit_ok` / `exit_error` call `process::exit()` which drops the runtime
+    // without running its shutdown sequence — aborting the update-check task
+    // mid-fetch so the cache is never written and every fast command starts a
+    // fresh (aborted) network request.
+    let update_handle: Option<tokio::task::JoinHandle<()>> = if !cli.no_update_check {
         let auto_check = load_settings_with_context(&context)
             .map(|s| s.auto_check_updates)
             .unwrap_or(true);
-        runtime.spawn(update_check::run_update_check(
+        Some(runtime.spawn(update_check::run_update_check(
             config_dir.clone(),
             auto_check,
-        ));
-    }
+        )))
+    } else {
+        None
+    };
 
     let result = runtime.block_on(handle_command(&context, &cli));
+
+    // #3667: Give the update-check task a short grace period so the cache is
+    // persisted.  When the cache is already fresh (common case after the first
+    // successful fetch), the task completes instantly and the timeout is a
+    // no-op.  Only on the first invocation of each 24 h window does this cost
+    // up to 150 ms — a worthwhile trade-off to make the feature actually work.
+    if let Some(handle) = update_handle {
+        let _ = runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_millis(150), handle).await
+        });
+    }
+
     match result {
         Ok(value) => exit_ok(&cli.pretty, value),
         Err(err) => exit_error(

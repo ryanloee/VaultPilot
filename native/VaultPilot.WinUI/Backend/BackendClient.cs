@@ -71,9 +71,29 @@ public sealed class BackendClient : IAsyncDisposable
         }
 
         _executablePath = executablePath;
-        await StartProcessAsync();
-        StartHealthCheck();
-        RegisterPowerModeHandler();
+
+        // #3688: acquire _reconnectLock to serialize with health-check-triggered
+        // reconnections, preventing a TOCTOU race where the first health check
+        // tick fires concurrently with slow startup and spawns a duplicate backend.
+        if (!await _reconnectLock.WaitAsync(TimeSpan.FromSeconds(5)))
+        {
+            Trace.TraceError("StartAsync: unable to acquire reconnect lock within 5s, aborting.");
+            return;
+        }
+
+        try
+        {
+            if (Volatile.Read(ref _isDisposed) != 0) return;
+            if (IsConnected) return;
+
+            await StartProcessAsync();
+            StartHealthCheck();
+            RegisterPowerModeHandler();
+        }
+        finally
+        {
+            _reconnectLock.Release();
+        }
     }
 
     private async Task StartProcessAsync()

@@ -98,6 +98,7 @@ public sealed partial class MainWindow : Window
     {
         var old = Interlocked.Exchange(ref _agentCts, null);
         old?.Cancel();
+        old?.Dispose();
         _agentModeActive = false;
         Interlocked.Increment(ref _agentGeneration);
 

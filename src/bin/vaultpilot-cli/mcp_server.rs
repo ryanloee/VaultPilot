@@ -750,6 +750,7 @@ async fn handle_mcp_request(
                 "email.search" => mcp_call_email_search(context, arguments).await,
                 "email.get" => mcp_call_email_get(context, arguments).await,
                 "calendar.today" => mcp_call_calendar_today(context).await,
+                "tags.list" => mcp_call_tags_list(context).await,
                 "ask" => mcp_call_ask(context, arguments).await,
                 _ => {
                     return Some(McpResponse::error(
@@ -1756,6 +1757,38 @@ fn mcp_tools() -> Vec<Value> {
                 "openWorldHint": false
             }
         }),
+        serde_json::json!({
+            "name": "tags.list",
+            "title": "List All Tags",
+            "description": "Return all unique tags used across notes in the vault, sorted alphabetically. Each tag includes a count of how many notes use it. Use this to discover available tags before searching with notes.search.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "tags": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string" },
+                                "count": { "type": "integer" }
+                            }
+                        }
+                    }
+                }
+            },
+            "annotations": {
+                "title": "List All Tags",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
     ]
 }
 
@@ -2701,6 +2734,62 @@ async fn mcp_call_calendar_today(context: &StorageContext) -> Value {
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
+/// `tags.list` — list all unique tags used across notes in the vault.
+///
+/// Queries all notes (up to the storage-layer cap of 200) and collects
+/// unique tags with usage counts. Tags are sorted alphabetically.
+/// This allows external MCP clients (Claude Desktop, Cursor, etc.) to
+/// discover available tags before filtering with `notes.search`.
+async fn mcp_call_tags_list(context: &StorageContext) -> Value {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || {
+        match search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: String::new(),
+                tags: Vec::new(),
+                keywords: Vec::new(),
+                limit: Some(200),
+                ..Default::default()
+            },
+        ) {
+            Ok(result) => {
+                let mut tag_counts: std::collections::BTreeMap<String, usize> =
+                    std::collections::BTreeMap::new();
+                for note in &result.notes {
+                    for tag in &note.tags {
+                        *tag_counts.entry(tag.clone()).or_insert(0) += 1;
+                    }
+                }
+                let tags: Vec<Value> = tag_counts
+                    .into_iter()
+                    .map(|(name, count)| {
+                        serde_json::json!({
+                            "name": name,
+                            "count": count
+                        })
+                    })
+                    .collect();
+                let count = tags.len();
+                let structured = serde_json::json!({
+                    "tags": tags,
+                    "totalNotes": result.notes.len()
+                });
+                mcp_tool_success(
+                    format!(
+                        "{count} unique tag(s) across {} note(s).",
+                        result.notes.len()
+                    ),
+                    with_token_estimate(structured),
+                )
+            }
+            Err(e) => mcp_tool_error(sanitize_error(&e.to_string())),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
+}
+
 // ─── Token optimization helpers (#2108) ──────────────────────────
 //
 // External Agents consume vault content through this MCP server. Returning
@@ -3096,7 +3185,7 @@ mod tests {
     #[test]
     fn mcp_tools_count() {
         let tools = mcp_tools();
-        assert_eq!(tools.len(), 21);
+        assert_eq!(tools.len(), 22);
     }
 
     #[test]
@@ -3617,7 +3706,7 @@ mod tests {
         assert!(modes.contains(&"summary"));
         assert!(modes.contains(&"meta"));
         // tool count reflects all registered tools.
-        assert_eq!(tools.len(), 21);
+        assert_eq!(tools.len(), 22);
     }
 
     // ── #3095: Agent edit diff preview MCP tools ──────────────────

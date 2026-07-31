@@ -8,6 +8,45 @@
  */
 import type { ResolvedSharePayload } from 'expo-sharing';
 
+/** Sanitize a shared filename — strip path traversal and return a safe base name. (#3643) */
+export function sanitizeShareFileName(name: string | null | undefined): string {
+  if (!name) return '';
+  // Take only the basename — strip all directory components to prevent path traversal.
+  const parts = name.split(/[/\\]/);
+  const baseName = parts[parts.length - 1] ?? '';
+  // Strip leading dots to prevent hidden-file / relative-path abuse.
+  return baseName.replace(/^\.+/, '');
+}
+
+/**
+ * Resolve a unique, safe vault filename for a shared payload.
+ *
+ * Must produce identical results when called from extractShareText (embed) and
+ * copyToVault (file write) for the same (payload, index) pair so that
+ * Obsidian-style `![[name]]` embeds always resolve to the saved file. (#3643)
+ *
+ * @param index - zero-based index of this payload within the full share batch.
+ *                Appended as a suffix to guarantee uniqueness.
+ */
+export function resolveShareFileName(
+  p: ResolvedSharePayload,
+  index: number,
+): string {
+  const sanitized = sanitizeShareFileName(p.originalName);
+  if (sanitized) {
+    // Append index suffix to prevent collision in multi-file shares.
+    // Insert before the extension: "photo.jpg" → "photo-1.jpg"
+    const dotIdx = sanitized.lastIndexOf('.');
+    if (dotIdx > 0) {
+      return `${sanitized.slice(0, dotIdx)}-${index + 1}${sanitized.slice(dotIdx)}`;
+    }
+    return `${sanitized}-${index + 1}`;
+  }
+  // Deterministic fallback — no Date.now() so embed and copy stay consistent.
+  const ext = p.shareType === 'image' ? '.jpg' : '';
+  return `share-${p.shareType}-${index + 1}${ext}`;
+}
+
 /** Extract share URLs from resolved payloads for template {{share_url}} usage. */
 export function extractShareUrls(payloads: ResolvedSharePayload[]): string[] {
   return payloads
@@ -43,12 +82,16 @@ export function suggestShareTitle(payload: ResolvedSharePayload): string {
 /**
  * Extract text content from a share payload based on shareType.
  *
- * @param actualFileName - When provided, overrides originalName for image/file
- *   embed references. This is the real filename written to disk by copyToVault,
- *   ensuring embeds like `![[name]]` resolve correctly (#3639).
+ * Uses deterministic `resolveShareFileName(p, index)` for image/file embeds so
+ * that `![[name]]` always matches the file written by `copyToVault` (#3643).
+ *
+ * @param index - zero-based index within the share batch (for unique filename).
+ * @param actualFileName - If provided, overrides the deterministic name. Used
+ *   by handleSave when copyToVault has already resolved the filenames (#3639).
  */
 export function extractShareText(
   p: ResolvedSharePayload,
+  index = 0,
   actualFileName?: string,
 ): string {
   switch (p.shareType) {
@@ -57,11 +100,11 @@ export function extractShareText(
     case 'url':
       return p.value ?? '';
     case 'image': {
-      const name = actualFileName ?? p.originalName ?? 'shared-image';
+      const name = actualFileName ?? resolveShareFileName(p, index);
       return `![[${name}]]`;
     }
     case 'file': {
-      const name = actualFileName ?? p.originalName ?? 'shared-file';
+      const name = actualFileName ?? resolveShareFileName(p, index);
       return `📎 ${name}`;
     }
     default:

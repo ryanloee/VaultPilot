@@ -123,17 +123,17 @@ describe('extractShareText', () => {
 
   it('formats image with markdown', () => {
     const result = extractShareText(makePayload({ shareType: 'image', originalName: 'photo.jpg' }));
-    expect(result).toBe('![[photo.jpg]]');
+    expect(result).toBe('![[photo-1.jpg]]');
   });
 
   it('falls back for image without name', () => {
     const result = extractShareText(makePayload({ shareType: 'image' }));
-    expect(result).toBe('![[shared-image]]');
+    expect(result).toBe('![[share-image-1.jpg]]');
   });
 
   it('formats file with emoji', () => {
     const result = extractShareText(makePayload({ shareType: 'file', originalName: 'doc.pdf' }));
-    expect(result).toBe('📎 doc.pdf');
+    expect(result).toBe('📎 doc-1.pdf');
   });
 
   it('returns empty for empty text', () => {
@@ -147,50 +147,49 @@ describe('extractShareText', () => {
   });
 });
 
-describe('extractShareText — actualFileName override (#3639)', () => {
+describe('extractShareText — actualFileName override (#3639, #3643)', () => {
   it('uses actualFileName for image embed when provided', () => {
     const p = makePayload({ shareType: 'image', originalName: null });
-    // copyToVault saved the file as "share-1690000000.jpg"
-    const result = extractShareText(p, 'share-1690000000.jpg');
-    expect(result).toBe('![[share-1690000000.jpg]]');
+    const result = extractShareText(p, 0, 'saved-image.jpg');
+    expect(result).toBe('![[saved-image.jpg]]');
   });
 
-  it('uses actualFileName even when originalName exists (actualFileName wins)', () => {
+  it('actualFileName wins over deterministic naming', () => {
     const p = makePayload({ shareType: 'image', originalName: 'original.jpg' });
-    // Dedup may have renamed to original-2.jpg
-    const result = extractShareText(p, 'original-2.jpg');
+    const result = extractShareText(p, 0, 'original-2.jpg');
     expect(result).toBe('![[original-2.jpg]]');
   });
 
   it('uses actualFileName for file reference when provided', () => {
     const p = makePayload({ shareType: 'file', originalName: null });
-    const result = extractShareText(p, 'share-1690000000.bin');
-    expect(result).toBe('📎 share-1690000000.bin');
+    const result = extractShareText(p, 0, 'saved-file.bin');
+    expect(result).toBe('📎 saved-file.bin');
   });
 
-  it('falls back to originalName when actualFileName is undefined', () => {
+  it('falls back to deterministic resolveShareFileName when actualFileName omitted', () => {
     const p = makePayload({ shareType: 'image', originalName: 'photo.jpg' });
-    const result = extractShareText(p, undefined);
-    expect(result).toBe('![[photo.jpg]]');
+    // resolveShareFileName(p, 0) = 'photo-1.jpg'
+    const result = extractShareText(p, 0);
+    expect(result).toBe('![[photo-1.jpg]]');
   });
 
-  it('falls back to default when neither actualFileName nor originalName', () => {
+  it('falls back to deterministic fallback when neither actualFileName nor originalName', () => {
     const p = makePayload({ shareType: 'image', originalName: null });
-    const result = extractShareText(p, undefined);
-    expect(result).toBe('![[shared-image]]');
+    const result = extractShareText(p, 0);
+    expect(result).toBe('![[share-image-1.jpg]]');
   });
 
-  it('file type falls back to shared-file when neither provided', () => {
+  it('file type falls back to deterministic share-file-N', () => {
     const p = makePayload({ shareType: 'file', originalName: null });
-    const result = extractShareText(p, undefined);
-    expect(result).toBe('📎 shared-file');
+    const result = extractShareText(p, 0);
+    expect(result).toBe('📎 share-file-1');
   });
 
-  it('text/url payloads ignore actualFileName', () => {
+  it('text/url payloads ignore both index and actualFileName', () => {
     const textP = makePayload({ shareType: 'text', value: 'hello' });
-    expect(extractShareText(textP, 'ignored.txt')).toBe('hello');
+    expect(extractShareText(textP, 0, 'ignored.txt')).toBe('hello');
 
     const urlP = makePayload({ shareType: 'url', value: 'https://x.com' });
-    expect(extractShareText(urlP, 'ignored.txt')).toBe('https://x.com');
+    expect(extractShareText(urlP, 0, 'ignored.txt')).toBe('https://x.com');
   });
 });

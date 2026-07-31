@@ -19,7 +19,7 @@ import type { ResolvedSharePayload } from 'expo-sharing';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAppStore, getColors } from '../store';
 import { createNote } from '../db';
-import { extractShareText, extractShareUrls, suggestShareTitle } from '../utils/shareHelpers';
+import { extractShareText, extractShareUrls, suggestShareTitle, resolveShareFileName } from '../utils/shareHelpers';
 
 /** Extract a suggested note title */
 
@@ -36,7 +36,7 @@ export default function ShareReceiveScreen({ navigation }: any) {
   const noteContent = useMemo(() => {
     if (!resolvedSharedPayloads || resolvedSharedPayloads.length === 0) return '';
     return resolvedSharedPayloads
-      .map((p) => extractShareText(p))
+      .map((p, i) => extractShareText(p, i))
       .filter(Boolean)
       .join('\n\n---\n\n');
   }, [resolvedSharedPayloads]);
@@ -63,35 +63,16 @@ export default function ShareReceiveScreen({ navigation }: any) {
       }
 
       const copies: { index: number; fileName: string }[] = [];
-      const usedNames = new Set<string>();
 
-      for (let i = 0; i < payloads.length; i++) {
-        const p = payloads[i];
+      for (const [index, p] of payloads.entries()) {
         if ((p.shareType === 'image' || p.shareType === 'file') && p.contentUri) {
-          // Fallback extension must match shareType (#3639 bug 2):
-          // image → .jpg, file → .bin (preserves non-image files like PDF)
-          const ext = p.shareType === 'image' ? 'jpg' : 'bin';
-          const baseName = p.originalName ?? `share-${Date.now()}.${ext}`;
-
-          // Dedup: append -2, -3, etc. when multiple payloads collide on the
-          // same name or same-ms timestamp (#3639 bug 3).
-          let finalName = baseName;
-          let dedupCounter = 2;
-          while (usedNames.has(finalName)) {
-            const dotIdx = baseName.lastIndexOf('.');
-            if (dotIdx > 0) {
-              finalName = `${baseName.slice(0, dotIdx)}-${dedupCounter}${baseName.slice(dotIdx)}`;
-            } else {
-              finalName = `${baseName}-${dedupCounter}`;
-            }
-            dedupCounter++;
-          }
-          usedNames.add(finalName);
-
-          const dest = `${vaultDir}${finalName}`;
+          // Use deterministic naming via resolveShareFileName so that embed
+          // text produced by extractShareText always matches (#3643).
+          const fileName = resolveShareFileName(p, index);
+          const dest = `${vaultDir}${fileName}`;
           try {
             await FileSystem.copyAsync({ from: p.contentUri, to: dest });
-            copies.push({ index: i, fileName: finalName });
+            copies.push({ index, fileName });
           } catch (e) {
             console.warn('[ShareReceive] copy failed for', p.contentUri, e);
           }
@@ -120,7 +101,7 @@ export default function ShareReceiveScreen({ navigation }: any) {
       }
 
       let finalContent = resolvedSharedPayloads
-        .map((p, i) => extractShareText(p, fileNameMap.get(i)))
+        .map((p, i) => extractShareText(p, i, fileNameMap.get(i)))
         .filter(Boolean)
         .join('\n\n---\n\n');
 

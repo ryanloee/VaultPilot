@@ -81,20 +81,30 @@ export function suggestShareTitle(payload: ResolvedSharePayload): string {
 
 /**
  * Extract text content from a share payload based on shareType.
- * @param index - zero-based index within the batch (for unique filename generation). (#3643)
+ *
+ * Uses deterministic `resolveShareFileName(p, index)` for image/file embeds so
+ * that `![[name]]` always matches the file written by `copyToVault` (#3643).
+ *
+ * @param index - zero-based index within the share batch (for unique filename).
+ * @param actualFileName - If provided, overrides the deterministic name. Used
+ *   by handleSave when copyToVault has already resolved the filenames (#3639).
  */
-export function extractShareText(p: ResolvedSharePayload, index = 0): string {
+export function extractShareText(
+  p: ResolvedSharePayload,
+  index = 0,
+  actualFileName?: string,
+): string {
   switch (p.shareType) {
     case 'text':
       return p.value ?? '';
     case 'url':
       return p.value ?? '';
     case 'image': {
-      const name = resolveShareFileName(p, index);
+      const name = actualFileName ?? resolveShareFileName(p, index);
       return `![[${name}]]`;
     }
     case 'file': {
-      const name = resolveShareFileName(p, index);
+      const name = actualFileName ?? resolveShareFileName(p, index);
       return `📎 ${name}`;
     }
     default:

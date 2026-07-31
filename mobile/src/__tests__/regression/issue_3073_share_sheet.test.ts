@@ -146,3 +146,50 @@ describe('extractShareText', () => {
     expect(result).toBe('test.mp4');
   });
 });
+
+describe('extractShareText — actualFileName override (#3639, #3643)', () => {
+  it('uses actualFileName for image embed when provided', () => {
+    const p = makePayload({ shareType: 'image', originalName: null });
+    const result = extractShareText(p, 0, 'saved-image.jpg');
+    expect(result).toBe('![[saved-image.jpg]]');
+  });
+
+  it('actualFileName wins over deterministic naming', () => {
+    const p = makePayload({ shareType: 'image', originalName: 'original.jpg' });
+    const result = extractShareText(p, 0, 'original-2.jpg');
+    expect(result).toBe('![[original-2.jpg]]');
+  });
+
+  it('uses actualFileName for file reference when provided', () => {
+    const p = makePayload({ shareType: 'file', originalName: null });
+    const result = extractShareText(p, 0, 'saved-file.bin');
+    expect(result).toBe('📎 saved-file.bin');
+  });
+
+  it('falls back to deterministic resolveShareFileName when actualFileName omitted', () => {
+    const p = makePayload({ shareType: 'image', originalName: 'photo.jpg' });
+    // resolveShareFileName(p, 0) = 'photo-1.jpg'
+    const result = extractShareText(p, 0);
+    expect(result).toBe('![[photo-1.jpg]]');
+  });
+
+  it('falls back to deterministic fallback when neither actualFileName nor originalName', () => {
+    const p = makePayload({ shareType: 'image', originalName: null });
+    const result = extractShareText(p, 0);
+    expect(result).toBe('![[share-image-1.jpg]]');
+  });
+
+  it('file type falls back to deterministic share-file-N', () => {
+    const p = makePayload({ shareType: 'file', originalName: null });
+    const result = extractShareText(p, 0);
+    expect(result).toBe('📎 share-file-1');
+  });
+
+  it('text/url payloads ignore both index and actualFileName', () => {
+    const textP = makePayload({ shareType: 'text', value: 'hello' });
+    expect(extractShareText(textP, 0, 'ignored.txt')).toBe('hello');
+
+    const urlP = makePayload({ shareType: 'url', value: 'https://x.com' });
+    expect(extractShareText(urlP, 0, 'ignored.txt')).toBe('https://x.com');
+  });
+});

@@ -153,6 +153,7 @@ impl UserScript {
             "rb" => Some("ruby"),
             "pl" => Some("perl"),
             "lua" => Some("lua"),
+            "php" => Some("php"),
             _ => None,
         };
 
@@ -972,22 +973,25 @@ tags:
 
     #[test]
     fn test_known_exts_matches_interpreter_mapping() {
-        // Regression for #3646: every extension in KNOWN_EXTS must have a
+        // Regression for #3646 + #3662: every extension in KNOWN_EXTS must have a
         // corresponding interpreter mapping in resolve_command(), otherwise
         // `script list` shows entries that `script run` cannot execute.
         let (dir, _guard) = make_temp_dir();
         let scripts_dir = dir.join("scripts");
         std::fs::create_dir_all(&scripts_dir).unwrap();
 
+        // Write scripts WITHOUT shebangs — this exercises the extension mapping
+        // path in resolve_command() (not the shebang path). PHP files in the wild
+        // typically start with `<?php`, not a shebang (#3662).
         for (ext, content) in [
-            ("sh", "#!/bin/bash\necho hi\n"),
-            ("py", "#!/usr/bin/env python3\nprint('hi')\n"),
-            ("js", "#!/usr/bin/env node\nconsole.log('hi')\n"),
-            ("ts", "#!/usr/bin/env node\nconsole.log('hi')\n"),
-            ("rb", "#!/usr/bin/env ruby\nputs 'hi'\n"),
-            ("pl", "#!/usr/bin/env perl\nprint 'hi\\n';\n"),
-            ("lua", "#!/usr/bin/env lua\nprint('hi')\n"),
-            ("php", "#!/usr/bin/env php\n<?php echo 'hi';\n"),
+            ("sh", "echo hi\n"),
+            ("py", "print('hi')\n"),
+            ("js", "console.log('hi')\n"),
+            ("ts", "console.log('hi')\n"),
+            ("rb", "puts 'hi'\n"),
+            ("pl", "print 'hi\\n';\n"),
+            ("lua", "print('hi')\n"),
+            ("php", "<?php echo 'hi';\n"),
         ] {
             write_script(&scripts_dir, &format!("script.{ext}"), content, false);
         }
@@ -1002,6 +1006,45 @@ tags:
             exts,
             vec!["js", "lua", "php", "pl", "py", "rb", "sh", "ts"],
             "KNOWN_EXTS must stay in sync with resolve_command() interpreter mapping"
+        );
+
+        // Verify resolve_command() succeeds for every discovered extension.
+        // This catches the #3662 regression where an ext was in KNOWN_EXTS
+        // but had no interpreter mapping (the original test gave false confidence).
+        for script in &scripts {
+            let result = script.resolve_command();
+            assert!(
+                result.is_ok(),
+                "resolve_command() failed for .{} script '{}': {:?}",
+                script.extension,
+                script.name,
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_php_without_shebang_resolves() {
+        // Regression for #3662: PHP files without a shebang (the common case,
+        // since PHP files start with `<?php` not `#!/usr/bin/env php`) must
+        // resolve to the `php` interpreter via extension mapping.
+        let (dir, _guard) = make_temp_dir();
+        let scripts_dir = dir.join("scripts");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+
+        write_script(&scripts_dir, "hello.php", "<?php echo 'hi';\n", false);
+
+        let scripts = discover_scripts(&scripts_dir).expect("should succeed");
+        assert_eq!(scripts.len(), 1, "PHP script should be discovered");
+        assert_eq!(scripts[0].extension, "php");
+
+        let (prog, args) = scripts[0]
+            .resolve_command()
+            .expect("PHP script should resolve to php interpreter");
+        assert_eq!(prog, "php", "PHP script should resolve to php interpreter");
+        assert!(
+            args.iter().any(|a| a.ends_with("hello.php")),
+            "args should contain the script path"
         );
     }
 

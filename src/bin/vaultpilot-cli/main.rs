@@ -738,6 +738,23 @@ enum Commands {
         action: VoiceActions,
     },
 
+    /// Scan and clean orphan attachment files (#3672)
+    ///
+    /// Detects files under the vault's `attachments/` directory that are not
+    /// referenced by any note body (markdown images/links or `![[...]]`
+    /// wikilink embeds) or by the attachments index. `clean` is dry-run by
+    /// default — pass `--delete` to actually remove orphan files.
+    ///
+    /// Examples:
+    ///   vp attachments scan                       — list orphan files
+    ///   vp attachments scan --json                — machine-readable output
+    ///   vp attachments clean                      — dry run (nothing deleted)
+    ///   vp attachments clean --delete             — delete orphan files
+    Attachments {
+        #[command(subcommand)]
+        action: AttachmentsActions,
+    },
+
     /// Show vault health dashboard — note counts, orphan analysis, density score, suggestions (#2014)
     ///
     /// Examples:
@@ -1141,6 +1158,42 @@ enum VoiceActions {
         /// (default: "Voice Capture" when --target is used)
         #[arg(long)]
         section: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttachmentsActions {
+    /// Scan the vault's attachments/ directory for orphan files (#3672)
+    ///
+    /// Lists files that are not referenced by any note body (markdown
+    /// images/links or `![[...]]` wikilink embeds) or the attachments index.
+    ///
+    /// Examples:
+    ///   vp attachments scan          — human-readable list
+    ///   vp attachments scan --json   — machine-readable output
+    Scan {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Clean orphan attachment files (dry-run unless --delete) (#3672)
+    ///
+    /// By default this is a dry run: orphan files are listed with their sizes
+    /// and nothing is deleted. Pass `--delete` to actually remove the files
+    /// (empty directories left behind are pruned automatically).
+    ///
+    /// Examples:
+    ///   vp attachments clean          — dry run (nothing deleted)
+    ///   vp attachments clean --delete — delete orphan files
+    Clean {
+        /// Actually delete orphan files (default is a dry run)
+        #[arg(long)]
+        delete: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -3225,6 +3278,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Voice { action } => handle_voice(context, action).await,
         Commands::Health { json, weekly } => {
             tokio::task::block_in_place(|| handle_health(context, *json, *weekly))
+        }
+        Commands::Attachments { action } => {
+            tokio::task::block_in_place(|| handle_attachments(context, action))
         }
         Commands::TagMerge { from, to, dry_run } => {
             tokio::task::block_in_place(|| handle_tag_merge(context, from, to, *dry_run))
@@ -9169,6 +9225,69 @@ fn pad_str(s: &str, width: usize) -> String {
 }
 
 // ─── Health handler (#2014) ─────────────────────────────────────
+
+/// Handle `vp attachments` subcommands — scan/clean orphan attachment files (#3672).
+fn handle_attachments(context: &StorageContext, action: &AttachmentsActions) -> Result<Value> {
+    use vaultpilot_lib::attachments::{clean_orphan_attachments, scan_orphan_attachments};
+
+    match action {
+        AttachmentsActions::Scan { json } => {
+            let orphans = scan_orphan_attachments(context)?;
+            if *json {
+                return to_json(&orphans);
+            }
+            if orphans.is_empty() {
+                eprintln!(
+                    "🧹 No orphan attachments found — every file in attachments/ is referenced."
+                );
+                return Ok(Value::Null);
+            }
+            let total_bytes: u64 = orphans.iter().map(|o| o.size_bytes).sum();
+            eprintln!(
+                "🧹 Found {} orphan attachment(s) ({} bytes):",
+                orphans.len(),
+                total_bytes
+            );
+            for orphan in &orphans {
+                eprintln!("  • {}  ({} bytes)", orphan.path, orphan.size_bytes);
+            }
+            eprintln!();
+            eprintln!("Run `vp attachments clean` to preview deletion, or `vp attachments clean --delete` to remove them.");
+            Ok(Value::Null)
+        }
+        AttachmentsActions::Clean { delete, json } => {
+            let report = clean_orphan_attachments(context, *delete)?;
+            if *json {
+                return to_json(&report);
+            }
+            if report.dry_run {
+                eprintln!(
+                    "🧹 Dry run: {} orphan attachment(s) would be deleted ({} bytes).",
+                    report.total_orphans, report.freed_bytes
+                );
+                for orphan in &report.orphans {
+                    eprintln!("  • {}  ({} bytes)", orphan.path, orphan.size_bytes);
+                }
+                if report.total_orphans > 0 {
+                    eprintln!();
+                    eprintln!("Re-run with `--delete` to actually remove these files.");
+                }
+            } else {
+                eprintln!(
+                    "🗑️ Deleted {} orphan attachment(s), freed {} bytes.",
+                    report.deleted, report.freed_bytes
+                );
+                if report.total_orphans > report.deleted {
+                    eprintln!(
+                        "⚠️ {} file(s) could not be deleted (see logs).",
+                        report.total_orphans - report.deleted
+                    );
+                }
+            }
+            Ok(Value::Null)
+        }
+    }
+}
 
 /// Handle `vp health` command — show vault health dashboard.
 fn handle_health(context: &StorageContext, json: bool, weekly: bool) -> Result<Value> {

@@ -2,6 +2,7 @@ mod feed_poller;
 mod http_bridge;
 mod markdown_utils;
 mod mcp_server;
+mod update_check;
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -74,6 +75,10 @@ struct Cli {
     /// Pretty-print JSON output
     #[arg(long, global = true)]
     pretty: bool,
+
+    /// Skip the startup version self-check (#3648)
+    #[arg(long, global = true)]
+    no_update_check: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -2702,6 +2707,18 @@ fn main() {
             process::exit(1);
         }
         return;
+    }
+
+    // Fire-and-forget version self-check (#3648).
+    // Runs concurrently with the command; 24 h cache keeps it instant on repeat.
+    if !cli.no_update_check {
+        let auto_check = load_settings_with_context(&context)
+            .map(|s| s.auto_check_updates)
+            .unwrap_or(true);
+        runtime.spawn(update_check::run_update_check(
+            config_dir.clone(),
+            auto_check,
+        ));
     }
 
     let result = runtime.block_on(handle_command(&context, &cli));

@@ -178,7 +178,7 @@ fn collect_attachment_files(root: &Path) -> Result<Vec<PathBuf>> {
             if file_type.is_dir() {
                 stack.push(path);
             } else if file_type.is_file() {
-                files.push(path);
+                files.push(normalize_abs(&path));
             }
         }
     }

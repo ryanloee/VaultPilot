@@ -95,7 +95,7 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
   const ACTIVE_LINES: string[] = [];
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
-    const defMatch = trimmed.match(/^\[\^([^\]]+)\]:\s+(.*)$/);
+    const defMatch = trimmed.match(/^\[\^([^\]]+)\]:[\t ](.*)$/);
     if (defMatch) {
       const id = defMatch[1].trim();
       if (!footnoteDefs.has(id)) {
@@ -384,6 +384,22 @@ function renderInline(
       continue;
     }
 
+    // Footnote reference [^id] (#3684) — must be after [link](url) to avoid
+    // confusing `[^id]` with the link capture group `([^\]]+)`.
+    // Also must be BEFORE bold/italic to catch refs inside formatted text (#3690).
+    const fnMatch = remaining.match(/^(.*?)\[\^([^\]]+)\](.*)$/);
+    if (fnMatch) {
+      if (fnMatch[1]) parts.push(...renderWithNoteRefs(fnMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      // Render as superscript reference (e.g. [1], [note])
+      parts.push(
+        <Text key={`fn${key++}`} style={{ fontSize: 12, color: accentColor, fontWeight: '600', lineHeight: 20 }}>
+          [{fnMatch[2]}]
+        </Text>
+      );
+      remaining = fnMatch[3];
+      continue;
+    }
+
     // Bold **text**
     const boldMatch = remaining.match(/^(.*?)\*\*([^*]+)\*\*(.*)$/);
     if (boldMatch) {
@@ -408,21 +424,6 @@ function renderInline(
       if (linkMatch[1]) parts.push(...renderWithNoteRefs(linkMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
       parts.push(<Text key={`l${key++}`} style={{ color: accentColor, textDecorationLine: 'underline' }}>{linkMatch[2]}</Text>);
       remaining = linkMatch[4];
-      continue;
-    }
-
-    // Footnote reference [^id] (#3684) — must be after [link](url) to avoid
-    // confusing `[^id]` with the link capture group `([^\]]+)`
-    const fnMatch = remaining.match(/^(.*?)\[\^([^\]]+)\](.*)$/);
-    if (fnMatch) {
-      if (fnMatch[1]) parts.push(...renderWithNoteRefs(fnMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
-      // Render as superscript reference (e.g. [1], [note])
-      parts.push(
-        <Text key={`fn${key++}`} style={{ fontSize: 12, color: accentColor, fontWeight: '600', lineHeight: 20 }}>
-          [{fnMatch[2]}]
-        </Text>
-      );
-      remaining = fnMatch[3];
       continue;
     }
 

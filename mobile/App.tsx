@@ -13,6 +13,7 @@ import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import { autoSyncOnStartup } from './src/services/sync';
 import { applyBackgroundSyncFromConfig } from './src/services/backgroundSync';
+import { initLocale } from './src/i18n';
 
 import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
@@ -169,6 +170,9 @@ export default function App() {
     loadedRef.current = true;
     setInitState('ready');
     await SplashScreen.hideAsync();
+
+    // #3692 — Initialize i18n locale before any UI renders
+    initLocale().catch((e) => console.warn('[App] initLocale:', e));
 
     // #3158 — Background sync: kick off (a) a one-shot foreground auto-sync
     // now that the DB/settings are ready, and (b) re-apply the persisted

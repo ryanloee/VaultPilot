@@ -15,7 +15,7 @@
     "search": "搜索笔记…",
     "delete": "删除",
     "deleteConfirm": "确定删除此笔记？",
-    "deleteTitle": "删除后无法恢复"
+    "deleteConfirmDesc": "删除后无法恢复"
   },
   "editor": {
     "title": "编辑",

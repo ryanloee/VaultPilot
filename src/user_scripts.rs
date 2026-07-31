@@ -106,7 +106,7 @@ pub struct UserScript {
     pub path: PathBuf,
     /// File extension (e.g., "sh", "py", "js"), or empty if none.
     pub extension: String,
-    /// Parsed metadata (from companion TOML or inline comments).
+    /// Parsed metadata (from companion YAML manifest or inline comments).
     pub meta: ScriptMeta,
     /// Whether the script file is executable.
     pub is_executable: bool,

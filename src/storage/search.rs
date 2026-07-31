@@ -1047,6 +1047,48 @@ fn query_recent_note_ids(connection: &Connection, limit: usize) -> Result<Vec<St
     Ok(rows)
 }
 
+/// Query backlink (incoming link) counts for a set of note IDs (#3677).
+///
+/// Uses the `weak_links` table to approximate bidirectional link density.
+/// Notes with more incoming links are considered more "central" / important
+/// and get a relevance boost in search ranking.
+///
+/// Returns a map of note_id → backlink count.
+fn query_backlink_counts(
+    connection: &Connection,
+    note_ids: &[String],
+) -> Result<HashMap<String, i64>> {
+    if note_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut counts = HashMap::new();
+    // Process in chunks to avoid SQLITE_MAX_VARIABLE_NUMBER overflow
+    for chunk in note_ids.chunks(500) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT target_note_id, COUNT(*) as cnt
+             FROM weak_links
+             WHERE target_note_id IN ({})
+             GROUP BY target_note_id",
+            placeholders.join(", ")
+        );
+        let params: Vec<&dyn rusqlite::ToSql> =
+            chunk.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let mut stmt = connection.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (id, cnt) = row?;
+            counts.insert(id, cnt);
+        }
+    }
+    Ok(counts)
+}
+
 fn row_to_attachment_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentEntry> {
     let semantic_vector: String = row.get(5)?;
     let perceptual_hash: String = row.get(6)?;
@@ -1362,6 +1404,9 @@ pub(super) fn rank_documents(
         limit,
     );
     let attachment_entries = load_attachment_entries_by_note_ids(connection, &candidate_ids)?;
+    // #3677: Query backlink counts to boost notes with higher link density
+    // (more "central" notes in the knowledge graph are likely more relevant).
+    let backlink_counts = query_backlink_counts(connection, &candidate_ids)?;
     let mut ranked = Vec::new();
 
     for note_id in candidate_ids {
@@ -1396,6 +1441,12 @@ pub(super) fn rank_documents(
         }
         if let Some(visual_score) = visual_scores.get(&note_id) {
             score += *visual_score;
+        }
+        // #3677: Backlink density boost — notes with more incoming links
+        // are considered more important/central in the vault. Each backlink
+        // adds 5 pts, capped at 50 (10+ backlinks = max boost).
+        if let Some(&count) = backlink_counts.get(&note_id) {
+            score += (count * 5).min(50);
         }
 
         if score > 0 {
@@ -1640,7 +1691,42 @@ pub(super) fn document_relevance_score(query: &str, doc: &NoteDocument) -> i64 {
     score += crate::search_rules::SearchRules::global()
         .domain_relevance_bonus(&terms, &collect_document_terms(doc));
 
+    // Recency boost: notes that matched at least one search term get a
+    // recency bump so that more relevant (recent) results rank higher.
+    // The boost is NOT applied to notes with zero content matches —
+    // recency alone should not turn an irrelevant note into a match.
+    // Boost decays over a 90-day window: 100 pts for today, 0 pts at 90+ days.
+    if score > 0 {
+        score += recency_score(&doc.meta.updated_at);
+    }
+
     score
+}
+
+/// Compute a recency boost based on how recently the note was modified.
+///
+/// Boost is 100 for today, decaying to 0 after 90 days.
+/// Returns 0 for notes with unparseable timestamps.
+fn recency_score(updated_at: &str) -> i64 {
+    let now = Utc::now();
+    let updated = match DateTime::parse_from_rfc3339(updated_at) {
+        Ok(dt) => dt.with_timezone(&Utc),
+        Err(_) => return 0,
+    };
+
+    let age_seconds = (now - updated).num_seconds();
+    if age_seconds < 0 {
+        // Future-dated note — treat as very recent
+        return 100;
+    }
+
+    let age_days = (age_seconds as f64) / 86400.0;
+    if age_days >= 90.0 {
+        return 0;
+    }
+
+    // Linear decay: 100 at day 0, 0 at day 90
+    (100.0 * (1.0 - age_days / 90.0)).round() as i64
 }
 
 pub(super) fn normalize_search_text(text: &str) -> String {
@@ -3473,6 +3559,228 @@ mod tests {
         assert_eq!(
             result_title.notes[0].id, "note-1",
             "alphabetically first title 'Alpha beta' must be returned when --sort title"
+        );
+    }
+
+    /// #3677: Recency boost — notes modified recently should score higher
+    /// than notes with the same content but older timestamps.
+    #[test]
+    fn recency_score_recent_note_gets_boost_3677() {
+        let now = Utc::now();
+        let recent_ts = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let old_ts = (now - chrono::Duration::days(100))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        let recent_score = recency_score(&recent_ts);
+        let old_score = recency_score(&old_ts);
+
+        assert!(
+            recent_score > old_score,
+            "recent note ({recent_score}) should score higher than old note ({old_score})"
+        );
+        assert_eq!(
+            old_score, 0,
+            "note older than 90 days should get zero recency boost"
+        );
+        assert!(
+            recent_score > 0,
+            "note modified today should get positive recency boost"
+        );
+    }
+
+    /// #3677: Recency score returns 0 for unparseable timestamps.
+    #[test]
+    fn recency_score_invalid_timestamp_returns_zero_3677() {
+        assert_eq!(recency_score(""), 0);
+        assert_eq!(recency_score("not-a-date"), 0);
+        assert_eq!(recency_score("2026-13-45T99:99:99Z"), 0);
+    }
+
+    /// #3677: Recency score decays linearly over 90 days.
+    #[test]
+    fn recency_score_linear_decay_3677() {
+        let now = Utc::now();
+
+        // Day 0 — max boost (~100)
+        let today = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let score_0 = recency_score(&today);
+
+        // Day 45 — roughly half
+        let mid = (now - chrono::Duration::days(45))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let score_45 = recency_score(&mid);
+
+        // Day 89 — nearly zero
+        let almost_old = (now - chrono::Duration::days(89))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let score_89 = recency_score(&almost_old);
+
+        assert!(
+            score_0 > score_45,
+            "day 0 ({score_0}) should beat day 45 ({score_45})"
+        );
+        assert!(
+            score_45 > score_89,
+            "day 45 ({score_45}) should beat day 89 ({score_89})"
+        );
+        assert!(
+            score_89 < 10,
+            "day 89 should have very low boost ({score_89})"
+        );
+    }
+
+    /// #3677: Document relevance score includes recency boost.
+    /// Two notes with identical content but different timestamps should
+    /// produce different scores (the newer one higher).
+    #[test]
+    fn document_relevance_score_includes_recency_3677() {
+        let now = Utc::now();
+        let recent_ts = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let old_ts = (now - chrono::Duration::days(365))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        let recent_doc = NoteDocument {
+            meta: NoteMeta {
+                title: "test note".into(),
+                updated_at: recent_ts,
+                ..Default::default()
+            },
+            body: "matching content".into(),
+            search_snippet: None,
+            search_score: None,
+        };
+        let old_doc = NoteDocument {
+            meta: NoteMeta {
+                title: "test note".into(),
+                updated_at: old_ts,
+                ..Default::default()
+            },
+            body: "matching content".into(),
+            search_snippet: None,
+            search_score: None,
+        };
+
+        let recent_score = document_relevance_score("matching", &recent_doc);
+        let old_score = document_relevance_score("matching", &old_doc);
+        assert!(
+            recent_score > old_score,
+            "recent note ({recent_score}) should score higher than old note ({old_score}) with identical content"
+        );
+    }
+
+    /// #3677: Backlink density boost — notes with more incoming weak_links
+    /// should rank higher in search results.
+    #[test]
+    fn backlink_density_boosts_ranking_3677() {
+        use crate::models::SearchSortBy;
+        let (_temp, ctx) = setup_temp_context();
+        let (conn, _) = open_connection(&ctx).expect("open connection");
+
+        // Two notes with identical title/body content but different backlink density.
+        for id in ["hub-note", "leaf-note"] {
+            conn.execute(
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel, status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+                 VALUES (?1, 'project plan', '[]', '', '', '', '', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '', ?2, '', '', '')",
+                params![id, format!("/p/{id}.md")],
+            )
+            .expect("insert note");
+            conn.execute(
+                "INSERT INTO note_fts (note_id, title, keywords, body)
+                 VALUES (?1, 'project plan', '', 'project plan content')",
+                params![id],
+            )
+            .expect("insert fts");
+        }
+
+        // Add 5 backlinks to hub-note, 0 to leaf-note
+        for i in 0..5 {
+            conn.execute(
+                "INSERT INTO weak_links (id, source_note_id, target_note_id, link_type, score, status, created_at, updated_at)
+                 VALUES (?1, ?2, 'hub-note', 'content_similarity', 0.5, 'confirmed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                params![format!("wl-{i}"), format!("source-{i}")],
+            )
+            .expect("insert weak_link");
+        }
+
+        let query = SearchQuery {
+            text: "project plan".into(),
+            tags: vec![],
+            keywords: vec![],
+            limit: Some(10),
+            offset: None,
+            created_after: None,
+            created_before: None,
+            modified_after: None,
+            modified_before: None,
+            deep_search: false,
+            sort_by: SearchSortBy::Relevance,
+        };
+        let result = search_notes_with_context(&ctx, query).expect("search");
+
+        // Both notes should be found
+        assert!(
+            result.notes.len() >= 2,
+            "should find both notes, got {}",
+            result.notes.len()
+        );
+
+        // The hub-note (with backlinks) should rank first
+        assert_eq!(
+            result.notes[0].id, "hub-note",
+            "hub-note with 5 backlinks should rank above leaf-note with 0 backlinks"
+        );
+    }
+
+    /// #3677: query_backlink_counts returns correct counts.
+    #[test]
+    fn query_backlink_counts_returns_correct_values_3677() {
+        let (_temp, ctx) = setup_temp_context();
+        let (conn, _) = open_connection(&ctx).expect("open connection");
+
+        // Insert some weak_links
+        conn.execute(
+            "INSERT INTO weak_links (id, source_note_id, target_note_id, link_type, score, status, created_at, updated_at)
+             VALUES ('wl-1', 'src-1', 'target-a', 'content_similarity', 0.5, 'confirmed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("insert wl-1");
+        conn.execute(
+            "INSERT INTO weak_links (id, source_note_id, target_note_id, link_type, score, status, created_at, updated_at)
+             VALUES ('wl-2', 'src-2', 'target-a', 'content_similarity', 0.5, 'confirmed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("insert wl-2");
+        conn.execute(
+            "INSERT INTO weak_links (id, source_note_id, target_note_id, link_type, score, status, created_at, updated_at)
+             VALUES ('wl-3', 'src-3', 'target-b', 'content_similarity', 0.3, 'confirmed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("insert wl-3");
+
+        let ids = vec![
+            "target-a".to_string(),
+            "target-b".to_string(),
+            "target-c".to_string(),
+        ];
+        let counts = query_backlink_counts(&conn, &ids).expect("query backlink counts");
+
+        assert_eq!(
+            counts.get("target-a"),
+            Some(&2),
+            "target-a should have 2 backlinks"
+        );
+        assert_eq!(
+            counts.get("target-b"),
+            Some(&1),
+            "target-b should have 1 backlink"
+        );
+        assert!(
+            !counts.contains_key("target-c"),
+            "target-c should not be in the map (no backlinks)"
         );
     }
 }

@@ -153,6 +153,11 @@ pub enum BaseView {
     /// Use `BaseConfig.group_by` (default: `status`) to choose the column
     /// field, and `BaseConfig.kanban_columns` to declare column order.
     Kanban,
+    /// Card grid with cover images, titles, summaries, and property tags.
+    /// Mirrors the Obsidian Bases \"Gallery\" view (#3568).  Unlike Cards,
+    /// Gallery prioritizes cover images (from `cover`/`banner`/`image`/
+    /// `thumbnail` frontmatter) and renders notes in a visual grid layout.
+    Gallery,
 }
 
 /// Column descriptor for table view.

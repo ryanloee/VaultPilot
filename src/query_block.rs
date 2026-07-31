@@ -388,6 +388,7 @@ fn parse_shorthand(yaml: &str) -> Result<BaseConfig> {
                     "list" => BaseView::List,
                     "cards" => BaseView::Cards,
                     "kanban" => BaseView::Kanban,
+                    "gallery" => BaseView::Gallery,
                     _ => BaseView::Table,
                 };
             }

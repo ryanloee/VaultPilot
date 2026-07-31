@@ -7191,6 +7191,7 @@ fn handle_bases(context: &StorageContext, action: &BasesActions) -> Result<Value
                         BaseView::Cards => "cards",
                         BaseView::List => "list",
                         BaseView::Kanban => "kanban",
+                        BaseView::Gallery => "gallery",
                     },
                     "columns": result.columns.iter().map(|c| serde_json::json!({
                         "field": c.field,

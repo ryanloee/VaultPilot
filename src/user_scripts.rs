@@ -951,6 +951,61 @@ tags:
     }
 
     #[test]
+    fn test_discover_scripts_skips_go_and_rs_without_interpreter() {
+        // Regression for #3646: `.go` and `.rs` have no interpreter mapping in
+        // resolve_command(), so they must NOT be listed as runnable scripts.
+        // Only extensions with a known interpreter (or shebang) are included.
+        let (dir, _guard) = make_temp_dir();
+        let scripts_dir = dir.join("scripts");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        // .go and .rs are NOT in KNOWN_EXTS → skipped even when executable
+        write_script(&scripts_dir, "tool.go", "package main\n", true);
+        write_script(&scripts_dir, "tool.rs", "fn main() {}\n", true);
+        // Known-interpreter script still discovered
+        write_script(&scripts_dir, "real.sh", "#!/bin/bash\necho hi\n", true);
+
+        let scripts = discover_scripts(&scripts_dir).expect("should succeed");
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].name, "real");
+        assert_eq!(scripts[0].extension, "sh");
+    }
+
+    #[test]
+    fn test_known_exts_matches_interpreter_mapping() {
+        // Regression for #3646: every extension in KNOWN_EXTS must have a
+        // corresponding interpreter mapping in resolve_command(), otherwise
+        // `script list` shows entries that `script run` cannot execute.
+        let (dir, _guard) = make_temp_dir();
+        let scripts_dir = dir.join("scripts");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+
+        for (ext, content) in [
+            ("sh", "#!/bin/bash\necho hi\n"),
+            ("py", "#!/usr/bin/env python3\nprint('hi')\n"),
+            ("js", "#!/usr/bin/env node\nconsole.log('hi')\n"),
+            ("ts", "#!/usr/bin/env node\nconsole.log('hi')\n"),
+            ("rb", "#!/usr/bin/env ruby\nputs 'hi'\n"),
+            ("pl", "#!/usr/bin/env perl\nprint 'hi\\n';\n"),
+            ("lua", "#!/usr/bin/env lua\nprint('hi')\n"),
+            ("php", "#!/usr/bin/env php\n<?php echo 'hi';\n"),
+        ] {
+            write_script(&scripts_dir, &format!("script.{ext}"), content, false);
+        }
+        // .go / .rs have no interpreter mapping → must not be discovered
+        write_script(&scripts_dir, "compiled.go", "package main\n", true);
+        write_script(&scripts_dir, "compiled.rs", "fn main() {}\n", true);
+
+        let scripts = discover_scripts(&scripts_dir).expect("should succeed");
+        let mut exts: Vec<&str> = scripts.iter().map(|s| s.extension.as_str()).collect();
+        exts.sort_unstable();
+        assert_eq!(
+            exts,
+            vec!["js", "lua", "php", "pl", "py", "rb", "sh", "ts"],
+            "KNOWN_EXTS must stay in sync with resolve_command() interpreter mapping"
+        );
+    }
+
+    #[test]
     fn test_find_script_exact() {
         let (dir, _guard) = make_temp_dir();
         let scripts_dir = dir.join("scripts");

@@ -34,6 +34,7 @@ pub mod plugin;
 pub mod prompt_store;
 pub mod prompting;
 pub mod property_schema;
+pub mod query_block;
 pub mod quick_switcher;
 pub mod reader;
 pub mod recovery;

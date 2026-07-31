@@ -765,10 +765,12 @@ pub fn run_base(context: &StorageContext, config: &BaseConfig) -> Result<BaseRes
         group_keys.sort();
         group_keys.dedup();
 
+        let note_refs: Vec<&NoteMeta> = notes.iter().collect();
         group_keys
             .iter()
             .map(|key| {
-                let summaries = compute_summaries(config, &rows, &columns, &schema, Some(key), &[]);
+                let summaries =
+                    compute_summaries(config, &rows, &columns, &schema, Some(key), &note_refs);
                 GroupSummary {
                     key: key.clone(),
                     summaries,

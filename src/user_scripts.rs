@@ -52,7 +52,7 @@ const MAX_TIMEOUT: u64 = 3600;
 
 // ── Script metadata ───────────────────────────────────────────────────────
 
-/// Metadata for a user script, parsed from a TOML manifest or inline comments.
+/// Metadata for a user script, parsed from a YAML manifest or inline comments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptMeta {
@@ -314,7 +314,7 @@ fn parse_shebang(shebang: &str) -> (String, Vec<String>) {
 
 /// Discover all user scripts in the given scripts directory.
 ///
-/// Scans for executable files and companion `.toml` manifests. Non-executable
+/// Scans for executable files and companion `.yaml` manifests. Non-executable
 /// files without a recognized extension are skipped.
 pub fn discover_scripts(scripts_dir: &Path) -> Result<Vec<UserScript>> {
     let mut scripts = Vec::new();
@@ -413,7 +413,7 @@ pub fn discover_scripts(scripts_dir: &Path) -> Result<Vec<UserScript>> {
 /// Check if a file is a plausible script (by extension or executability).
 fn is_script_file(path: &Path, ext: &str) -> bool {
     // Known script extensions
-    const KNOWN_EXTS: &[&str] = &["sh", "py", "js", "ts", "rb", "pl", "lua", "php", "go", "rs"];
+    const KNOWN_EXTS: &[&str] = &["sh", "py", "js", "ts", "rb", "pl", "lua", "php"];
 
     if KNOWN_EXTS.contains(&ext) {
         return true;
@@ -866,6 +866,7 @@ tags:
         assert_eq!(scripts[0].name, "backup");
         assert_eq!(scripts[0].extension, "sh");
         assert_eq!(scripts[0].meta.description, "Backup script");
+        #[cfg(unix)]
         assert!(scripts[0].is_executable);
     }
 

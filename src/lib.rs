@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_engine;
 pub mod ai;
+pub mod attachments;
 pub mod bases;
 pub mod bases_formula;
 pub mod block_ref;

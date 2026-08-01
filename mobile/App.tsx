@@ -13,7 +13,7 @@ import { getSettings } from './src/api/client';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import { autoSyncOnStartup } from './src/services/sync';
 import { applyBackgroundSyncFromConfig } from './src/services/backgroundSync';
-import { initLocale } from './src/i18n';
+import { initLocale, t } from './src/i18n';
 
 import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
@@ -100,19 +100,19 @@ function MainTabs() {
       }}
     >
       <Tab.Screen name="Chat" component={ChatStack} options={{
-        tabBarLabel: '对话',
+        tabBarLabel: t('nav.chat'),
         tabBarIcon: ({ color }) => <TabIcon name="chatbubble-outline" color={color} />,
       }} />
       <Tab.Screen name="Notes" component={NotesStack} options={{
-        tabBarLabel: '笔记',
+        tabBarLabel: t('nav.notes'),
         tabBarIcon: ({ color }) => <TabIcon name="document-text-outline" color={color} />,
       }} />
       <Tab.Screen name="Search" component={SearchScreen} options={{
-        tabBarLabel: '搜索',
+        tabBarLabel: t('nav.search'),
         tabBarIcon: ({ color }) => <TabIcon name="search-outline" color={color} />,
       }} />
       <Tab.Screen name="Settings" component={SettingsScreen} options={{
-        tabBarLabel: '设置',
+        tabBarLabel: t('nav.settings'),
         tabBarIcon: ({ color }) => <TabIcon name="settings-outline" color={color} />,
       }} />
     </Tab.Navigator>
@@ -168,11 +168,12 @@ export default function App() {
       console.warn('[App] Failed to load settings:', e);
     }
     loadedRef.current = true;
+    // #3692/#3696 — Initialize i18n locale BEFORE marking ready so the first
+    // UI render uses the correct locale. initLocale() never throws (internal
+    // try/catch), so awaiting it cannot fail the app boot.
+    await initLocale();
     setInitState('ready');
     await SplashScreen.hideAsync();
-
-    // #3692 — Initialize i18n locale before any UI renders
-    initLocale().catch((e) => console.warn('[App] initLocale:', e));
 
     // #3158 — Background sync: kick off (a) a one-shot foreground auto-sync
     // now that the DB/settings are ready, and (b) re-apply the persisted

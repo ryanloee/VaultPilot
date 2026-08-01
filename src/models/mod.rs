@@ -96,6 +96,22 @@ impl AttachmentCleanupMode {
             Self::Never => "never",
         }
     }
+
+    /// Resolve this mode into the `Option<bool>` consumed by
+    /// [`delete_note_with_context`](crate::storage::delete_note_with_context).
+    ///
+    /// `Always` → delete exclusive attachments (`Some(true)`).
+    /// `Never`  → keep all attachments (`Some(false)`).
+    /// `Ask`    → safe default: keep (`Some(false)`), because the async
+    ///            delete paths (HTTP bridge, MCP, agent) cannot render an
+    ///            interactive prompt. The platform UI is expected to
+    ///            resolve `Ask` before calling the backend. (#3732)
+    pub fn resolve_delete_attachments(self) -> Option<bool> {
+        match self {
+            Self::Always => Some(true),
+            Self::Ask | Self::Never => Some(false),
+        }
+    }
 }
 
 impl std::str::FromStr for AttachmentCleanupMode {
@@ -1021,6 +1037,27 @@ mod tests {
         assert_eq!(parsed.meta.id, "n1");
         assert_eq!(parsed.meta.tags, vec!["tag1"]);
         assert_eq!(parsed.body, "Some content");
+    }
+
+    #[test]
+    fn attachment_cleanup_mode_resolve_delete_attachments() {
+        // #3732: All three modes must resolve to a non-None Option<bool> so
+        // that the async delete paths (HTTP bridge, MCP, agent) never fall
+        // through to the old `None` default that silently purges attachments.
+        assert_eq!(
+            AttachmentCleanupMode::Always.resolve_delete_attachments(),
+            Some(true)
+        );
+        assert_eq!(
+            AttachmentCleanupMode::Never.resolve_delete_attachments(),
+            Some(false)
+        );
+        // Ask falls back to the safe default (keep) when no interactive
+        // prompt is available.
+        assert_eq!(
+            AttachmentCleanupMode::Ask.resolve_delete_attachments(),
+            Some(false)
+        );
     }
 
     #[test]

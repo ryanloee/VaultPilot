@@ -508,13 +508,23 @@ fn classify_note_load_error(e: &anyhow::Error) -> StatusCode {
 // ─── #3514: Single & bulk note operations for file-browser multi-select ───
 
 /// DELETE /api/notes/{note_id} — Delete a single note (#3514).
+///
+/// Honors the persisted `attachment_cleanup_on_note_delete` setting (#3732):
+/// the prior implementation hard-coded `None`, silently purging exclusive
+/// attachments even when the user set the mode to `Never`.
 async fn http_delete_note(
     State(state): State<Arc<HttpBridgeState>>,
     headers: HeaderMap,
     AxumPath(note_id): AxumPath<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
-    let deleted = delete_note_async(&state.context, &note_id)
+    // Resolve cleanup mode from the persisted setting (#3732).
+    let cleanup = load_settings_async(&state.context)
+        .await
+        .unwrap_or_default()
+        .attachment_cleanup_on_note_delete
+        .resolve_delete_attachments();
+    let deleted = delete_note_async(&state.context, &note_id, cleanup)
         .await
         .map_err(|e| {
             tracing::warn!("http_delete_note: failed to delete note {note_id}: {e}");
@@ -548,7 +558,20 @@ async fn http_bulk_delete_notes(
             "note_ids must not be empty",
         ));
     }
-    let result = bulk_delete_notes_async(&state.context, req.note_ids, req.delete_attachments)
+    // When the caller didn't specify, fall back to the persisted setting (#3732).
+    let cleanup = if req.delete_attachments.is_some() {
+        req.delete_attachments
+    } else {
+        Some(
+            load_settings_async(&state.context)
+                .await
+                .unwrap_or_default()
+                .attachment_cleanup_on_note_delete
+                .resolve_delete_attachments()
+                .unwrap_or(false),
+        )
+    };
+    let result = bulk_delete_notes_async(&state.context, req.note_ids, cleanup)
         .await
         .map_err(|e| {
             tracing::warn!("http_bulk_delete_notes: {e}");

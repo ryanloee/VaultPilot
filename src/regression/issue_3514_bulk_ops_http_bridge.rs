@@ -55,10 +55,10 @@ body"
         let ctx = setup_temp_context();
         let id = create(&ctx, "ToDelete").await;
 
-        let deleted = delete_note_async(&ctx, &id).await.unwrap();
+        let deleted = delete_note_async(&ctx, &id, None).await.unwrap();
         assert!(deleted);
 
-        let deleted2 = delete_note_async(&ctx, &id).await.unwrap();
+        let deleted2 = delete_note_async(&ctx, &id, None).await.unwrap();
         assert!(!deleted2, "second delete should return false");
     }
 
@@ -78,7 +78,7 @@ body"
         assert!(result.failures.is_empty());
 
         // id3 still exists.
-        let alive = delete_note_async(&ctx, &id3).await.unwrap();
+        let alive = delete_note_async(&ctx, &id3, None).await.unwrap();
         assert!(alive);
     }
 

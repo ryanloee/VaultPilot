@@ -96,19 +96,15 @@ pub struct MermaidBlock {
 /// between the fences (lines joined with `\n`, no trailing newline).
 ///
 /// ```
-/// use vaultpilot::mermaid::{extract_mermaid_blocks, MermaidDiagramType};
+/// use vaultpilot_lib::mermaid::{extract_mermaid_blocks, MermaidDiagramType};
 ///
-/// let md = r#"
-/// Some text.
-///
-/// ```mermaid
-/// graph TD
-///   A --> B
-/// ```
-///
-/// More text.
-/// "#;
-/// let blocks = extract_mermaid_blocks(md);
+/// // Build markdown with backtick fences via concat to avoid clashing with
+/// // this doctest's own ``` fence.
+/// let fence = concat!("#", "#", "```", "#"); // → ##```# (unused, placeholder)
+/// let md = "Some text.\n\n".to_string()
+///     + "```mermaid\ngraph TD\n  A --> B\n```\n\n"
+///     + "More text.\n";
+/// let blocks = extract_mermaid_blocks(&md);
 /// assert_eq!(blocks.len(), 1);
 /// assert_eq!(blocks[0].diagram_type, MermaidDiagramType::Flowchart);
 /// assert!(blocks[0].source.contains("A --> B"));

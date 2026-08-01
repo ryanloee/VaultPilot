@@ -407,12 +407,16 @@ export async function updateNote(
 
 export async function deleteNote(id: string): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
-    await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
-    // Queue delete for offline sync push (#2433)
-    await queuePendingSync(id, 'delete');
-  });
+  await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
   invalidateNoteTitleCache();
+  // Queue delete for offline sync push (#2433).
+  // queuePendingSync is best-effort; failure must NOT prevent note deletion
+  // (same principle as createNote/updateNote, #3502).
+  try {
+    await queuePendingSync(id, 'delete');
+  } catch (queueErr) {
+    console.warn('[db] deleteNote: queuePendingSync failed (note still deleted):', queueErr);
+  }
 }
 
 /**

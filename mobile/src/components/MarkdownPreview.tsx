@@ -459,13 +459,16 @@ function renderInline(
     const nextSpecial = remaining.search(/[*`\[]/);
     if (nextSpecial > 0) {
       parts.push(...renderWithNoteRefs(remaining.slice(0, nextSpecial), textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      key++;
       remaining = remaining.slice(nextSpecial);
     } else if (nextSpecial === -1) {
       parts.push(...renderWithNoteRefs(remaining, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      key++;
       remaining = '';
     } else {
       // Single special char — render it as text
       parts.push(...renderWithNoteRefs(remaining[0], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      key++;
       remaining = remaining.slice(1);
     }
   }

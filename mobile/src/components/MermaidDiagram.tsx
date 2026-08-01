@@ -15,7 +15,7 @@
  * Fallback: if WebView fails to render (e.g. no network), shows the
  * raw code text in a styled card so the content is always visible.
  */
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import Icon from './Icon';
@@ -32,15 +32,27 @@ export interface MermaidDiagramProps {
 }
 
 /**
- * Escape a string for safe embedding in an HTML/JS template literal.
- * Prevents script injection from note content.
+ * Escape a string for safe embedding inside an HTML element's text content.
+ *
+ * The source is placed inside `<div class="mermaid">…</div>` in the WebView's
+ * HTML document.  If raw `<`, `>`, `&`, `"`, or `'` survive into the HTML the
+ * browser parses them as real DOM nodes/tags — enabling script injection
+ * (#3722).  HTML-entity-escaping ensures the characters are treated as text;
+ * the browser's HTML parser decodes the entities when `element.textContent` is
+ * read, so mermaid.js still receives the exact original source.
+ *
+ * (Previously `escapeForJs` only escaped JS template-literal characters but
+ *  left HTML characters untouched — and the backslash-escaping it did perform
+ *  was unnecessary for `${}` interpolation, so it also silently corrupted
+ *  sources containing backticks/`$`/`'`/backslashes.)
  */
-function escapeForJs(str: string): string {
+function escapeHtml(str: string): string {
   return str
-    .replace(/\\/g, '\\\\')
-    .replace(/`/g, '\\`')
-    .replace(/\$/g, '\\$')
-    .replace(/'/g, "\\'");
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -49,7 +61,7 @@ function escapeForJs(str: string): string {
 function buildMermaidHtml(source: string, isDark: boolean): string {
   const theme = isDark ? 'dark' : 'default';
   const bgColor = isDark ? '#111122' : '#ffffff';
-  const escaped = escapeForJs(source);
+  const escaped = escapeHtml(source);
 
   return `<!DOCTYPE html>
 <html>
@@ -158,6 +170,13 @@ export default function MermaidDiagram({
   const [hasError, setHasError] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const renderedRef = useRef(false);
+
+  // Reset the "first render" guard whenever the source or theme changes so
+  // subsequent WebView reloads can post updated heights. Without this the
+  // height becomes permanently stuck at the first render's value (#3723).
+  useEffect(() => {
+    renderedRef.current = false;
+  }, [source, isDark]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     try {

@@ -15,6 +15,7 @@ import {
   configureBackgroundSync,
   type BackgroundSyncInterval,
 } from '../services/backgroundSync';
+import { getCurrentLocale, setLocale } from '../i18n';
 
 const THEME_KEY = 'cfg_theme_mode';
 const ACCENT_KEY = 'cfg_accent_color';
@@ -46,6 +47,11 @@ export default function SettingsScreen() {
   // #3158 — Background sync state
   const [bgSyncEnabled, setBgSyncEnabled] = useState(false);
   const [bgSyncInterval, setBgSyncInterval] = useState<BackgroundSyncInterval>(30);
+
+  // #3649 — Language picker state
+  const [currentLang, setCurrentLang] = useState<'en' | 'zh-CN'>(
+    getCurrentLocale() === 'en' ? 'en' : 'zh-CN'
+  );
 
   // Load persisted background-sync config on mount.
   useEffect(() => {
@@ -506,6 +512,43 @@ export default function SettingsScreen() {
       </View>
       )}
 
+      {/* ── Language (#3649) ── */}
+      {matchesSearch('语言', 'language', 'lang', 'locale', '中文', 'English', '简体', '繁体') && (
+      <><Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>语言 / Language</Text>
+      <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
+        {[
+          { value: 'zh-CN' as const, label: '中文' },
+          { value: 'en' as const, label: 'English' },
+        ].map(({ value, label }) => (
+          <TouchableOpacity
+            key={value}
+            onPress={async () => {
+              setCurrentLang(value);
+              try {
+                await setLocale(value);
+              } catch (e) {
+                console.warn('[Settings] setLocale failed:', e);
+              }
+            }}
+            style={[
+              s.langBtn,
+              {
+                backgroundColor: currentLang === value ? store.accentColor : c.card,
+                borderColor: currentLang === value ? store.accentColor : c.border,
+              },
+            ]}
+            accessibilityLabel={label}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: currentLang === value }}
+          >
+            <Text style={{ color: currentLang === value ? '#FFF' : c.text, fontWeight: '600' }}>
+              {label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View></>
+      )}
+
       {/* ── Background Sync (#3158) ── */}
       {matchesSearch('数据同步', '同步', 'sync', 'background', '后台', '间隔', 'interval') && (
       <><Text style={[s.sectionTitle, { color: c.text, marginTop: 24 }]}>数据同步</Text>
@@ -675,6 +718,7 @@ const s = StyleSheet.create({
   formatBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   themeRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
   themeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
+  langBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   colorRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
   toggleRow: {

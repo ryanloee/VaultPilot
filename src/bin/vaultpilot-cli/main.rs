@@ -1158,6 +1158,10 @@ enum VoiceActions {
         /// (default: "Voice Capture" when --target is used)
         #[arg(long)]
         section: Option<String>,
+        /// Run AI cleanup on the raw transcript — fix typos, improve structure,
+        /// add headings and bullet lists before saving the note (#3536)
+        #[arg(long)]
+        cleanup: bool,
     },
 }
 
@@ -8974,6 +8978,7 @@ async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result
             language,
             target,
             section,
+            cleanup,
         } => {
             let settings = load_settings_with_context(context)?;
 
@@ -8984,6 +8989,12 @@ async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result
                 .ok_or_else(|| anyhow::anyhow!("audio path is not valid UTF-8"))?;
 
             eprintln!("🔊 Transcribing voice audio…");
+
+            if *cleanup {
+                eprintln!(
+                    "🧹 AI cleanup enabled — transcript will be cleaned up before saving (#3536)"
+                );
+            }
 
             if let Some(target_val) = target {
                 // Voice capture → append transcript to daily/inbox note (#3333).
@@ -8997,6 +9008,8 @@ async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result
                     context,
                     target_val,
                     &section_val,
+                    &settings,
+                    *cleanup,
                 )
                 .await
                 .map_err(|e| anyhow::anyhow!("Voice capture failed: {e}"))?;
@@ -9028,6 +9041,8 @@ async fn handle_voice(context: &StorageContext, action: &VoiceActions) -> Result
                     language.as_deref(),
                     context,
                     title.as_deref(),
+                    &settings,
+                    *cleanup,
                 )
                 .await
                 .map_err(|e| anyhow::anyhow!("Voice capture failed: {e}"))?;

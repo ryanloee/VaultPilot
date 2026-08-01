@@ -711,24 +711,50 @@ pub fn create_voice_note(
 /// `title_override` (when non-empty) is used verbatim; otherwise the title is
 /// derived from the first line of the transcript, falling back to a
 /// timestamped placeholder when the transcript is empty.
-#[instrument(skip(provider_config, context))]
+#[instrument(skip(provider_config, context, settings))]
 pub async fn transcribe_voice_note(
     audio_path: &str,
     provider_config: &ProviderConfig,
     language: Option<&str>,
     context: &StorageContext,
     title_override: Option<&str>,
+    settings: &AppSettings,
+    cleanup: bool,
 ) -> Result<VoiceNoteResult> {
     // 1. Transcribe via the shared Whisper provider path.
     let transcript = transcribe_audio(audio_path, provider_config, language).await?;
 
-    // 2. Persist (sync file/SQLite I/O → spawn_blocking). Note-building is
+    // 2. Optional AI cleanup — run the CleanUp action on the raw transcript
+    //    to fix typos, improve structure, and add headings/lists (#3536).
+    let final_transcript = if cleanup {
+        let request = crate::ai::actions::AiActionRequest {
+            action: crate::ai::actions::AiActionType::CleanUp,
+            text: transcript.clone(),
+            target_language: language.map(|l| l.to_string()),
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let result = crate::ai::actions::execute_ai_action(settings, &request).await;
+        if let Some(ref err) = result.error {
+            tracing::warn!("AI cleanup failed (falling back to raw transcript): {err}");
+            transcript.clone()
+        } else {
+            result.result
+        }
+    } else {
+        transcript.clone()
+    };
+
+    // 3. Persist (sync file/SQLite I/O → spawn_blocking). Note-building is
     //    delegated to create_voice_note so it stays unit-testable.
     let ctx = context.clone();
-    let transcript_owned = transcript.clone();
+    let final_owned = final_transcript.clone();
     let title_owned = title_override.map(|s| s.to_string());
     let saved = tokio::task::spawn_blocking(move || {
-        create_voice_note(&ctx, &transcript_owned, title_owned.as_deref())
+        create_voice_note(&ctx, &final_owned, title_owned.as_deref())
     })
     .await
     .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))??;
@@ -736,7 +762,7 @@ pub async fn transcribe_voice_note(
     Ok(VoiceNoteResult {
         note_id: saved.meta.id,
         title: saved.meta.title,
-        transcript,
+        transcript: final_transcript,
     })
 }
 
@@ -749,7 +775,8 @@ pub async fn transcribe_voice_note(
 ///
 /// Returns the same [`VoiceNoteResult`] shape (note_id refers to the target
 /// note, not a newly-created one).
-#[instrument(skip(provider_config, context))]
+#[instrument(skip(provider_config, context, settings))]
+#[allow(clippy::too_many_arguments)]
 pub async fn transcribe_and_capture_to_target(
     audio_path: &str,
     provider_config: &ProviderConfig,
@@ -757,10 +784,36 @@ pub async fn transcribe_and_capture_to_target(
     context: &StorageContext,
     target: &str,
     section: &str,
+    settings: &AppSettings,
+    cleanup: bool,
 ) -> Result<VoiceNoteResult> {
     // 1. Transcribe via the shared Whisper provider path.
     let transcript = transcribe_audio(audio_path, provider_config, language).await?;
-    let trimmed = transcript.trim();
+
+    // 2. Optional AI cleanup (#3536).
+    let final_transcript = if cleanup {
+        let request = crate::ai::actions::AiActionRequest {
+            action: crate::ai::actions::AiActionType::CleanUp,
+            text: transcript.clone(),
+            target_language: language.map(|l| l.to_string()),
+            tone: None,
+            note_id: None,
+            instruction: None,
+            model: None,
+            export_format: None,
+        };
+        let result = crate::ai::actions::execute_ai_action(settings, &request).await;
+        if let Some(ref err) = result.error {
+            tracing::warn!("AI cleanup failed (falling back to raw transcript): {err}");
+            transcript.clone()
+        } else {
+            result.result
+        }
+    } else {
+        transcript.clone()
+    };
+
+    let trimmed = final_transcript.trim();
     if trimmed.is_empty() {
         anyhow::bail!("voice capture produced empty transcript");
     }
@@ -785,7 +838,7 @@ pub async fn transcribe_and_capture_to_target(
             "🎤 Voice capture → {}",
             trimmed.chars().take(60).collect::<String>()
         ),
-        transcript,
+        transcript: final_transcript,
     })
 }
 
@@ -1062,6 +1115,8 @@ mod tests {
 
         let provider = crate::models::ProviderConfig::default();
 
+        let settings = crate::models::AppSettings::default();
+
         let result = transcribe_and_capture_to_target(
             "/nonexistent/audio/file.wav",
             &provider,
@@ -1069,6 +1124,8 @@ mod tests {
             &ctx,
             "daily",
             "Voice Capture",
+            &settings,
+            false,
         )
         .await;
 

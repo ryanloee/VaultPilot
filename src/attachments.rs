@@ -161,6 +161,100 @@ pub fn clean_orphan_attachments(
 }
 
 // ---------------------------------------------------------------------------
+// Note-scoped attachment cleanup (#3718)
+// ---------------------------------------------------------------------------
+
+/// An attachment file referenced by a note being deleted, classified by
+/// whether it is safe to remove from disk.
+///
+/// Returned by [`list_attachments_exclusive_to_note`]. Used by platform UIs
+/// to preview "these files will also be deleted" before the user confirms
+/// note deletion (#3718, parity with Obsidian 1.12.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteAttachment {
+    /// Absolute path of the attachment file on disk (if it exists).
+    pub path: String,
+    /// File name (basename) for display.
+    pub file_name: String,
+    /// File size in bytes (0 if the file is missing from disk).
+    pub size_bytes: u64,
+    /// `true` when no other note references this file — i.e. deleting the
+    /// current note would orphan it, so it is safe to delete. `false` when
+    /// at least one other note also references the file (shared).
+    pub exclusive_to_note: bool,
+}
+
+/// List every attachment referenced by `note_id`, classifying each as
+/// "exclusive to this note" (no other note references it) or "shared".
+///
+/// This is the preview used by the delete-note confirmation prompt (#3718):
+/// the platform UI shows the exclusive attachments as "files that will also
+/// be removed". The actual deletion is performed by
+/// [`crate::storage::notes::delete_note_with_context`] when called with
+/// `delete_attachments = Some(true)`; this helper only computes the list
+/// without modifying anything.
+///
+/// Returns an empty vector when the note does not exist or has no
+/// attachments. The vector is sorted by file name for stable display.
+pub fn list_attachments_exclusive_to_note(
+    context: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<NoteAttachment>> {
+    let conn = context.get_connection()?;
+
+    // Resolve the note id (the caller may pass a path).
+    let resolved_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM notes WHERE id = ?1 OR path = ?1 LIMIT 1",
+            [note_id],
+            |row| row.get(0),
+        )
+        .ok();
+    let Some(resolved_id) = resolved_id else {
+        return Ok(Vec::new());
+    };
+
+    // Fetch this note's attachment rows.
+    let mut stmt = conn
+        .prepare("SELECT path, file_name FROM attachments WHERE note_id = ?1 ORDER BY file_name")?;
+    let rows = stmt.query_map([&resolved_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for row in rows {
+        entries.push(row?);
+    }
+    drop(stmt);
+
+    let mut result = Vec::with_capacity(entries.len());
+    for (path, file_name) in entries {
+        // Count how many OTHER notes reference the same path.
+        let other_refs: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM attachments WHERE path = ?1 AND note_id != ?2",
+            [&path, &resolved_id],
+            |row| row.get(0),
+        )?;
+        let exclusive = other_refs == 0;
+        let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        result.push(NoteAttachment {
+            path,
+            file_name,
+            size_bytes,
+            exclusive_to_note: exclusive,
+        });
+    }
+
+    // Deterministic ordering: exclusive first, then by file name.
+    result.sort_by(|a, b| {
+        b.exclusive_to_note
+            .cmp(&a.exclusive_to_note)
+            .then_with(|| a.file_name.cmp(&b.file_name))
+    });
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -581,5 +675,114 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         format!("{:016x}", COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Regression test for #3718: `list_attachments_exclusive_to_note` must
+    /// classify a note's attachments as "exclusive" (safe to delete) or
+    /// "shared" (referenced by another note) so the delete-note UI can show
+    /// an accurate preview before purging.
+    #[test]
+    fn regression_3718_exclusive_vs_shared_attachments() {
+        let (temp, ctx) = make_context();
+        let vault = ctx.vault_dir().to_path_buf();
+
+        // Two notes; note A owns two attachment files, note B shares one of them.
+        write_file(&vault.join("attachments/exclusive.png"), "png-a");
+        write_file(&vault.join("attachments/shared.png"), "png-shared");
+
+        insert_note(&ctx, "note-a", "note-a.md", "body a");
+        insert_note(&ctx, "note-b", "note-b.md", "body b");
+
+        let conn = ctx.get_connection().unwrap();
+        let excl_path = vault.join("attachments/exclusive.png");
+        let shared_path = vault.join("attachments/shared.png");
+        // exclusive.png → only note-a
+        conn.execute(
+            "INSERT INTO attachments (id, note_id, path, file_name, created_at) \
+             VALUES ('a1', 'note-a', ?1, 'exclusive.png', '2026-01-01T00:00:00Z')",
+            rusqlite::params![excl_path.to_string_lossy()],
+        )
+        .unwrap();
+        // shared.png → note-a AND note-b
+        conn.execute(
+            "INSERT INTO attachments (id, note_id, path, file_name, created_at) \
+             VALUES ('a2', 'note-a', ?1, 'shared.png', '2026-01-01T00:00:00Z')",
+            rusqlite::params![shared_path.to_string_lossy()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO attachments (id, note_id, path, file_name, created_at) \
+             VALUES ('b1', 'note-b', ?1, 'shared.png', '2026-01-01T00:00:00Z')",
+            rusqlite::params![shared_path.to_string_lossy()],
+        )
+        .unwrap();
+
+        let attachments = list_attachments_exclusive_to_note(&ctx, "note-a").unwrap();
+
+        // Both attachments belong to note-a.
+        assert_eq!(
+            attachments.len(),
+            2,
+            "expected both of note-a's attachments"
+        );
+
+        let excl = attachments
+            .iter()
+            .find(|a| a.file_name == "exclusive.png")
+            .expect("exclusive.png should be listed");
+        assert!(
+            excl.exclusive_to_note,
+            "exclusive.png is referenced only by note-a → exclusive_to_note must be true"
+        );
+
+        let shared = attachments
+            .iter()
+            .find(|a| a.file_name == "shared.png")
+            .expect("shared.png should be listed");
+        assert!(
+            !shared.exclusive_to_note,
+            "shared.png is also referenced by note-b → exclusive_to_note must be false"
+        );
+
+        // Non-existent note → empty list (no panic).
+        assert!(
+            list_attachments_exclusive_to_note(&ctx, "does-not-exist")
+                .unwrap()
+                .is_empty(),
+            "non-existent note should yield an empty attachment list"
+        );
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    /// Regression test for #3718: the new settings field round-trips through
+    /// serialization and defaults to `Ask` (matching Obsidian 1.12.0).
+    #[test]
+    fn regression_3718_attachment_cleanup_mode_default_and_roundtrip() {
+        use crate::models::AttachmentCleanupMode;
+        use std::str::FromStr;
+
+        // Default is "Ask".
+        assert_eq!(AttachmentCleanupMode::default(), AttachmentCleanupMode::Ask);
+        assert_eq!(AttachmentCleanupMode::default().as_str(), "ask");
+
+        // as_str round trip.
+        for mode in [
+            AttachmentCleanupMode::Always,
+            AttachmentCleanupMode::Ask,
+            AttachmentCleanupMode::Never,
+        ] {
+            let s = mode.as_str();
+            assert_eq!(AttachmentCleanupMode::from_str(s).unwrap(), mode);
+        }
+
+        // Serde round trip preserves the value (camelCase keys).
+        let json = serde_json::to_string(&AttachmentCleanupMode::Always).unwrap();
+        assert_eq!(json, "\"always\"");
+        let parsed: AttachmentCleanupMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, AttachmentCleanupMode::Always);
+
+        // Invalid input errors clearly.
+        assert!(AttachmentCleanupMode::from_str("sometimes").is_err());
     }
 }

@@ -1442,10 +1442,26 @@ enum NotesActions {
     /// List available note templates (#3383)
     Templates {},
 
-    /// Delete a note by ID
+    /// Delete a note by ID.
+    ///
+    /// By default, attachments that are exclusive to this note (referenced
+    /// by no other note) are also deleted from disk, matching the existing
+    /// cleanup behaviour. Use `--keep-attachments` to preserve all files,
+    /// or `--purge-attachments` to force deletion even when the configured
+    /// setting is "Never"/"Ask" (#3718).
     Delete {
-        /// Note ID
+        /// Note ID or file path.
         id: String,
+
+        /// Force-delete attachments exclusive to this note, regardless of the
+        /// `attachment_cleanup_on_note_delete` setting (#3718).
+        #[arg(long)]
+        purge_attachments: bool,
+
+        /// Keep all attachment files on disk; only the note is removed (#3718).
+        /// Overrides any `--purge-attachments` flag.
+        #[arg(long)]
+        keep_attachments: bool,
     },
 
     /// Search notes
@@ -4343,9 +4359,50 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             *dry_run,
         ),
         NotesActions::Templates {} => handle_note_templates(context),
-        NotesActions::Delete { id } => {
-            let deleted = delete_note_with_context(context, id, None)?;
-            Ok(serde_json::json!({ "deleted": deleted, "id": id }))
+        NotesActions::Delete {
+            id,
+            purge_attachments,
+            keep_attachments,
+        } => {
+            // Resolve the effective attachment-cleanup behaviour from the
+            // CLI flags and the persisted setting (#3718):
+            //   --keep-attachments  → always keep (Never)
+            //   --purge-attachments → always delete exclusive (Always)
+            //   neither             → defer to the setting; `Ask` has no CLI
+            //                         prompt so it falls back to the safe
+            //                         default (keep), matching prior behaviour.
+            let settings = load_settings_with_context(context).unwrap_or_default();
+            let mode = settings.attachment_cleanup_on_note_delete;
+            let delete_attachments = if *keep_attachments {
+                Some(false)
+            } else if *purge_attachments {
+                Some(true)
+            } else {
+                match mode {
+                    AttachmentCleanupMode::Always => Some(true),
+                    AttachmentCleanupMode::Never => Some(false),
+                    // Ask: no interactive prompt in CLI → keep (safe default).
+                    AttachmentCleanupMode::Ask => Some(false),
+                }
+            };
+
+            // Preview the attachments that would be removed so the output is
+            // self-documenting (the UI surfaces the same list via a dialog).
+            let preview =
+                vaultpilot_lib::attachments::list_attachments_exclusive_to_note(context, id)
+                    .unwrap_or_default();
+            let purged_exclusive = preview.iter().filter(|a| a.exclusive_to_note).count();
+
+            let deleted = delete_note_with_context(context, id, delete_attachments)?;
+            Ok(serde_json::json!({
+                "deleted": deleted,
+                "id": id,
+                "attachmentCleanup": {
+                    "mode": mode.as_str(),
+                    "deleteAttachments": delete_attachments,
+                    "exclusiveAttachmentCount": purged_exclusive,
+                }
+            }))
         }
         NotesActions::Search {
             query,

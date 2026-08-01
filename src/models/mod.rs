@@ -66,6 +66,53 @@ impl FromStr for ResponseStyle {
 // AiSubscription — AI Scheduled Research subscription model (#2167)
 // ---------------------------------------------------------------------------
 
+/// Behavior when deleting a note that has attachments (images, audio, PDFs,
+/// …) referenced only by that note (#3718, parity with Obsidian 1.12.0).
+///
+/// - `Always` — silently delete the attachments that are exclusive to the
+///   note being deleted (no other note references them).
+/// - `Ask` — prompt the user before deleting (default). The actual prompt is
+///   rendered by the platform UI (WinUI / mobile); the CLI treats `Ask` the
+///   same as `Never` unless `--purge-attachments` is passed.
+/// - `Never` — keep all attachment files on disk; only the note is removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AttachmentCleanupMode {
+    /// Always delete exclusive attachments without asking.
+    Always,
+    /// Prompt the user every time (default).
+    #[default]
+    Ask,
+    /// Never delete attachments; leave them on disk.
+    Never,
+}
+
+impl AttachmentCleanupMode {
+    /// Return the CLI / settings-file string representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Ask => "ask",
+            Self::Never => "never",
+        }
+    }
+}
+
+impl std::str::FromStr for AttachmentCleanupMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "always" => Ok(Self::Always),
+            "ask" | "prompt" => Ok(Self::Ask),
+            "never" => Ok(Self::Never),
+            other => Err(format!(
+                "unknown attachment cleanup mode: '{other}'; expected 'always', 'ask', or 'never'"
+            )),
+        }
+    }
+}
+
 /// A subscription represents a recurring AI-powered research task.
 /// Stored as a row in the `subscriptions` SQLite table.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -282,6 +282,12 @@ pub struct AppSettings {
     /// default to match Obsidian/Notion/Slack/Figma behaviour.
     #[serde(default = "default_smart_paste_enabled")]
     pub smart_paste_enabled: bool,
+    /// Behavior when deleting a note that references attachments (images,
+    /// audio, PDFs, …) that are exclusive to it (#3718, parity with Obsidian
+    /// 1.12.0). Defaults to `Ask` — the platform UI prompts the user; the
+    /// CLI treats `Ask` like `Never` unless `--purge-attachments` is given.
+    #[serde(default)]
+    pub attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode,
 }
 
 fn default_privacy_mode() -> bool {
@@ -344,6 +350,7 @@ impl Default for AppSettings {
             custom_tools: Vec::new(),
             is_always_on_top: false,
             smart_paste_enabled: default_smart_paste_enabled(),
+            attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
         }
     }
 }
@@ -693,6 +700,7 @@ mod tests {
             custom_tools: Vec::new(),
             is_always_on_top: false,
             smart_paste_enabled: true,
+            attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

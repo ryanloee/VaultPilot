@@ -43,7 +43,7 @@ pub(crate) fn is_masked_key(s: &str) -> bool {
     // Short-key mask: all '*' chars, length 1..=12. mask_secret only emits
     // all-'*' for inputs of length ≤ 12, so a longer *-only string (or any
     // string containing '…' that isn't the exact long form above) is plaintext.
-    !chars.is_empty() && chars.len() <= 12 && chars.iter().all(|c| *c == '*')
+    chars.len() <= 12 && chars.iter().all(|c| *c == '*')
 }
 
 /// Returns `true` only if `candidate` is the actual masked form of `real_key` —

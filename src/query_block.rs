@@ -306,10 +306,8 @@ fn has_top_level_config_key(yaml: &str) -> bool {
                 }
             }
             // Mapping-valued key → full format (formulas)
-            serde_yaml_ng::Value::Mapping(_) => {
-                if key_str == "formulas" {
-                    return true;
-                }
+            serde_yaml_ng::Value::Mapping(_) if key_str == "formulas" => {
+                return true;
             }
             // String-valued `view` or `group_by` alone are NOT sufficient
             // full-format markers (#3651).  They are valid in both shorthand
@@ -986,8 +984,12 @@ invalid: [broken: yaml
         assert!(!has_top_level_config_key("view: table"));
         assert!(!has_top_level_config_key("group_by: status"));
         // Full-format when combined with a sequence-valued key:
-        assert!(has_top_level_config_key("filters:\n  - field: status\nview: table"));
-        assert!(has_top_level_config_key("sort:\n  - field: title\ngroup_by: status"));
+        assert!(has_top_level_config_key(
+            "filters:\n  - field: status\nview: table"
+        ));
+        assert!(has_top_level_config_key(
+            "sort:\n  - field: title\ngroup_by: status"
+        ));
     }
 
     #[test]

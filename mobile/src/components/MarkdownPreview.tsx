@@ -4,6 +4,7 @@ import { renderLatex, parseLatexSegments } from '../utils/latex';
 import Icon from './Icon';
 import { findNoteReferences, splitLineByNoteRefs } from '../utils/noteRefs';
 import Lightbox from './Lightbox';
+import MarkdownTable, { detectTable } from './MarkdownTable';
 import {
   extractImagesFromLine,
   extractStandaloneImages,
@@ -179,6 +180,25 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       elements.push(<View key={`hr-${i}`} style={[styles.hr, { backgroundColor: isDark ? '#333' : '#ddd' }]} />);
       continue;
+    }
+
+    // Markdown table (#3685): detect pipe-delimited table rows
+    {
+      const tableLineCount = detectTable(ACTIVE_LINES, i);
+      if (tableLineCount >= 2) {
+        const tableLines = ACTIVE_LINES.slice(i, i + tableLineCount);
+        elements.push(
+          <MarkdownTable
+            key={`table-${i}`}
+            lines={tableLines}
+            textColor={textColor}
+            accentColor={accentColor}
+            isDark={isDark}
+          />
+        );
+        i += tableLineCount - 1; // skip consumed lines
+        continue;
+      }
     }
 
     // Unordered list

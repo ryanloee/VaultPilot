@@ -142,7 +142,9 @@ interface AppState {
   // Focus / reading mode (#2894): when on, hide AI command palette entry,
   // assistant floating button and context suggestion panels for immersive writing.
   focusMode: boolean;
-  setFocusMode: (focus: boolean) => void;
+  setFocusMode: (focusMode: boolean) => void;
+  localeVersion: number;
+  bumpLocaleVersion: () => void;
 
   // Legacy flat fields (kept for client.ts backward compat, synced from active provider)
   apiBase: string;
@@ -295,6 +297,10 @@ export const useAppStore = create<AppState>()(
       setIsDark: (isDark) => set({ isDark }),
       focusMode: false,
       setFocusMode: (focusMode) => set({ focusMode }),
+      // #3696 — bumped on language change so locale-sensitive UI (tab labels,
+      // t() calls in mounted screens) re-renders with the new language.
+      localeVersion: 0,
+      bumpLocaleVersion: () => set((state) => ({ localeVersion: state.localeVersion + 1 })),
 
       apiBase: 'https://opencode.ai/zen/v1',
       apiKey: '',

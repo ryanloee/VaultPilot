@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import en from "./locales/en.json";
 import zhCN from "./locales/zh-CN.json";
+import { useAppStore } from "../store";
 
 const i18n = new I18n({
   en,
@@ -47,6 +48,9 @@ export async function initLocale(): Promise<void> {
  */
 export async function setLocale(locale: "en" | "zh-CN"): Promise<void> {
   i18n.locale = locale;
+  // #3696 — notify the store so mounted locale-sensitive UI (tab labels,
+  // screens using t()) re-renders immediately instead of on next remount.
+  useAppStore.getState().bumpLocaleVersion();
   try {
     await AsyncStorage.setItem(USER_LANG_KEY, locale);
   } catch {

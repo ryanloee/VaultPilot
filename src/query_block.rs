@@ -107,11 +107,12 @@ pub fn extract_query_blocks(markdown: &str) -> Vec<QueryBlock> {
         // Check language tag — must be "query" (case-insensitive),
         // possibly followed by additional words e.g. "query yaml"
         let rest = trimmed[fence_chars.len()..].trim();
-        let is_query = rest.is_empty()
-            || rest
-                .split_whitespace()
-                .next()
-                .is_some_and(|t| t.eq_ignore_ascii_case("query"));
+        // Only match when the first word is "query" (case-insensitive).
+        // A bare ``` fence (no language tag) is NOT a query block (#3650).
+        let is_query = rest
+            .split_whitespace()
+            .next()
+            .is_some_and(|t| t.eq_ignore_ascii_case("query"));
 
         if !is_query {
             i += 1;
@@ -310,15 +311,12 @@ fn has_top_level_config_key(yaml: &str) -> bool {
                     return true;
                 }
             }
-            // For string-valued keys, only `view` and `group_by` are
-            // exclusive to full format (they have no shorthand analogue
-            // that would collide).  `sort` and `columns` with string
-            // values are *shorthand*, so skip them.
-            serde_yaml_ng::Value::String(_) => {
-                if matches!(key_str, "view" | "group_by") {
-                    return true;
-                }
-            }
+            // String-valued `view` or `group_by` alone are NOT sufficient
+            // full-format markers (#3651).  They are valid in both shorthand
+            // (`render: list`) and full format (`view: list`), so treating
+            // them as decisive full-format signals would silently route mixed
+            // shorthand (e.g. `view: list` + `status: todo`) through
+            // BaseConfig::from_yaml, which drops non-BaseConfig keys.
             _ => {}
         }
     }
@@ -644,6 +642,18 @@ status: todo
         assert_eq!(blocks.len(), 0);
     }
 
+    /// Regression test for #3650: a bare ``` fence (no language tag)
+    /// must NOT be parsed as a query block.
+    #[test]
+    fn bare_fence_not_query_block() {
+        let md = "\
+```
+some code
+```";
+        let blocks = extract_query_blocks(md);
+        assert_eq!(blocks.len(), 0);
+    }
+
     #[test]
     fn query_block_with_yaml_lang() {
         let md = "\
@@ -964,13 +974,20 @@ invalid: [broken: yaml
     fn detects_full_config_yaml() {
         assert!(has_top_level_config_key("filters:\n  - field: status"));
         assert!(has_top_level_config_key("sort:\n  - field: title"));
-        assert!(has_top_level_config_key("view: table"));
         assert!(has_top_level_config_key("columns:\n  - field: title"));
-        assert!(has_top_level_config_key("group_by: status"));
         assert!(has_top_level_config_key("kanban_columns:\n  - todo"));
         assert!(has_top_level_config_key(
             "formulas:\n  score: 'priority * 2'"
         ));
+        // #3651: string-valued `view` or `group_by` alone no longer
+        // triggers full-format routing (they are valid in both shorthand
+        // and full format).  They still parse correctly via
+        // parse_shorthand → parse_query_config.
+        assert!(!has_top_level_config_key("view: table"));
+        assert!(!has_top_level_config_key("group_by: status"));
+        // Full-format when combined with a sequence-valued key:
+        assert!(has_top_level_config_key("filters:\n  - field: status\nview: table"));
+        assert!(has_top_level_config_key("sort:\n  - field: title\ngroup_by: status"));
     }
 
     #[test]
@@ -978,6 +995,31 @@ invalid: [broken: yaml
         assert!(!has_top_level_config_key("status: todo"));
         assert!(!has_top_level_config_key("tags: contains rust"));
         assert!(!has_top_level_config_key(""));
+    }
+
+    /// Regression test for #3651: `view: list` combined with filter lines
+    /// must NOT silently drop the filters.  `view` alone is NOT a full-format
+    /// marker, so the mixed shorthand goes through parse_shorthand which
+    /// preserves the filter.
+    #[test]
+    fn view_shorthand_preserves_filters() {
+        let yaml = "status: todo\nview: list";
+        let config = parse_query_config(yaml).expect("should parse");
+        assert_eq!(config.filters.len(), 1, "filter should be preserved");
+        assert_eq!(config.filters[0].field, "status");
+        assert_eq!(config.filters[0].op, "equals");
+        assert_eq!(config.view, BaseView::List);
+    }
+
+    /// `render:` (documented alias for `view:`) also preserves filters.
+    #[test]
+    fn render_shorthand_preserves_filters() {
+        let yaml = "status: done\nrender: cards";
+        let config = parse_query_config(yaml).expect("should parse");
+        assert_eq!(config.filters.len(), 1);
+        assert_eq!(config.filters[0].field, "status");
+        assert_eq!(config.filters[0].op, "equals");
+        assert_eq!(config.view, BaseView::Cards);
     }
 
     // ── find_query_blocks ─────────────────────────────────────────────

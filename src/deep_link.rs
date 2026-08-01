@@ -181,14 +181,21 @@ pub fn parse_deep_link(uri: &str) -> DeepLinkAction {
     let xcallback = parse_xcallback(query);
     let params = parse_new_note_params(query);
 
-    // Normalise the path: lowercase segments for matching but preserve the
-    // note id verbatim (ids can be mixed-case).
+    // Normalise the path: match route keywords case-insensitively (#3734) but
+    // extract the note id from the original segments (ids can be mixed-case),
+    // then percent-decode the id so encoded characters resolve correctly (#3735).
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let lower: Vec<String> = segments.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let lower_refs: Vec<&str> = lower.iter().map(|s| s.as_str()).collect();
 
-    match segments.as_slice() {
+    match lower_refs.as_slice() {
         ["note", "new"] => DeepLinkAction::NewNote { params, xcallback },
-        ["note", id] | ["note", "open", id] => DeepLinkAction::OpenNote {
-            note_id: (*id).to_string(),
+        ["note", _] => DeepLinkAction::OpenNote {
+            note_id: url_decode(segments[1]),
+            xcallback,
+        },
+        ["note", "open", _] => DeepLinkAction::OpenNote {
+            note_id: url_decode(segments[2]),
             xcallback,
         },
         ["daily"] => DeepLinkAction::Daily { xcallback },
@@ -513,6 +520,107 @@ mod tests {
         // Scheme matching is case-insensitive per RFC 3986.
         let action = parse_deep_link("VAULTPILOT://search?query=x");
         assert!(matches!(action, DeepLinkAction::Search { .. }));
+    }
+
+    // --- Regression tests for #3734: case-insensitive route segments ---
+
+    #[test]
+    fn test_parse_case_insensitive_route_search() {
+        // `vaultpilot://Search` should match Search, not Unknown (#3734).
+        let action = parse_deep_link("vaultpilot://Search?query=x");
+        match action {
+            DeepLinkAction::Search { query, .. } => {
+                assert_eq!(query.as_deref(), Some("x"));
+            }
+            other => panic!("expected Search, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_case_insensitive_route_daily() {
+        let action = parse_deep_link("vaultpilot://Daily");
+        assert!(matches!(action, DeepLinkAction::Daily { .. }));
+    }
+
+    #[test]
+    fn test_parse_case_insensitive_route_settings() {
+        let action = parse_deep_link("vaultpilot://Settings");
+        assert!(matches!(action, DeepLinkAction::Settings { .. }));
+    }
+
+    #[test]
+    fn test_parse_case_insensitive_route_note_new() {
+        let action = parse_deep_link("vaultpilot://NOTE/New");
+        assert!(matches!(action, DeepLinkAction::NewNote { .. }));
+    }
+
+    #[test]
+    fn test_parse_case_insensitive_route_chat_new() {
+        let action = parse_deep_link("vaultpilot://CHAT/NEW");
+        assert!(matches!(action, DeepLinkAction::NewChat { .. }));
+    }
+
+    #[test]
+    fn test_parse_case_insensitive_note_open_keyword() {
+        // `note/OPEN/id` — the "open" keyword is case-insensitive.
+        let action = parse_deep_link("vaultpilot://note/OPEN/MyNote");
+        match action {
+            DeepLinkAction::OpenNote { note_id, .. } => {
+                assert_eq!(note_id, "MyNote");
+            }
+            other => panic!("expected OpenNote, got {other:?}"),
+        }
+    }
+
+    // --- Regression tests for #3735: percent-decode note ID ---
+
+    #[test]
+    fn test_parse_open_note_percent_decoded_space() {
+        // `vaultpilot://note/my%20note` → "my note" (#3735).
+        let action = parse_deep_link("vaultpilot://note/my%20note");
+        match action {
+            DeepLinkAction::OpenNote { note_id, .. } => {
+                assert_eq!(note_id, "my note");
+            }
+            other => panic!("expected OpenNote, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_open_note_percent_decoded_unicode() {
+        // `vaultpilot://note/caf%C3%A9` → "café" (#3735).
+        let action = parse_deep_link("vaultpilot://note/caf%C3%A9");
+        match action {
+            DeepLinkAction::OpenNote { note_id, .. } => {
+                assert_eq!(note_id, "café");
+            }
+            other => panic!("expected OpenNote, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_open_note_explicit_open_percent_decoded() {
+        // Percent-decoding also applies to `note/open/<id>` form.
+        let action = parse_deep_link("vaultpilot://note/open/project%20alpha");
+        match action {
+            DeepLinkAction::OpenNote { note_id, .. } => {
+                assert_eq!(note_id, "project alpha");
+            }
+            other => panic!("expected OpenNote, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_open_note_preserves_mixed_case_id() {
+        // Mixed-case note IDs are preserved even with case-insensitive
+        // route matching (#3734 + #3735 combined).
+        let action = parse_deep_link("vaultpilot://Note/MyCamelCaseID");
+        match action {
+            DeepLinkAction::OpenNote { note_id, .. } => {
+                assert_eq!(note_id, "MyCamelCaseID");
+            }
+            other => panic!("expected OpenNote, got {other:?}"),
+        }
     }
 
     #[test]

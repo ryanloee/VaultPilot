@@ -6,7 +6,11 @@
 //!
 //! - **Orphan attachments** — files under `<vault>/attachments/` not referenced
 //!   by any note (delegates to [`crate::attachments`]).
-//! - **Orphan notes** — notes with no tags and no wiki-links / URLs.
+//! - **Orphan notes** — notes with no tags, no outgoing wiki-links / URLs,
+//!   AND no incoming wikilinks from other notes (i.e. no backlinks). A note
+//!   that is referenced via `[[wikilink]]` by any other note is treated as a
+//!   "hub note" and is never flagged as orphan, even if its own body has no
+//!   links or tags (#3719).
 //! - **Empty notes** — notes whose body is empty or below a minimum threshold.
 //! - **Stale notes** — notes not updated in a configurable number of days.
 //!
@@ -59,7 +63,9 @@ pub struct CleanupReport {
     /// Attachment files not referenced by any note or the attachments table.
     #[serde(default)]
     pub orphan_attachments: Vec<OrphanAttachment>,
-    /// Notes with no tags and no links to/from other notes.
+    /// Notes with no tags, no outgoing links, AND no incoming wikilinks
+    /// (backlinks) from other notes. Hub notes referenced via `[[wikilink]]`
+    /// are excluded even if they have no tags/links themselves (#3719).
     #[serde(default)]
     pub orphan_notes: Vec<NoteMeta>,
     /// Notes whose body is empty or below the minimum content threshold.
@@ -176,19 +182,94 @@ fn load_note_metas(conn: &rusqlite::Connection, total: usize) -> Result<Vec<Note
     Ok(notes)
 }
 
-/// Find notes that have no tags and no wiki-links / URLs in their body.
+/// Find notes that have no tags, no outgoing wiki-links / URLs in their body,
+/// AND no incoming wikilinks (backlinks) from other notes.
+///
+/// A note whose title is referenced via `[[wikilink]]` by any other note is
+/// treated as a "hub note" — it has incoming links and is therefore NOT an
+/// orphan, even if its own body has no tags or outgoing links. Without this
+/// check, hub notes were misclassified as orphans and suggested for deletion,
+/// which would break every backlink pointing to them (#3719).
+///
+/// To keep this O(n) rather than O(n²), we build a one-time index of every
+/// wikilink target seen across the vault before scanning candidates.
 fn find_orphan_notes(conn: &rusqlite::Connection, all_notes: &[NoteMeta]) -> Result<Vec<NoteMeta>> {
+    // Build a one-time index of note titles (lowercased) that are referenced
+    // by at least one `[[wikilink]]` anywhere in the vault. A candidate note
+    // whose title appears in this index has at least one incoming link and is
+    // excluded from the orphan set (#3719).
+    let backlinked_titles = build_backlinked_title_index(conn, all_notes)?;
+
     let mut orphans = Vec::new();
     for note in all_notes {
         let has_tags = !note.tags.is_empty();
         let has_links = body_has_links(conn, &note.id)?;
-        if !has_tags && !has_links {
-            orphans.push(note.clone());
+        if has_tags || has_links {
+            continue;
         }
+        // No tags and no outgoing links — but does any other note link TO it?
+        // A non-empty title that appears in the backlink index means the note
+        // is a hub: exclude it from the orphan set.
+        let title_trimmed = note.title.trim();
+        if !title_trimmed.is_empty() && backlinked_titles.contains(&title_trimmed.to_lowercase()) {
+            continue;
+        }
+        orphans.push(note.clone());
     }
     // Cap to keep the report manageable.
     orphans.truncate(500);
     Ok(orphans)
+}
+
+/// Build a set of note titles (lowercased) that appear as the target of at
+/// least one `[[wikilink]]` across all notes in the vault.
+///
+/// This is the incoming-link index used by [`find_orphan_notes`] to detect
+/// "hub notes". Scanning every note body once and extracting wikilinks is
+/// O(total_body_size); lookups against the returned set are O(1).
+///
+/// Notes whose body cannot be loaded (e.g. missing FTS row) are skipped
+/// silently — they simply contribute no targets to the index.
+fn build_backlinked_title_index(
+    conn: &rusqlite::Connection,
+    all_notes: &[NoteMeta],
+) -> Result<std::collections::HashSet<String>> {
+    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for note in all_notes {
+        let body: String = match conn.query_row(
+            "SELECT body FROM note_fts WHERE note_id = ?1",
+            [&note.id],
+            |row| row.get(0),
+        ) {
+            Ok(b) => b,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(e) => {
+                warn!(
+                    error = %e, note_id = %note.id,
+                    "failed to query note_fts for backlink index"
+                );
+                continue;
+            }
+        };
+        for (target, _alias) in crate::storage::extract_wikilinks(&body) {
+            // `extract_wikilinks` returns the raw target text (already without
+            // the surrounding `[[ ]]`). Strip a leading path segment if the
+            // target uses Obsidian's `[[folder/Note]]` form so that a link to
+            // `folder/Note` also counts as a backlink for a note titled `Note`.
+            let target = target.trim();
+            if target.is_empty() {
+                continue;
+            }
+            referenced.insert(target.to_lowercase());
+            if let Some(slash) = target.rfind('/') {
+                let basename = target[slash + 1..].trim();
+                if !basename.is_empty() {
+                    referenced.insert(basename.to_lowercase());
+                }
+            }
+        }
+    }
+    Ok(referenced)
 }
 
 /// Check whether a note body contains wiki-style links (`[[...]]`) or
@@ -499,6 +580,147 @@ mod tests {
         // This test verifies the logic indirectly — body_has_links returns
         // false for a non-existent note_id (no FTS row).
         // Full integration test requires a StorageContext.
+    }
+
+    /// Regression test for #3719: a "hub note" — one whose body has no tags
+    /// and no outgoing links but is referenced via `[[wikilink]]` by other
+    /// notes — must NOT be classified as an orphan. Before the fix, the
+    /// cleanup report suggested deleting such notes, which would break every
+    /// backlink pointing to them.
+    ///
+    /// This is a full integration test: it writes markdown files into a temp
+    /// vault, indexes them, runs `generate_cleanup_report`, and asserts that
+    /// the hub note is excluded from `orphan_notes` while a genuine orphan
+    /// (no tags, no outgoing links, no incoming links) is still flagged.
+    #[test]
+    fn regression_3719_hub_note_with_backlinks_not_orphan() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-3719-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        let vault = temp.join("vault");
+        let notes_dir = vault.join("notes");
+        std::fs::create_dir_all(&notes_dir).expect("create notes dir");
+
+        let ctx = crate::storage::StorageContext::for_test(&temp);
+        crate::storage::initialize_storage_with_context(&ctx).expect("init storage");
+
+        // ── Hub note: plain text only, no tags, no outgoing links. ──
+        // Multiple other notes will `[[wikilink]]` to it, so it must be
+        // treated as a hub, NOT an orphan.
+        std::fs::write(
+            notes_dir.join("hub.md"),
+            "---\ntitle: Hub Concept\n---\n\nThis is an important concept page with plain text only.\n",
+        )
+        .expect("write hub note");
+
+        // ── Three notes that backlink to the hub. ──
+        for name in &["alpha", "beta", "gamma"] {
+            std::fs::write(
+                notes_dir.join(format!("{name}.md")),
+                format!("---\ntitle: {name}\n---\n\nSee [[Hub Concept]] for background.\n"),
+            )
+            .expect("write backlinking note");
+        }
+
+        // ── Control: a genuine orphan — no tags, no links, no backlinks. ──
+        std::fs::write(
+            notes_dir.join("loner.md"),
+            "---\ntitle: Loner\n---\n\nJust some isolated text with no connections at all.\n",
+        )
+        .expect("write orphan note");
+
+        crate::storage::rebuild_index_with_context(&ctx).expect("rebuild index");
+
+        let report = generate_cleanup_report(&ctx, DEFAULT_STALE_DAYS).expect("cleanup report");
+
+        // Sanity: all 5 notes were indexed.
+        assert_eq!(
+            report.total_notes, 5,
+            "expected 5 indexed notes (hub + 3 backlinks + loner)"
+        );
+
+        let orphan_titles: Vec<&str> = report
+            .orphan_notes
+            .iter()
+            .map(|n| n.title.as_str())
+            .collect();
+
+        // ── The hub note must NOT be flagged as orphan (the actual bug). ──
+        assert!(
+            !orphan_titles.iter().any(|t| t == &"Hub Concept"),
+            "#3719 regression: hub note 'Hub Concept' has backlinks and must NOT be an orphan, \
+             but it appeared in orphan_notes: {orphan_titles:?}"
+        );
+
+        // ── The three backlinking notes have outgoing links, so they're not orphans either. ──
+        for name in &["alpha", "beta", "gamma"] {
+            assert!(
+                !orphan_titles.iter().any(|t| t == name),
+                "note '{name}' has an outgoing wikilink and must not be an orphan"
+            );
+        }
+
+        // ── The genuine orphan IS still detected (no false negatives). ──
+        assert!(
+            orphan_titles.iter().any(|t| t == &"Loner"),
+            "the genuine orphan 'Loner' (no tags/links/backlinks) must be flagged, \
+             got orphan_notes: {orphan_titles:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// Unit test for the backlink title index path-prefix handling (#3719):
+    /// a wikilink of the form `[[folder/Note]]` should count as a backlink
+    /// for a note titled `Note`. We exercise the index logic directly against
+    /// an in-memory DB seeded with a single note whose body contains the link.
+    #[test]
+    fn regression_3719_backlink_index_handles_path_prefixed_wikilink() {
+        use crate::models::NoteMeta;
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        // Minimal FTS5 table mirroring the production `note_fts` shape used
+        // by `build_backlinked_title_index` / `body_has_links`.
+        conn.execute(
+            "CREATE VIRTUAL TABLE note_fts USING fts5(note_id, body)",
+            [],
+        )
+        .expect("create note_fts");
+
+        // A note whose body links to `concepts/Important` — Obsidian path form.
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            [
+                &"linker-id".to_string() as &dyn rusqlite::ToSql,
+                &"See [[concepts/Important]] for more.".to_string() as &dyn rusqlite::ToSql,
+            ],
+        )
+        .expect("insert linker note");
+
+        let notes = vec![NoteMeta {
+            id: "linker-id".to_string(),
+            ..Default::default()
+        }];
+
+        let index =
+            super::build_backlinked_title_index(&conn, &notes).expect("build backlink index");
+
+        // Both the full path target and the basename must be present so that
+        // a note titled "Important" (no folder) is recognised as backlinked.
+        assert!(
+            index.contains("concepts/important"),
+            "full path target should be in the index: {index:?}"
+        );
+        assert!(
+            index.contains("important"),
+            "basename of path-prefixed wikilink should be in the index: {index:?}"
+        );
     }
 
     /// Regression test for #3714: overlapping notes across categories must be

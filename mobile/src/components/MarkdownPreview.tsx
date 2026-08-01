@@ -5,6 +5,7 @@ import Icon from './Icon';
 import { findNoteReferences, splitLineByNoteRefs } from '../utils/noteRefs';
 import Lightbox from './Lightbox';
 import MarkdownTable, { detectTable } from './MarkdownTable';
+import MermaidDiagram from './MermaidDiagram';
 import {
   extractImagesFromLine,
   extractStandaloneImages,
@@ -126,20 +127,16 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     if (line.trimStart().startsWith('```')) {
       if (inCodeBlock) {
         const joined = codeLines.join('\n');
-        // #2805: mermaid diagrams get a special diagram card instead of raw code block
+        // #3683: mermaid diagrams now render as actual SVG charts via WebView
         if (codeLang === 'mermaid') {
           elements.push(
-            <View key={`mermaid-${codeKey++}`} style={[styles.mermaidCard, { borderColor: accentColor, backgroundColor: isDark ? '#1a1a2e' : '#f0f4ff' }]}>
-              <View style={styles.mermaidHeader}>
-                <Icon name="analytics-outline" size={14} color={accentColor} />
-                <Text style={[styles.mermaidLabel, { color: accentColor }]}>Mermaid Diagram</Text>
-              </View>
-              <View style={[styles.mermaidBody, { backgroundColor: isDark ? '#111122' : '#e8edf8' }]}>
-                <Text style={{ color: textColor, fontSize: 12, fontFamily: 'monospace', opacity: isDark ? 0.85 : 1 }}>
-                  {joined}
-                </Text>
-              </View>
-            </View>
+            <MermaidDiagram
+              key={`mermaid-${codeKey++}`}
+              source={joined}
+              accentColor={accentColor}
+              textColor={textColor}
+              isDark={isDark}
+            />
           );
         } else {
           elements.push(
@@ -283,19 +280,16 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
   // Handle unclosed code blocks / mermaid diagrams (e.g. stream interrupted, truncated output)
   if (inCodeBlock && codeLines.length > 0) {
     const joined = codeLines.join('\n');
+    // #3683: unclosed mermaid blocks also render via MermaidDiagram
     if (codeLang === 'mermaid') {
       elements.push(
-        <View key={`mermaid-${codeKey++}`} style={[styles.mermaidCard, { borderColor: accentColor, backgroundColor: isDark ? '#1a1a2e' : '#f0f4ff' }]}>
-          <View style={styles.mermaidHeader}>
-            <Icon name="analytics-outline" size={14} color={accentColor} />
-            <Text style={[styles.mermaidLabel, { color: accentColor }]}>Mermaid Diagram</Text>
-          </View>
-          <View style={[styles.mermaidBody, { backgroundColor: isDark ? '#111122' : '#e8edf8' }]}>
-            <Text style={{ color: textColor, fontSize: 12, fontFamily: 'monospace', opacity: isDark ? 0.85 : 1 }}>
-              {joined}
-            </Text>
-          </View>
-        </View>
+        <MermaidDiagram
+          key={`mermaid-${codeKey++}`}
+          source={joined}
+          accentColor={accentColor}
+          textColor={textColor}
+          isDark={isDark}
+        />
       );
     } else {
       elements.push(
@@ -569,33 +563,7 @@ const styles = StyleSheet.create({
   codeInline: { paddingHorizontal: 4, borderRadius: 3, fontSize: 14, fontFamily: 'monospace' },
   hr: { height: 1, marginVertical: 8 },
   mathBlock: { backgroundColor: 'rgba(128,128,128,0.08)', borderRadius: 6, padding: 8, marginVertical: 6 },
-  // #2805: Mermaid diagram card
-  mermaidCard: {
-    borderRadius: 8,
-    borderWidth: 1.5,
-    marginVertical: 8,
-    overflow: 'hidden',
-  },
-  mermaidHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(128,128,128,0.2)',
-  },
-  mermaidLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  mermaidBody: {
-    padding: 12,
-    borderRadius: 6,
-    margin: 8,
-  },
+  // #3683: Mermaid card styles moved to MermaidDiagram.tsx component
   wikilinkTouch: {
     flexDirection: 'row',
     alignItems: 'center',

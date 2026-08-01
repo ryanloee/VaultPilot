@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -55,6 +56,24 @@ pub struct AttachmentCleanReport {
 /// Maximum number of orphan files included in the report list.
 const MAX_ORPHANS_IN_REPORT: usize = 1_000;
 
+/// Format epoch seconds + nanoseconds as an RFC 3339 UTC timestamp
+/// (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
+///
+/// Uses `chrono` (already a workspace dependency) for correct calendar
+/// arithmetic. This replaces the previous approximate conversion that
+/// assumed every year is exactly 365 days and every month 30.42 days
+/// (2,628,000 s), which produced dates 12–14 days ahead of reality
+/// (#3727).
+///
+/// Returns the bare epoch seconds as a fallback string for timestamps that
+/// cannot be represented (e.g. far-future / out-of-range values).
+fn format_epoch_rfc3339(secs: i64, nanos: u32) -> String {
+    match DateTime::<Utc>::from_timestamp(secs, nanos) {
+        Some(dt) => dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        None => format!("{secs}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -86,22 +105,7 @@ pub fn scan_orphan_attachments(context: &StorageContext) -> Result<Vec<OrphanAtt
         let modified_at = meta
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| {
-                let secs = d.as_secs() as i64;
-                let millis = d.subsec_millis() as i64;
-                // RFC 3339-ish UTC timestamp (no external chrono dependency
-                // needed here — the report uses it only for display).
-                format!(
-                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-                    secs / 31_536_000 + 1970,
-                    (secs % 31_536_000) / 2_628_000 + 1,
-                    (secs % 2_628_000) / 86_400 + 1,
-                    (secs % 86_400) / 3_600,
-                    (secs % 3_600) / 60,
-                    secs % 60,
-                    millis
-                )
-            });
+            .map(|d| format_epoch_rfc3339(d.as_secs() as i64, d.subsec_nanos()));
         orphans.push(OrphanAttachment {
             path: abs.to_string_lossy().to_string(),
             size_bytes,
@@ -784,5 +788,35 @@ mod tests {
 
         // Invalid input errors clearly.
         assert!(AttachmentCleanupMode::from_str("sometimes").is_err());
+    }
+
+    #[test]
+    fn test_format_epoch_rfc3339_known_dates() {
+        // 2024-06-15T12:30:45.123Z corresponds to epoch 1718454645 + 123ms.
+        // The OLD approximate math reported this as ~2024-06-27 (+12 days).
+        // (#3727)
+        let s = format_epoch_rfc3339(1_718_454_645, 123_000_000);
+        assert_eq!(s, "2024-06-15T12:30:45.123Z");
+
+        // 2024-12-15T00:00:00.000Z → epoch 1734220800.
+        let s = format_epoch_rfc3339(1_734_220_800, 0);
+        assert_eq!(s, "2024-12-15T00:00:00.000Z");
+    }
+
+    #[test]
+    fn test_format_epoch_rfc3339_epoch_zero() {
+        // Unix epoch: 1970-01-01T00:00:00.000Z.
+        assert_eq!(format_epoch_rfc3339(0, 0), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn test_format_epoch_rfc3339_no_future_drift() {
+        // 2026-08-02T04:00:00Z → the approximate conversion drifted this
+        // ~12 days ahead. With chrono it must land exactly on Aug 2.
+        // epoch = 178_...; compute via a sanity anchor: 2026-01-01T00:00:00Z
+        // = 1767225600; Aug 2 is day-of-year 214 → 1767225600 + 213*86400.
+        let aug2 = 1_767_225_600 + 213 * 86_400;
+        let s = format_epoch_rfc3339(aug2, 0);
+        assert_eq!(s, "2026-08-02T00:00:00.000Z");
     }
 }

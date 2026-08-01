@@ -1073,6 +1073,8 @@ mod tests {
             is_always_on_top: false,
             smart_paste_enabled: true,
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
+            session_tabs: Vec::new(),
+            active_tab_index: None,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

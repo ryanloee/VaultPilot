@@ -288,6 +288,34 @@ pub struct AppSettings {
     /// CLI treats `Ask` like `Never` unless `--purge-attachments` is given.
     #[serde(default)]
     pub attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode,
+    /// Persisted open-tab state for desktop clients (#3700 — WinUI multi-tab).
+    /// The WinUI client saves which notes are open at session end and restores
+    /// them on relaunch (parity with Anytype 0.54 "tabs restore"). Mobile and
+    /// CLI ignore this field. Empty by default.
+    #[serde(default)]
+    pub session_tabs: Vec<TabInfo>,
+    /// Index into `session_tabs` for the currently active tab.
+    /// `None` when no tabs are open or after a fresh launch.
+    #[serde(default)]
+    pub active_tab_index: Option<usize>,
+}
+
+/// A single persisted tab entry for WinUI multi-tab support (#3700).
+///
+/// Desktop clients (WinUI) populate this at session end and restore on launch.
+/// The `note_id` is the vault-relative path or identifier of the note; `title`
+/// is a cached display title (the client refreshes it after the note loads).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TabInfo {
+    /// Vault-relative note identifier (path or slug).
+    pub note_id: String,
+    /// Whether the tab is pinned (immune to "close other tabs").
+    #[serde(default)]
+    pub is_pinned: bool,
+    /// Cached display title for the tab header. `None` until first render.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 fn default_privacy_mode() -> bool {
@@ -351,6 +379,8 @@ impl Default for AppSettings {
             is_always_on_top: false,
             smart_paste_enabled: default_smart_paste_enabled(),
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
+            session_tabs: Vec::new(),
+            active_tab_index: None,
         }
     }
 }
@@ -701,6 +731,8 @@ mod tests {
             is_always_on_top: false,
             smart_paste_enabled: true,
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
+            session_tabs: Vec::new(),
+            active_tab_index: None,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -1655,5 +1687,86 @@ mod tests {
         // Same length, different content → must return false.
         assert!(!constant_time_eq(b"secret", b"Secret"));
         assert!(!constant_time_eq(b"abc", b"abd"));
+    }
+
+    // --- Regression tests for #3700: session tab persistence ---
+
+    #[test]
+    fn session_tabs_default_empty() {
+        let settings = AppSettings::default();
+        assert!(settings.session_tabs.is_empty());
+        assert!(settings.active_tab_index.is_none());
+    }
+
+    #[test]
+    fn session_tabs_round_trip() {
+        let settings = AppSettings {
+            session_tabs: vec![
+                TabInfo {
+                    note_id: "notes/project-alpha.md".into(),
+                    is_pinned: true,
+                    title: Some("Project Alpha".into()),
+                },
+                TabInfo {
+                    note_id: "inbox.md".into(),
+                    is_pinned: false,
+                    title: None,
+                },
+            ],
+            active_tab_index: Some(0),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let parsed: AppSettings = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(parsed.session_tabs.len(), 2);
+        assert_eq!(parsed.session_tabs[0].note_id, "notes/project-alpha.md");
+        assert!(parsed.session_tabs[0].is_pinned);
+        assert_eq!(
+            parsed.session_tabs[0].title.as_deref(),
+            Some("Project Alpha")
+        );
+        assert_eq!(parsed.session_tabs[1].note_id, "inbox.md");
+        assert!(!parsed.session_tabs[1].is_pinned);
+        assert!(parsed.session_tabs[1].title.is_none());
+        assert_eq!(parsed.active_tab_index, Some(0));
+    }
+
+    #[test]
+    fn session_tabs_backwards_compatible_when_absent() {
+        // A legacy settings JSON that omits session_tabs and active_tab_index
+        // entirely must still deserialize with empty defaults.
+        let legacy = serde_json::json!({
+            "vaultDir": "/tmp/vault",
+            "provider": {
+                "name": "test",
+                "apiKey": "key",
+                "baseUrl": "https://api.test.com",
+                "model": "m",
+                "requestTimeoutMs": 60000
+            }
+        });
+        let parsed: AppSettings = serde_json::from_value(legacy).expect("deserialize");
+        assert!(parsed.session_tabs.is_empty());
+        assert!(parsed.active_tab_index.is_none());
+    }
+
+    #[test]
+    fn session_tabs_serialize_camel_case() {
+        let settings = AppSettings {
+            session_tabs: vec![TabInfo {
+                note_id: "x.md".into(),
+                is_pinned: true,
+                title: Some("X".into()),
+            }],
+            active_tab_index: Some(0),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize");
+        assert!(json.contains("\"sessionTabs\""));
+        assert!(json.contains("\"activeTabIndex\""));
+        assert!(json.contains("\"noteId\""));
+        assert!(json.contains("\"isPinned\""));
     }
 }

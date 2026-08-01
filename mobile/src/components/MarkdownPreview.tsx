@@ -397,12 +397,53 @@ function renderInline(
       continue;
     }
 
-    // Footnote reference [^id] (#3684) — must be after [link](url) to avoid
-    // confusing `[^id]` with the link capture group `([^\]]+)`.
-    // Also must be BEFORE bold/italic to catch refs inside formatted text (#3690).
+    // Bold **text** — checked before [link] so `**bold [link](url)**` keeps
+    // its bold span, and before footnote refs so `**bold [^1]**` does not
+    // lose its `**` delimiters (#3695). Inner content goes through a nested
+    // footnote-ref pass so refs inside bold spans render as superscripts.
+    const boldMatch = remaining.match(/^(.*?)\*\*([^*]+)\*\*(.*)$/);
+    if (boldMatch) {
+      if (boldMatch[1]) parts.push(...renderWithFootnoteRefs(boldMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      parts.push(
+        <Text key={`b${key++}`} style={{ fontWeight: '700', color: textColor }}>
+          {renderWithFootnoteRefs(boldMatch[2], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key)}
+        </Text>
+      );
+      remaining = boldMatch[3];
+      continue;
+    }
+
+    // Italic *text* — same nested footnote-ref pass as bold (#3695)
+    const italicMatch = remaining.match(/^(.*?)\*([^*]+)\*(.*)$/);
+    if (italicMatch) {
+      if (italicMatch[1]) parts.push(...renderWithFootnoteRefs(italicMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      parts.push(
+        <Text key={`i${key++}`} style={{ fontStyle: 'italic', color: textColor }}>
+          {renderWithFootnoteRefs(italicMatch[2], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key)}
+        </Text>
+      );
+      remaining = italicMatch[3];
+      continue;
+    }
+
+    // Link [text](url) — checked before footnote refs so `[^1](https://…)` is
+    // a valid GFM link with text `^1`, not a superscript + literal URL (#3695).
+    const linkMatch = remaining.match(/^(.*?)\[([^\]]+)\]\(([^)]+)\)(.*)$/);
+    if (linkMatch) {
+      if (linkMatch[1]) parts.push(...renderWithFootnoteRefs(linkMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      parts.push(<Text key={`l${key++}`} style={{ color: accentColor, textDecorationLine: 'underline' }}>{linkMatch[2]}</Text>);
+      remaining = linkMatch[4];
+      continue;
+    }
+
+    // Footnote reference [^id] (#3684) — must be AFTER [link](url) so a valid
+    // GFM link like `[^1](https://example.com)` (link text `^1`) is not
+    // hijacked into a superscript, and AFTER bold/italic so `**bold [^1]**`
+    // does not lose its `**` delimiters (#3695). Refs inside formatted spans
+    // are handled by renderWithFootnoteRefs in the bold/italic branches.
     const fnMatch = remaining.match(/^(.*?)\[\^([^\]]+)\](.*)$/);
     if (fnMatch) {
-      if (fnMatch[1]) parts.push(...renderWithNoteRefs(fnMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
+      if (fnMatch[1]) parts.push(...renderWithFootnoteRefs(fnMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
       // Render as superscript reference (e.g. [1], [note])
       parts.push(
         <Text key={`fn${key++}`} style={{ fontSize: 12, color: accentColor, fontWeight: '600', lineHeight: 20 }}>
@@ -410,33 +451,6 @@ function renderInline(
         </Text>
       );
       remaining = fnMatch[3];
-      continue;
-    }
-
-    // Bold **text**
-    const boldMatch = remaining.match(/^(.*?)\*\*([^*]+)\*\*(.*)$/);
-    if (boldMatch) {
-      if (boldMatch[1]) parts.push(...renderWithNoteRefs(boldMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
-      parts.push(<Text key={`b${key++}`} style={{ fontWeight: '700', color: textColor }}>{boldMatch[2]}</Text>);
-      remaining = boldMatch[3];
-      continue;
-    }
-
-    // Italic *text*
-    const italicMatch = remaining.match(/^(.*?)\*([^*]+)\*(.*)$/);
-    if (italicMatch) {
-      if (italicMatch[1]) parts.push(...renderWithNoteRefs(italicMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
-      parts.push(<Text key={`i${key++}`} style={{ fontStyle: 'italic', color: textColor }}>{italicMatch[2]}</Text>);
-      remaining = italicMatch[3];
-      continue;
-    }
-
-    // Link [text](url)
-    const linkMatch = remaining.match(/^(.*?)\[([^\]]+)\]\(([^)]+)\)(.*)$/);
-    if (linkMatch) {
-      if (linkMatch[1]) parts.push(...renderWithNoteRefs(linkMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, key));
-      parts.push(<Text key={`l${key++}`} style={{ color: accentColor, textDecorationLine: 'underline' }}>{linkMatch[2]}</Text>);
-      remaining = linkMatch[4];
       continue;
     }
 
@@ -456,6 +470,46 @@ function renderInline(
   }
 
   return parts.length === 1 ? parts[0] : <>{parts}</>;
+}
+
+/**
+ * Render a plain text segment, converting footnote refs ([^id]) to
+ * superscripts and passing all other content through renderWithNoteRefs
+ * (auto-detected note references, #2035).
+ *
+ * Used as the nested pass for bold/italic/link span content so `[^id]` refs
+ * inside formatted spans still render as superscripts without breaking the
+ * span delimiters (#3695).
+ */
+function renderWithFootnoteRefs(
+  text: string,
+  textColor: string,
+  accentColor: string,
+  isDark: boolean,
+  onNoteLinkPress?: (title: string) => void,
+  noteTitleMap?: Map<string, string>,
+  key?: number,
+): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  let remaining = text;
+  let k = key ?? 0;
+  while (remaining) {
+    const fnMatch = remaining.match(/^(.*?)\[\^([^\]]+)\](.*)$/);
+    if (fnMatch) {
+      if (fnMatch[1]) parts.push(...renderWithNoteRefs(fnMatch[1], textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, k));
+      // Render as superscript reference (e.g. [1], [note])
+      parts.push(
+        <Text key={`fn${k++}`} style={{ fontSize: 12, color: accentColor, fontWeight: '600', lineHeight: 20 }}>
+          [{fnMatch[2]}]
+        </Text>
+      );
+      remaining = fnMatch[3];
+    } else {
+      if (remaining) parts.push(...renderWithNoteRefs(remaining, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, k));
+      remaining = '';
+    }
+  }
+  return parts;
 }
 
 /**

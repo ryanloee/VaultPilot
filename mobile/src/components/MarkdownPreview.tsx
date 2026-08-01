@@ -91,9 +91,22 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
   // They appear as standalone lines (usually at the end) and should be
   // hidden from normal rendering. References ([^id] inline) are handled
   // in renderInline below.
+  // #3697: the scan must be fence-aware — a `[^id]: ...` line inside a
+  // ``` fenced code block is literal code content, NOT a footnote
+  // definition. Mirror the inCodeBlock toggling used in the render loop.
   const footnoteDefs = new Map<string, string>();
   const ACTIVE_LINES: string[] = [];
+  let inFence = false;
   for (const rawLine of lines) {
+    if (rawLine.trimStart().startsWith('```')) {
+      inFence = !inFence;
+      ACTIVE_LINES.push(rawLine);
+      continue;
+    }
+    if (inFence) {
+      ACTIVE_LINES.push(rawLine);
+      continue;
+    }
     const trimmed = rawLine.trim();
     const defMatch = trimmed.match(/^\[\^([^\]]+)\]:[\t ](.*)$/);
     if (defMatch) {

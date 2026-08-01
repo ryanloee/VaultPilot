@@ -13,10 +13,10 @@ use axum::Json;
 use vaultpilot_lib::models::*;
 use vaultpilot_lib::storage::{
     delete_note_with_context, find_backlinks_with_context, find_related_notes_with_context,
-    follow_wikilinks_with_context, import_markdown_with_context, load_chat_state_with_context,
-    load_note_async, load_note_with_context, rebuild_index_with_context,
-    save_chat_state_with_context, save_note_with_context, search_notes_async,
-    search_notes_with_context, StorageContext,
+    follow_wikilinks_with_context, import_markdown_with_context, list_all_notes_with_context,
+    load_chat_state_with_context, load_note_async, load_note_with_context,
+    rebuild_index_with_context, save_chat_state_with_context, save_note_with_context,
+    search_notes_async, search_notes_with_context, StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, finalize_chat_with_ai_answer, prepare_chat_for_ai,
@@ -2734,31 +2734,25 @@ async fn mcp_call_calendar_today(context: &StorageContext) -> Value {
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
-/// `tags.list` — list all unique tags used across notes in the vault.
+/// `tags.list` — list all unique tags used across ALL notes in the vault.
 ///
-/// Queries all notes (up to the storage-layer cap of 200) and collects
-/// unique tags with usage counts. Tags are sorted alphabetically.
-/// This allows external MCP clients (Claude Desktop, Cursor, etc.) to
-/// discover available tags before filtering with `notes.search`.
+/// Uses `list_all_notes_with_context` (no limit, #2813) to ensure tags from
+/// every note are collected, even in vaults with >200 notes (#3673).
+/// Tags are de-duplicated case-insensitively (lowercased) to match
+/// `notes.search` tag filtering and `notes.rs` add/remove-tag behaviour.
 async fn mcp_call_tags_list(context: &StorageContext) -> Value {
     let ctx = context.clone();
     tokio::task::spawn_blocking(move || {
-        match search_notes_with_context(
-            &ctx,
-            SearchQuery {
-                text: String::new(),
-                tags: Vec::new(),
-                keywords: Vec::new(),
-                limit: Some(200),
-                ..Default::default()
-            },
-        ) {
-            Ok(result) => {
+        match list_all_notes_with_context(&ctx) {
+            Ok(notes) => {
+                let total = notes.len();
                 let mut tag_counts: std::collections::BTreeMap<String, usize> =
                     std::collections::BTreeMap::new();
-                for note in &result.notes {
+                for note in &notes {
                     for tag in &note.tags {
-                        *tag_counts.entry(tag.clone()).or_insert(0) += 1;
+                        // Case-insensitive de-duplication to match search / add-tag
+                        let key = tag.to_lowercase();
+                        *tag_counts.entry(key).or_insert(0) += 1;
                     }
                 }
                 let tags: Vec<Value> = tag_counts
@@ -2773,13 +2767,10 @@ async fn mcp_call_tags_list(context: &StorageContext) -> Value {
                 let count = tags.len();
                 let structured = serde_json::json!({
                     "tags": tags,
-                    "totalNotes": result.notes.len()
+                    "totalNotes": total
                 });
                 mcp_tool_success(
-                    format!(
-                        "{count} unique tag(s) across {} note(s).",
-                        result.notes.len()
-                    ),
+                    format!("{count} unique tag(s) across {total} note(s).",),
                     with_token_estimate(structured),
                 )
             }

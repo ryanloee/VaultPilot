@@ -27,6 +27,14 @@ jest.mock('../../components/Lightbox', () => {
   };
 });
 
+// Mock react-native-webview (ESM, Jest can't parse it; pulled in via MermaidDiagram)
+jest.mock('react-native-webview', () => {
+  const { View } = require('react-native');
+  return {
+    WebView: (props: any) => React.createElement(View, { testID: props.testID || 'mock-webview' }),
+  };
+});
+
 describe('MarkdownPreview — footnote rendering (#3684)', () => {
   const defaultProps = {
     textColor: '#000',

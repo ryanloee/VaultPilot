@@ -27,5 +27,8 @@ module.exports = {
     '^react-native$': '<rootDir>/src/__mocks__/react-native.ts',
     '^@expo/vector-icons/Ionicons$': '<rootDir>/src/__mocks__/expo-vector-icons.js',
     '^@expo/vector-icons$': '<rootDir>/src/__mocks__/expo-vector-icons.js',
+    // #3683: MermaidDiagram renders mermaid.js via WebView; the real module
+    // ships ESM that ts-jest can't transform from node_modules.
+    '^react-native-webview$': '<rootDir>/src/__mocks__/react-native-webview.ts',
   },
 };

@@ -88,4 +88,5 @@ mod issue_3666_bases_summaries;
 mod issue_3667_update_check_grace_period;
 mod issue_3682_group_summary_filtering;
 mod issue_3684_footnote_rendering;
+mod issue_3708_vault_cleanup;
 mod issue_914_related_notes;

@@ -554,7 +554,6 @@ impl AgentSession {
         cmd.current_dir(vault_dir);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
-        cmd.kill_on_drop(true);
 
         // Set environment variables for the agent
         cmd.env("VAULTPILOT_VAULT_DIR", vault_dir);

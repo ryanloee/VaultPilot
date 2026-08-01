@@ -755,6 +755,27 @@ enum Commands {
         action: AttachmentsActions,
     },
 
+    /// Show vault cleanup suggestions — orphan attachments, orphan notes,
+    /// empty notes, and stale notes (#3708).
+    ///
+    /// Generates a read-only report of items that can be removed to tidy up
+    /// the vault. Inspired by Anytype 0.56's "Cleanup Suggestions".
+    ///
+    /// Examples:
+    ///   vp cleanup                  — full cleanup report
+    ///   vp cleanup --json           — machine-readable JSON output
+    ///   vp cleanup --stale-days 180 — use a 180-day staleness threshold
+    Cleanup {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Staleness threshold in days (notes not updated within this period
+        /// are flagged as stale). Default: 90 days.
+        #[arg(long, default_value_t = vaultpilot_lib::cleanup::DEFAULT_STALE_DAYS)]
+        stale_days: u64,
+    },
+
     /// Show vault health dashboard — note counts, orphan analysis, density score, suggestions (#2014)
     ///
     /// Examples:
@@ -3282,6 +3303,9 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Voice { action } => handle_voice(context, action).await,
         Commands::Health { json, weekly } => {
             tokio::task::block_in_place(|| handle_health(context, *json, *weekly))
+        }
+        Commands::Cleanup { json, stale_days } => {
+            tokio::task::block_in_place(|| handle_cleanup(context, *json, *stale_days))
         }
         Commands::Attachments { action } => {
             tokio::task::block_in_place(|| handle_attachments(context, action))
@@ -9303,6 +9327,109 @@ fn handle_attachments(context: &StorageContext, action: &AttachmentsActions) -> 
             }
             Ok(Value::Null)
         }
+    }
+}
+
+/// Handle `vp cleanup` command — show vault cleanup suggestions (#3708).
+fn handle_cleanup(context: &StorageContext, json: bool, stale_days: u64) -> Result<Value> {
+    let report = vaultpilot_lib::cleanup::generate_cleanup_report(context, stale_days)?;
+
+    if json {
+        return to_json(&report);
+    }
+
+    eprintln!("🧹 Vault Cleanup Suggestions");
+    eprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    eprintln!("  Total notes:          {}", report.total_notes);
+    eprintln!(
+        "  Orphan attachments:   {} ({})",
+        report.orphan_attachments.len(),
+        format_bytes(report.potential_freed_bytes)
+    );
+    eprintln!("  Orphan notes:         {}", report.orphan_notes.len());
+    eprintln!("  Empty notes:          {}", report.empty_notes.len());
+    eprintln!(
+        "  Stale notes ({}d+):    {}",
+        stale_days,
+        report.stale_notes.len()
+    );
+    eprintln!();
+    eprintln!("  Total cleanup items:  {}", report.total_items);
+
+    if !report.orphan_attachments.is_empty() {
+        eprintln!();
+        eprintln!("📎 Orphan Attachments (unreferenced files):");
+        for att in report.orphan_attachments.iter().take(20) {
+            let path = att.path.rsplit('/').next().unwrap_or(&att.path);
+            eprintln!("  • {} ({})", path, format_bytes(att.size_bytes));
+        }
+        if report.orphan_attachments.len() > 20 {
+            eprintln!(
+                "  … and {} more (use `vp cleanup --json` to see all)",
+                report.orphan_attachments.len() - 20
+            );
+        }
+        eprintln!();
+        eprintln!("  💡 Run `vp attachments clean --delete` to remove them.");
+    }
+
+    if !report.orphan_notes.is_empty() {
+        eprintln!();
+        eprintln!("🗂️  Orphan Notes (no tags, no links):");
+        for note in report.orphan_notes.iter().take(20) {
+            eprintln!("  • {} ({})", note.title, note.id);
+        }
+        if report.orphan_notes.len() > 20 {
+            eprintln!("  … and {} more", report.orphan_notes.len() - 20);
+        }
+    }
+
+    if !report.empty_notes.is_empty() {
+        eprintln!();
+        eprintln!(
+            "📋 Empty Notes (< {} chars of content):",
+            vaultpilot_lib::cleanup::EMPTY_BODY_THRESHOLD
+        );
+        for note in report.empty_notes.iter().take(20) {
+            eprintln!("  • {} ({})", note.title, note.id);
+        }
+        if report.empty_notes.len() > 20 {
+            eprintln!("  … and {} more", report.empty_notes.len() - 20);
+        }
+    }
+
+    if !report.stale_notes.is_empty() {
+        eprintln!();
+        eprintln!("⏰ Stale Notes (not updated in {}+ days):", stale_days);
+        for stale in report.stale_notes.iter().take(20) {
+            eprintln!(
+                "  • {} ({}) — {} days ago",
+                stale.note.title, stale.note.id, stale.days_since_update
+            );
+        }
+        if report.stale_notes.len() > 20 {
+            eprintln!("  … and {} more", report.stale_notes.len() - 20);
+        }
+    }
+
+    if report.total_items == 0 {
+        eprintln!();
+        eprintln!("✅ Your vault is clean! No cleanup suggestions.");
+    }
+
+    to_json(&report)
+}
+
+/// Format a byte count as a human-readable string.
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
 

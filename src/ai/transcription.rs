@@ -26,6 +26,13 @@ use crate::models::{AppSettings, NoteDocument, NoteMeta, ProviderConfig};
 use crate::people_index::PersonAliasMap;
 use crate::storage::{save_note_with_context, StorageContext};
 
+/// Join separator for annotated transcript segments.
+///
+/// Must be used in ALL places where `annotated_transcript` is built
+/// (`diarize_transcript`, `map_speakers_to_people`, `annotated_transcript_to_string`).
+/// A shared constant prevents the separator drift regression seen in #3622 / #3709.
+const ANNOTATED_TRANSCRIPT_SEP: &str = "\n\n";
+
 // ── Data types ────────────────────────────────────────────────────────────
 
 /// A single action item extracted from a meeting.
@@ -438,7 +445,7 @@ Output ONLY valid JSON — no markdown fences, no extra text."#,
         .iter()
         .map(|seg| format!("{}: {}", seg.speaker, seg.text))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(ANNOTATED_TRANSCRIPT_SEP);
 
     Ok(DiarizationResult {
         segments: parsed.segments,
@@ -473,7 +480,7 @@ pub fn map_speakers_to_people(result: &mut DiarizationResult, alias_map: &Person
         .iter()
         .map(|seg| format!("{}: {}", seg.speaker, seg.text))
         .collect::<Vec<_>>()
-        .join("\n\n");
+        .join(ANNOTATED_TRANSCRIPT_SEP);
 }
 
 /// Build the annotated transcript string from diarized segments.
@@ -482,7 +489,7 @@ pub fn annotated_transcript_to_string(segments: &[DiarizedSegment]) -> String {
         .iter()
         .map(|seg| format!("{}: {}", seg.speaker, seg.text))
         .collect::<Vec<_>>()
-        .join("\n\n")
+        .join(ANNOTATED_TRANSCRIPT_SEP)
 }
 
 // ── Create Meeting Note ───────────────────────────────────────────────────
@@ -1324,6 +1331,56 @@ mod tests {
             before_paras.len(),
             after_paras.len(),
             "paragraph count must be identical before and after speaker mapping"
+        );
+    }
+
+    /// Regression test for #3709: verify that the join separator is consistent
+    /// across all annotated-transcript-building functions. Since
+    /// `diarize_transcript()` requires an LLM call and cannot be unit-tested,
+    /// we instead verify the invariant at the data level: all three functions
+    /// must use the same `ANNOTATED_TRANSCRIPT_SEP` constant.
+    #[test]
+    fn annotated_transcript_separator_constant_drift_detection() {
+        // The separator constant must be "\n\n" — single newline would be a regression.
+        assert_eq!(
+            ANNOTATED_TRANSCRIPT_SEP, "\n\n",
+            "ANNOTATED_TRANSCRIPT_SEP must remain \"\\n\\n\" to stay consistent \
+             across all transcript-building functions (#3622 / #3709)"
+        );
+
+        // map_speakers_to_people and annotated_transcript_to_string must agree
+        let segments = vec![
+            DiarizedSegment {
+                speaker: "Alice".to_string(),
+                text: "First.".to_string(),
+            },
+            DiarizedSegment {
+                speaker: "Bob".to_string(),
+                text: "Second.".to_string(),
+            },
+        ];
+
+        let direct = annotated_transcript_to_string(&segments);
+
+        let mut result = DiarizationResult {
+            segments: segments.clone(),
+            annotated_transcript: String::new(),
+            raw_speakers: vec!["Alice".to_string(), "Bob".to_string()],
+        };
+        map_speakers_to_people(&mut result, &PersonAliasMap::new());
+
+        // The separator in the mapped result must match the direct build
+        assert_eq!(
+            result.annotated_transcript, direct,
+            "map_speakers_to_people and annotated_transcript_to_string must \
+             produce identical output for the same segments (separator drift)"
+        );
+
+        // Count separators — exactly one between two segments
+        let sep_count = direct.matches(ANNOTATED_TRANSCRIPT_SEP).count();
+        assert_eq!(
+            sep_count, 1,
+            "two segments joined should have exactly one separator occurrence"
         );
     }
 }

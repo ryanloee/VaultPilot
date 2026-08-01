@@ -266,33 +266,33 @@ describe('updateNote', () => {
 });
 
 describe('deleteNote', () => {
-  it('deletes note by id and queues delete sync in a transaction', async () => {
+  it('deletes note by id and queues delete sync outside transaction (#3738)', async () => {
     const db = await freshDb();
     await db.deleteNote('n1');
-    // Transaction wrapper should have been called
-    expect(mockDb.withTransactionAsync).toHaveBeenCalled();
-    // First inner call: DELETE FROM notes
+    // DELETE FROM notes is called directly, no transaction wrapper (#3738)
+    expect(mockDb.withTransactionAsync).not.toHaveBeenCalled();
+    // First runAsync call: DELETE FROM notes
     const [delSql, delParams] = mockDb.runAsync.mock.calls[0];
     expect(delSql).toContain('DELETE FROM notes');
     expect(delParams).toEqual(['n1']);
-    // Second inner call: INSERT INTO pending_syncs with delete action (#2433)
+    // Second call: queuePendingSync INSERT INTO pending_syncs (best-effort, #2433)
     const [syncSql, syncParams] = mockDb.runAsync.mock.calls[1];
     expect(syncSql).toContain('INSERT INTO pending_syncs');
     expect(syncParams).toEqual(['n1', 'delete']);
   });
 
-  it('does not queue pending sync if delete fails inside transaction', async () => {
+  it('still deletes even if queuePendingSync fails (#3738 best-effort)', async () => {
     const db = await freshDb();
-    // Make the DELETE fail (runAsync first call throws)
-    mockDb.runAsync.mockRejectedValueOnce(new Error('SQLITE_ERROR: constraint failed'));
-    await expect(db.deleteNote('n1')).rejects.toThrow('SQLITE_ERROR');
-    // Queue should NOT have been called (transaction aborted)
-    // Only one runAsync call — the DELETE
-    expect(mockDb.runAsync).toHaveBeenCalledTimes(1);
-    // No INSERT into pending_syncs
+    // Make the queuePendingSync INSERT fail
+    mockDb.runAsync.mockResolvedValueOnce(undefined); // DELETE succeeds
+    mockDb.runAsync.mockRejectedValueOnce(new Error('SQLITE_ERROR: constraint failed')); // queue fails
+    // deleteNote should NOT throw — deletion succeeded, queue is best-effort
+    await expect(db.deleteNote('n1')).resolves.toBeUndefined();
+    // DELETE was called
+    expect(mockDb.runAsync).toHaveBeenCalledTimes(2);
     const calls = mockDb.runAsync.mock.calls as [string, any[]][];
-    const syncCalls = calls.filter(([sql]: [string, any[]]) => sql.includes('pending_syncs'));
-    expect(syncCalls).toHaveLength(0);
+    expect(calls[0][0]).toContain('DELETE FROM notes');
+    expect(calls[1][0]).toContain('INSERT INTO pending_syncs');
   });
 });
 

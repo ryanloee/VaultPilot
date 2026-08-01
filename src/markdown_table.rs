@@ -18,18 +18,13 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Column alignment in a markdown table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ColumnAlignment {
+    #[default]
     Left,
     Center,
     Right,
-}
-
-impl Default for ColumnAlignment {
-    fn default() -> Self {
-        Self::Left
-    }
 }
 
 /// A parsed markdown table with header, rows, and per-column alignment.

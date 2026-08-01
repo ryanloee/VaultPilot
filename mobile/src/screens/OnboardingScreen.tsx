@@ -8,6 +8,7 @@ import { checkApi, saveSettings } from '../api/client';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from '../components/Icon';
+import { getCurrentLocale, setLocale } from '../i18n';
 
 const ONBOARDING_KEY = 'cfg_onboarding_done';
 
@@ -29,6 +30,18 @@ export default function OnboardingScreen({ onComplete }: Props) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [customMode, setCustomMode] = useState(false);
+  const [lang, setLang] = useState<'en' | 'zh-CN'>(
+    getCurrentLocale() === 'en' ? 'en' : 'zh-CN'
+  );
+
+  const handleSelectLang = async (value: 'en' | 'zh-CN') => {
+    setLang(value);
+    try {
+      await setLocale(value);
+    } catch (e) {
+      console.warn('[Onboarding] setLocale failed:', e);
+    }
+  };
 
   const selectProvider = (preset: typeof PROVIDERS[0]) => {
     setSelectedPreset(preset);
@@ -106,6 +119,31 @@ export default function OnboardingScreen({ onComplete }: Props) {
           <Text style={[styles.subtitle, { color: c.textSecondary }]}>
             AI 驱动的个人知识管理助手{'\n'}三端原生 · 本地优先 · 用户自备 Key
           </Text>
+          <View style={styles.langRow}>
+            {[
+              { value: 'zh-CN' as const, label: '中文' },
+              { value: 'en' as const, label: 'English' },
+            ].map(({ value, label }) => (
+              <TouchableOpacity
+                key={value}
+                onPress={() => handleSelectLang(value)}
+                style={[
+                  styles.langBtn,
+                  {
+                    backgroundColor: lang === value ? store.accentColor : 'transparent',
+                    borderColor: lang === value ? store.accentColor : c.border,
+                  },
+                ]}
+                accessibilityLabel={label}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: lang === value }}
+              >
+                <Text style={{ color: lang === value ? '#FFF' : c.textSecondary, fontWeight: '600' }}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           <TouchableOpacity
             style={[styles.primaryBtn, { backgroundColor: store.accentColor }]}
             onPress={() => setStep(1)}
@@ -288,6 +326,9 @@ const styles = StyleSheet.create({
   logo: { fontSize: 64, marginBottom: 16 },
   title: { fontSize: 28, fontWeight: '700', marginBottom: 8 },
   subtitle: { fontSize: 15, textAlign: 'center', lineHeight: 22, marginBottom: 32 },
+  // Language picker (welcome step) — mirrors SettingsScreen's langBtn (#3649)
+  langRow: { flexDirection: 'row', gap: 12, marginBottom: 24 },
+  langBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1, alignItems: 'center' },
   stepTitle: { fontSize: 24, fontWeight: '700', marginBottom: 8 },
   stepDesc: { fontSize: 15, marginBottom: 24, lineHeight: 22 },
   primaryBtn: {

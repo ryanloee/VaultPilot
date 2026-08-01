@@ -27,6 +27,7 @@ pub mod keychain;
 pub mod knowledge_graph;
 pub mod mail;
 pub mod markdown_table;
+pub mod mermaid;
 pub mod mindmap;
 pub mod mirror;
 pub mod models;

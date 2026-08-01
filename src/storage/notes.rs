@@ -2534,12 +2534,27 @@ pub async fn save_note_with_images_async(
 }
 
 /// Spawn-blocking wrapper for [`delete_note_with_context`].
-pub async fn delete_note_async(ctx: &StorageContext, note_id: &str) -> Result<bool> {
+///
+/// `delete_attachments` follows the same semantics as the underlying function:
+/// * `None`       — old default (purge exclusive attachments)
+/// * `Some(true)` — force-delete exclusive attachments
+/// * `Some(false)`— keep all attachment files on disk
+///
+/// Callers that need to honor the persisted `attachment_cleanup_on_note_delete`
+/// setting should resolve it first via
+/// [`AttachmentCleanupMode::resolve_delete_attachments`] (#3732).
+pub async fn delete_note_async(
+    ctx: &StorageContext,
+    note_id: &str,
+    delete_attachments: Option<bool>,
+) -> Result<bool> {
     let ctx = ctx.clone();
     let note_id = note_id.to_owned();
-    tokio::task::spawn_blocking(move || delete_note_with_context(&ctx, &note_id, None))
-        .await
-        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        delete_note_with_context(&ctx, &note_id, delete_attachments)
+    })
+    .await
+    .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
 }
 
 /// Spawn-blocking wrapper for [`import_markdown_with_context`].

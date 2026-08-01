@@ -2195,8 +2195,13 @@ async fn mcp_call_notes_delete(context: &StorageContext, arguments: Value) -> Va
         Some(id) => id.to_string(),
         None => return mcp_tool_error("notes.delete requires 'id' parameter".to_string()),
     };
+    // Resolve cleanup mode from the persisted setting (#3732).
+    let cleanup = vaultpilot_lib::storage::load_settings_with_context(context)
+        .unwrap_or_default()
+        .attachment_cleanup_on_note_delete
+        .resolve_delete_attachments();
     let ctx = context.clone();
-    tokio::task::spawn_blocking(move || match delete_note_with_context(&ctx, &id, None) {
+    tokio::task::spawn_blocking(move || match delete_note_with_context(&ctx, &id, cleanup) {
         Ok(deleted) => mcp_tool_success(
             format!("Deleted={deleted}, id={}", escape_xml_content(&id)),
             serde_json::json!({ "deleted": deleted, "id": id }),

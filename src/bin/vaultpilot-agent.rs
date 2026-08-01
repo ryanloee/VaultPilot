@@ -29,9 +29,10 @@ use vaultpilot_lib::storage::{
     create_subscription_async, delete_note_async, delete_subscription_async,
     find_related_notes_async, get_snapshot_async, get_subscription_async, import_markdown_async,
     initialize_storage_async, list_notes_async, list_snapshots_for_note_async,
-    list_subscriptions_async, load_chat_state_async, load_note_async, rebuild_index_async,
-    restore_snapshot_async, save_chat_state_async, save_note_async, save_settings_async,
-    set_subscription_enabled_with_context, update_subscription_async, StorageContext,
+    list_subscriptions_async, load_chat_state_async, load_note_async, load_settings_async,
+    rebuild_index_async, restore_snapshot_async, save_chat_state_async, save_note_async,
+    save_settings_async, set_subscription_enabled_with_context, update_subscription_async,
+    StorageContext,
 };
 use vaultpilot_lib::{
     ask_with_ai_with_context, compress_chat_history_with_context, normalize_tool_path,
@@ -411,7 +412,13 @@ async fn handle_request(
         }
         "deleteNote" => {
             let params: IdParams = parse_params(&request.params)?;
-            serialize_result(delete_note_async(context, &params.id).await)
+            // Resolve cleanup mode from the persisted setting (#3732).
+            let cleanup = load_settings_async(context)
+                .await
+                .unwrap_or_default()
+                .attachment_cleanup_on_note_delete
+                .resolve_delete_attachments();
+            serialize_result(delete_note_async(context, &params.id, cleanup).await)
         }
         "findRelatedNotes" => {
             let params: IdWithLimitParams = parse_params(&request.params)?;

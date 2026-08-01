@@ -263,7 +263,7 @@ fn find_stale_notes(
         }
     }
     // Sort by most stale first.
-    stale.sort_by(|a, b| b.days_since_update.cmp(&a.days_since_update));
+    stale.sort_by_key(|n| std::cmp::Reverse(n.days_since_update));
     stale.truncate(500);
     let _ = conn; // suppress unused warning when no DB query is needed
     Ok(stale)

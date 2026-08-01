@@ -24,6 +24,12 @@
 //!   mermaid — they cannot carry an info string.
 //! - Nested fences (a ``` block inside a ~~~ block or vice-versa) are handled
 //!   by tracking the exact fence string that opened the block.
+//! - A ` ```mermaid ` fence that appears *inside* another (non-mermaid)
+//!   fenced code block — e.g. a 4-backtick documentation block or a `~~~`
+//!   block — is correctly treated as literal text and **not** extracted
+//!   (CommonMark: a fence with fewer back-ticks cannot close a wider one).
+//!   See `test_mermaid_inside_wider_code_fence` and
+//!   `test_mermaid_inside_tilde_fence` (#3726).
 
 use serde::{Deserialize, Serialize};
 
@@ -113,8 +119,24 @@ pub fn extract_mermaid_blocks(markdown: &str) -> Vec<MermaidBlock> {
     let lines: Vec<&str> = markdown.lines().collect();
     let mut blocks = Vec::new();
 
+    // Track any currently-active NON-mermaid fenced code block so that a
+    // ` ```mermaid ` fence appearing *inside* it (as literal documentation
+    // text) is not falsely extracted (#3726).  CommonMark: a fence with fewer
+    // back-ticks cannot close a wider one, so the inner fence is just text.
+    // Fields: (fence_char, fence_len).
+    let mut active_fence: Option<(char, usize)> = None;
+
     let mut i = 0;
     while i < lines.len() {
+        // If we are inside a non-mermaid code fence, scan forward until we
+        // find its matching closing fence.
+        if let Some((fence_char, fence_len)) = active_fence {
+            if is_closing_fence_for(lines[i], fence_char, fence_len) {
+                active_fence = None;
+            }
+            i += 1;
+            continue;
+        }
         if let Some(fence_len) = mermaid_fence_len(lines[i]) {
             // Found an opening ```mermaid fence at line `i` (0-based).
             let start_line = i + 1; // 1-based
@@ -144,6 +166,12 @@ pub fn extract_mermaid_blocks(markdown: &str) -> Vec<MermaidBlock> {
                 // Unterminated fence — consume the rest but skip it.
                 break;
             }
+        } else if let Some((fence_char, fence_len, _info)) = detect_fence(lines[i]) {
+            // Opens a non-mermaid code block (``` / ~~~ / 4+ back-ticks).
+            // Track it so subsequent lines are treated as literal until it
+            // closes.  (mermaid_fence_len already handled the mermaid case.)
+            active_fence = Some((fence_char, fence_len));
+            i += 1;
         } else {
             i += 1;
         }
@@ -155,11 +183,22 @@ pub fn extract_mermaid_blocks(markdown: &str) -> Vec<MermaidBlock> {
 ///
 /// This is a cheap predicate that short-circuits on the first match — useful
 /// for UI code that wants to decide whether to load the mermaid renderer at
-/// all.
+/// all.  Like [`extract_mermaid_blocks`], it correctly skips ` ```mermaid `
+/// fences that appear inside another (non-mermaid) code fence (#3726).
 pub fn has_mermaid_blocks(markdown: &str) -> bool {
+    let mut active_fence: Option<(char, usize)> = None;
     for line in markdown.lines() {
+        if let Some((fence_char, fence_len)) = active_fence {
+            if is_closing_fence_for(line, fence_char, fence_len) {
+                active_fence = None;
+            }
+            continue;
+        }
         if mermaid_fence_len(line).is_some() {
             return true;
+        }
+        if let Some((fence_char, fence_len, _info)) = detect_fence(line) {
+            active_fence = Some((fence_char, fence_len));
         }
     }
     false
@@ -198,13 +237,40 @@ fn mermaid_fence_len(line: &str) -> Option<usize> {
     }
 }
 
+/// Detect *any* fenced code block opening (back-tick or tilde, ≥ 3 chars).
+///
+/// Returns the fence character, its length, and the trailing info string
+/// (trimmed) when `line` opens a code fence.  Used to track non-mermaid code
+/// blocks so that a ` ```mermaid ` fence nested inside them is treated as
+/// literal text (#3726).
+fn detect_fence(line: &str) -> Option<(char, usize, &str)> {
+    let trimmed = line.trim_start();
+    let first = trimmed.chars().next()?;
+    if first != '`' && first != '~' {
+        return None;
+    }
+    let count = trimmed.chars().take_while(|&c| c == first).count();
+    if count < 3 {
+        return None;
+    }
+    let info = trimmed[count..].trim();
+    Some((first, count, info))
+}
+
 /// Check whether `line` is a closing fence with at least `min_len` back-ticks
 /// (matching CommonMark's rule that the closing fence must be ≥ the opening
 /// fence length).
 fn is_closing_fence(line: &str, min_len: usize) -> bool {
+    is_closing_fence_for(line, '`', min_len)
+}
+
+/// Check whether `line` closes the fence opened by `fence_char` with at least
+/// `min_len` of the same character (CommonMark closing-fence rules: same char,
+/// ≥ opening length, and nothing but whitespace after the fence markers).
+fn is_closing_fence_for(line: &str, fence_char: char, min_len: usize) -> bool {
     let trimmed = line.trim_start();
-    let count = trimmed.chars().take_while(|&c| c == '`').count();
-    count >= min_len && trimmed[count..].trim().is_empty()
+    let count = trimmed.chars().take_while(|&c| c == fence_char).count();
+    count >= min_len && count >= 3 && trimmed[count..].trim().is_empty()
 }
 
 /// Best-effort classification of a mermaid diagram from its source.
@@ -233,7 +299,7 @@ fn classify_diagram(source: &str) -> MermaidDiagramType {
             s if s.starts_with("statediagram") => MermaidDiagramType::State,
             s if s.starts_with("erdiagram") => MermaidDiagramType::Er,
             s if s.starts_with("gantt") => MermaidDiagramType::Gantt,
-            s if s.starts_with("pie") => MermaidDiagramType::Pie,
+            s if s == "pie" || s.starts_with("pie ") => MermaidDiagramType::Pie,
             s if s.starts_with("journey") => MermaidDiagramType::Journey,
             s if s.starts_with("gitgraph") => MermaidDiagramType::GitGraph,
             s if s.starts_with("mindmap") => MermaidDiagramType::Mindmap,
@@ -419,5 +485,75 @@ pie
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].source.is_empty());
         assert_eq!(blocks[0].diagram_type, MermaidDiagramType::Unknown);
+    }
+
+    // ---- Regression tests for #3726 ----
+
+    #[test]
+    fn test_mermaid_inside_wider_code_fence() {
+        // A ```mermaid fence nested inside a 4-backtick documentation block is
+        // literal text and must NOT be extracted (#3726).
+        let md = "````\n```mermaid\ngraph TD\nA --> B\n```\n````\n";
+        assert!(extract_mermaid_blocks(md).is_empty());
+        assert!(!has_mermaid_blocks(md));
+    }
+
+    #[test]
+    fn test_mermaid_inside_wider_fence_then_real_block() {
+        // After the wrapping 4-backtick block closes, a genuine mermaid block
+        // in the same document must still be found (#3726).
+        let md = "\
+````
+```mermaid
+graph TD
+A --> B
+```
+````
+text
+
+```mermaid
+flowchart LR
+X --> Y
+```
+";
+        let blocks = extract_mermaid_blocks(md);
+        assert_eq!(blocks.len(), 1, "only the real (post-fence) block");
+        assert_eq!(blocks[0].diagram_type, MermaidDiagramType::Flowchart);
+        assert!(blocks[0].source.contains("X --> Y"));
+        assert!(has_mermaid_blocks(md));
+    }
+
+    #[test]
+    fn test_mermaid_inside_tilde_fence() {
+        // A ```mermaid fence nested inside a ~~~ block is literal text (#3726).
+        let md = "~~~\n```mermaid\ngraph TD\nA --> B\n```\n~~~\n";
+        assert!(extract_mermaid_blocks(md).is_empty());
+        assert!(!has_mermaid_blocks(md));
+    }
+
+    #[test]
+    fn test_mermaid_inside_rust_code_fence() {
+        // A ```mermaid fence nested inside a regular ```rust block is literal
+        // text (#3726).
+        let md = "```rust\nlet md = \"```mermaid\\ngraph TD\\n```\";\n```\n";
+        assert!(extract_mermaid_blocks(md).is_empty());
+        assert!(!has_mermaid_blocks(md));
+    }
+
+    #[test]
+    fn test_classify_pie_keyword_not_prefix() {
+        // "pie" should not match "piece", "pier", etc. (#3726 secondary).
+        assert_eq!(
+            classify_diagram("pie\n  \"x\" : 1"),
+            MermaidDiagramType::Pie
+        );
+        assert_eq!(
+            classify_diagram("piece of cake"),
+            MermaidDiagramType::Unknown
+        );
+        assert_eq!(
+            classify_diagram("pier reviews"),
+            MermaidDiagramType::Unknown
+        );
     }
 }

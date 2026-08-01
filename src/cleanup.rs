@@ -14,6 +14,8 @@
 //! not remove anything.  Deletion of orphan attachments is handled separately
 //! via `vp attachments clean --delete`.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -104,12 +106,25 @@ pub fn generate_cleanup_report(context: &StorageContext, stale_days: u64) -> Res
     let empty_notes = find_empty_notes(&conn, &all_notes)?;
 
     // ── 6. Stale notes ─────────────────────────────────────────────────
-    let stale_notes = find_stale_notes(&conn, &all_notes, stale_days)?;
+    let stale_notes = find_stale_notes(&all_notes, stale_days)?;
 
     // ── 7. Aggregate totals ────────────────────────────────────────────
     let potential_freed_bytes = orphan_attachments.iter().map(|a| a.size_bytes).sum();
-    let total_items =
-        orphan_attachments.len() + orphan_notes.len() + empty_notes.len() + stale_notes.len();
+    // Count UNIQUE note IDs across the three note categories so that a note
+    // appearing in several categories (e.g. orphan + empty + stale) is only
+    // counted once.  Orphan attachments are separate files and always counted
+    // in full.  See #3714 — the previous simple sum double-counted overlaps.
+    let mut seen: HashSet<&str> = HashSet::new();
+    for n in &orphan_notes {
+        seen.insert(&n.id);
+    }
+    for n in &empty_notes {
+        seen.insert(&n.id);
+    }
+    for n in &stale_notes {
+        seen.insert(&n.note.id);
+    }
+    let total_items = orphan_attachments.len() + seen.len();
 
     Ok(CleanupReport {
         total_notes,
@@ -235,11 +250,7 @@ fn find_empty_notes(conn: &rusqlite::Connection, all_notes: &[NoteMeta]) -> Resu
 }
 
 /// Find notes not updated within the last `stale_days` days.
-fn find_stale_notes(
-    conn: &rusqlite::Connection,
-    all_notes: &[NoteMeta],
-    stale_days: u64,
-) -> Result<Vec<StaleNote>> {
+fn find_stale_notes(all_notes: &[NoteMeta], stale_days: u64) -> Result<Vec<StaleNote>> {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -265,7 +276,6 @@ fn find_stale_notes(
     // Sort by most stale first.
     stale.sort_by_key(|n| std::cmp::Reverse(n.days_since_update));
     stale.truncate(500);
-    let _ = conn; // suppress unused warning when no DB query is needed
     Ok(stale)
 }
 
@@ -489,5 +499,81 @@ mod tests {
         // This test verifies the logic indirectly — body_has_links returns
         // false for a non-existent note_id (no FTS row).
         // Full integration test requires a StorageContext.
+    }
+
+    /// Regression test for #3714: overlapping notes across categories must be
+    /// counted only once in `total_items`.  We simulate the dedup logic inline
+    /// (the production code lives in `generate_cleanup_report` which needs a
+    /// DB; here we verify the dedup algorithm itself).
+    #[test]
+    fn test_total_items_dedup_overlapping_notes() {
+        let orphan_notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                ..Default::default()
+            },
+        ];
+        let empty_notes = vec![
+            // n2 overlaps with orphan_notes
+            NoteMeta {
+                id: "n2".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                ..Default::default()
+            },
+        ];
+        let stale_notes = vec![
+            // n1 and n3 overlap; n4 is new
+            StaleNote {
+                note: NoteMeta {
+                    id: "n1".into(),
+                    ..Default::default()
+                },
+                days_since_update: 100,
+            },
+            StaleNote {
+                note: NoteMeta {
+                    id: "n3".into(),
+                    ..Default::default()
+                },
+                days_since_update: 200,
+            },
+            StaleNote {
+                note: NoteMeta {
+                    id: "n4".into(),
+                    ..Default::default()
+                },
+                days_since_update: 300,
+            },
+        ];
+
+        // Mirror the dedup logic from generate_cleanup_report.
+        let mut seen: HashSet<&str> = HashSet::new();
+        for n in &orphan_notes {
+            seen.insert(&n.id);
+        }
+        for n in &empty_notes {
+            seen.insert(&n.id);
+        }
+        for n in &stale_notes {
+            seen.insert(&n.note.id);
+        }
+        let orphan_attachment_count = 5usize;
+        let total_items = orphan_attachment_count + seen.len();
+
+        // 4 unique notes (n1..n4) + 5 attachments = 9, NOT 5+2+2+3=12.
+        assert_eq!(seen.len(), 4);
+        assert_eq!(total_items, 9);
+        // Ensure the naive sum would have been wrong (regression guard).
+        let naive =
+            orphan_attachment_count + orphan_notes.len() + empty_notes.len() + stale_notes.len();
+        assert_eq!(naive, 12);
+        assert!(total_items < naive);
     }
 }

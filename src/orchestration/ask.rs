@@ -964,6 +964,33 @@ pub fn normalize_tool_path(path: &str, vault_root: &Path) -> Result<PathBuf, any
 /// The candidate path is still canonicalized per-call because it may be a
 /// user-supplied path and its symlink resolution is required for TOCTOU
 /// safety (#2258).
+/// Normalizes `..` and `.` components in a path without requiring the path
+/// to exist. Unlike `canonicalize()`, this works purely lexically.
+fn normalize_components(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                result.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => result.push(other),
+        }
+    }
+    result
+}
+
+/// #1227 / #2258 / #2740: Confine tool access to the vault directory.
+///
+/// This variant of `normalize_tool_path` accepts a pre-canonicalized vault
+/// directory path to avoid repeated blocking I/O on tokio worker threads.
+/// This is the hot-path entry point: the vault directory never changes during
+/// a session, so callers that perform many path checks (e.g. `ToolProxy`) can
+/// canonicalize once at construction and reuse the result here, avoiding
+/// repeated blocking `canonicalize()` I/O on tokio worker threads (#2470).
+/// The candidate path is still canonicalized per-call because it may be a
+/// user-supplied path and its symlink resolution is required for TOCTOU
+/// safety (#2258).
 pub fn normalize_tool_path_with_canonical(
     path: &str,
     vault_canonical: &Path,
@@ -1021,7 +1048,19 @@ pub fn normalize_tool_path_with_canonical(
                     // remaining relative path components so the caller
                     // operates on a symlink-free resolved base. (#2258)
                     if let Ok(rest) = candidate.strip_prefix(parent) {
-                        return Ok(pc.join(rest));
+                        // #3749: `rest` may contain `..` components if the
+                        // original path had them (e.g. notes/../../x.md).
+                        // Normalize the joined path to prevent path traversal
+                        // through non-existing intermediate directories.
+                        let resolved = pc.join(rest);
+                        let normalized = normalize_components(&resolved);
+                        if !normalized.starts_with(vault_canonical) {
+                            return Err(anyhow::anyhow!(
+                                "access denied: path '{}' resolves outside the vault directory",
+                                trimmed
+                            ));
+                        }
+                        return Ok(normalized);
                     }
                     confined = true;
                 }

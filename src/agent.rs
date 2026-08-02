@@ -1947,6 +1947,16 @@ async fn execute_tool(
 ) -> (String, bool) {
     use crate::storage::{load_context_notes_async, load_recent_notes_for_overview_async};
 
+    // Wraps anyhow/io/rusqlite errors in a tool-error message with
+    // sanitization so internal paths/credentials don't leak to the LLM.
+    fn tool_err(e: &anyhow::Error) -> String {
+        format!("tool error: {}", vaultpilot_lib::sanitize_error(&e.to_string()))
+    }
+
+    fn task_join_err(e: &tokio::task::JoinError) -> String {
+        format!("tool error: task join failed: {}", vaultpilot_lib::sanitize_error(&e.to_string()))
+    }
+
     match tool_call {
         ai::AssistantToolCall::None => ("no tool selected".into(), false),
         ai::AssistantToolCall::SearchNotes { query, limit } => {
@@ -1969,7 +1979,7 @@ async fn execute_tool(
                         )
                     }
                 }
-                Err(e) => (format!("tool error: {}", e), true),
+                Err(e) => (tool_err(&e), true),
             }
         }
         ai::AssistantToolCall::ListNotes { limit } => {
@@ -1986,7 +1996,7 @@ async fn execute_tool(
                         (format!("{} notes:\n{}", docs.len(), summary), false)
                     }
                 }
-                Err(e) => (format!("tool error: {}", e), true),
+                Err(e) => (tool_err(&e), true),
             }
         }
         ai::AssistantToolCall::ListDirectory { path } => {
@@ -1998,8 +2008,8 @@ async fn execute_tool(
             .await
             {
                 Ok(Ok(output)) => (output, false),
-                Ok(Err(e)) => (format!("tool error: {}", e), true),
-                Err(e) => (format!("tool error: task join failed: {}", e), true),
+                Ok(Err(e)) => (tool_err(&e), true),
+                Err(e) => (task_join_err(&e), true),
             }
         }
         ai::AssistantToolCall::ReadFile { path } => {
@@ -2009,8 +2019,8 @@ async fn execute_tool(
                 .await
             {
                 Ok(Ok(output)) => (output, false),
-                Ok(Err(e)) => (format!("tool error: {}", e), true),
-                Err(e) => (format!("tool error: task join failed: {}", e), true),
+                Ok(Err(e)) => (tool_err(e), true),
+                Err(e) => (task_join_err(&e), true),
             }
         }
         ai::AssistantToolCall::SaveNote { draft, note_id } => {
@@ -2026,6 +2036,13 @@ async fn execute_tool(
                 .map(|n| n.meta.created_at.clone())
                 .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
             let short_id: String = note_id.chars().take(8).collect();
+            // Sanitize: keep only word chars so LLM-supplied note_id cannot
+            // inject path separators or special chars into the filename.
+            let safe_id: String = short_id
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            let short_id = if safe_id.is_empty() { "note" } else { &safe_id };
             let max_slug_len = 255usize.saturating_sub(short_id.len()).saturating_sub(4); // "-" + ".md"
             let slug = slugify(&draft.title);
             let mut byte_count = 0usize;
@@ -2066,7 +2083,7 @@ async fn execute_tool(
                     format!("Note saved: {} at {}", saved.meta.title, saved.meta.path),
                     false,
                 ),
-                Err(e) => (format!("tool error: save_note failed: {}", e), true),
+                Err(e) => (tool_err(&e), true),
             }
         }
         ai::AssistantToolCall::Custom { name, args } => {
@@ -2082,7 +2099,11 @@ async fn execute_tool(
                     match tool.execute(&args_str, &vault_dir).await {
                         Ok(output) => (output, false),
                         Err(e) => (
-                            format!("tool error: custom tool '{}' failed: {}", name, e),
+                            format!(
+                                "tool error: custom tool '{}' failed: {}",
+                                name,
+                                vaultpilot_lib::sanitize_error(&e.to_string())
+                            ),
                             true,
                         ),
                     }

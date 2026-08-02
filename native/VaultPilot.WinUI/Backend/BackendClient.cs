@@ -18,6 +18,10 @@ public sealed class BackendClient : IAsyncDisposable
     private static readonly TimeSpan PingTimeout = TimeSpan.FromSeconds(30);
     private const int MaxReconnectAttempts = 6;
     private const int MaxStderrLines = 50;
+    /// <summary>Maximum size of the agent stderr log file before it's rotated out (512 KB).</summary>
+    private const long MaxAgentLogBytes = 512 * 1024;
+    /// <summary>After rotation, keep this many bytes from the end of the old log.</summary>
+    private const int AgentLogKeepBytes = 256 * 1024;
     private const int DegradedFailureThreshold = 3; // consecutive health check cycles before switching to degraded mode
     private static readonly TimeSpan MinBackoff = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
@@ -883,10 +887,20 @@ public sealed class BackendClient : IAsyncDisposable
                     {
                         File.AppendAllText(logPath,
                             $"[{DateTimeOffset.Now:HH:mm:ss.fff}] {line}{Environment.NewLine}");
+
+                        // Rotate if the log exceeds the size limit (512 KB).
+                        var info = new FileInfo(logPath);
+                        if (info.Length > MaxAgentLogBytes)
+                        {
+                            var data = File.ReadAllBytes(logPath);
+                            var keep = Math.Min(AgentLogKeepBytes, data.Length);
+                            File.WriteAllBytes(logPath,
+                                data.AsSpan(data.Length - keep).ToArray());
+                        }
                     }
                     catch
                     {
-                        // Disk full / permission — stop trying, keep in-memory tail.
+                        // Disk full / permission / locked — stop trying, keep in-memory tail.
                         logPath = null;
                     }
                 }

@@ -225,7 +225,10 @@ pub fn load_note_with_context(context: &StorageContext, note_id: &str) -> Result
 /// Anchor format (consistent with Obsidian wiki-link anchors):
 /// * `None`       — return first `max_lines` lines of the note
 /// * `#heading`   — return content under the matching heading (trimmed to `max_lines`)
-/// * `#^block-id` — return the specific block with matching id
+/// * `#^block-id` — return the specific block with matching id. Block ids are
+///   FNV-1a content hashes assigned by `parse_blocks`/`annotate_blocks`
+///   (e.g. `d0b576e1ab0f1f25`), *not* user-written `^marker` text — a `^marker`
+///   typed into the note body stays literal text and never becomes an anchor.
 pub fn preview_note_fragment(
     context: &StorageContext,
     note_id: &str,
@@ -3947,6 +3950,7 @@ mod tests {
     #[test]
     fn regression_3739_preview_note_fragment_block_id() {
         use super::*;
+        use crate::block_ref::parse_blocks;
         let dir = std::env::temp_dir().join(format!(
             "vaultpilot-3739-block-{}-{}",
             std::process::id(),
@@ -3967,15 +3971,47 @@ mod tests {
         let saved = save_note_with_context(&ctx, note).expect("save note");
         let note_id = &saved.meta.id;
 
-        let preview = preview_note_fragment(&ctx, note_id, Some("^block-abc"), 10).unwrap();
+        // Block ids are FNV-1a content hashes assigned by parse_blocks /
+        // annotate_blocks (src/block_ref.rs), NOT user-written "^marker" text.
+        // Anchor with a real id and assert *exact* block text so the
+        // find_block_by_id branch is genuinely exercised: the fallback path
+        // (first `max_lines` lines) can never return this merged paragraph.
+        let blocks = parse_blocks(&saved.body);
+        assert_eq!(blocks.len(), 3, "expected 3 blocks, got: {blocks:?}");
+        let target = &blocks[2];
         assert!(
-            preview.contains("block content here"),
-            "preview: {}",
-            preview
+            target.text.contains("block content here"),
+            "expected merged paragraph block, got: {:?}",
+            target.text
+        );
+        let preview =
+            preview_note_fragment(&ctx, note_id, Some(&format!("^{}", target.id)), 1).unwrap();
+        assert_eq!(
+            preview, target.text,
+            "block-id branch must return the exact block text, got: {preview}"
         );
 
+        // Headings are addressable blocks too.
+        let heading = &blocks[0];
+        assert_eq!(heading.text, "## 摘要");
+        let preview =
+            preview_note_fragment(&ctx, note_id, Some(&format!("^{}", heading.id)), 1).unwrap();
+        assert_eq!(
+            preview, "## 摘要",
+            "heading block lookup must return the heading text"
+        );
+
+        // A user-written "^marker" in the body is literal text, not a block id,
+        // so it must NOT resolve — the preview falls back to the note head.
+        let preview = preview_note_fragment(&ctx, note_id, Some("^block-abc"), 2).unwrap();
+        assert!(
+            !preview.contains("^block-abc"),
+            "user marker must not resolve as a block id, got: {preview}"
+        );
+
+        // Unknown ids fall back to the first N lines.
         let preview = preview_note_fragment(&ctx, note_id, Some("^nonexistent"), 2).unwrap();
-        assert!(preview.contains("## 摘要"), "fallback: {}", preview);
+        assert!(preview.contains("## 摘要"), "fallback: {preview}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

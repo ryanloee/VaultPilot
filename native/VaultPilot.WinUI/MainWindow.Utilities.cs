@@ -168,7 +168,9 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var line = $"{DateTimeOffset.Now:O} {message}";
+            // #3604: prefix every milestone with elapsed ms since process start
+            // so the startup timeline is measurable (e.g. "[+1234ms] Ping ok").
+            var line = $"[+{App.StartupWatch.Elapsed.TotalMilliseconds,6:F0}ms] {DateTimeOffset.Now:O} {message}";
             await File.AppendAllTextAsync(StartupLogPath(), line + Environment.NewLine, Encoding.UTF8);
         }
         catch

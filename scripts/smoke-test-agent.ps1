@@ -144,7 +144,7 @@ function Send-Request {
         if ($obj.id -eq $RequestId) {
             return $obj
         }
-        # Event lines (agentStatus) carry no matching id — ignore and keep reading
+        # Event lines (agentStatus) carry no matching id - ignore and keep reading
     }
 
     Write-Host "!!! TIMEOUT waiting for response to '$Method' (${TimeoutSec}s) !!!"
@@ -161,16 +161,16 @@ function Assert-Request {
     $reqId = [guid]::NewGuid().ToString("N")
     $resp = Send-Request -Method $Method -Params $Params -RequestId $reqId -TimeoutSec $TimeoutSeconds
     if ($null -eq $resp) {
-        throw "FAIL: $What — no response"
+        throw "FAIL: $What - no response"
     }
     if ($resp.error) {
-        throw "FAIL: $What — agent error: $($resp.error.message)"
+        throw "FAIL: $What - agent error: $($resp.error.message)"
     }
     Write-Host "  PASS: $Method"
     return $resp
 }
 
-# ── Test sequence ──
+# -- Test sequence --
 $failures = @()
 
 # 1. ping
@@ -181,7 +181,7 @@ try {
     }
 } catch { $failures += $_.Exception.Message }
 
-# 2. getSettings — proves storage init + settings plumbing
+# 2. getSettings - proves storage init + settings plumbing
 try {
     $r = Assert-Request -Method "getSettings" -Params @{} -What "getSettings"
     if (-not $r.result.vaultDir) {
@@ -189,7 +189,7 @@ try {
     }
 } catch { $failures += $_.Exception.Message }
 
-# 3. listNotes — proves storage layer responds
+# 3. listNotes - proves storage layer responds
 try {
     $r = Assert-Request -Method "listNotes" -Params @{ limit = 5 } -What "listNotes"
     if ($null -eq $r.result) {
@@ -197,7 +197,7 @@ try {
     }
 } catch { $failures += $_.Exception.Message }
 
-# 4. Heartbeat — sustained request load must not kill the agent
+# 4. Heartbeat - sustained request load must not kill the agent
 Write-Host ""
 Write-Host "Heartbeat: pinging every 5s for ${HeartbeatSeconds}s..."
 $hbFailures = 0
@@ -220,7 +220,7 @@ if ($hbFailures -gt 0) {
     $failures += "Heartbeat: $hbFailures of $hbPings pings failed"
 }
 
-# ── Verify no panic in agent-crash.log ──
+# -- Verify no panic in agent-crash.log --
 Write-Host ""
 Write-Host "Checking agent-crash.log..."
 $crashLog = Join-Path $fakeAppData "com.local.vaultpilot\agent-crash.log"
@@ -236,7 +236,7 @@ if (Test-Path $crashLog) {
     Write-Host "No agent-crash.log (no panics recorded)."
 }
 
-# ── Drain stderr (best-effort) and check for panic text ──
+# -- Drain stderr (best-effort) and check for panic text --
 Write-Host ""
 Write-Host "Checking stderr..."
 try {
@@ -255,7 +255,7 @@ try {
     Write-Host "Could not read stderr: $_"
 }
 
-# ── Cleanup ──
+# -- Cleanup --
 try { $process.Kill() } catch {}
 try { $process.WaitForExit(5000) } catch {}
 Remove-Item -LiteralPath $fakeRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -1950,11 +1950,14 @@ async fn execute_tool(
     // Wraps anyhow/io/rusqlite errors in a tool-error message with
     // sanitization so internal paths/credentials don't leak to the LLM.
     fn tool_err(e: &anyhow::Error) -> String {
-        format!("tool error: {}", vaultpilot_lib::sanitize_error(&e.to_string()))
+        format!("tool error: {}", crate::sanitize_error(&e.to_string()))
     }
 
     fn task_join_err(e: &tokio::task::JoinError) -> String {
-        format!("tool error: task join failed: {}", vaultpilot_lib::sanitize_error(&e.to_string()))
+        format!(
+            "tool error: task join failed: {}",
+            crate::sanitize_error(&e.to_string())
+        )
     }
 
     match tool_call {
@@ -2019,7 +2022,7 @@ async fn execute_tool(
                 .await
             {
                 Ok(Ok(output)) => (output, false),
-                Ok(Err(e)) => (tool_err(e), true),
+                Ok(Err(e)) => (tool_err(&e), true),
                 Err(e) => (task_join_err(&e), true),
             }
         }
@@ -2102,7 +2105,7 @@ async fn execute_tool(
                             format!(
                                 "tool error: custom tool '{}' failed: {}",
                                 name,
-                                vaultpilot_lib::sanitize_error(&e.to_string())
+                                crate::sanitize_error(&e.to_string())
                             ),
                             true,
                         ),

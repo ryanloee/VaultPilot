@@ -475,6 +475,16 @@ public sealed class BackendClient : IAsyncDisposable
         var request = new BackendRequest(id, method, parameters);
         var payload = JsonSerializer.Serialize(request, _jsonOptions);
         var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // #3749: Observe the TCS task's exception. FailPending can race with
+        // the caller's timeout path (timeout throws → finally removes the
+        // pending entry → FailPending sets the exception on a TCS nobody
+        // awaits) which triggers TaskScheduler.UnobservedTaskException and
+        // pollutes crash.log with "Rust 后端已关闭输出通道" entries.
+        _ = completion.Task.ContinueWith(
+            static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
         if (!_pending.TryAdd(id, completion))
         {
             throw new InvalidOperationException("后端请求 ID 冲突。");

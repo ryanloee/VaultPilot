@@ -3,6 +3,9 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using System.Collections.Generic;
+using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.RegularExpressions;
 using VaultPilot.WinUI.Utils;
 
@@ -50,6 +53,9 @@ public sealed partial class MainWindow : Window
         copyButton.Click += (_, _) => CopyTextToClipboard(markdown);
         stack.Children.Add(copyButton);
 
+        // Collect all image paths across blocks for lightbox navigation (#3693).
+        var allImagePaths = CollectMarkdownImages(markdown);
+
         foreach (var block in ParseMarkdownBlocks(markdown))
         {
             if (block.IsCode)
@@ -64,7 +70,7 @@ public sealed partial class MainWindow : Window
                 stack.Children.Add(CreateMarkdownTable(block.Text));
                 continue;
             }
-            foreach (var element in CreateMarkdownTextElements(block.Text))
+            foreach (var element in CreateMarkdownTextElements(block.Text, allImagePaths))
             {
                 stack.Children.Add(element);
             }
@@ -73,7 +79,8 @@ public sealed partial class MainWindow : Window
         return stack;
     }
 
-    private IEnumerable<FrameworkElement> CreateMarkdownTextElements(string text)
+    private IEnumerable<FrameworkElement> CreateMarkdownTextElements(
+        string text, IReadOnlyList<string> allImagePaths)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n');
         foreach (var rawLine in lines)
@@ -82,6 +89,17 @@ public sealed partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(line))
             {
                 yield return new Border { Height = 4, Opacity = 0 };
+                continue;
+            }
+
+            // Image line (#3693): render clickable thumbnail opening lightbox
+            var imgMatch = Regex.Match(line, @"^!\[(?<alt>[^\]]*)\]\((?<url>[^)]+)\)$");
+            if (imgMatch.Success)
+            {
+                yield return CreateMarkdownImage(
+                    imgMatch.Groups["url"].Value,
+                    imgMatch.Groups["alt"].Value,
+                    allImagePaths);
                 continue;
             }
 
@@ -788,5 +806,140 @@ public sealed partial class MainWindow : Window
 
         var second = text.IndexOf('*', first + 1);
         return second > first + 1;
+    }
+
+    // ── Image lightbox integration (#3693) ──────────────────────────
+
+    private static readonly Regex MarkdownImagePattern = new(
+        @"^!\[(?<alt>[^\]]*)\]\((?<url>[^)]+)\)$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Scan all markdown blocks and collect image URLs for lightbox
+    /// cross-image navigation (#3693).
+    /// </summary>
+    private static List<string> CollectMarkdownImages(string markdown)
+    {
+        var paths = new List<string>();
+        var normalized = markdown.Replace("\r\n", "\n");
+        var parts = normalized.Split("```");
+        for (var i = 0; i < parts.Length; i++)
+        {
+            if (i % 2 != 0) continue; // skip code blocks
+            foreach (var line in parts[i].Split('\n'))
+            {
+                var trimmed = line.Trim();
+                var m = MarkdownImagePattern.Match(trimmed);
+                if (m.Success)
+                    paths.Add(m.Groups["url"].Value);
+            }
+        }
+        return paths;
+    }
+
+    /// <summary>
+    /// Create a clickable image thumbnail for a markdown image line.
+    /// Clicking opens the full image lightbox (#3693).
+    /// </summary>
+    private FrameworkElement CreateMarkdownImage(
+        string imagePath, string altText, IReadOnlyList<string> allImagePaths)
+    {
+        var image = new Image
+        {
+            Stretch = Stretch.Uniform,
+            MaxWidth = 400,
+            MaxHeight = 300,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Source = TryCreateImageSource(imagePath),
+        };
+
+        if (!string.IsNullOrWhiteSpace(altText))
+            AutomationProperties.SetName(image, altText);
+        else
+            AutomationProperties.SetName(image, "Image");
+
+        // ── Click → open lightbox ──
+        var capturedPath = imagePath;
+        var capturedPaths = allImagePaths;
+        image.PointerPressed += async (sender, args) =>
+        {
+            args.Handled = true;
+            var idx = -1;
+            for (var i = 0; i < capturedPaths.Count; i++)
+            {
+                if (string.Equals(capturedPaths[i], capturedPath, StringComparison.Ordinal))
+                {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx < 0) idx = 0;
+            await ShowImageLightboxAsync(
+                capturedPaths, idx,
+                LoadLightboxImageAsync, removable: false);
+        };
+
+        return new Border
+        {
+            Child = image,
+            Margin = new Thickness(0, 4, 0, 4),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+    }
+
+    /// <summary>
+    /// Try to create an ImageSource from a path — supports HTTP(S) URLs
+    /// and local files.
+    /// </summary>
+    private static ImageSource? TryCreateImageSource(string path)
+    {
+        try
+        {
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                return new BitmapImage(uri);
+
+            if (System.IO.File.Exists(path))
+                return new BitmapImage(new Uri(path, UriKind.Absolute));
+
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Lightbox image loader for markdown images (#3693).
+    /// Tries the backend preview API first, then falls back to HTTP(S) URL.
+    /// </summary>
+    private async Task<BitmapImage?> LoadLightboxImageAsync(string path)
+    {
+        try
+        {
+            if (_backendClient is not null)
+            {
+                using var cts = new System.Threading.CancellationTokenSource(
+                    TimeSpan.FromSeconds(30));
+                var dataUrl = await _backendClient.SendAsync<string>(
+                    "readImagePreview", new { path }, cts.Token);
+                if (!string.IsNullOrWhiteSpace(dataUrl))
+                {
+                    var bytes = DecodeDataUrl(dataUrl);
+                    using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+                    await stream.WriteAsync(bytes.AsBuffer());
+                    stream.Seek(0);
+                    var bitmap = new BitmapImage();
+                    await bitmap.SetSourceAsync(stream);
+                    return bitmap;
+                }
+            }
+        }
+        catch { /* fall through to URL fallback */ }
+
+        // Fallback: HTTP(S) URL
+        if (Uri.TryCreate(path, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            return new BitmapImage(uri);
+
+        return null;
     }
 }

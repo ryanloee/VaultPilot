@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -829,6 +830,25 @@ public sealed class BackendClient : IAsyncDisposable
             return;
         }
 
+        // #3749: Persist agent stderr to logs/agent.log so "后端断开" incidents
+        // are diagnosable after the fact — the in-memory tail (GetStderrTail)
+        // only survives until the process is restarted by TryReconnectAsync.
+        string? logPath = null;
+        try
+        {
+            var logDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "com.local.vaultpilot", "logs");
+            Directory.CreateDirectory(logDir);
+            logPath = Path.Combine(logDir, "agent.log");
+            File.AppendAllText(logPath,
+                $"\n[==== agent stderr pump started {DateTimeOffset.Now:O} ====]\n");
+        }
+        catch
+        {
+            logPath = null; // logging must never break the backend pump
+        }
+
         try
         {
             while (!token.IsCancellationRequested)
@@ -845,6 +865,20 @@ public sealed class BackendClient : IAsyncDisposable
                 while (_stderrLines.Count > MaxStderrLines)
                 {
                     _stderrLines.TryDequeue(out _);
+                }
+
+                if (logPath is not null)
+                {
+                    try
+                    {
+                        File.AppendAllText(logPath,
+                            $"[{DateTimeOffset.Now:HH:mm:ss.fff}] {line}{Environment.NewLine}");
+                    }
+                    catch
+                    {
+                        // Disk full / permission — stop trying, keep in-memory tail.
+                        logPath = null;
+                    }
                 }
             }
         }

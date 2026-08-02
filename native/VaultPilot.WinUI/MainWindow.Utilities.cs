@@ -153,23 +153,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ShowLoadingOverlay(string message = "正在处理...")
-    {
-        LoadingOverlay.Visibility = Visibility.Visible;
-        LoadingOverlayText.Text = message;
-    }
-
-    private void HideLoadingOverlay()
-    {
-        LoadingOverlay.Visibility = Visibility.Collapsed;
-    }
-
-    // #3607: LoadingOverlay cancel button — same action as the composer CancelButton.
-    private void OnLoadingOverlayCancelClicked(object sender, RoutedEventArgs e)
-    {
-        CancelActiveRequest();
-    }
-
     // ── Logging ──
 
     private static string StartupLogPath()

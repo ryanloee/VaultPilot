@@ -293,7 +293,6 @@ public sealed partial class MainWindow : Window
             ComposerBox.Text = string.Empty;
             _attachments.Clear();
             RefreshAttachments();
-            ShowLoadingOverlay(statusTitle);
             UpdateStatusBar("info", statusTitle, statusDetail);
 
             await CompressCurrentSessionIfNeededAsync(requestSessionId, prompt, pendingAttachments, cancellationToken);
@@ -358,7 +357,6 @@ public sealed partial class MainWindow : Window
             NewSessionButton.IsEnabled = true;
             // DeleteSessionButton.IsEnabled restored by RefreshSessions()
             CancelButton.Visibility = Visibility.Collapsed;
-            HideLoadingOverlay();
             RefreshSessions();
         }
         }

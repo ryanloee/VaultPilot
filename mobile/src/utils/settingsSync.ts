@@ -106,7 +106,7 @@ export async function importSettings(json: string): Promise<{ providersImported:
   state.themeMode = isValidThemeMode(data.themeMode) ? data.themeMode : 'system';
   state.accentColor = data.accentColor;
   state.activeProviderIndex = data.providers.length > 0
-    ? Math.min(data.activeProviderIndex, data.providers.length - 1)
+    ? Math.max(0, Math.min(data.activeProviderIndex, data.providers.length - 1))
     : 0;
 
   // Save API keys to SecureStore FIRST — if this fails we must not overwrite
@@ -180,7 +180,7 @@ export async function importSettings(json: string): Promise<{ providersImported:
       apiFormat: p.apiFormat as ApiFormat,
     })) as ProviderConfig[],
     activeProviderIndex: data.providers.length > 0
-      ? Math.min(data.activeProviderIndex, data.providers.length - 1)
+      ? Math.max(0, Math.min(data.activeProviderIndex, data.providers.length - 1))
       : 0,
     apiBase: active?.apiBase ?? fresh.apiBase,
     apiKey: active?.apiKey ?? fresh.apiKey,

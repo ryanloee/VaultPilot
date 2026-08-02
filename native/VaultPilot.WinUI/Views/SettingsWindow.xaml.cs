@@ -1,3 +1,4 @@
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -8,7 +9,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Windows.Graphics;
 using Windows.System;
+using WinRT.Interop;
 
 namespace VaultPilot.WinUI.Views;
 
@@ -134,6 +137,20 @@ public sealed partial class SettingsWindow : Window
         _checkConnectionAsync = checkConnectionAsync;
 
         InitializeComponent();
+
+        // Set window size and minimum size via AppWindow
+        // (Width/Height/MinWidth/MinHeight are not supported on WinUI 3 Window XAML).
+        try
+        {
+            var hwnd = WindowNative.GetWindowHandle(this);
+            var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            appWindow.Resize(new SizeInt32(640, 720));
+        }
+        catch
+        {
+            // Sizing is best-effort; window may not have activated yet.
+        }
 
         LoadSettings(settings, models, nextWakeText, versionText);
         WireUpButtons();

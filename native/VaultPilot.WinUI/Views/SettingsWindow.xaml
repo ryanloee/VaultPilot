@@ -5,11 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Title="设置"
-    Width="640"
-    Height="720"
-    MinWidth="480"
-    MinHeight="400">
+    Title="设置">
 
     <Grid RowSpacing="0">
         <Grid.RowDefinitions>

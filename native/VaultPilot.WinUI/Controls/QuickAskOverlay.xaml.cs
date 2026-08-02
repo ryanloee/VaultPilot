@@ -85,6 +85,8 @@ public sealed partial class QuickAskOverlay : UserControl
 
     /// <summary>
     /// Send the question to the AI backend and display the answer.
+    /// #3674: use Interlocked.Exchange to prevent Dismiss from cancelling
+    /// the new request, and capture ct locally to avoid ObjectDisposedException.
     /// </summary>
     private async void SubmitQuestion(string question)
     {
@@ -97,15 +99,22 @@ public sealed partial class QuickAskOverlay : UserControl
         if (string.IsNullOrWhiteSpace(question))
             return;
 
-        CancelActiveRequest();
+        // #3674: atomically swap CTS so Dismiss() cancels the *previous*
+        // request, not this one.
+        var newCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var oldCts = Interlocked.Exchange(ref _activeRequestCts, newCts);
+        oldCts?.Cancel();
+        oldCts?.Dispose();
+
+        // Capture token locally so Dismiss+Dispose doesn't throw
+        // ObjectDisposedException when we touch _activeRequestCts.Token later.
+        var ct = newCts.Token;
 
         // Show loading state
         QuickAskCard.Visibility = Visibility.Collapsed;
         LoadingOverlay.Visibility = Visibility.Visible;
         LoadingText.Text = "AI 思考中...";
         LoadingDetailText.Text = "正在检索知识库...";
-
-        _activeRequestCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
 
         try
         {
@@ -115,7 +124,12 @@ public sealed partial class QuickAskOverlay : UserControl
                 {
                     question = question,
                 },
-                _activeRequestCts.Token);
+                ct);
+
+            // #3674: check cancellation after await — if we were dismissed
+            // mid-flight, don't overwrite the UI.
+            if (ct.IsCancellationRequested)
+                return;
 
             LoadingOverlay.Visibility = Visibility.Collapsed;
             QuickAskCard.Visibility = Visibility.Visible;
@@ -130,7 +144,7 @@ public sealed partial class QuickAskOverlay : UserControl
                 ShowError("AI 未能生成有效回答，请重试。");
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             LoadingOverlay.Visibility = Visibility.Collapsed;
             QuickAskCard.Visibility = Visibility.Visible;
@@ -142,7 +156,7 @@ public sealed partial class QuickAskOverlay : UserControl
             QuickAskCard.Visibility = Visibility.Visible;
             ShowError("请求超时，后端可能无响应。");
         }
-        catch (Exception error)
+        catch (Exception error) when (!ct.IsCancellationRequested)
         {
             LoadingOverlay.Visibility = Visibility.Collapsed;
             QuickAskCard.Visibility = Visibility.Visible;

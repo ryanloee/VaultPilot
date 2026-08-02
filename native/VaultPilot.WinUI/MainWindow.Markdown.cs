@@ -93,7 +93,8 @@ public sealed partial class MainWindow : Window
             }
 
             // Image line (#3693): render clickable thumbnail opening lightbox
-            var imgMatch = Regex.Match(line, @"^!\[(?<alt>[^\]]*)\]\((?<url>[^)]+)\)$");
+            // #3749: reuse compiled static MarkdownImagePattern instead of per-line alloc
+            var imgMatch = MarkdownImagePattern.Match(line);
             if (imgMatch.Success)
             {
                 yield return CreateMarkdownImage(
@@ -858,12 +859,11 @@ public sealed partial class MainWindow : Window
         else
             AutomationProperties.SetName(image, "Image");
 
-        // ── Click → open lightbox ──
+        // ── Click → open lightbox (Tapped for touch-scroll safety, #3748) ──
         var capturedPath = imagePath;
         var capturedPaths = allImagePaths;
-        image.PointerPressed += async (sender, args) =>
+        image.Tapped += async (sender, args) =>
         {
-            args.Handled = true;
             var idx = -1;
             for (var i = 0; i < capturedPaths.Count; i++)
             {
@@ -909,18 +909,25 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Lightbox image loader for markdown images (#3693).
+    /// #3749: skip backend round-trip for HTTP(S) URLs (always fails).
     /// Tries the backend preview API first, then falls back to HTTP(S) URL.
     /// </summary>
     private async Task<BitmapImage?> LoadLightboxImageAsync(string path)
     {
         try
         {
+            // #3749: HTTP(S) URLs don't need backend — go straight to fallback
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                return new BitmapImage(uri);
+
             if (_backendClient is not null)
             {
                 using var cts = new System.Threading.CancellationTokenSource(
                     TimeSpan.FromSeconds(30));
+                // #3747: readFileAsDataUrl supports paths outside vault
                 var dataUrl = await _backendClient.SendAsync<string>(
-                    "readImagePreview", new { path }, cts.Token);
+                    "readFileAsDataUrl", new { path }, cts.Token);
                 if (!string.IsNullOrWhiteSpace(dataUrl))
                 {
                     var bytes = DecodeDataUrl(dataUrl);
@@ -935,10 +942,10 @@ public sealed partial class MainWindow : Window
         }
         catch { /* fall through to URL fallback */ }
 
-        // Fallback: HTTP(S) URL
-        if (Uri.TryCreate(path, UriKind.Absolute, out var uri)
-            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
-            return new BitmapImage(uri);
+        // Fallback: HTTP(S) URL (only reached if backend fails AND path is HTTP)
+        if (Uri.TryCreate(path, UriKind.Absolute, out var uri2)
+            && (uri2.Scheme == Uri.UriSchemeHttp || uri2.Scheme == Uri.UriSchemeHttps))
+            return new BitmapImage(uri2);
 
         return null;
     }

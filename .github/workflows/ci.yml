@@ -286,3 +286,12 @@ jobs:
           ./scripts/smoke-test-winui.ps1 `
             -ExePath "native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe" `
             -TimeoutSeconds 8
+
+      # PR gate: Rust backend agent must start, answer JSON-RPC, and survive
+      # a heartbeat window (see smoke-test-agent.ps1).
+      - name: Smoke test agent backend
+        shell: powershell
+        run: |
+          ./scripts/smoke-test-agent.ps1 `
+            -ExePath "native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/vaultpilot-agent.exe" `
+            -HeartbeatSeconds 20

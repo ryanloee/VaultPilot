@@ -442,16 +442,12 @@ public sealed partial class MainWindow : Window
 
     private void RefreshSessions()
     {
-        // #3581: Quick structure check — avoid full LINQ projection + ItemsSource
-        // reassignment when only the current session's turn count changed.
+        // #3581 / #3757: Always rebuild the session list. An early-return
+        // optimisation (removed here) compared only session IDs and skipped
+        // rebuilds — but after CompressCurrentSessionIfNeededAsync truncates
+        // turns, TurnCount / Title / RelativeTime would differ while IDs
+        // stayed the same, so stale values were displayed.
         var sessionList = _chatState.Sessions;
-        if (SessionList.ItemsSource is IReadOnlyList<SessionListItem> current
-            && current.Count == sessionList.Count
-            && current.Select(i => i.Id).SequenceEqual(sessionList.Select(s => s.Id)))
-        {
-            return;
-        }
-
         var items = sessionList
             .Select(session => new SessionListItem(
                 session.Id,

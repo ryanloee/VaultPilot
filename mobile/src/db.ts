@@ -408,7 +408,14 @@ export async function updateNote(
 export async function deleteNote(id: string): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM notes WHERE id = ?', [id]);
-  invalidateNoteTitleCache();
+  // Post-DELETE side-effects are best-effort: the note row is already deleted,
+  // so cache invalidation or sync-queue failures must never surface as errors
+  // to the caller. Mirrors the createNote/updateNote pattern (#3502, #3778).
+  try {
+    invalidateNoteTitleCache();
+  } catch (cacheErr) {
+    console.warn('[db] deleteNote: invalidateNoteTitleCache failed (non-fatal):', cacheErr);
+  }
   // Queue delete for offline sync push (#2433).
   // queuePendingSync is best-effort; failure must NOT prevent note deletion
   // (same principle as createNote/updateNote, #3502).

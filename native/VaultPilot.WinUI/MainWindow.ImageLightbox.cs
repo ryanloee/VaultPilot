@@ -41,6 +41,10 @@ public sealed partial class MainWindow
     private bool _lightboxPanning;
     private Point _lightboxPanLast;
 
+    // Swipe-to-dismiss tracking (#3751)
+    private double _lightboxSwipeY;
+    private bool _lightboxSwipeActive;
+
     /// <summary>
     /// Show a full-screen image lightbox.
     /// </summary>
@@ -80,6 +84,9 @@ public sealed partial class MainWindow
         root.PointerPressed += Lightbox_OnPointerPressed;
         root.PointerMoved += Lightbox_OnPointerMoved;
         root.PointerReleased += Lightbox_OnPointerReleased;
+        root.ManipulationMode = ManipulationModes.TranslateY | ManipulationModes.TranslateInertia;
+        root.ManipulationDelta += Lightbox_OnManipulationDelta;
+        root.ManipulationCompleted += Lightbox_OnManipulationCompleted;
 
         UpdateLightboxNavButtons();
 
@@ -342,6 +349,83 @@ public sealed partial class MainWindow
             ((UIElement?)sender)?.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
         }
+    }
+
+    // ── Swipe-to-dismiss (#3751) ────────────────────────────────────
+    private void Lightbox_OnManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
+    {
+        // Only enable swipe-to-dismiss when not zoomed in (at 1x, pan is
+        // not needed — the image fits the viewport).  When zoomed, let
+        // pointer-drag pan handle it.
+        if (_lightboxScale is { ScaleX: > LightboxMinZoom })
+        {
+            return;
+        }
+
+        _lightboxSwipeY += e.Delta.Translation.Y;
+        _lightboxSwipeActive = true;
+
+        // Visually follow the finger by translating the image container.
+        if (_lightboxTranslate is not null)
+        {
+            _lightboxTranslate.Y = _lightboxSwipeY;
+        }
+
+        // Fade the background as the swipe progresses (0→1 opacity drops
+        // toward 0.3 at ~200 px).
+        var opacity = Math.Max(0.3, 1.0 - Math.Abs(_lightboxSwipeY) / 300.0);
+        if (sender is Grid grid)
+        {
+            grid.Opacity = opacity;
+        }
+    }
+
+    private void Lightbox_OnManipulationCompleted(object sender, ManipulationCompletedRoutedEventArgs e)
+    {
+        if (!_lightboxSwipeActive)
+            return;
+
+        _lightboxSwipeActive = false;
+
+        // If the vertical swipe exceeded the dismiss threshold (120 px),
+        // close the lightbox. Otherwise, animate back to original position.
+        if (Math.Abs(_lightboxSwipeY) > 120)
+        {
+            _lightboxDialog?.Hide();
+        }
+        else
+        {
+            // Animate back — simple linear animation with 200ms duration.
+            var translate = _lightboxTranslate;
+            var grid = sender as Grid;
+            if (translate is null || grid is null) return;
+
+            var from = _lightboxSwipeY;
+            var to = 0.0;
+            var startTime = DateTime.UtcNow;
+            var duration = TimeSpan.FromMilliseconds(200);
+
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            timer.Tick += (_, _) =>
+            {
+                var elapsed = (DateTime.UtcNow - startTime).TotalMilliseconds;
+                var t = Math.Clamp(elapsed / duration.TotalMilliseconds, 0, 1);
+                // Ease-out cubic
+                var eased = 1 - Math.Pow(1 - t, 3);
+                translate.Y = from + (to - from) * eased;
+                grid.Opacity = 1 - (1 - Math.Abs(translate.Y) / 300.0) * (1 - t);
+
+                if (t >= 1)
+                {
+                    translate.Y = 0;
+                    grid.Opacity = 1;
+                    timer.Stop();
+                }
+            };
+            timer.Start();
+        }
+
+        _lightboxSwipeY = 0;
     }
 
     private void Lightbox_OnPointerWheel(object sender, PointerRoutedEventArgs e)

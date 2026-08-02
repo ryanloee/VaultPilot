@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System.Collections.Generic;
+using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.RegularExpressions;
 using VaultPilot.WinUI.Utils;
 
@@ -863,7 +864,15 @@ public sealed partial class MainWindow : Window
         image.PointerPressed += async (sender, args) =>
         {
             args.Handled = true;
-            var idx = capturedPaths.IndexOf(capturedPath);
+            var idx = -1;
+            for (var i = 0; i < capturedPaths.Count; i++)
+            {
+                if (string.Equals(capturedPaths[i], capturedPath, StringComparison.Ordinal))
+                {
+                    idx = i;
+                    break;
+                }
+            }
             if (idx < 0) idx = 0;
             await ShowImageLightboxAsync(
                 capturedPaths, idx,

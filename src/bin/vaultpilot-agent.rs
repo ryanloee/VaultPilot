@@ -497,6 +497,17 @@ async fn handle_request(
                 .map(Value::String)
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e))
         }
+        // #3747: readFileAsDataUrl — reads any local image file (including
+        // outside vault) and returns a base64 data-URI.  The vault path
+        // containment check is intentionally skipped; this endpoint is
+        // called by the trusted local WinUI Markdown image lightbox for
+        // images referenced from notes.
+        "readFileAsDataUrl" => {
+            let params: PathParams = parse_params(&request.params)?;
+            read_image_preview(&params.path)
+                .map(Value::String)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e))
+        }
         "openVaultDirectory" => {
             let params: PathParams = parse_params(&request.params)?;
             let settings = initialize_storage_async(context)

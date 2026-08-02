@@ -50,6 +50,13 @@ use vaultpilot_lib::{
 /// Shared state for the active agent session's write-approval channel.
 static AGENT_APPROVAL: StdMutex<Option<std::sync::mpsc::Sender<bool>>> = StdMutex::new(None);
 
+/// Handle of the active agent background thread. Used to:
+/// - Detect and reject concurrent `runAgent` calls (preventing the race on
+///   AGENT_APPROVAL where a second runAgent overwrites the first's channel
+///   sender, leaving the first thread blocked on `rx.recv()` forever).
+/// - Join the agent thread on process exit so it isn't abruptly killed.
+static ACTIVE_AGENT: StdMutex<Option<std::thread::JoinHandle<()>>> = StdMutex::new(None);
+
 /// Shared stdout writer — ensures atomic line writes from both the main loop
 /// and the background agent task.
 struct SharedWriter {
@@ -268,6 +275,22 @@ fn main() {
 
         if let Ok(serialized) = serde_json::to_string(&response) {
             shared_writer.write_line(&serialized);
+        }
+    }
+
+    // Join the active agent thread on exit so it completes gracefully
+    // instead of being abruptly killed when the process terminates.
+    if let Some(handle) = ACTIVE_AGENT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        tracing::info!("vaultpilot-agent waiting for active agent thread to finish...");
+        if let Err(e) = handle.join() {
+            tracing::error!(
+                "Agent thread panicked: {:?}",
+                e.downcast_ref::<&str>().unwrap_or(&"<unknown>")
+            );
         }
     }
 }
@@ -536,6 +559,30 @@ async fn handle_request(
         }
         "runAgent" => {
             let params: RunAgentParams = parse_params(&request.params)?;
+
+            // Reject concurrent agent runs — avoids the race where a second
+            // runAgent overwrites AGENT_APPROVAL, leaving the first thread
+            // blocked forever on rx.recv().
+            {
+                let active = ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner());
+                if active.is_some() {
+                    writer.write_line(
+                        &serde_json::json!({
+                            "event": "error",
+                            "payload": {
+                                "code": "AGENT_ALREADY_RUNNING",
+                                "message": "Agent session is already in progress."
+                            }
+                        })
+                        .to_string(),
+                    );
+                    return Ok(serde_json::json!({
+                        "status": "rejected",
+                        "reason": "agent already running"
+                    }));
+                }
+            }
+
             let settings = initialize_storage_async(context)
                 .await
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
@@ -549,7 +596,8 @@ async fn handle_request(
 
             // Spawn agent in background so main loop can continue processing
             // respondToWriteApproval requests.
-            std::thread::spawn(move || {
+            let thread_writer = Arc::clone(&writer);
+            let handle = std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
@@ -563,11 +611,14 @@ async fn handle_request(
                         &history,
                         max_steps,
                         auto_approve,
-                        writer,
+                        thread_writer,
                     )
                     .await;
                 });
             });
+
+            // Store handle so main loop can detect concurrent runs and join on exit.
+            *ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 
             Ok(serde_json::json!({ "status": "started" }))
         }
@@ -1468,8 +1519,9 @@ async fn run_agent_task(
         }
     }
 
-    // Clear any pending approval channel
+    // Clear any pending approval channel and active agent handle.
     *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2245,5 +2297,76 @@ mod tests {
             "rating": "medium"
         });
         assert!(serde_json::from_value::<ReviewFlashcardParams>(json).is_err());
+    }
+
+    // ── Regression: #3769 concurrent runAgent race on AGENT_APPROVAL ────
+    // NOTE: These tests share the global ACTIVE_AGENT / AGENT_APPROVAL
+    // statics, so they are combined into a single test to avoid races
+    // between parallel test threads.
+
+    /// Verifies the agent lifecycle state machine used by #3769 fix:
+    /// - ACTIVE_AGENT starts None
+    /// - Setting / clearing tracks agent lifecycle correctly
+    /// - AGENT_APPROVAL and ACTIVE_AGENT are independently managed
+    #[test]
+    fn regression_3769_agent_approval_race_fix() {
+        // ── Phase 1: initial state ──
+        {
+            let guard = ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(guard.is_none(), "ACTIVE_AGENT should start as None");
+        }
+
+        // ── Phase 2: lifecycle — set, verify, clear ──
+        let handle = std::thread::spawn(|| {});
+        *ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+
+        {
+            let guard = ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(guard.is_some(), "should be busy while agent runs");
+        }
+
+        // Join and clear
+        let handle = ACTIVE_AGENT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .expect("should have a handle");
+        handle.join().unwrap();
+
+        {
+            let guard = ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                guard.is_none(),
+                "ACTIVE_AGENT should be None after agent finishes"
+            );
+        }
+
+        // ── Phase 3: approval channel independence ──
+        let handle = std::thread::spawn(|| {});
+        *ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+
+        // Clear AGENT_APPROVAL first (as run_agent_task does)
+        *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        assert!(AGENT_APPROVAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none());
+
+        // ACTIVE_AGENT should still be set (independent)
+        assert!(ACTIVE_AGENT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some());
+
+        // Cleanup
+        let handle = ACTIVE_AGENT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .unwrap();
+        handle.join().unwrap();
     }
 }

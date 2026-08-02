@@ -64,6 +64,7 @@ public sealed partial class MainWindow : Window
     private const int AutoWakeMaxFailures = 3;
     private Views.NotesView? _notesView;
     private bool _notesViewLoaded;
+    private Views.SettingsWindow ? _settingsWindow;
     private nint _windowHandle;
     private nint _originalWindowProc;
     private WindowProcDelegate? _windowProcDelegate;
@@ -260,6 +261,149 @@ public sealed partial class MainWindow : Window
     }
 
     private async void OnSettingsClicked(object sender, RoutedEventArgs e)
+        {
+            // #3612: Use the new SettingsWindow (non-blocking standalone window)
+            // instead of the old SettingsDialog ContentDialog (blocking modal).
+            // When the user holds Ctrl, fall back to the old ContentDialog for now.
+            // (We keep both code paths for a smooth transition.)
+            bool useDialog = false;
+            try
+            {
+                if (e is KeyRoutedEventArgs keyArgs)
+                {
+                    useDialog = keyArgs.Key == Windows.System.VirtualKey.Control;
+                }
+            }
+            catch { }
+
+            if (useDialog)
+            {
+                await OpenSettingsDialogAsync();
+            }
+            else
+            {
+                OpenSettingsWindow();
+            }
+        }
+
+        private async void OpenSettingsWindow()
+            {
+                try
+                {
+                    // If already open, bring it to front
+                    if (_settingsWindow is not null)
+                    {
+                        try { _settingsWindow.Activate(); } catch { }
+                        return;
+                    }
+
+                    try
+                    {
+                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                        _settings ??= await _backendClient.SendAsync<AppSettings>("getSettings", new { }, cts.Token);
+                    }
+                    catch (Exception loadError)
+                    {
+                        ShowError("无法加载设置", new InvalidOperationException($"设置加载失败，请检查后端连接：{loadError.Message}", loadError));
+                        return;
+                    }
+                    if (_settings is null)
+                    {
+                        ShowError("无法加载设置", new InvalidOperationException("后端返回了空设置数据，请重启应用后重试。"));
+                        return;
+                    }
+
+                string? nextWakeText = null;
+                if (_settings.AutoWakeEnabled)
+                {
+                    var next = GetNextAutoWakeTime();
+                    if (next.HasValue)
+                    {
+                        nextWakeText = next.Value.Date == DateTime.Today
+                            ? $"下次唤醒: {next.Value:HH:mm}"
+                            : $"下次唤醒: {next.Value:MM/dd HH:mm}";
+                    }
+                }
+
+                var activeProvider = _settings.Providers.Count > 0
+                    ? _settings.Providers[Math.Clamp(_settings.ActiveProviderIndex, 0, _settings.Providers.Count - 1)]
+                    : (_settings.Provider ?? new ProviderConfig());
+                var models = GetModelsForProvider(activeProvider?.BaseUrl ?? string.Empty);
+
+                var window = new Views.SettingsWindow(
+                    _settings,
+                    models,
+                    nextWakeText,
+                    ResolveDisplayVersion(),
+                    OpenVaultDirectoryAsync,
+                    OpenProjectHomepageAsync,
+                    CheckProviderConnectionAsync);
+
+                window.SettingsSaved += OnSettingsWindowSaved;
+                window.SettingsCancelled += OnSettingsWindowCancelled;
+                window.Closed += OnSettingsWindowClosed;
+
+                _settingsWindow = window;
+                window.Activate();
+            }
+            catch (Exception error)
+            {
+                ShowError("打开设置失败", error);
+            }
+        }
+
+        private async void OnSettingsWindowSaved()
+    {
+        try
+        {
+            if (_settingsWindow?.UpdatedSettings is { } updated)
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated }, cts.Token);
+                    RefreshVaultSummary();
+                    RefreshContextStatus();
+                    ApplyAutoWakeSettings();
+                    UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
+                    ShowNextWakeTime();
+                    ApplyTheme(_settingsWindow.ThemeMode);
+                    ApplyAlwaysOnTop(updated.IsAlwaysOnTop);
+                }
+            }
+            catch (Exception error)
+            {
+                ShowError("保存设置失败", error);
+            }
+        }
+
+        private void OnSettingsWindowCancelled(object? sender, EventArgs e)
+        {
+            CloseSettingsWindow();
+        }
+
+        private void OnSettingsWindowClosed(object? sender, WindowEventArgs e)
+        {
+            ClearSettingsWindow((Window)sender!);
+        }
+
+        private void CloseSettingsWindow()
+        {
+            if (_settingsWindow is null) return;
+            try { _settingsWindow.Close(); } catch { }
+            ClearSettingsWindow(_settingsWindow);
+        }
+
+        private void ClearSettingsWindow(Views.SettingsWindow window)
+        {
+            if (_settingsWindow == window)
+            {
+                window.SettingsSaved -= OnSettingsWindowSaved;
+                window.SettingsCancelled -= OnSettingsWindowCancelled;
+                window.Closed -= OnSettingsWindowClosed;
+                _settingsWindow = null;
+            }
+        }
+
+        private async Task OpenSettingsDialogAsync()
     {
         try
         {
@@ -292,12 +436,6 @@ public sealed partial class MainWindow : Window
                 }
             }
 
-            // Use the active provider from the multi-provider list, with
-            // fallback to the legacy single Provider field for backward compat.
-            // Defensive null-coalescing (issue #3090): System.Text.Json can
-            // explicitly set Provider to null when the backend payload contains
-            // "provider": null, which would otherwise NullReferenceException
-            // on the .BaseUrl access below.
             var activeProvider = _settings.Providers.Count > 0
                 ? _settings.Providers[Math.Clamp(_settings.ActiveProviderIndex, 0, _settings.Providers.Count - 1)]
                 : (_settings.Provider ?? new ProviderConfig());
@@ -324,9 +462,7 @@ public sealed partial class MainWindow : Window
                 ApplyAutoWakeSettings();
                 UpdateStatusBar("success", "设置已保存", "模型服务配置已更新。");
                 ShowNextWakeTime();
-                // Apply theme change immediately so the user sees it without restart.
                 ApplyTheme(dialog.ThemeMode);
-                // Apply Always-on-Top immediately (#3473).
                 ApplyAlwaysOnTop(updated.IsAlwaysOnTop);
             }
         }

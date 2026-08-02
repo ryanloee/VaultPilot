@@ -217,6 +217,85 @@ pub fn load_note_with_context(context: &StorageContext, note_id: &str) -> Result
     parse_markdown_note(Path::new(&path), "manual")
 }
 
+/// Preview a fragment of a note for hover/long-press link previews (#3739).
+///
+/// Similar to Obsidian's Page Preview: returns the first `max_lines` lines of a
+/// note, or a specific block/heading if an anchor is provided.
+///
+/// Anchor format (consistent with Obsidian wiki-link anchors):
+/// * `None`       — return first `max_lines` lines of the note
+/// * `#heading`   — return content under the matching heading (trimmed to `max_lines`)
+/// * `#^block-id` — return the specific block with matching id
+pub fn preview_note_fragment(
+    context: &StorageContext,
+    note_id: &str,
+    anchor: Option<&str>,
+    max_lines: usize,
+) -> Result<String> {
+    use crate::block_ref::{find_block_by_id, parse_blocks};
+
+    let doc = load_note_with_context(context, note_id)?;
+    let body = &doc.body;
+
+    match anchor {
+        None => {
+            // Return first N lines (head of the note)
+            let lines: Vec<&str> = body.lines().take(max_lines).collect();
+            Ok(lines.join("\n"))
+        }
+        Some(anchor) if anchor.starts_with('^') => {
+            // Block reference: find by block id
+            let block_id = &anchor[1..]; // strip leading ^
+            let blocks = parse_blocks(body);
+            match find_block_by_id(&blocks, block_id) {
+                Some(block) => Ok(block.text.clone()),
+                None => {
+                    // Block not found — fall back to first N lines
+                    let lines: Vec<&str> = body.lines().take(max_lines).collect();
+                    Ok(lines.join("\n"))
+                }
+            }
+        }
+        Some(heading) => {
+            // Heading anchor: find the heading and return content underneath it
+            let heading_text = heading.trim_start_matches('#');
+            let mut found = false;
+            let mut result = Vec::new();
+            let mut line_count = 0;
+
+            for line in body.lines() {
+                if line_count >= max_lines {
+                    break;
+                }
+                if !found {
+                    // Check if this line is a heading matching the anchor
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('#')
+                        && trimmed
+                            .trim_start_matches('#')
+                            .trim()
+                            .eq_ignore_ascii_case(heading_text.trim())
+                    {
+                        found = true;
+                    }
+                }
+                if found {
+                    result.push(line);
+                    line_count += 1;
+                }
+            }
+
+            if result.is_empty() {
+                // Heading not found — fall back to first N lines
+                let lines: Vec<&str> = body.lines().take(max_lines).collect();
+                Ok(lines.join("\n"))
+            } else {
+                Ok(result.join("\n"))
+            }
+        }
+    }
+}
+
 /// Delete a note (and optionally its associated attachments).
 ///
 /// `delete_attachments` controls attachment cleanup:
@@ -3786,5 +3865,118 @@ mod tests {
             "content preserved: '{}'",
             summary
         );
+    }
+
+    // ── #3739: preview_note_fragment regression tests ──
+    #[test]
+    fn regression_3739_preview_note_fragment_no_anchor() {
+        use super::*;
+        let dir = std::env::temp_dir().join(format!(
+            "vaultpilot-3739-preview-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let ctx = StorageContext::for_test(&dir);
+
+        // Body includes summary section so ensure_summary_section won't duplicate it.
+        let body = "## 摘要\n\nBrief summary.\n\nLine 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6";
+        let note = NoteDocument {
+            meta: NoteMeta {
+                id: "test-note-1".to_string(),
+                title: "Test Note".to_string(),
+                ..Default::default()
+            },
+            body: body.to_string(),
+            ..Default::default()
+        };
+        let saved = save_note_with_context(&ctx, note).expect("save note");
+        assert_eq!(saved.meta.id, "test-note-1");
+
+        // Preview first 3 lines (should include the summary header)
+        let preview = preview_note_fragment(&ctx, "test-note-1", None, 3).unwrap();
+        assert!(preview.contains("## 摘要"), "preview: {}", preview);
+        assert!(preview.contains("Brief summary"), "preview: {}", preview);
+
+        let preview = preview_note_fragment(&ctx, "test-note-1", None, 100).unwrap();
+        assert!(preview.contains("Line 1"));
+        assert!(preview.contains("Line 6"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn regression_3739_preview_note_fragment_with_heading() {
+        use super::*;
+        let dir = std::env::temp_dir().join(format!(
+            "vaultpilot-3739-heading-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let ctx = StorageContext::for_test(&dir);
+
+        let body = "## 摘要\n\ntest summary.\n\n# Introduction\nintro content\nmore intro\n## Methods\nmethod detail\nmore method\n## Results\nresult line";
+        let note = NoteDocument {
+            meta: NoteMeta {
+                title: "Test Heading".to_string(),
+                ..Default::default()
+            },
+            body: body.to_string(),
+            ..Default::default()
+        };
+        let saved = save_note_with_context(&ctx, note).expect("save note");
+        let note_id = &saved.meta.id;
+
+        let preview = preview_note_fragment(&ctx, note_id, Some("#Introduction"), 3).unwrap();
+        assert!(preview.contains("# Introduction"), "preview: {}", preview);
+        assert!(preview.contains("intro content"), "preview: {}", preview);
+
+        // Nonexistent heading → fallback
+        let preview = preview_note_fragment(&ctx, note_id, Some("#Nonexistent"), 2).unwrap();
+        assert!(
+            !preview.contains("method"),
+            "nonexistent should fallback: {}",
+            preview
+        );
+        assert!(preview.contains("## 摘要"), "fallback: {}", preview);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn regression_3739_preview_note_fragment_block_id() {
+        use super::*;
+        let dir = std::env::temp_dir().join(format!(
+            "vaultpilot-3739-block-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let ctx = StorageContext::for_test(&dir);
+
+        let body = "## 摘要\n\ntest block summary.\n\nplain line\nblock content here ^block-abc\nmore text";
+        let note = NoteDocument {
+            meta: NoteMeta {
+                title: "test-block".to_string(),
+                ..Default::default()
+            },
+            body: body.to_string(),
+            ..Default::default()
+        };
+        let saved = save_note_with_context(&ctx, note).expect("save note");
+        let note_id = &saved.meta.id;
+
+        let preview = preview_note_fragment(&ctx, note_id, Some("^block-abc"), 10).unwrap();
+        assert!(
+            preview.contains("block content here"),
+            "preview: {}",
+            preview
+        );
+
+        let preview = preview_note_fragment(&ctx, note_id, Some("^nonexistent"), 2).unwrap();
+        assert!(preview.contains("## 摘要"), "fallback: {}", preview);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -80,6 +80,7 @@ pub use notes::{
     load_recent_notes_for_overview_async,
     ocr_image_text,
     ocr_image_text_async,
+    preview_note_fragment,
     rebuild_index_async,
     rebuild_index_with_context,
     save_note_async,

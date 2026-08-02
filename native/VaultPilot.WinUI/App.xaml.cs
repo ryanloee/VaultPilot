@@ -15,6 +15,14 @@ public partial class App : Application
     private Mutex? _instanceMutex;
     private int _exitInProgress;
 
+    /// <summary>
+    /// Stopwatch started at process entry — the reference point for startup
+    /// milestone timings logged by <c>LogStartup</c> (#3604 "指标化": every
+    /// startup.log line gets a [+Nms] offset so regressions are measurable
+    /// between releases).
+    /// </summary>
+    public static readonly Stopwatch StartupWatch = Stopwatch.StartNew();
+
     public App()
     {
         InitializeComponent();

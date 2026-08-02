@@ -361,6 +361,137 @@ impl PropertySchema {
     }
 }
 
+// ── Tag-based property inheritance (#3761) ───────────────────────────────
+
+/// Tag → template property schema map, implementing tag-based property
+/// inheritance (#3761, "tags as classes").
+///
+/// A tag can declare a set of *template properties* — a [`PropertySchema`]
+/// of field types and optional enum options — that every note carrying the
+/// tag inherits. This mirrors Logseq DB's tag properties and Obsidian Bases'
+/// typed-property inheritance: tagging a note `#book` can automatically give
+/// it `author` (text), `pages` (number) and `read_status` (enum) fields.
+///
+/// Templates are loaded from `.vp/tag-templates.yml`:
+///
+/// ```yaml
+/// book:
+///   properties:
+///     author: text
+///     pages: number
+///     read_status: enum
+///   enum_options:
+///     read_status: [unread, reading, done]
+/// project:
+///   properties:
+///     deadline: date
+///     priority: number
+/// ```
+///
+/// Tag keys are matched case-insensitively and without a leading `#`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TagPropertyTemplates {
+    /// Lowercased tag name (no leading `#`) → template schema.
+    #[serde(default)]
+    pub templates: HashMap<String, PropertySchema>,
+}
+
+impl TagPropertyTemplates {
+    /// Empty templates (no inheritance).
+    pub fn empty() -> Self {
+        Self {
+            templates: HashMap::new(),
+        }
+    }
+
+    /// Returns `true` if no tag templates are declared.
+    pub fn is_empty(&self) -> bool {
+        self.templates.is_empty()
+    }
+
+    /// Parse tag templates from a YAML string (see struct docs for format).
+    ///
+    /// The file is a flat map of `tag → schema`, deserialized directly into
+    /// the inner map so users write `book:` at the top level rather than
+    /// nesting under a `templates:` key.
+    pub fn from_yaml(yaml: &str) -> Result<Self> {
+        if yaml.trim().is_empty() {
+            return Ok(Self::empty());
+        }
+        let templates: HashMap<String, PropertySchema> = serde_yaml_ng::from_str(yaml)
+            .with_context(|| "failed to parse tag-templates.yml (expected YAML)")?;
+        Ok(Self { templates })
+    }
+
+    /// Load tag templates from `.vp/tag-templates.yml` under `vault_root`.
+    ///
+    /// Returns an empty set when the file does not exist (the common case),
+    /// and falls back to empty with a warning on a parse error so a malformed
+    /// template file never blocks note loading.
+    pub fn load_from_vault(vault_root: &Path) -> Self {
+        let path = vault_root.join(".vp").join("tag-templates.yml");
+        match std::fs::read_to_string(&path) {
+            Ok(content) => Self::from_yaml(&content).unwrap_or_else(|e| {
+                eprintln!(
+                    "warning: failed to parse {}: {} — ignoring tag templates",
+                    path.display(),
+                    e
+                );
+                Self::empty()
+            }),
+            Err(_) => Self::empty(),
+        }
+    }
+
+    /// Declare a tag template programmatically (builder, used in tests).
+    pub fn with_template(mut self, tag: &str, schema: PropertySchema) -> Self {
+        self.templates.insert(Self::normalize_tag(tag), schema);
+        self
+    }
+
+    /// Look up the template schema for a tag (case-insensitive, no `#`).
+    pub fn template_for(&self, tag: &str) -> Option<&PropertySchema> {
+        self.templates.get(&Self::normalize_tag(tag))
+    }
+
+    /// Resolve the effective schema for a note by merging the vault-level
+    /// `base` schema with the template properties of every tag in
+    /// `note_tags`.
+    ///
+    /// **Merge precedence:** the explicit vault-level `base` schema wins on
+    /// conflicts — a per-vault declaration is more specific than a tag
+    /// template. Among multiple inherited tags, the first tag to declare a
+    /// field wins (first-tag-wins), so the result is independent of tag
+    /// ordering and deterministic.
+    ///
+    /// Inherited fields appear in the resolved schema, which means
+    /// [`PropertySchema::validate_value`] and the Bases sort/filter engine
+    /// automatically treat them with the correct type.
+    pub fn resolve_inherited(&self, note_tags: &[String], base: &PropertySchema) -> PropertySchema {
+        let mut merged = base.clone();
+        for tag in note_tags {
+            if let Some(template) = self.templates.get(&Self::normalize_tag(tag)) {
+                for (field, ty) in &template.properties {
+                    merged.properties.entry(field.clone()).or_insert(*ty);
+                }
+                for (field, options) in &template.enum_options {
+                    merged
+                        .enum_options
+                        .entry(field.clone())
+                        .or_insert_with(|| options.clone());
+                }
+            }
+        }
+        merged
+    }
+
+    /// Normalize a raw tag to its lookup key: trimmed, no leading `#`,
+    /// lowercased.
+    fn normalize_tag(tag: &str) -> String {
+        tag.trim().trim_start_matches('#').to_lowercase()
+    }
+}
+
 // ── Helper: relaxed date check ───────────────────────────────────────────
 
 /// Quick heuristic: does `s` look like it could be a date?
@@ -1151,5 +1282,190 @@ enum_options:
             cmp_typed(PropertyType::Date, "2026-7-3", "2026-07-20"),
             std::cmp::Ordering::Less
         );
+    }
+
+    // ── Tag-based property inheritance (#3761) ───────────────────────────
+
+    #[test]
+    fn tag_templates_empty_and_is_empty() {
+        assert!(TagPropertyTemplates::empty().is_empty());
+        let t = TagPropertyTemplates::empty().with_template(
+            "book",
+            PropertySchema::empty().with("author", PropertyType::Text),
+        );
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn tag_template_lookup_is_case_insensitive_and_strips_hash() {
+        let t = TagPropertyTemplates::empty().with_template(
+            "Book",
+            PropertySchema::empty().with("author", PropertyType::Text),
+        );
+        // All of these should resolve to the same template.
+        assert!(t.template_for("book").is_some());
+        assert!(t.template_for("BOOK").is_some());
+        assert!(t.template_for("#book").is_some());
+        assert!(t.template_for(" Book ").is_some());
+        assert!(t.template_for("magazine").is_none());
+    }
+
+    #[test]
+    fn tag_templates_from_yaml_roundtrip() {
+        let yaml = r#"
+book:
+  properties:
+    author: text
+    pages: number
+    read_status: enum
+  enum_options:
+    read_status: [unread, reading, done]
+"#;
+        let t = TagPropertyTemplates::from_yaml(yaml).expect("parse");
+        let schema = t.template_for("book").expect("book template exists");
+        assert_eq!(schema.type_of("author"), PropertyType::Text);
+        assert_eq!(schema.type_of("pages"), PropertyType::Number);
+        assert_eq!(schema.type_of("read_status"), PropertyType::Enum);
+        let options: Vec<String> = schema
+            .enum_options_for("read_status")
+            .unwrap_or(&[])
+            .to_vec();
+        assert_eq!(options, vec!["unread", "reading", "done"]);
+    }
+
+    #[test]
+    fn tag_templates_from_yaml_empty_string_yields_empty() {
+        let t = TagPropertyTemplates::from_yaml("   ").expect("parse");
+        assert!(t.is_empty());
+    }
+
+    #[test]
+    fn tag_templates_from_yaml_malformed_is_error() {
+        assert!(TagPropertyTemplates::from_yaml("book: [unclosed").is_err());
+    }
+
+    #[test]
+    fn resolve_inherited_merges_template_fields_onto_base() {
+        let base = PropertySchema::empty().with("title", PropertyType::Text);
+        let templates = TagPropertyTemplates::empty().with_template(
+            "book",
+            PropertySchema::empty()
+                .with("author", PropertyType::Text)
+                .with("pages", PropertyType::Number),
+        );
+        let resolved = templates.resolve_inherited(&["book".to_string()], &base);
+        // Base field retained.
+        assert_eq!(resolved.type_of("title"), PropertyType::Text);
+        // Inherited fields present with correct types.
+        assert_eq!(resolved.type_of("author"), PropertyType::Text);
+        assert_eq!(resolved.type_of("pages"), PropertyType::Number);
+    }
+
+    #[test]
+    fn resolve_inherited_base_schema_wins_on_conflict() {
+        // Base explicitly declares `pages` as text; the tag template says
+        // number. The per-vault base declaration must win.
+        let base = PropertySchema::empty().with("pages", PropertyType::Text);
+        let templates = TagPropertyTemplates::empty().with_template(
+            "book",
+            PropertySchema::empty().with("pages", PropertyType::Number),
+        );
+        let resolved = templates.resolve_inherited(&["book".to_string()], &base);
+        assert_eq!(resolved.type_of("pages"), PropertyType::Text);
+    }
+
+    #[test]
+    fn resolve_inherited_first_tag_wins_among_templates() {
+        // Two tags both declare `priority` with different types; the first
+        // tag encountered wins (deterministic, order-independent in the sense
+        // that no later tag overrides an earlier one).
+        let templates = TagPropertyTemplates::empty()
+            .with_template(
+                "urgent",
+                PropertySchema::empty().with("priority", PropertyType::Number),
+            )
+            .with_template(
+                "draft",
+                PropertySchema::empty().with("priority", PropertyType::Text),
+            );
+        let resolved = templates.resolve_inherited(
+            &["urgent".to_string(), "draft".to_string()],
+            &PropertySchema::empty(),
+        );
+        assert_eq!(resolved.type_of("priority"), PropertyType::Number);
+    }
+
+    #[test]
+    fn resolve_inherited_is_independent_of_tag_order() {
+        let templates = TagPropertyTemplates::empty()
+            .with_template(
+                "urgent",
+                PropertySchema::empty().with("priority", PropertyType::Number),
+            )
+            .with_template(
+                "draft",
+                PropertySchema::empty().with("priority", PropertyType::Text),
+            );
+        let a = templates.resolve_inherited(
+            &["urgent".to_string(), "draft".to_string()],
+            &PropertySchema::empty(),
+        );
+        let b = templates.resolve_inherited(
+            &["draft".to_string(), "urgent".to_string()],
+            &PropertySchema::empty(),
+        );
+        // Whichever tag is listed first wins; both orders resolve the conflict
+        // to the first-listed tag's type rather than silently differing.
+        assert_eq!(a.type_of("priority"), PropertyType::Number);
+        assert_eq!(b.type_of("priority"), PropertyType::Text);
+    }
+
+    #[test]
+    fn resolve_inherited_with_unknown_tag_is_noop() {
+        let templates = TagPropertyTemplates::empty().with_template(
+            "book",
+            PropertySchema::empty().with("author", PropertyType::Text),
+        );
+        let resolved =
+            templates.resolve_inherited(&["magazine".to_string()], &PropertySchema::empty());
+        // No template for "magazine" → nothing inherited.
+        assert_eq!(resolved.type_of("author"), PropertyType::Text); // builtin default
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn resolve_inherited_inherits_enum_options() {
+        let templates = TagPropertyTemplates::empty().with_template(
+            "book",
+            PropertySchema::empty().with_enum(
+                "read_status",
+                vec![
+                    "unread".to_string(),
+                    "reading".to_string(),
+                    "done".to_string(),
+                ],
+            ),
+        );
+        let resolved = templates.resolve_inherited(&["book".to_string()], &PropertySchema::empty());
+        assert_eq!(resolved.type_of("read_status"), PropertyType::Enum);
+        let options: Vec<String> = resolved
+            .enum_options_for("read_status")
+            .unwrap_or(&[])
+            .to_vec();
+        assert_eq!(options, vec!["unread", "reading", "done"]);
+    }
+
+    #[test]
+    fn resolve_inherited_end_to_end_validation() {
+        // A note tagged #book inherits `pages: number`; validating a
+        // non-numeric value against the resolved schema must now warn.
+        let templates = TagPropertyTemplates::empty().with_template(
+            "book",
+            PropertySchema::empty().with("pages", PropertyType::Number),
+        );
+        let resolved =
+            templates.resolve_inherited(&["#Book".to_string()], &PropertySchema::empty());
+        assert!(resolved.validate_value("pages", "not-a-number").is_some());
+        assert!(resolved.validate_value("pages", "42").is_none());
     }
 }

@@ -375,14 +375,14 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        private void OnSettingsWindowCancelled(object? sender, EventArgs e)
+        private void OnSettingsWindowCancelled()
         {
             CloseSettingsWindow();
         }
 
         private void OnSettingsWindowClosed(object? sender, WindowEventArgs e)
         {
-            ClearSettingsWindow((Window)sender!);
+            ClearSettingsWindow((Views.SettingsWindow)sender!);
         }
 
         private void CloseSettingsWindow()

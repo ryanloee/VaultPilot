@@ -22,6 +22,10 @@ use vaultpilot_lib::ai::transcription::{
 };
 use vaultpilot_lib::ai::RequestUsage;
 use vaultpilot_lib::diff::compute_diff;
+use vaultpilot_lib::flashcards::{
+    create_flashcard, get_stats, list_due_flashcards, list_flashcards, review_flashcard, Flashcard,
+    FlashcardStats, ReviewRating, ReviewResult,
+};
 use vaultpilot_lib::models::{
     AppSettings, ChatState, ConversationSummary, ConversationTurn, NoteDocument,
 };
@@ -799,6 +803,55 @@ async fn handle_request(
             let result = check_provider_connection(&params).await;
             serde_json::to_value(&result)
                 .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        // ── Flashcard / Spaced Repetition (#3763) ─────────────────
+        "createFlashcard" => {
+            let params: CreateFlashcardParams = parse_params(&request.params)?;
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let card = create_flashcard(
+                &settings,
+                params.front,
+                params.back,
+                params.source_note_id,
+                params.tags,
+            )
+            .map_err(|e| vaultpilot_lib::sanitize_error(&e))?;
+            serde_json::to_value(&card).map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "listFlashcards" => {
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let cards: Vec<Flashcard> =
+                list_flashcards(&settings).map_err(|e| vaultpilot_lib::sanitize_error(&e))?;
+            serde_json::to_value(&cards).map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "listDueFlashcards" => {
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let cards: Vec<Flashcard> =
+                list_due_flashcards(&settings).map_err(|e| vaultpilot_lib::sanitize_error(&e))?;
+            serde_json::to_value(&cards).map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "reviewFlashcard" => {
+            let params: ReviewFlashcardParams = parse_params(&request.params)?;
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let result: ReviewResult = review_flashcard(&settings, &params.id, params.rating);
+            serde_json::to_value(&result)
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
+        }
+        "getFlashcardStats" => {
+            let settings = initialize_storage_async(context)
+                .await
+                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let stats: FlashcardStats =
+                get_stats(&settings).map_err(|e| vaultpilot_lib::sanitize_error(&e))?;
+            serde_json::to_value(&stats).map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
         method => Err(format!("unknown method: {method}")),
     }
@@ -1617,6 +1670,24 @@ struct DiffSnapshotParams {
     snapshot_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateFlashcardParams {
+    front: String,
+    back: String,
+    #[serde(default)]
+    source_note_id: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewFlashcardParams {
+    id: String,
+    rating: ReviewRating,
+}
+
 impl AgentResponse {
     fn ok(id: String, result: Value) -> Self {
         Self {
@@ -2123,5 +2194,56 @@ mod tests {
             v["models"],
             serde_json::json!(["llama3.2:latest", "mistral:7b"])
         );
+    }
+
+    // ── Flashcard IPC params tests (#3763) ──────────────────────
+
+    #[test]
+    fn create_flashcard_params_deserialize() {
+        let json = serde_json::json!({
+            "front": "What is FSRS?",
+            "back": "Free Spaced Repetition Scheduler",
+            "sourceNoteId": "note-abc",
+            "tags": ["algorithms", "memory"]
+        });
+        let params: CreateFlashcardParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.front, "What is FSRS?");
+        assert_eq!(params.back, "Free Spaced Repetition Scheduler");
+        assert_eq!(params.source_note_id.as_deref(), Some("note-abc"));
+        assert_eq!(params.tags, vec!["algorithms", "memory"]);
+    }
+
+    #[test]
+    fn create_flashcard_params_optional_fields_default() {
+        // source_note_id and tags should default when omitted.
+        let json = serde_json::json!({
+            "front": "2 + 2?",
+            "back": "4"
+        });
+        let params: CreateFlashcardParams = serde_json::from_value(json).unwrap();
+        assert!(params.source_note_id.is_none());
+        assert!(params.tags.is_empty());
+    }
+
+    #[test]
+    fn review_flashcard_params_deserialize_all_ratings() {
+        for rating in ["again", "hard", "good", "easy"] {
+            let json = serde_json::json!({
+                "id": "card-123",
+                "rating": rating
+            });
+            let params: ReviewFlashcardParams = serde_json::from_value(json)
+                .unwrap_or_else(|e| panic!("failed to deserialize rating '{rating}': {e}"));
+            assert_eq!(params.id, "card-123");
+        }
+    }
+
+    #[test]
+    fn review_flashcard_params_rejects_invalid_rating() {
+        let json = serde_json::json!({
+            "id": "card-123",
+            "rating": "medium"
+        });
+        assert!(serde_json::from_value::<ReviewFlashcardParams>(json).is_err());
     }
 }

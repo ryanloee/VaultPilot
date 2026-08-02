@@ -418,8 +418,16 @@ impl TagPropertyTemplates {
         if yaml.trim().is_empty() {
             return Ok(Self::empty());
         }
-        let templates: HashMap<String, PropertySchema> = serde_yaml_ng::from_str(yaml)
+        let raw: HashMap<String, PropertySchema> = serde_yaml_ng::from_str(yaml)
             .with_context(|| "failed to parse tag-templates.yml (expected YAML)")?;
+        // Normalize all tag keys (trim + strip leading `#` + lowercase) so that
+        // lookups via `template_for`/`resolve_inherited` — which normalize the
+        // query key — actually match.  Without this, capitalized or
+        // `#`-prefixed YAML keys silently never match (#3773).
+        let templates = raw
+            .into_iter()
+            .map(|(tag, schema)| (Self::normalize_tag(&tag), schema))
+            .collect();
         Ok(Self { templates })
     }
 
@@ -1342,6 +1350,34 @@ book:
     #[test]
     fn tag_templates_from_yaml_malformed_is_error() {
         assert!(TagPropertyTemplates::from_yaml("book: [unclosed").is_err());
+    }
+
+    #[test]
+    fn test_regression_3773_from_yaml_normalizes_tag_keys() {
+        // Before #3773: `from_yaml` stored raw YAML keys without normalizing,
+        // so capitalized or `#`-prefixed tag keys silently never matched
+        // lookups (which normalize via `normalize_tag`).
+        let yaml = r##"
+Book:
+  properties:
+    author: text
+    pages: number
+"#Project":
+  properties:
+    deadline: date
+"##;
+        let t = TagPropertyTemplates::from_yaml(yaml).expect("parse");
+        // Lookup with lowercase tag must find the capitalized YAML key.
+        let book = t.template_for("book").expect("book template exists");
+        assert_eq!(book.type_of("author"), PropertyType::Text);
+        assert_eq!(book.type_of("pages"), PropertyType::Number);
+        // Lookup with `#`-prefixed query must find the `#`-prefixed YAML key.
+        let project = t.template_for("project").expect("project template exists");
+        assert_eq!(project.type_of("deadline"), PropertyType::Date);
+        // The internal map should have normalized keys only.
+        assert!(t.templates.contains_key("book"));
+        assert!(t.templates.contains_key("project"));
+        assert!(!t.templates.contains_key("Book"));
     }
 
     #[test]

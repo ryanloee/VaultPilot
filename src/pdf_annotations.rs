@@ -361,9 +361,20 @@ pub fn sidecar_path<P: AsRef<Path>>(pdf: P) -> PathBuf {
 /// empty model is returned so the UI can recover rather than crash.
 pub fn load<P: AsRef<Path>>(pdf: P) -> AnnotationFile {
     let path = sidecar_path(&pdf);
+    let pdf_str = pdf.as_ref().to_string_lossy().into_owned();
     match fs::read_to_string(&path) {
-        Ok(text) => AnnotationFile::from_markdown(&text),
-        Err(_) => AnnotationFile::for_pdf(pdf.as_ref().to_string_lossy()),
+        Ok(text) => {
+            let mut file = AnnotationFile::from_markdown(&text);
+            // `from_markdown` returns `AnnotationFile::default()` (with an
+            // empty `pdf` field) when the sidecar YAML is malformed.  Restore
+            // the correct PDF path so a subsequent `save()` doesn't write
+            // `pdf: ""` and permanently corrupt the sidecar (#3774).
+            if file.pdf.is_empty() {
+                file.pdf = pdf_str;
+            }
+            file
+        }
+        Err(_) => AnnotationFile::for_pdf(pdf_str),
     }
 }
 
@@ -614,6 +625,48 @@ mod tests {
         let loaded = load(&pdf);
         assert_eq!(loaded.pdf, pdf.to_string_lossy());
         assert!(loaded.annotations.is_empty());
+    }
+
+    #[test]
+    fn test_regression_3774_load_restores_pdf_path_on_malformed_sidecar() {
+        // Before #3774: when the sidecar file existed but contained malformed
+        // YAML, `from_markdown` returned `AnnotationFile::default()` with an
+        // empty `pdf` field. `load` passed it through without restoring the
+        // path, so a subsequent `save()` would write `pdf: ""` into the
+        // sidecar and permanently corrupt it.
+        let dir = std::env::temp_dir().join(format!(
+            "vaultpilot-pdf-ann-malformed-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let pdf = dir.join("corrupt.pdf");
+        let sidecar = sidecar_path(&pdf);
+        // Write a malformed sidecar that `from_markdown` can't parse.
+        fs::write(
+            &sidecar,
+            "---\npdf: [unclosed\nannotations: !!bad\n---\nbody",
+        )
+        .unwrap();
+
+        let loaded = load(&pdf);
+        // The pdf path must be restored to the argument, not empty.
+        assert_eq!(loaded.pdf, pdf.to_string_lossy());
+        assert!(loaded.annotations.is_empty());
+
+        // A save after load should NOT corrupt the sidecar with empty pdf.
+        save(&pdf, &loaded).unwrap();
+        let rewritten = fs::read_to_string(&sidecar).unwrap();
+        assert!(
+            !rewritten.contains("pdf: \"\""),
+            "sidecar should not contain empty pdf after load+save"
+        );
+        assert!(
+            rewritten.contains("corrupt.pdf"),
+            "sidecar should contain the restored pdf path"
+        );
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

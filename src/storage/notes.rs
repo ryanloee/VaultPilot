@@ -596,7 +596,7 @@ pub fn bulk_update_meta_field_with_context(
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
-                    let sub = bulk_update_tags_with_context(context, &[id.clone()], &add, &[])?;
+                    let sub = bulk_update_tags_with_context(context, std::slice::from_ref(id), &add, &[])?;
                     if sub.affected > 0 {
                         result.affected += 1;
                     } else if sub.skipped > 0 {

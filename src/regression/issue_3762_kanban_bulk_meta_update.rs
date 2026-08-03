@@ -52,7 +52,7 @@ mod tests {
         save_note_with_context(&ctx, note).expect("save");
 
         // 1. Update status from "todo" → "done".
-        let result = bulk_update_meta_field_with_context(&ctx, &[id.clone()], "status", "done")
+        let result = bulk_update_meta_field_with_context(&ctx, std::slice::from_ref(&id), "status", "done")
             .expect("bulk_update_meta_field");
         assert_eq!(result.affected, 1, "should affect 1 note");
         assert_eq!(result.skipped, 0);
@@ -63,13 +63,13 @@ mod tests {
         assert_eq!(reloaded.meta.status, "done");
 
         // 2. Update again with the same value → should be skipped.
-        let result2 = bulk_update_meta_field_with_context(&ctx, &[id.clone()], "status", "done")
+        let result2 = bulk_update_meta_field_with_context(&ctx, std::slice::from_ref(&id), "status", "done")
             .expect("bulk_update_meta_field same value");
         assert_eq!(result2.affected, 0, "no-op should not affect");
         assert_eq!(result2.skipped, 1, "no-op should be skipped");
 
         // 3. Invalid field should error.
-        let err = bulk_update_meta_field_with_context(&ctx, &[id.clone()], "created_at", "now")
+        let err = bulk_update_meta_field_with_context(&ctx, std::slice::from_ref(&id), "created_at", "now")
             .unwrap_err();
         assert!(
             err.to_string().contains("not supported"),
@@ -78,7 +78,7 @@ mod tests {
         );
 
         // 4. Board field update.
-        let result3 = bulk_update_meta_field_with_context(&ctx, &[id.clone()], "board", "sprint")
+        let result3 = bulk_update_meta_field_with_context(&ctx, std::slice::from_ref(&id), "board", "sprint")
             .expect("bulk_update_meta_field board");
         assert_eq!(result3.affected, 1);
         let reloaded3 = load_note_with_context(&ctx, &id).expect("load");

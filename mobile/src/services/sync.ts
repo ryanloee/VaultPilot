@@ -392,6 +392,11 @@ async function runWithConcurrency<T>(
     });
     await Promise.all(workers);
     if (aborted) return;  // Return partial results instead of throwing (#2451)
+  } catch (e) {
+    // One or more workers failed; innerController.abort() was already called.
+    // The caller (doSync) tracks errors per-item, so suppress the aggregate
+    // rejection to avoid full-sync abort with inaccurate error counts (#3812).
+    if (!aborted) console.warn('[Sync] runWithConcurrency aggregate failure:', e);
   } finally {
     // Clean up the outer-signal listener to prevent listener leak (#3536)
     signal?.removeEventListener('abort', onOuterAbort);

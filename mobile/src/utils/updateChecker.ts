@@ -96,10 +96,9 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
           } finally {
             clearTimeout(timer2);
           }
-        } catch (syncErr) {
-          // Log sync errors (e.g., clearTimeout failure) instead of silently swallowing (#3814)
-          console.warn('[UpdateChecker] fallback release fetch outer error:', syncErr);
-        }
+} catch (e) {
+            console.warn('[UpdateChecker] fallback sync error:', e);
+          }
       }
 
       return {

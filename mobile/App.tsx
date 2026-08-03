@@ -148,11 +148,8 @@ export default function App() {
     try {
       // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
       const apiSettings = await getSettings();
-      // setApiSettings is async (writes to SecureStore) but the interface declares void.
-      // Catch rejection to prevent unhandled promise rejection on startup (#3813).
-      const setter = useAppStore.getState().setApiSettings as (s: typeof apiSettings) => Promise<void>;
-      setter(apiSettings).catch((err) => {
-        console.warn('[App] Failed to persist API settings:', err);
+      useAppStore.getState().setApiSettings(apiSettings).catch((e) => {
+        console.warn('[App] Failed to set API settings:', e);
       });
 
       // Load theme settings from cfg_* keys

@@ -105,8 +105,13 @@ export async function importSettings(json: string): Promise<{ providersImported:
 
   state.themeMode = isValidThemeMode(data.themeMode) ? data.themeMode : 'system';
   state.accentColor = data.accentColor;
+  // #3798: Guard against undefined/NaN/fractional activeProviderIndex.
+  // Math.max(0, Math.min(undefined, n)) === NaN — nullish-coalescing later
+  // (?? 0) does NOT catch NaN, so a missing/NaN index would flow into
+  // providers[NaN] → undefined and get stored as NaN in Zustand.
+  const activeIdx = Number.isInteger(data.activeProviderIndex) ? data.activeProviderIndex : 0;
   state.activeProviderIndex = data.providers.length > 0
-    ? Math.max(0, Math.min(data.activeProviderIndex, data.providers.length - 1))
+    ? Math.max(0, Math.min(activeIdx, data.providers.length - 1))
     : 0;
 
   // Save API keys to SecureStore FIRST — if this fails we must not overwrite
@@ -149,14 +154,22 @@ export async function importSettings(json: string): Promise<{ providersImported:
   const activeIndex = state.activeProviderIndex ?? 0;
   const active = data.providers[activeIndex];
   if (active) {
+    // #3797: When an import switches the active provider (activeProviderIndex),
+    // the payload's `active.apiKey` is undefined for includeKeys=false exports.
+    // Resolve the key from the merged SecureStore record (`keys[active.name]`
+    // = existing device key, possibly overwritten by an includeKeys=true import)
+    // so the NEW provider's cfg_* key matches its apiBase/model. Otherwise the
+    // OLD provider's key stays paired with the new provider's endpoint — wrong
+    // endpoint+key pair → auth failure (e.g. OpenAI key → Anthropic base).
+    const activeKey = keys[active.name ?? ''] ?? active.apiKey;
     const settings: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat } = {
       apiBase: active.apiBase,
       model: active.model,
       apiFormat: active.apiFormat as ApiFormat,
     };
-    if (active.apiKey) {
+    if (activeKey) {
       // #3483: Only propagate non-empty keys to cfg_* settings.
-      settings.apiKey = active.apiKey;
+      settings.apiKey = activeKey;
     }
     await saveSettings(settings);
   }
@@ -180,10 +193,12 @@ export async function importSettings(json: string): Promise<{ providersImported:
       apiFormat: p.apiFormat as ApiFormat,
     })) as ProviderConfig[],
     activeProviderIndex: data.providers.length > 0
-      ? Math.max(0, Math.min(data.activeProviderIndex, data.providers.length - 1))
+      ? Math.max(0, Math.min(activeIdx, data.providers.length - 1))
       : 0,
     apiBase: active?.apiBase ?? fresh.apiBase,
-    apiKey: active?.apiKey ?? fresh.apiKey,
+    // #3797: resolve the active provider's key from the merged SecureStore
+    // record so switching active provider pairs the new key with its base/model.
+    apiKey: (keys[active?.name ?? ''] ?? active?.apiKey) ?? fresh.apiKey,
     model: active?.model ?? fresh.model,
     apiFormat: (active?.apiFormat as ApiFormat) ?? fresh.apiFormat,
   });

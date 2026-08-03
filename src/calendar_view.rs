@@ -350,6 +350,208 @@ fn month_name(m: u32) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Week / Year views + date-move helper (#3770)
+// ---------------------------------------------------------------------------
+
+/// Render a single ISO week (Mon-Sun or Sun-Sat depending on `week_start`)
+/// containing `date`, listing entries that fall within that 7-day window.
+///
+/// This is the CLI-equivalent of a calendar "week view" — useful for
+/// zooming into a focused 7-day slice when the month grid is too dense.
+pub fn render_week_grid(
+    date: NaiveDate,
+    entries: &[CalendarEntry],
+    week_start: WeekStart,
+    with_titles: bool,
+) -> String {
+    // Compute the first day of the week containing `date`.
+    let col = week_start.column_for(date.weekday());
+    let week_start_date = date - chrono::Duration::days(col as i64);
+
+    let mut by_day: std::collections::HashMap<NaiveDate, Vec<&CalendarEntry>> =
+        std::collections::HashMap::new();
+    for e in entries {
+        if e.date >= week_start_date && e.date < week_start_date + chrono::Duration::days(7) {
+            by_day.entry(e.date).or_default().push(e);
+        }
+    }
+
+    let mut out = String::with_capacity(256);
+    let week_end = week_start_date + chrono::Duration::days(6);
+    out.push_str(&format!(
+        "Week {} – {} {}\n\n",
+        week_start_date.format("%b %d"),
+        week_end.format("%b %d"),
+        week_end.year()
+    ));
+
+    let header = match week_start {
+        WeekStart::Sunday => "Su Mo Tu We Th Fr Sa\n",
+        WeekStart::Monday => "Mo Tu We Th Fr Sa Su\n",
+    };
+    out.push_str(header);
+
+    let mut col = 0;
+    for offset in 0..7 {
+        let d = week_start_date + chrono::Duration::days(offset);
+        let count = by_day.get(&d).map(|v| v.len()).unwrap_or(0);
+        let cell = if count > 0 {
+            format!("{:>2}[{}]", d.day(), min_digits(count))
+        } else {
+            format!("{:>2}  ", d.day())
+        };
+        out.push_str(&cell);
+        col += 1;
+        if col == 7 {
+            out.push('\n');
+            col = 0;
+        }
+    }
+    if col != 0 {
+        for _ in col..7 {
+            out.push_str("   ");
+        }
+        out.push('\n');
+    }
+
+    // Per-day listing
+    let total: usize = by_day.values().map(|v| v.len()).sum();
+    if total > 0 {
+        if with_titles {
+            out.push('\n');
+        }
+        let mut days: Vec<NaiveDate> = by_day.keys().copied().collect();
+        days.sort_unstable();
+        for d in days {
+            let es = by_day.get(&d).unwrap();
+            out.push_str(&format!("  {} {}: ", d.format("%a"), d.day()));
+            for (i, e) in es.iter().enumerate() {
+                if i > 0 {
+                    out.push_str("; ");
+                }
+                match &e.title {
+                    Some(t) => out.push_str(&format!("{} ({})", t, e.note_path)),
+                    None => out.push_str(&e.note_path),
+                }
+            }
+            out.push('\n');
+        }
+    } else {
+        out.push_str("\nNo notes this week.\n");
+    }
+
+    out
+}
+
+/// Render a compact 12-month year overview showing per-month entry counts.
+///
+/// Each month is rendered as `Month: NN notes` with a simple bar chart
+/// (`█` per 5 notes, capped). This is the "year view" — a heat-map-style
+/// summary for scanning annual activity at a glance.
+pub fn render_year_overview(year: i32, entries: &[CalendarEntry]) -> String {
+    let mut month_counts = [0usize; 12];
+    for e in entries {
+        if e.date.year() == year {
+            if let Some(idx) = e.date.month().checked_sub(1) {
+                if (idx as usize) < 12 {
+                    month_counts[idx as usize] += 1;
+                }
+            }
+        }
+    }
+
+    let total: usize = month_counts.iter().sum();
+    let max_count = *month_counts.iter().max().unwrap_or(&0);
+    let max_bar = 20; // cap bar length
+
+    let mut out = String::with_capacity(512);
+    out.push_str(&format!("    Year {} Overview\n\n", year));
+
+    for (i, &count) in month_counts.iter().enumerate() {
+        let month = (i + 1) as u32;
+        let name = month_name(month);
+        let bar_len = if max_count == 0 {
+            0
+        } else {
+            (count * max_bar / max_count).min(max_bar)
+        };
+        let bar: String = "█".repeat(bar_len);
+        out.push_str(&format!("  {:>9}: {:>3} {}", name, count, bar));
+        out.push('\n');
+    }
+
+    out.push_str(&format!("\n  Total: {} notes in {}\n", total, year));
+    out
+}
+
+/// Rewrite a date field in a note's YAML frontmatter to a new date.
+///
+/// This is the pure-function backend for "drag a note to a new calendar date"
+/// (#3770). Given the raw note content (including `---\n...\n---\n` frontmatter
+/// block), the field name to update (e.g. `date`), and the target date, this
+/// returns the note content with the field set to the new ISO date string.
+///
+/// If the note has no frontmatter block, one is created with the date field.
+/// The field is always written in `YYYY-MM-DD` format.
+///
+/// Returns `(new_content, changed)` where `changed` is false if the field
+/// already had the target value.
+pub fn rewrite_date_field(note_content: &str, field: &str, new_date: NaiveDate) -> (String, bool) {
+    let new_val = new_date.format("%Y-%m-%d").to_string();
+
+    // Detect frontmatter block: must start with `---\n` and have a closing `---`.
+    let trimmed = note_content.trim_start_matches(['\u{FEFF}', '\n', '\r', ' ']);
+    if !trimmed.starts_with("---\n") && !trimmed.starts_with("---\r\n") {
+        // No frontmatter — create one
+        let fm = format!("---\n{}: {}\n---\n\n", field, new_val);
+        return (format!("{}{}", fm, note_content), true);
+    }
+
+    // Find the closing delimiter
+    let fm_start = note_content.len() - trimmed.len();
+    let after_start = &note_content[fm_start..];
+    let fm_end_rel = after_start[4..].find("\n---").map(|p| p + 4 + 1); // +4 for `---\n`, +1 to skip the newline after closing
+
+    let fm_end_rel = match fm_end_rel {
+        Some(e) => e,
+        None => return (note_content.to_string(), false), // malformed, bail
+    };
+
+    let fm_block = &note_content[fm_start..fm_start + fm_end_rel];
+    let rest = &note_content[fm_start + fm_end_rel..];
+
+    // Parse the frontmatter lines to find/update the field
+    let fm_inner = &fm_block[4..]; // skip `---\n`
+    let mut lines: Vec<String> = fm_inner.lines().map(|l| l.to_string()).collect();
+    let mut found = false;
+    let mut changed = false;
+    let field_prefix = format!("{}:", field);
+
+    for line in lines.iter_mut() {
+        let trimmed_line = line.trim_start();
+        if trimmed_line.starts_with(&field_prefix) {
+            // Check if it's already the target value
+            let current_val = trimmed_line[field_prefix.len()..].trim();
+            if current_val == new_val {
+                return (note_content.to_string(), false);
+            }
+            *line = format!("{}: {}", field, new_val);
+            found = true;
+            changed = true;
+            break;
+        }
+    }
+
+    if !found {
+        lines.push(format!("{}: {}", field, new_val));
+        changed = true;
+    }
+
+    let new_fm = format!("---\n{}\n---", lines.join("\n"));
+    (format!("{}{}", new_fm, rest), changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -737,5 +939,160 @@ mod tests {
         let t = truncate_str("héllo world", 5);
         assert_eq!(t.chars().count(), 5);
         assert!(t.ends_with('…'));
+    }
+
+    // ---- Week/Year/DateMove tests (#3770) ----
+
+    #[test]
+    fn render_week_grid_shows_entries_in_window() {
+        let entries = vec![
+            CalendarEntry {
+                note_path: "a.md".into(),
+                date: NaiveDate::from_ymd_opt(2026, 1, 13).unwrap(), // Tuesday
+                title: Some("Meet".into()),
+            },
+            CalendarEntry {
+                note_path: "b.md".into(),
+                date: NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(), // Thursday
+                title: None,
+            },
+        ];
+        // Wednesday Jan 14 2026 — week should contain Jan 12-18 (Mon-first)
+        let out = render_week_grid(
+            NaiveDate::from_ymd_opt(2026, 1, 14).unwrap(),
+            &entries,
+            WeekStart::Monday,
+            true,
+        );
+        assert!(out.contains("Week Jan 12 – Jan 18 2026"));
+        assert!(out.contains("Meet (a.md)"));
+        assert!(out.contains("b.md"));
+    }
+
+    #[test]
+    fn render_week_grid_excludes_outside_entries() {
+        let entries = vec![
+            CalendarEntry {
+                note_path: "out.md".into(),
+                date: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(), // previous week
+                title: None,
+            },
+            CalendarEntry {
+                note_path: "in.md".into(),
+                date: NaiveDate::from_ymd_opt(2026, 1, 13).unwrap(), // this week
+                title: None,
+            },
+        ];
+        let out = render_week_grid(
+            NaiveDate::from_ymd_opt(2026, 1, 14).unwrap(),
+            &entries,
+            WeekStart::Monday,
+            false,
+        );
+        assert!(!out.contains("out.md"));
+        assert!(out.contains("in.md"));
+    }
+
+    #[test]
+    fn render_week_grid_empty_week() {
+        let out = render_week_grid(
+            NaiveDate::from_ymd_opt(2026, 1, 14).unwrap(),
+            &[],
+            WeekStart::Sunday,
+            false,
+        );
+        assert!(out.contains("No notes this week."));
+    }
+
+    #[test]
+    fn render_year_overview_counts_per_month() {
+        let entries = vec![
+            CalendarEntry {
+                note_path: "1.md".into(),
+                date: NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+                title: None,
+            },
+            CalendarEntry {
+                note_path: "2.md".into(),
+                date: NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+                title: None,
+            },
+            CalendarEntry {
+                note_path: "3.md".into(),
+                date: NaiveDate::from_ymd_opt(2026, 6, 15).unwrap(),
+                title: None,
+            },
+            CalendarEntry {
+                note_path: "4.md".into(),
+                date: NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(), // wrong year
+                title: None,
+            },
+        ];
+        let out = render_year_overview(2026, &entries);
+        assert!(out.contains("Year 2026 Overview"));
+        assert!(out.contains("Total: 3 notes in 2026"));
+        assert!(out.contains("January:   2")); // 2 in January (7 chars, padded to 9)
+        assert!(out.contains("June:   1")); // 1 in June (4 chars, padded to 9)
+    }
+
+    #[test]
+    fn render_year_overview_empty_year() {
+        let out = render_year_overview(2026, &[]);
+        assert!(out.contains("Total: 0 notes in 2026"));
+    }
+
+    #[test]
+    fn rewrite_date_field_updates_existing_field() {
+        let note = "---\ndate: 2026-01-10\ntitle: Test\n---\n\nBody text";
+        let (result, changed) =
+            rewrite_date_field(note, "date", NaiveDate::from_ymd_opt(2026, 2, 15).unwrap());
+        assert!(changed);
+        assert!(result.contains("date: 2026-02-15"));
+        assert!(!result.contains("2026-01-10"));
+        assert!(result.contains("title: Test"));
+        assert!(result.contains("Body text"));
+    }
+
+    #[test]
+    fn rewrite_date_field_no_change_when_same_value() {
+        let note = "---\ndate: 2026-02-15\n---\n\nBody";
+        let (result, changed) =
+            rewrite_date_field(note, "date", NaiveDate::from_ymd_opt(2026, 2, 15).unwrap());
+        assert!(!changed);
+        assert_eq!(result, note);
+    }
+
+    #[test]
+    fn rewrite_date_field_creates_frontmatter_when_missing() {
+        let note = "# My Note\n\nNo frontmatter here";
+        let (result, changed) =
+            rewrite_date_field(note, "date", NaiveDate::from_ymd_opt(2026, 3, 1).unwrap());
+        assert!(changed);
+        assert!(result.starts_with("---\ndate: 2026-03-01\n---\n\n"));
+        assert!(result.contains("# My Note"));
+    }
+
+    #[test]
+    fn rewrite_date_field_adds_field_to_existing_frontmatter() {
+        let note = "---\ntitle: Existing\n---\n\nBody";
+        let (result, changed) =
+            rewrite_date_field(note, "date", NaiveDate::from_ymd_opt(2026, 7, 4).unwrap());
+        assert!(changed);
+        assert!(result.contains("title: Existing"));
+        assert!(result.contains("date: 2026-07-04"));
+        assert!(result.contains("Body"));
+    }
+
+    #[test]
+    fn rewrite_date_field_custom_field_name() {
+        let note = "---\npublished: 2026-01-01\n---\n\nBody";
+        let (result, changed) = rewrite_date_field(
+            note,
+            "published",
+            NaiveDate::from_ymd_opt(2026, 12, 25).unwrap(),
+        );
+        assert!(changed);
+        assert!(result.contains("published: 2026-12-25"));
+        assert!(!result.contains("2026-01-01"));
     }
 }

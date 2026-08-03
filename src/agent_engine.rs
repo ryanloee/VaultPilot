@@ -284,7 +284,14 @@ pub struct SubprocessEngine {
 /// write end, see #2440) may have left more than a single 4 KB buffer worth of
 /// data in the pipe. A single fixed-size read would silently drop the tail. Loop
 /// until EOF or `WouldBlock`/`Interrupted` so the entire residual buffer is
-/// captured. This never hangs because the FD is non-blocking (#2541).
+/// captured.
+///
+/// # Safety on blocking pipes (Windows)
+///
+/// On platforms where the pipe cannot be set non-blocking (Windows without
+/// named-pipe handles, #3807), this function performs at most ONE read to
+/// avoid an indefinite thread hang when a grandchild still holds the write
+/// end. The residual data loss is bounded to unbuffered bytes beyond 4 KB.
 ///
 /// `label` is used only for diagnostics (e.g. "stdout" / "stderr").
 pub(crate) fn drain_nonblocking_remaining<R: std::io::Read>(
@@ -293,19 +300,37 @@ pub(crate) fn drain_nonblocking_remaining<R: std::io::Read>(
     buf: &mut Vec<u8>,
 ) {
     let mut tmp = [0u8; 4096];
-    loop {
-        match reader.read(&mut tmp) {
-            Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&tmp[..n]),
-            Err(ref e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::Interrupted =>
-            {
-                break;
+    #[cfg(unix)]
+    {
+        // Unix: pipe is O_NONBLOCK, safe to loop until WouldBlock/EOF.
+        loop {
+            match reader.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::Interrupted =>
+                {
+                    break;
+                }
+                Err(ref e) => {
+                    tracing::warn!("[agent_engine] {label} final drain read failed: {e}");
+                    break;
+                }
             }
+        }
+    }
+    #[cfg(not(unix))]
+    // #3807 — On Windows anonymous pipes cannot be made non-blocking via
+    // fcntl-style APIs. A blocking read() here would hang forever if a
+    // grandchild still holds the write end. Drain at most one buffer to
+    // capture any already-buffered data without risking a permanent hang.
+    {
+        match reader.read(&mut tmp) {
+            Ok(0) => {}
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
             Err(ref e) => {
                 tracing::warn!("[agent_engine] {label} final drain read failed: {e}");
-                break;
             }
         }
     }

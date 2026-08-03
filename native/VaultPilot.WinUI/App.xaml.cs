@@ -145,9 +145,10 @@ public partial class App : Application
         {
             if (_window != null)
             {
-                _window.Closed -= OnWindowClosed;
-                await _window.ShutdownAsync();
-                _window.Close();
+                var window = _window;
+                window.Closed -= OnWindowClosed;
+                await window.ShutdownAsync();
+                window.Close();
                 _window = null;
             }
         }

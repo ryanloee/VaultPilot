@@ -14,7 +14,7 @@ namespace VaultPilot.WinUI;
 
 /// <summary>
 /// Image Lightbox — full-screen image viewer with zoom, pan, and keyboard
-/// navigation across a list of images (issue #3469, mirroring the mobile
+/// navigation across a list of images (issues #3469, #3790, mirroring the mobile
 /// Lightbox.tsx behaviour). Built programmatically to match the code-built
 /// UI pattern used by <c>MainWindow.Attachments.cs</c>.
 /// </summary>
@@ -136,7 +136,8 @@ public sealed partial class MainWindow
 
         var zoomInBtn = MakeLightboxIconButton("+", "放大", Lightbox_ZoomIn);
         var zoomOutBtn = MakeLightboxIconButton("−", "缩小", Lightbox_ZoomOut);
-        var resetBtn = MakeLightboxIconButton("1:1", "重置", Lightbox_ResetZoom);
+        var resetBtn = MakeLightboxIconButton("1:1", "100%", Lightbox_ResetZoom);
+        var fitBtn = MakeLightboxIconButton("↕", "适应屏幕", Lightbox_ResetZoom);
         var closeBtn = MakeLightboxIconButton("✕", "关闭", Lightbox_Close);
 
         var topBar = new Grid
@@ -163,6 +164,7 @@ public sealed partial class MainWindow
         controlsStack.Children.Add(zoomOutBtn);
         controlsStack.Children.Add(zoomInBtn);
         controlsStack.Children.Add(resetBtn);
+        controlsStack.Children.Add(fitBtn);
         if (removable)
         {
             controlsStack.Children.Add(MakeLightboxIconButton("🗑", "移除", Lightbox_Remove));

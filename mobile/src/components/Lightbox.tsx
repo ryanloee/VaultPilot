@@ -1,5 +1,5 @@
 /**
- * Image Lightbox component (#3030, #3422).
+ * Image Lightbox component (#3030, #3422, #3790).
  *
  * Fullscreen image viewer with:
  * - Semi-transparent dark overlay (#3030)
@@ -8,8 +8,9 @@
  * - Thumbnail position indicator (#3030)
  * - Swipe-down to dismiss gesture (#3422)
  * - Double-tap to toggle zoom (#3422)
- * - Pinch / button zoom with pan support (#3422)
+ * - Pinch / button zoom with pan support (#3422, #3790)
  * - Zoom percentage indicator (#3422)
+ * - Fit-to-screen zoom control (#3790)
  *
  * Uses only React Native core APIs (Animated, PanResponder, Modal, Image) —
  * no external gesture-handler dependencies required.
@@ -113,6 +114,11 @@ export default function Lightbox({
       }
       return next;
     });
+  }, [resetTransforms]);
+
+  const fitToScreen = useCallback(() => {
+    setZoom(MIN_ZOOM);
+    resetTransforms();
   }, [resetTransforms]);
 
   const handleDoubleTap = useCallback(() => {
@@ -250,8 +256,16 @@ export default function Lightbox({
           <Icon name="close" size={28} color="#fff" />
         </TouchableOpacity>
 
-        {/* Zoom controls (#3422) */}
+        {/* Zoom controls (#3422, #3790) */}
         <View style={styles.zoomControls}>
+          <TouchableOpacity
+            style={styles.zoomButton}
+            onPress={fitToScreen}
+            testID="lightbox-fit"
+            accessibilityLabel="Fit to screen"
+          >
+            <Icon name="fit-screen" size={24} color="#fff" />
+          </TouchableOpacity>
           <TouchableOpacity
             style={styles.zoomButton}
             onPress={zoomOut}

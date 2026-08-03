@@ -15,7 +15,7 @@ export type IconName =
   | 'sun' | 'moon' | 'refresh' | 'export' | 'import'
   | 'chevron-right' | 'chevron-down' | 'arrow-back'
   | 'settings' | 'chatbubble' | 'add-circle' | 'remove-circle'
-  | 'analytics-outline';
+  | 'analytics-outline' | 'fit-screen';
 
 const ICON_MAP: Record<IconName, keyof typeof Ionicons.glyphMap> = {
   'menu': 'menu',
@@ -59,6 +59,7 @@ const ICON_MAP: Record<IconName, keyof typeof Ionicons.glyphMap> = {
   'add-circle': 'add-circle-outline',
   'remove-circle': 'remove-circle-outline',
   'analytics-outline': 'analytics-outline',
+  'fit-screen': 'scan-outline',
 };
 
 interface IconProps {

@@ -71,6 +71,11 @@ static AGENT_RUNNING: AtomicBool = AtomicBool::new(false);
 /// arrive (see #3788).
 static AGENT_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
+/// Shared state for the active agent's Plan Mode approval channel (#3791).
+/// Allows `respondToPlanApproval` to deliver PlanDecision back to the agent
+/// thread — mirroring the write-approval coordination model.
+static PLAN_APPROVAL: StdMutex<Option<std::sync::mpsc::Sender<PlanDecision>>> = StdMutex::new(None);
+
 /// Shared stdout writer — ensures atomic line writes from both the main loop
 /// and the background agent task.
 struct SharedWriter {
@@ -646,6 +651,7 @@ async fn handle_request(
                     fn drop(&mut self) {
                         AGENT_RUNNING.store(false, Ordering::SeqCst);
                         *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        *PLAN_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = None;
                         *ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     }
                 }
@@ -687,6 +693,39 @@ async fn handle_request(
                     Ok(serde_json::json!({ "ok": true }))
                 }
                 None => Err("no active agent session waiting for approval".to_string()),
+            }
+        }
+        "respondToPlanApproval" => {
+            let params: RespondToPlanApprovalParams = parse_params(&request.params)?;
+            let tx = PLAN_APPROVAL
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            match tx {
+                Some(tx) => {
+                    let decision = match params.action.as_str() {
+                        "approve" => PlanDecision::Approve,
+                        "reject" => PlanDecision::Reject,
+                        "edit" => PlanDecision::Edit {
+                            steps: params
+                                .modified_steps
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|s| {
+                                    vaultpilot_lib::agent::PlanStep::new(
+                                        vaultpilot_lib::agent::PlanStepKind::Write,
+                                        s,
+                                        None,
+                                    )
+                                })
+                                .collect(),
+                        },
+                        _ => PlanDecision::Reject,
+                    };
+                    let _ = tx.send(decision);
+                    Ok(serde_json::json!({ "ok": true }))
+                }
+                None => Err("no active plan waiting for approval".to_string()),
             }
         }
         "executeAiAction" => {
@@ -1557,11 +1596,26 @@ async fn run_agent_task(
             }
         },
         |_plan| {
-            // The UI sidecar delegates plan decisions to the WinUI/Android client.
-            // For now, auto-approve since the UI does not yet handle plan events.
-            // The plan is displayed via the PlanProposed event above.
-            eprintln!("[vaultpilot-agent] Plan Mode: auto-approving (UI plan handling not yet implemented)");
-            PlanDecision::Approve
+            // Plan Mode approval through the UI sidecar (#3791).
+            // Mirror write-approval: fire a channel to PLAN_APPROVAL,
+            // wait for the client to call respondToPlanApproval.
+            // Also aborts on shutdown to prevent join() deadlock (#3788).
+            let (tx, rx) = std::sync::mpsc::channel();
+            *PLAN_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+            loop {
+                if AGENT_SHUTDOWN.load(Ordering::SeqCst) {
+                    eprintln!("[vaultpilot-agent] Plan Mode: shuting down — auto-rejecting");
+                    return PlanDecision::Reject;
+                }
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(decision) => return decision,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        eprintln!("[vaultpilot-agent] Plan Mode: approval channel disconnected — auto-rejecting");
+                        return PlanDecision::Reject;
+                    }
+                }
+            }
         },
     )
     .await;
@@ -1768,6 +1822,17 @@ struct RunAgentParams {
 #[serde(rename_all = "camelCase")]
 struct RespondToWriteApprovalParams {
     approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RespondToPlanApprovalParams {
+    action: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    reason: Option<String>,
+    #[serde(default)]
+    modified_steps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

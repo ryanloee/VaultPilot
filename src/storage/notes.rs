@@ -554,6 +554,125 @@ pub fn bulk_update_tags_with_context(
     Ok(result)
 }
 
+/// Bulk update a single NoteMeta field for multiple notes (#3762).
+///
+/// This is the backend for Kanban drag-drop: when the user drags a card
+/// from one column to another, the UI calls this function to update the
+/// note field without loading/resaving the entire document.
+/// Notes whose field already holds the requested value are
+/// reported as \"skipped\" rather than \"affected\".
+///
+/// Supported fields: title, board, kernel, platform, status, source,
+/// summary, tags, keywords.
+pub fn bulk_update_meta_field_with_context(
+    context: &StorageContext,
+    note_ids: &[String],
+    field: &str,
+    value: &str,
+) -> Result<BulkNoteOpResult> {
+    let mut result = BulkNoteOpResult {
+        requested: note_ids.len(),
+        ..Default::default()
+    };
+
+    let allowed = [
+        "title", "board", "kernel", "platform", "status", "source", "summary", "tags", "keywords",
+    ];
+    if !allowed.contains(&field) {
+        return Err(anyhow::anyhow!(
+            "field '{field}' is not supported for bulk update; allowed fields: {}",
+            allowed.join(", ")
+        ));
+    }
+
+    let value = value.trim().to_string();
+
+    for id in note_ids {
+        match load_note_with_context(context, id) {
+            Ok(mut note) => {
+                if field == "tags" {
+                    let add: Vec<String> = value
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    let sub = bulk_update_tags_with_context(context, &[id.clone()], &add, &[])?;
+                    if sub.affected > 0 {
+                        result.affected += 1;
+                    } else if sub.skipped > 0 {
+                        result.skipped += 1;
+                    }
+                    result.failures.extend(sub.failures);
+                    continue;
+                }
+                if field == "keywords" {
+                    let mut kwds: Vec<String> = value
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    kwds.dedup();
+                    let new_str = kwds.join(",");
+                    let old_str = note.meta.keywords.join(",");
+                    if old_str == new_str {
+                        result.skipped += 1;
+                        continue;
+                    }
+                    note.meta.keywords = kwds;
+                    note.meta.updated_at = Utc::now().to_rfc3339();
+                    match save_note_with_context(context, note) {
+                        Ok(_) => result.affected += 1,
+                        Err(e) => result.failures.push(BulkNoteOpFailure {
+                            id: id.clone(),
+                            reason: e.to_string(),
+                        }),
+                    }
+                    continue;
+                }
+
+                let old_value: &str = match field {
+                    "title" => &note.meta.title,
+                    "board" => &note.meta.board,
+                    "kernel" => &note.meta.kernel,
+                    "platform" => &note.meta.platform,
+                    "status" => &note.meta.status,
+                    "source" => &note.meta.source,
+                    "summary" => &note.meta.summary,
+                    _ => unreachable!("validated above"),
+                };
+
+                if old_value == value {
+                    result.skipped += 1;
+                } else {
+                    match field {
+                        "title" => note.meta.title = value.clone(),
+                        "board" => note.meta.board = value.clone(),
+                        "kernel" => note.meta.kernel = value.clone(),
+                        "platform" => note.meta.platform = value.clone(),
+                        "status" => note.meta.status = value.clone(),
+                        "source" => note.meta.source = value.clone(),
+                        "summary" => note.meta.summary = value.clone(),
+                        _ => unreachable!("validated above"),
+                    }
+                    note.meta.updated_at = Utc::now().to_rfc3339();
+                    match save_note_with_context(context, note) {
+                        Ok(_) => result.affected += 1,
+                        Err(e) => result.failures.push(BulkNoteOpFailure {
+                            id: id.clone(),
+                            reason: e.to_string(),
+                        }),
+                    }
+                }
+            }
+            Err(e) => result.failures.push(BulkNoteOpFailure {
+                id: id.clone(),
+                reason: e.to_string(),
+            }),
+        }
+    }
+    Ok(result)
+}
+
 /// Bulk move notes to a target subdirectory within the vault (#3104).
 ///
 /// `target_dir` is interpreted relative to the vault root and is confined

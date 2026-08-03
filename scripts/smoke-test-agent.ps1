@@ -93,15 +93,25 @@ Write-Host ""
 
 # Reads one stdout line with a per-line wait budget. Returns $null on EOF
 # (agent died) or when the budget elapses without a complete line.
+# Reuses a single pending ReadLineAsync task across calls: .NET throws
+# "The stream is currently in use by a previous operation" if a new async
+# read is started while the previous one is still pending, which happened
+# on every cold start (agent not ready -> first read stays pending).
+$script:pendingStdoutRead = $null
+
 function Read-ResponseLine {
     param([int]$WaitMs)
 
     if ($process.HasExited) {
         return $null
     }
-    $task = $process.StandardOutput.ReadLineAsync()
-    if ($task.Wait($WaitMs)) {
-        return $task.Result
+    if ($null -eq $script:pendingStdoutRead) {
+        $script:pendingStdoutRead = $process.StandardOutput.ReadLineAsync()
+    }
+    if ($script:pendingStdoutRead.Wait($WaitMs)) {
+        $line = $script:pendingStdoutRead.Result
+        $script:pendingStdoutRead = $null
+        return $line
     }
     return $null
 }
@@ -123,15 +133,19 @@ function Send-Request {
         return $null
     }
 
-    # Wait for the response line matching our request id (skip event lines)
+    # Wait for the response line matching our request id (skip event lines).
+    # A null line just means the 1s read window elapsed with no complete
+    # line yet - keep waiting until the overall deadline unless the agent
+    # process has exited.
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         $line = Read-ResponseLine -WaitMs 1000
         if ($null -eq $line) {
             if ($process.HasExited) {
                 Write-Host "!!! AGENT PROCESS EXITED (code $($process.ExitCode)) while waiting for '$Method' !!!"
+                return $null
             }
-            return $null
+            continue
         }
         $line = $line.Trim()
         if ($line.Length -eq 0) { continue }
@@ -173,13 +187,39 @@ function Assert-Request {
 # -- Test sequence --
 $failures = @()
 
-# 1. ping
-try {
-    $r = Assert-Request -Method "ping" -Params @{} -What "ping"
-    if (-not ($r.result.ok -eq $true)) {
-        throw "ping result not ok: $($r.result | ConvertTo-Json -Compress)"
+# 0. Readiness probe: the agent cold-starts storage/keychain init, which can
+#    take several seconds on a fresh CI cache. Wait (with a bounded retry)
+#    until it answers ping instead of failing the very first request.
+Write-Host ""
+Write-Host "Probing for agent readiness (up to 90s)..."
+$ready = $false
+$probeDeadline = (Get-Date).AddSeconds(90)
+while ((Get-Date) -lt $probeDeadline) {
+    $probeId = [guid]::NewGuid().ToString("N")
+    $r = $null
+    try {
+        $r = Send-Request -Method "ping" -Params @{} -RequestId $probeId -TimeoutSec 10
+    } catch {}
+    if ($r -and $r.result.ok -eq $true) {
+        $ready = $true
+        Write-Host "Agent ready."
+        break
     }
-} catch { $failures += $_.Exception.Message }
+    Start-Sleep -Seconds 3
+}
+if (-not $ready) {
+    $failures += "agent not ready within 90s (cold start exceeded window)"
+}
+
+# 1. ping
+if ($ready) {
+    try {
+        $r = Assert-Request -Method "ping" -Params @{} -What "ping"
+        if (-not ($r.result.ok -eq $true)) {
+            throw "ping result not ok: $($r.result | ConvertTo-Json -Compress)"
+        }
+    } catch { $failures += $_.Exception.Message }
+}
 
 # 2. getSettings - proves storage init + settings plumbing
 try {

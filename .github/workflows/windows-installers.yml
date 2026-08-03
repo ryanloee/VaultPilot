@@ -11,6 +11,9 @@ jobs:
     permissions:
       contents: read
     runs-on: windows-2022
+    # Defensive cap: a hung step must fail fast instead of burning the full
+    # 6h GitHub default and cancelling the whole release (v0.6.69-v0.6.72).
+    timeout-minutes: 60
 
     steps:
       - name: Checkout

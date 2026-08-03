@@ -63,7 +63,6 @@ public class Issue3604StartupPerformanceTests
     public void Regression_3604_OnLoaded_Logs_Key_Milestones()
     {
         var source = ResolveSource();
-        if (source is null) return;
 
         var content = File.ReadAllText(source);
 
@@ -78,7 +77,6 @@ public class Issue3604StartupPerformanceTests
     public void Regression_3604_OnLoaded_Uses_TaskWhenAll()
     {
         var source = ResolveSource();
-        if (source is null) return;
 
         var content = File.ReadAllText(source);
 
@@ -90,7 +88,6 @@ public class Issue3604StartupPerformanceTests
     public void Regression_3604_MessagesRepeater_Uses_Virtualized_ItemsSource()
     {
         var source = ResolveSource();
-        if (source is null) return;
 
         var content = File.ReadAllText(source);
 
@@ -98,29 +95,36 @@ public class Issue3604StartupPerformanceTests
         Assert.Contains("MessagesRepeater.ItemsSource = _messageItems", content);
     }
 
-    private static string? ResolveSource()
+    /// <summary>
+    /// Resolves native/VaultPilot.WinUI/MainWindow.xaml.cs relative to the test
+    /// assembly, walking up the directory tree until the file is found.
+    ///
+    /// CI builds the test project with /p:Platform=x64, so the output lands in
+    /// bin/x64/Debug|Release/net8.0-windows10.0.19041.0/ — a fixed number of
+    /// ".." hops from there never reaches native/. Walking up until the file is
+    /// found makes the tests work in any output layout (with or without an
+    /// x64/RID subdirectory).
+    /// </summary>
+    private static string ResolveSource()
     {
-        var candidate = Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..",
-            "VaultPilot.WinUI", "MainWindow.xaml.cs");
-        return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
-    }
-}
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName, "VaultPilot.WinUI", "MainWindow.xaml.cs");
+            if (File.Exists(candidate))
+            {
+                return Path.GetFullPath(candidate);
+            }
+            directory = directory.Parent;
+        }
 
-/// <summary>
-/// Workaround: the project uses <ImplicitUsings>disable</ImplicitUsings> and
-/// App is internal (defined in App.xaml.cs). Reflection-based tests reference
-/// the type by name, but the compiler sees no App type in global scope.
-/// This alias provides a neutral name for the reflection get-field test.
-/// </summary>
-#pragma warning disable CA1050
-internal static class AppStartup
-{
-    public static object GetStartupWatch()
-    {
-      var field = typeof(App).GetField(
-            "StartupWatch",
-            BindingFlags.Public | BindingFlags.Static);
-      return field?.GetValue(null) ?? new object();
+        // Fail loudly instead of silently passing: a wrong path must never turn
+        // these source-structure tests into no-ops (see #3793).
+        Assert.Fail(
+            "Could not locate VaultPilot.WinUI/MainWindow.xaml.cs from test " +
+            $"output directory '{AppContext.BaseDirectory}'. " +
+            "The test project output layout may have changed; update ResolveSource().");
+        return string.Empty; // unreachable — Assert.Fail throws
     }
 }

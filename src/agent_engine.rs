@@ -278,15 +278,9 @@ pub struct SubprocessEngine {
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
-/// Set the pipe file descriptor `O_NONBLOCK` so that a read loop can avoid
-/// hanging indefinitely when grandchild processes inherit the write end of
-/// the pipe (#2364).
-///
-/// Returns an error if `fcntl` fails, so callers can abort the subprocess
-/// upfront rather than risk a permanent thread hang (#2541).
 /// #2746 — Final drain of a non-blocking pipe once the child has exited.
 ///
-/// When `drain_done` is set the child (and any grandchildren still holding the
+/// When `drain_done` is set the parent side (and any grandchildren still holding the
 /// write end, see #2440) may have left more than a single 4 KB buffer worth of
 /// data in the pipe. A single fixed-size read would silently drop the tail. Loop
 /// until EOF or `WouldBlock`/`Interrupted` so the entire residual buffer is
@@ -317,6 +311,12 @@ pub(crate) fn drain_nonblocking_remaining<R: std::io::Read>(
     }
 }
 
+/// Set the pipe file descriptor `O_NONBLOCK` so that a read loop can avoid
+/// hanging indefinitely when grandchild processes inherit the write end of
+/// the pipe (#2364).
+///
+/// Returns an error if `fcntl` fails, so callers can abort the subprocess
+/// upfront rather than risk a permanent thread hang (#2541).
 #[cfg(unix)]
 fn make_nonblocking<T: std::os::unix::io::AsRawFd>(handle: &T) -> Result<()> {
     let fd = handle.as_raw_fd();

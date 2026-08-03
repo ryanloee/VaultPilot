@@ -50,6 +50,7 @@ pub use notes::{
     bulk_delete_notes_with_context,
     bulk_move_notes_async,
     bulk_move_notes_with_context,
+    bulk_update_meta_field_with_context,
     bulk_update_tags_async,
     bulk_update_tags_with_context,
     delete_note_async,

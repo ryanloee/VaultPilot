@@ -1671,6 +1671,17 @@ enum NotesActions {
         #[arg(long)]
         remove_tags: Option<String>,
 
+        /// Bulk-update a single NoteMeta field (e.g. `status`, `board`) for
+        /// Kanban drag-drop and batch metadata edits (#3762). Must be paired
+        /// with `--set-value`. Supported fields: title, board, kernel,
+        /// platform, status, source, summary, tags, keywords.
+        #[arg(long)]
+        set_field: Option<String>,
+
+        /// Value to assign when `--set-field` is used (#3762).
+        #[arg(long)]
+        set_value: Option<String>,
+
         /// Target subdirectory within the vault to move the selected notes
         /// into (relative to the vault root; the path is confined to the
         /// vault, so `../` escape is rejected).
@@ -4577,6 +4588,8 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             select,
             add_tags,
             remove_tags,
+            set_field,
+            set_value,
             to,
             delete,
             delete_attachments,
@@ -4589,6 +4602,8 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                 select,
                 add_tags: add_tags.as_deref(),
                 remove_tags: remove_tags.as_deref(),
+                set_field: set_field.as_deref(),
+                set_value: set_value.as_deref(),
                 to: to.as_deref(),
                 delete: *delete,
                 delete_attachments: *delete_attachments,
@@ -4860,6 +4875,8 @@ struct NotesBatchRequest<'a> {
     select: &'a str,
     add_tags: Option<&'a str>,
     remove_tags: Option<&'a str>,
+    set_field: Option<&'a str>,
+    set_value: Option<&'a str>,
     to: Option<&'a str>,
     delete: bool,
     delete_attachments: bool,
@@ -4892,6 +4909,8 @@ fn execute_notes_batch(context: &StorageContext, request: NotesBatchRequest) -> 
         select,
         add_tags,
         remove_tags,
+        set_field,
+        set_value,
         to,
         delete,
         delete_attachments,

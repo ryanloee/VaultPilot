@@ -91,4 +91,5 @@ mod issue_3684_footnote_rendering;
 mod issue_3685_markdown_table;
 mod issue_3708_vault_cleanup;
 mod issue_3732_attachment_cleanup_setting_honored;
+mod issue_3762_kanban_bulk_meta_update;
 mod issue_914_related_notes;

@@ -471,11 +471,10 @@ pub fn render_year_overview(year: i32, entries: &[CalendarEntry]) -> String {
     for (i, &count) in month_counts.iter().enumerate() {
         let month = (i + 1) as u32;
         let name = month_name(month);
-        let bar_len = if max_count == 0 {
-            0
-        } else {
-            (count * max_bar / max_count).min(max_bar)
-        };
+        let bar_len = (count * max_bar)
+            .checked_div(max_count)
+            .map(|v| v.min(max_bar))
+            .unwrap_or(0);
         let bar: String = "█".repeat(bar_len);
         out.push_str(&format!("  {:>9}: {:>3} {}", name, count, bar));
         out.push('\n');

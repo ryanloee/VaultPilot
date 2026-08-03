@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -51,11 +52,24 @@ use vaultpilot_lib::{
 static AGENT_APPROVAL: StdMutex<Option<std::sync::mpsc::Sender<bool>>> = StdMutex::new(None);
 
 /// Handle of the active agent background thread. Used to:
-/// - Detect and reject concurrent `runAgent` calls (preventing the race on
-///   AGENT_APPROVAL where a second runAgent overwrites the first's channel
-///   sender, leaving the first thread blocked on `rx.recv()` forever).
 /// - Join the agent thread on process exit so it isn't abruptly killed.
+///
+/// NOTE: must NOT be used as the concurrent-run guard — a fast-finishing
+/// task clears it to None before the parent stores the handle, leaving a
+/// stale finished handle that would reject every later runAgent call (#3788).
 static ACTIVE_AGENT: StdMutex<Option<std::thread::JoinHandle<()>>> = StdMutex::new(None);
+
+/// Concurrent-run guard, acquired atomically BEFORE the agent thread is
+/// spawned and released by the thread itself when it exits (see #3788).
+/// This replaces the previous check-and-set on ACTIVE_AGENT, which raced
+/// when a task finished faster than the parent could store its handle.
+static AGENT_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Set once the stdin loop hits EOF (client gone). The agent thread's
+/// write-approval wait polls this and aborts (denying the write) so that
+/// main()'s join() on exit cannot deadlock on an approval that will never
+/// arrive (see #3788).
+static AGENT_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 /// Shared stdout writer — ensures atomic line writes from both the main loop
 /// and the background agent task.
@@ -280,6 +294,10 @@ fn main() {
 
     // Join the active agent thread on exit so it completes gracefully
     // instead of being abruptly killed when the process terminates.
+    // First signal shutdown so a pending write-approval wait (which can no
+    // longer be answered — the client is gone after stdin EOF) aborts and
+    // the join below cannot deadlock (#3788).
+    AGENT_SHUTDOWN.store(true, Ordering::SeqCst);
     if let Some(handle) = ACTIVE_AGENT
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -562,30 +580,38 @@ async fn handle_request(
 
             // Reject concurrent agent runs — avoids the race where a second
             // runAgent overwrites AGENT_APPROVAL, leaving the first thread
-            // blocked forever on rx.recv().
+            // blocked forever on rx.recv(). AGENT_RUNNING is acquired
+            // atomically BEFORE spawning: a check-and-set on ACTIVE_AGENT
+            // after spawn races with a fast-finishing task that clears it,
+            // leaving a stale handle that permanently rejects later runs (#3788).
+            if AGENT_RUNNING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
             {
-                let active = ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner());
-                if active.is_some() {
-                    writer.write_line(
-                        &serde_json::json!({
-                            "event": "error",
-                            "payload": {
-                                "code": "AGENT_ALREADY_RUNNING",
-                                "message": "Agent session is already in progress."
-                            }
-                        })
-                        .to_string(),
-                    );
-                    return Ok(serde_json::json!({
-                        "status": "rejected",
-                        "reason": "agent already running"
-                    }));
-                }
+                writer.write_line(
+                    &serde_json::json!({
+                        "event": "error",
+                        "payload": {
+                            "code": "AGENT_ALREADY_RUNNING",
+                            "message": "Agent session is already in progress."
+                        }
+                    })
+                    .to_string(),
+                );
+                return Ok(serde_json::json!({
+                    "status": "rejected",
+                    "reason": "agent already running"
+                }));
             }
 
-            let settings = initialize_storage_async(context)
-                .await
-                .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))?;
+            let settings = match initialize_storage_async(context).await {
+                Ok(settings) => settings,
+                Err(e) => {
+                    // No agent was spawned — release the run guard.
+                    AGENT_RUNNING.store(false, Ordering::SeqCst);
+                    return Err(vaultpilot_lib::sanitize_error(&e.to_string()));
+                }
+            };
             let ctx = context.clone();
             let writer: Arc<SharedWriter> = Arc::clone(writer);
             let prompt = params.prompt.clone();
@@ -598,6 +624,22 @@ async fn handle_request(
             // respondToWriteApproval requests.
             let thread_writer = Arc::clone(&writer);
             let handle = std::thread::spawn(move || {
+                // Guarantee the run guard and session state are cleared on
+                // EVERY exit path (normal completion or panic). Without this,
+                // a fast-finishing task would clear ACTIVE_AGENT before the
+                // parent stores its handle, and a panicking task would leave
+                // AGENT_RUNNING=true — both permanently rejecting later
+                // runAgent calls until process restart (#3788).
+                struct ClearSessionState;
+                impl Drop for ClearSessionState {
+                    fn drop(&mut self) {
+                        AGENT_RUNNING.store(false, Ordering::SeqCst);
+                        *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        *ACTIVE_AGENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    }
+                }
+                let _session_guard = ClearSessionState;
+
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
@@ -1300,6 +1342,25 @@ where
         })
 }
 
+/// Waits for a write-approval decision from the UI. Returns `false`
+/// (deny the write) if the approval sender disconnects OR if the agent
+/// process is shutting down after stdin EOF. The shutdown check matters
+/// because once stdin hits EOF no more `respondToWriteApproval` requests
+/// can be read, so a naive `rx.recv()` would block forever and main()'s
+/// join() on exit would deadlock (#3788).
+fn await_write_approval(rx: std::sync::mpsc::Receiver<bool>) -> bool {
+    loop {
+        if AGENT_SHUTDOWN.load(Ordering::SeqCst) {
+            return false;
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(approved) => return approved,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+}
+
 /// Run an agent session in the background. Emits events via `writer` and
 /// handles write-approval through the global `AGENT_APPROVAL` channel.
 #[allow(clippy::too_many_arguments)]
@@ -1447,8 +1508,10 @@ async fn run_agent_task(
                     let (tx, rx) = std::sync::mpsc::channel();
                     *AGENT_APPROVAL.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
                     // Block until approval received (this runs in a background thread,
-                    // not on the main stdin loop, so blocking is fine).
-                    rx.recv().unwrap_or(false)
+                    // not on the main stdin loop, so blocking is fine). The wait also
+                    // aborts (denying the write) once the process is shutting down
+                    // after stdin EOF, preventing a join() deadlock on exit (#3788).
+                    await_write_approval(rx)
                 }
                 LibAgentEvent::PlanProposed { plan } => {
                     emit_event(
@@ -2368,5 +2431,60 @@ mod tests {
             .take()
             .unwrap();
         handle.join().unwrap();
+    }
+
+    // ── Regression: #3788 shutdown deadlock + stale run-guard race ──────
+    // NOTE: shares the AGENT_RUNNING / AGENT_SHUTDOWN statics; kept in a
+    // single test so parallel test threads cannot race one another.
+
+    /// Verifies the #3788 fixes:
+    /// - Bug A: the write-approval wait promptly aborts (denies the write)
+    ///   once the process is shutting down after stdin EOF, so main()'s
+    ///   join() cannot deadlock on an approval that will never arrive.
+    /// - Bug B: the concurrent-run guard is released after a task finishes,
+    ///   so a fast task cannot leave a stale "running" state that rejects
+    ///   every later runAgent call until process restart.
+    #[test]
+    fn regression_3788_agent_shutdown_and_run_guard() {
+        // ── Phase 1: Bug A — approval wait aborts on shutdown ──
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _ = tx; // never send — simulates stdin EOF with a pending approval
+            AGENT_SHUTDOWN.store(true, Ordering::SeqCst);
+            let started = std::time::Instant::now();
+            let decision = await_write_approval(rx);
+            assert!(!decision, "approval must be denied once shutting down");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "approval wait must not block forever after shutdown"
+            );
+            AGENT_SHUTDOWN.store(false, Ordering::SeqCst);
+        }
+
+        // ── Phase 2: Bug A — normal user approval still honored ──
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let waiter = std::thread::spawn(move || await_write_approval(rx));
+            tx.send(true).unwrap();
+            assert!(waiter.join().unwrap(), "user approval must be honored");
+        }
+
+        // ── Phase 3: Bug B — atomic concurrent-run guard ──
+        {
+            // First acquisition succeeds
+            assert!(AGENT_RUNNING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok());
+            // Concurrent acquisition is rejected
+            assert!(AGENT_RUNNING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err());
+            // Fast task finishes and clears the guard → next run is allowed
+            AGENT_RUNNING.store(false, Ordering::SeqCst);
+            assert!(AGENT_RUNNING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok());
+            AGENT_RUNNING.store(false, Ordering::SeqCst);
+        }
     }
 }

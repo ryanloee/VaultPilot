@@ -149,7 +149,7 @@ interface AppState {
   apiKey: string;
   model: string;
   apiFormat: ApiFormat;
-  setApiSettings: (s: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }) => void;
+  setApiSettings: (s: { apiBase?: string; apiKey?: string; model?: string; apiFormat?: ApiFormat }) => Promise<void>;
 
   // Multi-provider
   providers: ProviderConfig[];

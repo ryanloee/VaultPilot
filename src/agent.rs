@@ -987,7 +987,7 @@ impl ExecutionPlan {
 fn format_tokens(n: u64) -> String {
     if n >= 1000 {
         let k = (n as f64) / 1000.0;
-        if (k.fract() - 0.0).abs() < f64::EPSILON {
+        if k.fract() < f64::EPSILON {
             format!("~{}k", k as u64)
         } else {
             format!("~{:.1}k", k)

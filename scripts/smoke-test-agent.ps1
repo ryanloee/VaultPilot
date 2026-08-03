@@ -239,6 +239,12 @@ if (Test-Path $crashLog) {
 # -- Drain stderr (best-effort) and check for panic text --
 Write-Host ""
 Write-Host "Checking stderr..."
+# IMPORTANT: the agent is a long-running JSON-RPC server that never exits on
+# its own, so ReadToEnd() would block until EOF forever, hanging the whole CI
+# job until GitHub's 6h timeout. Kill the process first so the stderr pipe
+# closes, then drain whatever was buffered.
+try { $process.Kill() } catch {}
+try { $process.WaitForExit(5000) } catch {}
 try {
     $stderrAll = $process.StandardError.ReadToEnd()
     if ($stderrAll) {

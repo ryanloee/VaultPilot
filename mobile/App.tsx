@@ -148,7 +148,9 @@ export default function App() {
     try {
       // Load API settings from cfg_* keys (matches SettingsScreen's saveSettings)
       const apiSettings = await getSettings();
-      useAppStore.getState().setApiSettings(apiSettings);
+      useAppStore.getState().setApiSettings(apiSettings).catch((e) => {
+        console.warn('[App] Failed to set API settings:', e);
+      });
 
       // Load theme settings from cfg_* keys
       const [savedTheme, savedColor] = await Promise.all([

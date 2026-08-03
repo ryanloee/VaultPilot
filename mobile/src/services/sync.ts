@@ -232,7 +232,8 @@ async function doSync(
   emitProgress('details');
 
   // Concurrent detail fetches with concurrency limit (#2011)
-  await runWithConcurrency(notesToFetch, DETAIL_CONCURRENCY, async (meta) => {
+  try {
+    await runWithConcurrency(notesToFetch, DETAIL_CONCURRENCY, async (meta) => {
     if (signal.aborted) throw new Error('同步超时');
 
     try {
@@ -344,6 +345,13 @@ async function doSync(
       emitProgress('details');
     }
   }, signal);
+  } catch (e) {
+    // runWithConcurrency may still throw (e.g., signal aborted, Promise.all failure).
+    // Consume the error here instead of letting it abort the entire sync (#3812).
+    if (signal.aborted) throw new Error('同步超时');
+    console.warn('[Sync] runWithConcurrency failed:', e);
+    errors++;
+  }
 
   // Only persist the sync timestamp on a clean (non-aborted) sync (#2369)
   if (!signal.aborted) {
@@ -374,9 +382,11 @@ async function runWithConcurrency<T>(
         const i = index++;
         try { await fn(items[i]); } catch (e) {
           if (innerSignal.aborted) { aborted = true; return; }
-          // Cancel other workers when one fails (#3534)
+          // Cancel other workers when one fails (#3534).
+          // Do NOT re-throw — the caller's fn already handles error counting,
+          // and re-throwing causes Promise.all to reject, skipping error counters
+          // and aborting the entire sync (#3812).
           innerController.abort();
-          throw e;
         }
       }
     });

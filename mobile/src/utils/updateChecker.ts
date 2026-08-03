@@ -96,7 +96,7 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateInfo
           } finally {
             clearTimeout(timer2);
           }
-        } catch (e) {
+} catch (e) {
             console.warn('[UpdateChecker] fallback sync error:', e);
           }
       }

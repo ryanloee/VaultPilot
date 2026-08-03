@@ -21,23 +21,33 @@ mod tests {
     use std::io::{Cursor, Read};
 
     /// A child exiting with a >4KB burst fills the pipe with e.g. 10_000 bytes.
-    /// A single 4096-byte read (the old behaviour) would truncate it. The drain
-    /// must capture ALL residual bytes.
+    /// On Unix the drain loops to capture all bytes; on Windows (#3807) a
+    /// single 4 KB read is the safe maximum to avoid indefinite thread hangs.
     #[test]
     fn regression_2746_drain_captures_more_than_4kb() {
         let data = vec![b'x'; 10_000];
         let mut reader = Cursor::new(data);
         let mut buf = Vec::new();
         drain_nonblocking_remaining("stdout", &mut reader, &mut buf);
-        assert_eq!(
-            buf.len(),
-            10_000,
-            "final drain must capture ALL residual bytes, not just the first 4KB"
-        );
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                buf.len(),
+                10_000,
+                "final drain must capture ALL residual bytes, not just the first 4KB"
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows single-read fallback (#3807) — at most one 4 KB buffer.
+            assert_eq!(buf.len(), 4096);
+        }
         assert!(buf.iter().all(|&b| b == b'x'));
     }
 
     /// Boundary sizes around the 4096-byte read buffer must not truncate.
+    /// On Windows (#3807) only the first 4 KB are read — sizes beyond that
+    /// are not expected.
     #[test]
     fn regression_2746_drain_handles_exact_and_small() {
         for size in [0usize, 1, 4095, 4096, 4097, 8192, 12_345] {
@@ -45,7 +55,19 @@ mod tests {
             let mut reader = Cursor::new(data);
             let mut buf = Vec::new();
             drain_nonblocking_remaining("stdout", &mut reader, &mut buf);
-            assert_eq!(buf.len(), size, "final drain truncated at size {size}");
+            #[cfg(unix)]
+            {
+                assert_eq!(buf.len(), size, "final drain truncated at size {size}");
+            }
+            #[cfg(not(unix))]
+            {
+                let expected = size.min(4096);
+                assert_eq!(
+                    buf.len(),
+                    expected,
+                    "final drain size mismatch at size {size}"
+                );
+            }
         }
     }
 

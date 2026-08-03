@@ -192,6 +192,12 @@ public sealed partial class AiCommandPalette : UserControl
 
             _lastResult = result;
 
+            // #3795: if a newer request superseded this one (Interlocked.Exchange
+            // swapped _activeRequestCts), the stale continuation must not stomp
+            // the newer request's UI state.
+            if (!ReferenceEquals(Volatile.Read(ref _activeRequestCts), newCts))
+                return;
+
             LoadingOverlay.Visibility = Visibility.Collapsed;
 
             if (result is not null && string.IsNullOrEmpty(result.Error))
@@ -206,12 +212,18 @@ public sealed partial class AiCommandPalette : UserControl
         }
         catch (OperationCanceledException)
         {
+            // #3795: stale (superseded) request must not rewrite the UI.
+            if (!ReferenceEquals(Volatile.Read(ref _activeRequestCts), newCts))
+                return;
             LoadingOverlay.Visibility = Visibility.Collapsed;
             PaletteCard.Visibility = Visibility.Visible;
             FooterHint.Text = "操作已取消。";
         }
         catch (Exception error)
         {
+            // #3795: stale (superseded) request must not rewrite the UI.
+            if (!ReferenceEquals(Volatile.Read(ref _activeRequestCts), newCts))
+                return;
             LoadingOverlay.Visibility = Visibility.Collapsed;
             ShowError($"操作执行失败: {error.Message}");
         }

@@ -131,6 +131,12 @@ public sealed partial class QuickAskOverlay : UserControl
             if (ct.IsCancellationRequested)
                 return;
 
+            // #3795: if a newer request superseded this one (Interlocked.Exchange
+            // swapped _activeRequestCts), the stale continuation must not stomp
+            // the newer request's UI state.
+            if (!ReferenceEquals(Volatile.Read(ref _activeRequestCts), newCts))
+                return;
+
             LoadingOverlay.Visibility = Visibility.Collapsed;
             QuickAskCard.Visibility = Visibility.Visible;
 
@@ -146,18 +152,27 @@ public sealed partial class QuickAskOverlay : UserControl
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // #3795: stale (superseded) request must not rewrite the UI.
+            if (!ReferenceEquals(Volatile.Read(ref _activeRequestCts), newCts))
+                return;
             LoadingOverlay.Visibility = Visibility.Collapsed;
             QuickAskCard.Visibility = Visibility.Visible;
             ShowInfo("请求已取消。");
         }
         catch (TimeoutException)
         {
+            // #3795: stale (superseded) request must not rewrite the UI.
+            if (!ReferenceEquals(Volatile.Read(ref _activeRequestCts), newCts))
+                return;
             LoadingOverlay.Visibility = Visibility.Collapsed;
             QuickAskCard.Visibility = Visibility.Visible;
             ShowError("请求超时，后端可能无响应。");
         }
         catch (Exception error) when (!ct.IsCancellationRequested)
         {
+            // #3795: stale (superseded) request must not rewrite the UI.
+            if (!ReferenceEquals(Volatile.Read(ref _activeRequestCts), newCts))
+                return;
             LoadingOverlay.Visibility = Visibility.Collapsed;
             QuickAskCard.Visibility = Visibility.Visible;
             ShowError($"请求失败: {error.Message}");

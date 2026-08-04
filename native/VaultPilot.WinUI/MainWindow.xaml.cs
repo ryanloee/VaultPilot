@@ -733,22 +733,39 @@ public sealed partial class MainWindow : Window
             }
 
             var items = await e.DataView.GetStorageItemsAsync();
+
+            // Handle folders (feat #3808)
+            var folders = items
+                .OfType<StorageFolder>()
+                .Select(f => f.Path)
+                .Where(p => !string.IsNullOrEmpty(p))
+                .ToArray();
+            foreach (var folder in folders)
+            {
+                await ImportFolderAsync(folder);
+            }
+
+            // Handle image files as before
             var files = items
                 .OfType<StorageFile>()
                 .Where(IsSupportedImageFile)
                 .ToArray();
 
-            if (files.Length == 0)
+            if (files.Length == 0 && folders.Length == 0)
             {
-                UpdateStatusBar("warning", "未添加图片", "拖入的文件里没有可用的图片。");
+                UpdateStatusBar("warning", "未添加内容",
+                    "拖入的文件里没有可用的图片或可导入的笔记文件。");
                 return;
             }
 
-            AddImageAttachments(files);
+            if (files.Length > 0)
+            {
+                AddImageAttachments(files);
+            }
         }
         catch (Exception error)
         {
-            ShowError("拖放图片失败", error);
+            ShowError("拖放失败", error);
         }
     }
 
@@ -1346,28 +1363,45 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            // Separate directories from files
+            var directories = paths
+                .Where(p => Directory.Exists(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            // Import each dropped folder (feat #3808)
+            foreach (var dir in directories)
+            {
+                await ImportFolderAsync(dir);
+            }
+
+            // Handle image files as before
             var imagePaths = paths
+                .Where(p => !Directory.Exists(p))
                 .Where(IsSupportedImagePath)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            if (imagePaths.Length == 0)
+            if (imagePaths.Length == 0 && directories.Length == 0)
             {
-                UpdateStatusBar("warning", "未添加图片", "拖入的文件里没有可用的图片。");
+                UpdateStatusBar("warning", "未添加内容",
+                    "拖入的文件里没有可用的图片或可导入的笔记文件。");
                 return;
             }
 
-            var files = new List<StorageFile>(imagePaths.Length);
-            foreach (var path in imagePaths)
+            if (imagePaths.Length > 0)
             {
-                files.Add(await StorageFile.GetFileFromPathAsync(path));
+                var files = new List<StorageFile>(imagePaths.Length);
+                foreach (var path in imagePaths)
+                {
+                    files.Add(await StorageFile.GetFileFromPathAsync(path));
+                }
+                AddImageAttachments(files);
             }
-
-            AddImageAttachments(files);
         }
         catch (Exception error)
         {
-            ShowError("拖放图片失败", error);
+            ShowError("拖放失败", error);
         }
     }
 

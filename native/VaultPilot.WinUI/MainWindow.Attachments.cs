@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using System.IO;
 using System.Runtime.InteropServices.WindowsRuntime;
 using VaultPilot.WinUI.Controls;
 using VaultPilot.WinUI.Models;
@@ -410,6 +411,143 @@ public sealed partial class MainWindow : Window
         catch (Exception)
         {
             // Best-effort cleanup; don't disrupt user
+        }
+    }
+
+    // ── Folder import helpers (feat #3808) ──
+
+    /// <summary>
+    /// Maximum file size (bytes) to import as a note. Files larger than this
+    /// are skipped to prevent memory issues from huge binary files.
+    /// </summary>
+    private const long MaxImportFileSizeBytes = 10 * 1024 * 1024; // 10 MB
+
+    /// <summary>
+    /// File extensions that can be imported as notes.
+    /// </summary>
+    private static readonly HashSet<string> ImportableNoteExtensions = new(
+        StringComparer.OrdinalIgnoreCase)
+    {
+        ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+        ".csv", ".html", ".xml", ".org", ".rst", ".adoc"
+    };
+
+    /// <summary>
+    /// Returns true if the file extension is one we can import as a note.
+    /// </summary>
+    private static bool IsImportableNoteExtension(string path)
+    {
+        var ext = Path.GetExtension(path);
+        return !string.IsNullOrEmpty(ext) && ImportableNoteExtensions.Contains(ext);
+    }
+
+    /// <summary>
+    /// Recursively enumerates all importable files under the given directory,
+    /// preserving relative path information via the tuple.
+    /// </summary>
+    private static List<(string AbsolutePath, string RelativePath)> EnumerateImportableFiles(
+        string rootDir)
+    {
+        var results = new List<(string, string)>();
+        try
+        {
+            foreach (var filePath in Directory.EnumerateFiles(rootDir, "*.*", SearchOption.AllDirectories))
+            {
+                if (!IsImportableNoteExtension(filePath))
+                    continue;
+
+                var fileInfo = new FileInfo(filePath);
+                if (fileInfo.Length > MaxImportFileSizeBytes)
+                    continue;
+
+                var relativePath = Path.GetRelativePath(rootDir, filePath);
+                results.Add((filePath, relativePath));
+            }
+        }
+        catch (Exception)
+        {
+            // Directory may be inaccessible; return what we found so far
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Imports a folder (and its sub-folders) as notes into the vault.
+    /// Each file becomes a note; the relative directory path is used as the
+    /// note title prefix. Shows progress in the status bar.
+    /// </summary>
+    private async Task ImportFolderAsync(string folderPath)
+    {
+        var files = EnumerateImportableFiles(folderPath);
+        if (files.Count == 0)
+        {
+            UpdateStatusBar("warning", "未找到可导入的文件",
+                $"在 {Path.GetFileName(folderPath)} 中没有找到支持的笔记文件。");
+            return;
+        }
+
+        var succeeded = 0;
+        var failed = 0;
+        var folderName = Path.GetFileName(folderPath);
+
+        for (var i = 0; i < files.Count; i++)
+        {
+            var (absolutePath, relativePath) = files[i];
+
+            // Progress update every 5 files to avoid flooding the UI
+            if (i % 5 == 0)
+            {
+                UpdateStatusBar("info", "正在导入文件夹",
+                    $"正在导入 {folderName}… ({i + 1}/{files.Count})");
+            }
+
+            try
+            {
+                var content = await File.ReadAllTextAsync(absolutePath);
+
+                // Derive title from relative path: "subdir/file.md" → "subdir/file"
+                var title = Path.ChangeExtension(relativePath, null)
+                    .Replace('\\', '/'); // normalize to forward slash
+
+                var now = DateTimeOffset.UtcNow.ToString("o");
+                var meta = new NoteMeta
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Title = title,
+                    Tags = new[] { $"import:{folderName}" },
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                    Source = "folder-import",
+                    Path = relativePath.Replace('\\', '/'),
+                    Summary = string.Empty,
+                };
+
+                var doc = new NoteDocument(meta, content);
+
+                var saved = await _backendClient.SendAsync<NoteDocument>(
+                    "saveNote", new { note = doc });
+
+                if (saved is not null)
+                    succeeded++;
+                else
+                    failed++;
+            }
+            catch (Exception)
+            {
+                failed++;
+            }
+        }
+
+        // Final status
+        if (failed == 0)
+        {
+            UpdateStatusBar("success", "文件夹导入完成",
+                $"从 {folderName} 导入了 {succeeded} 个笔记。");
+        }
+        else
+        {
+            UpdateStatusBar("warning", "文件夹导入完成",
+                $"从 {folderName} 导入了 {succeeded} 个笔记，{failed} 个失败。");
         }
     }
 }

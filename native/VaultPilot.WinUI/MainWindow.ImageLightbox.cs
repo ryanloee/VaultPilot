@@ -415,7 +415,7 @@ public sealed partial class MainWindow
                 // Ease-out cubic
                 var eased = 1 - Math.Pow(1 - t, 3);
                 translate.Y = from + (to - from) * eased;
-                grid.Opacity = 1 - (1 - Math.Abs(translate.Y) / 300.0) * (1 - t);
+                grid.Opacity = Math.Max(0.3, 1.0 - Math.Abs(translate.Y) / 300.0);
 
                 if (t >= 1)
                 {

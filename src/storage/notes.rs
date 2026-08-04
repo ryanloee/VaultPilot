@@ -596,18 +596,25 @@ pub fn bulk_update_meta_field_with_context(
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
-                    let sub = bulk_update_tags_with_context(
+                    match bulk_update_tags_with_context(
                         context,
                         std::slice::from_ref(id),
                         &add,
                         &[],
-                    )?;
-                    if sub.affected > 0 {
-                        result.affected += 1;
-                    } else if sub.skipped > 0 {
-                        result.skipped += 1;
+                    ) {
+                        Ok(sub) => {
+                            if sub.affected > 0 {
+                                result.affected += 1;
+                            } else if sub.skipped > 0 {
+                                result.skipped += 1;
+                            }
+                            result.failures.extend(sub.failures);
+                        }
+                        Err(e) => result.failures.push(BulkNoteOpFailure {
+                            id: id.clone(),
+                            reason: e.to_string(),
+                        }),
                     }
-                    result.failures.extend(sub.failures);
                     continue;
                 }
                 if field == "keywords" {
@@ -4136,6 +4143,88 @@ mod tests {
         // Unknown ids fall back to the first N lines.
         let preview = preview_note_fragment(&ctx, note_id, Some("^nonexistent"), 2).unwrap();
         assert!(preview.contains("## 摘要"), "fallback: {preview}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── #3826: bulk_update_meta_field "tags" path must collect failures
+    //    instead of aborting the entire batch via `?` ──
+    #[test]
+    fn regression_3826_bulk_update_tags_batch_continues_on_error() {
+        let dir = std::env::temp_dir().join(format!(
+            "vaultpilot-3826-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let ctx = StorageContext::for_test(&dir);
+
+        // Create two valid notes.
+        let note1 = save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "alpha".to_string(),
+                    ..Default::default()
+                },
+                body: "body alpha".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("save note1");
+
+        let note2 = save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "beta".to_string(),
+                    ..Default::default()
+                },
+                body: "body beta".to_string(),
+                ..Default::default()
+            },
+        )
+        .expect("save note2");
+
+        let nonexistent = "does-not-exist-3826".to_string();
+
+        // Batch update tags on [note1, nonexistent, note2].
+        // Before fix: `?` on tags path would propagate the load error for
+        // `nonexistent` and abort the batch → note2 would never be processed.
+        // After fix: failures are collected, batch continues.
+        let ids = vec![
+            note1.meta.id.clone(),
+            nonexistent.clone(),
+            note2.meta.id.clone(),
+        ];
+        let result = bulk_update_meta_field_with_context(&ctx, &ids, "tags", "rust,bug")
+            .expect("bulk update should return Ok, not Err");
+
+        // note1 and note2 should be affected; nonexistent should be a failure.
+        assert_eq!(
+            result.affected, 2,
+            "both valid notes should be affected, got: {result:?}"
+        );
+        assert_eq!(
+            result.failures.len(),
+            1,
+            "nonexistent id should be in failures, got: {result:?}"
+        );
+        assert_eq!(result.failures[0].id, nonexistent, "failure id mismatch");
+
+        // Verify tags were actually written to both notes.
+        let loaded1 = load_note_with_context(&ctx, &note1.meta.id).expect("load note1");
+        assert!(
+            loaded1.meta.tags.contains(&"rust".to_string()),
+            "note1 tags should contain 'rust': {:?}",
+            loaded1.meta.tags
+        );
+        let loaded2 = load_note_with_context(&ctx, &note2.meta.id).expect("load note2");
+        assert!(
+            loaded2.meta.tags.contains(&"rust".to_string()),
+            "note2 tags should contain 'rust': {:?}",
+            loaded2.meta.tags
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

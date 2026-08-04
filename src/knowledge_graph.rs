@@ -143,7 +143,7 @@ pub fn extract_local_graph(
     }
 
     // Filter nodes and edges to only those in the visited set.
-    let nodes: Vec<GraphNode> = graph
+    let mut nodes: Vec<GraphNode> = graph
         .nodes
         .iter()
         .filter(|n| visited.contains(&n.id))
@@ -156,6 +156,13 @@ pub fn extract_local_graph(
         .filter(|e| visited.contains(&e.source) && visited.contains(&e.target))
         .cloned()
         .collect();
+
+    // Recompute in_degree/out_degree from the filtered edges (#3838).
+    // The global graph degrees are misleading for a local subgraph.
+    for node in &mut nodes {
+        node.in_degree = edges.iter().filter(|e| e.target == node.id).count();
+        node.out_degree = edges.iter().filter(|e| e.source == node.id).count();
+    }
 
     let note_count = nodes.len();
     let edge_count = edges.len();
@@ -530,7 +537,9 @@ pub fn score_pair(a: &NoteMeta, b: &NoteMeta) -> Option<InferredRelation> {
 /// This is a pure, database-free function suitable for unit testing.
 pub fn infer_relations(notes: &[NoteMeta], config: &InferenceConfig) -> Vec<InferredRelation> {
     let mut all: Vec<InferredRelation> = Vec::new();
-    // Dedup before per-source truncation: track seen unordered pairs globally.
+    // Track pairs that actually entered `all` (i.e. survived truncation),
+    // so that no valid pair is permanently excluded because a source that
+    // found it later dropped it during per-source truncation (#3836).
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
 
     for i in 0..notes.len() {
@@ -550,7 +559,7 @@ pub fn infer_relations(notes: &[NoteMeta], config: &InferenceConfig) -> Vec<Infe
                     } else {
                         (rel.target.clone(), rel.source.clone())
                     };
-                    if seen.insert(key) {
+                    if !seen.contains(&key) {
                         per_source.push(rel);
                     }
                 }
@@ -563,6 +572,15 @@ pub fn infer_relations(notes: &[NoteMeta], config: &InferenceConfig) -> Vec<Infe
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         per_source.truncate(config.max_per_note);
+        // Only mark pairs that actually survive truncation as seen (#3836).
+        for rel in &per_source {
+            let key = if rel.source <= rel.target {
+                (rel.source.clone(), rel.target.clone())
+            } else {
+                (rel.target.clone(), rel.source.clone())
+            };
+            seen.insert(key);
+        }
         all.extend(per_source);
     }
 
@@ -1043,7 +1061,7 @@ fn extract_context_snippet(body: &str, needle: &str) -> Option<String> {
     let pos = body_lower.find(&needle_lower)?;
 
     let start = pos.saturating_sub(BACKLINK_SNIPPET_RADIUS);
-    let end = (pos + needle.len() + BACKLINK_SNIPPET_RADIUS).min(body.len());
+    let end = (pos + needle_lower.len() + BACKLINK_SNIPPET_RADIUS).min(body.len());
 
     // Snap to UTF-8 char boundaries.
     let start = snap_to_char_boundary(body, start);
@@ -1627,10 +1645,11 @@ mod tests {
         assert!(result.starts_with('{'));
     }
 
-    /// Regression: infer_relations must dedup BEFORE per-source truncation.
-    /// When max_per_note=1 and B→A is the top score for source B but (A,B) was
-    /// already claimed by source A, the next unique pair B→C must survive.
-    /// (Issue #3387)
+    /// Regression: infer_relations must NOT silently drop valid pairs (#3836).
+    /// When max_per_note=1 and B→A is already seen from source A (via A→B),
+    /// the next unique pair B→C must survive for source B.  After the fix for
+    /// #3836 (seen populated only AFTER truncation), source C can also emit
+    /// C→A, recovering a pair that the old code silently dropped.
     #[test]
     fn test_infer_relations_dedup_before_truncation() {
         // Create 3 notes where A→B has the best score, A→C and B→C less so.
@@ -1666,18 +1685,18 @@ mod tests {
 
         let relations = infer_relations(&notes, &config);
 
-        // Must have 2 unique relations, not 1:
-        //   A→B (or B→A) from source A
-        //   B→C (the unique pair that would have been lost under the old per-source-then-dedup ordering)
+        // After #3836 fix: three unique unordered pairs survive:
+        //   A↔B (from source A), B↔C (from source B), C↔A (from source C).
+        // The old buggy code would return only 2 (dropping C↔A permanently).
         assert_eq!(
             relations.len(),
-            2,
-            "expected 2 unique relations (A↔B and B↔C), got {}: {:?}",
+            3,
+            "expected 3 unique relations (A↔B, B↔C, C↔A), got {}: {:?}",
             relations.len(),
             relations
         );
 
-        // Verify the unordered pairs are exactly {A,B} and {B,C}.
+        // Verify the unordered pairs are exactly {A,B}, {B,C}, and {A,C}.
         let pairs: Vec<(&str, &str)> = relations
             .iter()
             .map(|r| {
@@ -1690,10 +1709,7 @@ mod tests {
             .collect();
         assert!(pairs.contains(&("A", "B")), "missing pair A-B");
         assert!(pairs.contains(&("B", "C")), "missing pair B-C");
-        assert!(
-            !pairs.contains(&("A", "C")),
-            "unexpected pair A-C (max_per_note=1 should drop it)"
-        );
+        assert!(pairs.contains(&("A", "C")), "missing pair A-C");
     }
 
     // ── #3570: Local Graph + Force-Directed Layout tests ──────────────────

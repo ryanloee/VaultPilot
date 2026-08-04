@@ -588,7 +588,7 @@ public sealed partial class SettingsWindow : Window
         if (string.IsNullOrEmpty(trimmedModel)) return false;
 
         if (!ulong.TryParse((timeoutText ?? string.Empty).Trim(), out var timeoutMs)
-            || timeoutMs < 1_000) return false;
+            || timeoutMs < 35_000) return false;
         if (timeoutMs > 300_000) return false;
 
         ulong? contextWindowTokens = null;
@@ -688,8 +688,8 @@ public sealed partial class SettingsWindow : Window
 
     private void OnTimeoutLostFocus(object sender, RoutedEventArgs e)
     {
-        if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var v) || v < 1_000)
-            SetFieldError(TimeoutBox, TimeoutError, "超时不能少于 1,000 毫秒");
+        if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var v) || v < 35_000)
+            SetFieldError(TimeoutBox, TimeoutError, "超时不能少于 35,000 毫秒 (35 秒)");
         else if (v > 300_000)
             SetFieldError(TimeoutBox, TimeoutError, "超时不能超过 300,000 毫秒");
         else
@@ -907,9 +907,9 @@ public sealed partial class SettingsWindow : Window
                 firstErrorElement ??= ModelBox;
             }
 
-            if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs < 1_000)
+            if (!ulong.TryParse(TimeoutBox.Text.Trim(), out var timeoutMs) || timeoutMs < 35_000)
             {
-                SetFieldError(TimeoutBox, TimeoutError, "请求超时不能少于 1,000 毫秒 (1 秒)。");
+                SetFieldError(TimeoutBox, TimeoutError, "请求超时不能少于 35,000 毫秒 (35 秒)。");
                 providerValid = false;
                 firstErrorElement ??= TimeoutBox;
             }

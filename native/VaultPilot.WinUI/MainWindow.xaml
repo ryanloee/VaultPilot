@@ -231,6 +231,18 @@
                                     x:Name="MessagesRepeater"
                                     ElementPrepared="OnMessageElementPrepared"
                                     ElementClearing="OnMessageElementClearing">
+                                    <ItemsRepeater.ItemTemplate>
+                                        <!-- #BUGFIX: explicit DataTemplate ensures each
+                                             item container is a ContentControl, not a
+                                             ContentPresenter (WinAppSDK 1.6 default).
+                                             Without this, OnMessageElementPrepared's
+                                             `args.Element is not ContentControl` check
+                                             silently returns, leaving MessageItem.ToString()
+                                             as the visible text. -->
+                                        <DataTemplate>
+                                            <ContentControl/>
+                                        </DataTemplate>
+                                    </ItemsRepeater.ItemTemplate>
                                     <ItemsRepeater.Layout>
                                         <StackLayout Orientation="Vertical" Spacing="18"/>
                                     </ItemsRepeater.Layout>

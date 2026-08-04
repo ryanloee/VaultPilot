@@ -1886,6 +1886,14 @@ enum VaultActions {
         #[arg(long, default_value = "table")]
         format: QueryFormat,
 
+        /// Suppress status metadata on stdout — send it to stderr instead.
+        ///
+        /// When set (or when --format is json/csv), stdout contains *only* the
+        /// query result data, making it safe to pipe into jq, awk, or other
+        /// scripts without JSON/text pollution (#3823).
+        #[arg(long)]
+        raw: bool,
+
         /// Write results to a file instead of stdout
         #[arg(long, short)]
         output: Option<PathBuf>,
@@ -5439,6 +5447,7 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             group_by,
             summarize,
             formula,
+            raw,
         } => handle_vault_query(
             context,
             query,
@@ -5447,6 +5456,7 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
             group_by.as_deref(),
             summarize,
             formula,
+            *raw,
         ),
         VaultActions::SaveView {
             name,
@@ -5467,6 +5477,7 @@ fn handle_vault(context: &StorageContext, action: &VaultActions) -> Result<Value
 /// YAML mapping so that arbitrary user-defined properties are captured, converts
 /// them to [`vault_query::Record`]s, runs the query, and formats the output in
 /// table / CSV / Markdown-table / JSON / Kanban board.
+#[allow(clippy::too_many_arguments)]
 fn handle_vault_query(
     context: &StorageContext,
     query_str: &str,
@@ -5475,6 +5486,7 @@ fn handle_vault_query(
     group_by: Option<&str>,
     summarize_specs: &[String],
     formula_specs: &[String],
+    raw: bool,
 ) -> Result<Value> {
     use std::fs;
 
@@ -5625,6 +5637,12 @@ fn handle_vault_query(
         }
     }
 
+    // Determine whether stdout should contain *only* data (no status JSON).
+    // This is true when --raw is set, or when the format is machine-readable
+    // (json/csv) so piping to jq/awk/scripts works without pollution (#3823).
+    let machine_readable = matches!(format, QueryFormat::Json | QueryFormat::Csv);
+    let suppress_status_stdout = raw || machine_readable;
+
     // Write output
     if let Some(path) = output_path {
         let mut full_output = formatted;
@@ -5640,10 +5658,24 @@ fn handle_vault_query(
             "format": format!("{format:?}").to_lowercase(),
         }))
     } else {
-        // Print to stdout for piping / redirection
+        // Print data to stdout for piping / redirection
         println!("{formatted}");
         if !summary_text.is_empty() {
             print!("{}", summary_text);
+        }
+        if suppress_status_stdout {
+            // #3823: send status metadata to stderr so stdout is pure data.
+            // This lets users pipe `vp vault query ... --format json` directly
+            // into jq, awk, or other tools without JSON pollution.
+            eprintln!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "rows": rows.len(),
+                    "format": format!("{format:?}").to_lowercase(),
+                }))?
+            );
+            // Bypass exit_ok — it would print a status JSON to stdout.
+            process::exit(0);
         }
         to_json(&serde_json::json!({
             "rows": rows.len(),
@@ -5811,6 +5843,7 @@ fn handle_open_view(
         view.group_by.as_deref(),
         &view.formula,
         &[],
+        false,
     )
 }
 

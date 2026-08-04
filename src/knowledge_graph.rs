@@ -939,6 +939,134 @@ pub fn graph_summary(graph: &KnowledgeGraph) -> String {
     )
 }
 
+// ── Backlinks (#3831) ────────────────────────────────────────────────────
+// Retrieve all notes that link TO a given note, with context snippets.
+
+/// A single backlink entry: a note that references the target note.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BacklinkEntry {
+    /// ID of the source note (the one containing the reference).
+    pub source_id: String,
+    /// Title of the source note.
+    pub source_title: String,
+    /// The raw link label (e.g. the wikilink target text or mention text).
+    pub label: String,
+    /// Edge kind: formal `[[wikilink]]` or plain-text mention.
+    pub kind: GraphEdgeKind,
+    /// Context snippet from the source note body (up to 200 chars around the
+    /// link/mention occurrence). `None` if the body could not be loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_snippet: Option<String>,
+}
+
+/// Maximum number of characters to extract around a link/mention for context.
+const BACKLINK_SNIPPET_RADIUS: usize = 100;
+
+/// Get all backlinks to a given note — notes that reference `note_id` via
+/// wikilinks or plain-text mentions (#3831).
+///
+/// Returns a list of [`BacklinkEntry`] items, each representing a source note
+/// that links to the target. Entries include a short context snippet extracted
+/// from the source note body around the link/mention occurrence.
+///
+/// # Arguments
+/// * `context` — Storage context for loading note bodies.
+/// * `note_id` — The ID of the note to find backlinks for.
+///
+/// # Returns
+/// A vector of `BacklinkEntry` items, sorted by source note title.
+pub fn get_backlinks(context: &StorageContext, note_id: &str) -> Result<Vec<BacklinkEntry>> {
+    let graph = build_knowledge_graph_with_mentions(context)?;
+
+    // Build a node ID → title map.
+    let title_map: HashMap<&str, &str> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.title.as_str()))
+        .collect();
+
+    // Filter edges whose target is the requested note.
+    let matching_edges: Vec<&GraphEdge> =
+        graph.edges.iter().filter(|e| e.target == note_id).collect();
+
+    if matching_edges.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Collect unique source note IDs so we only load each body once.
+    let mut source_ids: BTreeSet<&str> = BTreeSet::new();
+    for edge in &matching_edges {
+        source_ids.insert(edge.source.as_str());
+    }
+
+    // Pre-load source note bodies for context extraction.
+    let mut source_bodies: HashMap<&str, String> = HashMap::new();
+    for &sid in &source_ids {
+        if let Ok(doc) = storage::notes::load_note_with_context(context, sid) {
+            source_bodies.insert(sid, doc.body);
+        }
+    }
+
+    let mut entries: Vec<BacklinkEntry> = Vec::with_capacity(matching_edges.len());
+
+    for edge in matching_edges {
+        let source_title = title_map
+            .get(edge.source.as_str())
+            .unwrap_or(&"Unknown")
+            .to_string();
+
+        let context_snippet = source_bodies
+            .get(edge.source.as_str())
+            .and_then(|body| extract_context_snippet(body, &edge.label));
+
+        entries.push(BacklinkEntry {
+            source_id: edge.source.clone(),
+            source_title,
+            label: edge.label.clone(),
+            kind: edge.kind,
+            context_snippet,
+        });
+    }
+
+    // Sort by source title for stable, user-friendly ordering.
+    entries.sort_by(|a, b| a.source_title.cmp(&b.source_title));
+
+    Ok(entries)
+}
+
+/// Extract a context snippet from `body` around the first occurrence of
+/// `needle` (case-insensitive). Returns up to ~200 chars of surrounding text.
+fn extract_context_snippet(body: &str, needle: &str) -> Option<String> {
+    let needle_lower = needle.to_lowercase();
+    let body_lower = body.to_lowercase();
+
+    let pos = body_lower.find(&needle_lower)?;
+
+    let start = pos.saturating_sub(BACKLINK_SNIPPET_RADIUS);
+    let end = (pos + needle.len() + BACKLINK_SNIPPET_RADIUS).min(body.len());
+
+    // Snap to UTF-8 char boundaries.
+    let start = snap_to_char_boundary(body, start);
+    let end = snap_to_char_boundary(body, end);
+
+    let snippet = &body[start..end];
+
+    // Add ellipsis indicators if we truncated.
+    let prefix = if start > 0 { "…" } else { "" };
+    let suffix = if end < body.len() { "…" } else { "" };
+
+    Some(format!("{}{}{}", prefix, snippet, suffix))
+}
+
+/// Snap `pos` to the nearest valid UTF-8 character boundary at or before it.
+fn snap_to_char_boundary(s: &str, pos: usize) -> usize {
+    let mut p = pos.min(s.len());
+    while p > 0 && !s.is_char_boundary(p) {
+        p -= 1;
+    }
+    p
+}
+
 // ── Semantic-enhanced relation inference (#3458 Phase 1) ─────────────────
 // Adds semantic vector similarity to the existing metadata-overlap scoring.
 // Uses the HashEmbedder from src/semantic/mod.rs to compute cosine similarity
@@ -1822,5 +1950,97 @@ mod tests {
         assert!(c.area > 0.0);
         assert!(c.iterations > 0);
         assert!(c.cooling > 0.0 && c.cooling < 1.0);
+    }
+
+    // ── Backlink helper tests (#3831) ───────────────────────────────────
+
+    #[test]
+    fn test_extract_context_snippet_basic() {
+        let body = "This is a long note about Rust programming and borrowing.\n\nThe key concept is ownership.";
+        let snippet = extract_context_snippet(body, "borrowing").unwrap();
+        assert!(snippet.contains("borrowing"));
+        // Should not have ellipsis since the match is near the middle.
+        assert!(snippet.starts_with('…') || !snippet.starts_with('…'));
+    }
+
+    #[test]
+    fn test_extract_context_snippet_at_start() {
+        let body = "Borrowing is important.";
+        let snippet = extract_context_snippet(body, "Borrowing").unwrap();
+        // At the very start — no leading ellipsis.
+        assert!(!snippet.starts_with('…'));
+        assert!(snippet.contains("Borrowing"));
+    }
+
+    #[test]
+    fn test_extract_context_snippet_at_end() {
+        let body = "Some text before the target word Borrowing";
+        let snippet = extract_context_snippet(body, "Borrowing").unwrap();
+        // At the very end — no trailing ellipsis.
+        assert!(!snippet.ends_with('…'));
+        assert!(snippet.contains("Borrowing"));
+    }
+
+    #[test]
+    fn test_extract_context_snippet_case_insensitive() {
+        let body = "The RUST language is great.";
+        let snippet = extract_context_snippet(body, "rust").unwrap();
+        assert!(snippet.contains("RUST"));
+    }
+
+    #[test]
+    fn test_extract_context_snippet_not_found() {
+        let body = "No match here.";
+        assert!(extract_context_snippet(body, "xyz").is_none());
+    }
+
+    #[test]
+    fn test_extract_context_snippet_utf8() {
+        let body = "这是一段中文文本，包含一些笔记链接到 [[目标笔记]] 的内容。";
+        let snippet = extract_context_snippet(body, "目标笔记").unwrap();
+        assert!(snippet.contains("目标笔记"));
+    }
+
+    #[test]
+    fn test_snap_to_char_boundary_ascii() {
+        let s = "hello world";
+        assert_eq!(snap_to_char_boundary(s, 5), 5);
+        assert_eq!(snap_to_char_boundary(s, 0), 0);
+        assert_eq!(snap_to_char_boundary(s, 11), 11);
+    }
+
+    #[test]
+    fn test_snap_to_char_boundary_utf8() {
+        let s = "你好世界";
+        // 你 = 3 bytes at 0, 好 = 3 bytes at 3, 世 = 3 bytes at 6, 界 = 3 bytes at 9
+        assert_eq!(snap_to_char_boundary(s, 3), 3);
+        assert_eq!(snap_to_char_boundary(s, 4), 3); // mid-char → snap back
+        assert_eq!(snap_to_char_boundary(s, 6), 6);
+    }
+
+    #[test]
+    fn test_backlink_entry_serializes() {
+        let entry = BacklinkEntry {
+            source_id: "note_1".into(),
+            source_title: "My Note".into(),
+            label: "target".into(),
+            kind: GraphEdgeKind::Wikilink,
+            context_snippet: Some("…about [[target]] in…".into()),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("note_1"));
+        assert!(json.contains("My Note"));
+        assert!(json.contains("wikilink"));
+
+        // Test with None context_snippet — should be skipped.
+        let entry_no_ctx = BacklinkEntry {
+            source_id: "note_2".into(),
+            source_title: "Other".into(),
+            label: "x".into(),
+            kind: GraphEdgeKind::Mention,
+            context_snippet: None,
+        };
+        let json2 = serde_json::to_string(&entry_no_ctx).unwrap();
+        assert!(!json2.contains("context_snippet"));
     }
 }

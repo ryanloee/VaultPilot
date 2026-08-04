@@ -208,11 +208,22 @@ pub fn load_note_with_context(context: &StorageContext, note_id: &str) -> Result
     let (connection, _) = open_connection(context)?;
     let path = connection
         .query_row(
-            "SELECT path FROM notes WHERE id = ?1 OR path = ?1 LIMIT 1",
+            "SELECT path FROM notes WHERE id = ?1 LIMIT 1",
             [note_id],
             |row| row.get::<_, String>(0),
         )
         .optional()?
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT path FROM notes WHERE path = ?1 LIMIT 1",
+                    [note_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+        })
         .ok_or_else(|| anyhow::Error::from(NoteNotFound(note_id.to_string())))?;
     parse_markdown_note(Path::new(&path), "manual")
 }
@@ -318,11 +329,22 @@ pub fn delete_note_with_context(
     let (mut connection, _) = open_connection(context)?;
     let row: Option<(String, String)> = connection
         .query_row(
-            "SELECT id, path FROM notes WHERE id = ?1 OR path = ?1 LIMIT 1",
+            "SELECT id, path FROM notes WHERE id = ?1 LIMIT 1",
             [note_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?;
+        .optional()?
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT id, path FROM notes WHERE path = ?1 LIMIT 1",
+                    [note_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .ok()
+                .flatten()
+        });
     let Some((resolved_note_id, note_path)) = row else {
         return Ok(false);
     };
@@ -712,7 +734,7 @@ pub fn bulk_move_notes_with_context(
     // nearest ancestor. (#3104 regression: all relative moves currently fail.)
     let target_candidate = vault_dir.join(target_dir);
     let target_root =
-        crate::normalize_tool_path(target_candidate.to_str().unwrap_or(target_dir), &vault_dir)
+        crate::normalize_tool_path(&target_candidate.to_string_lossy(), &vault_dir)
             .map_err(|e| anyhow::anyhow!("invalid target directory '{target_dir}': {e}"))?;
     fs::create_dir_all(&target_root).ok();
 
@@ -749,11 +771,22 @@ fn move_one_note_with_connection(
 ) -> Result<MoveOutcome> {
     let row: Option<(String, String)> = connection
         .query_row(
-            "SELECT id, path FROM notes WHERE id = ?1 OR path = ?1 LIMIT 1",
+            "SELECT id, path FROM notes WHERE id = ?1 LIMIT 1",
             [note_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?;
+        .optional()?
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT id, path FROM notes WHERE path = ?1 LIMIT 1",
+                    [note_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .ok()
+                .flatten()
+        });
     let Some((_resolved_id, old_path_str)) = row else {
         return Err(anyhow!("note not found: {note_id}"));
     };
@@ -1583,18 +1616,45 @@ pub(crate) fn body_mentions_title(body: &str, title_lower: &str) -> bool {
     false
 }
 
-/// Remove inline code spans (`` `…` ``) from a line.
+/// Remove inline code spans (`` `…` `` / `` ``code`` ``) from a line.
+///
+/// Instead of treating every backtick as a toggle (#3835), count consecutive
+/// backticks to determine the opener's width and only close when the same
+/// backtick count is seen again.  This mirrors how `extract_wikilinks` already
+/// handles multi-backtick code spans.
 fn strip_inline_code(line: &str) -> String {
     let mut result = String::with_capacity(line.len());
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
     let mut in_code = false;
-    for ch in line.chars() {
-        if ch == '`' {
-            in_code = !in_code;
-            result.push(' ');
+    let mut opener_ticks = 0usize;
+
+    while i < chars.len() {
+        if chars[i] == '`' {
+            let mut count = 1usize;
+            while i + count < chars.len() && chars[i + count] == '`' {
+                count += 1;
+            }
+            if in_code {
+                if count == opener_ticks {
+                    in_code = false;
+                    opener_ticks = 0;
+                }
+            } else {
+                in_code = true;
+                opener_ticks = count;
+            }
+            // Replace the backtick(s) with spaces.
+            for _ in 0..count {
+                result.push(' ');
+            }
+            i += count;
         } else if in_code {
             result.push(' ');
+            i += 1;
         } else {
-            result.push(ch);
+            result.push(chars[i]);
+            i += 1;
         }
     }
     result
@@ -3654,6 +3714,25 @@ mod tests {
         let cleaned = strip_inline_code(input);
         // `world` → 7 spaces (2 backticks + 5 chars), plus original spaces.
         assert_eq!(cleaned, "Hello         here");
+    }
+
+    #[test]
+    fn regression_3835_strip_inline_code_multi_backtick() {
+        // ``code`` with double backticks — should strip the code content.
+        let input = "See ``code`` here";
+        let cleaned = strip_inline_code(input);
+        assert_eq!(cleaned.len(), input.len());
+        // "code" inside ``...`` must not appear as text.
+        assert!(!cleaned.contains("code"), "code should be stripped: {cleaned:?}");
+        // Non-code text preserved.
+        assert!(cleaned.contains("See"), "See should be preserved");
+        assert!(cleaned.contains("here"), "here should be preserved");
+
+        // Triple backtick code span.
+        let input2 = "```code```";
+        let cleaned2 = strip_inline_code(input2);
+        assert_eq!(cleaned2.len(), input2.len());
+        assert!(!cleaned2.contains("code"), "triple-backtick code should be stripped: {cleaned2:?}");
     }
 
     #[test]

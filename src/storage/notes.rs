@@ -3723,7 +3723,10 @@ mod tests {
         let cleaned = strip_inline_code(input);
         assert_eq!(cleaned.len(), input.len());
         // "code" inside ``...`` must not appear as text.
-        assert!(!cleaned.contains("code"), "code should be stripped: {cleaned:?}");
+        assert!(
+            !cleaned.contains("code"),
+            "code should be stripped: {cleaned:?}"
+        );
         // Non-code text preserved.
         assert!(cleaned.contains("See"), "See should be preserved");
         assert!(cleaned.contains("here"), "here should be preserved");
@@ -3732,7 +3735,10 @@ mod tests {
         let input2 = "```code```";
         let cleaned2 = strip_inline_code(input2);
         assert_eq!(cleaned2.len(), input2.len());
-        assert!(!cleaned2.contains("code"), "triple-backtick code should be stripped: {cleaned2:?}");
+        assert!(
+            !cleaned2.contains("code"),
+            "triple-backtick code should be stripped: {cleaned2:?}"
+        );
     }
 
     #[test]

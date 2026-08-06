@@ -604,10 +604,6 @@ public sealed partial class MainWindow : Window
 
     private void RemoveThinkingIndicator()
     {
-        _thinkingDotsTimer?.Stop();
-        _thinkingDotsTimer = null;
-        _thinkingDotStep = 0;
-
         for (int i = _messageItems.Count - 1; i >= 0; i--)
         {
             if (_messageItems[i].TurnId == ThinkingItemKey)

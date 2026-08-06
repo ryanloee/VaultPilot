@@ -49,6 +49,18 @@ public sealed class BackendClient : IAsyncDisposable
     private int _consecutiveHealthCheckFailures;
     private volatile bool _degradedMode;
     private int _healthCheckInProgress;
+    // True while DisposeProcessAsync is intentionally stopping the agent (vs. an
+    // autonomous crash). Lets PumpStdoutAsync distinguish an EOF caused by our
+    // own Kill (=> no reconnect) from a real crash (=> reconnect). Without this,
+    // Kill closes stdout, the pump reads EOF and fires a fire-and-forget
+    // reconnect that kills the next process, forming a self-sustaining restart
+    // loop (~1s period, hundreds of "stderr pump started" lines in agent.log).
+    private volatile bool _isIntentionalStop;
+    // Guards TryReconnectAsync against re-entrancy: 6 call sites fire-and-forget
+    // TryReconnectWithRetryAsync; even though _reconnectLock serializes them,
+    // each holder still does a full dispose+restart, so concurrent triggers
+    // chain into a restart storm. This flag collapses concurrent attempts.
+    private int _reconnectInProgress;
 
     public bool IsConnected
     {
@@ -172,6 +184,9 @@ public sealed class BackendClient : IAsyncDisposable
             var token = _readerCts.Token;
             _pumpStdoutTask = Task.Run(() => PumpStdoutAsync(token));
             _pumpStderrTask = Task.Run(() => PumpStderrAsync(token));
+            // New process is up and pumps are wired — clear the intentional-stop
+            // flag so a future EOF is correctly treated as a real crash.
+            _isIntentionalStop = false;
             ConnectionStateChanged?.Invoke(true);
         }
         catch (Exception ex) when (Volatile.Read(ref _isDisposed) == 0)
@@ -393,10 +408,26 @@ public sealed class BackendClient : IAsyncDisposable
             return false;
         }
 
+        var claimedSlot = false; // set true when we take the _reconnectInProgress slot
         try
         {
             if (Volatile.Read(ref _isDisposed) != 0 || _executablePath == null) return false;
             if (IsConnected && !forceRestart) return true;
+
+            // Idempotency guard: multiple call sites fire-and-forget
+            // TryReconnectWithRetryAsync concurrently. The lock serializes them,
+            // but each holder would otherwise do a full dispose+restart, so a
+            // burst of triggers cascades into a restart storm. Skip when another
+            // reconnect is already in progress (unless the caller explicitly
+            // forces a restart, e.g. a user-initiated Reconnect button).
+            if (!forceRestart)
+            {
+                if (Interlocked.CompareExchange(ref _reconnectInProgress, 1, 0) != 0)
+                {
+                    return true;
+                }
+                claimedSlot = true;
+            }
 
             await DisposeProcessAsync();
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
@@ -439,6 +470,7 @@ public sealed class BackendClient : IAsyncDisposable
         }
         finally
         {
+            if (claimedSlot) Interlocked.Exchange(ref _reconnectInProgress, 0);
             try { _reconnectLock.Release(); }
             catch (ObjectDisposedException) { /* shutting down — safe to ignore */ }
         }
@@ -562,8 +594,16 @@ public sealed class BackendClient : IAsyncDisposable
             }
             catch (TimeoutException)
             {
-                // Attempt reconnection on timeout since the backend may be dead.
-                _ = TryReconnectWithRetryAsync();
+                // A timeout does NOT imply the backend is dead — it may still be
+                // servicing this long request (askWithAi can legitimately run
+                // 60s+) or just be slow. Reconnecting here used to KILL a healthy
+                // process mid-request, which (combined with the EOF loop) caused
+                // the restart storm. Only reconnect if the process has actually
+                // exited; otherwise leave it alone and let the caller decide.
+                if (!IsConnected)
+                {
+                    _ = TryReconnectWithRetryAsync();
+                }
                 throw;
             }
         }
@@ -613,32 +653,51 @@ public sealed class BackendClient : IAsyncDisposable
             return;
         }
 
+        // CRITICAL ordering (stability fix): cancel the reader CTS BEFORE Kill.
+        // Kill closes the stdout pipe; if the pump's ReadLineAsync observes that
+        // EOF before cancellation, it treats it as an autonomous crash and
+        // fire-and-forgets a reconnect — which kills the next process — forming
+        // a self-sustaining ~1s restart loop. Cancelling first makes the pump
+        // exit via OperationCanceledException (silent path) instead of the EOF
+        // path. Also mark the stop as intentional so PumpStdoutAsync's EOF guard
+        // can suppress the reconnect even if the cancellation races.
+        _isIntentionalStop = true;
         try
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
+            var oldCts = Interlocked.Exchange(ref _readerCts, null);
+            try { oldCts?.Cancel(); } catch (ObjectDisposedException) { /* racing with dispose */ }
 
-            // Issue #713: WaitForExitAsync with timeout — Kill() may fail on
-            // zombie/unkillable processes, which would hang disposal indefinitely.
-            using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            try { await process.WaitForExitAsync(exitCts.Token); }
-            catch (OperationCanceledException) { /* timeout — proceed with dispose */ }
-        }
-        catch
-        {
-            // Ignore errors during cleanup
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+
+                // Issue #713: WaitForExitAsync with timeout — Kill() may fail on
+                // zombie/unkillable processes, which would hang disposal indefinitely.
+                using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try { await process.WaitForExitAsync(exitCts.Token); }
+                catch (OperationCanceledException) { /* timeout — proceed with dispose */ }
+            }
+            catch
+            {
+                // Ignore errors during cleanup
+            }
+            finally
+            {
+                // Issue #3437: Dispose the CancellationTokenSource to avoid kernel
+                // handle leak during reconnection cycles. (Cancel already done above.)
+                oldCts?.Dispose();
+                process.Dispose();
+                ConnectionStateChanged?.Invoke(false);
+            }
         }
         finally
         {
-            // Issue #3437: Cancel AND Dispose the CancellationTokenSource
-            // to avoid kernel handle leak during reconnection cycles.
-            var oldCts = Interlocked.Exchange(ref _readerCts, null);
-            oldCts?.Cancel();
-            oldCts?.Dispose();
-            process.Dispose();
-            ConnectionStateChanged?.Invoke(false);
+            // Keep _isIntentionalStop true until the next StartProcessAsync sets
+            // it false (see StartProcessAsync). Holding it through dispose is what
+            // prevents the dying pump from firing a spurious reconnect.
         }
     }
 
@@ -659,6 +718,17 @@ public sealed class BackendClient : IAsyncDisposable
                 var line = await process.StandardOutput.ReadLineAsync(token);
                 if (line is null)
                 {
+                    // EOF — but WHY? If DisposeProcessAsync is intentionally
+                    // stopping the process (reconnect/user-close/shutdown), this
+                    // EOF is the expected side-effect of our own Kill, NOT a
+                    // crash. Failing the pending requests and reconnecting here
+                    // would start a self-sustaining restart loop. Only treat it
+                    // as a real crash when we didn't provoke it ourselves.
+                    if (_isIntentionalStop)
+                    {
+                        FailPending("Rust 后端正在重启。");
+                        return;
+                    }
                     FailPending("Rust 后端已关闭输出通道。");
                     if (Volatile.Read(ref _isDisposed) == 0)
                     {

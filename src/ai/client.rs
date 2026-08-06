@@ -91,8 +91,25 @@ pub(super) fn get_or_build_client(
 
     // Pin DNS to the addresses verified by validate_base_url to prevent
     // DNS rebinding TOCTOU attacks (issue #503).
-    for (host, addr) in resolved_addrs {
-        builder = builder.resolve(host, *addr);
+    //
+    // CRITICAL: use `resolve_to_addrs` to pass ALL addresses for a host in one
+    // call. Calling `resolve` in a loop silently OVERWRITES the override on each
+    // iteration (reqwest stores it as a HashMap insert keyed by domain), so the
+    // loop version ended up pinning only the LAST address — usually an IPv6 addr
+    // that is unreachable on dual-stack-impaired networks, producing transport
+    // errors even when IPv4 was reachable. Group by host and pass the full
+    // IPv4-first-ordered slice per host.
+    {
+        // Group addresses by host (in practice resolved_addrs is single-host,
+        // but group defensively in case validate_base_url ever returns more).
+        let mut by_host: std::collections::BTreeMap<&str, Vec<SocketAddr>> =
+            std::collections::BTreeMap::new();
+        for (host, addr) in resolved_addrs {
+            by_host.entry(host.as_str()).or_default().push(*addr);
+        }
+        for (host, addrs) in by_host {
+            builder = builder.resolve_to_addrs(host, &addrs);
+        }
     }
 
     // Configure proxy: if proxy_url is set and non-empty, use it;
@@ -1175,16 +1192,7 @@ pub(super) async fn validate_base_url(
         )
         .await
         {
-            Ok(Ok(addrs)) => {
-                let mut resolved = Vec::new();
-                for addr in addrs {
-                    if is_blocked_ip(addr.ip()) {
-                        return Err(anyhow!("{}", private_ip_error_message(host_str, addr.ip())));
-                    }
-                    resolved.push((host_str.to_string(), addr));
-                }
-                Ok(resolved)
-            }
+            Ok(Ok(addrs)) => collect_resolved_addrs(host_str, addrs),
             Ok(Err(e)) => Err(anyhow!(
                 "failed to resolve base_url host '{}': {}",
                 host_str,
@@ -1221,16 +1229,7 @@ pub(super) async fn validate_base_url(
         )
         .await
         {
-            Ok(Ok(addrs)) => {
-                let mut resolved = Vec::new();
-                for addr in addrs {
-                    if is_blocked_ip(addr.ip()) {
-                        return Err(anyhow!("{}", private_ip_error_message(host_str, addr.ip())));
-                    }
-                    resolved.push((host_str.to_string(), addr));
-                }
-                Ok(resolved)
-            }
+            Ok(Ok(addrs)) => collect_resolved_addrs(host_str, addrs),
             Ok(Err(e)) => Err(anyhow!(
                 "failed to resolve base_url host '{}': {}",
                 host_str,
@@ -1242,6 +1241,44 @@ pub(super) async fn validate_base_url(
             )),
         }
     }
+}
+
+/// Collects resolved addresses, rejecting private/blocked IPs and ordering the
+/// result **IPv4-first**.
+///
+/// Many ISP DNS resolvers (and some Cloudflare-fronted hosts) return only IPv6
+/// `AAAA` records for a host while the local network has no working IPv6
+/// connectivity. reqwest/ hyper's `resolve()` tries the pinned addresses in the
+/// order given, so if IPv6 leads it stalls until the connect timeout — surfacing
+/// as a `transport error` and, in the agent sidecar, a crash/reconnect loop.
+///
+/// Sorting IPv4 ahead of IPv6 lets the request succeed on IPv4-only paths while
+/// still keeping IPv6 as a fallback when it actually works. This mirrors the
+/// intent of Happy Eyeballs (RFC 8305) without requiring hyper-level support.
+fn collect_resolved_addrs(
+    host: &str,
+    addrs: impl IntoIterator<Item = SocketAddr>,
+) -> Result<Vec<(String, SocketAddr)>> {
+    let mut v4 = Vec::new();
+    let mut v6 = Vec::new();
+    for addr in addrs {
+        if is_blocked_ip(addr.ip()) {
+            return Err(anyhow!("{}", private_ip_error_message(host, addr.ip())));
+        }
+        match addr {
+            SocketAddr::V4(_) => v4.push((host.to_string(), addr)),
+            SocketAddr::V6(_) => v6.push((host.to_string(), addr)),
+        }
+    }
+    // IPv4 first (reachable on dual-stack-impaired networks), then IPv6 fallback.
+    v4.append(&mut v6);
+    if v4.is_empty() {
+        return Err(anyhow!(
+            "failed to resolve base_url host '{}': no usable DNS records",
+            host
+        ));
+    }
+    Ok(v4)
 }
 
 /// Returns `true` if `ip` is in the 198.18.0.0/15 benchmarking range.
@@ -1906,5 +1943,63 @@ mod tests {
             "expected empty vec for unreachable endpoint, got {} models",
             models.len()
         );
+    }
+
+    // ── collect_resolved_addrs: IPv4-first ordering (#3069 IPv6 trap) ──
+
+    #[test]
+    fn collect_resolved_addrs_ipv4_before_ipv6() {
+        // Cloudflare-fronted hosts (e.g. opencode.ai) often return both A and
+        // AAAA records, but many ISP networks have broken IPv6 paths. reqwest
+        // tries pinned addresses in order, so IPv4 must come first.
+        let v4_a: SocketAddr = "172.65.90.20:443".parse().unwrap();
+        let v6_a: SocketAddr = "[2606:4700:78::90:0:140]:443".parse().unwrap();
+        let v4_b: SocketAddr = "172.65.90.21:443".parse().unwrap();
+        let v6_b: SocketAddr = "[2606:4700:78::90:0:142]:443".parse().unwrap();
+
+        // Input IPv6-first (typical getaddrinfo order); output must be IPv4-first.
+        let out = collect_resolved_addrs("opencode.ai", vec![v6_a, v4_a, v6_b, v4_b]).unwrap();
+        assert_eq!(out.len(), 4);
+        assert!(
+            out[0].1.is_ipv4(),
+            "first address must be IPv4, got {}",
+            out[0].1
+        );
+        assert!(
+            out[1].1.is_ipv4(),
+            "second address must be IPv4, got {}",
+            out[1].1
+        );
+        assert!(
+            out[2].1.is_ipv6(),
+            "third address must be IPv6, got {}",
+            out[2].1
+        );
+        assert!(
+            out[3].1.is_ipv6(),
+            "fourth address must be IPv6, got {}",
+            out[3].1
+        );
+        // All entries carry the original host (for reqwest resolve pinning).
+        assert!(out.iter().all(|(h, _)| h == "opencode.ai"));
+    }
+
+    #[test]
+    fn collect_resolved_addrs_ipv6_only_still_ok() {
+        // If only IPv6 is available we still return it (better than nothing;
+        // the connect will fail fast on broken-IPv6 networks and surface a
+        // clear transport error rather than an empty-address panic).
+        let v6: SocketAddr = "[2606:4700:78::90:0:140]:443".parse().unwrap();
+        let out = collect_resolved_addrs("opencode.ai", vec![v6]).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].1.is_ipv6());
+    }
+
+    #[test]
+    fn collect_resolved_addrs_rejects_private() {
+        // SSRF guard is preserved: a private IPv4 must error, not get sorted.
+        let priv_v4: SocketAddr = "10.0.0.1:443".parse().unwrap();
+        let err = collect_resolved_addrs("internal.example.com", vec![priv_v4]).unwrap_err();
+        assert!(format!("{}", err).contains("10.0.0.1"));
     }
 }

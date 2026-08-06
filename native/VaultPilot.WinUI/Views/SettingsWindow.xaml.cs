@@ -156,11 +156,47 @@ public sealed partial class SettingsWindow : Window
         LoadSettings(settings, models, nextWakeText, versionText);
         WireUpButtons();
 
+        // Apply the persisted theme to this window immediately so the Settings
+        // window matches the rest of the app on open (it is an independent
+        // Window and does not inherit MainWindow.RootGrid.RequestedTheme).
+        ApplyCurrentTheme();
+
         // Fire SettingsCancelled when the user closes via title-bar X button.
         Closed += (_, _) =>
         {
             SettingsCancelled?.Invoke();
         };
+    }
+
+    /// <summary>
+    /// Applies the given theme (or the persisted one) to this window's root.
+    /// Independent Windows do not inherit <see cref="MainWindow"/>'s
+    /// <c>RequestedTheme</c>, so the Settings window must apply it itself.
+    /// </summary>
+    private void ApplyCurrentTheme(ElementTheme? mode = null)
+    {
+        var theme = mode ?? ThemePreferences.Load();
+        if (RootGrid.RequestedTheme != theme)
+        {
+            RootGrid.RequestedTheme = theme;
+        }
+    }
+
+    /// <summary>
+    /// Live-previews the theme as the user toggles the radio buttons. The
+    /// preference is only persisted on Save (<see cref="OnSaveClick"/>); this
+    /// just updates the window visually so the user sees immediate feedback.
+    /// </summary>
+    private void OnThemeChecked(object sender, RoutedEventArgs e)
+    {
+        // Skip until the radio buttons exist / during initial setup.
+        if (ThemeSystem is null) return;
+        var theme = ThemeDark.IsChecked == true
+            ? ElementTheme.Dark
+            : ThemeLight.IsChecked == true
+                ? ElementTheme.Light
+                : ElementTheme.Default;
+        ApplyCurrentTheme(theme);
     }
 
     // ──────────────────────────────────────────────
@@ -791,9 +827,19 @@ public sealed partial class SettingsWindow : Window
         }
         finally
         {
-            TestConnectionButton.IsEnabled = true;
-            TestConnectionProgress.IsActive = false;
-            TestConnectionProgress.Visibility = Visibility.Collapsed;
+            // Guard against the window being closed while the connection test
+            // was in flight: after close, the controls are detached (XamlRoot is
+            // null) and accessing them throws, which would surface as an
+            // unhandled exception.
+            if (TestConnectionButton?.XamlRoot is not null)
+            {
+                TestConnectionButton.IsEnabled = true;
+            }
+            if (TestConnectionProgress?.XamlRoot is not null)
+            {
+                TestConnectionProgress.IsActive = false;
+                TestConnectionProgress.Visibility = Visibility.Collapsed;
+            }
         }
     }
 

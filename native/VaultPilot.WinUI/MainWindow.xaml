@@ -314,7 +314,7 @@
                                                 Width="32" Height="32"
                                                 ToolTipService.ToolTip="将当前对话内容记录到知识库"
                                                 AutomationProperties.Name="记录" AutomationProperties.HelpText="将当前对话内容记录到知识库">
-                                            <FontIcon Glyph="&#xE7C8;" FontSize="14" />
+                                            <FontIcon Glyph="&#xE74E;" FontSize="14" />
                                         </Button>
                                     </StackPanel>
 

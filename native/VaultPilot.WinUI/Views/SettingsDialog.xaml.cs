@@ -103,6 +103,9 @@ public sealed partial class SettingsDialog : ContentDialog
 
         LoadSettings(settings, models, nextWakeText, versionText);
         WireUpButtons();
+
+        // Apply the persisted theme so the dialog matches the app on open.
+        RequestedTheme = ThemePreferences.Load();
     }
 
     // ──────────────────────────────────────────────
@@ -740,9 +743,18 @@ public sealed partial class SettingsDialog : ContentDialog
         }
         finally
         {
-            TestConnectionButton.IsEnabled = true;
-            TestConnectionProgress.IsActive = false;
-            TestConnectionProgress.Visibility = Visibility.Collapsed;
+            // Guard against the dialog being closed while the connection test
+            // was in flight: after close, the controls are detached (XamlRoot is
+            // null) and accessing them throws.
+            if (TestConnectionButton?.XamlRoot is not null)
+            {
+                TestConnectionButton.IsEnabled = true;
+            }
+            if (TestConnectionProgress?.XamlRoot is not null)
+            {
+                TestConnectionProgress.IsActive = false;
+                TestConnectionProgress.Visibility = Visibility.Collapsed;
+            }
         }
     }
 
@@ -795,6 +807,30 @@ public sealed partial class SettingsDialog : ContentDialog
     private void OnAutoWakeToggled(object sender, RoutedEventArgs e)
     {
         // Next wake label is computed by MainWindow; no-op here.
+    }
+
+    // ──────────────────────────────────────────────
+    //  Theme live-preview
+    // ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Live-previews the theme as the user toggles the radio buttons. The
+    /// preference is only persisted on Save (<see cref="OnPrimaryButtonClick"/>);
+    /// this just applies <c>RequestedTheme</c> to the dialog so the user sees
+    /// immediate feedback instead of waiting until the dialog closes.
+    /// </summary>
+    private void OnThemeChecked(object sender, RoutedEventArgs e)
+    {
+        if (ThemeSystem is null) return;
+        var theme = ThemeDark.IsChecked == true
+            ? ElementTheme.Dark
+            : ThemeLight.IsChecked == true
+                ? ElementTheme.Light
+                : ElementTheme.Default;
+        if (RequestedTheme != theme)
+        {
+            RequestedTheme = theme;
+        }
     }
 
     // ──────────────────────────────────────────────

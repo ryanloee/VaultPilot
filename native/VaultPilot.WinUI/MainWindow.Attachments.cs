@@ -304,21 +304,6 @@ public sealed partial class MainWindow : Window
         return Convert.FromBase64String(base64);
     }
 
-    private static string ShortenPath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return "图片";
-        }
-
-        var fileName = Path.GetFileName(path);
-        var directoryName = Path.GetFileName(Path.GetDirectoryName(path) ?? string.Empty);
-        var label = string.IsNullOrWhiteSpace(directoryName)
-            ? fileName
-            : $"{directoryName}\\{fileName}";
-        return label.Length <= 34 ? label : $"...{label[^31..]}";
-    }
-
     private async Task<bool> TryHandleClipboardImagePasteAsync()
     {
         try

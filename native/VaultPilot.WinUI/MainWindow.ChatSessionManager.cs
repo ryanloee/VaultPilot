@@ -31,13 +31,10 @@ public sealed partial class MainWindow : Window
     private readonly List<ChatAttachment> _attachments = [];
     private double _contextUsagePercent;
     private FrameworkElement? _thinkingIndicator;
-    private DispatcherTimer? _thinkingDotsTimer;
-    private int _thinkingDotStep;
     private CancellationTokenSource? _activeRequestCts;
     private volatile Task? _activeRequestTask;
     private int _requestInProgress; // #676: guard against concurrent ExecuteAiRequestAsync calls
     private GroundedAnswer? _lastAiAnswer;
-    private TextBlock? _composerMeasureBlock;
 
     // #3508: Incremental render tracking — avoids full O(n) panel rebuild on
     // every message send. RenderCurrentSession updates these after a full

@@ -24,3 +24,6 @@ artifacts/
 .tmp/
 
 src-tauri/target/
+
+# ZCode agent workspace
+.zcode/

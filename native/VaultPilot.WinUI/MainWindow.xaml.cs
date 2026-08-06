@@ -367,6 +367,11 @@ public sealed partial class MainWindow : Window
                     ShowNextWakeTime();
                     ApplyTheme(_settingsWindow.ThemeMode);
                     ApplyAlwaysOnTop(updated.IsAlwaysOnTop);
+                    // UX: auto-close the Settings window on successful save so the
+                    // user sees a clear confirmation that their change took effect
+                    // (otherwise the window stays open and users re-click "保存",
+                    // thinking nothing happened).
+                    CloseSettingsWindow();
                 }
             }
             catch (Exception error)
@@ -394,6 +399,13 @@ public sealed partial class MainWindow : Window
 
         private void ClearSettingsWindow(Views.SettingsWindow window)
         {
+            // Guard against double-cleanup: CloseSettingsWindow() calls Close()
+            // (which synchronously fires Closed → ClearSettingsWindow, clearing
+            // the field) and then calls ClearSettingsWindow(_settingsWindow)
+            // again with the now-null field. Without this guard the second call
+            // hits `_settingsWindow == window` as `null == null` and dereferences
+            // the null `window` (crash.log NullReferenceException).
+            if (window is null) return;
             if (_settingsWindow == window)
             {
                 window.SettingsSaved -= OnSettingsWindowSaved;
@@ -814,6 +826,7 @@ public sealed partial class MainWindow : Window
         DeleteSessionButton.Click -= OnDeleteSessionClicked;
         NewSessionButton.Click -= OnNewSessionClicked;
         ToggleSidebarButton.Click -= OnToggleSidebarClicked;
+        ExpandSidebarButton.Click -= OnExpandSidebarClicked;
         ChatScrollViewer.ViewChanged -= OnChatScrollViewerViewChanged;
         JumpLatestButton.Click -= OnJumpLatestClicked;
         RootGrid.SizeChanged -= OnRootGridSizeChanged;
@@ -946,6 +959,10 @@ public sealed partial class MainWindow : Window
 
         RemoveThinkingIndicator();
         StopAutoWakeTimer();
+        // #review: stop the composer debounce timer and detach its Tick handler
+        // so the dispatcher queue stops referencing this window after shutdown.
+        _composerDebounceTimer.Stop();
+        _composerDebounceTimer.Tick -= OnComposerDebounceTick;
         UnsubscribeEvents();
         TryReleaseWindowFileDropHook();
         await SaveChatStateAsync();

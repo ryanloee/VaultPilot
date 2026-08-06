@@ -7,7 +7,7 @@
     mc:Ignorable="d"
     Title="设置">
 
-    <Grid RowSpacing="0">
+    <Grid x:Name="RootGrid" RowSpacing="0">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
@@ -241,9 +241,9 @@
                         <StackPanel Spacing="4">
                             <TextBlock Text="主题" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
                             <RadioButtons x:Name="ThemeModeRadio" MaxColumns="1">
-                                <RadioButton x:Name="ThemeSystem" Content="跟随系统" />
-                                <RadioButton x:Name="ThemeLight" Content="亮色" />
-                                <RadioButton x:Name="ThemeDark" Content="暗色" />
+                                <RadioButton x:Name="ThemeSystem" Content="跟随系统" Checked="OnThemeChecked" />
+                                <RadioButton x:Name="ThemeLight" Content="亮色" Checked="OnThemeChecked" />
+                                <RadioButton x:Name="ThemeDark" Content="暗色" Checked="OnThemeChecked" />
                             </RadioButtons>
                         </StackPanel>
                         <TextBox

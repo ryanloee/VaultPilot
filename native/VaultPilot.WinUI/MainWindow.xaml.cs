@@ -50,6 +50,11 @@ public sealed partial class MainWindow : Window
     private static Brush BrushLimeGreen => GetThemeBrush("SystemFillColorSuccessBrush");
 
     private AppSettings? _settings;
+    // #3939: tracks the in-flight saveSettings IPC call so ShutdownAsync can
+    // drain it (bounded wait) before disposing the backend client — prevents
+    // the last settings change from being silently lost when the user exits
+    // immediately after saving.
+    private volatile Task? _pendingSettingsSaveTask;
     private int _noteCount;
     private Dictionary<string, string>? _noteTitleMap;
     private DateTime _noteTitleMapTimestamp;
@@ -379,7 +384,10 @@ public sealed partial class MainWindow : Window
             if (_settingsWindow?.UpdatedSettings is { } updated)
                 {
                     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                    _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated }, cts.Token);
+                    // #3939: track the in-flight save so ShutdownAsync can flush it before exit
+                    var saveTask = _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated }, cts.Token);
+                    Volatile.Write(ref _pendingSettingsSaveTask, saveTask);
+                    _settings = await saveTask;
                     RefreshVaultSummary();
                     RefreshContextStatus();
                     ApplyAutoWakeSettings();
@@ -525,7 +533,10 @@ public sealed partial class MainWindow : Window
             if (dialog.UpdatedSettings is { } updated)
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                _settings = await _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated }, cts.Token);
+                // #3939: track the in-flight save so ShutdownAsync can flush it before exit
+                var saveTask = _backendClient.SendAsync<AppSettings>("saveSettings", new { settings = updated }, cts.Token);
+                Volatile.Write(ref _pendingSettingsSaveTask, saveTask);
+                _settings = await saveTask;
                 RefreshVaultSummary();
                 RefreshContextStatus();
                 ApplyAutoWakeSettings();
@@ -1027,6 +1038,27 @@ public sealed partial class MainWindow : Window
         TryReleaseWindowFileDropHook();
         await SaveChatStateAsync();
         _chatStateLock?.Dispose();
+
+        // #3939: Wait for any in-flight settings save to be flushed to the
+        // backend before disposing the client — otherwise the last settings
+        // change is silently lost if the user exits right after saving.
+        var pendingSaveTask = Volatile.Read(ref _pendingSettingsSaveTask);
+        if (pendingSaveTask != null)
+        {
+            try
+            {
+                await pendingSaveTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (TimeoutException)
+            {
+                // Proceed with shutdown even if the save doesn't finish in time
+            }
+            catch (ObjectDisposedException)
+            {
+                // The backend client was already disposed; nothing more to flush
+            }
+        }
+
         await _backendClient.DisposeAsync();
         PruneClipboardImages();
     }

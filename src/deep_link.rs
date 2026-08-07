@@ -44,6 +44,9 @@
 //!
 //! These enable integration with Hook, Alfred, Raycast, and iOS Shortcuts.
 
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -329,12 +332,230 @@ fn is_truthy(value: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// #3822 — URI action security confirmation (Obsidian 1.13 parity)
+// ---------------------------------------------------------------------------
+
+/// Risk level of a deep-link action, used by [`should_confirm_uri_action`] to
+/// decide whether the front-end must show a confirmation dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UriActionRisk {
+    /// Low-risk, read-only, or navigational (open note, search, settings).
+    /// No confirmation needed unless the user opted into always-confirm mode.
+    Low,
+    /// Mutating but reversible (create note, append/prepend).
+    /// Confirm for untrusted apps; auto-allow for trusted apps.
+    Medium,
+    /// High-risk / destructive or potentially irreversible (overwrite existing
+    /// note, start AI chat which may execute agent tools). **Always** confirm
+    /// regardless of trusted status — mirrors Obsidian's "high-risk actions
+    /// always require confirmation" policy.
+    High,
+}
+
+/// Classify the risk of a parsed [`DeepLinkAction`].
+///
+/// The decision is based purely on the action type + parameters (e.g. an
+/// overwrite flag bumps a Medium `new` note to High). It does NOT consider the
+/// source app — that is handled separately by the trusted-app list.
+pub fn classify_uri_action_risk(action: &DeepLinkAction) -> UriActionRisk {
+    match action {
+        // Read-only / navigational → Low.
+        DeepLinkAction::OpenNote { .. }
+        | DeepLinkAction::Daily { .. }
+        | DeepLinkAction::Search { .. }
+        | DeepLinkAction::Settings { .. } => UriActionRisk::Low,
+
+        // Creating a note is reversible unless overwrite is set → Medium/High.
+        DeepLinkAction::NewNote { params, .. } => {
+            if params.overwrite {
+                UriActionRisk::High
+            } else {
+                UriActionRisk::Medium
+            }
+        }
+
+        // Starting an AI chat may trigger agent tool execution → High.
+        DeepLinkAction::NewChat { .. } => UriActionRisk::High,
+
+        // Unknown route — be conservative: confirm (Medium).
+        DeepLinkAction::Unknown { .. } => UriActionRisk::Medium,
+    }
+}
+
+/// The decision returned to the front-end for a deep-link action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UriConfirmationDecision {
+    /// Execute the action immediately — no dialog needed.
+    /// `reason` explains why (trusted app + low/medium risk).
+    Allow { reason: String },
+    /// Show a confirmation dialog before executing.
+    /// `message` is a human-readable description of the action for the dialog.
+    Confirm { message: String },
+}
+
+/// A human-readable summary of a deep-link action for confirmation dialogs.
+///
+/// Examples:
+/// - "Create a new note 'My Note'"
+/// - "Open note abc-123"
+/// - "Open today's daily note"
+/// - "Start a new chat session"
+/// - "Search vault for 'query'"
+/// - "Open settings"
+pub fn describe_uri_action(action: &DeepLinkAction) -> String {
+    match action {
+        DeepLinkAction::NewNote { params, .. } => {
+            let title = params
+                .name
+                .as_deref()
+                .map(|n| format!("'{n}'"))
+                .unwrap_or_else(|| "without a title".into());
+            if params.overwrite {
+                format!("Replace existing note {title} (overwrite)")
+            } else if params.append {
+                format!("Append to note {title}")
+            } else if params.prepend {
+                format!("Prepend to note {title}")
+            } else {
+                format!("Create a new note {title}")
+            }
+        }
+        DeepLinkAction::OpenNote { note_id, .. } => {
+            format!("Open note '{note_id}'")
+        }
+        DeepLinkAction::Daily { .. } => "Open today's daily note".to_string(),
+        DeepLinkAction::NewChat { .. } => "Start a new AI chat session".to_string(),
+        DeepLinkAction::Search { query, .. } => match query {
+            Some(q) if !q.is_empty() => format!("Search vault for '{q}'"),
+            _ => "Open search".to_string(),
+        },
+        DeepLinkAction::Settings { .. } => "Open settings".to_string(),
+        DeepLinkAction::Unknown { raw, .. } => format!("Execute unknown action: {raw}"),
+    }
+}
+
+/// The trusted-app list — persisted to `.vaultpilot/trusted_apps.yaml`.
+///
+/// Apps added via the "Don't ask again" checkbox in the confirmation dialog.
+/// Trusted apps bypass confirmation for Low and Medium risk actions; High risk
+/// actions **always** require confirmation regardless of trust.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TrustedAppRegistry {
+    /// Lowercased source-app names that the user has trusted.
+    #[serde(default)]
+    pub trusted_apps: std::collections::HashSet<String>,
+}
+
+impl TrustedAppRegistry {
+    /// Load the registry from `<vault_dir>/.vaultpilot/trusted_apps.yaml`.
+    /// Returns an empty registry if the file does not exist (first run).
+    pub fn load(vault_dir: &Path) -> Self {
+        let path = trusted_apps_path(vault_dir);
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => serde_yaml_ng::from_str(&contents).unwrap_or_default(),
+            Err(_) => TrustedAppRegistry::default(),
+        }
+    }
+
+    /// Persist the registry to `<vault_dir>/.vaultpilot/trusted_apps.yaml`.
+    pub fn save(&self, vault_dir: &Path) -> Result<()> {
+        let dir = vault_dir.join(".vaultpilot");
+        std::fs::create_dir_all(&dir)?;
+        let yaml = serde_yaml_ng::to_string(self)?;
+        std::fs::write(trusted_apps_path(vault_dir), yaml)?;
+        Ok(())
+    }
+
+    /// Returns true if `source` (case-insensitive) is in the trusted list.
+    /// An empty/missing source is never trusted.
+    pub fn is_trusted(&self, source: &str) -> bool {
+        let s = source.trim().to_ascii_lowercase();
+        !s.is_empty() && self.trusted_apps.contains(&s)
+    }
+
+    /// Add a source app to the trusted list (case-insensitive).
+    pub fn trust(&mut self, source: &str) {
+        let s = source.trim().to_ascii_lowercase();
+        if !s.is_empty() {
+            self.trusted_apps.insert(s);
+        }
+    }
+
+    /// Remove a source app from the trusted list (case-insensitive).
+    pub fn revoke(&mut self, source: &str) {
+        self.trusted_apps
+            .remove(&source.trim().to_ascii_lowercase());
+    }
+}
+
+/// Path to the trusted-apps persistence file inside the vault.
+fn trusted_apps_path(vault_dir: &Path) -> PathBuf {
+    vault_dir.join(".vaultpilot").join("trusted_apps.yaml")
+}
+
+/// Decide whether a deep-link action requires a confirmation dialog.
+///
+/// Returns [`UriConfirmationDecision::Allow`] when:
+/// - The action is Low risk (read-only), OR
+/// - The action is Medium risk AND the source app is trusted.
+///
+/// Returns [`UriConfirmationDecision::Confirm`] otherwise (untrusted app,
+/// High risk action, or unknown source).
+///
+/// `source` is the `x-source` parameter from the URI (the calling app name),
+/// or an empty string if not provided.
+pub fn should_confirm_uri_action(
+    action: &DeepLinkAction,
+    source: &str,
+    trusted: &TrustedAppRegistry,
+) -> UriConfirmationDecision {
+    let risk = classify_uri_action_risk(action);
+    let is_trusted = trusted.is_trusted(source);
+    let description = describe_uri_action(action);
+
+    match risk {
+        UriActionRisk::Low => {
+            // Read-only actions are always safe to execute.
+            UriConfirmationDecision::Allow {
+                reason: format!("read-only action: {description}"),
+            }
+        }
+        UriActionRisk::Medium if is_trusted => {
+            // Mutating but reversible, from a trusted app — skip confirmation.
+            UriConfirmationDecision::Allow {
+                reason: format!("trusted app '{source}': {description}"),
+            }
+        }
+        UriActionRisk::Medium | UriActionRisk::High => {
+            // Either Medium risk + untrusted, or High risk (always confirm).
+            let source_label = if source.trim().is_empty() {
+                "an external app"
+            } else {
+                source
+            };
+            let message = if risk == UriActionRisk::High {
+                format!(
+                    "{source_label} wants to: {description}\n\n\
+                     This is a high-risk action and always requires confirmation."
+                )
+            } else {
+                format!("{source_label} wants to: {description}")
+            };
+            UriConfirmationDecision::Confirm { message }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn test_parse_open_note() {
@@ -678,5 +899,204 @@ mod tests {
             parse_deep_link("vaultpilot://search"),
             DeepLinkAction::Search { .. }
         ));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // #3822 — URI action security confirmation tests
+    // ════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_3822_classify_risk_low_actions() {
+        // Read-only / navigational actions are Low risk.
+        assert_eq!(
+            classify_uri_action_risk(&parse_deep_link("vaultpilot://note/abc")),
+            UriActionRisk::Low
+        );
+        assert_eq!(
+            classify_uri_action_risk(&parse_deep_link("vaultpilot://daily")),
+            UriActionRisk::Low
+        );
+        assert_eq!(
+            classify_uri_action_risk(&parse_deep_link("vaultpilot://search")),
+            UriActionRisk::Low
+        );
+        assert_eq!(
+            classify_uri_action_risk(&parse_deep_link("vaultpilot://settings")),
+            UriActionRisk::Low
+        );
+    }
+
+    #[test]
+    fn test_3822_classify_risk_medium_new_note() {
+        // Creating a note (no overwrite) is Medium risk.
+        assert_eq!(
+            classify_uri_action_risk(&parse_deep_link("vaultpilot://note/new")),
+            UriActionRisk::Medium
+        );
+        assert_eq!(
+            classify_uri_action_risk(&parse_deep_link("vaultpilot://note/new?append=1")),
+            UriActionRisk::Medium
+        );
+    }
+
+    #[test]
+    fn test_3822_classify_risk_high_overwrite() {
+        // Overwrite bumps to High risk (destructive).
+        let action = parse_deep_link("vaultpilot://note/new?overwrite=1");
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+    }
+
+    #[test]
+    fn test_3822_classify_risk_high_new_chat() {
+        // Starting an AI chat is High risk (may execute agent tools).
+        let action = parse_deep_link("vaultpilot://chat/new");
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+    }
+
+    #[test]
+    fn test_3822_classify_risk_medium_unknown() {
+        let action = parse_deep_link("vaultpilot://unknown/route");
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::Medium);
+    }
+
+    #[test]
+    fn test_3822_describe_actions() {
+        assert_eq!(
+            describe_uri_action(&parse_deep_link("vaultpilot://note/new?name=My%20Note")),
+            "Create a new note 'My Note'"
+        );
+        assert_eq!(
+            describe_uri_action(&parse_deep_link("vaultpilot://note/abc-123")),
+            "Open note 'abc-123'"
+        );
+        assert_eq!(
+            describe_uri_action(&parse_deep_link("vaultpilot://daily")),
+            "Open today's daily note"
+        );
+        assert_eq!(
+            describe_uri_action(&parse_deep_link("vaultpilot://chat/new")),
+            "Start a new AI chat session"
+        );
+        assert_eq!(
+            describe_uri_action(&parse_deep_link("vaultpilot://search?query=rust")),
+            "Search vault for 'rust'"
+        );
+    }
+
+    #[test]
+    fn test_3822_should_confirm_low_risk_always_allowed() {
+        // Low-risk actions never need confirmation, even from unknown apps.
+        let trusted = TrustedAppRegistry::default();
+        let action = parse_deep_link("vaultpilot://note/abc-123");
+        let decision = should_confirm_uri_action(&action, "unknown-app", &trusted);
+        assert!(
+            matches!(decision, UriConfirmationDecision::Allow { .. }),
+            "Low risk should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_3822_should_confirm_medium_untrusted() {
+        // Medium risk from untrusted app → Confirm.
+        let trusted = TrustedAppRegistry::default();
+        let action = parse_deep_link("vaultpilot://note/new");
+        let decision = should_confirm_uri_action(&action, "Raycast", &trusted);
+        assert!(
+            matches!(decision, UriConfirmationDecision::Confirm { .. }),
+            "Medium risk from untrusted app should require confirmation"
+        );
+    }
+
+    #[test]
+    fn test_3822_should_confirm_medium_trusted_allowed() {
+        // Medium risk from trusted app → Allow.
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Raycast");
+        let action = parse_deep_link("vaultpilot://note/new");
+        let decision = should_confirm_uri_action(&action, "Raycast", &trusted);
+        assert!(
+            matches!(decision, UriConfirmationDecision::Allow { .. }),
+            "Medium risk from trusted app should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_3822_should_confirm_high_always_confirm_even_trusted() {
+        // High risk (overwrite) always confirms, even from trusted apps.
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Raycast");
+        let action = parse_deep_link("vaultpilot://note/new?overwrite=1");
+        let decision = should_confirm_uri_action(&action, "Raycast", &trusted);
+        assert!(
+            matches!(decision, UriConfirmationDecision::Confirm { .. }),
+            "High risk should always require confirmation, even for trusted apps"
+        );
+    }
+
+    #[test]
+    fn test_3822_should_confirm_new_chat_always_confirm() {
+        // NewChat is High risk → always confirm.
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Alfred");
+        let action = parse_deep_link("vaultpilot://chat/new");
+        let decision = should_confirm_uri_action(&action, "Alfred", &trusted);
+        assert!(
+            matches!(decision, UriConfirmationDecision::Confirm { .. }),
+            "NewChat (High risk) should always require confirmation"
+        );
+    }
+
+    #[test]
+    fn test_3822_trusted_registry_case_insensitive() {
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Raycast");
+        assert!(trusted.is_trusted("raycast"));
+        assert!(trusted.is_trusted("RAYCAST"));
+        assert!(trusted.is_trusted("Raycast"));
+        assert!(!trusted.is_trusted("Alfred"));
+    }
+
+    #[test]
+    fn test_3822_trusted_registry_empty_source_never_trusted() {
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("");
+        assert!(!trusted.is_trusted(""));
+        assert!(!trusted.is_trusted("   "));
+    }
+
+    #[test]
+    fn test_3822_trusted_registry_revoke() {
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Raycast");
+        assert!(trusted.is_trusted("Raycast"));
+        trusted.revoke("raycast");
+        assert!(!trusted.is_trusted("Raycast"));
+    }
+
+    #[test]
+    fn test_3822_trusted_registry_round_trip() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-trusted-3822-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Raycast");
+        trusted.trust("Alfred");
+        trusted.save(&temp).expect("save");
+
+        // Load from disk and verify persistence.
+        let loaded = TrustedAppRegistry::load(&temp);
+        assert!(loaded.is_trusted("Raycast"));
+        assert!(loaded.is_trusted("Alfred"));
+        assert!(!loaded.is_trusted("UnknownApp"));
+
+        // Non-existent vault dir returns empty registry.
+        let empty = TrustedAppRegistry::load(&temp.join("nonexistent"));
+        assert!(!empty.is_trusted("Raycast"));
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

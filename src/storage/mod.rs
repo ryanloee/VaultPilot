@@ -209,6 +209,26 @@ pub(super) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         // #850: Clean up temp file on rename failure (cross-device move, permissions, disk full)
         let _ = fs::remove_file(&tmp_path);
     })?;
+
+    // #3939: fsync the parent directory after rename so the rename itself is
+    // durably persisted. On power loss / crash, a `rename()` without a parent
+    // directory fsync may not reach disk — the file could revert to its old
+    // contents or disappear entirely. This mirrors Obsidian 1.13.5's
+    // configuration-save durability fix. On platforms without parent-dir
+    // fsync (Windows) we silently skip; the rename + child fsync already
+    // provides strong-enough guarantees there.
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            // Opening the directory read-only and fsync-ing it is the POSIX
+            // idiom for durable renames. Failures here are non-fatal — the
+            // data write itself already succeeded.
+            if let Ok(dir_file) = std::fs::File::open(parent) {
+                let _ = dir_file.sync_all();
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -538,6 +558,45 @@ mod tests {
     // ══════════════════════════════════════
 
     // ── 1.0 existing tests (preserved) ──
+
+    #[test]
+    fn atomic_write_durable_with_parent_dir_fsync_3939() {
+        // #3939: atomic_write must not panic/error after adding parent-dir
+        // fsync. Verifies the file content is correct and no temp files leak.
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-atomic-3939-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let target = temp.join("config.json");
+        let payload = b"{\"hello\":\"world\"}";
+
+        atomic_write(&target, payload).expect("atomic_write succeeds");
+
+        // Content must match exactly.
+        let read_back = fs::read(&target).expect("read back");
+        assert_eq!(read_back, payload);
+
+        // No leftover .tmp files in the parent directory.
+        let leaks: Vec<_> = fs::read_dir(&temp)
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .map(|n| n.ends_with(".tmp"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(
+            leaks.is_empty(),
+            "temp file leaked after atomic_write: {:?}",
+            leaks
+        );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
 
     #[test]
     fn derived_id_is_stable_for_same_path() {

@@ -367,30 +367,31 @@ public sealed partial class MainWindow : Window
         var isAssistant = author == "助手";
 
         // ── Avatar circle ──
-        var avatarInitial = isUser ? "我" : "V";
-        var avatarBg = isUser
-            ? GetThemeBrush("VaultAvatarUserBg")
-            : GetThemeBrush("VaultAvatarAiBg");
-        var avatarFg = isUser
-            ? GetThemeBrush("VaultAvatarUserFg")
-            : GetThemeBrush("VaultAvatarAiFg");
+        // User avatar: custom image when configured, else letter fallback.
+        // AI avatar stays the letter "V" (no custom AI avatar yet).
         var avatar = new Border
         {
             Width = 32,
             Height = 32,
             CornerRadius = new CornerRadius(16),
-            Background = avatarBg,
+            Background = isUser
+                ? GetThemeBrush("VaultAvatarUserBg")
+                : GetThemeBrush("VaultAvatarAiBg"),
             MinHeight = 0, MinWidth = 0,
             VerticalAlignment = VerticalAlignment.Top,
-        };
-        avatar.Child = new TextBlock
-        {
-            Text = avatarInitial,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            FontSize = 13,
-            Foreground = avatarFg,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
+            Child = isUser && AvatarPreferences.AvatarFilePath is not null
+                ? (UIElement)BuildAvatarImage(32)
+                : new TextBlock
+                {
+                    Text = isUser ? "我" : "V",
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    FontSize = 13,
+                    Foreground = isUser
+                        ? GetThemeBrush("VaultAvatarUserFg")
+                        : GetThemeBrush("VaultAvatarAiFg"),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
         };
 
         // ── Timestamp ──
@@ -488,6 +489,29 @@ public sealed partial class MainWindow : Window
     }
 
     // ── Sub-element builders (now take a target Panel) ──
+
+    /// <summary>
+    /// Builds a circular avatar image element from the persisted custom
+    /// avatar (AvatarPreferences). Falls back to null when unreadable.
+    /// </summary>
+    private static Image BuildAvatarImage(int size)
+    {
+        var bitmap = AvatarPreferences.LoadBitmap();
+        var image = new Image
+        {
+            Width = size,
+            Height = size,
+            Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (bitmap is not null)
+        {
+            image.Source = bitmap;
+        }
+        return image;
+    }
+
 
     private void AppendAttachmentPreviewsTo(Panel target, IReadOnlyList<ChatAttachment> attachments, string role)
     {

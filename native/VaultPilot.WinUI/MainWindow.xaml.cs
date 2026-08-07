@@ -78,6 +78,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         ConfigureWindowBounds();
+        ApplyBrandMark(); // #avatar: custom avatar image or letter "V"
         _backendClient = new BackendClient();
         _backendClient.AgentStatusReceived += OnAgentStatusReceived;
         _backendClient.ConnectionStateChanged += OnConnectionStateChanged;
@@ -367,6 +368,7 @@ public sealed partial class MainWindow : Window
                     ShowNextWakeTime();
                     ApplyTheme(_settingsWindow.ThemeMode);
                     ApplyAlwaysOnTop(updated.IsAlwaysOnTop);
+                    ApplyBrandMark(); // #avatar: reflect avatar changes immediately
                     // UX: auto-close the Settings window on successful save so the
                     // user sees a clear confirmation that their change took effect
                     // (otherwise the window stays open and users re-click "保存",
@@ -397,8 +399,44 @@ public sealed partial class MainWindow : Window
             ClearSettingsWindow(_settingsWindow);
         }
 
-        private void ClearSettingsWindow(Views.SettingsWindow window)
+    /// <summary>
+    /// Shows the persisted custom avatar in the sidebar brand mark, or the
+    /// letter "V" when none is configured / the image is unreadable.
+    /// </summary>
+    private void ApplyBrandMark()
+    {
+        try
         {
+            if (BrandMarkBorder is null || BrandMarkText is null)
+            {
+                return; // XAML not initialized yet (called before InitializeComponent)
+            }
+
+            var avatar = AvatarPreferences.LoadBitmap();
+            if (avatar is not null)
+            {
+                BrandMarkBorder.Child = new Image
+                {
+                    Width = 28,
+                    Height = 28,
+                    Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill,
+                    Source = avatar,
+                };
+            }
+            else
+            {
+                BrandMarkText.Text = "V";
+                BrandMarkBorder.Child = BrandMarkText;
+            }
+        }
+        catch
+        {
+            // Never let a brand-mark failure break window startup.
+        }
+    }
+
+    private void ClearSettingsWindow(Views.SettingsWindow window)
+    {
             // Guard against double-cleanup: CloseSettingsWindow() calls Close()
             // (which synchronously fires Closed → ClearSettingsWindow, clearing
             // the field) and then calls ClearSettingsWindow(_settingsWindow)

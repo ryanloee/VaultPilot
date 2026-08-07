@@ -40,11 +40,11 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <!-- Brand mark -->
-                    <Border Grid.Row="0" Width="28" Height="28" CornerRadius="6"
+                    <!-- Brand mark (custom avatar image when set, else "V") -->
+                    <Border x:Name="BrandMarkBorder" Grid.Row="0" Width="28" Height="28" CornerRadius="6"
                             Background="{ThemeResource VaultLogoBg}"
                             HorizontalAlignment="Center" Margin="0,0,0,8">
-                        <TextBlock Text="V" FontWeight="Bold" FontSize="13"
+                        <TextBlock x:Name="BrandMarkText" Text="V" FontWeight="Bold" FontSize="13"
                                    Foreground="{ThemeResource VaultLogoFg}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
@@ -240,7 +240,7 @@
                                              silently returns, leaving MessageItem.ToString()
                                              as the visible text. -->
                                         <DataTemplate>
-                                            <ContentControl/>
+                                            <ContentControl HorizontalContentAlignment="Stretch" HorizontalAlignment="Stretch"/>
                                         </DataTemplate>
                                     </ItemsRepeater.ItemTemplate>
                                     <ItemsRepeater.Layout>
@@ -330,7 +330,9 @@
                                             TextWrapping="Wrap"
                                             BorderThickness="0"
                                             Background="Transparent"
+                                            Foreground="{ThemeResource VaultTextPrimary}"
                                             PlaceholderText="输入问题，或记录一条知识..."
+                                            PlaceholderForeground="{ThemeResource VaultTextMuted}"
                                             FontSize="{StaticResource VaultFontSizeBody}"
                                             Padding="8,8,8,8"
                                             ToolTipService.ToolTip="Enter 发送消息，Shift+Enter 插入换行"

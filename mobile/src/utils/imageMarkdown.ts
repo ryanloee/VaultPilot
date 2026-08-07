@@ -230,3 +230,34 @@ export function nextImageIndex(
   if (total <= 1) return 0;
   return ((current + delta) % total + total) % total;
 }
+
+/**
+ * Extract the file name of an image for the Lightbox caption (#3927).
+ *
+ * Mirrors Obsidian 1.13.4: the lightbox shows the current image's file name.
+ * - For http(s)/file URIs: last path segment, query/hash stripped, percent-decoded.
+ * - For data URIs (base64 inline images): no file name → falls back to alt text
+ *   (or the raw uri when alt is empty), so the caption never looks broken.
+ *
+ * @param image MarkdownImage to derive the name from
+ * @returns Display name for the lightbox caption.
+ */
+export function imageFileName(image: MarkdownImage): string {
+  if (!image.uri) return image.alt || '';
+  if (image.uri.startsWith('data:')) {
+    // Inline base64 image — no real file name. Use alt text as the caption.
+    return image.alt || '';
+  }
+  try {
+    const withoutQuery = image.uri.split(/[?#]/)[0];
+    const segments = withoutQuery.split('/');
+    const raw = segments[segments.length - 1] || '';
+    const name = decodeURIComponent(raw);
+    return name || image.alt || '';
+  } catch {
+    // Malformed percent-encoding — fall back to the raw last segment.
+    const withoutQuery = image.uri.split(/[?#]/)[0];
+    const segments = withoutQuery.split('/');
+    return segments[segments.length - 1] || image.alt || '';
+  }
+}

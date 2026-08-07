@@ -30,6 +30,7 @@ public sealed partial class MainWindow
     private TranslateTransform? _lightboxTranslate;
     private TextBlock? _lightboxZoomLabel;
     private TextBlock? _lightboxIndexLabel;
+    private TextBlock? _lightboxFileNameLabel;
     private Button? _lightboxPrevBtn;
     private Button? _lightboxNextBtn;
 
@@ -126,6 +127,17 @@ public sealed partial class MainWindow
             FontSize = 13,
             VerticalAlignment = VerticalAlignment.Center,
         };
+        // #3927: current image file name caption (mirrors Obsidian 1.13.4)
+        _lightboxFileNameLabel = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxLines = 1,
+            Text = string.Empty,
+        };
         _lightboxZoomLabel = new TextBlock
         {
             Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
@@ -152,6 +164,11 @@ public sealed partial class MainWindow
         topBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Auto) });
         topBar.Children.Add(_lightboxIndexLabel);
         Grid.SetColumn(_lightboxIndexLabel, 0);
+
+        // File name caption sits in the stretchable middle column so it
+        // centers between the index label and the zoom controls (#3927).
+        topBar.Children.Add(_lightboxFileNameLabel);
+        Grid.SetColumn(_lightboxFileNameLabel, 1);
 
         var controlsStack = new StackPanel
         {
@@ -253,6 +270,15 @@ public sealed partial class MainWindow
             _lightboxIndexLabel.Text = _lightboxPaths.Count > 1
                 ? $"{index + 1} / {_lightboxPaths.Count}"
                 : string.Empty;
+        }
+        // #3927: show the current image's file name (mirrors Obsidian 1.13.4).
+        // Tooltip carries the full path so long file names stay inspectable.
+        if (_lightboxFileNameLabel is not null)
+        {
+            var path = _lightboxPaths[index];
+            var fileName = System.IO.Path.GetFileName(path);
+            _lightboxFileNameLabel.Text = string.IsNullOrEmpty(fileName) ? path : fileName;
+            ToolTipService.SetToolTip(_lightboxFileNameLabel, path);
         }
     }
 

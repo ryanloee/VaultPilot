@@ -14,6 +14,7 @@ import {
   zoomPercentage,
   clampZoom,
   nextImageIndex,
+  imageFileName,
   clamp,
   SWIPE_DISMISS_THRESHOLD,
   MIN_ZOOM,
@@ -328,5 +329,56 @@ describe('imageMarkdown — gesture/zoom logic (#3422)', () => {
   it('returns 0 for single image', () => {
     expect(nextImageIndex(0, 1, 1)).toBe(0);
     expect(nextImageIndex(0, -1, 1)).toBe(0);
+  });
+});
+
+describe('imageFileName — lightbox file name caption (#3927)', () => {
+  it('returns the last path segment of an http URL', () => {
+    expect(imageFileName({ uri: 'https://example.com/screenshot.png', alt: 'screenshot' }))
+      .toBe('screenshot.png');
+  });
+
+  it('strips query string and hash fragment', () => {
+    expect(imageFileName({ uri: 'https://example.com/a.png?w=100&h=50', alt: '' }))
+      .toBe('a.png');
+    expect(imageFileName({ uri: 'https://example.com/a.png#frag', alt: '' }))
+      .toBe('a.png');
+  });
+
+  it('percent-decodes URL-encoded file names', () => {
+    expect(imageFileName({ uri: 'https://example.com/%E6%88%AA%E5%9B%BE.png', alt: '' }))
+      .toBe('截图.png');
+  });
+
+  it('handles file paths (local vault images)', () => {
+    expect(imageFileName({ uri: 'file:///vault/attachments/photo.jpg', alt: '' }))
+      .toBe('photo.jpg');
+    expect(imageFileName({ uri: '/vault/attachments/photo.jpg', alt: '' }))
+      .toBe('photo.jpg');
+  });
+
+  it('falls back to alt text for data URIs (no real file name)', () => {
+    expect(imageFileName({ uri: 'data:image/png;base64,iVBOR==', alt: '内嵌图' }))
+      .toBe('内嵌图');
+  });
+
+  it('falls back to alt text when URL has no usable last segment', () => {
+    expect(imageFileName({ uri: 'https://example.com/', alt: 'fallback' }))
+      .toBe('fallback');
+  });
+
+  it('uses the last segment even for bare domains (edge case)', () => {
+    expect(imageFileName({ uri: 'https://example.com', alt: 'fallback' }))
+      .toBe('example.com');
+  });
+
+  it('returns empty string when nothing is available', () => {
+    expect(imageFileName({ uri: 'data:image/png;base64,abc', alt: '' })).toBe('');
+    expect(imageFileName({ uri: '', alt: '' })).toBe('');
+  });
+
+  it('tolerates malformed percent-encoding without throwing', () => {
+    expect(imageFileName({ uri: 'https://example.com/%zz.png', alt: 'x' }))
+      .toBe('%zz.png');
   });
 });

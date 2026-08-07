@@ -31,6 +31,7 @@ import {
 import Icon from './Icon';
 import {
   clampZoom,
+  imageFileName,
   MarkdownImage,
   nextImageIndex,
   nextZoomOnDoubleTap,
@@ -256,6 +257,20 @@ export default function Lightbox({
           <Icon name="close" size={28} color="#fff" />
         </TouchableOpacity>
 
+        {/* File name caption (#3927) — mirrors Obsidian 1.13.4 */}
+        {imageFileName(current) ? (
+          <View style={styles.fileNameBar} testID="lightbox-file-name">
+            <Text
+              style={styles.fileNameText}
+              numberOfLines={1}
+              ellipsizeMode="middle"
+              testID="lightbox-file-name-text"
+            >
+              {imageFileName(current)}
+            </Text>
+          </View>
+        ) : null}
+
         {/* Zoom controls (#3422, #3790) */}
         <View style={styles.zoomControls}>
           <TouchableOpacity
@@ -397,6 +412,23 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   indicatorText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  // #3927: file name caption bar (top-center, mirrors Obsidian 1.13.4)
+  fileNameBar: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 60 : 40,
+    alignSelf: 'center',
+    maxWidth: '80%',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    zIndex: 10,
+  },
+  fileNameText: {
     color: '#fff',
     fontSize: 13,
     fontWeight: '500',

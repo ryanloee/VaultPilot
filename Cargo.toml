@@ -1,6 +1,6 @@
 [package]
 name = "vaultpilot"
-version = "0.7.5"
+version = "0.7.6"
 
 description = "Local-first knowledge-base assistant with Windows UI and cross-platform CLI"
 edition = "2021"

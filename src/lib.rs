@@ -49,6 +49,7 @@ pub mod search_rules;
 pub mod semantic;
 pub mod settings_schema;
 pub mod skills;
+pub mod startup_stats;
 pub mod storage;
 pub mod template;
 pub mod template_store;

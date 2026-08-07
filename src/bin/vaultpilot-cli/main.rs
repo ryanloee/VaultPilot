@@ -80,6 +80,10 @@ struct Cli {
     #[arg(long, global = true)]
     no_update_check: bool,
 
+    /// Print fine-grained startup phase timing stats to stderr (#3851)
+    #[arg(long, global = true)]
+    startup_stats: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -2749,7 +2753,21 @@ enum AiSubcommand {
 // ─── Main ─────────────────────────────────────────────────────────
 
 fn main() {
+    // Issue #3851: fine-grained startup phase timing (mirrors Obsidian
+    // 1.13.5 startup stats). The timer is cheap enough to keep running
+    // unconditionally; the report is only printed when --startup-stats is
+    // passed (also for serve/MCP paths, where startup ends when the server
+    // begins and the process never reaches the end of main()).
+    let mut startup_timer = vaultpilot_lib::startup_stats::PhaseTimer::new();
     let cli = Cli::parse();
+    vaultpilot_lib::startup_stats::record_startup_phase(&mut startup_timer, "cli_parse");
+
+    let show_startup_stats = cli.startup_stats;
+    let maybe_show_startup_stats = |timer: &vaultpilot_lib::startup_stats::PhaseTimer| {
+        if show_startup_stats {
+            eprintln!("{}", timer.report());
+        }
+    };
 
     // Skip tracing init when running as MCP stdio server to avoid
     // polluting the JSON-RPC stdout channel with log output.
@@ -2762,6 +2780,7 @@ fn main() {
             .init();
     }
     let is_mcp = matches!(cli.command, Commands::Mcp);
+    vaultpilot_lib::startup_stats::record_startup_phase(&mut startup_timer, "tracing_init");
 
     // Initialize configurable search rules from user's config directory
     let config_dir = std::env::var_os("APPDATA")
@@ -2770,6 +2789,7 @@ fn main() {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let rules_path = config_dir.join("search_rules.json");
     vaultpilot_lib::search_rules::SearchRules::init_from_file(&rules_path);
+    vaultpilot_lib::startup_stats::record_startup_phase(&mut startup_timer, "search_rules_load");
 
     let serve_target = match &cli.command {
         Commands::Serve { host, port, token } => Some((host.clone(), *port, token.clone())),
@@ -2790,13 +2810,16 @@ fn main() {
         .enable_all()
         .build()
         .expect("failed to initialize async runtime");
+    vaultpilot_lib::startup_stats::record_startup_phase(&mut startup_timer, "runtime_build");
 
     let context = match StorageContext::for_cli(cli.vault_dir.clone()) {
         Ok(ctx) => ctx,
         Err(err) => exit_error(&cli.pretty, "context_error", err.to_string()),
     };
+    vaultpilot_lib::startup_stats::record_startup_phase(&mut startup_timer, "storage_open");
 
     if let Some((host, port, token)) = serve_target {
+        maybe_show_startup_stats(&startup_timer);
         if let Err(err) = runtime.block_on(run_http_bridge(context, host, port, token)) {
             eprintln!("HTTP bridge failed: {err}");
             process::exit(1);
@@ -2805,6 +2828,7 @@ fn main() {
     }
 
     if let Some((host, port, token, read_only)) = mcp_http_target {
+        maybe_show_startup_stats(&startup_timer);
         if let Err(err) =
             runtime.block_on(run_mcp_http_server(context, host, port, token, read_only))
         {
@@ -2815,6 +2839,7 @@ fn main() {
     }
 
     if is_mcp {
+        maybe_show_startup_stats(&startup_timer);
         if let Err(err) = run_mcp_server(&context, &runtime) {
             eprintln!("MCP server failed: {err}");
             process::exit(1);
@@ -2843,6 +2868,10 @@ fn main() {
         None
     };
 
+    // Startup is complete once the command is dispatched — record the final
+    // phase and surface the report before running the command (#3851).
+    vaultpilot_lib::startup_stats::record_startup_phase(&mut startup_timer, "command_dispatch");
+
     let result = runtime.block_on(handle_command(&context, &cli));
 
     // #3667: Give the update-check task a short grace period so the cache is
@@ -2855,6 +2884,8 @@ fn main() {
             tokio::time::timeout(std::time::Duration::from_millis(150), handle).await
         });
     }
+
+    maybe_show_startup_stats(&startup_timer);
 
     match result {
         Ok(value) => exit_ok(&cli.pretty, value),

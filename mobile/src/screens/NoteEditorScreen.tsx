@@ -93,10 +93,15 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   // 在客户端用当前 noteId 提取 1 跳邻居。后端不可达/无 token/图为空时优雅降级。
   useEffect(() => {
     let cancelled = false;
+    // #3911：每次以当前 noteId 运行先复位错误态 —— 否则新建流程中
+    // noteId="new" 分支曾设置的 relatedError=true 会在 setParams 换成
+    // 真实 id 后重跑成功时残留，导致有数据仍显示「未连接后端」。
+    setRelatedError(false);
     (async () => {
       if (!noteId || noteId === 'new') {
-        // 新建笔记没有稳定 id，跳过图谱查询
-        if (!cancelled) { setRelatedError(true); setRelatedNotes(null); }
+        // 新建笔记没有稳定 id，跳过图谱查询；保持 null（加载态），
+        // 等 setParams 换成真实 id 后本 effect 重跑再拉取（#3911）。
+        if (!cancelled) setRelatedNotes(null);
         return;
       }
       const graph = await fetchKnowledgeGraph();

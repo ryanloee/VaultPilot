@@ -81,6 +81,17 @@ public class Issue3850AtomicThemeSaveTests
         Assert.Contains("atomic_write", File.ReadAllText(chatPath));
     }
 
+    private static string ResolveSourcePath(string projectName, string relativePath)
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var dir = new DirectoryInfo(baseDir);
+        while (dir is not null && !dir.GetFiles("*.sln").Any())
+            dir = dir.Parent;
+        if (dir is null)
+            return string.Empty;
+        return Path.Combine(dir.FullName, projectName, relativePath);
+    }
+
     private static string ResolveRepoFile(params string[] relativeParts)
     {
         var baseDir = AppContext.BaseDirectory;

@@ -12,6 +12,8 @@ import MarkdownPreview from '../components/MarkdownPreview';
 import { getNote, createNote, updateNote, deleteNote, moveToFolder, getFolders, getNoteTags, addTag, removeTag, saveAsTemplate } from '../db';
 import { chat, ChatMessage, parseSSEStream } from '../api/client';
 import AiActionPalette from '../components/ai/AiActionPalette';
+import { fetchKnowledgeGraph } from '../services/graphService';
+import { extractRelatedNotes, RelatedNote } from '../utils/relatedNotes';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
@@ -30,6 +32,9 @@ export default function NoteEditorScreen({ route, navigation }: any) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiGenerating, setAiGenerating] = useState(false);
   const [showAiPalette, setShowAiPalette] = useState(false);
+  // 相关笔记（局部图谱 1 跳邻居，#3832）：null=加载中，[]=已加载但无邻居
+  const [relatedNotes, setRelatedNotes] = useState<RelatedNote[] | null>(null);
+  const [relatedError, setRelatedError] = useState(false);
   const titleRef = useRef('');
   const contentRef = useRef('');
   const timerRef = useRef<any>(null);
@@ -80,6 +85,30 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       } finally {
         if (!cancelled) setLoading(false);
       }
+    })();
+    return () => { cancelled = true; };
+  }, [noteId]);
+
+  // 相关笔记（局部图谱 1 跳邻居，#3832）：进屏时拉取 /api/graph，
+  // 在客户端用当前 noteId 提取 1 跳邻居。后端不可达/无 token/图为空时优雅降级。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!noteId || noteId === 'new') {
+        // 新建笔记没有稳定 id，跳过图谱查询
+        if (!cancelled) { setRelatedError(true); setRelatedNotes(null); }
+        return;
+      }
+      const graph = await fetchKnowledgeGraph();
+      if (cancelled) return;
+      if (!graph) {
+        setRelatedError(true);
+        setRelatedNotes(null);
+        return;
+      }
+      const neighbors = extractRelatedNotes(graph, noteId);
+      if (cancelled) return;
+      setRelatedNotes(neighbors);
     })();
     return () => { cancelled = true; };
   }, [noteId]);
@@ -358,6 +387,37 @@ export default function NoteEditorScreen({ route, navigation }: any) {
         </View>
       </View>
 
+      {/* 相关笔记（局部图谱 1 跳邻居，#3832） */}
+      <View style={[s.relatedSection, { borderBottomColor: c.border }]} testID="related-notes-section">
+        <View style={s.relatedHeader}>
+          <Ionicons name="git-network-outline" size={14} color={c.textSecondary} />
+          <Text style={[s.relatedHeaderTitle, { color: c.textSecondary }]}>相关笔记</Text>
+        </View>
+        {relatedError ? (
+          <Text style={[s.relatedEmpty, { color: c.textSecondary }]}>未连接后端</Text>
+        ) : relatedNotes === null ? (
+          <ActivityIndicator size="small" color={accentColor} style={s.relatedLoading} testID="related-notes-loading" />
+        ) : relatedNotes.length === 0 ? (
+          <Text style={[s.relatedEmpty, { color: c.textSecondary }]}>暂无相关笔记</Text>
+        ) : (
+          relatedNotes.map(n => (
+            <TouchableOpacity
+              key={n.id}
+              testID={`related-note-${n.id}`}
+              style={[s.relatedItem, { backgroundColor: c.card, borderColor: c.border }]}
+              onPress={() => navigation.navigate('NoteEdit', { noteId: n.id })}
+            >
+              <Text style={[s.relatedItemTitle, { color: c.text }]} numberOfLines={1}>
+                {n.title || '未命名'}
+              </Text>
+              <Text style={[s.relatedItemMeta, { color: c.textSecondary }]}>
+                {n.in_degree + n.out_degree} 条链接
+              </Text>
+            </TouchableOpacity>
+          ))
+        )}
+      </View>
+
       {/* Title */}
       <TextInput
         style={[s.titleInput, { color: c.text }]}
@@ -531,4 +591,21 @@ const s = StyleSheet.create({
   aiWriteBtnText: {
     color: '#FFF', fontSize: 14, fontWeight: '600',
   },
+  // 相关笔记（局部图谱，#3832）
+  relatedSection: {
+    paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1,
+  },
+  relatedHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8,
+  },
+  relatedHeaderTitle: { fontSize: 13, fontWeight: '600' },
+  relatedLoading: { alignSelf: 'flex-start', marginVertical: 4 },
+  relatedEmpty: { fontSize: 13, paddingVertical: 4 },
+  relatedItem: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
+    marginBottom: 6, gap: 8,
+  },
+  relatedItemTitle: { flex: 1, fontSize: 15, fontWeight: '500' },
+  relatedItemMeta: { fontSize: 12 },
 });

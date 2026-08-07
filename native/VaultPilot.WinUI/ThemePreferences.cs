@@ -12,6 +12,10 @@ namespace VaultPilot.WinUI;
 /// theme toggle can ship without a backend schema change — the preference is
 /// purely a client-side concern. The file is small, lazily created, and safe
 /// to delete (defaults back to System).
+///
+/// #3850: saves are atomic (temp file + flush + rename) so an exit or crash
+/// mid-write can never leave a truncated/corrupt theme.json — mirroring the
+/// backend's atomic_write contract for settings/chat-state files.
 /// </summary>
 internal static class ThemePreferences
 {
@@ -68,11 +72,43 @@ internal static class ThemePreferences
                 }
             };
             var json = JsonSerializer.Serialize(record, JsonOptions);
-            File.WriteAllText(FilePath, json);
+
+            // #3850: atomic write — write to a temp file in the same
+            // directory, flush to disk, then rename over the target. A
+            // process exit or crash mid-write leaves only a harmless temp
+            // file, never a truncated theme.json (mirrors the backend's
+            // atomic_write contract).
+            var tmpPath = FilePath + ".tmp";
+            using (var stream = new FileStream(
+                tmpPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None))
+            using (var writer = new StreamWriter(stream, System.Text.Encoding.UTF8))
+            {
+                writer.Write(json);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+            // File.Move with overwrite is atomic on NTFS (same volume).
+            File.Move(tmpPath, FilePath, overwrite: true);
         }
         catch
         {
             // Best-effort persistence; in-memory theme still applies.
+            // Clean up any leftover temp file so a failed write never
+            // accumulates stale .tmp files.
+            try
+            {
+                if (File.Exists(FilePath + ".tmp"))
+                {
+                    File.Delete(FilePath + ".tmp");
+                }
+            }
+            catch
+            {
+                // Ignore cleanup failures.
+            }
         }
     }
 

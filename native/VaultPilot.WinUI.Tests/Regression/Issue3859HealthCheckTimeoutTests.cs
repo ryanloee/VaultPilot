@@ -88,8 +88,13 @@ public class Issue3859HealthCheckTimeoutTests
         var guardIndex = source.IndexOf(
             "(ex is OperationCanceledException or TimeoutException) && !_pending.IsEmpty",
             StringComparison.Ordinal);
+        // Search from the guard onward: the first occurrence of the reconnect
+        // call is in OnHealthCheckTick's top-of-method `if (!IsConnected)`
+        // block, which precedes the catch guard; the path this test cares
+        // about is the reconnect reachable past the guard inside the catch.
         var reconnectIndex = source.IndexOf(
             "var reconnected = await TryReconnectWithRetryAsync();",
+            guardIndex,
             StringComparison.Ordinal);
         Assert.True(guardIndex >= 0 && reconnectIndex >= 0);
         Assert.True(guardIndex < reconnectIndex,

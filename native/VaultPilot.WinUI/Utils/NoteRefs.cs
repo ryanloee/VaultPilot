@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 
 namespace VaultPilot.WinUI.Utils;
@@ -86,6 +87,18 @@ public static class NoteRefs
 
         var lowerText = text.ToLowerInvariant();
 
+        // #3936: Some characters expand under ToLowerInvariant (e.g. U+0130 'İ'
+        // -> "i̇", U+FB00 'ﬀ' -> "ff"), so lowerText may be longer than text.
+        // Match offsets live in lowerText space; we must translate them back to
+        // original-text coordinates for NoteRef.Start/End to stay valid when
+        // callers slice the original text. Build a per-char map once.
+        var stable = (lowerText.Length == text.Length);
+        int[]? lowerToOriginal = null;
+        if (!stable)
+        {
+            lowerToOriginal = BuildLowerToOriginalMap(text, lowerText);
+        }
+
         // #3581: Static cache for sorted title list — rebuilt only when the
         // titleMap reference changes (practically never within a 30s TTL).
         if (_lastTitleMap != titleMap || _sortedTitlesCache is null)
@@ -117,11 +130,8 @@ public static class NoteRefs
                 // in the middle of a Latin word (e.g. "React" in "Reactor" -> no match).
                 // For non-ASCII (CJK etc.) titles, boundary check is relaxed because
                 // CJK characters don't form compound words like Latin does.
-                // #3932: idx comes from lowerText (the ToLowerInvariant copy), so
-                // read boundary chars from lowerText too and use the lowercased
-                // title length for the after-position. Some Unicode chars expand
-                // on lowercasing (e.g. U+0130 'İ' -> "i̇"), which would misalign
-                // indices against the original text.
+                // #3932/#3936: idx and afterIdx are lowerText-space offsets, so read
+                // boundary chars from lowerText and use the lowercased title length.
                 var isAsciiOnly = title.All(c => c <= 0x7f);
                 var afterIdx = idx + lowerTitle.Length;
                 var afterChar = afterIdx < lowerText.Length ? lowerText[afterIdx] : ' ';
@@ -140,12 +150,20 @@ public static class NoteRefs
                     continue;
                 }
 
-                // Avoid overlapping with already-found refs
+                // #3936: Translate lowerText-space idx back to original-text
+                // coordinates. End is Start + original title length (titles never
+                // change length under case-folding in a way that affects the
+                // *original* span). When lengths are equal (the common case) the
+                // map is the identity.
+                var start = stable ? idx : (lowerToOriginal?[idx] ?? idx);
+                var end = start + title.Length;
+
+                // Avoid overlapping with already-found refs (original-text space).
                 var overlaps = false;
                 foreach (var existing in refs)
                 {
-                    if ((idx >= existing.Start && idx < existing.End) ||
-                        (existing.Start >= idx && existing.Start < idx + title.Length))
+                    if ((start >= existing.Start && start < existing.End) ||
+                        (existing.Start >= start && existing.Start < end))
                     {
                         overlaps = true;
                         break;
@@ -154,7 +172,7 @@ public static class NoteRefs
 
                 if (!overlaps)
                 {
-                    refs.Add(new NoteRef(title, noteId, idx, idx + title.Length));
+                    refs.Add(new NoteRef(title, noteId, start, end));
                 }
 
                 searchFrom = idx + 1;
@@ -163,6 +181,44 @@ public static class NoteRefs
 
         refs.Sort((a, b) => a.Start.CompareTo(b.Start));
         return refs;
+    }
+
+    /// <summary>
+    /// Build a map from each index in <paramref name="lowerText"/> back to the
+    /// index of the originating source character in <paramref name="text"/>.
+    ///
+    /// #3936: Needed because <c>ToLowerInvariant</c> can expand characters
+    /// (U+0130 'İ' → "i̇", ligatures U+FB00–U+FB06 → multi-char). A match found
+    /// at position p in lowerText corresponds to a different position in the
+    /// original text, so we must translate before emitting NoteRef coordinates.
+    /// </summary>
+    private static int[] BuildLowerToOriginalMap(string text, string lowerText)
+    {
+        var map = new int[lowerText.Length];
+        var si = 0;  // source (original text) char index
+        var li = 0;  // lowerText write index
+        var srcEnum = StringInfo.GetTextElementEnumerator(text);
+        while (si < text.Length && li < map.Length)
+        {
+            if (!srcEnum.MoveNext())
+                break;
+            var srcEl = (string)srcEnum.Current;
+            var srcLower = srcEl.ToLowerInvariant();
+            for (var j = 0; j < srcLower.Length && li < map.Length; j++)
+            {
+                map[li] = si;
+                li++;
+            }
+            si += srcEl.Length;
+        }
+        // Defensive fill: any lowerText index we didn't reach maps to the last
+        // known source position (keeps End from going out of range).
+        var lastSrc = text.Length - 1;
+        for (var i = 0; i < map.Length; i++)
+        {
+            if (map[i] > lastSrc) map[i] = lastSrc;
+        }
+        return map;
     }
 
     /// <summary>

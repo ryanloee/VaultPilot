@@ -35,6 +35,11 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   // #2154: Template Snippets — notes flagged as templates (is_template=1) are excluded
   // from regular note listings and only surface in the template picker.
   await ensureColumn('notes', 'is_template', 'INTEGER DEFAULT 0');
+  // #3871: exact server-side ms timestamp of the last server version imported.
+  // `updated_at` stores floored whole seconds (#3866); the full-precision ms
+  // value lets sync distinguish "same server version already imported" from
+  // "a newer update within the same second" without re-downloading everything.
+  await ensureColumn('notes', 'server_updated_ms', 'INTEGER');
   await ensureColumn('messages', 'attachments', 'TEXT');
 
   // #1447: Ensure UNIQUE constraint on pending_syncs.note_id for INSERT OR REPLACE dedup
@@ -97,7 +102,8 @@ async function initDb(): Promise<SQLite.SQLiteDatabase> {
           starred INTEGER DEFAULT 0,
           folder TEXT NOT NULL DEFAULT '',
           created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-          updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+          updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+          server_updated_ms INTEGER
         );
         CREATE TABLE IF NOT EXISTS note_tags (
           note_id TEXT NOT NULL,
@@ -327,13 +333,14 @@ export interface DbNote {
   id: string; title: string; content: string;
   starred: number; folder: string; created_at: number; updated_at: number;
   is_template?: number; // #2154 — 0 (regular note) or 1 (template). Optional for legacy rows pre-migration.
+  server_updated_ms?: number | null; // #3871 — exact server ms of the last imported server version (null for local edits/legacy rows).
 }
 
 export async function createNote(
   title = '无标题',
   content = '',
   id?: string,
-  options?: { skipQueue?: boolean; is_template?: number; folder?: string; updated_at?: number },
+  options?: { skipQueue?: boolean; is_template?: number; folder?: string; updated_at?: number; server_updated_ms?: number | null },
 ): Promise<string> {
   const db = await getDb();
   const noteId = id ?? uuid();
@@ -342,9 +349,12 @@ export async function createNote(
   // updated_at falls back to "now" when the caller does not supply a server timestamp (#2893).
   const folder = options?.folder ?? '';
   const updatedAt = options?.updated_at ?? null;
+  // #3871: server imports carry the exact ms of the imported version so sync
+  // can compare at full precision; local creations leave it NULL.
+  const serverUpdatedMs = options?.server_updated_ms ?? null;
   await db.runAsync(
-    'INSERT INTO notes (id, title, content, is_template, folder, updated_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime(\'%s\',\'now\'))) ON CONFLICT(id) DO UPDATE SET title = excluded.title, content = excluded.content, is_template = excluded.is_template, folder = excluded.folder, updated_at = COALESCE(excluded.updated_at, strftime(\'%s\',\'now\'))',
-    [noteId, title, content, isTemplate, folder, updatedAt]);
+    'INSERT INTO notes (id, title, content, is_template, folder, updated_at, server_updated_ms) VALUES (?, ?, ?, ?, ?, COALESCE(?, strftime(\'%s\',\'now\')), ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, content = excluded.content, is_template = excluded.is_template, folder = excluded.folder, updated_at = COALESCE(excluded.updated_at, strftime(\'%s\',\'now\')), server_updated_ms = excluded.server_updated_ms',
+    [noteId, title, content, isTemplate, folder, updatedAt, serverUpdatedMs]);
   // Post-INSERT side-effects are best-effort: the note row is already committed,
   // so cache invalidation or sync-queue write failures must never turn a
   // successful save into a false "保存失败" for the caller (#3502).
@@ -375,7 +385,7 @@ export async function updateNote(
   id: string,
   title: string,
   content: string,
-  options?: { skipQueue?: boolean; is_template?: number; folder?: string; updated_at?: number },
+  options?: { skipQueue?: boolean; is_template?: number; folder?: string; updated_at?: number; server_updated_ms?: number | null },
 ): Promise<void> {
   const db = await getDb();
   const isTemplate = options?.is_template ?? null;
@@ -383,9 +393,12 @@ export async function updateNote(
   // updated_at falls back to "now" when no server timestamp is supplied.
   const folder = options?.folder ?? '';
   const updatedAt = options?.updated_at ?? null;
+  // #3871: any write without an explicit server_updated_ms is a local edit and
+  // clears the marker — the note is no longer a pure copy of a server version.
+  const serverUpdatedMs = options?.server_updated_ms ?? null;
   await db.runAsync(
-    'UPDATE notes SET title = ?, content = ?, is_template = COALESCE(?, is_template), folder = ?, updated_at = COALESCE(?, strftime(\'%s\',\'now\')) WHERE id = ?',
-    [title, content, isTemplate, folder, updatedAt, id]
+    'UPDATE notes SET title = ?, content = ?, is_template = COALESCE(?, is_template), folder = ?, updated_at = COALESCE(?, strftime(\'%s\',\'now\')), server_updated_ms = ? WHERE id = ?',
+    [title, content, isTemplate, folder, updatedAt, serverUpdatedMs, id]
   );
   // Post-UPDATE side-effects are best-effort: the note row is already written,
   // so cache invalidation or sync-queue failures must never turn a successful
@@ -561,9 +574,11 @@ export async function getNotes(folder?: string, limit?: number): Promise<DbNote[
 }
 
 /** 只加载 id 和 updated_at，用于同步比较，避免全量 content 导致 OOM (#1668) */
-export async function getNoteTimestamps(): Promise<Array<{ id: string; updated_at: number }>> {
+export async function getNoteTimestamps(): Promise<Array<{ id: string; updated_at: number; server_updated_ms?: number | null }>> {
   const db = await getDb();
-  return db.getAllAsync<{ id: string; updated_at: number }>('SELECT id, updated_at FROM notes WHERE is_template = 0');
+  return db.getAllAsync<{ id: string; updated_at: number; server_updated_ms?: number | null }>(
+    'SELECT id, updated_at, server_updated_ms FROM notes WHERE is_template = 0'
+  );
 }
 
 export async function getFolders(): Promise<string[]> {

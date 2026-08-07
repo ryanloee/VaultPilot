@@ -97,10 +97,11 @@ describe('issue #2893 — db createNote/updateNote write folder + updated_at', (
     expect(sql).toContain('UPDATE notes');
     expect(sql).toContain('folder = ?');
     expect(sql).toContain('updated_at = COALESCE');
-    // params order: title, content, is_template, folder, updated_at, id
+    // params order: title, content, is_template, folder, updated_at, server_updated_ms, id (#3871)
     expect(params[3]).toBe('work');
     expect(params[4]).toBe(1767225600);
-    expect(params[5]).toBe('note-1');
+    expect(params[5]).toBeNull(); // server_updated_ms not supplied → cleared — #3871
+    expect(params[6]).toBe('note-1');
   });
 
   it('updateNote keeps root folder (empty string is a valid value, not null)', async () => {

@@ -261,7 +261,8 @@ describe('updateNote', () => {
     expect(params[2]).toBeNull(); // is_template defaults to null → keep current
     expect(params[3]).toBe(''); // folder defaults to '' (vault root) — #2893
     expect(params[4]).toBeNull(); // updated_at defaults to null → COALESCE to now — #2893
-    expect(params[5]).toBe('n1');
+    expect(params[5]).toBeNull(); // server_updated_ms defaults to null → local edit clears marker — #3871
+    expect(params[6]).toBe('n1');
   });
 });
 

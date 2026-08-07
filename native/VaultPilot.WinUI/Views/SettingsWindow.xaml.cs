@@ -111,6 +111,18 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private int _keyboardFocusCardIndex = -1;
 
+    // ── #3804 Settings history (mouse back/forward) ───────────────────
+    /// <summary>
+    /// Snapshot of a visited settings state: the search keyword plus the
+    /// focused card index. Back/forward mouse buttons navigate this history,
+    /// mirroring Obsidian 1.13's settings history navigation (#3804).
+    /// </summary>
+    private readonly record struct SettingsNavSnapshot(string Keyword, int CardIndex);
+
+    private readonly List<SettingsNavSnapshot> _settingsNavHistory = new();
+    private int _settingsNavIndex = -1;
+    private bool _restoringNavSnapshot;
+
     // ── Constructor ──────────────────────────────────────────────────
 
     /// <summary>
@@ -431,6 +443,10 @@ public sealed partial class SettingsWindow : Window
         // close the window. Content.KeyDown fires before child controls handle
         // the key, so Ctrl+F still works even when focus is inside a TextBox.
         Content.KeyDown += OnWindowKeyDown;
+
+        // #3804 — mouse back/forward buttons (XButton1/XButton2) navigate the
+        // settings history, like a browser's back/forward buttons.
+        RootGrid.PointerPressed += OnRootPointerPressed;
     }
 
     // ──────────────────────────────────────────────
@@ -643,6 +659,10 @@ public sealed partial class SettingsWindow : Window
             // view so the user can see which card is logically "current".
             target.StartBringIntoView();
         }
+
+        // #3804: record the focused-card state so mouse back/forward can
+        // navigate settings history (deduplicated inside the recorder).
+        RecordSettingsNavSnapshot();
     }
 
     /// <summary>
@@ -1291,6 +1311,99 @@ public sealed partial class SettingsWindow : Window
         NoResultsText.Visibility = (!string.IsNullOrEmpty(keyword) && visibleCount == 0)
             ? Visibility.Visible
             : Visibility.Collapsed;
+
+        // #3804: record the new (keyword, focused card) state so the mouse
+        // back/forward buttons can navigate settings history.
+        RecordSettingsNavSnapshot();
+    }
+
+    /// <summary>
+    /// Records the current (search keyword, focused card index) state as the
+    /// new tip of the settings navigation history, truncating any forward
+    /// entries — the same canonical-stack discipline as the note navigation
+    /// stack in MainWindow (#3804). Deduplicates consecutive identical states
+    /// so typing one keyword doesn't spam the history.
+    /// </summary>
+    private void RecordSettingsNavSnapshot()
+    {
+        if (_restoringNavSnapshot) return;
+        var snapshot = new SettingsNavSnapshot(
+            SettingsSearchBox.Text?.Trim() ?? string.Empty,
+            _keyboardFocusCardIndex);
+        if (_settingsNavIndex >= 0 && _settingsNavIndex < _settingsNavHistory.Count
+            && _settingsNavHistory[_settingsNavIndex] == snapshot)
+        {
+            return; // no state change — don't push a duplicate
+        }
+        if (_settingsNavIndex >= 0 && _settingsNavIndex < _settingsNavHistory.Count - 1)
+        {
+            // Truncate forward history when navigating from a non-tip position
+            _settingsNavHistory.RemoveRange(_settingsNavIndex + 1, _settingsNavHistory.Count - (_settingsNavIndex + 1));
+        }
+        _settingsNavHistory.Add(snapshot);
+        _settingsNavIndex = _settingsNavHistory.Count - 1;
+    }
+
+    /// <summary>
+    /// Applies a settings-history snapshot: restores the search keyword and
+    /// focuses the recorded card. Used by the mouse back/forward buttons (#3804).
+    /// </summary>
+    private void ApplySettingsNavSnapshot(SettingsNavSnapshot snapshot)
+    {
+        _restoringNavSnapshot = true;
+        try
+        {
+            if (!string.Equals(SettingsSearchBox.Text?.Trim(), snapshot.Keyword, StringComparison.Ordinal))
+            {
+                SettingsSearchBox.Text = snapshot.Keyword; // triggers OnSettingsSearchTextChanged → re-filters cards
+            }
+            if (snapshot.CardIndex >= 0)
+            {
+                _keyboardFocusCardIndex = snapshot.CardIndex - 1; // MoveCardFocus(+1) lands on snapshot.CardIndex
+                MoveCardFocus(1);
+            }
+            else
+            {
+                FocusSearchBox();
+            }
+        }
+        finally
+        {
+            _restoringNavSnapshot = false;
+        }
+    }
+
+    /// <summary>
+    /// Navigates settings history by <paramref name="delta"/> (-1 = back,
+    /// +1 = forward) — mouse XButton1/XButton2 support (#3804), mirroring
+    /// Obsidian 1.13's settings history navigation.
+    /// </summary>
+    private void NavigateSettingsHistory(int delta)
+    {
+        var target = _settingsNavIndex + delta;
+        if (target < 0 || target >= _settingsNavHistory.Count) return;
+        _settingsNavIndex = target;
+        ApplySettingsNavSnapshot(_settingsNavHistory[target]);
+    }
+
+    /// <summary>
+    /// Root-grid pointer handler (#3804): XButton1 (mouse back) and XButton2
+    /// (mouse forward) step through the settings navigation history, exactly
+    /// like a browser's back/forward buttons.
+    /// </summary>
+    private void OnRootPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var props = e.GetCurrentPoint((UIElement)sender).Properties;
+        if (props.PointerUpdateKind == Windows.UI.Input.PointerUpdateKind.XButton1Pressed)
+        {
+            e.Handled = true;
+            NavigateSettingsHistory(-1);
+        }
+        else if (props.PointerUpdateKind == Windows.UI.Input.PointerUpdateKind.XButton2Pressed)
+        {
+            e.Handled = true;
+            NavigateSettingsHistory(1);
+        }
     }
 
     /// <summary>

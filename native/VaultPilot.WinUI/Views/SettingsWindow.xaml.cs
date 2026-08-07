@@ -1394,12 +1394,12 @@ public sealed partial class SettingsWindow : Window
     private void OnRootPointerPressed(object sender, PointerRoutedEventArgs e)
     {
         var props = e.GetCurrentPoint((UIElement)sender).Properties;
-        if (props.PointerUpdateKind == Windows.UI.Input.PointerUpdateKind.XButton1Pressed)
+        if (props.PointerUpdateKind == Microsoft.UI.Input.PointerUpdateKind.XButton1Pressed)
         {
             e.Handled = true;
             NavigateSettingsHistory(-1);
         }
-        else if (props.PointerUpdateKind == Windows.UI.Input.PointerUpdateKind.XButton2Pressed)
+        else if (props.PointerUpdateKind == Microsoft.UI.Input.PointerUpdateKind.XButton2Pressed)
         {
             e.Handled = true;
             NavigateSettingsHistory(1);

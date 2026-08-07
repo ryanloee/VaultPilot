@@ -246,6 +246,25 @@
                                 <RadioButton x:Name="ThemeDark" Content="暗色" Checked="OnThemeChecked" />
                             </RadioButtons>
                         </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Border x:Name="AvatarPreviewBorder" Width="44" Height="44" CornerRadius="22"
+                                    Background="{ThemeResource VaultAvatarUserBg}"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="头像预览">
+                                <TextBlock x:Name="AvatarPreviewText" Text="我" FontSize="16" FontWeight="SemiBold"
+                                           Foreground="{ThemeResource VaultAvatarUserFg}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Spacing="6" VerticalAlignment="Center">
+                                <TextBlock Text="头像" FontSize="12" Foreground="{ThemeResource VaultTextSecondary}" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="ChooseAvatarButton" Click="OnChooseAvatarClick"
+                                            Content="选择图片…" AutomationProperties.Name="选择头像图片" />
+                                    <Button x:Name="ClearAvatarButton" Click="OnClearAvatarClick"
+                                            Content="恢复默认" AutomationProperties.Name="清除头像" />
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
                         <TextBox
                             x:Name="ProxyUrlBox"
                             Header="代理地址（可选）"

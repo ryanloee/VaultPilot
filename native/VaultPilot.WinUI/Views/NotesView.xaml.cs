@@ -26,6 +26,9 @@ public sealed partial class NotesView : UserControl
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _relatedCts;
     private string? _currentBodyText;
+    // True while the user is navigating away from notes (view switching);
+    // suppresses the "timeout" error banner for intentional cancellations.
+    private volatile bool _isNavigatingAway;
 
     /// <summary>
     /// In-memory clipboard for note copy/paste (#3094).
@@ -81,12 +84,18 @@ public sealed partial class NotesView : UserControl
             _relatedCts?.Cancel();
             _relatedCts?.Dispose();
             _relatedCts = null;
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             _allNotes = await _backendClient.SendAsync<IReadOnlyList<NoteMeta>>("listNotes", new { }, cts.Token)
                 ?? Array.Empty<NoteMeta>();
             _allNotesBeforeSearch = null;
             ApplyFilter();
             UpdateNotesCount();
+        }
+        catch (OperationCanceledException) when (!_isNavigatingAway)
+        {
+            // 30s→60s timeout still tripped (backend cold start / large vault).
+            // Show a friendly hint instead of a raw "A task was canceled".
+            ShowError("加载笔记列表超时", new Exception("后端响应超时（60 秒），请稍后重试。"));
         }
         catch (Exception error)
         {

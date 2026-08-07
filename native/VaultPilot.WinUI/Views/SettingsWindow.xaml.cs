@@ -199,6 +199,86 @@ public sealed partial class SettingsWindow : Window
         ApplyCurrentTheme(theme);
     }
 
+    // ── Custom avatar (#avatar) ─────────────────────────────────────
+
+    /// <summary>
+    /// Shows the current persisted avatar in the settings preview circle,
+    /// or the letter "我" when none is set.
+    /// </summary>
+    private void RefreshAvatarPreview()
+    {
+        try
+        {
+            var bitmap = AvatarPreferences.LoadBitmap();
+            if (bitmap is not null)
+            {
+                AvatarPreviewBorder.Child = new Image
+                {
+                    Width = 44,
+                    Height = 44,
+                    Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill,
+                    Source = bitmap,
+                };
+            }
+            else
+            {
+                AvatarPreviewText.Text = "我";
+                AvatarPreviewBorder.Child = AvatarPreviewText;
+            }
+        }
+        catch
+        {
+            // Preview failure is cosmetic — ignore.
+        }
+    }
+
+    private async void OnChooseAvatarClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileOpenPicker
+            {
+                ViewMode = Windows.Storage.Pickers.PickerViewMode.Thumbnail,
+                SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.PicturesLibrary,
+            };
+            picker.FileTypeFilter.Add(".png");
+            picker.FileTypeFilter.Add(".jpg");
+            picker.FileTypeFilter.Add(".jpeg");
+            picker.FileTypeFilter.Add(".bmp");
+            picker.FileTypeFilter.Add(".webp");
+
+            // FileOpenPicker must be initialized with the window handle (WinUI 3).
+            var hwnd = WindowNative.GetWindowHandle(this);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+
+            var file = await picker.PickSingleFileAsync();
+            if (file is null)
+            {
+                return; // user cancelled
+            }
+
+            var saved = AvatarPreferences.Save(file.Path);
+            if (saved is null)
+            {
+                ErrorInfoBar.Title = "头像设置失败";
+                ErrorInfoBar.Message = "无法复制所选图片，请换一张试试。";
+                ErrorInfoBar.IsOpen = true;
+                return;
+            }
+            RefreshAvatarPreview();
+        }
+        catch (Exception error)
+        {
+            Debug.WriteLine($"[SettingsWindow] ChooseAvatar error: {error}");
+        }
+    }
+
+    private void OnClearAvatarClick(object sender, RoutedEventArgs e)
+    {
+        AvatarPreferences.Clear();
+        RefreshAvatarPreview();
+    }
+
     // ──────────────────────────────────────────────
     //  Initialization
     // ──────────────────────────────────────────────
@@ -283,6 +363,8 @@ public sealed partial class SettingsWindow : Window
                 ThemeSystem.IsChecked = true;
                 break;
         }
+
+        RefreshAvatarPreview();
     }
 
     private void LoadProviderFields(ProviderConfig p)

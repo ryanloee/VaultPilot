@@ -142,6 +142,10 @@ export default function NoteEditorScreen({ route, navigation }: any) {
 
   // Cleanup: flush pending save on unmount
   useEffect(() => {
+    // #3938: noteId "new"→真实 id 转换（#2915 setParams）会先跑本 effect 的
+    // cleanup 把 mountedRef 置 false，然后 body 重跑——必须在此复位，
+    // 否则 save() 首行守卫让 autosave/AI 写作/错误弹窗全部静默失效。
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       aiAbortRef.current?.abort();

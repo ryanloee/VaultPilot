@@ -12,6 +12,12 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 10
 
+  - package-ecosystem: "nuget"
+    directory: "/native/VaultPilot.WinUI.Tests"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
   - package-ecosystem: "npm"
     directory: "/mobile"
     schedule:

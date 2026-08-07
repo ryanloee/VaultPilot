@@ -89,6 +89,10 @@ public sealed class BackendClient : IAsyncDisposable
         // tick fires concurrently with slow startup and spawns a duplicate backend.
         if (!await _reconnectLock.WaitAsync(TimeSpan.FromSeconds(5)))
         {
+            // #3863: abandoning here is no longer fatal for recovery — the
+            // health check watchdog is now started inside StartProcessAsync,
+            // so any later path that brings the backend up (e.g. SendAsync →
+            // EnsureConnectedAsync → TryReconnectAsync) also arms the timer.
             Trace.TraceError("StartAsync: unable to acquire reconnect lock within 5s, aborting.");
             return;
         }
@@ -98,8 +102,8 @@ public sealed class BackendClient : IAsyncDisposable
             if (Volatile.Read(ref _isDisposed) != 0) return;
             if (IsConnected) return;
 
+            // StartProcessAsync starts the health check watchdog (#3863).
             await StartProcessAsync();
-            StartHealthCheck();
             RegisterPowerModeHandler();
         }
         finally
@@ -183,6 +187,17 @@ public sealed class BackendClient : IAsyncDisposable
             // flag so a future EOF is correctly treated as a real crash.
             _isIntentionalStop = false;
             ConnectionStateChanged?.Invoke(true);
+            // #3863: start the health check watchdog here (not only from
+            // StartAsync) so EVERY path that brings the process up — the
+            // initial start, TryReconnectAsync (reconnect), and
+            // EnsureConnectedAsync — is guaranteed a watchdog. Previously the
+            // timer was armed only in StartAsync; if StartAsync's 5s
+            // _reconnectLock wait timed out, the session ran with no health
+            // check at all, so a hung-but-alive backend (no EOF to trigger the
+            // reconnect path) never recovered. StartHealthCheck disposes and
+            // recreates the timer, so restarting the process simply re-arms it
+            // at the normal cadence.
+            StartHealthCheck();
         }
         catch (Exception ex) when (Volatile.Read(ref _isDisposed) == 0)
         {
@@ -272,10 +287,10 @@ public sealed class BackendClient : IAsyncDisposable
                 return;
             }
 
-            // #3859: skip the ping while a request is in flight. The agent
-            // main loop is strictly serial (one request at a time), so a ping
-            // queued behind a long askWithAi (60s+) sits unread in stdin and
-            // would time out — and a timeout must never kill the
+            // #3861/#3859: skip the ping while a request is in flight. The
+            // agent main loop is strictly serial (one request at a time), so a
+            // ping queued behind a long askWithAi (60s+) sits unread in stdin
+            // and would time out — and a timeout must never kill the
             // busy-but-healthy process. When the in-flight request completes
             // and its _pending entry is removed, the next tick pings normally.
             if (!_pending.IsEmpty)
@@ -298,20 +313,26 @@ public sealed class BackendClient : IAsyncDisposable
         {
             if (Volatile.Read(ref _isDisposed) == 0)
             {
-                // #3859: a ping timeout does NOT mean the backend is dead —
-                // it may still be servicing a long request (askWithAi can
-                // legitimately run 60s+, and a caller-side timeout can have
-                // removed the _pending entry while the backend keeps
-                // processing). Reconnecting here would KILL the healthy
-                // process mid-request, severing the user's in-flight request.
-                // Only reconnect when the process has actually exited (EOF/IO
-                // errors make IsConnected false), mirroring SendAsync's
-                // `if (!IsConnected)` rule.
-                if (IsConnected && ex is OperationCanceledException or TimeoutException)
+                // #3861: distinguish "busy" from "hung". A ping timeout while
+                // other requests are in flight just means the serial agent
+                // loop is servicing them (askWithAi can legitimately run 60s+)
+                // — do NOT kill the process (that was #3859's protection
+                // against severing an in-flight request). But when nothing is
+                // in flight — the ping was sent idle, and SendAsync has
+                // already removed the ping's own _pending entry by the time we
+                // land here, so an empty queue also means no new work arrived
+                // during the 30s ping window — an unanswered ping means the
+                // backend is alive-but-hung (agent main loop deadlock, etc.).
+                // Escalate to reconnect instead of waiting forever: previously
+                // this path skipped reconnect whenever IsConnected, so
+                // _consecutiveHealthCheckFailures never accumulated, degraded
+                // mode never engaged, and every request hung for the full 180s
+                // timeout with no recovery.
+                if ((ex is OperationCanceledException or TimeoutException) && !_pending.IsEmpty)
                 {
                     Trace.TraceWarning(
-                        $"OnHealthCheckTick: ping {ex.GetType().Name} while backend alive — " +
-                        "skipping reconnect to protect in-flight request.");
+                        $"OnHealthCheckTick: ping {ex.GetType().Name} while {_pending.Count} " +
+                        "request(s) in flight — skipping reconnect to protect in-flight request.");
                     return;
                 }
 

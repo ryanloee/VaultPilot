@@ -56,18 +56,19 @@ public class Issue3859HealthCheckTimeoutTests
     }
 
     [Fact]
-    public void Regression_3859_TimeoutWithAliveProcess_DoesNotReconnect()
+    public void Regression_3859_TimeoutWhileRequestInFlight_DoesNotReconnect()
     {
         var source = TryGetSource();
         if (source is null) return;
 
-        // The catch-all must distinguish timeout-type exceptions while the
-        // process is alive from real process death.
+        // The catch must distinguish timeout-type exceptions while requests
+        // are in flight (busy backend) from an idle ping timeout (hung
+        // backend, #3861): only the busy case skips reconnection.
         Assert.Contains(
             "ex is OperationCanceledException or TimeoutException",
             source);
         Assert.Contains(
-            "IsConnected && ex is OperationCanceledException or TimeoutException",
+            "(ex is OperationCanceledException or TimeoutException) && !_pending.IsEmpty",
             source);
 
         // The old unconditional catch-all (`catch {` followed directly by a
@@ -83,9 +84,9 @@ public class Issue3859HealthCheckTimeoutTests
         if (source is null) return;
 
         // Genuine death (EOF / IO) must still reconnect — the guard only
-        // protects timeout-while-alive, it must not disable recovery.
+        // protects timeout-while-busy, it must not disable recovery.
         var guardIndex = source.IndexOf(
-            "IsConnected && ex is OperationCanceledException or TimeoutException",
+            "(ex is OperationCanceledException or TimeoutException) && !_pending.IsEmpty",
             StringComparison.Ordinal);
         var reconnectIndex = source.IndexOf(
             "var reconnected = await TryReconnectWithRetryAsync();",

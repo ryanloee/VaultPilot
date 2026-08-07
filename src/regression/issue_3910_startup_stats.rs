@@ -8,15 +8,19 @@
 //! {
 //!   "phases": [
 //!     { "name": "search_rules_load", "elapsed_ms": 3.21 },
-//!     { "name": "ipc_ready",         "elapsed_ms": 567.89 }
+//!     { "name": "ipc_ready",         "elapsed_ms": 564.68 }
 //!   ],
 //!   "total_ms": 567.89
 //! }
 //! ```
 //!
-//! `elapsed_ms` is the cumulative fractional-millisecond elapsed time of
-//! each phase (as recorded in `StartupPhase`), and `total_ms` equals the
-//! last phase's elapsed (`StartupStats::total()`).
+//! `elapsed_ms` is each phase's **own** fractional-millisecond duration —
+//! the increment over the previous phase's cumulative elapsed
+//! (`elapsed.saturating_sub(previous)`, matching `StartupStats::report()`) —
+//! not the cumulative elapsed time, and `total_ms` equals the last phase's
+//! cumulative elapsed (`StartupStats::total()`), i.e. the sum of the phase
+//! increments. Consecutive `elapsed_ms` values are therefore *not*
+//! monotonic; only `total_ms` accumulates.
 //!
 //! The serialization helper lives in `src/bin/vaultpilot-agent.rs` and is
 //! private to that binary crate, so this test mirrors its shape logic —
@@ -25,16 +29,20 @@
 #[cfg(test)]
 mod tests {
     use crate::startup_stats::{PhaseTimer, StartupStats};
+    use std::time::Duration;
 
     /// Mirror of the agent binary's `startup_stats_to_json` shape (#3910).
     fn startup_stats_to_json(stats: &StartupStats) -> serde_json::Value {
+        let mut previous = Duration::ZERO;
         let phases: Vec<serde_json::Value> = stats
             .phases
             .iter()
             .map(|phase| {
+                let own = phase.elapsed.saturating_sub(previous);
+                previous = phase.elapsed;
                 serde_json::json!({
                     "name": phase.name,
-                    "elapsed_ms": phase.elapsed.as_secs_f64() * 1000.0,
+                    "elapsed_ms": own.as_secs_f64() * 1000.0,
                 })
             })
             .collect();
@@ -76,27 +84,29 @@ mod tests {
             "phases must be serialized in recording order"
         );
 
-        // elapsed_ms must be a finite f64 (fractional milliseconds),
-        // cumulative and monotonically non-decreasing.
-        let mut previous = 0.0f64;
+        // Each elapsed_ms is the phase's OWN duration (increment over the
+        // previous phase): a finite f64 >= 0, but NOT cumulative/monotonic.
+        let mut sum_ms = 0.0f64;
         for phase in phases.iter() {
             let elapsed_ms = phase["elapsed_ms"]
                 .as_f64()
                 .expect("elapsed_ms must be an f64");
             assert!(elapsed_ms.is_finite(), "elapsed_ms must be finite");
-            assert!(
-                elapsed_ms >= previous,
-                "elapsed_ms must be cumulative and monotonic"
-            );
-            previous = elapsed_ms;
+            assert!(elapsed_ms >= 0.0, "elapsed_ms must be non-negative");
+            sum_ms += elapsed_ms;
         }
 
         let total_ms = json["total_ms"].as_f64().expect("total_ms must be an f64");
         assert!(total_ms.is_finite(), "total_ms must be finite");
         assert!(total_ms >= 0.0);
+        assert!(
+            (sum_ms - total_ms).abs() <= 0.01,
+            "sum of per-phase elapsed_ms ({sum_ms:.3}) must equal total_ms ({total_ms:.3})"
+        );
         assert_eq!(
-            total_ms, previous,
-            "total_ms must equal the last phase's cumulative elapsed"
+            total_ms,
+            stats.total().as_secs_f64() * 1000.0,
+            "total_ms must equal StartupStats::total() in ms"
         );
         assert!(total_ms > 0.0, "real checkpoints must take some time");
     }

@@ -64,14 +64,14 @@ export default function Lightbox({
   onClose,
   onIndexChange,
 }: LightboxProps) {
-  // Guard against empty images
-  if (!images.length) {
-    return null;
-  }
+  // #3945: ALL hooks (useState/useRef/useCallback/useMemo) MUST be called
+  // unconditionally before any early return. Moving the empty-images guard
+  // below the hooks would violate the React Rules of Hooks and crash with
+  // "Rendered more/fewer hooks than expected" when the images array transitions
+  // between empty and non-empty across renders. We compute safeIndex/current
+  // in an empty-safe way so the hooks have stable inputs.
 
-  const safeIndex = Math.min(index, images.length - 1);
-  const current = images[safeIndex];
-  const hasMultiple = images.length > 1;
+  const safeIndex = images.length ? Math.min(index, images.length - 1) : 0;
 
   // ── Zoom state ──
   const [zoom, setZoom] = useState(1);
@@ -92,6 +92,7 @@ export default function Lightbox({
   // ── Navigation ──
   const navigate = useCallback(
     (delta: number) => {
+      if (!images.length) return;
       const next = nextImageIndex(safeIndex, delta, images.length);
       if (next !== safeIndex) {
         setZoom(1);
@@ -209,6 +210,17 @@ export default function Lightbox({
     outputRange: [1, 0.3],
     extrapolate: 'clamp',
   });
+
+  // #3945: Empty-images guard must come AFTER all hooks are registered.
+  // Returning null here is now safe — every useState/useRef/useCallback/useMemo
+  // above has already been called unconditionally in the same order regardless
+  // of whether images is empty or non-empty.
+  if (!images.length) {
+    return null;
+  }
+
+  const current = images[safeIndex];
+  const hasMultiple = images.length > 1;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>

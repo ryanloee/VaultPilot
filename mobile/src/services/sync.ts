@@ -3,7 +3,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createNote, updateNote, getNoteTimestamps, getNoteTags, addTag, removeTag } from '../db';
+import { createNote, updateNote, getNoteTimestamps, getNoteTags, addTag, removeTag, getPendingSyncs } from '../db';
 import { isRetryable } from '../api/clientUtils';
 
 const SERVER_URL_KEY = 'cfg_backend_url';
@@ -216,13 +216,31 @@ async function doSync(
   const localTimestamps = await getNoteTimestamps();
   const localMap = new Map(localTimestamps.map(n => [n.id, n]));
 
+  // #3867: notes with queued local edits (pending_syncs) must not be
+  // overwritten by server content — the offline flush pushes local edits
+  // first; pulling server content here would silently discard them.
+  const pendingSyncs = await getPendingSyncs();
+  const pendingIds = new Set(pendingSyncs.map(p => p.note_id));
+
   // Classify notes: which need detail fetch vs skip
   const notesToFetch: typeof allServerNotes = [];
   for (const meta of allServerNotes) {
     const serverUpdated = meta.updatedAt ?? meta.updated_at ?? '';
     const serverTs = serverUpdated ? new Date(serverUpdated).getTime() : Infinity;
     const localNote = localMap.get(meta.id);
-    if (localNote && localNote.updated_at * 1000 >= serverTs) {
+    // #3867: skip notes with queued local edits — local flush wins, pull after.
+    if (pendingIds.has(meta.id)) {
+      skipped++;
+      continue;
+    }
+    // #3866: server `updated_at` is RFC3339 with sub-second precision (chrono
+    // to_rfc3339, e.g. "...37.123456789Z") but local SQLite stores floored
+    // whole seconds (parseServerTimestamp floors). Comparing ms directly makes
+    // `localNote.updated_at * 1000 >= serverTs` almost never true, so every
+    // sync re-downloads all note bodies. Compare at whole-second precision:
+    // a server update within the same second as our stored floor is already
+    // reflected locally (we imported it), so it can be skipped.
+    if (localNote && Math.floor(serverTs / 1000) <= localNote.updated_at) {
       skipped++;
     } else {
       notesToFetch.push(meta);

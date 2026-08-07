@@ -16,9 +16,8 @@ jest.mock('../../db', () => ({
   getNote: jest.fn(),
   getNotes: jest.fn(),
   getNoteTimestamps: jest.fn(),
+  getPendingSyncs: jest.fn().mockResolvedValue([]),
 }));
-
-const mockGetNotes = require('../../db').getNotes as jest.MockedFunction<any>;
 const mockGetNoteTimestamps = require('../../db').getNoteTimestamps as jest.MockedFunction<any>;
 
 // Mock global fetch

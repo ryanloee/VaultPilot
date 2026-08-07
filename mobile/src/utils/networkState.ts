@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { pingBackend } from '../services/sync';
 
 /** Typed accessor for globalThis event listeners (browser/RN). */
 interface GlobalEventBus {
@@ -13,35 +14,48 @@ interface GlobalEventBus {
   removeEventListener(type: string, listener: () => void): void;
 }
 
+/**
+ * Probe real network reachability.
+ *
+ * #3868: 优先探测已配置后端的 /health（与同步同一网络路径，国内可达）；
+ * 未配置后端（pingBackend 返回 false）时才回退到公共端点 gstatic.com，
+ * 判断通用网络连通性。gstatic.com（Google）在大陆不可达，因此仅在
+ * 后端未配置时使用它，避免误判离线。
+ */
+export async function probeConnectivity(): Promise<boolean> {
+  const backendReachable = await pingBackend();
+  if (backendReachable) return true;
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), 3000);
+  try {
+    const res = await fetch('https://www.gstatic.com/generate_204', {
+      method: 'HEAD',
+      signal: timeoutController.signal,
+    });
+    return res.ok;
+  } catch (e) {
+    console.warn('[NetworkState] fallback probe failed:', e);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Simple online/offline state hook. */
 export function useNetworkState(): { isOnline: boolean; checkConnection: () => Promise<boolean> } {
   const [isOnline, setIsOnline] = useState(true);
-  const abortRef = useRef<AbortController | null>(null);
   const generationRef = useRef(0);
 
   const checkConnection = useCallback(async (): Promise<boolean> => {
     const gen = ++generationRef.current;
     try {
-      // Quick HEAD request to a reliable endpoint
-      const timeoutController = new AbortController();
-      abortRef.current = timeoutController;
-      const timer = setTimeout(() => timeoutController.abort(), 3000);
-      try {
-        const res = await fetch('https://www.gstatic.com/generate_204', {
-          method: 'HEAD',
-          signal: timeoutController.signal,
-        });
-        const online = res.ok;
-        // Only apply result if no newer fetch was started (avoids stale
-        // result overwriting event-driven state changes).
-        if (gen === generationRef.current) {
-          setIsOnline(online);
-        }
-        return online;
-      } finally {
-        clearTimeout(timer);
-        abortRef.current = null;
+      const online = await probeConnectivity();
+      // Only apply result if no newer fetch was started (avoids stale
+      // result overwriting event-driven state changes).
+      if (gen === generationRef.current) {
+        setIsOnline(online);
       }
+      return online;
     } catch (e) {
       console.warn('[NetworkState] checkConnection failed:', e);
       if (gen === generationRef.current) {
@@ -71,8 +85,6 @@ export function useNetworkState(): { isOnline: boolean; checkConnection: () => P
     }
 
     return () => {
-      abortRef.current?.abort();
-      abortRef.current = null;
       if (win.removeEventListener) {
         win.removeEventListener('online', handleOnline);
         win.removeEventListener('offline', handleOffline);

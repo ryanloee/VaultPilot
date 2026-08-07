@@ -263,6 +263,18 @@ public sealed partial class MainWindow : Window
 
     private async void OnSettingsClicked(object sender, RoutedEventArgs e)
         {
+            await OnSettingsClickedCore(sender, e, forceWindow: false);
+        }
+
+        /// <summary>
+        /// Core settings-opener. <paramref name="forceWindow"/> bypasses the
+        /// Ctrl-key dialog fallback — accelerators (Ctrl+,) and the empty-state
+        /// button must always open the new SettingsWindow, because reading the
+        /// global Ctrl state at accelerator-fire time is always true (#3941).
+        /// The fallback only makes sense for a real mouse Click (#3931).
+        /// </summary>
+        private async Task OnSettingsClickedCore(object sender, RoutedEventArgs e, bool forceWindow)
+        {
             // #3612: Use the new SettingsWindow (non-blocking standalone window)
             // instead of the old SettingsDialog ContentDialog (blocking modal).
             // #3931: The old event-args type check was dead code — Click and
@@ -271,13 +283,18 @@ public sealed partial class MainWindow : Window
             // real keyboard state instead (same pattern as OnComposerKeyDown).
             // When the user holds Ctrl, fall back to the old ContentDialog for now.
             // (We keep both code paths for a smooth transition.)
+            // #3941: Only the mouse-Click path runs this Ctrl detection — the
+            // Ctrl+, accelerator and the empty-state button pass forceWindow:true.
             bool useDialog = false;
-            try
+            if (!forceWindow)
             {
-                var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
-                useDialog = controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+                try
+                {
+                    var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
+                    useDialog = controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+                }
+                catch { }
             }
-            catch { }
 
             if (useDialog)
             {
@@ -891,7 +908,10 @@ public sealed partial class MainWindow : Window
     private void OnSettingsAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        OnSettingsClicked(SettingsButton, new RoutedEventArgs());
+        // #3941: The Ctrl+, accelerator must open the new SettingsWindow, not the
+        // old ContentDialog. Reading global Ctrl state here is always true (the
+        // user is holding Ctrl to fire the accelerator), so bypass the detection.
+        _ = OnSettingsClickedCore(SettingsButton, new RoutedEventArgs(), forceWindow: true);
     }
 
     private void OnEscapeAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)

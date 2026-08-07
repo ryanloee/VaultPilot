@@ -18,6 +18,7 @@ jest.mock('../../db', () => ({
   getNote: jest.fn(),
   getNotes: jest.fn(),
   getNoteTimestamps: jest.fn(),
+  getPendingSyncs: jest.fn(),
 }));
 
 const mockCreateNote = require('../../db').createNote as jest.MockedFunction<any>;
@@ -33,6 +34,7 @@ beforeEach(async () => {
   await AsyncStorage.clear();
   mockFetch.mockReset();
   mockGetNoteTimestamps.mockResolvedValue([]);
+  (require('../../db').getPendingSyncs as jest.Mock).mockResolvedValue([]);
 });
 
 describe('sync timestamp unit mismatch (#1390)', () => {

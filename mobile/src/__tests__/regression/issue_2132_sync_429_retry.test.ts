@@ -25,6 +25,7 @@ jest.mock('../../db', () => ({
   getNoteTags: jest.fn(),
   addTag: jest.fn(),
   removeTag: jest.fn(),
+  getPendingSyncs: jest.fn().mockResolvedValue([]),
 }));
 
 const mockGetNoteTimestamps = require('../../db').getNoteTimestamps as jest.MockedFunction<any>;

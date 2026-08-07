@@ -2,8 +2,13 @@
  * Regression test for #1448: useNetworkState calls checkConnection on mount.
  *
  * Before fix: Only checked navigator.onLine (unreliable in React Native).
- * After fix: Actively calls checkConnection() (HEAD request) on mount to verify
- * real network reachability, ensuring pending syncs flush when app opens online.
+ * After fix: Actively calls checkConnection() (connectivity probe) on mount to
+ * verify real network reachability, ensuring pending syncs flush when app
+ * opens online.
+ *
+ * Updated for #3868: the probe prefers the configured backend /health and
+ * falls back to the public endpoint (gstatic) only when no backend is
+ * configured — the gstatic endpoint is no longer the primary probe.
  */
 
 // Mock globalThis for online/offline events
@@ -29,6 +34,11 @@ Object.defineProperty(globalThis, 'navigator', {
 const mockFetch = jest.fn().mockResolvedValue({ ok: true });
 (globalThis as any).fetch = mockFetch;
 
+// Mock pingBackend (backend /health probe) — #3868: backend probe is primary.
+jest.mock('../../services/sync', () => ({
+  pingBackend: jest.fn().mockResolvedValue(false),
+}));
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockFetch.mockReset();
@@ -37,7 +47,7 @@ beforeEach(() => {
 });
 
 describe('issue #1448 — useNetworkState initial connectivity check', () => {
-  it('should call checkConnection (fetch HEAD) on mount when navigator.onLine is true', () => {
+  it('should call checkConnection (fetch probe) on mount when navigator.onLine is true', () => {
     // Import the hook module — the hook itself calls checkConnection in useEffect.
     // Since we can't easily render the hook, we verify the module structure.
     const mod = require('../../utils/networkState');
@@ -63,40 +73,31 @@ describe('issue #1448 — useNetworkState initial connectivity check', () => {
     });
   });
 
-  it('checkConnection should use HEAD request to gstatic endpoint', async () => {
+  it('probeConnectivity falls back to HEAD request on gstatic when backend unreachable', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true });
 
-    const res = await fetch('https://www.gstatic.com/generate_204', {
-      method: 'HEAD',
-      signal: AbortSignal.timeout(3000),
-    });
-    expect(res.ok).toBe(true);
+    const { probeConnectivity } = require('../../utils/networkState');
+    const online = await probeConnectivity();
+    expect(online).toBe(true);
     expect(mockFetch).toHaveBeenCalledWith(
       'https://www.gstatic.com/generate_204',
       expect.objectContaining({ method: 'HEAD' })
     );
   });
 
-  it('checkConnection should return false on network error', async () => {
+  it('probeConnectivity returns false on network error', async () => {
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
-    try {
-      await fetch('https://www.gstatic.com/generate_204', {
-        method: 'HEAD',
-        signal: AbortSignal.timeout(3000),
-      });
-    } catch (e) {
-      expect(e).toBeDefined();
-    }
+    const { probeConnectivity } = require('../../utils/networkState');
+    const online = await probeConnectivity();
+    expect(online).toBe(false);
   });
 
-  it('checkConnection should return false when server returns non-ok', async () => {
+  it('probeConnectivity returns false when server returns non-ok', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
 
-    const res = await fetch('https://www.gstatic.com/generate_204', {
-      method: 'HEAD',
-      signal: AbortSignal.timeout(3000),
-    });
-    expect(res.ok).toBe(false);
+    const { probeConnectivity } = require('../../utils/networkState');
+    const online = await probeConnectivity();
+    expect(online).toBe(false);
   });
 });

@@ -37,10 +37,12 @@ fn empty_providers_clamps_active_index_on_save() {
     let (ctx, temp) = temp_context("save");
 
     // providers is empty; index 99 must be clamped to 0 on save.
-    let mut settings = AppSettings::default();
-    settings.providers = vec![];
-    settings.active_provider_index = 99;
-    settings.vault_dir = temp.join("vault").to_string_lossy().into_owned();
+    let settings = AppSettings {
+        providers: vec![],
+        active_provider_index: 99,
+        vault_dir: temp.join("vault").to_string_lossy().into_owned(),
+        ..AppSettings::default()
+    };
 
     let saved = save_settings_with_context(&ctx, settings).expect("save settings");
     assert_eq!(
@@ -59,10 +61,12 @@ fn empty_providers_clamps_active_index_on_load() {
     // Write a settings file directly with empty providers + invalid index,
     // bypassing save_settings_with_context to simulate a hand-edited or
     // legacy file reaching the load path.
-    let mut settings = AppSettings::default();
-    settings.providers = vec![];
-    settings.active_provider_index = 42;
-    settings.vault_dir = temp.join("vault").to_string_lossy().into_owned();
+    let settings = AppSettings {
+        providers: vec![],
+        active_provider_index: 42,
+        vault_dir: temp.join("vault").to_string_lossy().into_owned(),
+        ..AppSettings::default()
+    };
     let json = serde_json::to_string_pretty(&settings).expect("serialize");
     std::fs::write(temp.join("settings.json"), json).expect("write settings");
 

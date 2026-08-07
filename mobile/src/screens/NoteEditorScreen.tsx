@@ -439,7 +439,19 @@ export default function NoteEditorScreen({ route, navigation }: any) {
       {/* Content — edit or preview */}
       {previewMode ? (
         <ScrollView style={s.previewContainer} contentContainerStyle={{ padding: 16 }}>
-          <MarkdownPreview content={content || '*空白笔记*'} textColor={c.text} accentColor={accentColor} isDark={isDark} />
+          <MarkdownPreview
+            content={content || '*空白笔记*'}
+            textColor={c.text}
+            accentColor={accentColor}
+            isDark={isDark}
+            // #3781: delete the selected standalone image line from the note
+            onDeleteImage={(imageLine) => {
+              const next = (contentRef.current || '').split('\n').filter((l) => l !== imageLine).join('\n');
+              contentRef.current = next;
+              setContent(next);
+              autoSave(titleRef.current, next);
+            }}
+          />
         </ScrollView>
       ) : (
         <TextInput

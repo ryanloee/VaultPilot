@@ -1,4 +1,4 @@
-import React, { memo, useState, useCallback, useMemo } from 'react';
+import React, { memo, useState, useCallback, useMemo, useRef } from 'react';
 import { Text, View, StyleSheet, ScrollView, TouchableOpacity, Image as RNImage } from 'react-native';
 import { renderLatex, parseLatexSegments } from '../utils/latex';
 import Icon from './Icon';
@@ -11,6 +11,7 @@ import {
   extractStandaloneImages,
   isStandaloneImageLine,
   MarkdownImage,
+  clamp,
 } from '../utils/imageMarkdown';
 
 interface Props {
@@ -22,6 +23,36 @@ interface Props {
   onNoteLinkPress?: (title: string) => void;
   /** Map of note title (lowercase) → noteId for auto-detection of note references (#2035). */
   noteTitleMap?: Map<string, string>;
+  /**
+   * #3781: called when the user deletes a selected standalone image from the
+   * floating action bar — receives the exact markdown line to remove, so the
+   * parent can update `content`. When omitted, the 删除 button is hidden.
+   */
+  onDeleteImage?: (imageLine: string) => void;
+}
+
+// ── #3781: image selection action bar (Obsidian 1.13 image interactions) ──
+/** Base rendered width (px) of a standalone image before any resize. */
+const DEFAULT_IMAGE_WIDTH = 300;
+/** Each +/- press grows/shrinks the rendered width by 25% of the base. */
+const IMAGE_WIDTH_STEP = 0.25;
+const MIN_IMAGE_SCALE = 0.25;
+const MAX_IMAGE_SCALE = 3;
+
+interface ImageSelection {
+  /** globalIdx of the selected image (aligned with the Lightbox index) */
+  index: number;
+  /** raw markdown line the image belongs to (passed to onDeleteImage) */
+  line: string;
+  /** single-image markdown syntax, e.g. ![alt](url "title") (copied) */
+  markdown: string;
+  /** rendered width scale; 1 = default width */
+  scale: number;
+}
+
+/** Rebuild the markdown syntax for a single image (#3781 copy action). */
+function imageMarkdown(img: MarkdownImage): string {
+  return `![${img.alt}](${img.uri}${img.title ? ` "${img.title}"` : ''})`;
 }
 
 /**
@@ -64,7 +95,7 @@ function processLatexSegments(text: string, textColor: string, accentColor: stri
  * Supports ```mermaid code fences: renders them as a labelled diagram container
  * with a chart icon instead of a plain code block (#2805).
  */
-const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap }: Props) {
+const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, accentColor, isDark, onNoteLinkPress, noteTitleMap, onDeleteImage }: Props) {
   // Collect standalone images for Lightbox navigation (#3030).
   // #3454: Must mirror the population rendered as tappable image blocks —
   // only standalone-line images get a `globalIdx` from `imageCounter`, so
@@ -75,9 +106,64 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     [content],
   );
   const [lightboxIndex, setLightboxIndex] = useState(-1);
-  const handleImagePress = useCallback((idx: number) => setLightboxIndex(idx), []);
+  // #3781: long-press selection on standalone images (Obsidian 1.13 parity).
+  const [selectedImage, setSelectedImage] = useState<ImageSelection | null>(null);
+  // True between a long-press firing and that gesture's touchEnd — prevents
+  // the touch area's onTouchEnd from instantly clearing a fresh selection.
+  const longPressSuppressClearRef = useRef(false);
+  const handleImagePress = useCallback((idx: number) => {
+    setLightboxIndex(idx);
+    setSelectedImage(null); // tapping an image (or anywhere) clears selection
+  }, []);
   const handleCloseLightbox = useCallback(() => setLightboxIndex(-1), []);
   const handleIndexChange = useCallback((idx: number) => setLightboxIndex(idx), []);
+
+  // ── #3781: selection / copy / delete / resize handlers ──────────────────
+  const handleImageLongPress = useCallback((globalIdx: number, line: string, img: MarkdownImage) => {
+    longPressSuppressClearRef.current = true;
+    setSelectedImage((prev) =>
+      prev && prev.index === globalIdx
+        ? prev // re-long-pressing the same image keeps its zoom level
+        : { index: globalIdx, line, markdown: imageMarkdown(img), scale: 1 },
+    );
+  }, []);
+
+  const handleCopyImage = useCallback((markdown: string) => {
+    // Lazy require: keeps expo-clipboard out of module scope — its ESM build
+    // can't be transformed by this repo's ts-jest setup (tests mock it).
+    const Clipboard = require('expo-clipboard') as typeof import('expo-clipboard');
+    Clipboard.setStringAsync(markdown);
+  }, []);
+
+  const handleDeleteImage = useCallback(() => {
+    if (!selectedImage) return;
+    onDeleteImage?.(selectedImage.line);
+    setSelectedImage(null);
+  }, [selectedImage, onDeleteImage]);
+
+  const handleResizeImage = useCallback((delta: number) => {
+    setSelectedImage((prev) =>
+      prev ? { ...prev, scale: clamp(prev.scale + delta, MIN_IMAGE_SCALE, MAX_IMAGE_SCALE) } : prev,
+    );
+  }, []);
+
+  const handleResetImageSize = useCallback(() => {
+    setSelectedImage((prev) => (prev ? { ...prev, scale: 1 } : prev));
+  }, []);
+
+  // Tap anywhere on the preview (empty area, text, or the end of a scroll
+  // gesture) clears the selection — except for the tail of the long-press
+  // gesture that just created it.
+  const handleTouchAreaStart = useCallback(() => {
+    longPressSuppressClearRef.current = false;
+  }, []);
+  const handleTouchAreaEnd = useCallback(() => {
+    if (longPressSuppressClearRef.current) {
+      longPressSuppressClearRef.current = false;
+      return;
+    }
+    setSelectedImage(null);
+  }, []);
 
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
@@ -226,11 +312,18 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     if (lineImages.length > 0 && isStandaloneImageLine(line)) {
       const imgElements = lineImages.map((img, imgIdx) => {
         const globalIdx = imageCounter++;
+        // #3781: long-press selects the image; the selected image gets a blue
+        // border and (when resized) an explicit pixel width.
+        const isSelected = selectedImage?.index === globalIdx;
+        const resizedStyle = isSelected && selectedImage.scale !== 1
+          ? { width: Math.round(DEFAULT_IMAGE_WIDTH * selectedImage.scale) }
+          : null;
         return (
           <TouchableOpacity
             key={`img-${i}-${imgIdx}`}
             activeOpacity={0.85}
             onPress={() => handleImagePress(globalIdx)}
+            onLongPress={() => handleImageLongPress(globalIdx, line, img)}
             testID={`md-image-${globalIdx}`}
           >
             <RNImage
@@ -238,6 +331,8 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
               style={[
                 styles.inlineImage,
                 lineImages.length > 1 && styles.inlineImageGrid,
+                isSelected && styles.imageSelected,
+                resizedStyle,
               ]}
               resizeMode="cover"
               accessibilityLabel={img.alt || 'Image'}
@@ -326,8 +421,57 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
   }
 
   return (
-    <>
-      {elements}
+    <View style={styles.previewRoot}>
+      {/* Touch area: taps outside images/text (or scroll gesture ends) clear the selection (#3781) */}
+      <View
+        testID="md-preview-touch-area"
+        onTouchStart={handleTouchAreaStart}
+        onTouchEnd={handleTouchAreaEnd}
+      >
+        {elements}
+      </View>
+      {/* #3781: floating action bar for the selected image (Obsidian 1.13 parity) */}
+      {selectedImage && (
+        <View testID="md-image-action-bar" style={styles.imageActionBar}>
+          <TouchableOpacity
+            testID="md-image-copy-btn"
+            style={styles.imageActionBtn}
+            onPress={() => handleCopyImage(selectedImage.markdown)}
+          >
+            <Text style={styles.imageActionBtnText}>复制</Text>
+          </TouchableOpacity>
+          {onDeleteImage && (
+            <TouchableOpacity
+              testID="md-image-delete-btn"
+              style={styles.imageActionBtn}
+              onPress={handleDeleteImage}
+            >
+              <Text style={styles.imageActionBtnText}>删除</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            testID="md-image-zoom-out"
+            style={styles.imageActionBtn}
+            onPress={() => handleResizeImage(-IMAGE_WIDTH_STEP)}
+          >
+            <Text style={styles.imageActionBtnText}>-</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="md-image-zoom-in"
+            style={styles.imageActionBtn}
+            onPress={() => handleResizeImage(IMAGE_WIDTH_STEP)}
+          >
+            <Text style={styles.imageActionBtnText}>+</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="md-image-zoom-reset"
+            style={styles.imageActionBtn}
+            onPress={handleResetImageSize}
+          >
+            <Text style={styles.imageActionBtnText}>0</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {allImages.length > 0 && lightboxIndex >= 0 && (
         <Lightbox
           visible={lightboxIndex >= 0}
@@ -337,7 +481,7 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
           onIndexChange={handleIndexChange}
         />
       )}
-    </>
+    </View>
   );
 });
 
@@ -598,6 +742,44 @@ const styles = StyleSheet.create({
   inlineImageGrid: {
     width: '48%',
     height: 140,
+  },
+  // #3781: image selection + floating action bar (Obsidian 1.13 parity)
+  previewRoot: {
+    position: 'relative',
+  },
+  imageSelected: {
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+  },
+  imageActionBar: {
+    position: 'absolute',
+    bottom: 8,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(24, 24, 27, 0.92)',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  imageActionBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+  },
+  imageActionBtnText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   // #3684: Footnote rendering
   footnoteItem: {

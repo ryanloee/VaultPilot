@@ -59,6 +59,17 @@ internal static class ThemePreferences
     /// </summary>
     public static void Save(ElementTheme mode)
     {
+        // #3862: unique temp name per save. A fixed ".tmp" name +
+        // FileShare.None made concurrent Save calls (SettingsWindow and
+        // SettingsDialog open at the same time, or a save re-triggered
+        // mid-write) race on the same deterministic file: the second
+        // FileStream threw IOException, which the catch swallowed — silently
+        // dropping that theme change. The backend's atomic_write
+        // (src/storage/mod.rs) uses random UUID suffixes precisely to prevent
+        // concurrent writers racing on one temp name; mirror that here. The
+        // rename over FilePath is still atomic on NTFS (same volume), so the
+        // #3850 crash-safety contract is unchanged.
+        var tmpPath = $"{FilePath}.{Guid.NewGuid():N}.tmp";
         try
         {
             System.IO.Directory.CreateDirectory(Directory);
@@ -78,7 +89,6 @@ internal static class ThemePreferences
             // process exit or crash mid-write leaves only a harmless temp
             // file, never a truncated theme.json (mirrors the backend's
             // atomic_write contract).
-            var tmpPath = FilePath + ".tmp";
             using (var stream = new FileStream(
                 tmpPath,
                 FileMode.Create,
@@ -96,13 +106,13 @@ internal static class ThemePreferences
         catch
         {
             // Best-effort persistence; in-memory theme still applies.
-            // Clean up any leftover temp file so a failed write never
-            // accumulates stale .tmp files.
+            // Clean up this save's temp file so a failed write never leaves
+            // stale theme.json.*.tmp files behind.
             try
             {
-                if (File.Exists(FilePath + ".tmp"))
+                if (File.Exists(tmpPath))
                 {
-                    File.Delete(FilePath + ".tmp");
+                    File.Delete(tmpPath);
                 }
             }
             catch

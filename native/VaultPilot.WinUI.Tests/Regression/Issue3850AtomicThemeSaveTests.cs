@@ -39,16 +39,18 @@ public class Issue3850AtomicThemeSaveTests
         // The buggy pattern is gone.
         Assert.DoesNotContain("File.WriteAllText(FilePath, json)", source);
 
-        // The atomic pattern is present: temp file in the same directory,
-        // flush to disk, then rename over the target.
-        Assert.Contains("\".tmp\"", source);
+        // The atomic pattern is present: unique temp file in the same
+        // directory (Guid-suffixed since #3862, so concurrent saves never
+        // race on a shared temp name), flush to disk, then rename over the
+        // target.
+        Assert.Contains("Guid.NewGuid()", source);
         Assert.Contains("stream.Flush(flushToDisk: true)", source);
         Assert.Contains("File.Move(tmpPath, FilePath, overwrite: true)", source);
     }
 
     /// <summary>
-    /// A failed write must clean up its temp file so stale .tmp files never
-    /// accumulate.
+    /// A failed write must clean up its own temp file so stale .tmp files
+    /// never accumulate.
     /// </summary>
     [Fact]
     public void Regression_3850_ThemeSave_CleansUpTempOnFailure()
@@ -60,7 +62,7 @@ public class Issue3850AtomicThemeSaveTests
         }
 
         var source = File.ReadAllText(sourcePath);
-        Assert.Contains("File.Delete(FilePath + \".tmp\")", source);
+        Assert.Contains("File.Delete(tmpPath)", source);
     }
 
     /// <summary>

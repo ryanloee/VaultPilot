@@ -319,8 +319,11 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrEmpty(text))
             return;
 
-        // #3581: Very short text can't match any meaningful note title.
-        if (text.Length < 4)
+        // #3581: A 1-char text can never contain a 2-char-minimum note title
+        // (NoteRefs.FindNoteReferences filters titles to t.Length >= 2), so
+        // skip it; 2-3 char texts may contain one, so let FindNoteReferences
+        // decide (#3932).
+        if (text.Length < 2)
         {
             inlines.Add(new Run { Text = text });
             return;

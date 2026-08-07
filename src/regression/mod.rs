@@ -94,4 +94,5 @@ mod issue_3732_attachment_cleanup_setting_honored;
 mod issue_3762_kanban_bulk_meta_update;
 mod issue_3809_active_provider_clamp;
 mod issue_3823_cli_query_raw;
+mod issue_3910_startup_stats;
 mod issue_914_related_notes;

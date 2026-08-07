@@ -4,7 +4,7 @@ use std::panic;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -30,6 +30,7 @@ use vaultpilot_lib::flashcards::{
 use vaultpilot_lib::models::{
     AppSettings, ChatState, ConversationSummary, ConversationTurn, NoteDocument,
 };
+use vaultpilot_lib::startup_stats::{PhaseTimer, StartupStats};
 use vaultpilot_lib::storage::{
     create_subscription_async, delete_note_async, delete_subscription_async,
     find_related_notes_async, get_snapshot_async, get_subscription_async, import_markdown_async,
@@ -75,6 +76,13 @@ static AGENT_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 /// Allows `respondToPlanApproval` to deliver PlanDecision back to the agent
 /// thread — mirroring the write-approval coordination model.
 static PLAN_APPROVAL: StdMutex<Option<std::sync::mpsc::Sender<PlanDecision>>> = StdMutex::new(None);
+
+/// Startup phase statistics for this agent process (#3910).
+///
+/// Populated once in `main()` right before the stdin request loop starts
+/// (the loop only exits at EOF, so the value stays stable for the process
+/// lifetime). Served to the WinUI client via the `startupStats` method.
+static STARTUP_STATS: OnceLock<StartupStats> = OnceLock::new();
 
 /// Shared stdout writer — ensures atomic line writes from both the main loop
 /// and the background agent task.
@@ -133,6 +141,12 @@ struct AgentStatusPayload {
 }
 
 fn main() {
+    // Fine-grained startup phase timing (#3910). The timer is created at
+    // the very start of main so every checkpoint is measured from process
+    // entry; the finished stats are published to STARTUP_STATS right
+    // before the stdin request loop starts.
+    let mut startup_timer = PhaseTimer::new();
+
     install_panic_hook();
 
     tracing_subscriber::fmt()
@@ -151,6 +165,7 @@ fn main() {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let rules_path = config_dir.join("search_rules.json");
     vaultpilot_lib::search_rules::SearchRules::init_from_file(&rules_path);
+    startup_timer.checkpoint("search_rules_load");
 
     let stdin = io::stdin();
     let shared_writer: Arc<SharedWriter> = Arc::new(SharedWriter {
@@ -160,6 +175,7 @@ fn main() {
         .enable_all()
         .build()
         .expect("failed to initialize async runtime");
+    startup_timer.checkpoint("runtime_build");
 
     // Create StorageContext once and reuse across all requests.
     // StorageContext already caches the SQLite connection and AppSettings
@@ -172,12 +188,19 @@ fn main() {
             std::process::exit(1);
         }
     };
+    startup_timer.checkpoint("storage_open");
 
     const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
     /// Maximum bytes allowed for a single JSON-RPC line on stdin.
     /// Prevents OOM from a malicious or buggy client sending an
     /// unbounded payload without a newline delimiter (#596).
     const MAX_LINE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
+
+    // Publish startup stats before entering the request loop. The loop only
+    // exits at EOF, so this is the final checkpoint and the stats are stable
+    // for the rest of the process lifetime (#3910).
+    startup_timer.checkpoint("ipc_ready");
+    let _ = STARTUP_STATS.set(startup_timer.finish());
 
     let mut stdin_buf = Vec::new();
     loop {
@@ -410,6 +433,39 @@ async fn handle_line(
     }
 }
 
+/// JSON-RPC result for the `startupStats` method (#3910): the recorded
+/// startup phases, or an empty shape if the stats were never published
+/// (shouldn't happen in practice — main() sets them before the loop).
+fn startup_stats_response() -> Value {
+    match STARTUP_STATS.get() {
+        Some(stats) => startup_stats_to_json(stats),
+        None => serde_json::json!({ "phases": [], "total_ms": 0 }),
+    }
+}
+
+/// Serialize startup stats into the shape consumed by the WinUI
+/// startup-stats window (#3910):
+/// `{ "phases": [{ "name": "...", "elapsed_ms": 12.34 }, ...], "total_ms": 567.89 }`
+/// where `elapsed_ms` is the cumulative fractional-millisecond elapsed time
+/// of each phase (as recorded in `StartupPhase`) and `total_ms` is the
+/// overall startup time (`StartupStats::total()`).
+fn startup_stats_to_json(stats: &StartupStats) -> Value {
+    let phases: Vec<Value> = stats
+        .phases
+        .iter()
+        .map(|phase| {
+            serde_json::json!({
+                "name": phase.name,
+                "elapsed_ms": phase.elapsed.as_secs_f64() * 1000.0,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "phases": phases,
+        "total_ms": stats.total().as_secs_f64() * 1000.0,
+    })
+}
+
 async fn handle_request(
     context: &StorageContext,
     request: &AgentRequest,
@@ -417,6 +473,7 @@ async fn handle_request(
 ) -> Result<Value, String> {
     match request.method.as_str() {
         "ping" => Ok(serde_json::json!({ "ok": true })),
+        "startupStats" => Ok(startup_stats_response()),
         "getSettings" => {
             let mut settings = initialize_storage_async(context)
                 .await
@@ -1943,6 +2000,104 @@ mod tests {
         assert!(serialized.contains("\"id\":\"req-002\""));
         assert!(serialized.contains("\"error\""));
         assert!(!serialized.contains("\"result\""));
+    }
+
+    // ── Regression: #3910 startupStats method ───────────────────────────
+
+    #[test]
+    fn startup_stats_to_json_serializes_phases_in_order() {
+        use vaultpilot_lib::startup_stats::StartupPhase;
+
+        let stats = StartupStats {
+            phases: vec![
+                StartupPhase {
+                    name: "search_rules_load".into(),
+                    elapsed: Duration::from_millis(5),
+                },
+                StartupPhase {
+                    name: "runtime_build".into(),
+                    elapsed: Duration::from_millis(12),
+                },
+                StartupPhase {
+                    name: "storage_open".into(),
+                    elapsed: Duration::from_millis(40),
+                },
+            ],
+        };
+        let json = startup_stats_to_json(&stats);
+        let phases = json["phases"].as_array().expect("phases must be an array");
+        assert_eq!(phases.len(), 3, "all phases must be serialized");
+        let names: Vec<&str> = phases
+            .iter()
+            .map(|p| p["name"].as_str().expect("name must be a string"))
+            .collect();
+        assert_eq!(
+            names,
+            ["search_rules_load", "runtime_build", "storage_open"],
+            "phases must be serialized in recording order"
+        );
+        assert_eq!(phases[0]["elapsed_ms"], 5.0);
+        assert_eq!(phases[1]["elapsed_ms"], 12.0);
+        assert_eq!(phases[2]["elapsed_ms"], 40.0);
+        assert_eq!(
+            json["total_ms"], 40.0,
+            "total_ms must equal the last phase's cumulative elapsed"
+        );
+    }
+
+    #[test]
+    fn startup_stats_to_json_empty_stats() {
+        let stats = StartupStats::default();
+        let json = startup_stats_to_json(&stats);
+        assert_eq!(
+            json["phases"]
+                .as_array()
+                .expect("phases must be an array")
+                .len(),
+            0,
+            "empty stats must yield an empty phases array"
+        );
+        assert_eq!(json["total_ms"], 0.0);
+    }
+
+    #[test]
+    fn startup_stats_response_returns_recorded_stats_when_set() {
+        // STARTUP_STATS is a process-wide OnceLock; tests run without main(),
+        // so it is guaranteed unset before this test sets it.
+        use vaultpilot_lib::startup_stats::StartupPhase;
+
+        let stats = StartupStats {
+            phases: vec![StartupPhase {
+                name: "ipc_ready".into(),
+                elapsed: Duration::from_millis(7),
+            }],
+        };
+        assert!(
+            STARTUP_STATS.set(stats).is_ok(),
+            "STARTUP_STATS must be unset before this test"
+        );
+        let json = startup_stats_response();
+        assert_eq!(json["phases"][0]["name"], "ipc_ready");
+        assert_eq!(json["phases"][0]["elapsed_ms"], 7.0);
+        assert_eq!(json["total_ms"], 7.0);
+    }
+
+    #[test]
+    fn startup_stats_method_is_dispatched_in_handle_request() {
+        // Pin the match arm so a rename/removal of the "startupStats"
+        // dispatch fails this regression test.
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/vaultpilot-agent.rs"
+        ));
+        assert!(
+            source.contains("\"startupStats\" =>"),
+            "handle_request must dispatch the startupStats method"
+        );
+        assert!(
+            source.contains("startup_stats_response"),
+            "startupStats arm must call startup_stats_response"
+        );
     }
 
     #[test]

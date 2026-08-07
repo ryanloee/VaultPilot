@@ -73,12 +73,21 @@ public partial class App : Application
         var showItem = new MenuFlyoutItem { Text = "显示窗口" };
         showItem.Click += (_, _) => ShowMainWindow();
 
+        // #3910: startup statistics dialog — fetches fine-grained startup
+        // phase timings from the backend agent via the startupStats IPC method.
+        var statsItem = new MenuFlyoutItem { Text = "启动耗时统计…" };
+        statsItem.Click += (_, _) =>
+        {
+            ShowMainWindow();
+            _window?.ShowStartupStatsDialog();
+        };
+
         var exitItem = new MenuFlyoutItem { Text = "退出" };
         exitItem.Click += (_, _) => ExitApplication();
 
         _trayIcon.ContextFlyout = new MenuFlyout
         {
-            Items = { showItem, new MenuFlyoutSeparator(), exitItem },
+            Items = { showItem, statsItem, new MenuFlyoutSeparator(), exitItem },
         };
 
         _trayIcon.ForceCreate();

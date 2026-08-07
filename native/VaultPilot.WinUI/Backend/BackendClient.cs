@@ -952,6 +952,17 @@ public sealed class BackendClient : IAsyncDisposable
             "findRelatedNotes", new { id = noteId, limit }, token);
     }
 
+    /// <summary>
+    /// Fetch fine-grained startup phase timings from the backend agent
+    /// (issue #3910). Returns null when the backend has no statistics
+    /// available (e.g. it was already running before this session, or the
+    /// method is not supported by the running agent binary).
+    /// </summary>
+    public async Task<StartupStatsResponse?> GetStartupStatsAsync(CancellationToken token = default)
+    {
+        return await SendAsync<StartupStatsResponse>("startupStats", new { }, token);
+    }
+
     private async Task PumpStderrAsync(CancellationToken token)
     {
         var process = Volatile.Read(ref _process);

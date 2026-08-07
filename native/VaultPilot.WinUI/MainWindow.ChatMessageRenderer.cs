@@ -349,7 +349,7 @@ public sealed partial class MainWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Center,
             };
             AutomationProperties.SetName(settingsBtn, "打开设置");
-            settingsBtn.Click += (_, _) => OnSettingsClicked(settingsBtn, new RoutedEventArgs());
+            settingsBtn.Click += (_, _) => _ = OnSettingsClickedCore(settingsBtn, new RoutedEventArgs(), forceWindow: true);
             container.Children.Add(settingsBtn);
         }
 

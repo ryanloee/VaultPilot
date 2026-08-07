@@ -162,10 +162,11 @@ pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
             p.context_window_tokens = None;
         }
     }
-    // Clamp active_provider_index.
-    if !settings.providers.is_empty() && settings.active_provider_index >= settings.providers.len()
-    {
-        settings.active_provider_index = settings.providers.len() - 1;
+    // Clamp active_provider_index. Always clamp, even when providers is
+    // empty: an out-of-range index must not persist, otherwise downstream
+    // code indexing providers[active_provider_index] can panic (#3809).
+    if settings.active_provider_index >= settings.providers.len() {
+        settings.active_provider_index = settings.providers.len().saturating_sub(1);
     }
 }
 
@@ -650,12 +651,16 @@ mod tests {
     }
 
     #[test]
-    fn normalize_empty_providers_no_clamp() {
+    fn normalize_empty_providers_clamps_index() {
         let paths = make_paths(None);
         let mut s = make_settings("/v");
+        s.providers = vec![];
         s.active_provider_index = 99;
         normalize_settings(&mut s, &paths);
-        assert_eq!(s.active_provider_index, 99);
+        // #3809: an out-of-range index must not survive normalization even
+        // when providers is empty — it would panic downstream code that
+        // indexes providers[active_provider_index].
+        assert_eq!(s.active_provider_index, 0);
     }
 
     // ── #2557: masked key must not be persisted when settings file is corrupt ──

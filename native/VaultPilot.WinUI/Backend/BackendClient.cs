@@ -56,11 +56,6 @@ public sealed class BackendClient : IAsyncDisposable
     // reconnect that kills the next process, forming a self-sustaining restart
     // loop (~1s period, hundreds of "stderr pump started" lines in agent.log).
     private volatile bool _isIntentionalStop;
-    // Guards TryReconnectAsync against re-entrancy: 6 call sites fire-and-forget
-    // TryReconnectWithRetryAsync; even though _reconnectLock serializes them,
-    // each holder still does a full dispose+restart, so concurrent triggers
-    // chain into a restart storm. This flag collapses concurrent attempts.
-    private int _reconnectInProgress;
 
     public bool IsConnected
     {
@@ -388,13 +383,19 @@ public sealed class BackendClient : IAsyncDisposable
         return delay > MaxBackoff ? MaxBackoff : delay;
     }
 
-    private async Task<bool> TryReconnectWithRetryAsync(CancellationToken cancellationToken = default)
+    private async Task<bool> TryReconnectWithRetryAsync(
+        CancellationToken cancellationToken = default,
+        bool forceRestart = false)
     {
         for (int attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
         {
             if (Volatile.Read(ref _isDisposed) != 0 || cancellationToken.IsCancellationRequested) return false;
 
-            var success = await TryReconnectAsync(forceRestart: true, cancellationToken: cancellationToken);
+            // #3858: forceRestart is now opt-in (only the manual Reconnect
+            // button passes true). Background triggers (EOF, health check,
+            // write-fail, power resume) pass false so the idempotency guard
+            // in TryReconnectAsync can collapse concurrent attempts.
+            var success = await TryReconnectAsync(forceRestart: forceRestart, cancellationToken: cancellationToken);
             if (success)
             {
                 try
@@ -435,7 +436,10 @@ public sealed class BackendClient : IAsyncDisposable
         _degradedMode = false;
         SetHealthCheckInterval(HealthCheckInterval);
 
-        return await TryReconnectWithRetryAsync(cancellationToken);
+        // #3858: manual user-initiated reconnect always forces a fresh
+        // restart (even of a healthy process) and bypasses the idempotency
+        // collapse — that is the user's explicit intent.
+        return await TryReconnectWithRetryAsync(cancellationToken: cancellationToken, forceRestart: true);
     }
 
     public Task<bool> EnsureConnectedAsync(CancellationToken cancellationToken = default)
@@ -450,6 +454,13 @@ public sealed class BackendClient : IAsyncDisposable
         bool forceRestart = false)
     {
         if (Volatile.Read(ref _isDisposed) != 0 || _executablePath == null) return false;
+        // Collapse point (#3858): if the process is healthy and the caller
+        // did not explicitly request a forced restart, there is nothing to
+        // do. Background triggers (EOF, health check, write-fail, power
+        // resume) fire while a reconnect is in flight; without this check
+        // they would each queue on _reconnectLock and sequentially kill the
+        // just-restarted healthy process (restart churn). Only the manual
+        // Reconnect button (forceRestart: true) bypasses the collapse.
         if (IsConnected && !forceRestart) return true;
 
         if (!await _reconnectLock.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken))
@@ -457,26 +468,13 @@ public sealed class BackendClient : IAsyncDisposable
             return false;
         }
 
-        var claimedSlot = false; // set true when we take the _reconnectInProgress slot
         try
         {
             if (Volatile.Read(ref _isDisposed) != 0 || _executablePath == null) return false;
+            // Re-check after acquiring the lock: a concurrent reconnect may
+            // have finished while we waited. Collapse onto its fresh process
+            // instead of disposing and restarting it again.
             if (IsConnected && !forceRestart) return true;
-
-            // Idempotency guard: multiple call sites fire-and-forget
-            // TryReconnectWithRetryAsync concurrently. The lock serializes them,
-            // but each holder would otherwise do a full dispose+restart, so a
-            // burst of triggers cascades into a restart storm. Skip when another
-            // reconnect is already in progress (unless the caller explicitly
-            // forces a restart, e.g. a user-initiated Reconnect button).
-            if (!forceRestart)
-            {
-                if (Interlocked.CompareExchange(ref _reconnectInProgress, 1, 0) != 0)
-                {
-                    return true;
-                }
-                claimedSlot = true;
-            }
 
             await DisposeProcessAsync();
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
@@ -519,7 +517,6 @@ public sealed class BackendClient : IAsyncDisposable
         }
         finally
         {
-            if (claimedSlot) Interlocked.Exchange(ref _reconnectInProgress, 0);
             try { _reconnectLock.Release(); }
             catch (ObjectDisposedException) { /* shutting down — safe to ignore */ }
         }

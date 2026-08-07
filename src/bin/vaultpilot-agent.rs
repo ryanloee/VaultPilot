@@ -446,17 +446,21 @@ fn startup_stats_response() -> Value {
 /// Serialize startup stats into the shape consumed by the WinUI
 /// startup-stats window (#3910):
 /// `{ "phases": [{ "name": "...", "elapsed_ms": 12.34 }, ...], "total_ms": 567.89 }`
-/// where `elapsed_ms` is the cumulative fractional-millisecond elapsed time
-/// of each phase (as recorded in `StartupPhase`) and `total_ms` is the
-/// overall startup time (`StartupStats::total()`).
+/// where `elapsed_ms` is the per-phase **own** duration (the increment over
+/// the previous phase, matching `StartupStats::report()`), not the
+/// cumulative elapsed time, and `total_ms` is the overall startup time
+/// (`StartupStats::total()`), which equals the sum of the phase increments.
 fn startup_stats_to_json(stats: &StartupStats) -> Value {
+    let mut previous = Duration::ZERO;
     let phases: Vec<Value> = stats
         .phases
         .iter()
         .map(|phase| {
+            let own = phase.elapsed.saturating_sub(previous);
+            previous = phase.elapsed;
             serde_json::json!({
                 "name": phase.name,
-                "elapsed_ms": phase.elapsed.as_secs_f64() * 1000.0,
+                "elapsed_ms": own.as_secs_f64() * 1000.0,
             })
         })
         .collect();
@@ -2037,11 +2041,11 @@ mod tests {
             "phases must be serialized in recording order"
         );
         assert_eq!(phases[0]["elapsed_ms"], 5.0);
-        assert_eq!(phases[1]["elapsed_ms"], 12.0);
-        assert_eq!(phases[2]["elapsed_ms"], 40.0);
+        assert_eq!(phases[1]["elapsed_ms"], 7.0, "own duration = 12 - 5");
+        assert_eq!(phases[2]["elapsed_ms"], 28.0, "own duration = 40 - 12");
         assert_eq!(
             json["total_ms"], 40.0,
-            "total_ms must equal the last phase's cumulative elapsed"
+            "total_ms must equal the last phase's cumulative elapsed (sum of increments)"
         );
     }
 

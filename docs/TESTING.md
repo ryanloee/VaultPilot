@@ -17,8 +17,8 @@ All Rust tests use the built-in `#[cfg(test)]` + `#[test]` framework. No externa
 ```
 src/regression/
 ├── mod.rs                    # Re-exports all regression test modules
-├── issue_042_empty_vault.rs  # Regression for issue #42
-├── issue_099_search_crash.rs # Regression for issue #99
+├── issue_1175_missing_test_fields.rs  # Regression for issue #1175
+├── issue_1326_agent_glob_utf8.rs      # Regression for issue #1326
 └── ...
 ```
 

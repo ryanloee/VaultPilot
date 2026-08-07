@@ -62,6 +62,20 @@ export function parseServerTimestamp(updatedAt: string | undefined | null): numb
   return Math.floor(parsed / 1000);
 }
 
+/**
+ * Parse a server RFC3339 `updated_at` into an exact unix-milliseconds value
+ * (#3871). Unlike `parseServerTimestamp` this does NOT floor to whole seconds:
+ * the full precision is what lets sync distinguish "same server version already
+ * imported" from "a newer update within the same second". Returns `undefined`
+ * when the value is missing or unparseable.
+ */
+export function parseServerTimestampMs(updatedAt: string | undefined | null): number | undefined {
+  if (!updatedAt) return undefined;
+  const parsed = Date.parse(updatedAt);
+  if (Number.isNaN(parsed)) return undefined;
+  return parsed;
+}
+
 export async function getServerConfig(): Promise<{ url: string; token: string }> {
   const [url, token] = await Promise.all([
     AsyncStorage.getItem(SERVER_URL_KEY),
@@ -237,11 +251,23 @@ async function doSync(
     // to_rfc3339, e.g. "...37.123456789Z") but local SQLite stores floored
     // whole seconds (parseServerTimestamp floors). Comparing ms directly makes
     // `localNote.updated_at * 1000 >= serverTs` almost never true, so every
-    // sync re-downloads all note bodies. Compare at whole-second precision:
-    // a server update within the same second as our stored floor is already
-    // reflected locally (we imported it), so it can be skipped.
-    if (localNote && Math.floor(serverTs / 1000) <= localNote.updated_at) {
-      skipped++;
+    // sync re-downloaded all note bodies.
+    // #3871: a floor-only compare has the opposite failure — a server update
+    // landing later within the same second as the version we imported (37.900
+    // vs 37.100) would be skipped forever. Rows that carry the exact server ms
+    // (server_updated_ms, written on import) compare at full precision; legacy
+    // rows without it fall back to a conservative strict floor compare that
+    // fetches whenever the server could be at-or-newer than the local floor.
+    if (localNote) {
+      const localServerMs = localNote.server_updated_ms;
+      const localIsNewer = localServerMs != null
+        ? localServerMs >= serverTs
+        : Math.floor(serverTs / 1000) < localNote.updated_at;
+      if (localIsNewer) {
+        skipped++;
+      } else {
+        notesToFetch.push(meta);
+      }
     } else {
       notesToFetch.push(meta);
     }
@@ -323,6 +349,9 @@ async function doSync(
       // Propagate server folder + real edit time into the local note (#2893).
       const folder = deriveFolderFromPath(noteData.meta.path);
       const updatedAt = parseServerTimestamp(noteData.meta.updated_at);
+      // #3871: also record the exact server ms so future syncs can compare at
+      // full precision instead of guessing at whole-second boundaries.
+      const serverUpdatedMs = parseServerTimestampMs(noteData.meta.updated_at);
 
       const localNote = localMap.get(meta.id);
       if (localNote) {
@@ -331,6 +360,7 @@ async function doSync(
           is_template: noteData.meta.is_template ?? 0,
           folder,
           updated_at: updatedAt,
+          server_updated_ms: serverUpdatedMs,
         });
         updated++;
       } else {
@@ -339,6 +369,7 @@ async function doSync(
           is_template: noteData.meta.is_template ?? 0,
           folder,
           updated_at: updatedAt,
+          server_updated_ms: serverUpdatedMs,
         });
         imported++;
       }

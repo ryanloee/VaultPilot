@@ -92,17 +92,19 @@ describe('sync timestamp unit mismatch (#1390)', () => {
     const result = await syncNotesFromServer();
     expect(result.updated).toBe(1);
     expect(result.skipped).toBe(0);
-    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content', { skipQueue: true, is_template: 0, folder: '', updated_at: undefined });
+    expect(mockUpdateNote).toHaveBeenCalledWith('note-1', 'Updated', 'new content', { skipQueue: true, is_template: 0, folder: '', updated_at: undefined, server_updated_ms: undefined });
   });
 
   it('skips when local and server timestamps are equal (boundary)', async () => {
     await AsyncStorage.setItem('cfg_backend_url', 'http://localhost:3000');
 
-    // Both at exactly 2026-06-23T12:00:00Z
+    // Both at exactly 2026-06-23T12:00:00Z.
+    // server_updated_ms mirrors an imported row (#3871): full-precision compare
+    // makes equal server versions skip without re-downloading.
     const ts = new Date('2026-06-23T12:00:00Z');
     const localSeconds = Math.floor(ts.getTime() / 1000);
     mockGetNoteTimestamps.mockResolvedValue([
-      { id: 'note-1', updated_at: localSeconds },
+      { id: 'note-1', updated_at: localSeconds, server_updated_ms: ts.getTime() },
     ]);
 
     mockFetch.mockResolvedValueOnce({

@@ -9,6 +9,11 @@
  *
  * Fix: compare at whole-second precision — skip when
  * `Math.floor(serverTs / 1000) <= localNote.updated_at`.
+ *
+ * #3871 follow-up: a floor-only compare skips NEWER updates that land in the
+ * same second as the imported version. Rows now carry the exact server ms
+ * (`server_updated_ms`, written on import) and compare at full precision;
+ * legacy rows without it use a conservative strict floor compare.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -45,9 +50,11 @@ describe('sync skip detection with sub-second server timestamps (#3866)', () => 
 
     // Server timestamp with sub-second precision (chrono to_rfc3339).
     const serverTs = '2026-08-07T19:00:37.123456789Z';
-    // Local stores floored whole seconds (parseServerTimestamp behavior).
+    // Local stores floored whole seconds (parseServerTimestamp behavior); the
+    // imported row also carries the exact server ms (#3871), so the full-
+    // precision compare sees an equal version and skips.
     const localSeconds = Math.floor(new Date(serverTs).getTime() / 1000);
-    mockGetNoteTimestamps.mockResolvedValue([{ id: 'note-1', updated_at: localSeconds }]);
+    mockGetNoteTimestamps.mockResolvedValue([{ id: 'note-1', updated_at: localSeconds, server_updated_ms: new Date(serverTs).getTime() }]);
 
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -70,8 +77,11 @@ describe('sync skip detection with sub-second server timestamps (#3866)', () => 
     await AsyncStorage.setItem('cfg_backend_url', 'http://localhost:3000');
 
     // Local note is at 19:00:37 (floored).
-    const localSeconds = Math.floor(new Date('2026-08-07T19:00:37.900000000Z').getTime() / 1000);
-    mockGetNoteTimestamps.mockResolvedValue([{ id: 'note-1', updated_at: localSeconds }]);
+    const localSeconds = Math.floor(new Date('2026-08-07T19:00:37.100000000Z').getTime() / 1000);
+    // Imported row carries the exact server ms of the version it was imported
+    // from (#3871): same version → full-precision equal → skip.
+    const importedServerMs = new Date('2026-08-07T19:00:37.100000000Z').getTime();
+    mockGetNoteTimestamps.mockResolvedValue([{ id: 'note-1', updated_at: localSeconds, server_updated_ms: importedServerMs }]);
 
     // Server updated at 19:00:38 — a whole second later → must fetch.
     const serverTs = '2026-08-07T19:00:38.000000000Z';

@@ -265,15 +265,17 @@ public sealed partial class MainWindow : Window
         {
             // #3612: Use the new SettingsWindow (non-blocking standalone window)
             // instead of the old SettingsDialog ContentDialog (blocking modal).
+            // #3931: The old event-args type check was dead code — Click and
+            // accelerator callers all pass RoutedEventArgs, so the Ctrl fallback
+            // never fired and OpenSettingsDialogAsync was unreachable. Read the
+            // real keyboard state instead (same pattern as OnComposerKeyDown).
             // When the user holds Ctrl, fall back to the old ContentDialog for now.
             // (We keep both code paths for a smooth transition.)
             bool useDialog = false;
             try
             {
-                if (e is KeyRoutedEventArgs keyArgs)
-                {
-                    useDialog = keyArgs.Key == Windows.System.VirtualKey.Control;
-                }
+                var controlState = InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
+                useDialog = controlState.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             }
             catch { }
 

@@ -2818,6 +2818,10 @@ fn main() {
     };
     vaultpilot_lib::startup_stats::record_startup_phase(&mut startup_timer, "storage_open");
 
+    // #3928: warn when the vault lives on a cloud-synced folder or a network
+    // drive (multi-device concurrent-write conflicts / unreliable file locks).
+    vaultpilot_lib::vault_location::warn_if_risky_location(context.vault_dir());
+
     if let Some((host, port, token)) = serve_target {
         maybe_show_startup_stats(&startup_timer);
         if let Err(err) = runtime.block_on(run_http_bridge(context, host, port, token)) {

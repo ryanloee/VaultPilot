@@ -190,6 +190,10 @@ fn main() {
     };
     startup_timer.checkpoint("storage_open");
 
+    // #3928: warn when the vault lives on a cloud-synced folder or a network
+    // drive (multi-device concurrent-write conflicts / unreliable file locks).
+    vaultpilot_lib::vault_location::warn_if_risky_location(context.vault_dir());
+
     const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
     /// Maximum bytes allowed for a single JSON-RPC line on stdin.
     /// Prevents OOM from a malicious or buggy client sending an

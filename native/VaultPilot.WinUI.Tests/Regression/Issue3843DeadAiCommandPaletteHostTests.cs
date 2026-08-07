@@ -1,3 +1,5 @@
+using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace VaultPilot.WinUI.Tests.Regression;
@@ -56,5 +58,16 @@ public class Issue3843DeadAiCommandPaletteHostTests
         // The live accelerator hooking OnAiCommandPaletteAccelerator is the
         // actual palette implementation — it must remain.
         Assert.Contains("OnAiCommandPaletteAccelerator", xaml);
+    }
+
+    private static string ResolveSourcePath(string projectName, string relativePath)
+    {
+        var baseDir = AppContext.BaseDirectory;
+        var dir = new DirectoryInfo(baseDir);
+        while (dir is not null && !dir.GetFiles("*.sln").Any())
+            dir = dir.Parent;
+        if (dir is null)
+            return string.Empty;
+        return Path.Combine(dir.FullName, projectName, relativePath);
     }
 }

@@ -65,8 +65,8 @@ public static class NoteRefs
     /// Boundary checks prevent matching inside Latin words (e.g. "React" != "Reactor").
     ///
     /// Performance (#3581): Sorted title list is cached at the static level and
-    /// rebuilt only when titleMap reference changes. Short texts (&lt;4 chars) also
-    /// skip the scan entirely since no meaningful title can match.
+    /// rebuilt only when titleMap reference changes. Short texts (&lt;2 chars) also
+    /// skip the scan entirely since the shortest cached title is 2 chars (#3932).
     /// </summary>
     /// <param name="text">Raw text to scan</param>
     /// <param name="titleMap">title -> noteId dictionary (from LoadNoteTitleMapAsync)</param>
@@ -77,9 +77,11 @@ public static class NoteRefs
         if (titleMap is null || titleMap.Count == 0 || string.IsNullOrEmpty(text))
             return refs;
 
-        // #3581: Very short text can't match any meaningful title. Avoid the
-        // cost of building lowerText + scanning through all titles.
-        if (text.Length < 4)
+        // #3581: The cache filter below keeps titles with t.Length >= 2, so a
+        // 1-char text can never contain a title — skipping it is still a valid
+        // optimization. 2-3 char texts must be scanned though: a 2-char title
+        // (e.g. "AI") can match inside 3 chars of text (#3932).
+        if (text.Length < 2)
             return refs;
 
         var lowerText = text.ToLowerInvariant();
@@ -115,9 +117,14 @@ public static class NoteRefs
                 // in the middle of a Latin word (e.g. "React" in "Reactor" -> no match).
                 // For non-ASCII (CJK etc.) titles, boundary check is relaxed because
                 // CJK characters don't form compound words like Latin does.
+                // #3932: idx comes from lowerText (the ToLowerInvariant copy), so
+                // read boundary chars from lowerText too and use the lowercased
+                // title length for the after-position. Some Unicode chars expand
+                // on lowercasing (e.g. U+0130 'İ' -> "i̇"), which would misalign
+                // indices against the original text.
                 var isAsciiOnly = title.All(c => c <= 0x7f);
-                var afterIdx = idx + title.Length;
-                var afterChar = afterIdx < text.Length ? text[afterIdx] : ' ';
+                var afterIdx = idx + lowerTitle.Length;
+                var afterChar = afterIdx < lowerText.Length ? lowerText[afterIdx] : ' ';
                 var validAfter = !isAsciiOnly || (!char.IsLetterOrDigit(afterChar) && afterChar != '_');
                 if (!validAfter)
                 {
@@ -125,7 +132,7 @@ public static class NoteRefs
                     continue;
                 }
                 var beforeIdx = idx - 1;
-                var beforeChar = beforeIdx >= 0 ? text[beforeIdx] : ' ';
+                var beforeChar = beforeIdx >= 0 ? lowerText[beforeIdx] : ' ';
                 var validBefore = !isAsciiOnly || (!char.IsLetterOrDigit(beforeChar) && beforeChar != '_');
                 if (!validBefore)
                 {

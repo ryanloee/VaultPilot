@@ -404,10 +404,5 @@
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />
 
-        <!-- AI Command Palette overlay (Phase 2 of #2188) — hidden by default -->
-        <Grid
-            x:Name="AiCommandPaletteHost"
-            Visibility="Collapsed"
-            IsHitTestVisible="False" />
-    </Grid>
+        </Grid>
 </Window>

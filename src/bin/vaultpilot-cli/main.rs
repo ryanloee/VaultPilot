@@ -4171,6 +4171,29 @@ async fn handle_uri(
             let saved = save_note_with_context(context, note)?;
             to_json(&saved)?
         }
+        DeepLinkAction::DeleteNote { note_id, .. } => {
+            // #3964 — symbolic note/delete route (also the MCP/HTTP mapping
+            // target). Requires an explicit id.
+            let id = note_id.clone().ok_or_else(|| {
+                anyhow::anyhow!("delete deep link requires a note id (?id= or /<id>)")
+            })?;
+            handle_notes(
+                context,
+                &NotesActions::Delete {
+                    id,
+                    purge_attachments: false,
+                    keep_attachments: false,
+                },
+            )?
+        }
+        DeepLinkAction::EditNote { .. } => {
+            // No content is carried in the URI itself; destructive rewrites
+            // are only meaningful through the editor/MCP. Refuse loudly.
+            bail!("note/edit deep links carry no content and are not executable from the CLI")
+        }
+        DeepLinkAction::BulkNoteOp { op, .. } => {
+            bail!("note/bulk deep link op '{op}' is not executable from the CLI")
+        }
         DeepLinkAction::Unknown { .. } => unreachable!("handled above"),
     };
 

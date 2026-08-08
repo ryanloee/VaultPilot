@@ -53,7 +53,6 @@ public sealed partial class NotesView : UserControl
         RelatedNotesList.SelectionChanged += OnRelatedNoteSelectionChanged;
         HistoryButton.Click += OnHistoryClicked;
         Loaded += OnLoaded;
-        IsVisibleChanged += OnIsVisibleChanged;
 
         // Register Ctrl+C / Ctrl+V keyboard shortcuts on the NotesList (#3094)
         NotesList.KeyDown += OnNotesListKeyDown;
@@ -61,23 +60,23 @@ public sealed partial class NotesView : UserControl
         UpdatePasteButtonState();
     }
 
+    /// <summary>
+    /// #3885/#4001: MainWindow keeps this control cached inside NotesViewHost
+    /// and switches views by toggling the host's Visibility. WinUI 3
+    /// (Windows App SDK 1.6) has no IsVisible/IsVisibleChanged (UWP-1809-only
+    /// APIs), so MainWindow — the only component that toggles the host —
+    /// notifies this view directly. In-flight refresh timeouts while the user
+    /// is away are suppressed by the catch filter in RefreshNotesAsync (#3871).
+    /// </summary>
+    public void SetNavigatingAway(bool away)
+    {
+        _isNavigatingAway = away;
+    }
+
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         try { await RefreshNotesAsync(); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[NotesView] OnLoaded error: {ex.Message}"); }
-    }
-
-    /// <summary>
-    /// #3885: MainWindow keeps this control cached inside NotesViewHost and
-    /// switches views by toggling its Visibility, so Loaded/Unloaded only fire
-    /// at first add/teardown — IsVisibleChanged fires on every view switch.
-    /// Track effective visibility so intentional navigation-away cancellations
-    /// are suppressed by the catch filter in RefreshNotesAsync (#3871).
-    /// </summary>
-    private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
-    {
-        // Away (host collapsed) → true; back (host shown) → false.
-        _isNavigatingAway = !IsVisible;
     }
 
     /// <summary>

@@ -963,6 +963,58 @@ public sealed class BackendClient : IAsyncDisposable
         return await SendAsync<StartupStatsResponse>("startupStats", new { }, token);
     }
 
+    // ─── File Recovery methods (#3960) ────────────────────────────
+    // Crash-recovery snapshots (vault-EXTERNAL, src/recovery.rs) — distinct
+    // from the in-vault note version snapshots of #2855 (listSnapshots /
+    // getSnapshot / restoreSnapshot). These helpers talk to the agent's
+    // recoveryList / recoveryShow / recoveryRestore / recoveryDelete
+    // JSON-RPC methods; see src/bin/vaultpilot-agent.rs for the dispatch.
+
+    /// <summary>
+    /// List crash-recovery snapshots via the backend's <c>recoveryList</c>
+    /// JSON-RPC method (issue #3960). Cheap list form — no content field.
+    /// When <paramref name="notePath"/> is null all snapshots are returned;
+    /// otherwise only snapshots for that vault-relative note path.
+    /// </summary>
+    public async Task<IReadOnlyList<RecoverySnapshotInfo>> RecoveryListAsync(
+        string? notePath = null,
+        CancellationToken token = default)
+    {
+        // A null notePath is omitted by the client's WhenWritingNull policy,
+        // so the wire params become { } — exactly the contract's "all" form.
+        return await SendAsync<IReadOnlyList<RecoverySnapshotInfo>>(
+            "recoveryList", new { notePath }, token)
+            ?? Array.Empty<RecoverySnapshotInfo>();
+    }
+
+    /// <summary>
+    /// Fetch the full content of a crash-recovery snapshot via the backend's
+    /// <c>recoveryShow</c> JSON-RPC method (issue #3960).
+    /// </summary>
+    public async Task<RecoverySnapshotDetail?> RecoveryShowAsync(string id, CancellationToken token = default)
+    {
+        return await SendAsync<RecoverySnapshotDetail>("recoveryShow", new { id }, token);
+    }
+
+    /// <summary>
+    /// Restore a crash-recovery snapshot back into the vault at its original
+    /// note path via the backend's <c>recoveryRestore</c> JSON-RPC method
+    /// (issue #3960).
+    /// </summary>
+    public async Task<RecoveryRestoreResult?> RecoveryRestoreAsync(string id, CancellationToken token = default)
+    {
+        return await SendAsync<RecoveryRestoreResult>("recoveryRestore", new { id }, token);
+    }
+
+    /// <summary>
+    /// Delete a crash-recovery snapshot via the backend's <c>recoveryDelete</c>
+    /// JSON-RPC method (issue #3960).
+    /// </summary>
+    public async Task<RecoveryDeleteResult?> RecoveryDeleteAsync(string id, CancellationToken token = default)
+    {
+        return await SendAsync<RecoveryDeleteResult>("recoveryDelete", new { id }, token);
+    }
+
     private async Task PumpStderrAsync(CancellationToken token)
     {
         var process = Volatile.Read(ref _process);

@@ -82,12 +82,23 @@ public partial class App : Application
             _window?.ShowStartupStatsDialog();
         };
 
+        // #3960: file recovery dialog — browses, previews, and restores
+        // vault-external crash-recovery snapshots (src/recovery.rs) via the
+        // recoveryList / recoveryShow / recoveryRestore / recoveryDelete
+        // IPC methods.
+        var recoveryItem = new MenuFlyoutItem { Text = "文件恢复…" };
+        recoveryItem.Click += (_, _) =>
+        {
+            ShowMainWindow();
+            _window?.ShowFileRecoveryDialog();
+        };
+
         var exitItem = new MenuFlyoutItem { Text = "退出" };
         exitItem.Click += (_, _) => ExitApplication();
 
         _trayIcon.ContextFlyout = new MenuFlyout
         {
-            Items = { showItem, statsItem, new MenuFlyoutSeparator(), exitItem },
+            Items = { showItem, statsItem, recoveryItem, new MenuFlyoutSeparator(), exitItem },
         };
 
         _trayIcon.ForceCreate();

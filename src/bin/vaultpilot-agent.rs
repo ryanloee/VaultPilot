@@ -560,6 +560,26 @@ async fn handle_request(
                 restore_snapshot_async(context, &params.note_id, &params.snapshot_id).await,
             )
         }
+        // ── File Recovery (vault-external crash snapshots, #3960) ─────
+        // Backed by vaultpilot_lib::recovery (unsaved edit buffers stored
+        // OUTSIDE the vault). Distinct from listSnapshots/getSnapshot/
+        // restoreSnapshot which operate on in-vault version history (#2855).
+        "recoveryList" => {
+            let params: RecoveryListParams = parse_params(&request.params)?;
+            serialize_result(recovery_list_async(context, params.note_path.as_deref()).await)
+        }
+        "recoveryShow" => {
+            let params: IdParams = parse_params(&request.params)?;
+            serialize_result(recovery_show_async(context, &params.id).await)
+        }
+        "recoveryRestore" => {
+            let params: IdParams = parse_params(&request.params)?;
+            serialize_result(recovery_restore_async(context, &params.id).await)
+        }
+        "recoveryDelete" => {
+            let params: IdParams = parse_params(&request.params)?;
+            serialize_result(recovery_delete_async(context, &params.id).await)
+        }
         "diffSnapshot" => {
             let params: DiffSnapshotParams = parse_params(&request.params)?;
             // Load the snapshot to get its body, and load the current note to compare.
@@ -1457,6 +1477,71 @@ where
         })
 }
 
+// ── File Recovery handlers (#3960) ─────────────────────────────
+// Crash-recovery snapshots live OUTSIDE the vault (vaultpilot_lib::recovery),
+// so the WinUI File Recovery dialog talks to them through these JSON-RPC
+// methods instead of the in-vault snapshot layer (#2855).
+
+async fn recovery_list_async(
+    context: &StorageContext,
+    note_path: Option<&str>,
+) -> anyhow::Result<Value> {
+    use vaultpilot_lib::recovery::list_recovery_snapshots;
+    let snaps = list_recovery_snapshots(context.vault_dir(), note_path)?;
+    // Cheap list: omit the full content field.
+    let items: Vec<Value> = snaps
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "notePath": s.note_path,
+                "title": s.title,
+                "contentSize": s.content_size,
+                "createdAt": s.created_at,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_value(items)?)
+}
+
+async fn recovery_show_async(context: &StorageContext, id: &str) -> anyhow::Result<Value> {
+    use vaultpilot_lib::recovery::get_recovery_snapshot;
+    let snap = get_recovery_snapshot(context.vault_dir(), id)?
+        .ok_or_else(|| anyhow::anyhow!("recovery snapshot '{id}' not found"))?;
+    Ok(serde_json::json!({
+        "id": snap.id,
+        "notePath": snap.note_path,
+        "title": snap.title,
+        "content": snap.content,
+        "contentSize": snap.content_size,
+        "createdAt": snap.created_at,
+    }))
+}
+
+async fn recovery_restore_async(context: &StorageContext, id: &str) -> anyhow::Result<Value> {
+    use vaultpilot_lib::recovery::get_recovery_snapshot;
+    let snap = get_recovery_snapshot(context.vault_dir(), id)?
+        .ok_or_else(|| anyhow::anyhow!("recovery snapshot '{id}' not found"))?;
+    // Write the recovered buffer back into the vault at its original
+    // vault-relative path (mirrors `vp recovery restore <id>` semantics).
+    let target = context.vault_dir().join(&snap.note_path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&target, &snap.content)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "notePath": snap.note_path,
+        "bytesWritten": snap.content_size,
+    }))
+}
+
+async fn recovery_delete_async(context: &StorageContext, id: &str) -> anyhow::Result<Value> {
+    use vaultpilot_lib::recovery::delete_recovery_snapshot;
+    let removed = delete_recovery_snapshot(context.vault_dir(), id)?;
+    Ok(serde_json::json!({ "ok": removed }))
+}
+
 /// Waits for a write-approval decision from the UI. Returns `false`
 /// (deny the write) if the approval sender disconnects OR if the agent
 /// process is shutting down after stdin EOF. The shutdown check matters
@@ -1904,6 +1989,16 @@ struct RespondToPlanApprovalParams {
 #[serde(rename_all = "camelCase")]
 struct ListSnapshotsParams {
     note_id: String,
+}
+
+// ── File Recovery params (#3960) ───────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryListParams {
+    /// Optional vault-relative note path filter (snapshots for one file).
+    #[serde(default)]
+    note_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -576,6 +576,13 @@ async fn handle_request(
             let params: IdParams = parse_params(&request.params)?;
             serialize_result(recovery_restore_async(context, &params.id).await)
         }
+        "recoverySave" => {
+            let params: RecoverySaveParams = parse_params(&request.params)?;
+            serialize_result(
+                recovery_save_async(context, &params.note_path, &params.title, &params.content)
+                    .await,
+            )
+        }
         "recoveryDelete" => {
             let params: IdParams = parse_params(&request.params)?;
             serialize_result(recovery_delete_async(context, &params.id).await)
@@ -1519,12 +1526,14 @@ async fn recovery_show_async(context: &StorageContext, id: &str) -> anyhow::Resu
 }
 
 async fn recovery_restore_async(context: &StorageContext, id: &str) -> anyhow::Result<Value> {
-    use vaultpilot_lib::recovery::get_recovery_snapshot;
+    use vaultpilot_lib::recovery::{get_recovery_snapshot, recovery_target_path};
     let snap = get_recovery_snapshot(context.vault_dir(), id)?
         .ok_or_else(|| anyhow::anyhow!("recovery snapshot '{id}' not found"))?;
-    // Write the recovered buffer back into the vault at its original
-    // vault-relative path (mirrors `vp recovery restore <id>` semantics).
-    let target = context.vault_dir().join(&snap.note_path);
+    // The snapshot DB lives OUTSIDE the vault, so note_path must never be
+    // trusted: resolve the write target through the containment check which
+    // refuses absolute paths, `..` traversal and symlink escapes that would
+    // write outside the vault (#3984).
+    let target = recovery_target_path(context.vault_dir(), &snap.note_path)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1540,6 +1549,32 @@ async fn recovery_delete_async(context: &StorageContext, id: &str) -> anyhow::Re
     use vaultpilot_lib::recovery::delete_recovery_snapshot;
     let removed = delete_recovery_snapshot(context.vault_dir(), id)?;
     Ok(serde_json::json!({ "ok": removed }))
+}
+
+/// `recoverySave` — the *write* side of the File Recovery chain (#3982).
+///
+/// #3960 shipped the read side (list/show/restore/delete) plus a WinUI
+/// dialog, but `save_recovery_snapshot` had no production caller, so the
+/// recovery store was always empty and the whole File Recovery UX faced an
+/// empty table. The frontend's unsaved-edit-buffer timer calls this method
+/// (notePath + title + content) to persist a crash-*recovery** snapshot
+/// OUTSIDE the vault. `note_path` passes through the same vault-relative
+/// containment check as restore (#3984), so `../` or absolute paths are
+/// refused here too.
+async fn recovery_save_async(
+    context: &StorageContext,
+    note_path: &str,
+    title: &str,
+    content: &str,
+) -> anyhow::Result<Value> {
+    use vaultpilot_lib::recovery::{save_recovery_snapshot, validate_recovery_note_path};
+    validate_recovery_note_path(note_path)?;
+    let snap = save_recovery_snapshot(context.vault_dir(), note_path, title, content)?;
+    Ok(serde_json::json!({
+        "id": snap.id,
+        "notePath": snap.note_path,
+        "createdAt": snap.created_at,
+    }))
 }
 
 /// Waits for a write-approval decision from the UI. Returns `false`
@@ -2003,6 +2038,18 @@ struct RecoveryListParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RecoverySaveParams {
+    /// Vault-relative note path the buffer belongs to (e.g. `inbox/draft.md`).
+    note_path: String,
+    /// Best-effort display title for the snapshot.
+    #[serde(default)]
+    title: String,
+    /// The unsaved edit buffer content to snapshot (#3960, #3982).
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GetSnapshotParams {
     snapshot_id: String,
 }
@@ -2103,6 +2150,72 @@ mod tests {
         assert!(serialized.contains("\"id\":\"req-002\""));
         assert!(serialized.contains("\"error\""));
         assert!(!serialized.contains("\"result\""));
+    }
+
+    // ── Regression: #3982 recoverySave write-path ─────────────────────────
+
+    #[test]
+    fn recovery_save_params_deserialize_from_json() {
+        // The write-side RPC (#3982): frontend edit-buffer timer issues
+        // recoverySave with vault-relative notePath + title + content.
+        let json = json!({
+            "notePath": "inbox/draft.md",
+            "title": "Draft",
+            "content": "# hello\n"
+        });
+        let params: RecoverySaveParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.note_path, "inbox/draft.md");
+        assert_eq!(params.title, "Draft");
+        assert_eq!(params.content, "# hello\n");
+    }
+
+    #[test]
+    fn recovery_save_params_title_is_optional() {
+        let json = json!({
+            "notePath": "inbox/draft.md",
+            "content": "body"
+        });
+        let params: RecoverySaveParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.title, "", "title defaults to empty");
+    }
+
+    #[test]
+    fn recovery_save_valid_path_records_snapshot() {
+        // #3982: the write path must persist a snapshot for a well-formed
+        // vault-relative path so `vp recovery list` / WinUI File Recovery have
+        // data to show.
+        use vaultpilot_lib::recovery::{list_recovery_snapshots, save_recovery_snapshot};
+
+        let vault = std::env::temp_dir().join(format!(
+            "vp-recovery-save-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let saved = save_recovery_snapshot(&vault, "inbox/draft.md", "Draft", "# hello\n")
+            .expect("save snapshot");
+        assert!(!saved.id.is_empty());
+        let list = list_recovery_snapshots(&vault, None).expect("list snapshots");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].note_path, "inbox/draft.md");
+        assert_eq!(list[0].title, "Draft");
+        assert_eq!(list[0].content_size, 8);
+    }
+
+    #[test]
+    fn recovery_save_rejects_escaping_note_path() {
+        // #3982 + #3984: the write side must enforce the same vault-relative
+        // boundary as restore, so a tampered or buggy caller cannot record
+        // snapshots that would later be restored outside the vault. The agent
+        // RPC asserts `validate_recovery_note_path` on the raw param; the
+        // lib-level function is available through vaultpilot_lib.
+        use vaultpilot_lib::recovery::validate_recovery_note_path;
+        assert!(
+            validate_recovery_note_path("../../../etc/pwned").is_err(),
+            "recoverySave must refuse a path that escapes the vault"
+        );
+        assert!(validate_recovery_note_path("inbox/draft.md").is_ok());
     }
 
     // ── Regression: #3910 startupStats method ───────────────────────────

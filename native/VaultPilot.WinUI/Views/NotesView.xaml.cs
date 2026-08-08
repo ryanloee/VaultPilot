@@ -53,6 +53,7 @@ public sealed partial class NotesView : UserControl
         RelatedNotesList.SelectionChanged += OnRelatedNoteSelectionChanged;
         HistoryButton.Click += OnHistoryClicked;
         Loaded += OnLoaded;
+        IsVisibleChanged += OnIsVisibleChanged;
 
         // Register Ctrl+C / Ctrl+V keyboard shortcuts on the NotesList (#3094)
         NotesList.KeyDown += OnNotesListKeyDown;
@@ -64,6 +65,19 @@ public sealed partial class NotesView : UserControl
     {
         try { await RefreshNotesAsync(); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[NotesView] OnLoaded error: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// #3885: MainWindow keeps this control cached inside NotesViewHost and
+    /// switches views by toggling its Visibility, so Loaded/Unloaded only fire
+    /// at first add/teardown — IsVisibleChanged fires on every view switch.
+    /// Track effective visibility so intentional navigation-away cancellations
+    /// are suppressed by the catch filter in RefreshNotesAsync (#3871).
+    /// </summary>
+    private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        // Away (host collapsed) → true; back (host shown) → false.
+        _isNavigatingAway = !IsVisible;
     }
 
     /// <summary>

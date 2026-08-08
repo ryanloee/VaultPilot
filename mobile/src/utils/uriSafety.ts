@@ -2,6 +2,14 @@
  * vaultpilot:// URI safety helpers — TypeScript mirror of the Rust backend's
  * classify_uri_action_risk (src/deep_link.rs) for issue #3964.
  *
+ * ⚠️ MIRROR CONSTRAINT (#3964/#3995): this file must stay in sync with
+ * `src/deep_link.rs` — `classify_uri_action_risk`, `parse_deep_link`
+ * (route table, case-insensitivity #3734) and `TrustedAppRegistry::is_trusted`
+ * (lowercase comparison). When the Rust side changes any of those, update the
+ * corresponding TS logic here (and vice versa). See deep_link.rs
+ * `classify_uri_action_risk` (~line 432) and `automation_tool_gate`
+ * (~line 700) for the authoritative classification.
+ *
  * The mobile app gates risky deep links behind an explicit Alert confirmation
  * before they are dispatched to React Navigation. These helpers are pure
  * functions (no react-native imports) so they can be unit-tested in Jest
@@ -20,13 +28,16 @@ export interface UriSafetyEvaluation {
   reason: string;
 }
 
-/** Known vaultpilot:// routes (mirrors the React Navigation linking config). */
+/** Known vaultpilot:// routes (mirrors the Rust DeepLinkAction routes). */
 export type VaultUriRoute =
   | 'chat'
   | 'chat/new'
   | 'chat/sessions'
   | 'note'
   | 'note/new'
+  | 'note/delete'
+  | 'note/edit'
+  | 'note/bulk'
   | 'note/:id'
   | 'search'
   | 'settings'
@@ -43,8 +54,13 @@ export interface ParsedVaultUri {
   overwrite?: boolean;
 }
 
-/** Values treated as falsy for the overwrite query flag. */
-const FALSY_FLAG_VALUES = new Set(['', 'false', '0', 'no', 'off']);
+/**
+ * Values treated as TRUTHY for the overwrite query flag — mirrors Rust's
+ * `flag("overwrite")` in deep_link.rs: truthy = {1, true, yes, on}, anything
+ * else is falsy (#3995; previously this was an inverted falsy-set which
+ * disagreed on values like `overwrite=2`).
+ */
+const TRUTHY_FLAG_VALUES = new Set(['1', 'true', 'yes', 'on']);
 
 /**
  * Split a raw URI into scheme, path and query params without throwing on
@@ -94,56 +110,90 @@ function parseVaultUri(uri: string): { path: string; params: Record<string, stri
 /** True when the overwrite query flag value should be treated as truthy. */
 function isTruthyFlag(value: string | undefined): boolean {
   if (value === undefined) return false;
-  return !FALSY_FLAG_VALUES.has(value.trim().toLowerCase());
+  return TRUTHY_FLAG_VALUES.has(value.trim().toLowerCase());
 }
 
 /**
  * Parse a vaultpilot:// URI into a route descriptor. Unknown/malformed URIs
  * map to route 'unknown' (never throws).
+ *
+ * Mirrors `parse_deep_link` (deep_link.rs ~line 194): route keywords are
+ * matched case-insensitively (#3734/#3995), note ids keep their original
+ * case, and `note/open/<id>` is an alias for `note/<id>` (OpenNote).
  */
 export function parseVaultPilotUri(uri: string): ParsedVaultUri {
   const parsed = parseVaultUri(uri);
   if (!parsed) return { route: 'unknown' };
-  switch (parsed.path) {
+
+  const segments = parsed.path.split('/');
+  const lower = segments.map((s) => s.toLowerCase());
+  const [head, second] = lower;
+
+  switch (head) {
     case 'chat':
-    case 'chat/new':
-    case 'chat/sessions':
+      if (second === 'new') return { route: 'chat/new' };
+      if (second === 'sessions') return { route: 'chat/sessions' };
+      if (segments.length === 1) return { route: 'chat' };
+      break;
     case 'note':
-    case 'note/new':
+      if (segments.length === 1) return { route: 'note' };
+      if (second === 'new') {
+        return {
+          route: 'note/new',
+          overwrite:
+            parsed.params['overwrite'] !== undefined
+              ? isTruthyFlag(parsed.params['overwrite'])
+              : undefined,
+        };
+      }
+      // Destructive / bulk routes — Rust classifies DeleteNote / EditNote /
+      // BulkNoteOp as HIGH (#3964/#3995). Matched before the note/:id fallback
+      // so `note/delete` is never treated as "open the note named delete".
+      if (second === 'delete') return { route: 'note/delete' };
+      if (second === 'edit') return { route: 'note/edit' };
+      if (second === 'bulk') return { route: 'note/bulk' };
+      // note/open/<id> is an explicit alias for note/<id> (Rust OpenNote).
+      if (second === 'open' && segments.length === 3 && segments[2]) {
+        return { route: 'note/:id', noteId: segments[2] };
+      }
+      // note/<id> → open existing note (id keeps original case).
+      if (segments.length === 2 && segments[1]) {
+        return { route: 'note/:id', noteId: segments[1] };
+      }
+      break;
     case 'search':
+      if (segments.length === 1) return { route: 'search' };
+      break;
     case 'settings':
-      return {
-        route: parsed.path,
-        overwrite:
-          parsed.path === 'note/new' && parsed.params['overwrite'] !== undefined
-            ? isTruthyFlag(parsed.params['overwrite'])
-            : undefined,
-      };
+      if (segments.length === 1) return { route: 'settings' };
+      break;
     default:
       break;
-  }
-  // note/:id → open existing note
-  if (parsed.path.startsWith('note/')) {
-    const id = parsed.path.slice('note/'.length);
-    if (id && !id.includes('/')) return { route: 'note/:id', noteId: id };
   }
   return { route: 'unknown' };
 }
 
 /**
  * Classify the risk of a vaultpilot:// URI (mirror of Rust
- * classify_uri_action_risk):
+ * classify_uri_action_risk, deep_link.rs ~line 432):
  *   - vaultpilot://chat/new            → HIGH (AI chat may trigger agent tools)
  *   - vaultpilot://note/new?overwrite  → HIGH (irreversible overwrite)
+ *   - vaultpilot://note/delete         → HIGH (irreversible delete, #3964/#3995)
+ *   - vaultpilot://note/edit           → HIGH (destructive rewrite, #3964/#3995)
+ *   - vaultpilot://note/bulk           → HIGH (bulk destructive op, #3964/#3995)
  *   - vaultpilot://note/new            → MEDIUM (creates a note)
  *   - vaultpilot://note/:id            → LOW (opens existing note)
  *   - vaultpilot://search|settings     → LOW
- *   - unknown/unparseable routes      → LOW (they simply fail navigation)
+ *   - unknown/unparseable routes      → MEDIUM (Rust: Unknown → Medium,
+ *                                        "be conservative", #3995)
  */
 export function classifyUriActionRisk(uri: string): UriActionRisk {
   const parsed = parseVaultPilotUri(uri);
   switch (parsed.route) {
     case 'chat/new':
+    case 'note/delete':
+    case 'note/edit':
+    case 'note/bulk':
       return 'high';
     case 'note/new':
       return parsed.overwrite ? 'high' : 'medium';
@@ -155,7 +205,8 @@ export function classifyUriActionRisk(uri: string): UriActionRisk {
     case 'settings':
       return 'low';
     default:
-      return 'low';
+      // Unknown routes: conservative Medium — mirrors Rust's Unknown → Medium.
+      return 'medium';
   }
 }
 
@@ -172,8 +223,8 @@ export function extractSource(uri: string): string {
 }
 
 const REASONS: Record<UriActionRisk, string> = {
-  high: '此链接将执行高风险操作：启动 AI 对话（可能触发代理工具执行）或覆盖笔记内容，且无法撤销。',
-  medium: '此链接将创建一个新笔记。',
+  high: '此链接将执行高风险操作：启动 AI 对话（可能触发代理工具执行）、删除/覆盖笔记或执行批量操作，且无法撤销。',
+  medium: '此链接将执行中风险操作（例如创建新笔记或无法识别的路由）。',
   low: '低风险操作：打开已有内容或跳转页面。',
 };
 
@@ -183,6 +234,9 @@ const REASONS: Record<UriActionRisk, string> = {
  *             (mirrors Obsidian's high-risk-always-confirm policy)
  *   - MEDIUM→ needsConfirmation unless the x-source is in trustedSources
  *   - LOW   → never needs confirmation
+ *
+ * Trusted-source comparison is case-insensitive, mirroring Rust
+ * `TrustedAppRegistry::is_trusted` which lowercases both sides (#3995).
  */
 export function evaluateUriSafety(uri: string, trustedSources: string[]): UriSafetyEvaluation {
   const risk = classifyUriActionRisk(uri);
@@ -192,7 +246,10 @@ export function evaluateUriSafety(uri: string, trustedSources: string[]): UriSaf
     return { risk, needsConfirmation: true, reason: REASONS.high };
   }
   if (risk === 'medium') {
-    const trusted = source !== '' && trustedSources.includes(source);
+    const sourceLower = source.toLowerCase();
+    const trusted =
+      source !== '' &&
+      trustedSources.some((s) => s.trim().toLowerCase() === sourceLower);
     return { risk, needsConfirmation: !trusted, reason: REASONS.medium };
   }
   return { risk, needsConfirmation: false, reason: REASONS.low };

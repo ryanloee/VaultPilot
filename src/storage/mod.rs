@@ -171,7 +171,7 @@ pub use projects::{
 ///
 /// Uses a random UUID suffix for the temp file to prevent concurrent writers
 /// from racing on the same deterministic temp filename.
-pub(super) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
 
     let tmp_name = format!(

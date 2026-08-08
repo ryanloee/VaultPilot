@@ -4063,6 +4063,23 @@ async fn run_synthesize_notes(
     }))
 }
 
+/// #3983 — format an `x-error:` deep-link callback diagnostic line.
+///
+/// x-callback lines are *diagnostics*: the result of a `uri` command is the
+/// JSON printed on stdout by the caller, so emitting these from `println!`
+/// polluted stdout and broke `vaultpilot-cli uri ... | jq`. They are routed
+/// to stderr via `eprintln!` in `handle_uri`; this pure fn pins the exact
+/// format. Keep the format string here so a regression test can lock it.
+fn x_error_line(url: &str) -> String {
+    format!("x-error: {url}")
+}
+
+/// #3983 — format an `x-success:` deep-link callback diagnostic line.
+/// See `x_error_line` for why this is a stderr diagnostic, not stdout.
+fn x_success_line(url: &str) -> String {
+    format!("x-success: {url}")
+}
+
 async fn handle_uri(
     context: &StorageContext,
     uri: &str,
@@ -4081,7 +4098,9 @@ async fn handle_uri(
     // caller supplied one, then fail loudly so automation sees the failure.
     if matches!(action, DeepLinkAction::Unknown { .. }) {
         if let Some(err_url) = action.xcallback().x_error.as_deref() {
-            println!("x-error: {err_url}");
+            // #3983: x-callback lines are diagnostics — stderr only; stdout
+            // carries solely the command's result JSON.
+            eprintln!("{}", x_error_line(err_url));
         }
         bail!(
             "unknown vaultpilot:// route: {}",
@@ -4123,7 +4142,7 @@ async fn handle_uri(
 
     if !allowed {
         if let Some(err_url) = xcb.x_error.as_deref() {
-            println!("x-error: {err_url}");
+            eprintln!("{}", x_error_line(err_url));
         }
         bail!("declined deep link: {}", describe_uri_action(&action));
     }
@@ -4198,7 +4217,7 @@ async fn handle_uri(
     };
 
     if let Some(ok_url) = xcb.x_success.as_deref() {
-        println!("x-success: {ok_url}");
+        eprintln!("{}", x_success_line(ok_url));
     }
     Ok(result)
 }
@@ -10435,8 +10454,8 @@ mod tests {
     use crate::mcp_server::{escape_xml_content, sanitize_mcp_prompt_content};
     use crate::{
         append_capture_entry, delete_attachments_opt, format_as_kanban, parse_batch_selector,
-        render_daily_template, resolve_audio_input, BatchSelector, Cli, Commands,
-        SkillSavedActions,
+        render_daily_template, resolve_audio_input, x_error_line, x_success_line, BatchSelector,
+        Cli, Commands, SkillSavedActions,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use clap::Parser;
@@ -10457,6 +10476,32 @@ mod tests {
     fn delete_attachments_opt_absent_keeps_3139() {
         // Flag absent (false) -> Some(false): attachments must be KEPT.
         assert_eq!(delete_attachments_opt(false), Some(false));
+    }
+
+    // ── x-success / x-error deep-link callbacks (#3983) ─────────────
+    // The `uri` command's formal result is a single JSON document written
+    // to stdout by the caller, so `x-success:` / `x-error:` lines MUST NOT
+    // be printed to stdout — that produced two stdout lines and broke
+    // `vaultpilot-cli uri ... | jq`. `handle_uri` therefore emits them via
+    // `eprintln!` (stderr), alongside the ✓/⚠ diagnostics. These helpers
+    // pin the exact callback format so the contract is regression-tested
+    // without spawning a subprocess. Keep `handle_uri`'s emission sites on
+    // `eprintln!` whenever touching this code.
+    #[test]
+    fn uri_x_callback_lines_are_stderr_diagnostics_3983() {
+        assert_eq!(
+            x_error_line("vaultpilot://cb/boom"),
+            "x-error: vaultpilot://cb/boom"
+        );
+        assert_eq!(
+            x_success_line("vaultpilot://cb/done"),
+            "x-success: vaultpilot://cb/done"
+        );
+        // URLs with query strings must pass through untouched
+        assert_eq!(
+            x_success_line("vaultpilot://cb?k=v&a=b"),
+            "x-success: vaultpilot://cb?k=v&a=b"
+        );
     }
 
     #[test]

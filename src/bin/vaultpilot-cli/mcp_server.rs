@@ -64,6 +64,9 @@ struct McpError {
 struct McpServerState {
     initialized: bool,
     protocol_version: String,
+    /// MCP client name from the `initialize` request's `clientInfo.name`
+    /// (used as the `source` for the #3964 URI safety gate).
+    client_name: String,
 }
 
 impl McpResponse {
@@ -171,6 +174,7 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
     let mut state = McpServerState {
         initialized: false,
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
+        client_name: String::new(),
     };
 
     let stdin = tokio::io::stdin();
@@ -363,6 +367,13 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                         state.initialized = true;
                         state.protocol_version =
                             negotiate_mcp_protocol_version(requested_version).to_string();
+                        state.client_name = request
+                            .params
+                            .get("clientInfo")
+                            .and_then(|ci| ci.get("name"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
                         Some(McpResponse::ok(
                             id,
                             serde_json::json!({
@@ -441,6 +452,7 @@ pub(super) async fn run_mcp_http_server(
         server_state: tokio::sync::RwLock::new(McpServerState {
             initialized: false,
             protocol_version: MCP_PROTOCOL_VERSION.to_string(),
+            client_name: String::new(),
         }),
         token,
         read_only,
@@ -531,6 +543,13 @@ async fn mcp_http_handler(
         server_state.initialized = true;
         server_state.protocol_version =
             negotiate_mcp_protocol_version(requested_version).to_string();
+        server_state.client_name = request
+            .params
+            .get("clientInfo")
+            .and_then(|ci| ci.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let protocol_version = server_state.protocol_version.clone();
         // Drop the lock before responding
         drop(server_state);
@@ -563,6 +582,7 @@ async fn mcp_http_handler(
         McpServerState {
             initialized: guard.initialized,
             protocol_version: guard.protocol_version.clone(),
+            client_name: guard.client_name.clone(),
         }
     };
 
@@ -728,6 +748,25 @@ async fn handle_mcp_request(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
+
+            // ── #3964 URI safety gate ────────────────────────────────────
+            // Headless entry points cannot present a confirmation dialog, so
+            // mutating/destructive tools are routed through the shared risk
+            // classifier: Low always allowed, Medium only from a trusted
+            // client, High always denied. `automation_tool_uri` returns None
+            // for read-only tools, which stay ungated.
+            if let Some(uri) = vaultpilot_lib::deep_link::automation_tool_uri(tool_name) {
+                use vaultpilot_lib::deep_link::{
+                    parse_deep_link, should_allow_non_interactive, TrustedAppRegistry,
+                };
+                let action = parse_deep_link(uri);
+                let trusted = TrustedAppRegistry::load(context.vault_dir());
+                if let Err(message) =
+                    should_allow_non_interactive(&action, &state.client_name, &trusted)
+                {
+                    return Some(McpResponse::error(id, -32000, message, None));
+                }
+            }
 
             let result = match tool_name {
                 "chat.send" => mcp_call_chat_send(context, arguments).await,

@@ -19,6 +19,9 @@
 //! |-------|--------|
 //! | `note/new[?params]` | Create a new note (+ optional content / clipboard) |
 //! | `note/<id>` / `note/open/<id>` | Open an existing note |
+//! | `note/delete[?id=<id>]` / `note/delete/<id>` | Delete a note (High risk) |
+//! | `note/edit[?id=<id>]` / `note/edit/<id>` | Destructively rewrite a note (High risk) |
+//! | `note/bulk?op=...` | Bulk destructive note operation (High risk) |
 //! | `daily` | Create or open today's daily note |
 //! | `chat/new` | Start a new chat session |
 //! | `search[?query=...]` | Open global search, optionally prefilled |
@@ -77,6 +80,32 @@ pub enum DeepLinkAction {
     },
     /// `vaultpilot://chat/new` — start a new chat session.
     NewChat {
+        #[serde(flatten)]
+        xcallback: XCallback,
+    },
+    /// `vaultpilot://note/delete[?id=<id>]` / `vaultpilot://note/delete/<id>` —
+    /// delete a note (irreversible). **High risk.** Headless entry points
+    /// (MCP server, HTTP bridge, #3964) map their delete tool here so the
+    /// shared risk classifier is the single source of truth.
+    DeleteNote {
+        /// Target note id (`id=` query param or path segment), when known.
+        note_id: Option<String>,
+        #[serde(flatten)]
+        xcallback: XCallback,
+    },
+    /// `vaultpilot://note/edit[?id=<id>]` / `vaultpilot://note/edit/<id>` —
+    /// destructively rewrite a note's content. **High risk.**
+    EditNote {
+        /// Target note id (`id=` query param or path segment), when known.
+        note_id: Option<String>,
+        #[serde(flatten)]
+        xcallback: XCallback,
+    },
+    /// `vaultpilot://note/bulk?op=delete|move|update_tags` — batch destructive
+    /// operation over multiple notes (bulk delete / move / retag). **High risk.**
+    BulkNoteOp {
+        /// The bulk operation name (`delete`, `move`, `update_tags`, ...).
+        op: String,
         #[serde(flatten)]
         xcallback: XCallback,
     },
@@ -193,12 +222,32 @@ pub fn parse_deep_link(uri: &str) -> DeepLinkAction {
 
     match lower_refs.as_slice() {
         ["note", "new"] => DeepLinkAction::NewNote { params, xcallback },
+        ["note", "delete"] => DeepLinkAction::DeleteNote {
+            note_id: parse_query_value(query, "id"),
+            xcallback,
+        },
+        ["note", "edit"] => DeepLinkAction::EditNote {
+            note_id: parse_query_value(query, "id"),
+            xcallback,
+        },
+        ["note", "bulk"] => DeepLinkAction::BulkNoteOp {
+            op: parse_query_value(query, "op").unwrap_or_default(),
+            xcallback,
+        },
         ["note", _] => DeepLinkAction::OpenNote {
             note_id: url_decode(segments[1]),
             xcallback,
         },
         ["note", "open", _] => DeepLinkAction::OpenNote {
             note_id: url_decode(segments[2]),
+            xcallback,
+        },
+        ["note", "delete", _] => DeepLinkAction::DeleteNote {
+            note_id: Some(url_decode(segments[2])),
+            xcallback,
+        },
+        ["note", "edit", _] => DeepLinkAction::EditNote {
+            note_id: Some(url_decode(segments[2])),
             xcallback,
         },
         ["daily"] => DeepLinkAction::Daily { xcallback },
@@ -232,6 +281,9 @@ impl DeepLinkAction {
             | DeepLinkAction::OpenNote { xcallback, .. }
             | DeepLinkAction::Daily { xcallback }
             | DeepLinkAction::NewChat { xcallback }
+            | DeepLinkAction::DeleteNote { xcallback, .. }
+            | DeepLinkAction::EditNote { xcallback, .. }
+            | DeepLinkAction::BulkNoteOp { xcallback, .. }
             | DeepLinkAction::Search { xcallback, .. }
             | DeepLinkAction::Settings { xcallback }
             | DeepLinkAction::Unknown { xcallback, .. } => xcallback,
@@ -397,6 +449,12 @@ pub fn classify_uri_action_risk(action: &DeepLinkAction) -> UriActionRisk {
         // Starting an AI chat may trigger agent tool execution → High.
         DeepLinkAction::NewChat { .. } => UriActionRisk::High,
 
+        // Deleting a note, destructively rewriting one, or running a bulk
+        // destructive operation is irreversible → High (#3964).
+        DeepLinkAction::DeleteNote { .. }
+        | DeepLinkAction::EditNote { .. }
+        | DeepLinkAction::BulkNoteOp { .. } => UriActionRisk::High,
+
         // Unknown route — be conservative: confirm (Medium).
         DeepLinkAction::Unknown { .. } => UriActionRisk::Medium,
     }
@@ -446,6 +504,17 @@ pub fn describe_uri_action(action: &DeepLinkAction) -> String {
         }
         DeepLinkAction::Daily { .. } => "Open today's daily note".to_string(),
         DeepLinkAction::NewChat { .. } => "Start a new AI chat session".to_string(),
+        DeepLinkAction::DeleteNote { note_id, .. } => match note_id.as_deref() {
+            Some(id) if !id.is_empty() => format!("Delete note '{id}'"),
+            _ => "Delete a note".to_string(),
+        },
+        DeepLinkAction::EditNote { note_id, .. } => match note_id.as_deref() {
+            Some(id) if !id.is_empty() => format!("Destructively rewrite note '{id}'"),
+            _ => "Destructively rewrite a note".to_string(),
+        },
+        DeepLinkAction::BulkNoteOp { op, .. } => {
+            format!("Run bulk note operation '{op}'")
+        }
         DeepLinkAction::Search { query, .. } => match query {
             Some(q) if !q.is_empty() => format!("Search vault for '{q}'"),
             _ => "Open search".to_string(),
@@ -571,6 +640,95 @@ pub fn should_confirm_uri_action(
             };
             UriConfirmationDecision::Confirm { message }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #3964 — non-interactive gate for headless automation entry points
+// ---------------------------------------------------------------------------
+
+/// Non-interactive risk gate for headless entry points (#3964).
+///
+/// The MCP server and the HTTP bridge cannot show a confirmation dialog, so
+/// they use this stricter variant of [`should_confirm_uri_action`]:
+///
+/// - **Low** risk actions: always allowed (read-only / navigational).
+/// - **Medium** risk actions: allowed only when `source` is a trusted app
+///   (see [`TrustedAppRegistry`]).
+/// - **High** risk actions: **always denied**, even for trusted apps — a
+///   headless server cannot present the confirmation dialog that high-risk
+///   actions require (mirrors the always-confirm policy for High risk).
+///
+/// Returns `Ok(())` when the action may proceed, or `Err(message)` with a
+/// human-readable explanation of the denial.
+///
+/// `source` is the calling app name (MCP `clientInfo.name`, HTTP
+/// `x-vaultpilot-source` header, x-callback `x-source`); an empty source is
+/// treated as untrusted.
+pub fn should_allow_non_interactive(
+    action: &DeepLinkAction,
+    source: &str,
+    trusted: &TrustedAppRegistry,
+) -> Result<(), String> {
+    let risk = classify_uri_action_risk(action);
+    let description = describe_uri_action(action);
+
+    match risk {
+        // Read-only actions are always safe to execute, even headless.
+        UriActionRisk::Low => Ok(()),
+        // Mutating but reversible, from a trusted app — allow.
+        UriActionRisk::Medium if trusted.is_trusted(source) => Ok(()),
+        UriActionRisk::Medium => {
+            let source_label = if source.trim().is_empty() {
+                "an external app".to_string()
+            } else {
+                source.to_string()
+            };
+            Err(format!(
+                "denied by vaultpilot URI safety gate: {description} — \
+                 {source_label} is not a trusted source, and headless entry \
+                 points cannot confirm medium-risk actions"
+            ))
+        }
+        // Destructive / potentially irreversible — always deny headless.
+        UriActionRisk::High => Err(format!(
+            "denied by vaultpilot URI safety gate: {description} — \
+             headless clients cannot confirm high-risk actions"
+        )),
+    }
+}
+
+/// Map a headless automation tool call to the `vaultpilot://` URI whose risk
+/// classification governs it (#3964).
+///
+/// The MCP server and the HTTP bridge gate their write/delete tools through
+/// this table so [`classify_uri_action_risk`] stays the single source of
+/// truth: each gated tool is parsed with [`parse_deep_link`] and evaluated
+/// with [`should_allow_non_interactive`].
+///
+/// Tools without a direct deep-link route map to the closest equivalent
+/// (`notes.delete` → `note/delete`, destructive edits → `note/edit`, bulk
+/// operations → `note/bulk?op=...`). Returns `None` for tools that are not
+/// gated (read-only / navigational operations).
+pub fn automation_tool_uri(tool: &str) -> Option<&'static str> {
+    match tool {
+        // Medium — creating notes (reversible).
+        "notes.create" | "http_create_note" | "http_clip_url" | "notes.import"
+        | "http_import_folder" => Some("vaultpilot://note/new"),
+        // High — deleting notes (irreversible).
+        "notes.delete" | "http_delete_note" | "http_bulk_delete_notes" => {
+            Some("vaultpilot://note/delete")
+        }
+        // High — destructive note rewrite.
+        "notes.preview_edit" | "notes.apply_edit" => Some("vaultpilot://note/edit"),
+        // High — starting an AI chat may execute agent tools.
+        "chat.new" => Some("vaultpilot://chat/new"),
+        // High — bulk destructive operations (move retargets files; retag
+        // rewrites note files via save_note, so both are irreversible-ish).
+        "http_bulk_move_notes" => Some("vaultpilot://note/bulk?op=move"),
+        "http_bulk_update_tags" => Some("vaultpilot://note/bulk?op=update_tags"),
+        // Not gated — read-only / navigational / non-vault tools.
+        _ => None,
     }
 }
 
@@ -1159,5 +1317,261 @@ mod tests {
         assert!(loaded.is_trusted("Alfred"));
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // #3964 — non-interactive gate for headless automation entry points
+    // ════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_3964_parse_delete_note_routes() {
+        // `vaultpilot://note/delete` (symbolic form used by the MCP/HTTP gate).
+        let action = parse_deep_link("vaultpilot://note/delete");
+        assert!(matches!(
+            action,
+            DeepLinkAction::DeleteNote { note_id: None, .. }
+        ));
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+
+        // Path-segment id form.
+        let action = parse_deep_link("vaultpilot://note/delete/abc-123");
+        assert!(matches!(
+            action,
+            DeepLinkAction::DeleteNote {
+                note_id: Some(ref id),
+                ..
+            } if id == "abc-123"
+        ));
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+
+        // Query-param id form.
+        let action = parse_deep_link("vaultpilot://note/delete?id=abc-123");
+        assert!(matches!(
+            action,
+            DeepLinkAction::DeleteNote {
+                note_id: Some(ref id),
+                ..
+            } if id == "abc-123"
+        ));
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+    }
+
+    #[test]
+    fn test_3964_parse_edit_note_routes() {
+        let action = parse_deep_link("vaultpilot://note/edit");
+        assert!(matches!(
+            action,
+            DeepLinkAction::EditNote { note_id: None, .. }
+        ));
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+
+        let action = parse_deep_link("vaultpilot://note/edit/my-note");
+        assert!(matches!(
+            action,
+            DeepLinkAction::EditNote {
+                note_id: Some(ref id),
+                ..
+            } if id == "my-note"
+        ));
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+    }
+
+    #[test]
+    fn test_3964_parse_bulk_note_route() {
+        let action = parse_deep_link("vaultpilot://note/bulk?op=update_tags");
+        assert!(matches!(
+            action,
+            DeepLinkAction::BulkNoteOp { ref op, .. } if op == "update_tags"
+        ));
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+
+        // Missing op → empty string, still High.
+        let action = parse_deep_link("vaultpilot://note/bulk");
+        assert!(matches!(
+            action,
+            DeepLinkAction::BulkNoteOp { ref op, .. } if op.is_empty()
+        ));
+        assert_eq!(classify_uri_action_risk(&action), UriActionRisk::High);
+    }
+
+    #[test]
+    fn test_3964_gate_low_always_allowed() {
+        // Read-only actions are allowed even headless, with no source at all.
+        let trusted = TrustedAppRegistry::default();
+        let action = parse_deep_link("vaultpilot://note/abc-123");
+        assert!(should_allow_non_interactive(&action, "", &trusted).is_ok());
+        let action = parse_deep_link("vaultpilot://search?query=rust");
+        assert!(should_allow_non_interactive(&action, "", &trusted).is_ok());
+    }
+
+    #[test]
+    fn test_3964_gate_medium_trusted_allowed() {
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Alfred");
+        let action = parse_deep_link("vaultpilot://note/new");
+        assert!(
+            should_allow_non_interactive(&action, "Alfred", &trusted).is_ok(),
+            "Medium risk from a trusted source should be allowed headless"
+        );
+        // Case-insensitive trust lookup.
+        assert!(should_allow_non_interactive(&action, "ALFRED", &trusted).is_ok());
+    }
+
+    #[test]
+    fn test_3964_gate_medium_untrusted_denied() {
+        let trusted = TrustedAppRegistry::default();
+        let action = parse_deep_link("vaultpilot://note/new");
+        let err = should_allow_non_interactive(&action, "Raycast", &trusted)
+            .expect_err("untrusted Medium must be denied");
+        assert!(
+            err.contains("denied by vaultpilot URI safety gate"),
+            "denial must name the gate, got: {err}"
+        );
+        assert!(
+            err.contains("Create a new note"),
+            "denial must describe the action: {err}"
+        );
+    }
+
+    #[test]
+    fn test_3964_gate_medium_empty_source_denied() {
+        // Empty source = untrusted → Medium denied.
+        let trusted = TrustedAppRegistry::default();
+        let action = parse_deep_link("vaultpilot://note/new");
+        assert!(should_allow_non_interactive(&action, "", &trusted).is_err());
+        assert!(should_allow_non_interactive(&action, "  ", &trusted).is_err());
+    }
+
+    #[test]
+    fn test_3964_gate_high_always_denied_even_trusted() {
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Alfred");
+
+        // New chat: High, denied even from a trusted app.
+        let chat = parse_deep_link("vaultpilot://chat/new");
+        let err = should_allow_non_interactive(&chat, "Alfred", &trusted)
+            .expect_err("High risk must be denied headless even when trusted");
+        assert!(err.contains("headless clients cannot confirm high-risk actions"));
+
+        // Delete: High, denied even from a trusted app.
+        let del = parse_deep_link("vaultpilot://note/delete");
+        assert!(should_allow_non_interactive(&del, "Alfred", &trusted).is_err());
+
+        // Destructive edit: High, denied.
+        let edit = parse_deep_link("vaultpilot://note/edit");
+        assert!(should_allow_non_interactive(&edit, "Alfred", &trusted).is_err());
+
+        // Bulk op: High, denied.
+        let bulk = parse_deep_link("vaultpilot://note/bulk?op=move");
+        assert!(should_allow_non_interactive(&bulk, "Alfred", &trusted).is_err());
+
+        // Overwrite flag bumps note/new to High → denied.
+        let overwrite = parse_deep_link("vaultpilot://note/new?overwrite=1");
+        assert!(should_allow_non_interactive(&overwrite, "Alfred", &trusted).is_err());
+    }
+
+    #[test]
+    fn test_3964_automation_tool_uri_mcp_mapping_risks() {
+        // The MCP tool → URI mapping must classify with the expected risk
+        // (#3964): chat.new High, notes.delete High, notes.create Medium.
+        let cases = [
+            ("chat.new", UriActionRisk::High),
+            ("notes.delete", UriActionRisk::High),
+            ("notes.preview_edit", UriActionRisk::High),
+            ("notes.apply_edit", UriActionRisk::High),
+            ("notes.create", UriActionRisk::Medium),
+            ("notes.import", UriActionRisk::Medium),
+        ];
+        for (tool, expected) in cases {
+            let uri = automation_tool_uri(tool)
+                .unwrap_or_else(|| panic!("{tool} must map to a vaultpilot:// URI"));
+            let action = parse_deep_link(uri);
+            assert_eq!(
+                classify_uri_action_risk(&action),
+                expected,
+                "tool {tool} -> {uri} risk mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn test_3964_automation_tool_uri_http_mapping_risks() {
+        let cases = [
+            ("http_create_note", UriActionRisk::Medium),
+            ("http_clip_url", UriActionRisk::Medium),
+            ("http_import_folder", UriActionRisk::Medium),
+            ("http_delete_note", UriActionRisk::High),
+            ("http_bulk_delete_notes", UriActionRisk::High),
+            ("http_bulk_move_notes", UriActionRisk::High),
+            ("http_bulk_update_tags", UriActionRisk::High),
+        ];
+        for (tool, expected) in cases {
+            let uri = automation_tool_uri(tool)
+                .unwrap_or_else(|| panic!("{tool} must map to a vaultpilot:// URI"));
+            let action = parse_deep_link(uri);
+            assert_eq!(
+                classify_uri_action_risk(&action),
+                expected,
+                "tool {tool} -> {uri} risk mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn test_3964_automation_tool_uri_read_only_tools_ungated() {
+        // Read-only / non-vault tools must NOT be gated.
+        for tool in [
+            "notes.list",
+            "notes.get",
+            "notes.search",
+            "notes.related",
+            "notes.follow_links",
+            "notes.backlinks",
+            "chat.list_sessions",
+            "chat.get_state",
+            "chat.send",
+            "email.search",
+            "email.get",
+            "calendar.today",
+            "tags.list",
+            "index.rebuild",
+            "ask",
+            "http_list_notes",
+            "http_get_note",
+            "http_search_notes",
+            "http_typeahead",
+            "http_progressive_search",
+            "http_health",
+            "http_vault_health",
+            "http_graph",
+        ] {
+            assert!(
+                automation_tool_uri(tool).is_none(),
+                "{tool} should not be gated"
+            );
+        }
+    }
+
+    #[test]
+    fn test_3964_gate_via_automation_mapping() {
+        // End-to-end through the mapping + gate: notes.create (Medium) from a
+        // trusted source passes; from an empty/untrusted source it is denied;
+        // chat.new (High) is denied regardless of trust.
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Claude");
+
+        let create_uri = automation_tool_uri("notes.create").unwrap();
+        let create = parse_deep_link(create_uri);
+        assert!(should_allow_non_interactive(&create, "Claude", &trusted).is_ok());
+        assert!(should_allow_non_interactive(&create, "", &trusted).is_err());
+        assert!(should_allow_non_interactive(&create, "Cursor", &trusted).is_err());
+
+        let chat_uri = automation_tool_uri("chat.new").unwrap();
+        let chat = parse_deep_link(chat_uri);
+        assert!(should_allow_non_interactive(&chat, "Claude", &trusted).is_err());
+
+        let delete_uri = automation_tool_uri("notes.delete").unwrap();
+        let delete = parse_deep_link(delete_uri);
+        assert!(should_allow_non_interactive(&delete, "Claude", &trusted).is_err());
     }
 }

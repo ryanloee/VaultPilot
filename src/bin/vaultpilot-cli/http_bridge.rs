@@ -518,6 +518,9 @@ async fn http_delete_note(
     AxumPath(note_id): AxumPath<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964 — headless safety gate: note deletion is High risk and cannot be
+    // confirmed non-interactively, so it is denied unless explicitly allowed.
+    enforce_uri_gate(&state, &headers, "http_delete_note")?;
     // Resolve cleanup mode from the persisted setting (#3732).
     let cleanup = load_settings_async(&state.context)
         .await
@@ -552,6 +555,7 @@ async fn http_bulk_delete_notes(
     Json(req): Json<BulkDeleteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    enforce_uri_gate(&state, &headers, "http_bulk_delete_notes")?;
     if req.note_ids.is_empty() {
         return Err(openai_error(
             StatusCode::BAD_REQUEST,
@@ -597,6 +601,7 @@ async fn http_bulk_move_notes(
     Json(req): Json<BulkMoveRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    enforce_uri_gate(&state, &headers, "http_bulk_move_notes")?;
     if req.note_ids.is_empty() {
         return Err(openai_error(
             StatusCode::BAD_REQUEST,
@@ -638,6 +643,7 @@ async fn http_bulk_update_tags(
     Json(req): Json<BulkTagsRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    enforce_uri_gate(&state, &headers, "http_bulk_update_tags")?;
     if req.note_ids.is_empty() {
         return Err(openai_error(
             StatusCode::BAD_REQUEST,
@@ -993,6 +999,9 @@ async fn http_create_note(
     Json(request): Json<CreateNoteRequest>,
 ) -> Result<Json<CreateNoteResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964 — headless safety gate: creating notes is Medium risk; allowed
+    // only from a trusted source (x-vaultpilot-source header).
+    enforce_uri_gate(&state, &headers, "http_create_note")?;
 
     let title = request.title.trim().to_string();
     if title.is_empty() {
@@ -1083,6 +1092,7 @@ async fn http_import_folder(
     Json(request): Json<ImportFolderRequest>,
 ) -> Result<Json<ImportFolderResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    enforce_uri_gate(&state, &headers, "http_import_folder")?;
 
     let folder_path = request.folder_path.trim().to_string();
     if folder_path.is_empty() {
@@ -1199,6 +1209,7 @@ async fn http_clip_url(
     Json(request): Json<ClipRequest>,
 ) -> Result<Json<ClipResponse>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    enforce_uri_gate(&state, &headers, "http_clip_url")?;
 
     let url = request.url.trim().to_string();
     if url.is_empty() {
@@ -2985,6 +2996,43 @@ pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     }
     // When lengths match, compare every byte in constant time.
     bool::from(a.ct_eq(b))
+}
+
+/// #3964 — non-interactive URI safety gate for the HTTP bridge.
+///
+/// The bridge cannot present a confirmation dialog, so mutating/destructive
+/// endpoints are routed through the shared headless policy
+/// (`deep_link::should_allow_non_interactive`): Low always allowed, Medium
+/// only from a trusted source, High always denied. `endpoint` is the
+/// handler name (e.g. `"http_create_note"`); it is looked up in
+/// `deep_link::automation_tool_uri`, which returns `None` for read-only
+/// endpoints (those stay ungated).
+///
+/// The caller app name is taken from the `x-vaultpilot-source` header
+/// (mirrors the CLI's x-callback `x-source`); an absent header is treated
+/// as an untrusted source.
+fn enforce_uri_gate(
+    state: &HttpBridgeState,
+    headers: &HeaderMap,
+    endpoint: &str,
+) -> Result<(), (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    use vaultpilot_lib::deep_link::{
+        automation_tool_uri, parse_deep_link, should_allow_non_interactive, TrustedAppRegistry,
+    };
+    let Some(uri) = automation_tool_uri(endpoint) else {
+        return Ok(());
+    };
+    let source = headers
+        .get("x-vaultpilot-source")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let action = parse_deep_link(uri);
+    let trusted = TrustedAppRegistry::load(state.context.vault_dir());
+    match should_allow_non_interactive(&action, &source, &trusted) {
+        Ok(()) => Ok(()),
+        Err(message) => Err(openai_error(StatusCode::FORBIDDEN, &message)),
+    }
 }
 
 fn require_bridge_token(

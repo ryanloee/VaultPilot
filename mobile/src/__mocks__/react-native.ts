@@ -16,7 +16,11 @@ const createComponent = (displayName: string) => {
 };
 
 export const Platform = { OS: 'android' };
-export const Linking = { openURL: jest.fn().mockResolvedValue(undefined) };
+export const Linking = {
+  openURL: jest.fn().mockResolvedValue(undefined),
+  getInitialURL: jest.fn().mockResolvedValue(null),
+  addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+};
 export const Alert = { alert: jest.fn() };
 export const StyleSheet = { 
   create: (styles: any) => styles,

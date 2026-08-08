@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
+import { StatusBar, useColorScheme, Text, View, ActivityIndicator, TouchableOpacity, StyleSheet, Alert, Linking, type AlertButton } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAppStore, ThemeMode, isValidThemeMode } from './src/store';
@@ -14,6 +14,8 @@ import ErrorBoundary from './src/components/ErrorBoundary';
 import { autoSyncOnStartup } from './src/services/sync';
 import { applyBackgroundSyncFromConfig } from './src/services/backgroundSync';
 import { initLocale, t } from './src/i18n';
+import { parseVaultPilotUri, evaluateUriSafety, extractSource, type ParsedVaultUri } from './src/utils/uriSafety';
+import { getTrustedSources, addTrustedSource } from './src/utils/uriTrustStore';
 
 import ChatScreen from './src/screens/ChatScreen';
 import SessionsScreen from './src/screens/SessionsScreen';
@@ -31,9 +33,15 @@ import ShareReceiveScreen from './src/screens/ShareReceiveScreen';
  *   vaultpilot://note/:id  → open existing note
  *   vaultpilot://chat/new  → new chat session
  *   vaultpilot://search    → global search
+ *
+ * NOTE (#3964): 'vaultpilot://' is intentionally NOT in `prefixes` anymore.
+ * vaultpilot:// URLs are intercepted by the safety gate below (installed at
+ * module scope) and only dispatched to React Navigation after risk evaluation
+ * + confirmation, so an external app can never auto-trigger a risky action.
+ * expo-sharing:// and normal in-app navigation are unaffected.
  */
 const linking: any = {
-  prefixes: ['vaultpilot://', 'expo-sharing://'],
+  prefixes: ['expo-sharing://'],
   config: {
     screens: {
       Main: {
@@ -59,6 +67,156 @@ const linking: any = {
     },
   },
 };
+
+/**
+ * #3964 — vaultpilot:// URI risk-confirmation gate.
+ *
+ * Every vaultpilot:// URL is intercepted HERE, before React Navigation can
+ * execute it:
+ *   - low risk      → dispatch immediately (open note / search / settings)
+ *   - medium risk   → Alert confirmation, unless the x-source is trusted
+ *                     (vaultpilot://note/new — creates a note)
+ *   - high risk     → ALWAYS Alert confirmation, even for trusted sources
+ *                     (vaultpilot://chat/new, vaultpilot://note/new?overwrite)
+ *
+ * Dispatch goes through navigationRef (nested navigate calls mirroring the
+ * linking config above). If the NavigationContainer is not mounted yet the
+ * URI is queued and flushed in onReady, covering the cold-start race where
+ * the initial URL arrives before the container exists.
+ */
+const navigationRef = createNavigationContainerRef<{
+  Main: { screen?: string; params?: object };
+  ShareReceive: object | undefined;
+}>();
+
+/** vaultpilot:// URIs captured before the NavigationContainer mounts. */
+const pendingVaultUris: string[] = [];
+
+/**
+ * Android can deliver the cold-start URL through BOTH getInitialURL() and a
+ * subsequent 'url' event; dedupe identical URIs within a short window so the
+ * action is not gated/executed twice.
+ */
+let lastSubmittedVaultUri: { uri: string; at: number } | null = null;
+
+let vaultUriListenersInstalled = false;
+
+function submitVaultUri(uri: string): void {
+  if (typeof uri !== 'string' || !uri.startsWith('vaultpilot://')) return;
+  const now = Date.now();
+  if (lastSubmittedVaultUri && lastSubmittedVaultUri.uri === uri && now - lastSubmittedVaultUri.at < 2000) {
+    return;
+  }
+  lastSubmittedVaultUri = { uri, at: now };
+  void gateAndDispatchVaultUri(uri);
+}
+
+function flushPendingVaultUris(): void {
+  while (pendingVaultUris.length > 0) {
+    const uri = pendingVaultUris.shift();
+    if (uri) void gateAndDispatchVaultUri(uri);
+  }
+}
+
+async function gateAndDispatchVaultUri(uri: string): Promise<void> {
+  let trustedSources: string[] = [];
+  try {
+    trustedSources = await getTrustedSources();
+  } catch (e) {
+    console.warn('[App] getTrustedSources failed:', e);
+  }
+  const evaluation = evaluateUriSafety(uri, trustedSources);
+  if (!evaluation.needsConfirmation) {
+    dispatchVaultUri(uri);
+    return;
+  }
+
+  const source = extractSource(uri);
+  const buttons: AlertButton[] = [{ text: '取消', style: 'cancel' }];
+  if (evaluation.risk === 'medium' && source) {
+    buttons.push({
+      text: '信任此来源',
+      onPress: () => {
+        addTrustedSource(source).catch((e) => console.warn('[App] addTrustedSource failed:', e));
+        dispatchVaultUri(uri);
+      },
+    });
+  }
+  buttons.push({ text: '确认', onPress: () => dispatchVaultUri(uri) });
+  Alert.alert('安全确认', `${evaluation.reason}\n来源：${source || '未知'}`, buttons);
+}
+
+function dispatchVaultUri(uri: string): void {
+  if (!navigationRef.isReady()) {
+    pendingVaultUris.push(uri);
+    return;
+  }
+  const parsed = parseVaultPilotUri(uri);
+  if (!navigateForVaultUri(parsed)) {
+    // Unknown route — the link simply fails navigation (same as before).
+    console.warn('[App] Unhandled vaultpilot URI:', uri);
+  }
+}
+
+/** Map a parsed vaultpilot:// URI onto the React Navigation routes from the linking config. */
+function navigateForVaultUri(parsed: ParsedVaultUri): boolean {
+  switch (parsed.route) {
+    case 'chat/new':
+      navigationRef.navigate('Main', { screen: 'Chat', params: { screen: 'ChatNew' } });
+      return true;
+    case 'chat':
+      navigationRef.navigate('Main', { screen: 'Chat', params: { screen: 'ChatMain' } });
+      return true;
+    case 'chat/sessions':
+      navigationRef.navigate('Main', { screen: 'Chat', params: { screen: 'Sessions' } });
+      return true;
+    case 'note/new':
+      navigationRef.navigate('Main', {
+        screen: 'Notes',
+        params: {
+          screen: 'NoteEdit',
+          params: { noteId: 'new', ...(parsed.overwrite ? { overwrite: true } : {}) },
+        },
+      });
+      return true;
+    case 'note/:id':
+      navigationRef.navigate('Main', {
+        screen: 'Notes',
+        params: { screen: 'NoteEdit', params: { noteId: parsed.noteId ?? '' } },
+      });
+      return true;
+    case 'note':
+      navigationRef.navigate('Main', { screen: 'Notes', params: { screen: 'NotesList' } });
+      return true;
+    case 'search':
+      navigationRef.navigate('Main', { screen: 'Search' });
+      return true;
+    case 'settings':
+      navigationRef.navigate('Main', { screen: 'Settings' });
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Install the vaultpilot:// listeners once, at module scope (covers pre-mount window). */
+function installVaultUriListeners(): void {
+  if (vaultUriListenersInstalled) return;
+  vaultUriListenersInstalled = true;
+
+  // Cold start — URL is delivered before any listener exists.
+  Linking.getInitialURL()
+    .then((url) => {
+      if (url) submitVaultUri(url);
+    })
+    .catch((e) => console.warn('[App] getInitialURL failed:', e));
+
+  // Warm start / app already running.
+  Linking.addEventListener('url', ({ url }) => {
+    if (url) submitVaultUri(url);
+  });
+}
+installVaultUriListeners();
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -216,7 +374,7 @@ export default function App() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-        <NavigationContainer linking={linking}>
+        <NavigationContainer ref={navigationRef} linking={linking} onReady={() => flushPendingVaultUris()}>
           <RootStack.Navigator screenOptions={{ headerShown: false }}>
             <RootStack.Screen name="Main" component={MainTabs} />
             <RootStack.Screen

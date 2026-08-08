@@ -96,4 +96,5 @@ mod issue_3809_active_provider_clamp;
 mod issue_3823_cli_query_raw;
 mod issue_3910_startup_stats;
 mod issue_3928_vault_location_risk;
+mod issue_3960_recovery_rpc;
 mod issue_914_related_notes;

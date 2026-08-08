@@ -2,13 +2,15 @@
  * vaultpilot:// URI safety helpers — TypeScript mirror of the Rust backend's
  * classify_uri_action_risk (src/deep_link.rs) for issue #3964.
  *
- * ⚠️ MIRROR CONSTRAINT (#3964/#3995): this file must stay in sync with
- * `src/deep_link.rs` — `classify_uri_action_risk`, `parse_deep_link`
- * (route table, case-insensitivity #3734) and `TrustedAppRegistry::is_trusted`
- * (lowercase comparison). When the Rust side changes any of those, update the
- * corresponding TS logic here (and vice versa). See deep_link.rs
- * `classify_uri_action_risk` (~line 432) and `automation_tool_gate`
- * (~line 700) for the authoritative classification.
+ * ⚠️ MIRROR CONSTRAINT (#3964/#3995/#4006/#4007): this file must stay in sync
+ * with `src/deep_link.rs` — `classify_uri_action_risk`, `parse_deep_link`
+ * (route table, case-insensitivity #3734, empty-segment filtering and
+ * percent-decoded note ids #4006, x-source key case-insensitivity #4007) and
+ * `TrustedAppRegistry::is_trusted` (lowercase comparison). When the Rust side
+ * changes any of those, update the corresponding TS logic here (and vice
+ * versa). See deep_link.rs `classify_uri_action_risk` (~line 432),
+ * `parse_deep_link` (~line 194) and `automation_tool_gate` (~line 700) for
+ * the authoritative classification.
  *
  * The mobile app gates risky deep links behind an explicit Alert confirmation
  * before they are dispatched to React Navigation. These helpers are pure
@@ -28,7 +30,15 @@ export interface UriSafetyEvaluation {
   reason: string;
 }
 
-/** Known vaultpilot:// routes (mirrors the Rust DeepLinkAction routes). */
+/**
+ * Known vaultpilot:// routes (mirrors the Rust DeepLinkAction routes).
+ *
+ * `chat`, `chat/sessions` and `note` are **intentional mobile navigation
+ * extensions** (App.tsx navigateForVaultUri maps them to the ChatMain /
+ * Sessions / NotesList screens). Rust has no such routes (they classify as
+ * Unknown → Medium), so they are deliberately classified MEDIUM here too —
+ * the mobile gate is never weaker than the Rust side (#4007).
+ */
 export type VaultUriRoute =
   | 'chat'
   | 'chat/new'
@@ -39,17 +49,19 @@ export type VaultUriRoute =
   | 'note/edit'
   | 'note/bulk'
   | 'note/:id'
+  | 'daily'
   | 'search'
   | 'settings'
   | 'unknown';
 
 export interface ParsedVaultUri {
   route: VaultUriRoute;
-  /** noteId for route 'note/:id'. */
+  /** noteId for route 'note/:id' (percent-decoded, mirrors Rust url_decode). */
   noteId?: string;
   /**
-   * overwrite query flag for route 'note/new'. true/false when the param is
-   * present, undefined when absent.
+   * overwrite query flag for route 'note/new'. true/false when at least one
+   * overwrite param is present, undefined when absent. Any-truthy across
+   * duplicate params — mirrors Rust `flag("overwrite")` (#4006).
    */
   overwrite?: boolean;
 }
@@ -62,11 +74,35 @@ export interface ParsedVaultUri {
  */
 const TRUTHY_FLAG_VALUES = new Set(['1', 'true', 'yes', 'on']);
 
+/** A decoded query (key, value) pair — mirrors Rust parse_query_pairs. */
+interface QueryPair {
+  key: string;
+  value: string;
+}
+
 /**
- * Split a raw URI into scheme, path and query params without throwing on
- * malformed input. Returns null for anything that is not a vaultpilot:// URI.
+ * Percent-decode a URI component, mirroring Rust's `url_decode`
+ * (deep_link.rs ~line 310): %XX hex pairs decode, '+' becomes a space, and
+ * malformed sequences are kept literally instead of throwing (#4006).
  */
-function parseVaultUri(uri: string): { path: string; params: Record<string, string> } | null {
+function percentDecode(input: string): string {
+  try {
+    return decodeURIComponent(input.replace(/\+/g, ' '));
+  } catch {
+    return input;
+  }
+}
+
+/**
+ * Split a raw URI into scheme, path and query pairs without throwing on
+ * malformed input. Returns null for anything that is not a vaultpilot:// URI.
+ *
+ * Query parsing mirrors Rust `parse_query_pairs` (deep_link.rs ~line 346):
+ * empty pairs are skipped and a pair WITHOUT '=' is dropped entirely (Rust's
+ * `split_once('=')` fails → filter_map discards it), e.g.
+ * `?overwrite` alone does NOT set the flag (#4006).
+ */
+function parseVaultUri(uri: string): { path: string; pairs: QueryPair[] } | null {
   if (typeof uri !== 'string') return null;
   const trimmed = uri.trim();
   const schemeEnd = trimmed.indexOf('://');
@@ -86,30 +122,22 @@ function parseVaultUri(uri: string): { path: string; params: Record<string, stri
   const path = rest.replace(/\/+$/, '');
   if (!path) return null;
 
-  const params: Record<string, string> = {};
+  const pairs: QueryPair[] = [];
   if (query) {
     for (const pair of query.split('&')) {
       if (!pair) continue;
       const eqIdx = pair.indexOf('=');
-      const rawKey = eqIdx >= 0 ? pair.slice(0, eqIdx) : pair;
-      const rawValue = eqIdx >= 0 ? pair.slice(eqIdx + 1) : 'true';
-      let key: string;
-      let value: string;
-      try {
-        key = decodeURIComponent(rawKey);
-        value = decodeURIComponent(rawValue);
-      } catch {
-        continue; // malformed percent-encoding — ignore this pair
-      }
-      if (key.trim()) params[key.trim()] = value;
+      if (eqIdx < 0) continue; // Rust: split_once('=') fails → pair dropped
+      const rawKey = pair.slice(0, eqIdx);
+      const rawValue = pair.slice(eqIdx + 1);
+      pairs.push({ key: percentDecode(rawKey), value: percentDecode(rawValue) });
     }
   }
-  return { path, params };
+  return { path, pairs };
 }
 
 /** True when the overwrite query flag value should be treated as truthy. */
-function isTruthyFlag(value: string | undefined): boolean {
-  if (value === undefined) return false;
+function isTruthyFlag(value: string): boolean {
   return TRUTHY_FLAG_VALUES.has(value.trim().toLowerCase());
 }
 
@@ -118,14 +146,17 @@ function isTruthyFlag(value: string | undefined): boolean {
  * map to route 'unknown' (never throws).
  *
  * Mirrors `parse_deep_link` (deep_link.rs ~line 194): route keywords are
- * matched case-insensitively (#3734/#3995), note ids keep their original
- * case, and `note/open/<id>` is an alias for `note/<id>` (OpenNote).
+ * matched case-insensitively (#3734/#3995), empty path segments are filtered
+ * out (`note//delete` === `note/delete`, #4006), note ids are
+ * percent-decoded and keep their original case, and `note/open/<id>` is an
+ * alias for `note/<id>` (OpenNote).
  */
 export function parseVaultPilotUri(uri: string): ParsedVaultUri {
   const parsed = parseVaultUri(uri);
   if (!parsed) return { route: 'unknown' };
 
-  const segments = parsed.path.split('/');
+  // Drop empty path segments — mirrors Rust `path.split('/').filter(|s| !s.is_empty())`.
+  const segments = parsed.path.split('/').filter((s) => s !== '');
   const lower = segments.map((s) => s.toLowerCase());
   const [head, second] = lower;
 
@@ -138,12 +169,16 @@ export function parseVaultPilotUri(uri: string): ParsedVaultUri {
     case 'note':
       if (segments.length === 1) return { route: 'note' };
       if (second === 'new') {
+        // Any-truthy across duplicate params — mirrors Rust
+        // `flag("overwrite")` = `pairs.iter().any(|(k, v)| k == key && is_truthy(v))`
+        // (deep_link.rs ~line 385): `overwrite=1&overwrite=0` IS overwrite (#4006).
+        const overwritePairs = parsed.pairs.filter((p) => p.key === 'overwrite');
         return {
           route: 'note/new',
           overwrite:
-            parsed.params['overwrite'] !== undefined
-              ? isTruthyFlag(parsed.params['overwrite'])
-              : undefined,
+            overwritePairs.length === 0
+              ? undefined
+              : overwritePairs.some((p) => isTruthyFlag(p.value)),
         };
       }
       // Destructive / bulk routes — Rust classifies DeleteNote / EditNote /
@@ -154,12 +189,18 @@ export function parseVaultPilotUri(uri: string): ParsedVaultUri {
       if (second === 'bulk') return { route: 'note/bulk' };
       // note/open/<id> is an explicit alias for note/<id> (Rust OpenNote).
       if (second === 'open' && segments.length === 3 && segments[2]) {
-        return { route: 'note/:id', noteId: segments[2] };
+        return { route: 'note/:id', noteId: percentDecode(segments[2]) };
       }
-      // note/<id> → open existing note (id keeps original case).
+      // note/<id> → open existing note (id keeps original case, percent-decoded).
       if (segments.length === 2 && segments[1]) {
-        return { route: 'note/:id', noteId: segments[1] };
+        return { route: 'note/:id', noteId: percentDecode(segments[1]) };
       }
+      break;
+    case 'daily':
+      // Rust has a dedicated Daily route (#4007) → LOW. The mobile app has no
+      // daily-note screen yet, so dispatchVaultUri logs an unhandled warning
+      // instead of navigating — but the URI is never over-confirmed.
+      if (segments.length === 1) return { route: 'daily' };
       break;
     case 'search':
       if (segments.length === 1) return { route: 'search' };
@@ -182,7 +223,10 @@ export function parseVaultPilotUri(uri: string): ParsedVaultUri {
  *   - vaultpilot://note/edit           → HIGH (destructive rewrite, #3964/#3995)
  *   - vaultpilot://note/bulk           → HIGH (bulk destructive op, #3964/#3995)
  *   - vaultpilot://note/new            → MEDIUM (creates a note)
+ *   - vaultpilot://chat|chat/sessions|note → MEDIUM (intentional mobile
+ *     navigation extensions; Rust classifies these Unknown → Medium, #4007)
  *   - vaultpilot://note/:id            → LOW (opens existing note)
+ *   - vaultpilot://daily               → LOW (Rust Daily, #4007)
  *   - vaultpilot://search|settings     → LOW
  *   - unknown/unparseable routes      → MEDIUM (Rust: Unknown → Medium,
  *                                        "be conservative", #3995)
@@ -200,7 +244,11 @@ export function classifyUriActionRisk(uri: string): UriActionRisk {
     case 'chat':
     case 'chat/sessions':
     case 'note':
+      // Intentional mobile navigation extensions — risk parity with Rust's
+      // Unknown → Medium so the mobile gate is never weaker (#4007).
+      return 'medium';
     case 'note/:id':
+    case 'daily':
     case 'search':
     case 'settings':
       return 'low';
@@ -214,12 +262,16 @@ export function classifyUriActionRisk(uri: string): UriActionRisk {
  * Extract the x-source query param — the package/app that opened the URI
  * (e.g. vaultpilot://chat/new?x-source=com.example.app). Returns '' when
  * absent or unparseable.
+ *
+ * The param KEY is matched case-insensitively, mirroring Rust
+ * `parse_xcallback`'s `k.eq_ignore_ascii_case("x-source")` (#4007):
+ * X-SOURCE / X-Source / x-source are all recognized.
  */
 export function extractSource(uri: string): string {
   const parsed = parseVaultUri(uri);
   if (!parsed) return '';
-  const source = parsed.params['x-source'];
-  return source ? source.trim() : '';
+  const pair = parsed.pairs.find((p) => p.key.toLowerCase() === 'x-source');
+  return pair ? pair.value.trim() : '';
 }
 
 const REASONS: Record<UriActionRisk, string> = {

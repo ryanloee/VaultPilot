@@ -232,6 +232,27 @@ export function nextImageIndex(
 }
 
 /**
+ * Remove a single line from multi-line content by 0-based line index (#3963).
+ *
+ * Unlike the previous text-equality filter (`filter(l => l !== imageLine)`),
+ * this removes ONLY the line at the given index — so duplicate image lines
+ * (same markdown text) are preserved and only the user-selected one is deleted.
+ *
+ * Out-of-range indices are ignored (content returned unchanged).
+ *
+ * @param content Full multi-line markdown content
+ * @param lineIndex 0-based line index to remove
+ * @returns Content with exactly one line removed (or unchanged if invalid index)
+ */
+export function removeLineByIndex(content: string, lineIndex: number): string {
+  if (lineIndex < 0) return content;
+  const lines = content.split('\n');
+  if (lineIndex >= lines.length) return content;
+  lines.splice(lineIndex, 1);
+  return lines.join('\n');
+}
+
+/**
  * Extract the file name of an image for the Lightbox caption (#3927).
  *
  * Mirrors Obsidian 1.13.4: the lightbox shows the current image's file name.

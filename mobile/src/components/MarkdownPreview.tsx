@@ -24,11 +24,13 @@ interface Props {
   /** Map of note title (lowercase) → noteId for auto-detection of note references (#2035). */
   noteTitleMap?: Map<string, string>;
   /**
-   * #3781: called when the user deletes a selected standalone image from the
-   * floating action bar — receives the exact markdown line to remove, so the
-   * parent can update `content`. When omitted, the 删除 button is hidden.
+   * #3781 / #3963: called when the user deletes a selected standalone image
+   * from the floating action bar — receives the 0-based line index (in the
+   * original content string) of the image line to remove, so the parent can
+   * delete exactly that one line even if duplicates exist. When omitted, the
+   * 删除 button is hidden.
    */
-  onDeleteImage?: (imageLine: string) => void;
+  onDeleteImage?: (lineIndex: number) => void;
 }
 
 // ── #3781: image selection action bar (Obsidian 1.13 image interactions) ──
@@ -42,7 +44,13 @@ const MAX_IMAGE_SCALE = 3;
 interface ImageSelection {
   /** globalIdx of the selected image (aligned with the Lightbox index) */
   index: number;
-  /** raw markdown line the image belongs to (passed to onDeleteImage) */
+  /**
+   * #3963: 0-based index of the image's line in the ORIGINAL content string
+   * (before footnote definitions are stripped). Passed to onDeleteImage so the
+   * parent deletes exactly this one line, not all duplicate-text lines.
+   */
+  lineIndex: number;
+  /** raw markdown line the image belongs to (kept for debugging/display) */
   line: string;
   /** single-image markdown syntax, e.g. ![alt](url "title") (copied) */
   markdown: string;
@@ -119,12 +127,12 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
   const handleIndexChange = useCallback((idx: number) => setLightboxIndex(idx), []);
 
   // ── #3781: selection / copy / delete / resize handlers ──────────────────
-  const handleImageLongPress = useCallback((globalIdx: number, line: string, img: MarkdownImage) => {
+  const handleImageLongPress = useCallback((globalIdx: number, srcLineIndex: number, line: string, img: MarkdownImage) => {
     longPressSuppressClearRef.current = true;
     setSelectedImage((prev) =>
       prev && prev.index === globalIdx
         ? prev // re-long-pressing the same image keeps its zoom level
-        : { index: globalIdx, line, markdown: imageMarkdown(img), scale: 1 },
+        : { index: globalIdx, lineIndex: srcLineIndex, line, markdown: imageMarkdown(img), scale: 1 },
     );
   }, []);
 
@@ -137,7 +145,9 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
 
   const handleDeleteImage = useCallback(() => {
     if (!selectedImage) return;
-    onDeleteImage?.(selectedImage.line);
+    // #3963: pass the original line INDEX (not the line text) so the parent
+    // deletes only this one occurrence — duplicate image lines are preserved.
+    onDeleteImage?.(selectedImage.lineIndex);
     setSelectedImage(null);
   }, [selectedImage, onDeleteImage]);
 
@@ -181,16 +191,24 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
   // in renderInline below.
   const footnoteDefs = new Map<string, string>();
   const ACTIVE_LINES: string[] = [];
+  // #3963: Parallel array tracking each ACTIVE_LINES entry's original index in
+  // content.split('\n'). Footnote definitions are dropped from ACTIVE_LINES, so
+  // the render-loop index `i` does NOT equal the original line index — we need
+  // this map to tell the parent exactly WHICH line to delete (by index, not by
+  // text equality, which would delete all identical duplicate image lines).
+  const activeSrcIndices: number[] = [];
   // #3697: The first pass must be fence-aware — a `[^id]: text` line inside a
   // ``` fenced code block is CODE content, not a footnote definition. Track
   // fence toggling exactly like the render loop below so code blocks keep
   // their lines (they previously rendered empty because the lines were
   // consumed as definitions).
   let inFence = false;
-  for (const rawLine of lines) {
+  for (let srcIdx = 0; srcIdx < lines.length; srcIdx++) {
+    const rawLine = lines[srcIdx];
     if (rawLine.trimStart().startsWith('```')) {
       inFence = !inFence;
       ACTIVE_LINES.push(rawLine);
+      activeSrcIndices.push(srcIdx);
       continue;
     }
     const trimmed = rawLine.trim();
@@ -203,6 +221,7 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
       // Don't add to active lines — footnote definitions are hidden
     } else {
       ACTIVE_LINES.push(rawLine);
+      activeSrcIndices.push(srcIdx);
     }
   }
 
@@ -310,6 +329,9 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
     // Image line (#3030): render ![alt](url) as clickable images that open Lightbox
     const lineImages = extractImagesFromLine(line);
     if (lineImages.length > 0 && isStandaloneImageLine(line)) {
+      // #3963: original line index in the source content (ACTIVE_LINES may
+      // have dropped footnote definitions, so `i` ≠ source index).
+      const srcLineIndex = activeSrcIndices[i];
       const imgElements = lineImages.map((img, imgIdx) => {
         const globalIdx = imageCounter++;
         // #3781: long-press selects the image; the selected image gets a blue
@@ -323,7 +345,7 @@ const MarkdownPreview = memo(function MarkdownPreview({ content, textColor, acce
             key={`img-${i}-${imgIdx}`}
             activeOpacity={0.85}
             onPress={() => handleImagePress(globalIdx)}
-            onLongPress={() => handleImageLongPress(globalIdx, line, img)}
+            onLongPress={() => handleImageLongPress(globalIdx, srcLineIndex, line, img)}
             testID={`md-image-${globalIdx}`}
           >
             <RNImage

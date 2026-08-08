@@ -4,6 +4,9 @@
  * Persists the x-source values the user explicitly opted to trust for
  * MEDIUM-risk deep-link actions (see uriSafety.evaluateUriSafety). Backed by
  * AsyncStorage under the key 'vaultpilot_trusted_uri_sources'.
+ *
+ * Stored values are lowercased at write time and compared case-insensitively
+ * at read time, mirroring the Rust `TrustedAppRegistry::is_trusted` (#3995).
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,14 +27,15 @@ export async function getTrustedSources(): Promise<string[]> {
   }
 }
 
-/** Persist a trusted source (idempotent; never throws). */
+/** Persist a trusted source (idempotent; never throws). Lowercased to match
+ * Rust's `TrustedAppRegistry.is_trusted` case-insensitive comparison. */
 export async function addTrustedSource(src: string): Promise<void> {
-  const trimmed = (src ?? '').trim();
-  if (!trimmed) return;
+  const lowercased = (src ?? '').trim().toLowerCase();
+  if (!lowercased) return;
   try {
     const current = await getTrustedSources();
-    if (current.includes(trimmed)) return;
-    await AsyncStorage.setItem(TRUSTED_SOURCES_KEY, JSON.stringify([...current, trimmed]));
+    if (current.includes(lowercased)) return;
+    await AsyncStorage.setItem(TRUSTED_SOURCES_KEY, JSON.stringify([...current, lowercased]));
   } catch (e) {
     console.warn('[UriTrustStore] addTrustedSource failed:', e);
   }

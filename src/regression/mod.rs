@@ -97,5 +97,6 @@ mod issue_3823_cli_query_raw;
 mod issue_3910_startup_stats;
 mod issue_3928_vault_location_risk;
 mod issue_3960_recovery_rpc;
+mod issue_3984_rec_restore_containment;
 mod issue_3992_uri_safety_gate;
 mod issue_914_related_notes;

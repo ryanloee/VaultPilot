@@ -30,7 +30,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -161,6 +161,115 @@ fn open_recovery_db(vault_dir: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Validate that a recovery snapshot's `note_path` is a safe vault-relative
+/// path.
+///
+/// Recovery snapshots are stored in a SQLite DB *outside* the vault, so
+/// `note_path` must never be trusted when it crosses back into the vault: an
+/// absolute path or `..` traversal would otherwise let a tampered DB (or a
+/// buggy capture) write arbitrary files anywhere on disk on restore (#3984).
+///
+/// This is the API-boundary check enforced by [`save_recovery_snapshot`] and
+/// re-checked (alongside symlink resolution) by [`recovery_target_path`]
+/// before any restore write. Rejects:
+/// - empty paths;
+/// - absolute paths (`/etc/...`, `\etc\...` when rooted on Windows,
+///   `C:\...` / `C:...` drive forms, UNC `\\...`);
+/// - any `..` component (`../../etc/pwned`, `a/../b.md`).
+pub fn validate_recovery_note_path(note_path: &str) -> Result<()> {
+    // Normalize Windows separators first so `\..\etc` is caught even on a
+    // Unix host, and a root-relative `\etc` is caught as absolute.
+    let normalized = note_path.replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    if normalized.is_empty() {
+        bail!("recovery note_path must not be empty");
+    }
+    if normalized.starts_with('/') || Path::new(note_path).is_absolute() {
+        bail!("recovery note_path must be vault-relative, got absolute path: '{note_path}'");
+    }
+    // Windows drive-letter prefixes (`C:\...`, `C:...`) are absolute or
+    // drive-relative on Windows; never valid vault-relative note paths.
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        bail!("recovery note_path must be vault-relative, got Windows-style path: '{note_path}'");
+    }
+    for component in normalized.split('/') {
+        if component == ".." {
+            bail!("recovery note_path must not contain '..' components: '{note_path}'");
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the on-disk destination for restoring a recovery snapshot,
+/// refusing anything that lands outside the vault (#3984).
+///
+/// The recovery DB is stored outside the vault, so a snapshot's `note_path`
+/// is treated as untrusted even though [`save_recovery_snapshot`] now
+/// validates it at save time: a tampered DB, or snapshots written by older
+/// builds, can still contain arbitrary paths. This performs:
+///   1. the lexical validation from [`validate_recovery_note_path`];
+///   2. a lexical containment re-check of the joined target;
+///   3. a symlink-resolving containment check — the deepest existing
+///      ancestor of the target is canonicalized and must still live under
+///      the canonical vault dir, so a subdirectory that is a symlink
+///      pointing outside the vault is refused too.
+///
+/// The caller may then `create_dir_all(target.parent())` and write; the path
+/// returned is always inside the vault.
+pub fn recovery_target_path(vault_dir: &Path, note_path: &str) -> Result<PathBuf> {
+    validate_recovery_note_path(note_path)?;
+
+    // Drop interior `//` and `.` components lexically (`a//b`, `a/./b` →
+    // `a/b`) so the path we join is exactly the path we check. `..` is
+    // already rejected above.
+    let normalized = note_path
+        .replace('\\', "/")
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    if normalized.is_empty() {
+        bail!("recovery note_path '{note_path}' does not name a file inside the vault");
+    }
+    let target = vault_dir.join(&normalized);
+    if !target.starts_with(vault_dir) {
+        bail!(
+            "recovery note_path '{note_path}' escapes the vault (target {})",
+            target.display()
+        );
+    }
+
+    // Resolve symlinks along the deepest existing ancestor of the target and
+    // confirm it still lies under the (canonicalized) vault dir.
+    let vault_canon = vault_dir
+        .canonicalize()
+        .unwrap_or_else(|_| vault_dir.to_path_buf());
+    let mut ancestor: &Path = &target;
+    let mut resolved: Option<PathBuf> = None;
+    loop {
+        if let Ok(canon) = ancestor.canonicalize() {
+            resolved = Some(canon);
+            break;
+        }
+        match ancestor.parent() {
+            Some(parent) => ancestor = parent,
+            None => break, // nothing exists yet; the lexical check above stands
+        }
+    }
+    if let Some(canon) = resolved {
+        if !canon.starts_with(&vault_canon) {
+            bail!(
+                "recovery note_path '{note_path}' escapes the vault via symlink \
+                 (resolves to {}, outside {})",
+                canon.display(),
+                vault_canon.display()
+            );
+        }
+    }
+
+    Ok(target)
+}
+
 /// Save the current unsaved edit buffer as a recovery snapshot.
 ///
 /// `note_path` should be vault-relative (e.g. `inbox/draft.md`). `title` is a
@@ -172,6 +281,10 @@ pub fn save_recovery_snapshot(
     title: &str,
     content: &str,
 ) -> Result<RecoverySnapshot> {
+    // `note_path` is stored in a DB outside the vault and later written back
+    // into the vault on restore — never accept a path that could land outside
+    // the vault (#3984).
+    validate_recovery_note_path(note_path)?;
     let conn = open_recovery_db(vault_dir)?;
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -441,5 +554,104 @@ mod tests {
         assert_eq!(fetched.content, body);
         assert_eq!(fetched.note_path, "笔记/草稿.md");
         assert_eq!(fetched.title, "标题");
+    }
+
+    #[test]
+    fn save_rejects_absolute_note_paths() {
+        // #3984: recovery snapshots live outside the vault; an absolute
+        // note_path must never be accepted (restore would write outside).
+        let vault = test_vault();
+        for bad in [
+            "/etc/pwned",
+            "\\etc\\pwned",
+            "C:\\pwned",
+            "C:/pwned",
+            "\\\\server\\share",
+        ] {
+            let err = save_recovery_snapshot(&vault, bad, "t", "x")
+                .expect_err("absolute note_path must be rejected");
+            assert!(
+                err.to_string().contains("vault-relative"),
+                "unexpected error for {bad:?}: {err}"
+            );
+        }
+        // Nothing leaked into the store.
+        assert!(list_recovery_snapshots(&vault, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn save_rejects_parent_traversal_note_paths() {
+        // #3984: `..` components could walk out of the vault on restore.
+        let vault = test_vault();
+        for bad in [
+            "../../escape.md",
+            "a/../../escape.md",
+            "..\\escape.md",
+            "a/..\\b.md",
+            "a/../b.md",
+        ] {
+            let err = save_recovery_snapshot(&vault, bad, "t", "x")
+                .expect_err("traversal note_path must be rejected");
+            assert!(
+                err.to_string().contains("'..'"),
+                "unexpected error for {bad:?}: {err}"
+            );
+        }
+        // Normal paths still work after the rejections.
+        let snap = save_recovery_snapshot(&vault, "inbox/draft.md", "t", "x").unwrap();
+        let fetched = get_recovery_snapshot(&vault, &snap.id).unwrap().unwrap();
+        assert_eq!(fetched.note_path, "inbox/draft.md");
+        assert_eq!(list_recovery_snapshots(&vault, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn restore_target_stays_inside_the_vault() {
+        // #3984: recovery_target_path is the restore-time boundary (used by
+        // `recovery_restore_async` in the agent binary).
+        let vault = test_vault();
+
+        // Valid relative paths resolve to a location inside the vault.
+        let target = recovery_target_path(&vault, "notes/inbox/draft.md").unwrap();
+        assert_eq!(target, vault.join("notes/inbox/draft.md"));
+        assert!(target.starts_with(&vault));
+
+        // Escapes are refused outright.
+        for bad in [
+            "../../../etc/pwned",
+            "/etc/pwned",
+            "C:\\Windows\\pwned",
+            "x/../pwned",
+            "x/./../pwned",
+        ] {
+            let err =
+                recovery_target_path(&vault, bad).expect_err("escaping note_path must be refused");
+            assert!(
+                err.to_string().contains("vault") || err.to_string().contains("'..'"),
+                "unexpected error for {bad:?}: {err}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_target_refuses_symlinked_subdir_leaving_vault() {
+        // A subdirectory inside the vault that is a symlink to an outside
+        // directory must not be writeable through a snapshot restore.
+        use std::os::unix::fs::symlink;
+        let vault = test_vault();
+        let outside =
+            std::env::temp_dir().join(format!("vaultpilot-recovery-outside-{}", Uuid::new_v4()));
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, vault.join("leak")).unwrap();
+
+        let err = recovery_target_path(&vault, "leak/pwned.md")
+            .expect_err("symlink escape must be refused");
+        assert!(
+            err.to_string().contains("symlink"),
+            "unexpected error: {err}"
+        );
+
+        fs::remove_file(vault.join("leak")).ok();
+        fs::remove_dir_all(&outside).ok();
     }
 }

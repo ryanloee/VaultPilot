@@ -4,11 +4,11 @@ mod markdown_utils;
 mod mcp_server;
 mod update_check;
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueHint};
 use clap_complete::{generate, Shell};
 use serde::Serialize;
@@ -92,6 +92,35 @@ struct Cli {
 enum Commands {
     /// Initialize storage and show resolved settings
     Init,
+
+    /// Handle a `vaultpilot://` deep link through the security gate (#3958).
+    ///
+    /// Parses the URI, classifies its risk, and requires interactive
+    /// confirmation (or `--yes`) before executing — this is the CLI wiring
+    /// for the #3822 confirmation backend (previously
+    /// `should_confirm_uri_action` had zero callers, so URIs from external
+    /// apps executed with no risk gate).  Confirmed/allowed actions execute
+    /// by dispatching to the matching subcommand handler:
+    /// `note/<id>` → `notes get`, `note/new` → note creation,
+    /// `daily` → `daily`, `chat/new` → `chat new`, `search` → `notes search`,
+    /// `settings` → `settings get`.
+    ///
+    /// Examples:
+    ///   vaultpilot uri "vaultpilot://note/new?name=Inbox&x-source=Alfred"
+    ///   vaultpilot uri "vaultpilot://note/new?overwrite=1&x-source=Alfred" --yes
+    Uri {
+        /// The `vaultpilot://...` URI to process
+        uri: String,
+
+        /// Skip the interactive confirmation prompt (for trusted automation)
+        #[arg(long)]
+        yes: bool,
+
+        /// Remember the x-source app as trusted ("don't ask again" for
+        /// Low/Medium-risk actions; High-risk actions always re-confirm)
+        #[arg(long)]
+        trust: bool,
+    },
 
     /// Start a local chat-completions bridge so external agents talk to VaultPilot as a model endpoint
     Serve {
@@ -2915,6 +2944,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
             eprintln!();
             to_json(&settings)
         }
+        Commands::Uri { uri, yes, trust } => handle_uri(context, uri, *yes, *trust).await,
         Commands::Serve { .. } => Ok(serde_json::json!({
             "message": "The HTTP bridge is started by running `vaultpilot-cli serve` directly."
         })),
@@ -4031,6 +4061,123 @@ async fn run_synthesize_notes(
             "outputTokens": result.usage.output_tokens,
         },
     }))
+}
+
+async fn handle_uri(
+    context: &StorageContext,
+    uri: &str,
+    yes: bool,
+    trust_source: bool,
+) -> Result<Value> {
+    use vaultpilot_lib::deep_link::{
+        describe_uri_action, parse_deep_link, should_confirm_uri_action, DeepLinkAction,
+        TrustedAppRegistry, UriConfirmationDecision,
+    };
+
+    let vault_dir = context.vault_dir();
+    let action = parse_deep_link(uri);
+
+    // Unknown route: nothing to execute. Fire the x-error callback if the
+    // caller supplied one, then fail loudly so automation sees the failure.
+    if matches!(action, DeepLinkAction::Unknown { .. }) {
+        if let Some(err_url) = action.xcallback().x_error.as_deref() {
+            println!("x-error: {err_url}");
+        }
+        bail!(
+            "unknown vaultpilot:// route: {}",
+            describe_uri_action(&action)
+        );
+    }
+
+    let xcb = action.xcallback();
+    let source = xcb.x_source.clone().unwrap_or_default();
+    let mut trusted = TrustedAppRegistry::load(vault_dir);
+
+    // ── Security gate (#3958) ─────────────────────────────────────────
+    // This is the CLI wiring for the #3822 confirmation backend. Previously
+    // should_confirm_uri_action had zero callers, so URIs from external apps
+    // (Alfred, Raycast, browser widgets, ...) executed with no risk gate.
+    let allowed = match should_confirm_uri_action(&action, &source, &trusted) {
+        UriConfirmationDecision::Allow { reason } => {
+            eprintln!("✓ {reason}");
+            true
+        }
+        UriConfirmationDecision::Confirm { message } => {
+            eprintln!("⚠ {message}");
+            let ok = if yes {
+                true
+            } else {
+                eprint!("   Allow this action? [y/N] ");
+                std::io::stdout().flush().ok();
+                let mut buf = String::new();
+                std::io::stdin().read_line(&mut buf).ok();
+                let answer = buf.trim().to_ascii_lowercase();
+                answer == "y" || answer == "yes"
+            };
+            if !ok {
+                eprintln!("   Declined.");
+            }
+            ok
+        }
+    };
+
+    if !allowed {
+        if let Some(err_url) = xcb.x_error.as_deref() {
+            println!("x-error: {err_url}");
+        }
+        bail!("declined deep link: {}", describe_uri_action(&action));
+    }
+
+    // "Don't ask again": persist the confirmed source as trusted. This only
+    // relaxes Low/Medium-risk actions — High-risk actions always re-confirm,
+    // so trusting a source can never bypass the gate for destructive URIs.
+    if trust_source && !source.is_empty() {
+        trusted.trust(&source);
+        trusted.save(vault_dir)?;
+        eprintln!("✓ remembered '{}' as trusted", source);
+    }
+
+    // ── Execute by dispatching to the matching existing handler ────────
+    let result = match &action {
+        DeepLinkAction::OpenNote { note_id, .. } => handle_notes(
+            context,
+            &NotesActions::Get {
+                id: note_id.clone(),
+            },
+        )?,
+        DeepLinkAction::Daily { .. } => handle_daily(context, "default", None, false, false)?,
+        DeepLinkAction::NewChat { .. } => {
+            handle_chat(context, &ChatActions::New { title: None }).await?
+        }
+        DeepLinkAction::Search { query, .. } => {
+            let results = search_notes_with_context(
+                context,
+                SearchQuery {
+                    text: query.clone().unwrap_or_default(),
+                    limit: Some(20),
+                    ..Default::default()
+                },
+            )?;
+            to_json(&results)?
+        }
+        DeepLinkAction::Settings { .. } => handle_settings(context, &SettingsActions::Get)?,
+        DeepLinkAction::NewNote { params, .. } => {
+            // CLI applies title + content. append/prepend/overwrite/silent/
+            // clipboard are desktop/mobile front-end semantics; the gate still
+            // protected this execution regardless of those flags.
+            let mut note = NoteDocument::default();
+            note.meta.title = params.name.clone().unwrap_or_default();
+            note.body = params.content.clone().unwrap_or_default();
+            let saved = save_note_with_context(context, note)?;
+            to_json(&saved)?
+        }
+        DeepLinkAction::Unknown { .. } => unreachable!("handled above"),
+    };
+
+    if let Some(ok_url) = xcb.x_success.as_deref() {
+        println!("x-success: {ok_url}");
+    }
+    Ok(result)
 }
 
 async fn handle_chat(context: &StorageContext, action: &ChatActions) -> Result<Value> {

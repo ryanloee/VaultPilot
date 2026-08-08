@@ -220,6 +220,25 @@ pub fn is_vaultpilot_uri(uri: &str) -> bool {
     strip_scheme(uri).is_some()
 }
 
+impl DeepLinkAction {
+    /// The x-callback-url parameters carried by this action.
+    ///
+    /// Every route may carry `x-success` / `x-error` / `x-source` (see
+    /// [`XCallback`]); this accessor lets callers (CLI wiring, #3958) read
+    /// them without matching on every variant.
+    pub fn xcallback(&self) -> &XCallback {
+        match self {
+            DeepLinkAction::NewNote { xcallback, .. }
+            | DeepLinkAction::OpenNote { xcallback, .. }
+            | DeepLinkAction::Daily { xcallback }
+            | DeepLinkAction::NewChat { xcallback }
+            | DeepLinkAction::Search { xcallback, .. }
+            | DeepLinkAction::Settings { xcallback }
+            | DeepLinkAction::Unknown { xcallback, .. } => xcallback,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

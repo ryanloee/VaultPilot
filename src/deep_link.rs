@@ -220,6 +220,25 @@ pub fn is_vaultpilot_uri(uri: &str) -> bool {
     strip_scheme(uri).is_some()
 }
 
+impl DeepLinkAction {
+    /// The x-callback-url parameters carried by this action.
+    ///
+    /// Every route may carry `x-success` / `x-error` / `x-source` (see
+    /// [`XCallback`]); this accessor lets callers (CLI wiring, #3958) read
+    /// them without matching on every variant.
+    pub fn xcallback(&self) -> &XCallback {
+        match self {
+            DeepLinkAction::NewNote { xcallback, .. }
+            | DeepLinkAction::OpenNote { xcallback, .. }
+            | DeepLinkAction::Daily { xcallback }
+            | DeepLinkAction::NewChat { xcallback }
+            | DeepLinkAction::Search { xcallback, .. }
+            | DeepLinkAction::Settings { xcallback }
+            | DeepLinkAction::Unknown { xcallback, .. } => xcallback,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -460,11 +479,18 @@ impl TrustedAppRegistry {
     }
 
     /// Persist the registry to `<vault_dir>/.vaultpilot/trusted_apps.yaml`.
+    ///
+    /// Writes through the hardened [`crate::storage::atomic_write`] path (temp
+    /// file + 0600-before-write + atomic rename), consistent with the project's
+    /// permission policy for sensitive files under `.vaultpilot/` (#186).
+    /// Previously this used a plain `std::fs::write`, which left the file
+    /// world-readable (0644) — the registry records the user's app-trust
+    /// decisions and deserves the same 0600 treatment as settings (#3959).
     pub fn save(&self, vault_dir: &Path) -> Result<()> {
         let dir = vault_dir.join(".vaultpilot");
         std::fs::create_dir_all(&dir)?;
         let yaml = serde_yaml_ng::to_string(self)?;
-        std::fs::write(trusted_apps_path(vault_dir), yaml)?;
+        crate::storage::atomic_write(&trusted_apps_path(vault_dir), yaml.as_bytes())?;
         Ok(())
     }
 
@@ -1096,6 +1122,41 @@ mod tests {
         // Non-existent vault dir returns empty registry.
         let empty = TrustedAppRegistry::load(&temp.join("nonexistent"));
         assert!(!empty.is_trusted("Raycast"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_3959_trusted_apps_save_is_0600_not_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-trusted-3959-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("Alfred");
+        trusted.save(&temp).expect("save");
+
+        let path = trusted_apps_path(&temp);
+        let mode = std::fs::metadata(&path)
+            .expect("trusted_apps.yaml exists")
+            .permissions()
+            .mode();
+        // The registry records user trust decisions under .vaultpilot/ and
+        // must not be world-readable (0644) — same 0600 policy as settings.
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "trusted_apps.yaml must be 0600, got {mode:o}"
+        );
+
+        // Round-trip still works through the hardened write path.
+        let loaded = TrustedAppRegistry::load(&temp);
+        assert!(loaded.is_trusted("Alfred"));
 
         let _ = std::fs::remove_dir_all(&temp);
     }

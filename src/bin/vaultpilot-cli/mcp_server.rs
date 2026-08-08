@@ -393,7 +393,7 @@ async fn run_mcp_server_async(context: &StorageContext) -> Result<()> {
                         ))
                     }
                 } else {
-                    handle_mcp_request(context, &state, request).await
+                    handle_mcp_request(context, &state, request, &state.client_name).await
                 }
             }
             Err(error) => Some(McpResponse::error(
@@ -628,7 +628,18 @@ async fn mcp_http_handler(
         }
     }
 
-    match handle_mcp_request(&state.context, &state_snapshot, request).await {
+    // #3994 — the HTTP MCP server is multi-client, so the #3964 gate must
+    // never trust the *globally shared* client_name (any client's `initialize`
+    // overwrites it, letting sessions pollute each other and self-identify as
+    // a trusted app). Instead the gate source is derived per-request from the
+    // explicit `x-vaultpilot-source` header, exactly like the HTTP bridge.
+    let gate_source = headers
+        .get("x-vaultpilot-source")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    match handle_mcp_request(&state.context, &state_snapshot, request, &gate_source).await {
         Some(resp) => Json(resp).into_response(),
         None => (axum::http::StatusCode::ACCEPTED,).into_response(),
     }
@@ -640,6 +651,7 @@ async fn handle_mcp_request(
     context: &StorageContext,
     state: &McpServerState,
     request: McpRequest,
+    gate_source: &str,
 ) -> Option<McpResponse> {
     if request.jsonrpc != "2.0" {
         return Some(McpResponse::error(
@@ -752,17 +764,20 @@ async fn handle_mcp_request(
             // ── #3964 URI safety gate ────────────────────────────────────
             // Headless entry points cannot present a confirmation dialog, so
             // mutating/destructive tools are routed through the shared risk
-            // classifier: Low always allowed, Medium only from a trusted
-            // client, High always denied. `automation_tool_uri` returns None
-            // for read-only tools, which stay ungated.
-            if let Some(uri) = vaultpilot_lib::deep_link::automation_tool_uri(tool_name) {
+            // classifier (deep_link::automation_tool_gate): Low always
+            // allowed, Medium only from a trusted client, High always denied.
+            // `gate_source` is the per-session caller identity (stdio MCP:
+            // clientInfo.name of the single client; HTTP MCP: the per-request
+            // `x-vaultpilot-source` header, #3994 — never the globally shared
+            // client_name, which cross-session initialize calls would
+            // overwrite and let clients self-identify as a trusted app).
+            {
                 use vaultpilot_lib::deep_link::{
-                    parse_deep_link, should_allow_non_interactive, TrustedAppRegistry,
+                    should_allow_tool_non_interactive, TrustedAppRegistry,
                 };
-                let action = parse_deep_link(uri);
                 let trusted = TrustedAppRegistry::load(context.vault_dir());
                 if let Err(message) =
-                    should_allow_non_interactive(&action, &state.client_name, &trusted)
+                    should_allow_tool_non_interactive(tool_name, gate_source, &trusted)
                 {
                     return Some(McpResponse::error(id, -32000, message, None));
                 }

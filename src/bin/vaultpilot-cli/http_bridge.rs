@@ -1997,6 +1997,10 @@ async fn http_create_subscription(
     Json(req): Json<CreateSubscriptionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964 gate: creating a subscription is a Medium mutation (reversible),
+    // so token holders are no longer exempt from the trusted-source check
+    // (#3993).
+    enforce_uri_gate(&state, &headers, "http_create_subscription")?;
     let sub = create_subscription_async(
         &state.context,
         req.name,
@@ -2051,6 +2055,8 @@ async fn http_delete_subscription(
     AxumPath(sub_id): AxumPath<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964/#3993: Medium mutation.
+    enforce_uri_gate(&state, &headers, "http_delete_subscription")?;
     let deleted = delete_subscription_async(&state.context, sub_id.clone())
         .await
         .map_err(|e| {
@@ -2080,6 +2086,9 @@ async fn http_run_subscription(
     AxumPath(sub_id): AxumPath<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964/#3993: running a subscription writes research results into the
+    // vault as notes — assert trusted-source before running.
+    enforce_uri_gate(&state, &headers, "http_run_subscription")?;
     let sub = get_subscription_async(&state.context, sub_id.clone())
         .await
         .map_err(|e| {
@@ -2111,6 +2120,8 @@ async fn http_toggle_subscription(
     Json(req): Json<ToggleSubscriptionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964/#3993: Medium mutation.
+    enforce_uri_gate(&state, &headers, "http_toggle_subscription")?;
     let updated = set_subscription_enabled_async(&state.context, sub_id.clone(), req.enabled)
         .await
         .map_err(|e| {
@@ -2157,6 +2168,8 @@ async fn http_update_subscription(
     Json(req): Json<UpdateSubscriptionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964/#3993: Medium mutation.
+    enforce_uri_gate(&state, &headers, "http_update_subscription")?;
 
     // Load existing subscription for partial merge
     let existing = get_subscription_async(&state.context, sub_id.clone())
@@ -2248,6 +2261,9 @@ async fn http_ai_action(
     Json(req): Json<AiActionHttpRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
     require_bridge_token(&state, &headers)?;
+    // #3964/#3993: AI actions accept a note_id and can rewrite the note —
+    // require a trusted source, matching http_create_note's bar.
+    enforce_uri_gate(&state, &headers, "http_ai_action")?;
     let ai_request = AiActionRequest {
         action: req.action,
         text: req.text,
@@ -3002,11 +3018,10 @@ pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 ///
 /// The bridge cannot present a confirmation dialog, so mutating/destructive
 /// endpoints are routed through the shared headless policy
-/// (`deep_link::should_allow_non_interactive`): Low always allowed, Medium
-/// only from a trusted source, High always denied. `endpoint` is the
-/// handler name (e.g. `"http_create_note"`); it is looked up in
-/// `deep_link::automation_tool_uri`, which returns `None` for read-only
-/// endpoints (those stay ungated).
+/// (`deep_link::should_allow_tool_non_interactive`): Low always allowed,
+/// Medium only from a trusted source, High always denied. `endpoint` is the
+/// handler name (e.g. `"http_create_note"`); ungated (read-only) endpoints
+/// return `None` from `automation_tool_gate` and stay ungated.
 ///
 /// The caller app name is taken from the `x-vaultpilot-source` header
 /// (mirrors the CLI's x-callback `x-source`); an absent header is treated
@@ -3016,23 +3031,15 @@ fn enforce_uri_gate(
     headers: &HeaderMap,
     endpoint: &str,
 ) -> Result<(), (StatusCode, Json<OpenAiErrorEnvelope>)> {
-    use vaultpilot_lib::deep_link::{
-        automation_tool_uri, parse_deep_link, should_allow_non_interactive, TrustedAppRegistry,
-    };
-    let Some(uri) = automation_tool_uri(endpoint) else {
-        return Ok(());
-    };
+    use vaultpilot_lib::deep_link::{should_allow_tool_non_interactive, TrustedAppRegistry};
     let source = headers
         .get("x-vaultpilot-source")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let action = parse_deep_link(uri);
     let trusted = TrustedAppRegistry::load(state.context.vault_dir());
-    match should_allow_non_interactive(&action, &source, &trusted) {
-        Ok(()) => Ok(()),
-        Err(message) => Err(openai_error(StatusCode::FORBIDDEN, &message)),
-    }
+    should_allow_tool_non_interactive(endpoint, &source, &trusted)
+        .map_err(|message| openai_error(StatusCode::FORBIDDEN, &message))
 }
 
 fn require_bridge_token(

@@ -672,7 +672,141 @@ pub fn should_allow_non_interactive(
 ) -> Result<(), String> {
     let risk = classify_uri_action_risk(action);
     let description = describe_uri_action(action);
+    should_allow_risk_non_interactive(risk, &description, source, trusted)
+}
 
+/// Gating classification for a headless automation tool call (#3964).
+///
+/// The MCP server and HTTP bridge cannot show a confirmation dialog, so every
+/// mutating/destructive tool they expose is classified here. The struct pairs
+/// the closest `vaultpilot://` deep-link route (used for parsing/description)
+/// with the **effective risk class** for the tool call — the two can differ
+/// when the tool's runtime behavior is safer than the raw URI route (see
+/// [`automation_tool_gate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutomationToolGate {
+    /// Closest `vaultpilot://` deep-link route (for description/parsing).
+    pub uri: &'static str,
+    /// Effective risk class governing the tool call.
+    pub risk: UriActionRisk,
+    /// Human-readable description of what the tool does (for denial messages).
+    pub description: &'static str,
+}
+
+/// Map a headless automation tool call to its gate classification (#3964).
+///
+/// The MCP server and the HTTP bridge gate their write/delete tools through
+/// this table so [`classify_uri_action_risk`] stays the single source of
+/// truth for URI routes, while per-tool overrides capture tools whose runtime
+/// behavior differs from the closest URI:
+///
+/// - `notes.preview_edit` is **read-only** (`saved:false`, no storage calls)
+///   → ungated (`None`), exactly like `notes.search` (#3992).
+/// - `notes.apply_edit` records a pre-edit backup and can be undone with
+///   `vaultpilot revert-edit` → *reversible* → **Medium** (trusted-only)
+///   rather than High, so trusted MCP clients can drive the documented
+///   preview → apply workflow (#3992).
+/// - HTTP subscription endpoints and the AI action endpoint mutate app data /
+///   vault notes → **Medium** (trusted-only), closing the token-only bypass
+///   that `http_create_note` already closed (#3993).
+///
+/// Tools without a direct deep-link route map to the closest equivalent
+/// (`notes.delete` → `note/delete`, destructive edits → `note/edit`, bulk
+/// operations → `note/bulk?op=...`). Returns `None` for tools that are not
+/// gated (read-only / navigational operations / audited exemptions such as
+/// `http_chat_completions`, #3993).
+pub fn automation_tool_gate(tool: &str) -> Option<AutomationToolGate> {
+    let (uri, risk, description) = match tool {
+        // Medium — creating notes / subscription records (reversible).
+        "notes.create" | "http_create_note" | "http_clip_url" | "notes.import"
+        | "http_import_folder" => (
+            "vaultpilot://note/new",
+            UriActionRisk::Medium,
+            "create a note",
+        ),
+        "http_create_subscription"
+        | "http_update_subscription"
+        | "http_toggle_subscription"
+        | "http_delete_subscription" => (
+            "vaultpilot://note/new",
+            UriActionRisk::Medium,
+            "manage a subscription",
+        ),
+        // Medium — running a subscription writes a research note into the
+        // vault (reversible, like creating a note) (#3993).
+        "http_run_subscription" => (
+            "vaultpilot://note/new",
+            UriActionRisk::Medium,
+            "run a subscription and save its result as a note",
+        ),
+        // Medium — AI actions may rewrite a note when note_id is supplied;
+        // keep parity with http_create_note's trusted-source bar (#3993).
+        "http_ai_action" => (
+            "vaultpilot://note/edit",
+            UriActionRisk::Medium,
+            "run an AI action on a note",
+        ),
+        // High — deleting notes (irreversible).
+        "notes.delete" | "http_delete_note" | "http_bulk_delete_notes" => (
+            "vaultpilot://note/delete",
+            UriActionRisk::High,
+            "delete notes",
+        ),
+        // #3992 — apply_edit records a pre-edit backup + revert-edit exists
+        // → reversible → Medium (trusted-only), NOT High like raw note/edit.
+        "notes.apply_edit" => (
+            "vaultpilot://note/edit",
+            UriActionRisk::Medium,
+            "apply an AI edit to a note (backup recorded)",
+        ),
+        // High — starting an AI chat may execute agent tools.
+        "chat.new" => (
+            "vaultpilot://chat/new",
+            UriActionRisk::High,
+            "start an AI chat",
+        ),
+        // High — bulk destructive operations (move retargets files; retag
+        // rewrites note files via save_note, so both are irreversible-ish).
+        "http_bulk_move_notes" => (
+            "vaultpilot://note/bulk?op=move",
+            UriActionRisk::High,
+            "bulk move notes",
+        ),
+        "http_bulk_update_tags" => (
+            "vaultpilot://note/bulk?op=update_tags",
+            UriActionRisk::High,
+            "bulk update note tags",
+        ),
+        // Not gated — read-only / navigational / non-vault tools, and the
+        // audited `http_chat_completions` exemption (#3993).
+        _ => return None,
+    };
+    Some(AutomationToolGate {
+        uri,
+        risk,
+        description,
+    })
+}
+
+/// Backwards-compatible URI lookup: returns the closest deep-link route for a
+/// gated automation tool (see [`automation_tool_gate`]).
+pub fn automation_tool_uri(tool: &str) -> Option<&'static str> {
+    automation_tool_gate(tool).map(|gate| gate.uri)
+}
+
+/// Shared risk-based decision for the #3964 non-interactive gate.
+///
+/// - **Low** risk actions: always allowed (read-only / navigational).
+/// - **Medium** risk actions: allowed only when `source` is a trusted app
+///   (see [`TrustedAppRegistry`]).
+/// - **High** risk actions: **always denied** — a headless server cannot
+///   present the confirmation dialog that high-risk actions require.
+pub fn should_allow_risk_non_interactive(
+    risk: UriActionRisk,
+    description: &str,
+    source: &str,
+    trusted: &TrustedAppRegistry,
+) -> Result<(), String> {
     match risk {
         // Read-only actions are always safe to execute, even headless.
         UriActionRisk::Low => Ok(()),
@@ -698,38 +832,22 @@ pub fn should_allow_non_interactive(
     }
 }
 
-/// Map a headless automation tool call to the `vaultpilot://` URI whose risk
-/// classification governs it (#3964).
+/// #3964 — evaluate the non-interactive gate for one automation tool call
+/// (MCP tool name or HTTP bridge endpoint), using the tool's *effective* risk
+/// class from [`automation_tool_gate`]. Ungated tools (read-only) always pass.
 ///
-/// The MCP server and the HTTP bridge gate their write/delete tools through
-/// this table so [`classify_uri_action_risk`] stays the single source of
-/// truth: each gated tool is parsed with [`parse_deep_link`] and evaluated
-/// with [`should_allow_non_interactive`].
-///
-/// Tools without a direct deep-link route map to the closest equivalent
-/// (`notes.delete` → `note/delete`, destructive edits → `note/edit`, bulk
-/// operations → `note/bulk?op=...`). Returns `None` for tools that are not
-/// gated (read-only / navigational operations).
-pub fn automation_tool_uri(tool: &str) -> Option<&'static str> {
-    match tool {
-        // Medium — creating notes (reversible).
-        "notes.create" | "http_create_note" | "http_clip_url" | "notes.import"
-        | "http_import_folder" => Some("vaultpilot://note/new"),
-        // High — deleting notes (irreversible).
-        "notes.delete" | "http_delete_note" | "http_bulk_delete_notes" => {
-            Some("vaultpilot://note/delete")
-        }
-        // High — destructive note rewrite.
-        "notes.preview_edit" | "notes.apply_edit" => Some("vaultpilot://note/edit"),
-        // High — starting an AI chat may execute agent tools.
-        "chat.new" => Some("vaultpilot://chat/new"),
-        // High — bulk destructive operations (move retargets files; retag
-        // rewrites note files via save_note, so both are irreversible-ish).
-        "http_bulk_move_notes" => Some("vaultpilot://note/bulk?op=move"),
-        "http_bulk_update_tags" => Some("vaultpilot://note/bulk?op=update_tags"),
-        // Not gated — read-only / navigational / non-vault tools.
-        _ => None,
-    }
+/// `source` is the calling app name (MCP `clientInfo.name` / per-session
+/// header, HTTP `x-vaultpilot-source`); an empty source is treated as
+/// untrusted.
+pub fn should_allow_tool_non_interactive(
+    tool: &str,
+    source: &str,
+    trusted: &TrustedAppRegistry,
+) -> Result<(), String> {
+    let Some(gate) = automation_tool_gate(tool) else {
+        return Ok(());
+    };
+    should_allow_risk_non_interactive(gate.risk, gate.description, source, trusted)
 }
 
 // ---------------------------------------------------------------------------
@@ -1472,26 +1590,28 @@ mod tests {
 
     #[test]
     fn test_3964_automation_tool_uri_mcp_mapping_risks() {
-        // The MCP tool → URI mapping must classify with the expected risk
-        // (#3964): chat.new High, notes.delete High, notes.create Medium.
+        // The MCP tool → gate mapping must classify with the expected risk
+        // (#3964, #3992): chat.new High, notes.delete High, notes.create
+        // Medium. notes.apply_edit records a pre-edit backup (revert-edit) so
+        // it is Medium (reversible) rather than High like the raw note/edit
+        // URI; notes.preview_edit is read-only and ungated (#3992).
         let cases = [
             ("chat.new", UriActionRisk::High),
             ("notes.delete", UriActionRisk::High),
-            ("notes.preview_edit", UriActionRisk::High),
-            ("notes.apply_edit", UriActionRisk::High),
+            ("notes.apply_edit", UriActionRisk::Medium),
             ("notes.create", UriActionRisk::Medium),
             ("notes.import", UriActionRisk::Medium),
         ];
         for (tool, expected) in cases {
-            let uri = automation_tool_uri(tool)
-                .unwrap_or_else(|| panic!("{tool} must map to a vaultpilot:// URI"));
-            let action = parse_deep_link(uri);
-            assert_eq!(
-                classify_uri_action_risk(&action),
-                expected,
-                "tool {tool} -> {uri} risk mismatch"
-            );
+            let gate =
+                automation_tool_gate(tool).unwrap_or_else(|| panic!("{tool} must map to a gate"));
+            assert_eq!(gate.risk, expected, "tool {tool} risk mismatch");
         }
+        // preview_edit is read-only — NOT gated.
+        assert!(
+            automation_tool_gate("notes.preview_edit").is_none(),
+            "notes.preview_edit is read-only and must not be gated"
+        );
     }
 
     #[test]
@@ -1504,16 +1624,19 @@ mod tests {
             ("http_bulk_delete_notes", UriActionRisk::High),
             ("http_bulk_move_notes", UriActionRisk::High),
             ("http_bulk_update_tags", UriActionRisk::High),
+            // #3993 — subscription lifecycle + run + AI actions were ungated;
+            // they mutate app data / vault notes, so they are now gated.
+            ("http_create_subscription", UriActionRisk::Medium),
+            ("http_update_subscription", UriActionRisk::Medium),
+            ("http_toggle_subscription", UriActionRisk::Medium),
+            ("http_delete_subscription", UriActionRisk::Medium),
+            ("http_run_subscription", UriActionRisk::Medium),
+            ("http_ai_action", UriActionRisk::Medium),
         ];
         for (tool, expected) in cases {
-            let uri = automation_tool_uri(tool)
-                .unwrap_or_else(|| panic!("{tool} must map to a vaultpilot:// URI"));
-            let action = parse_deep_link(uri);
-            assert_eq!(
-                classify_uri_action_risk(&action),
-                expected,
-                "tool {tool} -> {uri} risk mismatch"
-            );
+            let gate =
+                automation_tool_gate(tool).unwrap_or_else(|| panic!("{tool} must map to a gate"));
+            assert_eq!(gate.risk, expected, "tool {tool} risk mismatch");
         }
     }
 
@@ -1527,6 +1650,7 @@ mod tests {
             "notes.related",
             "notes.follow_links",
             "notes.backlinks",
+            "notes.preview_edit", // read-only, #3992
             "chat.list_sessions",
             "chat.get_state",
             "chat.send",
@@ -1544,12 +1668,78 @@ mod tests {
             "http_health",
             "http_vault_health",
             "http_graph",
+            "http_get_subscription",
+            "http_list_subscriptions",
+            "http_list_ai_actions",
+            "http_settings_definitions",
+            // #3993 — the OpenAI-compat chat endpoint is exempted (audited in
+            // the bridge) so it stays usable by token-only clients.
+            "http_chat_completions",
         ] {
             assert!(
-                automation_tool_uri(tool).is_none(),
+                automation_tool_gate(tool).is_none(),
                 "{tool} should not be gated"
             );
         }
+    }
+
+    #[test]
+    fn test_3992_preview_edit_and_apply_edit_gate_semantics() {
+        // The MCP preview → apply workflow (#3108) must not be locked out:
+        // - preview_edit is read-only → always allowed, even with no source.
+        // - apply_edit is reversible (backup + revert-edit) → Medium: allowed
+        //   only from a trusted source (#3992).
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("VaultPilot-WinUI");
+
+        assert!(
+            should_allow_tool_non_interactive("notes.preview_edit", "someone", &trusted).is_ok(),
+            "read-only preview must be ungated"
+        );
+        assert!(
+            should_allow_tool_non_interactive("notes.preview_edit", "", &trusted).is_ok(),
+            "read-only preview must be ungated even without a source"
+        );
+
+        let err = should_allow_tool_non_interactive("notes.apply_edit", "", &trusted)
+            .expect_err("untrusted apply_edit must be denied");
+        assert!(
+            err.contains("not a trusted source"),
+            "denial should explain the trusted-source requirement: {err}"
+        );
+        assert!(
+            should_allow_tool_non_interactive("notes.apply_edit", "VaultPilot-WinUI", &trusted)
+                .is_ok(),
+            "apply_edit from a trusted source must pass the gate"
+        );
+    }
+
+    #[test]
+    fn test_3993_new_http_endpoints_require_trusted_source() {
+        let mut trusted = TrustedAppRegistry::default();
+        trusted.trust("VaultPilot-WinUI");
+
+        for tool in [
+            "http_create_subscription",
+            "http_update_subscription",
+            "http_delete_subscription",
+            "http_run_subscription",
+            "http_ai_action",
+        ] {
+            assert!(
+                should_allow_tool_non_interactive(tool, "", &trusted).is_err(),
+                "{tool} must be denied for an untrusted source"
+            );
+            assert!(
+                should_allow_tool_non_interactive(tool, "VaultPilot-WinUI", &trusted).is_ok(),
+                "{tool} must pass for a trusted source"
+            );
+        }
+        // chat_completions is intentionally exempt (audited in the bridge).
+        assert!(
+            should_allow_tool_non_interactive("http_chat_completions", "", &trusted).is_ok(),
+            "http_chat_completions is exempt from the URI gate (#3993)"
+        );
     }
 
     #[test]

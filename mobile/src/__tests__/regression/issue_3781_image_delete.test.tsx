@@ -57,9 +57,10 @@ describe('#3781 MarkdownPreview — 长按选中 + 删除', () => {
     await fireEvent(getByTestId('md-image-0'), 'longPress');
     expect(getByTestId('md-image-delete-btn')).toBeTruthy();
 
-    // 点 删除 → 父组件收到整行 markdown；本地选中清除，操作栏消失
+    // 点 删除 → 父组件收到被选图片的行索引（0-based）；本地选中清除，操作栏消失
     await fireEvent.press(getByTestId('md-image-delete-btn'));
-    expect(onDeleteImage).toHaveBeenCalledWith('![photo](https://example.com/p.png)');
+    // content 'before\n![photo](https://example.com/p.png)\nafter' — image is line index 1
+    expect(onDeleteImage).toHaveBeenCalledWith(1);
     expect(queryByTestId('md-image-action-bar')).toBeNull();
   });
 

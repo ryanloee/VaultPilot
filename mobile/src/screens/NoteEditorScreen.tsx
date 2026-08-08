@@ -14,6 +14,7 @@ import { chat, ChatMessage, parseSSEStream } from '../api/client';
 import AiActionPalette from '../components/ai/AiActionPalette';
 import { fetchKnowledgeGraph } from '../services/graphService';
 import { extractRelatedNotes, RelatedNote } from '../utils/relatedNotes';
+import { removeLineByIndex } from '../utils/imageMarkdown';
 
 export default function NoteEditorScreen({ route, navigation }: any) {
   const { noteId } = route.params;
@@ -444,9 +445,10 @@ export default function NoteEditorScreen({ route, navigation }: any) {
             textColor={c.text}
             accentColor={accentColor}
             isDark={isDark}
-            // #3781: delete the selected standalone image line from the note
-            onDeleteImage={(imageLine) => {
-              const next = (contentRef.current || '').split('\n').filter((l) => l !== imageLine).join('\n');
+            // #3781 / #3963: delete ONLY the selected image's line by index
+            // (not by text equality — duplicate image lines must be preserved)
+            onDeleteImage={(lineIndex) => {
+              const next = removeLineByIndex(contentRef.current || '', lineIndex);
               contentRef.current = next;
               setContent(next);
               autoSave(titleRef.current, next);

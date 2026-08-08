@@ -49,7 +49,7 @@ fn regression_xxx_descriptive_name() {
 | Test Type | Location | Naming Convention |
 |-----------|----------|-------------------|
 | Unit tests | `mobile/src/__tests__/` | `<module>.test.ts` |
-| Regression tests | `mobile/src/__tests__/regression/` | `issue_xxx.test.ts` |
+| Regression tests | `mobile/src/__tests__/regression/` | `issue_NNN.test.ts` (pure logic) or `issue_NNN.test.tsx` (JSX/component) |
 
 ### WinUI (C# / xUnit)
 
@@ -68,7 +68,7 @@ When fixing a bug, **always** add a regression test. This is a hard requirement 
 
 - **Rust public API bug** → `src/regression/issue_NNN_short_desc.rs`
 - **Rust internal/private function bug** → Inline `#[cfg(test)]` in the source file, with a `// REGRESSION: #NNN` comment
-- **Mobile bug** → `mobile/src/__tests__/regression/issue_NNN.test.ts`
+- **Mobile bug** → `mobile/src/__tests__/regression/issue_NNN.test.ts` (pure logic) or `issue_NNN.test.tsx` (JSX/component tests); jest's `--testPathPattern` matches both extensions
 - **WinUI bug** → `native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs`
 
 ### 2. Create the regression file
@@ -146,7 +146,9 @@ mod tests {
 
 ## Regression Test Template (TypeScript / Jest)
 
-Copy into `mobile/src/__tests__/regression/issue_NNN.test.ts`:
+Copy into `mobile/src/__tests__/regression/issue_NNN.test.ts` (pure logic tests)
+or `issue_NNN.test.tsx` (component/JSX tests). Jest matches both extensions via
+`--testPathPattern`.
 
 ```typescript
 /**

@@ -44,7 +44,8 @@ cargo test regression_NNN
 **For Mobile (TypeScript):**
 ```bash
 # Create the test file
-# mobile/src/__tests__/regression/issue_NNN.test.ts
+# mobile/src/__tests__/regression/issue_NNN.test.ts   (pure logic / utility tests)
+# mobile/src/__tests__/regression/issue_NNN.test.tsx  (component / JSX tests)
 
 # Run and confirm it FAILS
 cd mobile && npx jest issue_NNN

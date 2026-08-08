@@ -3,7 +3,6 @@ name: Android Build
 on:
   push:
     branches: [main]
-    paths: [mobile/**, .github/workflows/android-build.yml]
     tags:
       - "v*"
   pull_request:
@@ -13,6 +12,17 @@ on:
 
 jobs:
   build:
+    # #3428: the `paths` filter was removed from the `push` trigger because it
+    # applied to tag pushes too, silently skipping 55% of release tags (157/285
+    # whose commits did not touch mobile/) and leaving those releases without
+    # an APK. Branch pushes are gated here instead: run when the push commits
+    # touch mobile/ or this workflow. Tag pushes, PRs and manual dispatches
+    # always run.
+    if: >-
+      github.event_name != 'push' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      contains(toJson(github.event.commits), 'mobile/') ||
+      contains(toJson(github.event.commits), 'android-build.yml')
     runs-on: ubuntu-latest
     defaults:
       run:

@@ -41,23 +41,14 @@ cargo test regression_NNN
 #   }
 ```
 
-**For Mobile (TypeScript):**
+**For Desktop UI (Tauri / React):**
 ```bash
-# Create the test file
-# mobile/src/__tests__/regression/issue_NNN.test.ts   (pure logic / utility tests)
-# mobile/src/__tests__/regression/issue_NNN.test.tsx  (component / JSX tests)
+# Create the test file under desktop/src/ (alongside the module under test)
+# desktop/src/__tests__/issue_NNN.test.ts(x)
 
-# Run and confirm it FAILS
-cd mobile && npx jest issue_NNN
-```
-
-**For WinUI (C#):**
-```bash
-# Create the test file
-# native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs
-
-# Run and confirm it FAILS
-dotnet test native/VaultPilot.WinUI.Tests/ --filter "IssueNNN"
+# Run and confirm it FAILS, then passes with the fix
+cd desktop && pnpm vitest issue_NNN   # when vitest is wired up
+pnpm build                            # type check + build gate
 ```
 
 ### Step 3: Implement the Fix

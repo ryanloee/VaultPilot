@@ -19,8 +19,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REGRESSION_DIR_RUST="$REPO_ROOT/src/regression"
-REGRESSION_DIR_MOBILE="$REPO_ROOT/mobile/src/__tests__/regression"
-REGRESSION_DIR_WINUI="$REPO_ROOT/native/VaultPilot.WinUI.Tests/Regression"
 
 # Check if any regression test files exist (excluding templates)
 has_regression_tests() {
@@ -56,8 +54,6 @@ main() {
             echo ""
             echo "If this is a bug fix, please add a regression test:"
             echo "  Rust:   src/regression/issue_NNN_short_desc.rs"
-            echo "  Mobile: mobile/src/__tests__/regression/issue_NNN.test.ts"
-            echo "  WinUI:  native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs"
             echo ""
             echo "See docs/TESTING.md for templates and conventions."
             exit 1
@@ -74,20 +70,8 @@ main() {
         echo "  ⚪ Rust: none yet (template available)"
     fi
 
-    if [ -d "$REGRESSION_DIR_MOBILE" ]; then
-        echo "  ✅ Mobile: $(find "$REGRESSION_DIR_MOBILE" -name "*.test.ts" 2>/dev/null | wc -l) test file(s)"
-    else
-        echo "  ⚪ Mobile: none yet"
-    fi
-
-    if [ -d "$REGRESSION_DIR_WINUI" ]; then
-        echo "  ✅ WinUI: $(find "$REGRESSION_DIR_WINUI" -name "*Tests.cs" 2>/dev/null | wc -l) test file(s)"
-    else
-        echo "  ⚪ WinUI: none yet"
-    fi
-
     echo ""
-    echo "All regression test directories exist and are ready for new tests."
+    echo "Regression test directories are ready for new tests."
     exit 0
 }
 

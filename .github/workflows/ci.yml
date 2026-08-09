@@ -220,8 +220,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  winui_build:
-    name: winui-build
+  tauri_desktop_build:
+    name: tauri-desktop-build
     runs-on: windows-2022
     steps:
       - name: Checkout
@@ -243,13 +243,23 @@ jobs:
           git fetch upstream "$BASE_REF"
           git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+      - name: Setup Node
+        uses: actions/setup-node@v7
         with:
-          dotnet-version: 8.0.x
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -259,39 +269,5 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Cache NuGet packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('native/VaultPilot.WinUI/VaultPilot.WinUI.csproj', 'native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj') }}
-
-      - name: Build WinUI project
-        run: msbuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj /restore /p:Configuration=Release /p:Platform=x64
-
-      # NOTE: C# unit tests cannot run in CI because the test project references
-      # VaultPilot.WinUI.dll which triggers WinRT runtime activation that hangs
-      # in headless CI runners. The build step below verifies test compilation.
-      # Tracked in #597 — fix requires extracting model classes into a
-      # non-UI shared project.
-      - name: Build C# unit tests (compile-only)
-        timeout-minutes: 3
-        shell: powershell
-        run: |
-          msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /t:Restore /p:BuildProjectReferences=false
-          msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Release /p:Platform=x64 /p:BuildProjectReferences=false
-
-      - name: Smoke test WinUI app
-        shell: powershell
-        run: |
-          ./scripts/smoke-test-winui.ps1 `
-            -ExePath "native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe" `
-            -TimeoutSeconds 8
-
-      # PR gate: Rust backend agent must start, answer JSON-RPC, and survive
-      # a heartbeat window (see smoke-test-agent.ps1).
-      - name: Smoke test agent backend
-        shell: powershell
-        run: |
-          ./scripts/smoke-test-agent.ps1 `
-            -ExePath "native/VaultPilot.WinUI/bin/x64/Release/net8.0-windows10.0.19041.0/vaultpilot-agent.exe" `
-            -HeartbeatSeconds 20
+      - name: Check Tauri backend
+        run: cargo check -p vaultpilot-desktop

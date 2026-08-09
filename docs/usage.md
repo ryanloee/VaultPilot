@@ -2,8 +2,8 @@
 
 ## English
 
-VaultPilot includes a Windows desktop app and a cross-platform CLI.  
-The Linux build is CLI-only and does not include the WinUI frontend.
+VaultPilot includes a Tauri desktop app (Windows / Linux), an Android app, and a cross-platform CLI.  
+Windows, Linux, and Android share the same React UI and Rust backend (`vaultpilot_lib`).
 
 ### Main usage modes
 
@@ -13,17 +13,19 @@ The Linux build is CLI-only and does not include the WinUI frontend.
 
 ### Start the desktop app from a local build
 
-For local testing, run:
+For local testing, run the Tauri dev server from `desktop/`:
 
-- `native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
+```powershell
+cd desktop
+pnpm tauri dev
+```
 
-If you built Release instead, use the equivalent Release path.
+For a production build, run `pnpm tauri build` (see `docs/build.md`).
 
 ### Start the installed app
 
-After installing the package, the app usually runs from:
-
-- `C:\Users\<YourUser>\AppData\Local\VaultPilot\current\VaultPilot.WinUI.exe`
+After installing the package, launch VaultPilot from the Start Menu (Windows),
+the installed .deb / AppImage (Linux), or the APK (Android).
 
 ### First-time setup
 
@@ -49,8 +51,8 @@ You can also choose whether the app should check for updates at startup.
 
 ### Update behavior
 
-If the app is installed through the Velopack installer, it can check GitHub releases for updates.  
-If the app is launched only from a local build directory, automatic update behavior is not available in the same way.
+Update behavior is delivered through the release channel (installer re-download /
+app store). Local dev builds do not auto-update.
 
 ### CLI and local bridge
 
@@ -67,8 +69,8 @@ For Linux CLI builds, the main binary is:
 
 ## 中文
 
-VaultPilot 包含 Windows 桌面应用和跨平台 CLI。  
-Linux 版本只包含 CLI，不包含 WinUI 图形界面。
+VaultPilot 包含 Tauri 桌面应用（Windows / Linux）、Android 应用和跨平台 CLI。  
+Windows、Linux、Android 共用同一套 React UI 和 Rust 后端（`vaultpilot_lib`）。
 
 ### 主要使用方式
 
@@ -78,17 +80,18 @@ Linux 版本只包含 CLI，不包含 WinUI 图形界面。
 
 ### 从本地构建结果启动桌面程序
 
-本地测试时，通常启动：
+本地测试时，在 `desktop/` 下运行 Tauri 开发模式：
 
-- `native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
+```powershell
+cd desktop
+pnpm tauri dev
+```
 
-如果你构建的是 Release 版本，也可以直接运行 Release 输出。
+生产构建请运行 `pnpm tauri build`（参见 `docs/build.md`）。
 
 ### 启动安装版程序
 
-安装完成后，程序通常位于：
-
-- `C:\Users\<你的用户名>\AppData\Local\VaultPilot\current\VaultPilot.WinUI.exe`
+安装完成后，从开始菜单启动（Windows）、安装的 .deb / AppImage（Linux）或 APK（Android）。
 
 ### 首次配置
 
@@ -114,8 +117,7 @@ Linux 版本只包含 CLI，不包含 WinUI 图形界面。
 
 ### 自动更新说明
 
-如果软件是通过 Velopack 安装包安装的，它可以从 GitHub Release 检查更新。  
-如果只是从本地构建目录直接运行，则不会以同样方式支持自动更新。
+更新通过发布渠道提供（重新下载安装包 / 应用商店）。本地开发构建不自动更新。
 
 ### CLI 与本地桥
 

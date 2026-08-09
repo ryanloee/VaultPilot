@@ -1,4 +1,4 @@
-name: Windows Installers
+name: Tauri Installers (Windows + Linux UI)
 
 on:
   push:
@@ -19,13 +19,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+      - name: Setup Node
+        uses: actions/setup-node@v7
         with:
-          dotnet-version: 8.0.x
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -65,61 +67,26 @@ jobs:
         shell: powershell
         run: cargo audit
 
-      - name: Build WinUI validation target
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
+
+      - name: Build agent backend (release)
         shell: powershell
-        run: >
-          MSBuild native/VaultPilot.WinUI/VaultPilot.WinUI.csproj
-          /restore
-          /t:Build
-          /p:Configuration=Debug
-          /p:Platform=x64
-          /bl:artifacts/logs/release-validate-winui-debug-x64.binlog
-
-      # NOTE: C# unit tests cannot run in CI — see ci.yml for details.
-      - name: Build C# unit tests (compile-only)
-        timeout-minutes: 3
-        shell: powershell
-        run: |
-          msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /t:Restore /p:BuildProjectReferences=false
-          msbuild native/VaultPilot.WinUI.Tests/VaultPilot.WinUI.Tests.csproj /p:Configuration=Debug /p:Platform=x64 /p:BuildProjectReferences=false
-
-      - name: Verify validation outputs
-        shell: powershell
-        run: |
-          $required = @(
-            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe",
-            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/vaultpilot-agent.exe",
-            "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/vaultpilot-cli.exe"
-          )
-
-          foreach ($path in $required) {
-            if (-not (Test-Path $path)) {
-              throw "Expected validation output not found: $path"
-            }
-          }
-
-          $binDir = "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0"
-          $notifyIconDll = Get-ChildItem $binDir -Filter "H.NotifyIcon.WinUI.dll" -Recurse -ErrorAction SilentlyContinue
-          if (-not $notifyIconDll) {
-            throw "H.NotifyIcon.WinUI.dll not found in build output"
-          }
-
-      - name: Smoke test WinUI app
-        shell: powershell
-        run: |
-          ./scripts/smoke-test-winui.ps1 `
-            -ExePath "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe" `
-            -TimeoutSeconds 8
+        run: cargo build --release --bin vaultpilot-agent
 
       # Release gate: the Rust backend agent must start, answer JSON-RPC,
       # and survive a heartbeat window. Catches "backend disconnect"-class
-      # regressions (agent won't start / protocol breakage / startup panic)
-      # before a version ships.
+      # regressions before a version ships.
       - name: Smoke test agent backend
         shell: powershell
         run: |
           ./scripts/smoke-test-agent.ps1 `
-            -ExePath "native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/vaultpilot-agent.exe" `
+            -ExePath "target/release/vaultpilot-agent.exe" `
             -HeartbeatSeconds 20
 
       - name: Upload validation diagnostics
@@ -151,13 +118,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+      - name: Setup Node
+        uses: actions/setup-node@v7
         with:
-          dotnet-version: 8.0.x
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -167,15 +136,14 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Install Velopack CLI
-        shell: powershell
-        run: dotnet tool install --global vpk --version 0.0.1298
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
 
       - name: Resolve app version
         id: version
         shell: powershell
         run: |
-          # Prefer git tag name when triggered by a tag push
           $tagRef = "${{ github.ref }}"
           if ($tagRef -match '^refs/tags/v(.+)$') {
             $version = $Matches[1]
@@ -190,34 +158,23 @@ jobs:
           "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
           echo "Resolved version: $version"
 
-      - name: Build Velopack package
+      - name: Sync Tauri version
         shell: powershell
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          $fetchReleaseHistory = "${{ startsWith(github.ref, 'refs/tags/v') }}" -eq "true"
-          ./scripts/build-windows-installers.ps1 `
-            -Platforms "${{ matrix.platform }}" `
-            -Version "${{ steps.version.outputs.value }}" `
-            -RepoUrl "https://github.com/${{ github.repository }}" `
-            -GitHubToken "$env:GITHUB_TOKEN" `
-            -FetchReleaseHistory:$fetchReleaseHistory
+          $conf = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $conf.version = "${{ steps.version.outputs.value }}"
+          $conf | ConvertTo-Json -Depth 20 | Set-Content desktop/src-tauri/tauri.conf.json -Encoding utf8
 
-      # Smoke test for the packaged installer is skipped here — the CI runner
-      # (windows-2022) has WinAppSDK pre-installed which conflicts with the
-      # self-contained bundle, causing a false-positive 0xC000027B crash on
-      # startup. This does NOT affect real user machines where no conflicting
-      # WinAppSDK is installed.
-      # Runtime verification is covered by the validate job (this workflow):
-      #   - WinUI startup smoke test (smoke-test-winui.ps1, Debug exe)
-      #   - Agent backend smoke test (smoke-test-agent.ps1: JSON-RPC + heartbeat)
-      # Both run on windows-2022 and must pass before build/release proceed.
+      - name: Build Tauri Windows installer
+        working-directory: desktop
+        shell: powershell
+        run: pnpm tauri build --bundles nsis --target ${{ matrix.rust_target }}
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
           name: windows-package-${{ matrix.platform }}
-          path: artifacts/velopack/packages/${{ matrix.channel }}
+          path: desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis/
           if-no-files-found: error
           retention-days: 7
 
@@ -231,12 +188,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install Linux packaging prerequisites
+      - name: Install Linux UI packaging prerequisites
         run: |
           # Remove broken Microsoft apt repos that cause update failures (#2613)
           sudo rm -f /etc/apt/sources.list.d/microsoft*.list 2>/dev/null || true
           sudo apt-get update
-          sudo apt-get install -y xz-utils dpkg-dev libssl-dev
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            xz-utils \
+            dpkg-dev \
+            pkg-config
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -246,28 +225,50 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Build Linux CLI artifacts
-        run: |
-          chmod +x scripts/build-linux-cli.sh
-          ./scripts/build-linux-cli.sh --platforms x64 --format all
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
 
-      - name: Verify Linux CLI outputs
+      - name: Resolve app version
+        id: version
+        shell: bash
         run: |
-          test -f artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
-          compgen -G "artifacts/linux-cli/packages/linux-x64/*.deb" > /dev/null
+          TAG_REF="${{ github.ref }}"
+          if [[ "$TAG_REF" =~ ^refs/tags/v(.+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            VERSION=$(grep -m1 '^version\s*=\s*"' Cargo.toml | sed -E 's/^version\s*=\s*"([^"]+)"/\1/')
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke test Linux CLI
+      - name: Sync Tauri version
         run: |
-          chmod +x scripts/smoke-test-linux-cli.sh
-          ./scripts/smoke-test-linux-cli.sh artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
+          python3 - <<'EOF'
+          import json
+          p = "desktop/src-tauri/tauri.conf.json"
+          with open(p, encoding="utf-8") as f:
+              conf = json.load(f)
+          conf["version"] = "${{ steps.version.outputs.value }}"
+          with open(p, "w", encoding="utf-8") as f:
+              json.dump(conf, f, indent=2)
+          EOF
+
+      - name: Build Tauri Linux package (deb + AppImage)
+        working-directory: desktop
+        run: pnpm tauri build --bundles deb,appimage --target x86_64-unknown-linux-gnu
+
+      - name: Verify Linux UI outputs
+        run: |
+          test -f desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+          compgen -G "desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage" > /dev/null
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: linux-package-x64
+          name: linux-ui-package-x64
           path: |
-            artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
-            artifacts/linux-cli/packages/linux-x64/*.deb
+            desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 7
 
@@ -276,16 +277,11 @@ jobs:
       contents: write
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, linux_build]
-    runs-on: windows-2022
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 8.0.x
 
       - name: Download x86 package
         uses: actions/download-artifact@v8
@@ -299,150 +295,34 @@ jobs:
           name: windows-package-x64
           path: release-assets/win-x64
 
-      - name: Download Linux x64 package
+      - name: Download Linux UI package
         uses: actions/download-artifact@v8
         with:
-          name: linux-package-x64
+          name: linux-ui-package-x64
           path: release-assets/linux-x64
 
-      - name: Inspect downloaded assets
-        shell: powershell
+      - name: Generate SHA256 checksums
         run: |
-          Write-Host "x86 assets:"
-          Get-ChildItem release-assets/win-x86 -File -Recurse | Sort-Object FullName | ForEach-Object { Write-Host " - $($_.FullName)" }
-          Write-Host "x64 assets:"
-          Get-ChildItem release-assets/win-x64 -File -Recurse | Sort-Object FullName | ForEach-Object { Write-Host " - $($_.FullName)" }
-          Write-Host "linux-x64 assets:"
-          Get-ChildItem release-assets/linux-x64 -File -Recurse | Sort-Object FullName | ForEach-Object { Write-Host " - $($_.FullName)" }
-
-      - name: Generate SHA256 checksums for supply chain verification (#1863)
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-          $checksumDir = "release-assets/checksums"
-          New-Item -ItemType Directory -Force -Path $checksumDir | Out-Null
-          Get-ChildItem release-assets -Recurse -File | Where-Object {
-            $_.Extension -notin @('.sha256')
-          } | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            $relative = $_.FullName.Replace($pwd.Path + "\release-assets\", "")
-            "$hash  $relative" | Out-File -Append -Encoding ascii "$checksumDir/SHA256SUMS"
-          }
-          Write-Host "=== SHA256SUMS ==="
-          Get-Content "$checksumDir/SHA256SUMS"
-          Compress-Archive -Path "$checksumDir/SHA256SUMS" -DestinationPath "$checksumDir/SHA256SUMS.zip" -Force
-          Write-Host "Checksums generated successfully"
+          mkdir -p release-assets/checksums
+          find release-assets -type f | sort | while read -r f; do
+            sha256sum "$f" >> release-assets/checksums/SHA256SUMS
+          done
+          cat release-assets/checksums/SHA256SUMS
+          (cd release-assets/checksums && zip -q SHA256SUMS.zip SHA256SUMS)
 
       - name: Publish release assets
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        shell: powershell
         run: |
-          $tag = "${{ github.ref_name }}"
-          $repo = "${{ github.repository }}"
-          $version = $tag.TrimStart('v')
-          $releaseTitle = "VaultPilot $version"
-          $ErrorActionPreference = "Stop"
-          $apiHeaders = @{
-            Authorization = "Bearer $env:GITHUB_TOKEN"
-            Accept = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
-          $apiBase = "https://api.github.com/repos/$repo"
-          $release = $null
+          TAG="${{ github.ref_name }}"
+          if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
+            gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
+          fi
 
-          try {
-            $release = Invoke-RestMethod `
-              -Method Get `
-              -Uri "$apiBase/releases/tags/$tag" `
-              -Headers $apiHeaders
-          } catch {
-            $statusCode = $null
-            if ($_.Exception.Response) {
-              $statusCode = [int]$_.Exception.Response.StatusCode
-            }
-
-            if ($statusCode -ne 404) {
-              throw
-            }
-          }
-
-          if (-not $release) {
-            $releasePayload = @{
-              tag_name = $tag
-              name = $releaseTitle
-              body = ""
-              draft = $false
-              prerelease = $false
-            } | ConvertTo-Json
-
-            $release = Invoke-RestMethod `
-              -Method Post `
-              -Uri "$apiBase/releases" `
-              -Headers $apiHeaders `
-              -ContentType "application/json" `
-              -Body $releasePayload
-          }
-
-          $existingAssetNames = @{}
-          foreach ($asset in @($release.assets)) {
-            if (-not [string]::IsNullOrWhiteSpace($asset.name)) {
-              $existingAssetNames[$asset.name.Trim()] = $true
-            }
-          }
-
-          function Upload-ReleaseAssets {
-            param(
-              [string]$Directory,
-              [hashtable]$ExistingNames
-            )
-
-            $assets = Get-ChildItem $Directory -File -Recurse | Where-Object {
-              $_.Name -match 'Setup\.exe$' -or
-              $_.Name -match '-full\.nupkg$' -or
-              $_.Name -match '\.deb$' -or
-              $_.Name -match '^releases\..+\.json$' -or
-              $_.Name -match '^RELEASES-.+$' -or
-              $_.Name -match '^SHA256SUMS\.zip$'
-            } | Sort-Object Name
-
-            if (-not $assets) {
-              throw "No release assets found in $Directory"
-            }
-
-            # Track uploaded assets by final upload name to avoid
-            # cross-directory collisions (e.g. Setup.exe from win-x86 vs win-x64)
-            $uploadedKeys = @{}
-
-            foreach ($asset in $assets) {
-              # Use directory-based channel to disambiguate duplicate filenames
-              $channel = Split-Path $Directory -Leaf
-              $assetName = if ($asset.Name -eq 'Setup.exe') {
-                "Setup-$channel.exe"
-              } else {
-                $asset.Name.Trim()
-              }
-
-              # Skip if already on the release (by final upload filename)
-              if ($ExistingNames.ContainsKey($assetName)) {
-                Write-Host "Skipping already-released asset $Directory/$assetName"
-                continue
-              }
-              # Skip if already uploaded from another directory in this run
-              if ($uploadedKeys.ContainsKey($assetName)) {
-                continue
-              }
-
-              Write-Host "Uploading $($asset.Name) as $assetName..."
-              gh release upload $tag "$($asset.FullName)#$assetName" --clobber
-              if ($LASTEXITCODE -ne 0) {
-                throw "Failed to upload asset $assetName"
-              }
-
-              $uploadedKeys[$assetName] = $true
-            }
-          }
-
-          Upload-ReleaseAssets -Directory "release-assets/win-x86" -ExistingNames $existingAssetNames
-          Upload-ReleaseAssets -Directory "release-assets/win-x64" -ExistingNames $existingAssetNames
-          Upload-ReleaseAssets -Directory "release-assets/linux-x64" -ExistingNames $existingAssetNames
+          find release-assets -type f \( \
+            -name '*-setup.exe' -o \
+            -name '*.deb' -o \
+            -name '*.AppImage' -o \
+            -name 'SHA256SUMS.zip' \) | sort | while read -r f; do
+            gh release upload "$TAG" "$f" --clobber
+          done

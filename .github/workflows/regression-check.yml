@@ -56,8 +56,6 @@ jobs:
             | Platform | Location |
             |----------|----------|
             | Rust/CLI | \`src/regression/issue_NNN_short_desc.rs\` |
-            | Mobile | \`mobile/src/__tests__/regression/issue_NNN.test.ts\` |
-            | WinUI | \`native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs\` |
 
             See [\`docs/TESTING.md\`](../docs/TESTING.md) for templates and conventions.
 

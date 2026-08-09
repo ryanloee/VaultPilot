@@ -2,8 +2,6 @@ node_modules/
 dist/
 target/
 gen/
-native/**/bin/
-native/**/obj/
 
 .env
 .env.*
@@ -22,8 +20,6 @@ CLAUDE.md
 packaging/windows/WindowsAppRuntimeInstall-*.exe
 artifacts/
 .tmp/
-
-src-tauri/target/
 
 # ZCode agent workspace
 .zcode/

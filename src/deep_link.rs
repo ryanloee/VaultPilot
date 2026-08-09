@@ -4,7 +4,7 @@
 //! `vaultpilot://` URIs that arrive from external automation sources
 //! (browser widgets, Quick Settings tiles, Alfred / Raycast, iOS Shortcuts,
 //! x-callback-url flows).  Previously the only routing logic lived in the
-//! mobile app's React Navigation config (`mobile/App.tsx`), which caused
+//! mobile app's deep-link handling, which caused
 //! inconsistency bugs like #3156 ("one platform has a route, another
 //! doesn't").
 //!
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn test_backward_compat_existing_routes() {
         // The four routes that existed before #3728 must still parse correctly
-        // (parity with mobile/App.tsx linking config).
+        // (parity with the shared Tauri UI deep-link handling).
         assert!(matches!(
             parse_deep_link("vaultpilot://note/new"),
             DeepLinkAction::NewNote { .. }

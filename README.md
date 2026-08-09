@@ -14,10 +14,10 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2B-0078D4" alt="Windows" />
-  <img src="https://img.shields.io/badge/linux-CLI%20only-FCC624" alt="Linux CLI" />
-  <img src="https://img.shields.io/badge/android-APK-3DDC84" alt="Android" />
+  <img src="https://img.shields.io/badge/platform-Linux-FCC624" alt="Linux" />
+  <img src="https://img.shields.io/badge/platform-Android-3DDC84" alt="Android" />
   <img src="https://img.shields.io/badge/rust-2021-orange" alt="Rust" />
-  <img src="https://img.shields.io/badge/.NET-8-512BD4" alt=".NET 8" />
+  <img src="https://img.shields.io/badge/React-18-61DAFB" alt="React" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" />
 </p>
 
@@ -44,28 +44,25 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 ## Architecture
 
 ```
-┌──────────────────────────────┐   ┌──────────────────────────┐
-│  VaultPilot.WinUI.exe (C#)   │   │  mobile/ (React Native)  │
-│  WinUI 3 desktop shell       │   │  Expo / Android APK      │
-│  ┌──────────┐ ┌────────────┐ │   │  ┌──────────┐            │
-│  │ Chat UI  │ │ Settings   │ │   │  │ Chat UI  │            │
-│  └────┬─────┘ └────────────┘ │   │  └────┬─────┘            │
-│       │ JSON-RPC (stdin/out) │   │       │ HTTPS             │
-│  ┌────▼──────────────────┐   │   │  ┌────▼──────────────┐   │
-│  │  BackendClient.cs     │   │   │  │  Expo HTTP client │   │
-│  └────┬──────────────────┘   │   │  └────┬──────────────┘   │
-└───────┼──────────────────────┘   └───────┼──────────────────┘
-        │                                  │
-┌───────▼──────────────────────────────────▼───────────────────┐
-│  vaultpilot-agent (Rust) / vaultpilot-cli                    │
-│  ┌────────┐ ┌──────────┐ ┌───────┐                          │
-│  │ ai.rs  │ │ agent.rs │ │storage│                          │
-│  └────────┘ └──────────┘ └──┬───┘                           │
-│  ┌────────┐    │                                           │
-│  │prompt. │    ▼                                           │
-│  │  rs    │  SQLite + .md                                  │
-│  └────────┘                                                │
-└──────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│  Tauri v2 app shell (desktop/ + desktop/src-tauri/)           │
+│  Windows · Linux · Android 共用同一套 React UI                │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  React 前端 (Tailwind + shadcn/ui + Zustand)            │  │
+│  │  WebView2 (Win) / WebKitGTK (Linux) / WebView (Android) │  │
+│  └──────────────────────┬──────────────────────────────────┘  │
+│                         │ invoke('command') 零 IPC            │
+│  ┌──────────────────────▼──────────────────────────────────┐  │
+│  │  Tauri 后端 (Rust, #[tauri::command])                   │  │
+│  │  直接依赖 vaultpilot_lib（无子进程）                     │  │
+│  └──────────────────────┬──────────────────────────────────┘  │
+└─────────────────────────┼─────────────────────────────────────┘
+                          │
+┌─────────────────────────▼─────────────────────────────────────┐
+│  vaultpilot_lib (Rust) / vaultpilot-cli                       │
+│  ai · agent · storage · knowledge_graph · feeds · mail        │
+│  SQLite (FTS5) + Markdown                                     │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -77,7 +74,7 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 
 ### Linux CLI
 
-The Linux build is CLI-only and does not include the WinUI desktop frontend.
+Linux ships both the Tauri UI (deb / AppImage) and the CLI.
 
 ```bash
 chmod +x ./scripts/build-linux-cli.sh
@@ -89,23 +86,35 @@ Main outputs:
 - `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
 - `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
 
-### Android (Mobile)
+### Desktop UI (Windows / Linux)
 
-The mobile app is built with React Native (Expo). It runs standalone — no desktop connection needed.
+The desktop UI is built with Tauri v2 + React. The same frontend also targets Android.
 
 ```bash
-cd mobile
-npm install
-npx expo start          # development
-npx expo export --platform android  # production build
+cd desktop
+pnpm install
+pnpm tauri dev          # development (opens app window)
+pnpm tauri build        # production build
+```
+
+### Android
+
+Android uses the same Tauri + React frontend:
+
+```bash
+cd desktop
+pnpm install
+pnpm tauri android init    # one-time native project generation
+pnpm tauri android build --target aarch64-linux-android --apk
 ```
 
 ### Install
 
 Download the latest installer from [Releases](https://github.com/ryanloee/VaultPilot/releases):
 
-- `VaultPilot-win-x64-Setup.exe` — installer with auto-update
-- `VaultPilot-win-x64-Portable.zip` — portable, no install needed
+- Windows: NSIS installer (`*-setup.exe`)
+- Linux: `.deb` / `.AppImage`
+- Android: APK
 
 ### First Run
 
@@ -252,20 +261,21 @@ The generated completions include static completions for all subcommands and fla
 See [docs/build.md](docs/build.md) for detailed build instructions.
 
 ```powershell
-# Quick build (requires Rust + .NET 8 SDK + VS Build Tools)
-dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
+# Quick build (requires Rust + Node.js + pnpm)
+cd desktop
+pnpm tauri build
 ```
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop Frontend | WinUI 3 / .NET 8 |
-| Mobile Frontend | React Native (Expo) |
+| Desktop Frontend (Windows/Linux) | Tauri v2 + React 18 + Tailwind + shadcn/ui |
+| Mobile Frontend (Android) | Tauri v2 + React（同一套代码） |
 | Backend | Rust (Tokio, Axum, Reqwest) |
 | Storage | SQLite (FTS5) + Markdown files |
 | AI | Anthropic Messages API with tool use + Agent Mode |
-| Packaging | Velopack (Windows auto-update), APK (Android) |
+| Packaging | Tauri bundler (NSIS / deb / AppImage / APK) |
 
 ## Documentation
 
@@ -340,7 +350,7 @@ VaultPilot 是一个面向工程师的**本地优先 AI 知识助手**。帮助�
 
 ### Linux CLI
 
-Linux 版本只包含 CLI，不包含 WinUI 图形界面。
+Linux 端同时提供 Tauri 图形界面（deb / AppImage）和 CLI。
 
 ```bash
 chmod +x ./scripts/build-linux-cli.sh
@@ -352,23 +362,35 @@ chmod +x ./scripts/build-linux-cli.sh
 - `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
 - `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
 
-### Android (移动端)
+### 桌面 UI（Windows / Linux）
 
-移动端使用 React Native (Expo) 构建，独立运行，不依赖桌面端。
+桌面 UI 使用 Tauri v2 + React 构建，同一套前端也用于 Android。
 
 ```bash
-cd mobile
-npm install
-npx expo start          # 开发模式
-npx expo export --platform android  # 生产构建
+cd desktop
+pnpm install
+pnpm tauri dev          # 开发模式（打开应用窗口）
+pnpm tauri build        # 生产构建
+```
+
+### Android
+
+Android 使用与桌面端相同的 Tauri + React 前端：
+
+```bash
+cd desktop
+pnpm install
+pnpm tauri android init    # 一次性生成原生工程
+pnpm tauri android build --target aarch64-linux-android --apk
 ```
 
 ### 安装
 
 从 [Releases](https://github.com/ryanloee/VaultPilot/releases) 下载最新版本：
 
-- `VaultPilot-win-x64-Setup.exe` — 安装版，支持自动更新
-- `VaultPilot-win-x64-Portable.zip` — 便携版，解压即用
+- Windows：NSIS 安装包（`*-setup.exe`）
+- Linux：`.deb` / `.AppImage`
+- Android：APK
 
 ### 使用流程
 
@@ -420,19 +442,20 @@ vaultpilot agent --auto-approve "创建今天的日记"
 详细说明请参考 [构建指南](docs/build.md)。
 
 ```powershell
-dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
+cd desktop
+pnpm tauri build
 ```
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 桌面前端 | WinUI 3 / .NET 8 |
-| 移动端前端 | React Native (Expo) |
+| 桌面前端（Windows/Linux） | Tauri v2 + React 18 + Tailwind + shadcn/ui |
+| 移动端前端（Android） | Tauri v2 + React（同一套代码） |
 | 后端 | Rust (Tokio, Axum, Reqwest) |
 | 存储 | SQLite (FTS5) + Markdown 文件 |
 | AI | Anthropic Messages API (工具调用 + Agent 模式) |
-| 打包 | Velopack (Windows 自动更新), APK (Android) |
+| 打包 | Tauri bundler (NSIS / deb / AppImage / APK) |
 
 ## 许可证
 

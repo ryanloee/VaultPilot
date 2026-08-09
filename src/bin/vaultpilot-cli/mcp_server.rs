@@ -2453,7 +2453,7 @@ async fn mcp_call_notes_apply_edit(context: &StorageContext, arguments: Value) -
     match edit_outcome {
         Ok((original, edited_body)) => {
             // Record backup for revert (#1652), mirroring CLI Commands::Edit.
-            vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+            vaultpilot_lib::orchestration::write::record_backup_persistent(context, &original);
 
             let edited_note = NoteDocument {
                 body: edited_body.clone(),

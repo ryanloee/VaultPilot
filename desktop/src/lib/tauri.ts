@@ -9,6 +9,7 @@ import type {
   NoteMeta,
   RelatedNote,
 } from "@/types";
+import { isTauri, mockApi } from "./mock";
 
 /** AI answer result (mirrors vaultpilot_lib::models::GroundedAnswer). */
 export type GroundedAnswer = {
@@ -27,11 +28,10 @@ export type AgentStatusPayload = {
 };
 
 /**
- * Type-safe wrapper around Tauri `invoke`. All backend calls go through here.
- * Command names are snake_case (Rust fn names); argument names are camelCase
- * (Tauri dispatches by camelCase argument names).
+ * The real Tauri-backed API. All commands go through `invoke`; command names
+ * are snake_case (Rust fn names), argument names are camelCase.
  */
-export const api = {
+const tauriApi = {
   // ── system ──
   ping: () => invoke<boolean>("ping"),
 
@@ -79,15 +79,29 @@ export const api = {
   getSnapshot: (snapshotId: string) => invoke<unknown>("get_snapshot", { snapshotId }),
   restoreSnapshot: (noteId: string, snapshotId: string) =>
     invoke<NoteDocument>("restore_snapshot", { noteId, snapshotId }),
-} as const;
+};
+
+/**
+ * Type-safe wrapper around the backend API. In a real Tauri shell it calls
+ * `invoke`; in a plain browser (no Tauri bridge, e.g. browser-based UI
+ * testing) it falls back to the in-memory mock so the UI can still be
+ * exercised. Command names are snake_case; args camelCase.
+ */
+export const api = isTauri() ? tauriApi : mockApi;
 
 /**
  * Subscribe to backend `agent-status` progress events (emitted during
- * ask_with_ai). Returns an unsubscribe function.
+ * ask_with_ai). Returns an unsubscribe function. In browser (mock) mode this
+ * is a no-op so the real Tauri event listener isn't bound.
  */
 export async function onAgentStatus(
   handler: (payload: AgentStatusPayload) => void
 ): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return () => {
+      /* mock mode: no events */
+    };
+  }
   return listen<AgentStatusPayload>("agent-status", (event) => {
     handler(event.payload);
   });

@@ -54,17 +54,25 @@ export type AppSettings = {
 
 export type ChatRole = "user" | "assistant" | "system";
 
+/** Mirrors vaultpilot_lib::models::ChatTurn (fields: id, role, text). */
+export type ChatTurn = {
+  id?: string;
+  role: ChatRole;
+  text: string;
+  citations?: unknown[];
+  savedNote?: unknown;
+  [key: string]: unknown;
+};
+
+/** Mirrors vaultpilot_lib::models::ConversationTurn (used in askWithAi params). */
 export type ConversationTurn = {
   role: ChatRole;
-  content: string;
-  turnId?: string;
-  timestamp?: string;
-  attachments?: ChatAttachment[];
+  text: string;
 };
 
 export type ChatAttachment = {
-  type: "image";
   path?: string;
+  type?: string;
   dataUrl?: string;
   name?: string;
 };
@@ -75,13 +83,14 @@ export type ConversationSummary = {
   [key: string]: unknown;
 };
 
+/** Mirrors vaultpilot_lib::models::ChatSession (turns, not messages). */
 export type ChatSession = {
   id: string;
   title: string;
-  messages: ConversationTurn[];
+  turns: ChatTurn[];
+  summary?: ConversationSummary;
   createdAt?: string;
   updatedAt?: string;
-  summary?: ConversationSummary;
 };
 
 export type ChatState = {

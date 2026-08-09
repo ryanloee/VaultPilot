@@ -1,8 +1,8 @@
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
-import type { ConversationTurn } from "@/types";
+import type { ChatTurn } from "@/types";
 
-export function MessageBubble({ turn }: { turn: ConversationTurn }) {
+export function MessageBubble({ turn }: { turn: ChatTurn }) {
   const isUser = turn.role === "user";
   return (
     <div className={cn("flex w-full gap-3 px-4 py-3", isUser ? "justify-end" : "justify-start")}>
@@ -15,9 +15,9 @@ export function MessageBubble({ turn }: { turn: ConversationTurn }) {
         )}
       >
         {isUser ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed">{turn.content}</p>
+          <p className="whitespace-pre-wrap text-sm leading-relaxed">{turn.text}</p>
         ) : (
-          <Markdown content={turn.content} />
+          <Markdown content={turn.text} />
         )}
       </div>
     </div>

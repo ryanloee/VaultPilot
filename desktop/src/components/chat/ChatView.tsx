@@ -6,7 +6,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./MessageBubble";
 
 export function ChatView() {
-  const { messages, sending, status, error, load, send, newSession } = useChatStore();
+  const { chatState, currentSessionId, turns, sending, status, error, load, send, newSession } =
+    useChatStore();
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -14,11 +15,13 @@ export function ChatView() {
     load();
   }, [load]);
 
+  const currentSession = chatState?.sessions.find((s) => s.id === currentSessionId);
+
   // Auto-scroll to bottom on new messages.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, status]);
+  }, [turns, status]);
 
   const handleSend = () => {
     if (!input.trim() || sending) return;
@@ -39,16 +42,18 @@ export function ChatView() {
       {/* Messages */}
       <ScrollArea className="flex-1" >
         <div ref={scrollRef} className="mx-auto max-w-3xl py-4">
-          {messages.length === 0 && !sending && (
+          {turns.length === 0 && !sending && (
             <div className="flex h-full min-h-[40vh] flex-col items-center justify-center text-center">
-              <h2 className="text-2xl font-semibold tracking-tight">开始对话</h2>
+              <h2 className="text-2xl font-semibold tracking-tight">
+                {currentSession?.title || "开始对话"}
+              </h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 输入问题，Ctrl+Enter 发送
               </p>
             </div>
           )}
-          {messages.map((m, i) => (
-            <MessageBubble key={m.turnId ?? i} turn={m} />
+          {turns.map((m, i) => (
+            <MessageBubble key={m.id ?? i} turn={m} />
           ))}
           {sending && (
             <div className="flex justify-start px-4 py-3">

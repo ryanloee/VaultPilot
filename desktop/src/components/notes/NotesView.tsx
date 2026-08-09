@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Markdown } from "@/components/chat/Markdown";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 export function NotesView() {
   const { notes, current, loading, error, loadList, open, saveCurrent } = useNotesStore();
@@ -33,15 +33,6 @@ export function NotesView() {
     await saveCurrent(draftBody, draftTitle);
     setEditing(false);
     await loadList();
-  };
-
-  const formatDate = (iso?: string) => {
-    if (!iso) return "";
-    try {
-      return new Date(iso).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
-    } catch {
-      return "";
-    }
   };
 
   return (

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { ViewId } from "./ActivityBar";
 import { useChatStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 type SidebarProps = {
   view: ViewId;
@@ -51,9 +51,9 @@ export function Sidebar({ view }: SidebarProps) {
               )}
             >
               <div className="truncate">{s.title || "新会话"}</div>
-              {s.updatedAt && (
+              {formatDate(s.updatedAt) && (
                 <div className="mt-0.5 text-[10px] text-muted-foreground">
-                  {new Date(s.updatedAt).toLocaleDateString("zh-CN")}
+                  {formatDate(s.updatedAt)}
                 </div>
               )}
             </button>

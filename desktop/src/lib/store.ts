@@ -4,6 +4,7 @@ import type {
   AppSettings,
   ChatSession,
   ChatState,
+  ChatTurn,
   ConversationTurn,
   NoteDocument,
   NoteMeta,
@@ -99,7 +100,7 @@ export const useNotesStore = create<NotesStore>((set, get) => ({
 type ChatStore = {
   chatState: ChatState | null;
   currentSessionId: string | null;
-  messages: ConversationTurn[];
+  turns: ChatTurn[];
   sending: boolean;
   status: AgentStatusPayload | null;
   error: string | null;
@@ -113,15 +114,16 @@ function emptySession(): ChatSession {
   return {
     id: crypto.randomUUID(),
     title: "新会话",
-    messages: [],
+    turns: [],
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   chatState: null,
   currentSessionId: null,
-  messages: [],
+  turns: [],
   sending: false,
   status: null,
   error: null,
@@ -134,7 +136,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set({
         chatState: state,
         currentSessionId: session?.id ?? null,
-        messages: session?.messages ?? [],
+        turns: session?.turns ?? [],
       });
     } catch (e) {
       // No chat state yet is fine for a fresh install.
@@ -147,24 +149,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ sending: true, status: null, error: null });
 
     // Append the user message immediately (optimistic).
-    const userTurn: ConversationTurn = {
+    const userTurn: ChatTurn = {
+      id: crypto.randomUUID(),
       role: "user",
-      content: text,
-      turnId: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
+      text,
     };
-    const history = get().messages;
-    set({ messages: [...history, userTurn] });
+    const history: ConversationTurn[] = get().turns.map((t) => ({ role: t.role, text: t.text }));
+    set((s) => ({ turns: [...s.turns, userTurn] }));
 
     try {
       const result = await api.askWithAi(text, history, null, null);
-      const assistantTurn: ConversationTurn = {
+      const assistantTurn: ChatTurn = {
+        id: crypto.randomUUID(),
         role: "assistant",
-        content: result.answer,
-        turnId: crypto.randomUUID(),
-        timestamp: new Date().toISOString(),
+        text: result.answer,
       };
-      set((s) => ({ messages: [...s.messages, assistantTurn] }));
+      set((s) => ({ turns: [...s.turns, assistantTurn] }));
 
       // Persist chat state in the background.
       void persistChatState(get);
@@ -186,20 +186,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           }
         : { currentSessionId: session.id, sessions: [session] },
       currentSessionId: session.id,
-      messages: [],
+      turns: [],
     }));
   },
 
   selectSession: (id) => {
+    console.log("[store] selectSession called with:", id);
     const state = get().chatState;
+    console.log("[store] current chatState currentSessionId:", state?.currentSessionId);
     if (!state) return;
     const session = state.sessions.find((s) => s.id === id);
+    console.log("[store] found session:", session?.id);
     if (session) {
       set({
         currentSessionId: id,
-        messages: session.messages,
+        turns: session.turns ?? [],
         chatState: { ...state, currentSessionId: id },
       });
+      console.log("[store] after set, currentSessionId should be:", id);
     }
   },
 }));
@@ -211,10 +215,10 @@ statusUnlisten ??= onAgentStatus((payload) => {
 });
 
 async function persistChatState(get: () => ChatStore) {
-  const { chatState, currentSessionId, messages } = get();
+  const { chatState, currentSessionId, turns } = get();
   if (!chatState || !currentSessionId) return;
   const sessions = chatState.sessions.map((s) =>
-    s.id === currentSessionId ? { ...s, messages, updatedAt: new Date().toISOString() } : s
+    s.id === currentSessionId ? { ...s, turns, updatedAt: new Date().toISOString() } : s
   );
   const updated: ChatState = { ...chatState, sessions };
   useChatStore.setState({ chatState: updated });

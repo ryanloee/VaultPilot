@@ -14,6 +14,23 @@ export function SettingsView() {
   const [draft, setDraft] = useState<AppSettings | null>(null);
   const [theme, setTheme] = useState<Theme>("system");
 
+  // Apply + persist the theme only when the user actively clicks a theme
+  // button (NOT on mount). Toggling <html>.dark re-renders the whole app with
+  // the Tailwind dark palette.
+  const selectTheme = (mode: Theme) => {
+    const root = document.documentElement;
+    const isDark =
+      mode === "dark" ||
+      (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    root.classList.toggle("dark", isDark);
+    setTheme(mode);
+    try {
+      localStorage.setItem("vaultpilot.theme", mode);
+    } catch {
+      /* ignore */
+    }
+  };
+
   useEffect(() => {
     load();
   }, [load]);
@@ -24,28 +41,15 @@ export function SettingsView() {
     }
   }, [settings]);
 
-  // Apply theme: add/remove .dark on <html>. Reads the persisted pref from
-  // the same theme.json the WinUI client uses (best-effort, localStorage fallback).
-  useEffect(() => {
-    const apply = (mode: Theme) => {
-      const root = document.documentElement;
-      const isDark =
-        mode === "dark" ||
-        (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-      root.classList.toggle("dark", isDark);
-    };
-    apply(theme);
-    try {
-      localStorage.setItem("vaultpilot.theme", theme);
-    } catch {
-      /* ignore */
-    }
-  }, [theme]);
-
+  // Read persisted theme once on mount; do NOT auto-apply here (mounting the
+  // settings view must not change the app theme). Application happens only when
+  // the user clicks a theme button (see applyTheme in the button handler).
   useEffect(() => {
     try {
       const saved = localStorage.getItem("vaultpilot.theme") as Theme | null;
-      if (saved) setTheme(saved);
+      if (saved && (saved === "system" || saved === "light" || saved === "dark")) {
+        setTheme(saved);
+      }
     } catch {
       /* ignore */
     }
@@ -88,7 +92,7 @@ export function SettingsView() {
                 key={t}
                 variant={theme === t ? "default" : "outline"}
                 size="sm"
-                onClick={() => setTheme(t)}
+                onClick={() => selectTheme(t)}
               >
                 {t === "system" ? "跟随系统" : t === "light" ? "亮色" : "暗色"}
               </Button>

@@ -14,11 +14,11 @@ export default defineConfig(async () => ({
     },
   },
   server: {
-    port: 1420,
+    port: 5173,
     strictPort: true,
     host: host || false,
     hmr: host
-      ? { protocol: "ws", host, port: 1421 }
+      ? { protocol: "ws", host, port: 5174 }
       : undefined,
     watch: {
       // Don't watch the Rust source — only the frontend.

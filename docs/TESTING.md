@@ -44,12 +44,12 @@ fn regression_xxx_descriptive_name() {
 }
 ```
 
-### Mobile (TypeScript / Jest)
+### Desktop UI (TypeScript)
 
 | Test Type | Location | Naming Convention |
 |-----------|----------|-------------------|
-| Unit tests | `mobile/src/__tests__/` | `<module>.test.ts` |
-| Regression tests | `mobile/src/__tests__/regression/` | `issue_NNN.test.ts` (pure logic) or `issue_NNN.test.tsx` (JSX/component) |
+| Frontend unit tests | `desktop/src/` tests alongside modules | `*.test.ts(x)` |
+| Frontend build gate | `desktop/` | `pnpm build` (tsc --noEmit + vite build) |
 
 ---
 
@@ -61,7 +61,7 @@ When fixing a bug, **always** add a regression test. This is a hard requirement 
 
 - **Rust public API bug** → `src/regression/issue_NNN_short_desc.rs`
 - **Rust internal/private function bug** → Inline `#[cfg(test)]` in the source file, with a `// REGRESSION: #NNN` comment
-- **Mobile bug** → `mobile/src/__tests__/regression/issue_NNN.test.ts` (pure logic) or `issue_NNN.test.tsx` (JSX/component tests); jest's `--testPathPattern` matches both extensions
+- **Desktop UI bug** → frontend test under `desktop/src/`, or Rust regression under `src/regression/` when the bug lives in the shared backend
 
 ### 2. Create the regression file
 
@@ -138,7 +138,7 @@ mod tests {
 
 ## Regression Test Template (TypeScript / Jest)
 
-Copy into `mobile/src/__tests__/regression/issue_NNN.test.ts` (pure logic tests)
+Copy into a test file next to the module under test under `desktop/src/` (or into `src/regression/` for shared-backend bugs)
 or `issue_NNN.test.tsx` (component/JSX tests). Jest matches both extensions via
 `--testPathPattern`.
 

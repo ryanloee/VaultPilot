@@ -61,7 +61,7 @@
 # 2. Regression test exists?
 #    → Check src/regression/ for issue_NNN_*.rs
 #    → Check inline tests for "// REGRESSION: #NNN" comments
-#    → Check mobile/src/__tests__/regression/ for issue_NNN.test.ts or issue_NNN.test.tsx
+#    → Check desktop/src/ for frontend test files covering the UI bug
 #
 # 3. Regression test is meaningful?
 #    → Not just `assert!(true)`

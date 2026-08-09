@@ -4,61 +4,73 @@
 
 This project currently has:
 
-- Rust backend (`vaultpilot-cli` / `vaultpilot-agent` binaries + `vaultpilot_lib`)
-- Linux CLI build (binary + `.deb`)
-- Android mobile app (`mobile/`, Expo / React Native)
-- Windows desktop frontend under development (`desktop/`, Tauri v2 + React)
-
-The legacy WinUI client (`native/`) has been removed; Windows now uses the new
-Tauri desktop UI once its sources are published to the repository.
+- Windows desktop UI build (Tauri v2 + React)
+- Linux desktop UI build (Tauri v2 + React)
+- Android UI build (Tauri v2 + React, same frontend)
+- Linux CLI build
 
 ### Prerequisites
 
+- Node.js 20+ with pnpm (or run `corepack enable`)
 - Rust toolchain with `rustup`
-- For `.deb` packaging: `dpkg-deb` from `dpkg-dev`
+- Windows: WebView2 runtime (preinstalled on Windows 10/11)
+- Linux UI: `libwebkit2gtk-4.1-dev`, GTK3, `libayatana-appindicator3-dev`, `librsvg2-dev`
+- Android: JDK 17, Android SDK + NDK, Rust targets (`aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`)
 
-### Build the Rust backend
+### Desktop UI (Windows / Linux) — local development
 
-```bash
-cargo build --release --bins
+```powershell
+cd desktop
+pnpm install
+pnpm tauri dev
 ```
 
-Outputs:
+`pnpm tauri dev` starts the Vite dev server, compiles the Tauri Rust shell
+(which depends directly on `vaultpilot_lib`), and opens the app window.
 
-- `target/release/vaultpilot-cli`
-- `target/release/vaultpilot-agent`
+### Desktop UI — production build
 
-### Build the Linux CLI
+```powershell
+cd desktop
+pnpm tauri build
+```
 
-The Linux build is CLI-only. It does not include a desktop frontend.
+Windows installer (NSIS) output:
 
-Prerequisites:
+- `desktop/src-tauri/target/<target>/release/bundle/nsis/*-setup.exe`
 
-- Linux with `bash`
-- Rust toolchain with `rustup`
-- for `x86` builds: either Zig + `cargo-zigbuild`, or a 32-bit GNU linker toolchain such as `gcc-multilib`
-- for `.deb` packaging: `dpkg-deb` from `dpkg-dev`
+Linux package (deb / AppImage) output:
 
-Build an `x64` Linux executable and `.deb` package:
+- `desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb`
+- `desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage`
+
+### Android
+
+One-time native project generation:
+
+```bash
+cd desktop
+pnpm tauri android init
+```
+
+Build APK for a target:
+
+```bash
+cd desktop
+pnpm tauri android build --target aarch64-linux-android --apk
+```
+
+APK output:
+
+- `desktop/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk`
+
+### Linux CLI
+
+The CLI remains a standalone Rust binary (no UI dependency).
 
 ```bash
 chmod +x ./scripts/build-linux-cli.sh
 ./scripts/build-linux-cli.sh --platforms x64 --format all
-```
-
-If your machine does not have `gcc-multilib`, install Zig and `cargo-zigbuild` instead.  
-When both `zig` and `cargo-zigbuild` are present in `PATH`, the script uses Zig automatically.
-
-Build only the executable:
-
-```bash
-./scripts/build-linux-cli.sh --platforms x64 --format bin
-```
-
-Optional `x86` build:
-
-```bash
-./scripts/build-linux-cli.sh --platforms x86 --format all
 ```
 
 Main outputs:
@@ -72,66 +84,81 @@ These directories are build outputs and should not be committed:
 
 - `target/`
 - `artifacts/`
+- `desktop/node_modules/`
+- `desktop/dist/`
+- `desktop/src-tauri/target/`
 
 ## 中文
 
-当前项目包含：
+当前项目包含以下构建路径：
 
-- Rust 后端（`vaultpilot-cli` / `vaultpilot-agent` 可执行文件 + `vaultpilot_lib`）
-- Linux CLI 构建（可执行文件 + `.deb`）
-- Android 移动端（`mobile/`，Expo / React Native）
-- Windows 桌面前端开发中（`desktop/`，Tauri v2 + React）
-
-旧版 WinUI 客户端（`native/`）已删除，Windows 端将使用新的 Tauri 桌面 UI
-（源码发布到仓库后）。
+- Windows 桌面 UI（Tauri v2 + React）
+- Linux 桌面 UI（Tauri v2 + React）
+- Android UI（Tauri v2 + React，同一套前端）
+- Linux CLI
 
 ### 环境要求
 
+- Node.js 20+，使用 pnpm（或执行 `corepack enable`）
 - Rust 工具链和 `rustup`
-- 若输出 `.deb`：需要 `dpkg-deb`，通常来自 `dpkg-dev`
+- Windows：WebView2 运行时（Windows 10/11 自带）
+- Linux UI：`libwebkit2gtk-4.1-dev`、GTK3、`libayatana-appindicator3-dev`、`librsvg2-dev`
+- Android：JDK 17、Android SDK + NDK、Rust targets（`aarch64-linux-android`、`armv7-linux-androideabi`、`x86_64-linux-android`）
 
-### 构建 Rust 后端
+### 桌面 UI（Windows / Linux）本地开发
 
-```bash
-cargo build --release --bins
+```powershell
+cd desktop
+pnpm install
+pnpm tauri dev
 ```
 
-产物：
+`pnpm tauri dev` 会启动 Vite 开发服务器、编译 Tauri Rust 壳（直接依赖
+`vaultpilot_lib`），并打开应用窗口。
 
-- `target/release/vaultpilot-cli`
-- `target/release/vaultpilot-agent`
+### 桌面 UI 生产构建
 
-### 构建 Linux CLI
+```powershell
+cd desktop
+pnpm tauri build
+```
 
-Linux 版本只包含 CLI，不包含桌面图形界面。
+Windows 安装包（NSIS）产物：
 
-环境要求：
+- `desktop/src-tauri/target/<target>/release/bundle/nsis/*-setup.exe`
 
-- Linux + `bash`
-- Rust 工具链和 `rustup`
-- 若构建 `x86`：可使用 Zig + `cargo-zigbuild`，或者安装 32 位 GNU 链接工具链（如 `gcc-multilib`）
-- 若输出 `.deb`：需要 `dpkg-deb`，通常来自 `dpkg-dev`
+Linux 包（deb / AppImage）产物：
 
-构建 `x64 Linux` 可执行文件和 `.deb` 包：
+- `desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb`
+- `desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage`
+
+### Android
+
+一次性生成原生工程：
+
+```bash
+cd desktop
+pnpm tauri android init
+```
+
+构建 APK：
+
+```bash
+cd desktop
+pnpm tauri android build --target aarch64-linux-android --apk
+```
+
+APK 产物：
+
+- `desktop/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk`
+
+### Linux CLI
+
+CLI 仍是独立的 Rust 可执行文件（不依赖 UI）。
 
 ```bash
 chmod +x ./scripts/build-linux-cli.sh
 ./scripts/build-linux-cli.sh --platforms x64 --format all
-```
-
-如果本机没有 `gcc-multilib`，也可以安装 Zig 和 `cargo-zigbuild`。  
-当 `PATH` 中同时存在 `zig` 和 `cargo-zigbuild` 时，脚本会自动走 Zig 交叉编译。
-
-只构建可执行文件：
-
-```bash
-./scripts/build-linux-cli.sh --platforms x64 --format bin
-```
-
-可选的 `x86` 构建：
-
-```bash
-./scripts/build-linux-cli.sh --platforms x86 --format all
 ```
 
 主要产物：
@@ -145,3 +172,6 @@ chmod +x ./scripts/build-linux-cli.sh
 
 - `target/`
 - `artifacts/`
+- `desktop/node_modules/`
+- `desktop/dist/`
+- `desktop/src-tauri/target/`

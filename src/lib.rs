@@ -26,6 +26,7 @@ pub mod fsrs;
 pub mod health;
 pub mod keychain;
 pub mod knowledge_graph;
+#[cfg(feature = "email")]
 pub mod mail;
 pub mod markdown_table;
 pub mod mermaid;

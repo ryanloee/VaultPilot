@@ -714,7 +714,7 @@ pub struct AgentResult {
 //   task-level (plan approve/reject/edit)  →  operation-level (per-write diff)
 //
 // All plan types are `Serialize + Deserialize` so they can cross the wire to
-// the WinUI (C#) and Android (React Native) clients via the HTTP bridge.
+// the Tauri (Windows/Linux/Android) clients via the HTTP bridge.
 
 /// Whether a task executes immediately or enters Plan Mode first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

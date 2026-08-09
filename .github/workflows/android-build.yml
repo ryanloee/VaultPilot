@@ -1,32 +1,29 @@
-name: Android Build
+name: Android Build (Tauri)
 
 on:
   push:
     branches: [main]
+    paths: [desktop/**, .github/workflows/android-build.yml]
     tags:
       - "v*"
   pull_request:
     branches: [main]
-    paths: [mobile/**, .github/workflows/android-build.yml]
+    paths: [desktop/**, .github/workflows/android-build.yml]
   workflow_dispatch:
 
 jobs:
   build:
-    # #3428: the `paths` filter was removed from the `push` trigger because it
-    # applied to tag pushes too, silently skipping 55% of release tags (157/285
-    # whose commits did not touch mobile/) and leaving those releases without
-    # an APK. Branch pushes are gated here instead: run when the push commits
-    # touch mobile/ or this workflow. Tag pushes, PRs and manual dispatches
-    # always run.
-    if: >-
-      github.event_name != 'push' ||
-      startsWith(github.ref, 'refs/tags/v') ||
-      contains(toJson(github.event.commits), 'mobile/') ||
-      contains(toJson(github.event.commits), 'android-build.yml')
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mobile
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: aarch64
+            rust_target: aarch64-linux-android
+          - abi: armv7
+            rust_target: armv7-linux-androideabi
+          - abi: x86_64
+            rust_target: x86_64-linux-android
 
     steps:
       - uses: actions/checkout@v7
@@ -34,134 +31,102 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Auto-merge main (PR only)
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/auto-merge-main
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          base-repo-clone-url: ${{ github.event.pull_request.base.repo.clone_url }}
-          base-ref: ${{ github.base_ref }}
+          version: 10
 
-      - uses: actions/setup-node@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: mobile/package-lock.json
-
-      - run: npm ci
-
-      - name: Verify React version consistency
-        run: npm run check-react
-
-      - name: Run tests
-        run: npm test
-
-      - name: TypeScript type check
-        run: npx tsc --noEmit
-
-      - name: Expo export (bundle check)
-        run: npx expo export --platform android
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
 
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
+      - name: Install Android NDK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "ndk;26.1.10909125"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
+
       - name: Set version from tag
         if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="$REF_NAME"  # e.g. v0.4.9 or v0.5.0-rc1
-          VERSION="${TAG#v}"  # 0.4.9 or 0.5.0-rc1
+          python3 - <<'EOF'
+          import json
+          version = "${{ github.ref_name }}".lstrip("v")
+          p = "desktop/src-tauri/tauri.conf.json"
+          with open(p, encoding="utf-8") as f:
+              conf = json.load(f)
+          conf["version"] = version
+          with open(p, "w", encoding="utf-8") as f:
+              json.dump(conf, f, indent=2)
+          EOF
 
-          # Split pre-release suffix for versionCode computation (#2536)
-          if [[ "$VERSION" == *-* ]]; then
-            PRERELEASE="${VERSION#*-}"
-            VERSION_BASE="${VERSION%%-*}"
-          else
-            PRERELEASE=""
-            VERSION_BASE="$VERSION"
+      - name: Initialize Android project (if missing)
+        working-directory: desktop
+        run: |
+          if [ ! -d src-tauri/gen/android ]; then
+            pnpm tauri android init
           fi
-
-          # versionCode scheme (#2667, #2976, #2990, #3592, #3635):
-          #   base       = major*1_000_000 + minor*1_000 + patch
-          #   prerelease = base*1000 + rc            (rc in 0..998)
-          #   release    = base*1000 + 999
-          # This keeps every rc of X.Y.Z below the X.Y.Z release, the next
-          # patch's rc0 above this release, rc >= 10 collision-free, and
-          # patch >= 100 from overflowing into the minor slot.
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_BASE"
-          BASE_CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
-
-          if [ -z "$PRERELEASE" ]; then
-            VERSION_CODE=$((BASE_CODE * 1000 + 999))
-          else
-            PR_NUM="${PRERELEASE##*[!0-9]}"
-            [[ "$PR_NUM" =~ ^[0-9]+$ ]] || PR_NUM=0
-            # Reserve 999 for the release code; cap rc at 998 so rc values
-            # never collide with the release or with each other (#3635).
-            if [ "$PR_NUM" -gt 998 ]; then
-              PR_NUM=998
-            fi
-            VERSION_CODE=$((BASE_CODE * 1000 + PR_NUM))
-          fi
-
-          echo "VERSION_NAME=$VERSION VERSION_CODE=$VERSION_CODE"
-          # Update app.json in-place — pass values as args to avoid shell injection (#2478)
-          python3 -c "
-          import json, sys
-          version = sys.argv[1]
-          version_code = int(sys.argv[2])
-          with open('app.json') as f:
-              cfg = json.load(f)
-          cfg['expo']['version'] = version
-          cfg['expo']['android']['versionCode'] = version_code
-          with open('app.json', 'w') as f:
-              json.dump(cfg, f, indent=2)
-          " "$VERSION" "$VERSION_CODE"
-
-      - name: Expo prebuild (generate native project)
-        run: npx expo prebuild --platform android --no-install
 
       - name: Build APK
-        run: |
-          cd android
-          ./gradlew assembleRelease
+        working-directory: desktop
+        run: pnpm tauri android build --target ${{ matrix.abi }} --apk
 
       - name: Validate APK
         run: |
-          APK="android/app/build/outputs/apk/release/app-release.apk"
-
-          if [ ! -f "$APK" ]; then
+          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' | head -n 1)
+          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
             echo "FAILED: APK not found"
             exit 1
           fi
-
-          # File is a valid ZIP (APK = ZIP) — use explicit if/raise instead of assert (#2492)
-          python3 -c "
+          python3 - "$APK" <<'EOF'
           import zipfile, os, sys
-
-          z = zipfile.ZipFile('$APK')
+          apk = sys.argv[1]
+          z = zipfile.ZipFile(apk)
           names = z.namelist()
-
-          # Must contain AndroidManifest.xml and classes.dex
-          if 'AndroidManifest.xml' not in names:
-              sys.exit('FAILED: Missing AndroidManifest.xml, got: ' + str(names[:10]))
-          if not any('classes.dex' in n for n in names):
-              sys.exit('FAILED: Missing classes.dex, got: ' + str(names[:10]))
-
-          # Check size is reasonable (>1MB for a real app, <200MB)
-          size_mb = os.path.getsize('$APK') / (1024 * 1024)
+          if "AndroidManifest.xml" not in names:
+              sys.exit("FAILED: Missing AndroidManifest.xml, got: " + str(names[:10]))
+          if not any("classes.dex" in n for n in names):
+              sys.exit("FAILED: Missing classes.dex, got: " + str(names[:10]))
+          size_mb = os.path.getsize(apk) / (1024 * 1024)
           if not (1 < size_mb < 200):
-              sys.exit('FAILED: APK size {:.1f}MB is unreasonable'.format(size_mb))
-
-          print('APK valid: {:.1f}MB, {} entries'.format(size_mb, len(names)))
-          "
+              sys.exit("FAILED: APK size {:.1f}MB is unreasonable".format(size_mb))
+          print("APK valid: {:.1f}MB, {} entries".format(size_mb, len(names)))
+          EOF
 
       - uses: actions/upload-artifact@v7
         with:
-          name: vaultpilot-android-${{ github.sha }}
-          path: mobile/android/app/build/outputs/apk/release/app-release.apk
+          name: vaultpilot-android-${{ matrix.abi }}-${{ github.sha }}
+          path: desktop/src-tauri/gen/android/**/outputs/apk/*/release/*.apk
+          if-no-files-found: error
           retention-days: 30
 
   release:
@@ -174,31 +139,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download APK artifact
+      - name: Download APK artifacts
         uses: actions/download-artifact@v8
         with:
-          name: vaultpilot-android-${{ github.sha }}
           path: release-assets/android
+          pattern: vaultpilot-android-*-${{ github.sha }}
+          merge-multiple: true
 
-      - name: Upload APK to release
+      - name: Upload APKs to release
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="$REF_NAME"
-          # #2765: upload-artifact preserves the mobile/ prefix, so the
-          # downloaded artifact lands under mobile/android/... — match the
-          # real path instead of expecting a bare app-release.apk.
-          APK="release-assets/android/mobile/android/app/build/outputs/apk/release/app-release.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "APK not found at $APK"
-            exit 1
-          fi
-
+          TAG="${{ github.ref_name }}"
           if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
             gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
           fi
-
-          gh release upload "$TAG" "$APK" --clobber
-          echo "Uploaded APK to release $TAG"
+          for apk in release-assets/android/*.apk; do
+            gh release upload "$TAG" "$apk" --clobber
+          done

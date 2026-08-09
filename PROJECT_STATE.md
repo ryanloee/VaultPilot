@@ -10,13 +10,13 @@
 ## 平台架构（三端独立）
 | 平台 | 类型 | 技术栈 | 路径 | 说明 |
 |------|------|--------|------|------|
-| **Windows** | 桌面 App | C# WinUI 3 | native/ | 完整 GUI 客户端 |
-| **Linux** | CLI | Rust | crates/cli/ | 终端直接用，不需要前端 |
-| **Android** | 手机 App | React Native (Expo) | mobile/ | APK 独立安装，不依赖电脑 |
+| **Windows** | 桌面 App | Tauri v2 + React | desktop/ | 完整 GUI 客户端 |
+| **Linux** | 桌面 App + CLI | Tauri v2 + React / Rust CLI | desktop/ + src/bin/ | GUI + 终端 |
+| **Android** | 手机 App | Tauri v2 + React（同一套前端） | desktop/ | APK 独立安装，不依赖电脑 |
 
-- 三端共用 Rust 后端核心（crates/core/）
+- 三端共用 Rust 后端核心（vaultpilot_lib，src/）
 - 不支持 iOS、不做浏览器版本
-- Android 端直接调 LLM API（用户自备 key），不连远程服务器
+- Android 端复用 vaultpilot_lib 本地能力，不连远程服务器
 
 ## 当前阶段
 **AI 驱动产品改进** — 讨论团队主动审查代码质量、发现改进点、产出高质量 issue；修复团队自动实现；审核团队把关合并

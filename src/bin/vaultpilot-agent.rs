@@ -1007,7 +1007,7 @@ async fn handle_request(
             .map_err(|e| vaultpilot_lib::sanitize_error(&e.to_string()))
         }
         // #2969: Quick Capture — append a timestamped bullet to today's daily
-        // note or the inbox. Exposed over JSON-RPC so the WinUI QuickCaptureOverlay
+        // note or the inbox. Exposed over JSON-RPC so the Tauri QuickCaptureOverlay
         // (and future mobile quick-capture surfaces) can call it without spawning
         // the CLI. Reuses the library implementation that the CLI command also
         // uses, so behaviour is identical end-to-end.

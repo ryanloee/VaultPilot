@@ -553,7 +553,9 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
     // before #3048 ship without these columns.
     ensure_trigger_rule_columns(connection)?;
 
-    // Ensure mail tables for Email-to-Vault integration
+    // Ensure mail tables for Email-to-Vault integration (feature-gated so
+    // targets without OpenSSL, e.g. Android, still initialize cleanly).
+    #[cfg(feature = "email")]
     connection.execute_batch(crate::mail::MAIL_SCHEMA_DDL)?;
     connection.execute_batch("PRAGMA user_version = 1;")?;
     Ok(())

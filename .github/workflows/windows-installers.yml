@@ -1,0 +1,334 @@
+name: Tauri Installers (Windows + Linux UI)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    permissions:
+      contents: read
+    runs-on: windows-2022
+    # Defensive cap: a hung step must fail fast instead of burning the full
+    # 6h GitHub default and cancelling the whole release (v0.6.69-v0.6.72).
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create log directory
+        shell: powershell
+        run: New-Item -ItemType Directory -Force -Path artifacts/logs | Out-Null
+
+      - name: Run tests
+        shell: powershell
+        run: cargo test --workspace --all-targets
+
+      - name: Run clippy
+        shell: powershell
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Install cargo-audit
+        shell: powershell
+        env:
+          CARGO_HTTP_HTTP2: "0"
+        run: |
+          for ($i = 1; $i -le 5; $i++) {
+            cargo install cargo-audit --locked --force
+            if ($LASTEXITCODE -eq 0) { break }
+            Write-Host "Attempt $i failed, retrying in 30s..."
+            Start-Sleep -Seconds 30
+          }
+          if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-audit failed after 5 attempts" }
+
+      - name: Run cargo audit
+        shell: powershell
+        run: cargo audit
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
+
+      - name: Build agent backend (release)
+        shell: powershell
+        run: cargo build --release --bin vaultpilot-agent
+
+      # Release gate: the Rust backend agent must start, answer JSON-RPC,
+      # and survive a heartbeat window. Catches "backend disconnect"-class
+      # regressions before a version ships.
+      - name: Smoke test agent backend
+        shell: powershell
+        run: |
+          ./scripts/smoke-test-agent.ps1 `
+            -ExePath "target/release/vaultpilot-agent.exe" `
+            -HeartbeatSeconds 20
+
+      - name: Upload validation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-validate-logs
+          path: artifacts/logs
+          if-no-files-found: warn
+          retention-days: 7
+
+  build:
+    permissions:
+      contents: read
+    needs: validate
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x86
+            rust_target: i686-pc-windows-msvc
+            channel: win-x86
+          - platform: x64
+            rust_target: x86_64-pc-windows-msvc
+            channel: win-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve app version
+        id: version
+        shell: powershell
+        run: |
+          $tagRef = "${{ github.ref }}"
+          if ($tagRef -match '^refs/tags/v(.+)$') {
+            $version = $Matches[1]
+          } else {
+            $cargo = Get-Content Cargo.toml
+            $line = $cargo | Where-Object { $_ -match '^version\s*=\s*".*"$' } | Select-Object -First 1
+            if (-not $line) {
+              throw "Unable to resolve version from Cargo.toml"
+            }
+            $version = [regex]::Match($line, '"([^"]+)"').Groups[1].Value
+          }
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+          echo "Resolved version: $version"
+
+      - name: Sync Tauri version
+        shell: powershell
+        run: |
+          $conf = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $conf.version = "${{ steps.version.outputs.value }}"
+          $conf | ConvertTo-Json -Depth 20 | Set-Content desktop/src-tauri/tauri.conf.json -Encoding utf8
+
+      - name: Build Tauri Windows installer
+        working-directory: desktop
+        shell: powershell
+        run: pnpm tauri build --bundles nsis --target ${{ matrix.rust_target }}
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-package-${{ matrix.platform }}
+          path: desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis/
+          if-no-files-found: error
+          retention-days: 7
+
+  linux_build:
+    permissions:
+      contents: read
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Linux UI packaging prerequisites
+        run: |
+          # Remove broken Microsoft apt repos that cause update failures (#2613)
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list 2>/dev/null || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            xz-utils \
+            dpkg-dev \
+            pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve app version
+        id: version
+        shell: bash
+        run: |
+          TAG_REF="${{ github.ref }}"
+          if [[ "$TAG_REF" =~ ^refs/tags/v(.+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            VERSION=$(grep -m1 '^version\s*=\s*"' Cargo.toml | sed -E 's/^version\s*=\s*"([^"]+)"/\1/')
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Sync Tauri version
+        run: |
+          python3 - <<'EOF'
+          import json
+          p = "desktop/src-tauri/tauri.conf.json"
+          with open(p, encoding="utf-8") as f:
+              conf = json.load(f)
+          conf["version"] = "${{ steps.version.outputs.value }}"
+          with open(p, "w", encoding="utf-8") as f:
+              json.dump(conf, f, indent=2)
+          EOF
+
+      - name: Build Tauri Linux package (deb + AppImage)
+        working-directory: desktop
+        run: pnpm tauri build --bundles deb,appimage --target x86_64-unknown-linux-gnu
+
+      - name: Verify Linux UI outputs
+        run: |
+          test -f desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+          compgen -G "desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage" > /dev/null
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-ui-package-x64
+          path: |
+            desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, linux_build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download x86 package
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-package-x86
+          path: release-assets/win-x86
+
+      - name: Download x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-package-x64
+          path: release-assets/win-x64
+
+      - name: Download Linux UI package
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-ui-package-x64
+          path: release-assets/linux-x64
+
+      - name: Generate SHA256 checksums
+        run: |
+          mkdir -p release-assets/checksums
+          find release-assets -type f | sort | while read -r f; do
+            sha256sum "$f" >> release-assets/checksums/SHA256SUMS
+          done
+          cat release-assets/checksums/SHA256SUMS
+          (cd release-assets/checksums && zip -q SHA256SUMS.zip SHA256SUMS)
+
+      - name: Publish release assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
+            gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
+          fi
+
+          find release-assets -type f \( \
+            -name '*-setup.exe' -o \
+            -name '*.deb' -o \
+            -name '*.AppImage' -o \
+            -name 'SHA256SUMS.zip' \) | sort | while read -r f; do
+            gh release upload "$TAG" "$f" --clobber
+          done

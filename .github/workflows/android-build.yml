@@ -17,7 +17,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android]
+        include:
+          - abi: aarch64
+            rust_target: aarch64-linux-android
+          - abi: armv7
+            rust_target: armv7-linux-androideabi
+          - abi: x86_64
+            rust_target: x86_64-linux-android
 
     steps:
       - uses: actions/checkout@v7
@@ -56,7 +62,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -92,7 +98,7 @@ jobs:
 
       - name: Build APK
         working-directory: desktop
-        run: pnpm tauri android build --target ${{ matrix.target }} --apk
+        run: pnpm tauri android build --target ${{ matrix.abi }} --apk
 
       - name: Validate APK
         run: |
@@ -118,7 +124,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: vaultpilot-android-${{ matrix.target }}-${{ github.sha }}
+          name: vaultpilot-android-${{ matrix.abi }}-${{ github.sha }}
           path: desktop/src-tauri/gen/android/**/outputs/apk/*/release/*.apk
           if-no-files-found: error
           retention-days: 30

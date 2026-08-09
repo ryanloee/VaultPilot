@@ -210,7 +210,7 @@ jobs:
             ${{ runner.os }}-cargo-build-
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - run: cargo build --release
+      - run: cargo build --release --bin vaultpilot-cli
 
       - name: Upload Linux CLI artifact
         uses: actions/upload-artifact@v7
@@ -243,15 +243,17 @@ jobs:
           git fetch upstream "$BASE_REF"
           git merge --no-edit "upstream/$BASE_REF" || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-
-      - name: Enable pnpm
-        run: corepack enable
 
       - name: Install frontend deps
         working-directory: desktop

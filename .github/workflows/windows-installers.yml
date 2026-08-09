@@ -19,15 +19,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-
-      - name: Enable pnpm
-        run: corepack enable
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -118,15 +120,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-
-      - name: Enable pnpm
-        run: corepack enable
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -207,15 +211,17 @@ jobs:
             dpkg-dev \
             pkg-config
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
-
-      - name: Enable pnpm
-        run: corepack enable
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

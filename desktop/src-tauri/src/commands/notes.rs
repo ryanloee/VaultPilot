@@ -42,10 +42,7 @@ pub async fn save_note(
 }
 
 #[tauri::command]
-pub async fn delete_note(
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> Result<bool, String> {
+pub async fn delete_note(state: tauri::State<'_, AppState>, id: String) -> Result<bool, String> {
     let cleanup = vaultpilot_lib::storage::load_settings_async(&state.storage)
         .await
         .unwrap_or_default()
@@ -131,8 +128,8 @@ pub async fn read_image_preview(
         .await
         .map_err(|e| e.to_string())?;
     let vault_root = Path::new(&settings.vault_dir);
-    let confined = vaultpilot_lib::normalize_tool_path(&path, vault_root)
-        .map_err(|e| e.to_string())?;
+    let confined =
+        vaultpilot_lib::normalize_tool_path(&path, vault_root).map_err(|e| e.to_string())?;
     read_image_as_data_url(&confined.to_string_lossy())
 }
 
@@ -146,8 +143,8 @@ pub async fn open_vault_directory(
         .await
         .map_err(|e| e.to_string())?;
     let vault_root = Path::new(&settings.vault_dir);
-    let confined = vaultpilot_lib::normalize_tool_path(&path, vault_root)
-        .map_err(|e| e.to_string())?;
+    let confined =
+        vaultpilot_lib::normalize_tool_path(&path, vault_root).map_err(|e| e.to_string())?;
     open_in_file_manager(&confined.to_string_lossy())
 }
 

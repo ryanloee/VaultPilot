@@ -491,6 +491,18 @@ impl AppSettings {
         }
     }
 
+    /// Verify a password against a PHC-style PBKDF2 hash string produced by
+    /// [`Self::hash_pin`]. Used by per-note locks (#3977), where the stored
+    /// hash lives in the note-lock file rather than in settings.
+    pub fn verify_password_hash(stored: &str, password: &str) -> bool {
+        if let Some(rest) = stored.strip_prefix("pbkdf2-sha256$") {
+            Self::verify_pbkdf2_hash(password, rest)
+        } else {
+            let input = Self::legacy_sha256_hex(password);
+            constant_time_eq(stored.as_bytes(), input.as_bytes())
+        }
+    }
+
     /// Verify a PIN and seamlessly upgrade legacy SHA-256 hashes to PBKDF2
     /// on successful verification (#3330).
     ///

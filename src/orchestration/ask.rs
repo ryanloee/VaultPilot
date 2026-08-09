@@ -409,6 +409,79 @@ pub async fn ask_with_ai_with_context(
                     }
                 }
             }
+            AssistantToolCall::GetCalendarEvents { date } => {
+                let input = format!("date={date}");
+                let result = crate::agent::get_calendar_events_for_agent(context, &date).await;
+                record_calendar_tool_result(
+                    "get_calendar_events",
+                    input,
+                    &mut tool_results,
+                    result,
+                )
+                .await;
+            }
+            AssistantToolCall::CreateCalendarEvent {
+                title,
+                start,
+                end,
+                location,
+            } => {
+                let input = format!("title={title} start={start} end={end}");
+                let result = crate::agent::create_calendar_event_for_agent(
+                    context,
+                    &title,
+                    &start,
+                    &end,
+                    location.as_deref(),
+                )
+                .await;
+                record_calendar_tool_result(
+                    "create_calendar_event",
+                    input,
+                    &mut tool_results,
+                    result,
+                )
+                .await;
+            }
+            AssistantToolCall::MoveCalendarEvent {
+                event_id,
+                start,
+                end,
+            } => {
+                let input = format!("eventId={event_id} start={start} end={end}");
+                let result =
+                    crate::agent::move_calendar_event_for_agent(context, &event_id, &start, &end)
+                        .await;
+                record_calendar_tool_result(
+                    "move_calendar_event",
+                    input,
+                    &mut tool_results,
+                    result,
+                )
+                .await;
+            }
+            AssistantToolCall::CancelCalendarEvent { event_id } => {
+                let input = format!("eventId={event_id}");
+                let result =
+                    crate::agent::cancel_calendar_event_for_agent(context, &event_id).await;
+                record_calendar_tool_result(
+                    "cancel_calendar_event",
+                    input,
+                    &mut tool_results,
+                    result,
+                )
+                .await;
+            }
+            AssistantToolCall::FindFreeSlot {
+                date,
+                duration_minutes,
+            } => {
+                let input = format!("date={date} durationMinutes={duration_minutes}");
+                let result =
+                    crate::agent::find_free_slot_for_agent(context, &date, duration_minutes).await;
+                record_calendar_tool_result("find_free_slot", input, &mut tool_results, result)
+                    .await;
+            }
             AssistantToolCall::Custom { name, args } => {
                 let tool_identity = format!("custom:{}", name);
                 emit_status("executing", format!("Running custom tool: {}", name));
@@ -590,7 +663,53 @@ fn planned_tool_identity(tool_call: &AssistantToolCall) -> Option<(&'static str,
         AssistantToolCall::SaveNote { draft, .. } => {
             Some(("save_note", format!("save_note:{}", draft.title)))
         }
+        AssistantToolCall::GetCalendarEvents { date } => {
+            Some(("get_calendar_events", format!("date={date}")))
+        }
+        AssistantToolCall::CreateCalendarEvent {
+            title, start, end, ..
+        } => Some((
+            "create_calendar_event",
+            format!("title={title} start={start} end={end}"),
+        )),
+        AssistantToolCall::MoveCalendarEvent {
+            event_id,
+            start,
+            end,
+            ..
+        } => Some((
+            "move_calendar_event",
+            format!("eventId={event_id} start={start} end={end}"),
+        )),
+        AssistantToolCall::CancelCalendarEvent { event_id } => {
+            Some(("cancel_calendar_event", format!("eventId={event_id}")))
+        }
+        AssistantToolCall::FindFreeSlot {
+            date,
+            duration_minutes,
+        } => Some((
+            "find_free_slot",
+            format!("date={date} durationMinutes={duration_minutes}"),
+        )),
         AssistantToolCall::Custom { name, .. } => Some(("custom", format!("custom:{}", name))),
+    }
+}
+
+/// Record a calendar tool outcome into `tool_results` (#3603).
+async fn record_calendar_tool_result(
+    name: &str,
+    input: String,
+    tool_results: &mut Vec<ToolExecution>,
+    result: anyhow::Result<String>,
+) {
+    match result {
+        Ok(output) => tool_results.push(ToolExecution::new(name, input, output, false)),
+        Err(error) => tool_results.push(ToolExecution::new(
+            name,
+            input,
+            format!("tool error: {}", crate::sanitize_error(&error.to_string())),
+            true,
+        )),
     }
 }
 

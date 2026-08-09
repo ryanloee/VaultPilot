@@ -388,6 +388,23 @@ enum Commands {
         format: vaultpilot_lib::mindmap::MindmapFormat,
     },
 
+    /// Export a note as a self-contained HTML slide deck (#3805)
+    ///
+    /// `## ` headings and `---` rules split the note into slides. The output
+    /// HTML works offline (keyboard ←/→/Space, click, F for fullscreen).
+    ///
+    /// Examples:
+    ///   vp slideshow my-note
+    ///   vp slideshow my-note --output slides.html
+    Slideshow {
+        /// Note ID or path
+        id: String,
+
+        /// Output HTML path (default: slides-<slug>.html in the current dir)
+        #[arg(long)]
+        output: Option<String>,
+    },
+
     /// Open or create today's daily note with optional template (#1843)
     ///
     /// Creates a structured daily note at `Daily/YYYY-MM-DD.md` using a template.
@@ -1430,6 +1447,31 @@ enum NotesActions {
         id: String,
     },
 
+    /// Lock a note with a password (#3977). The password is stored only as a
+    /// PBKDF2 hash; the body is masked until the note is unlocked.
+    Lock {
+        /// Note ID
+        id: String,
+        /// Lock password
+        #[arg(long)]
+        password: String,
+    },
+
+    /// Unlock a note with its password (#3977)
+    Unlock {
+        /// Note ID
+        id: String,
+        /// Lock password
+        #[arg(long)]
+        password: String,
+    },
+
+    /// Show whether a note is locked (#3977)
+    LockStatus {
+        /// Note ID
+        id: String,
+    },
+
     /// Create or update a note (JSON on stdin)
     Create {
         /// Auto-detect current meeting from calendar and attach source card
@@ -1524,6 +1566,10 @@ enum NotesActions {
         /// Enable deep semantic/vector search to find more relevant results (#2033)
         #[arg(long)]
         deep_search: bool,
+
+        /// Re-rank deep results by query embedding similarity (#3978)
+        #[arg(long)]
+        rerank: bool,
 
         /// Filter notes created on or after ISO-8601 datetime (e.g. "2026-01-01" or "2026-01-01T00:00:00Z")
         #[arg(long)]
@@ -3082,6 +3128,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
         Commands::Vault { action } => tokio::task::block_in_place(|| handle_vault(context, action)),
         Commands::Canvas { action } => handle_canvas(context, action),
         Commands::Mindmap { note_id, format } => handle_mindmap(context, note_id, *format),
+        Commands::Slideshow { id, output } => handle_slideshow(context, id, output.as_deref()),
         Commands::Calendar {
             year,
             month,
@@ -4571,9 +4618,17 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             to_json(&result)
         }
         NotesActions::Get { id } => {
-            let note = load_note_with_context(context, id)?;
+            let mut note = load_note_with_context(context, id)?;
+            // #3977: locked notes expose metadata but mask the body.
+            if vaultpilot_lib::note_lock::is_locked(context.vault_dir(), &note.meta.id) {
+                note.body = vaultpilot_lib::note_lock::MASKED_BODY.to_string();
+                note.search_snippet = None;
+            }
             to_json(&note)
         }
+        NotesActions::Lock { id, password } => handle_note_lock(context, id, password),
+        NotesActions::Unlock { id, password } => handle_note_unlock(context, id, password),
+        NotesActions::LockStatus { id } => handle_note_lock_status(context, id),
         NotesActions::Create { meeting } => {
             let input = read_stdin_json()?;
             let mut note: NoteDocument = serde_json::from_value(input)?;
@@ -4681,6 +4736,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             keywords,
             limit,
             deep_search,
+            rerank,
             after,
             before,
             modified_after,
@@ -4711,7 +4767,7 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             )?;
             if *deep_search {
                 // Perform deep semantic search and return combined results as JSON (#2695, #2698)
-                let deep_result = vaultpilot_lib::storage::deep_search_notes(
+                let mut deep_result = vaultpilot_lib::storage::deep_search_notes(
                     context,
                     SearchQuery {
                         text: query.clone(),
@@ -4727,9 +4783,57 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
                         ..Default::default()
                     },
                 )?;
+                if *rerank {
+                    // #3978: re-score the semantic candidates against the
+                    // query using the configured embedder.
+                    let settings = load_settings_with_context(context).unwrap_or_default();
+                    let embedder = vaultpilot_lib::semantic::embedder_from_provider(
+                        settings.embedding_provider,
+                    );
+                    let mut texts = Vec::new();
+                    let mut metas = Vec::new();
+                    for meta in &deep_result.notes {
+                        let text = load_note_with_context(context, &meta.id)
+                            .ok()
+                            .map(|n| format!("{}\n{}", n.meta.title, n.body))
+                            .unwrap_or_else(|| meta.title.clone());
+                        texts.push(text);
+                        metas.push(meta.clone());
+                    }
+                    let scores =
+                        vaultpilot_lib::semantic::rerank_scores(query, &texts, embedder.as_ref());
+                    let mut order: Vec<usize> = (0..metas.len()).collect();
+                    order.sort_by(|a, b| {
+                        scores[*b]
+                            .partial_cmp(&scores[*a])
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    let reranked: Vec<Value> = order
+                        .iter()
+                        .filter(|&&i| scores[i] > 0.0)
+                        .map(|&i| {
+                            let mut item = serde_json::to_value(&metas[i])
+                                .unwrap_or_else(|_| serde_json::json!({}));
+                            item["rerankScore"] = serde_json::json!(scores[i]);
+                            item
+                        })
+                        .collect();
+                    deep_result.notes = order
+                        .into_iter()
+                        .filter(|&i| scores[i] > 0.0)
+                        .map(|i| metas[i].clone())
+                        .collect();
+                    return Ok(serde_json::json!({
+                        "keyword_results": result,
+                        "semantic_results": deep_result,
+                        "reranked_results": reranked,
+                        "reranked": true,
+                    }));
+                }
                 Ok(serde_json::json!({
                     "keyword_results": result,
                     "semantic_results": deep_result,
+                    "reranked": false,
                 }))
             } else {
                 to_json(&result)
@@ -5139,6 +5243,39 @@ fn handle_template_clear_default(context: &StorageContext) -> Result<Value> {
     Ok(serde_json::json!({
         "status": "cleared",
         "default_template": "blank",
+    }))
+}
+
+/// Handle `notes lock <id> --password <pw>` (#3977).
+fn handle_note_lock(context: &StorageContext, note_id: &str, password: &str) -> Result<Value> {
+    // Validate the note exists first so typos fail loudly.
+    load_note_with_context(context, note_id)?;
+    vaultpilot_lib::note_lock::lock_note(context.vault_dir(), note_id, password)?;
+    Ok(serde_json::json!({
+        "status": "locked",
+        "note_id": note_id,
+        "locked": true,
+    }))
+}
+
+/// Handle `notes unlock <id> --password <pw>` (#3977).
+fn handle_note_unlock(context: &StorageContext, note_id: &str, password: &str) -> Result<Value> {
+    load_note_with_context(context, note_id)?;
+    let unlocked = vaultpilot_lib::note_lock::unlock_note(context.vault_dir(), note_id, password)?;
+    Ok(serde_json::json!({
+        "status": if unlocked { "unlocked" } else { "not_locked" },
+        "note_id": note_id,
+        "locked": false,
+    }))
+}
+
+/// Handle `notes lock-status <id>` (#3977).
+fn handle_note_lock_status(context: &StorageContext, note_id: &str) -> Result<Value> {
+    let locked = vaultpilot_lib::note_lock::is_locked(context.vault_dir(), note_id);
+    Ok(serde_json::json!({
+        "status": "ok",
+        "note_id": note_id,
+        "locked": locked,
     }))
 }
 
@@ -5614,6 +5751,33 @@ fn handle_mindmap(
         },
         "node_count": node_count,
         "root_count": nodes.len(),
+    }))
+}
+
+/// Handle `vp slideshow <id> [--output <path>]` (#3805).
+fn handle_slideshow(
+    context: &StorageContext,
+    note_id: &str,
+    output: Option<&str>,
+) -> Result<Value> {
+    let note = vaultpilot_lib::storage::load_note_with_context(context, note_id)?;
+    let output_path = match output {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(format!(
+            "slides-{}.html",
+            vaultpilot_lib::utils::slugify(&note.meta.title)
+        )),
+    };
+    vaultpilot_lib::export::export_markdown_to_presentation(
+        &note.body,
+        &note.meta.title,
+        &output_path,
+    )?;
+    Ok(serde_json::json!({
+        "status": "written",
+        "note_id": note.meta.id,
+        "title": note.meta.title,
+        "output": output_path.display().to_string(),
     }))
 }
 
@@ -11877,6 +12041,83 @@ mod tests {
         let blank_res =
             handle_note_new(&ctx, None, "Quick", None, None, &[], true).expect("dry-run blank");
         assert_eq!(blank_res["template"], "blank");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn regression_3977_locked_note_get_is_masked() {
+        // #3977: locking a note must mask its body in `notes get`; unlocking
+        // with the correct password restores it.
+        use crate::{handle_notes, NotesActions};
+        use std::env;
+        use std::fs;
+
+        let dir = env::temp_dir().join(format!("vp-test-3977-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create dir");
+        let ctx = vaultpilot_lib::storage::StorageContext::for_cli(Some(dir.clone()))
+            .expect("storage context");
+
+        let note = vaultpilot_lib::models::NoteDocument {
+            meta: vaultpilot_lib::models::NoteMeta {
+                id: "n3977".to_string(),
+                title: "Secret".to_string(),
+                path: String::new(),
+                ..Default::default()
+            },
+            body: "classified content".to_string(),
+            ..Default::default()
+        };
+        vaultpilot_lib::storage::save_note_with_context(&ctx, note).expect("save note");
+
+        let locked = handle_notes(
+            &ctx,
+            &NotesActions::Lock {
+                id: "n3977".to_string(),
+                password: "s3cret".to_string(),
+            },
+        )
+        .expect("lock");
+        assert_eq!(locked["status"], "locked");
+
+        let got = handle_notes(
+            &ctx,
+            &NotesActions::Get {
+                id: "n3977".to_string(),
+            },
+        )
+        .expect("get locked");
+        assert!(
+            got["body"].as_str().unwrap().contains("locked"),
+            "locked note body must be masked: {}",
+            got["body"]
+        );
+
+        let unlocked = handle_notes(
+            &ctx,
+            &NotesActions::Unlock {
+                id: "n3977".to_string(),
+                password: "s3cret".to_string(),
+            },
+        )
+        .expect("unlock");
+        assert_eq!(unlocked["status"], "unlocked");
+
+        let got2 = handle_notes(
+            &ctx,
+            &NotesActions::Get {
+                id: "n3977".to_string(),
+            },
+        )
+        .expect("get unlocked");
+        assert!(
+            got2["body"]
+                .as_str()
+                .unwrap()
+                .contains("classified content"),
+            "unlocked note body must be restored: {}",
+            got2["body"]
+        );
 
         fs::remove_dir_all(&dir).ok();
     }

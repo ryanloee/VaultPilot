@@ -567,6 +567,146 @@ blockquote {{ border-left: 4px solid #ddd; margin: 1rem 0; padding: 0.5rem 1rem;
     Ok(())
 }
 
+// ── Presentation export (#3805) ──────────────────────────────────────
+
+/// Split a note into slides: each `## ` (level-2) heading starts a new slide;
+/// `---` horizontal rules also break slides. A leading H1 becomes the title
+/// slide. Falls back to a single slide when the note has no section breaks.
+pub fn split_presentation_slides(markdown: &str) -> Vec<String> {
+    let mut slides = Vec::new();
+    let mut current = String::new();
+    let mut saw_rule = false;
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## ") || trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            if !current.trim().is_empty() {
+                slides.push(std::mem::take(&mut current));
+            }
+            if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+                saw_rule = true;
+                continue;
+            }
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+    if !current.trim().is_empty() {
+        slides.push(current);
+    }
+    if slides.is_empty() {
+        slides.push(markdown.to_string());
+    }
+    if slides.len() == 1 && !saw_rule {
+        // No explicit sections: build slides from the first H1 plus H2 blocks
+        // when the document has headings.
+        let mut rebuilt = Vec::new();
+        let mut block = String::new();
+        for line in markdown.lines() {
+            if line.trim().starts_with("## ") && !block.trim().is_empty() {
+                rebuilt.push(std::mem::take(&mut block));
+            }
+            block.push_str(line);
+            block.push('\n');
+        }
+        if !block.trim().is_empty() {
+            rebuilt.push(block);
+        }
+        if rebuilt.len() > 1 {
+            return rebuilt;
+        }
+    }
+    slides
+}
+
+/// Export a note as a self-contained HTML slide deck (#3805). Navigation is
+/// keyboard (←/→/Space) and click; the deck works offline (no external CDN).
+pub fn export_markdown_to_presentation(
+    markdown: &str,
+    title: &str,
+    output_path: &Path,
+) -> Result<()> {
+    let slides = split_presentation_slides(markdown);
+    let escaped_title = xml_escape(title);
+    let slide_html = slides
+        .iter()
+        .enumerate()
+        .map(|(i, slide)| {
+            format!(
+                r#"<section class="slide" id="slide-{i}"><div class="slide-content">{}</div></section>"#,
+                markdown_to_html_body(slide)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<style>
+html, body {{ margin: 0; height: 100%; background: #111827; color: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+.deck {{ position: relative; width: 100vw; height: 100vh; overflow: hidden; }}
+.slide {{ display: none; position: absolute; inset: 0; padding: 5vh 8vw; box-sizing: border-box; overflow-y: auto; }}
+.slide.active {{ display: flex; align-items: center; justify-content: center; }}
+.slide-content {{ max-width: 1100px; width: 100%; font-size: clamp(1rem, 2.2vw, 1.5rem); line-height: 1.55; }}
+.slide-content h1 {{ font-size: clamp(2rem, 5vw, 3.6rem); margin: 0 0 1rem; }}
+.slide-content h2 {{ font-size: clamp(1.5rem, 3.5vw, 2.4rem); color: #93c5fd; }}
+.slide-content h3 {{ color: #93c5fd; }}
+.slide-content pre {{ background: #1f2937; padding: 1rem; border-radius: 8px; overflow-x: auto; font-size: 0.85em; }}
+.slide-content code {{ background: #1f2937; padding: 0.1em 0.3em; border-radius: 4px; }}
+.slide-content table {{ border-collapse: collapse; width: 100%; }}
+.slide-content th, .slide-content td {{ border: 1px solid #374151; padding: 0.5rem 0.75rem; text-align: left; }}
+.slide-content th {{ background: #1f2937; }}
+.slide-content blockquote {{ border-left: 4px solid #6b7280; margin: 1rem 0; padding: 0.25rem 1rem; color: #9ca3af; }}
+#progress {{ position: fixed; left: 0; bottom: 0; height: 4px; background: #3b82f6; transition: width .2s ease; }}
+#counter {{ position: fixed; right: 1rem; bottom: 0.75rem; font-size: 0.85rem; color: #9ca3af; }}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+{slides}
+</div>
+<div id="progress"></div>
+<div id="counter"></div>
+<script>
+const slides = Array.from(document.querySelectorAll('.slide'));
+let index = 0;
+function show(i) {{
+  index = Math.max(0, Math.min(slides.length - 1, i));
+  slides.forEach((s, j) => s.classList.toggle('active', j === index));
+  document.getElementById('progress').style.width = ((index + 1) / slides.length * 100) + '%';
+  document.getElementById('counter').textContent = (index + 1) + ' / ' + slides.length;
+}}
+document.addEventListener('keydown', e => {{
+  if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {{ e.preventDefault(); show(index + 1); }}
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {{ e.preventDefault(); show(index - 1); }}
+  else if (e.key === 'Home') show(0);
+  else if (e.key === 'End') show(slides.length - 1);
+  else if (e.key === 'f') {{ if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }}
+}});
+document.querySelector('.deck').addEventListener('click', e => {{
+  if (e.clientX > window.innerWidth / 2) show(index + 1); else show(index - 1);
+}});
+show(0);
+</script>
+</body>
+</html>"#,
+        title = escaped_title,
+        slides = slide_html
+    );
+
+    std::fs::write(output_path, html).with_context(|| {
+        format!(
+            "failed to write presentation HTML file: {}",
+            output_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 // ── Callout helpers ────────────────────────────────────────────────────
 
 /// Known Obsidian callout types and their CSS class names.
@@ -2481,5 +2621,39 @@ Some text between tables.
             html.contains("<h2 id=\"indented-h2\">"),
             "Indented H2 should have id: {html}"
         );
+    }
+
+    #[test]
+    fn presentation_splits_on_h2_and_rules() {
+        // #3805: `## ` headings and `---` rules both start a new slide.
+        let md =
+            "# Title\n\nIntro\n\n## Section A\n\ncontent A\n\n---\n\n## Section B\n\ncontent B\n";
+        let slides = split_presentation_slides(md);
+        assert_eq!(slides.len(), 3, "expected 3 slides, got {slides:?}");
+        assert!(slides[0].contains("Intro"));
+        assert!(slides[1].contains("Section A"));
+        assert!(slides[2].contains("Section B"));
+    }
+
+    #[test]
+    fn presentation_export_writes_self_contained_html() {
+        // #3805: the deck must be a single offline HTML file with slides,
+        // keyboard navigation and no external CDN references.
+        let tmp = std::env::temp_dir().join(format!(
+            "vp-present-{}-{}.html",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        export_markdown_to_presentation("# Title\n\n## A\n\nhello", "Title", &tmp).unwrap();
+        let html = std::fs::read_to_string(&tmp).unwrap();
+        assert!(html.contains("class=\"slide\""));
+        assert!(html.contains("addEventListener('keydown'"));
+        assert!(html.contains("<div class=\"deck\""));
+        assert!(!html.contains("https://"), "deck must not depend on CDN");
+        assert!(html.contains("</html>"));
+        std::fs::remove_file(&tmp).ok();
     }
 }

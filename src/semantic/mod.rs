@@ -176,6 +176,25 @@ pub fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
         .clamp(-1.0, 1.0)
 }
 
+/// Re-rank candidate texts by embedding similarity to the query (#3978).
+/// Returns one score per text (0.0 when the query or text cannot be
+/// embedded). Callers reorder candidates by these scores; scores are cosine
+/// similarities in [-1, 1].
+pub fn rerank_scores(query: &str, texts: &[String], embedder: &dyn SemanticEmbedder) -> Vec<f32> {
+    let Some(query_vec) = embedder.embed(query) else {
+        return vec![0.0; texts.len()];
+    };
+    texts
+        .iter()
+        .map(|t| {
+            embedder
+                .embed(t)
+                .map(|v| cosine_similarity(&query_vec, &v))
+                .unwrap_or(0.0)
+        })
+        .collect()
+}
+
 /// Convenience: create the default embedder.
 pub fn default_embedder() -> Box<dyn SemanticEmbedder> {
     Box::new(HashEmbedder)
@@ -332,5 +351,24 @@ mod tests {
         let v: Vec<f32> = vec![];
         let json = serialize_vector(&v);
         assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn rerank_scores_prefers_related_text() {
+        // #3978: the candidate that shares more n-grams with the query must
+        // receive a higher similarity score.
+        let embedder = HashEmbedder;
+        let query = "rust async tokio concurrency".to_string();
+        let related = "rust async tokio task concurrency patterns".to_string();
+        let unrelated = "cooking recipes pasta tomato sauce".to_string();
+        let scores = rerank_scores(&query, &[unrelated.clone(), related.clone()], &embedder);
+        assert!(
+            scores[1] > scores[0],
+            "related candidate should rank higher: {scores:?}"
+        );
+
+        // Unembeddable query yields all-zero scores.
+        let empty = rerank_scores("!! 123 ??", &[related], &embedder);
+        assert_eq!(empty, vec![0.0]);
     }
 }

@@ -34,6 +34,7 @@ pub mod mindmap;
 pub mod mirror;
 pub mod models;
 pub mod note_composer;
+pub mod note_lock;
 pub mod orchestration;
 pub mod pdf_annotations;
 pub mod people_index;

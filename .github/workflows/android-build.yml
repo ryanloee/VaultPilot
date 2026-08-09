@@ -144,7 +144,6 @@ jobs:
         with:
           path: release-assets/android
           pattern: vaultpilot-android-*-${{ github.sha }}
-          merge-multiple: true
 
       - name: Upload APKs to release
         env:
@@ -154,6 +153,9 @@ jobs:
           if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
             gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
           fi
-          for apk in release-assets/android/*.apk; do
-            gh release upload "$TAG" "$apk" --clobber
+          for apk in release-assets/android/vaultpilot-android-*/*.apk; do
+            dir=$(basename "$(dirname "$apk")")
+            abi=${dir#vaultpilot-android-}
+            abi=${abi%%-*}
+            gh release upload "$TAG" "$apk#VaultPilot-${abi}-${TAG}.apk" --clobber
           done

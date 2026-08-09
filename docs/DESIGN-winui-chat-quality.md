@@ -42,8 +42,11 @@ AI 请求进行中，客户端使用**三重非阻塞反馈**，禁止全屏遮�
 - **新增任何"处理中"UI 前必须读本节**。反馈需求应先评估三重反馈是否已满足。
 - 代码评审中发现新增全屏遮罩（`Grid` + `Background="#80..."` + `ProgressRing` 覆盖全窗），
   默认打回。
-- `LoadingOverlay` 相关的 XAML 元素、方法、handler 已全部删除；若在 git 历史外
-  发现残留引用，属于回归，按本规则处理。
+- 聊天主流程的全屏 `LoadingOverlay`（XAML 元素、Show/Hide 方法、取消按钮 handler）
+  已全部删除；若在主聊天视图发现新的全窗遮罩，属于回归，按本规则处理。
+- `QuickAskOverlay`（快速提问）与 `AiCommandPalette`（命令面板）各自保留的
+  局部 `LoadingOverlay`（540×140 卡片，仅覆盖各自弹出层，不是全窗遮罩）不违反
+  本节规则，属于各自控件的局部反馈，不是聊天三重反馈的回归（#3854）。
 
 ---
 
@@ -105,11 +108,14 @@ agent 是**单进程长驻**：主线程 `runtime.block_on(handle_line(...))` �
 |----|----|------|
 | agent 请求超时 | 120s | `vaultpilot-agent.rs` `REQUEST_TIMEOUT` |
 | AI 调用超时 | 120s/次 | `ask.rs` `AI_CALL_TIMEOUT`（select_tool_call / answer_*） |
-| WinUI IPC 超时 | 180s | `BackendClient.cs` `DefaultIpcTimeout` |
-| WinUI AI 超时 | RequestTimeoutMs + 90s | `ChatInputHandler.cs` `aiTimeout` |
+| WinUI IPC 超时（非 AI 请求默认） | 180s | `BackendClient.cs` `DefaultIpcTimeout` |
+| WinUI AI 请求的 IPC 超时 | RequestTimeoutMs + 90s（作为 `SendAsync` 的 `requestTimeout` 传入） | `ChatInputHandler.cs` `aiTimeout` |
 
-规则：WinUI IPC 超时 > agent 内部超时 + 余量。若 WinUI 先超时，会
-`TryReconnectWithRetryAsync` 杀掉 agent 进程重启，用户看到"后端断开"。
+规则：WinUI 对 AI 请求实际使用的 IPC 超时是 `aiTimeout = RequestTimeoutMs + 90s`，
+不是固定的 180s。必须保证 `aiTimeout` > agent 内部超时（120s），即
+`RequestTimeoutMs` 必须大于 30s（默认 60s）；设置里目前允许 1s 之类的极低值
+（#3801），此时 WinUI 会先于 agent 超时，触发 `TryReconnectWithRetryAsync`
+杀掉 agent 进程重启，用户看到"后端断开"。
 
 ### 3.3 断开判定与修复记录（2026-08-02 复盘）
 

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use anyhow::Result;
 use axum::body::Body;
@@ -98,6 +98,9 @@ pub(super) async fn run_http_bridge(
         .route("/api/vault/health", get(http_vault_health))
         // Knowledge Graph API (#3460) — expose vault note link graph as JSON
         .route("/api/graph", get(http_graph))
+        // Local 1-hop subgraph (#3912) — cheap related-notes payload instead
+        // of shipping the whole graph on every note open.
+        .route("/api/graph/local", get(http_graph_local))
         // Subscriptions API (#2167)
         .route(
             "/api/subscriptions",
@@ -2357,6 +2360,111 @@ async fn http_vault_health(
     Ok(Json(value))
 }
 
+// ── Knowledge-graph server cache (#3912) ─────────────────────────────
+//
+// Building the full graph is expensive: it opens a fresh DB connection,
+// lists every note and reads each body to extract wikilinks. Mobile's
+// related-notes panel previously triggered this on every note open. The
+// cache reuses the built graph while the vault's knowledge-index DB (and its
+// WAL, since SQLite runs in journal_mode=WAL) is unchanged, and the local
+// subgraph endpoint serves 1-hop neighborhoods from it.
+
+/// Maximum age of a cached graph before it is rebuilt even if the DB mtime
+/// looks unchanged (belt-and-suspenders for filesystems with coarse mtimes).
+const GRAPH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+
+struct GraphCacheEntry {
+    vault_key: String,
+    include_mentions: bool,
+    db_modified: Option<SystemTime>,
+    built_at: Instant,
+    graph: Arc<vaultpilot_lib::knowledge_graph::KnowledgeGraph>,
+}
+
+fn graph_cache() -> &'static Mutex<Option<GraphCacheEntry>> {
+    static CACHE: OnceLock<Mutex<Option<GraphCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Latest modification time across the knowledge-index DB and its WAL file.
+fn knowledge_index_mtime(ctx: &StorageContext) -> Option<SystemTime> {
+    let base = ctx
+        .vault_dir()
+        .join(".vaultpilot")
+        .join("knowledge-index.sqlite");
+    let mut latest = std::fs::metadata(&base)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    for candidate in [
+        base.with_extension("sqlite-wal"),
+        base.with_extension("sqlite-shm"),
+    ] {
+        if let Ok(m) = std::fs::metadata(&candidate).and_then(|m| m.modified()) {
+            latest = Some(latest.map_or(m, |t| t.max(m)));
+        }
+    }
+    latest
+}
+
+/// Return the full graph, reusing the in-process cache when the vault's DB
+/// has not changed. Safe to call from `spawn_blocking` (single cached build).
+fn resolve_cached_graph(
+    ctx: &StorageContext,
+    include_mentions: bool,
+) -> Result<Arc<vaultpilot_lib::knowledge_graph::KnowledgeGraph>> {
+    let vault_key = ctx
+        .vault_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| ctx.vault_dir().to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let db_modified = knowledge_index_mtime(ctx);
+
+    let cache = graph_cache();
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let fresh = guard.as_ref().is_some_and(|entry| {
+        entry.vault_key == vault_key
+            && entry.include_mentions == include_mentions
+            && entry.db_modified == db_modified
+            && entry.built_at.elapsed() < GRAPH_CACHE_TTL
+    });
+    if fresh {
+        return Ok(guard.as_ref().expect("fresh implies entry").graph.clone());
+    }
+
+    let graph = if include_mentions {
+        vaultpilot_lib::knowledge_graph::build_knowledge_graph_with_mentions(ctx)
+    } else {
+        vaultpilot_lib::knowledge_graph::build_knowledge_graph(ctx)
+    }?;
+    let entry = GraphCacheEntry {
+        vault_key,
+        include_mentions,
+        db_modified,
+        built_at: Instant::now(),
+        graph: Arc::new(graph),
+    };
+    *guard = Some(entry);
+    Ok(guard.as_ref().expect("entry just set").graph.clone())
+}
+
+/// Build the 1-hop (or N-hop) local subgraph JSON for `note_id` (#3912).
+fn local_graph_json(
+    ctx: &StorageContext,
+    note_id: &str,
+    depth: usize,
+    include_mentions: bool,
+) -> Result<Value> {
+    let graph = resolve_cached_graph(ctx, include_mentions)?;
+    let local = vaultpilot_lib::knowledge_graph::extract_local_graph(&graph, note_id, depth);
+    let mut value = serde_json::to_value(&local)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("center".to_string(), Value::String(note_id.to_string()));
+        obj.insert("depth".to_string(), serde_json::json!(depth));
+    }
+    Ok(value)
+}
+
 /// GET /api/graph: knowledge graph as JSON (headless server #3460).
 ///
 /// Returns the full vault knowledge graph (nodes + edges) in JSON format,
@@ -2381,13 +2489,7 @@ async fn http_graph(
 
     let graph = tokio::task::spawn_blocking({
         let ctx = state.context.clone();
-        move || {
-            if include_mentions {
-                vaultpilot_lib::knowledge_graph::build_knowledge_graph_with_mentions(&ctx)
-            } else {
-                vaultpilot_lib::knowledge_graph::build_knowledge_graph(&ctx)
-            }
-        }
+        move || resolve_cached_graph(&ctx, include_mentions)
     })
     .await
     .map_err(|e| {
@@ -2405,9 +2507,68 @@ async fn http_graph(
         )
     })?;
 
-    let value = serde_json::to_value(&graph).map_err(|e| {
+    let value = serde_json::to_value(&*graph).map_err(|e| {
         tracing::warn!("graph: serialization failed: {e}");
         openai_error(StatusCode::INTERNAL_SERVER_ERROR, "Serialization failed")
+    })?;
+
+    Ok(Json(value))
+}
+
+/// GET /api/graph/local?noteId=...&depth=1 — local subgraph around one note.
+///
+/// Returns only the notes/edges reachable within `depth` hops of `noteId`
+/// (default 1, clamped to 1..=3), plus `center`/`depth` metadata. Clients
+/// like the mobile related-notes panel use this instead of fetching the
+/// whole graph on every note open (#3912).
+async fn http_graph_local(
+    State(state): State<Arc<HttpBridgeState>>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<OpenAiErrorEnvelope>)> {
+    require_bridge_token(&state, &headers)?;
+
+    let note_id = match params
+        .get("noteId")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => id.to_string(),
+        None => {
+            return Err(openai_error(
+                StatusCode::BAD_REQUEST,
+                "Missing required query parameter 'noteId'",
+            ));
+        }
+    };
+    let depth = params
+        .get("depth")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1)
+        .clamp(1, 3);
+    let include_mentions = params
+        .get("mentions")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+
+    let value = tokio::task::spawn_blocking({
+        let ctx = state.context.clone();
+        move || local_graph_json(&ctx, &note_id, depth, include_mentions)
+    })
+    .await
+    .map_err(|e| {
+        tracing::warn!("graph/local: spawn_blocking failed: {e}");
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Local graph generation failed",
+        )
+    })?
+    .map_err(|e| {
+        tracing::warn!("graph/local: build failed: {e}");
+        openai_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Local graph generation failed",
+        )
     })?;
 
     Ok(Json(value))
@@ -4528,5 +4689,109 @@ mod tests {
         let json = serde_json::json!({ "path": "/tmp/notes" });
         let res: Result<ImportFolderRequest, _> = serde_json::from_value(json);
         assert!(res.is_err());
+    }
+
+    // ── #3912: knowledge-graph cache + local subgraph endpoint ─────
+
+    fn make_graph_note(id: &str, title: &str, body: &str) -> vaultpilot_lib::models::NoteDocument {
+        vaultpilot_lib::models::NoteDocument {
+            meta: vaultpilot_lib::models::NoteMeta {
+                id: id.to_string(),
+                title: title.to_string(),
+                // Empty path: storage derives the vault-absolute path.
+                path: String::new(),
+                ..Default::default()
+            },
+            body: body.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn graph_cache_reuses_until_db_changes() {
+        // #3912: the server must not rebuild the full knowledge graph on
+        // every related-notes request. Reuse the cached build until the
+        // vault's knowledge-index DB (or its WAL) changes.
+        use std::time::SystemTime;
+
+        let tmp = std::env::temp_dir().join(format!("vp_test_graph_cache_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let ctx = vaultpilot_lib::storage::StorageContext::for_cli(Some(tmp.clone())).unwrap();
+        vaultpilot_lib::storage::save_note_with_context(&ctx, make_graph_note("a", "a", "[[b]]"))
+            .unwrap();
+
+        let g1 = resolve_cached_graph(&ctx, false).unwrap();
+        let g2 = resolve_cached_graph(&ctx, false).unwrap();
+        assert!(
+            Arc::ptr_eq(&g1, &g2),
+            "second call must reuse the cached graph"
+        );
+
+        // Bump the DB/WAL mtime (SQLite runs in WAL mode, so touch both).
+        let db = tmp.join(".vaultpilot").join("knowledge-index.sqlite");
+        let wal = db.with_extension("sqlite-wal");
+        let future = SystemTime::now() + std::time::Duration::from_secs(30);
+        for path in [&db, &wal] {
+            if let Ok(f) = std::fs::OpenOptions::new().write(true).open(path) {
+                let _ = f.set_modified(future);
+            }
+        }
+
+        let g3 = resolve_cached_graph(&ctx, false).unwrap();
+        assert!(
+            !Arc::ptr_eq(&g1, &g3),
+            "DB mtime change must invalidate the cache"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn local_graph_json_returns_depth_one_subgraph() {
+        // #3912: the local endpoint must return only the 1-hop neighborhood
+        // (nodes + edges) around the requested note instead of the whole
+        // graph, so mobile related-notes stops transferring MBs of JSON.
+        let tmp = std::env::temp_dir().join(format!("vp_test_local_graph_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let ctx = vaultpilot_lib::storage::StorageContext::for_cli(Some(tmp.clone())).unwrap();
+        vaultpilot_lib::storage::save_note_with_context(&ctx, make_graph_note("a", "a", "[[b]]"))
+            .unwrap();
+        vaultpilot_lib::storage::save_note_with_context(&ctx, make_graph_note("b", "b", "[[c]]"))
+            .unwrap();
+        vaultpilot_lib::storage::save_note_with_context(&ctx, make_graph_note("c", "c", ""))
+            .unwrap();
+
+        let json = local_graph_json(&ctx, "a", 1, false).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj["center"], "a");
+        assert_eq!(obj["depth"], 1);
+        let ids: Vec<String> = obj["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str().map(str::to_string))
+            .collect();
+        assert!(
+            ids.contains(&"a".to_string()) && ids.contains(&"b".to_string()),
+            "depth 1 must include a and b, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"c".to_string()),
+            "depth 1 must not include c, got {ids:?}"
+        );
+
+        let json2 = local_graph_json(&ctx, "a", 2, false).unwrap();
+        let ids2: Vec<String> = json2["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|n| n["id"].as_str().map(str::to_string))
+            .collect();
+        assert!(
+            ids2.contains(&"c".to_string()),
+            "depth 2 must include c, got {ids2:?}"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

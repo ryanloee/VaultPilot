@@ -15,6 +15,25 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // On mobile (Android/iOS) the OS does not set the APPDATA /
+            // LOCALAPPDATA / HOME environment variables that
+            // `StorageContext::for_sidecar()` relies on. Bridge them to the
+            // Tauri-resolved app directories so settings.json, chat state and
+            // the SQLite vault land in the app's own data dir instead of the
+            // temp fallback. Desktop platforms keep their native env vars.
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            {
+                let path = app.path();
+                let set = |name: &str, dir: Option<std::path::PathBuf>| {
+                    if let Some(dir) = dir {
+                        std::env::set_var(name, dir);
+                    }
+                };
+                set("APPDATA", path.app_config_dir().ok());
+                set("LOCALAPPDATA", path.app_local_data_dir().ok());
+                set("HOME", path.app_data_dir().ok());
+                set("USERPROFILE", path.app_data_dir().ok());
+            }
             // Initialize the shared storage context up front so that a failure
             // (e.g. config dir not writable) surfaces as a visible error rather
             // than a silent crash inside the first command.

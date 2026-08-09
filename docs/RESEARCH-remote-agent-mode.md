@@ -210,10 +210,10 @@ Calls `cancellation_token.cancel()` on the running task, then cleans up the sess
 
 | Component | Location | Ready For Agent Mode? |
 |---|---|---|
-| Rust: SSE response with `CancellationToken` | `http_bridge.rs` lines 2181-2330 (streaming branch ~2211-2239) | ✅ Yes, reusable pattern |
-| Rust: `tokio::sync::mpsc` bounded channels | `http_bridge.rs` line 2214 (`sse_tx`, cap=16) and line 2222 (`chunk_tx`, cap=64) | ✅ Yes, just needs different event format |
+| Rust: SSE response with `CancellationToken` | `http_bridge.rs` lines 2615-2673 (streaming branch ~2634-2673) | ✅ Yes, reusable pattern |
+| Rust: `tokio::sync::mpsc` bounded channels | `http_bridge.rs` line 2616 (`sse_tx`, cap=16) and line 2624 (`chunk_tx`, cap=64) | ✅ Yes, just needs different event format |
 
-> **Channel clarification:** the capacity-16 channel (`sse_tx`, line 2214) is the **SSE socket** boundary; the capacity-64 channel (`chunk_tx`, line 2222) is the **upstream→forwarder** backpressure boundary. Do not conflate the two — backpressure is enforced by `chunk_tx`, not by the SSE socket channel.
+> **Channel clarification:** the capacity-16 channel (`sse_tx`, line 2616) is the **SSE socket** boundary; the capacity-64 channel (`chunk_tx`, line 2624) is the **upstream→forwarder** backpressure boundary. Do not conflate the two — backpressure is enforced by `chunk_tx`, not by the SSE socket channel.
 | Mobile: `parseSSEStreamWithReconnect` | `sse.ts` line 162-257 | ✅ Yes, auto-reconnect with backoff |
 | Mobile: `StreamChunk` type | `sse.ts` lines 3-7 | ⚠️ Currently assumes OpenAI delta format — needs extension for agent events |
 

@@ -49,9 +49,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 
 
 Main package outputs:
 
-- `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Setup.exe`
-- `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Portable.zip`
+- `artifacts/velopack/packages/win-x64/Setup.exe`
 - `artifacts/velopack/packages/win-x64/VaultPilot-<version>-win-x64-full.nupkg`
+- `artifacts/velopack/packages/win-x64/RELEASES-win-x64`
+
+> Velopack names the Windows installer `Setup.exe` (the release workflow
+> renames it to `Setup-win-x64.exe` only when uploading to GitHub Releases).
+> There is no `Portable.zip` output.
 
 Intermediate publish directory:
 
@@ -164,9 +168,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 
 
 主要打包产物：
 
-- `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Setup.exe`
-- `artifacts/velopack/packages/win-x64/VaultPilot-win-x64-Portable.zip`
+- `artifacts/velopack/packages/win-x64/Setup.exe`
 - `artifacts/velopack/packages/win-x64/VaultPilot-<version>-win-x64-full.nupkg`
+- `artifacts/velopack/packages/win-x64/RELEASES-win-x64`
+
+> Velopack 将 Windows 安装器命名为 `Setup.exe`（发布工作流仅在上传到
+> GitHub Releases 时改名为 `Setup-win-x64.exe`）。没有 `Portable.zip` 产物。
 
 打包前的发布目录：
 

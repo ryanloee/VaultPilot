@@ -19,13 +19,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.23"
 chrono = "0.4"
+tokio = { version = "1", features = ["sync"] }
+anyhow = "1"
 # ★ Direct dependency on the existing backend library — zero IPC.
 # Every #[tauri::command] calls vaultpilot_lib functions in-process.
 # (The crate is published as package `vaultpilot`; its lib name is
 # `vaultpilot_lib`, which is what `use vaultpilot_lib::...` refers to.)
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 vaultpilot = { path = "../.." }
-tokio = { version = "1", features = ["sync"] }
-anyhow = "1"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+# Mobile builds drop the email/IMAP feature (native-tls → openssl-sys cannot
+# cross-compile for Android). All other backend functionality is unchanged.
+vaultpilot = { path = "../..", default-features = false }
 
 [features]
 # By default Tauri bundles the frontend assets shipped by `tauri dev/build`.

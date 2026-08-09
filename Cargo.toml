@@ -20,6 +20,12 @@ members = [
 name = "vaultpilot_lib"
 crate-type = ["rlib"]
 
+[features]
+default = ["email"]
+# Email-to-Vault integration (IMAP). Disabled on targets where OpenSSL
+# cross-compilation is impractical (e.g. Android); the desktop/CLI keep it.
+email = ["dep:imap", "dep:mailparse", "dep:native-tls"]
+
 [dependencies]
 aes-gcm = "0.11"
 anyhow = "1"
@@ -59,9 +65,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = "8.6.0"
 cron = "0.17"
 feed-rs = "2.4"
-imap = "3.0.0-alpha.15"
-mailparse = "0.16"
-native-tls = "0.2"
+imap = { version = "3.0.0-alpha.15", optional = true }
+mailparse = { version = "0.16", optional = true }
+native-tls = { version = "0.2", optional = true }
 pdf-extract = "0.12"
 keyring = "4.1.5"
 

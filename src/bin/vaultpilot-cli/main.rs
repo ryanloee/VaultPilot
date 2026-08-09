@@ -1430,6 +1430,31 @@ enum NotesActions {
         id: String,
     },
 
+    /// Lock a note with a password (#3977). The password is stored only as a
+    /// PBKDF2 hash; the body is masked until the note is unlocked.
+    Lock {
+        /// Note ID
+        id: String,
+        /// Lock password
+        #[arg(long)]
+        password: String,
+    },
+
+    /// Unlock a note with its password (#3977)
+    Unlock {
+        /// Note ID
+        id: String,
+        /// Lock password
+        #[arg(long)]
+        password: String,
+    },
+
+    /// Show whether a note is locked (#3977)
+    LockStatus {
+        /// Note ID
+        id: String,
+    },
+
     /// Create or update a note (JSON on stdin)
     Create {
         /// Auto-detect current meeting from calendar and attach source card
@@ -4571,9 +4596,17 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             to_json(&result)
         }
         NotesActions::Get { id } => {
-            let note = load_note_with_context(context, id)?;
+            let mut note = load_note_with_context(context, id)?;
+            // #3977: locked notes expose metadata but mask the body.
+            if vaultpilot_lib::note_lock::is_locked(context.vault_dir(), &note.meta.id) {
+                note.body = vaultpilot_lib::note_lock::MASKED_BODY.to_string();
+                note.search_snippet = None;
+            }
             to_json(&note)
         }
+        NotesActions::Lock { id, password } => handle_note_lock(context, id, password),
+        NotesActions::Unlock { id, password } => handle_note_unlock(context, id, password),
+        NotesActions::LockStatus { id } => handle_note_lock_status(context, id),
         NotesActions::Create { meeting } => {
             let input = read_stdin_json()?;
             let mut note: NoteDocument = serde_json::from_value(input)?;
@@ -5139,6 +5172,39 @@ fn handle_template_clear_default(context: &StorageContext) -> Result<Value> {
     Ok(serde_json::json!({
         "status": "cleared",
         "default_template": "blank",
+    }))
+}
+
+/// Handle `notes lock <id> --password <pw>` (#3977).
+fn handle_note_lock(context: &StorageContext, note_id: &str, password: &str) -> Result<Value> {
+    // Validate the note exists first so typos fail loudly.
+    load_note_with_context(context, note_id)?;
+    vaultpilot_lib::note_lock::lock_note(context.vault_dir(), note_id, password)?;
+    Ok(serde_json::json!({
+        "status": "locked",
+        "note_id": note_id,
+        "locked": true,
+    }))
+}
+
+/// Handle `notes unlock <id> --password <pw>` (#3977).
+fn handle_note_unlock(context: &StorageContext, note_id: &str, password: &str) -> Result<Value> {
+    load_note_with_context(context, note_id)?;
+    let unlocked = vaultpilot_lib::note_lock::unlock_note(context.vault_dir(), note_id, password)?;
+    Ok(serde_json::json!({
+        "status": if unlocked { "unlocked" } else { "not_locked" },
+        "note_id": note_id,
+        "locked": false,
+    }))
+}
+
+/// Handle `notes lock-status <id>` (#3977).
+fn handle_note_lock_status(context: &StorageContext, note_id: &str) -> Result<Value> {
+    let locked = vaultpilot_lib::note_lock::is_locked(context.vault_dir(), note_id);
+    Ok(serde_json::json!({
+        "status": "ok",
+        "note_id": note_id,
+        "locked": locked,
     }))
 }
 
@@ -11877,6 +11943,70 @@ mod tests {
         let blank_res =
             handle_note_new(&ctx, None, "Quick", None, None, &[], true).expect("dry-run blank");
         assert_eq!(blank_res["template"], "blank");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn regression_3977_locked_note_get_is_masked() {
+        // #3977: locking a note must mask its body in `notes get`; unlocking
+        // with the correct password restores it.
+        use crate::{handle_notes, NotesActions};
+        use std::env;
+        use std::fs;
+
+        let dir = env::temp_dir().join(format!("vp-test-3977-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create dir");
+        let ctx = vaultpilot_lib::storage::StorageContext::for_cli(Some(dir.clone()))
+            .expect("storage context");
+
+        let note = vaultpilot_lib::models::NoteDocument {
+            meta: vaultpilot_lib::models::NoteMeta {
+                id: "n3977".to_string(),
+                title: "Secret".to_string(),
+                path: String::new(),
+                ..Default::default()
+            },
+            body: "classified content".to_string(),
+            ..Default::default()
+        };
+        vaultpilot_lib::storage::save_note_with_context(&ctx, note).expect("save note");
+
+        let locked = handle_notes(
+            &ctx,
+            &NotesActions::Lock {
+                id: "n3977".to_string(),
+                password: "s3cret".to_string(),
+            },
+        )
+        .expect("lock");
+        assert_eq!(locked["status"], "locked");
+
+        let got = handle_notes(&ctx, &NotesActions::Get { id: "n3977".to_string() })
+            .expect("get locked");
+        assert!(
+            got["body"].as_str().unwrap().contains("locked"),
+            "locked note body must be masked: {}",
+            got["body"]
+        );
+
+        let unlocked = handle_notes(
+            &ctx,
+            &NotesActions::Unlock {
+                id: "n3977".to_string(),
+                password: "s3cret".to_string(),
+            },
+        )
+        .expect("unlock");
+        assert_eq!(unlocked["status"], "unlocked");
+
+        let got2 = handle_notes(&ctx, &NotesActions::Get { id: "n3977".to_string() })
+            .expect("get unlocked");
+        assert!(
+            got2["body"].as_str().unwrap().contains("classified content"),
+            "unlocked note body must be restored: {}",
+            got2["body"]
+        );
 
         fs::remove_dir_all(&dir).ok();
     }

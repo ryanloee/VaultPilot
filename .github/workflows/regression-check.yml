@@ -30,10 +30,10 @@ jobs:
         id: check
         run: |
           echo "Checking if bug-fix PR includes regression test..."
-          # #3162: match only the three canonical regression-test locations.
+          # #3162: match only the canonical regression-test locations.
           # A broad "regression/" grep also matched docs/regression/, design
           # notes, etc. and produced false positives.
-          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qiE '^(src/regression/|mobile/src/__tests__/regression/|native/VaultPilot.WinUI.Tests/Regression/)'; then
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -qiE '^(src/regression/|mobile/src/__tests__/regression/)'; then
             echo "has_regression=true" >> "$GITHUB_OUTPUT"
             echo "✅ PR includes regression test changes"
           else
@@ -60,7 +60,6 @@ jobs:
             |----------|----------|
             | Rust/CLI | \`src/regression/issue_NNN_short_desc.rs\` |
             | Mobile | \`mobile/src/__tests__/regression/issue_NNN.test.ts\` |
-            | WinUI | \`native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs\` |
 
             See [\`docs/TESTING.md\`](docs/TESTING.md) for templates and conventions.
 

@@ -22,7 +22,7 @@
 - **Store**: Zustand with `persist` middleware; `ProviderConfig[]` with `SecureStore`-backed keys
 
 ### Key gap
-**No existing endpoint for remote agent execution.** The `/v1/chat/completions` endpoint is a simple LLM proxy — it does NOT use `run_agent()`, `ToolProxy`, sandboxing, or any of the agent infrastructure. Agent mode is currently only available via the CLI (`vaultpilot agent run`) and the desktop WinUI app (which uses named pipes).
+**No existing endpoint for remote agent execution.** The `/v1/chat/completions` endpoint is a simple LLM proxy — it does NOT use `run_agent()`, `ToolProxy`, sandboxing, or any of the agent infrastructure. Agent mode is currently only available via the CLI (`vaultpilot agent run`) and the desktop app (which uses the agent sidecar).
 
 ---
 

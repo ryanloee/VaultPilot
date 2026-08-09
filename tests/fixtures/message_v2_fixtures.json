@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "vaultpilot://message-v2-fixtures",
-  "description": "Shared test fixtures for MessageV2 schema (#1239). All three platforms (Rust, WinUI, Mobile) MUST parse these without error.",
+  "description": "Shared test fixtures for MessageV2 schema (#1239). All platforms (Rust backend, Desktop, Mobile) MUST parse these without error.",
   "fixtures": [
     {
       "name": "minimal_user_text",

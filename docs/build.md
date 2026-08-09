@@ -4,86 +4,33 @@
 
 This project currently has:
 
-- Windows desktop app build
-- Windows installer package build
-- Linux CLI build
+- Rust backend (`vaultpilot-cli` / `vaultpilot-agent` binaries + `vaultpilot_lib`)
+- Linux CLI build (binary + `.deb`)
+- Android mobile app (`mobile/`, Expo / React Native)
+- Windows desktop frontend under development (`desktop/`, Tauri v2 + React)
+
+The legacy WinUI client (`native/`) has been removed; Windows now uses the new
+Tauri desktop UI once its sources are published to the repository.
 
 ### Prerequisites
 
-- Windows 10 or later
 - Rust toolchain with `rustup`
-- .NET 8 SDK
-- Visual Studio 2022 Build Tools with Windows App SDK support
-- PowerShell
+- For `.deb` packaging: `dpkg-deb` from `dpkg-dev`
 
-### Build the desktop app for local development
+### Build the Rust backend
 
-This builds the WinUI frontend and the Rust binaries used by the frontend.
-
-```powershell
-& "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe" `
-  ".\native\VaultPilot.WinUI\VaultPilot.WinUI.csproj" `
-  /restore `
-  /t:Build `
-  /p:Configuration=Debug `
-  /p:Platform=x64
+```bash
+cargo build --release --bins
 ```
 
-Main local output:
+Outputs:
 
-- `native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
-
-### Build a release package
-
-This is the normal packaging flow for installers and release artifacts.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x64 -Version <version>
-```
-
-You can also build both `x86` and `x64`:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x86,x64 -Version <version>
-```
-
-Main package outputs:
-
-- `artifacts/velopack/packages/win-x64/Setup.exe`
-- `artifacts/velopack/packages/win-x64/VaultPilot-<version>-win-x64-full.nupkg`
-- `artifacts/velopack/packages/win-x64/RELEASES-win-x64`
-
-> Velopack names the Windows installer `Setup.exe` (the release workflow
-> renames it to `Setup-win-x64.exe` only when uploading to GitHub Releases).
-> There is no `Portable.zip` output.
-
-Intermediate publish directory:
-
-- `artifacts/velopack/publish/win-x64/`
-
-### Build flow summary
-
-1. `build-windows-installers.ps1` reads the version from `Cargo.toml`.
-2. The WinUI project builds first.
-3. During WinUI build, the project runs `cargo build` for:
-   - `vaultpilot-agent`
-   - `vaultpilot-cli`
-4. The Rust binaries are copied into the WinUI output directory.
-5. The publish directory is assembled under `artifacts/velopack/publish/...`.
-6. Velopack packs the final installer and release assets under `artifacts/velopack/packages/...`.
-
-### Important note
-
-These directories are build outputs and should not be committed:
-
-- `target/`
-- `artifacts/`
-- `native/**/bin/`
-- `native/**/obj/`
+- `target/release/vaultpilot-cli`
+- `target/release/vaultpilot-agent`
 
 ### Build the Linux CLI
 
-The Linux build is CLI-only. It does not include the WinUI frontend.
+The Linux build is CLI-only. It does not include a desktop frontend.
 
 Prerequisites:
 
@@ -119,89 +66,44 @@ Main outputs:
 - `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
 - `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
 
-## 中文
+### Important note
 
-当前项目现在包含三条构建路径：
-
-- Windows 桌面应用构建
-- Windows 安装包构建
-- Linux CLI 构建
-
-### 环境要求
-
-- Windows 10 或更高版本
-- 已安装 Rust 工具链和 `rustup`
-- .NET 8 SDK
-- 带 Windows App SDK 支持的 Visual Studio 2022 Build Tools
-- PowerShell
-
-### 本地开发构建
-
-这个流程会同时构建 WinUI 前端和前端依赖的 Rust 可执行文件。
-
-```powershell
-& "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe" `
-  ".\native\VaultPilot.WinUI\VaultPilot.WinUI.csproj" `
-  /restore `
-  /t:Build `
-  /p:Configuration=Debug `
-  /p:Platform=x64
-```
-
-主要本地产物：
-
-- `native/VaultPilot.WinUI/bin/x64/Debug/net8.0-windows10.0.19041.0/VaultPilot.WinUI.exe`
-
-### 构建正式安装包
-
-这是正常的打包流程，会输出安装包和 Release 产物。
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x64 -Version <version>
-```
-
-如果要同时打 `x86` 和 `x64`：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-installers.ps1 -Platforms x86,x64 -Version <version>
-```
-
-主要打包产物：
-
-- `artifacts/velopack/packages/win-x64/Setup.exe`
-- `artifacts/velopack/packages/win-x64/VaultPilot-<version>-win-x64-full.nupkg`
-- `artifacts/velopack/packages/win-x64/RELEASES-win-x64`
-
-> Velopack 将 Windows 安装器命名为 `Setup.exe`（发布工作流仅在上传到
-> GitHub Releases 时改名为 `Setup-win-x64.exe`）。没有 `Portable.zip` 产物。
-
-打包前的发布目录：
-
-- `artifacts/velopack/publish/win-x64/`
-
-### 编译流程概览
-
-1. `build-windows-installers.ps1` 从 `Cargo.toml` 读取版本号。
-2. 先构建 WinUI 工程。
-3. WinUI 工程在构建过程中会调用 `cargo build`，生成：
-   - `vaultpilot-agent`
-   - `vaultpilot-cli`
-4. 这两个 Rust 可执行文件会被复制到 WinUI 输出目录。
-5. 脚本把发布目录整理到 `artifacts/velopack/publish/...`。
-6. 最后用 Velopack 生成安装包和 Release 产物到 `artifacts/velopack/packages/...`。
-
-### 重要说明
-
-以下目录都是构建产物，不应该提交到仓库：
+These directories are build outputs and should not be committed:
 
 - `target/`
 - `artifacts/`
-- `native/**/bin/`
-- `native/**/obj/`
+
+## 中文
+
+当前项目包含：
+
+- Rust 后端（`vaultpilot-cli` / `vaultpilot-agent` 可执行文件 + `vaultpilot_lib`）
+- Linux CLI 构建（可执行文件 + `.deb`）
+- Android 移动端（`mobile/`，Expo / React Native）
+- Windows 桌面前端开发中（`desktop/`，Tauri v2 + React）
+
+旧版 WinUI 客户端（`native/`）已删除，Windows 端将使用新的 Tauri 桌面 UI
+（源码发布到仓库后）。
+
+### 环境要求
+
+- Rust 工具链和 `rustup`
+- 若输出 `.deb`：需要 `dpkg-deb`，通常来自 `dpkg-dev`
+
+### 构建 Rust 后端
+
+```bash
+cargo build --release --bins
+```
+
+产物：
+
+- `target/release/vaultpilot-cli`
+- `target/release/vaultpilot-agent`
 
 ### 构建 Linux CLI
 
-Linux 版本只包含 CLI，不包含 WinUI 图形界面。
+Linux 版本只包含 CLI，不包含桌面图形界面。
 
 环境要求：
 
@@ -236,3 +138,10 @@ chmod +x ./scripts/build-linux-cli.sh
 
 - `artifacts/linux-cli/bin/linux-x64/vaultpilot-cli`
 - `artifacts/linux-cli/packages/linux-x64/vaultpilot-cli_<version>_amd64.deb`
+
+### 重要说明
+
+以下目录都是构建产物，不应该提交到仓库：
+
+- `target/`
+- `artifacts/`

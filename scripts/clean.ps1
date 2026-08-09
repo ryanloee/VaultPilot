@@ -11,9 +11,6 @@ $targets = @(
     (Join-Path $repoRoot "target"),
     (Join-Path $repoRoot "artifacts"),
     (Join-Path $repoRoot "tmp-icons"),
-    (Join-Path $repoRoot "native\VaultPilot.WinUI\bin"),
-    (Join-Path $repoRoot "native\VaultPilot.WinUI\obj"),
-
 )
 
 if ($IncludeReleaseAssets) {
@@ -22,8 +19,7 @@ if ($IncludeReleaseAssets) {
 
 $processes = Get-Process -ErrorAction SilentlyContinue | Where-Object {
     $_.Path -like (Join-Path $repoRoot "artifacts\*") -or
-    $_.Path -like (Join-Path $repoRoot "target\*") -or
-    $_.Path -like (Join-Path $repoRoot "native\VaultPilot.WinUI\bin\*")
+    $_.Path -like (Join-Path $repoRoot "target\*")
 }
 
 if ($processes) {

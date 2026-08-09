@@ -62,7 +62,6 @@
 #    → Check src/regression/ for issue_NNN_*.rs
 #    → Check inline tests for "// REGRESSION: #NNN" comments
 #    → Check mobile/src/__tests__/regression/ for issue_NNN.test.ts or issue_NNN.test.tsx
-#    → Check native/VaultPilot.WinUI.Tests/Regression/ for IssueNNN*.cs
 #
 # 3. Regression test is meaningful?
 #    → Not just `assert!(true)`

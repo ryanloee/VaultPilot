@@ -14,7 +14,7 @@ When fixing a bug in VaultPilot, follow this exact workflow:
 
 ### Step 1: Understand the Bug
 - Read the issue description and reproduction steps
-- Identify the affected module (CLI/Rust, Mobile/TS, WinUI/C#)
+- Identify the affected module (CLI/Rust, Mobile/TS)
 - Find the root cause in the source code
 
 ### Step 2: Write a Failing Regression Test FIRST (TDD)
@@ -49,15 +49,6 @@ cargo test regression_NNN
 
 # Run and confirm it FAILS
 cd mobile && npx jest issue_NNN
-```
-
-**For WinUI (C#):**
-```bash
-# Create the test file
-# native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs
-
-# Run and confirm it FAILS
-dotnet test native/VaultPilot.WinUI.Tests/ --filter "IssueNNN"
 ```
 
 ### Step 3: Implement the Fix

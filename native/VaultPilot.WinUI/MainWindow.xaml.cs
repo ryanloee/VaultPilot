@@ -646,6 +646,10 @@ public sealed partial class MainWindow : Window
     {
         ChatView.Visibility = Visibility.Visible;
         NotesViewHost.Visibility = Visibility.Collapsed;
+        // #3885/#4001: the host is kept cached (Visibility toggled, not removed),
+        // so NotesView can't see its own effective visibility in WinUI 3 — tell
+        // it directly so in-flight refresh timeouts don't pop a stale banner.
+        _notesView?.SetNavigatingAway(true);
     }
 
     /// <summary>Shows the notes view, lazily initializing it on first use.</summary>
@@ -661,6 +665,7 @@ public sealed partial class MainWindow : Window
                 NotesViewHost.Children.Add(_notesView);
                 _notesViewLoaded = true;
             }
+            _notesView?.SetNavigatingAway(false);
             await _notesView.RefreshNotesAsync();
         }
         catch (Exception error)

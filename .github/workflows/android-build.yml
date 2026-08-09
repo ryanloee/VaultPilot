@@ -36,15 +36,10 @@ jobs:
 
       - name: Auto-merge main (PR only)
         if: github.event_name == 'pull_request'
-        env:
-          CLONE_URL: ${{ github.event.pull_request.base.repo.clone_url }}
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add upstream $CLONE_URL
-          git fetch upstream $BASE_REF
-          git merge --no-edit upstream/$BASE_REF || { echo "⚠️ Merge conflict with main — please rebase your branch"; exit 1; }
+        uses: ./.github/actions/auto-merge-main
+        with:
+          base-repo-clone-url: ${{ github.event.pull_request.base.repo.clone_url }}
+          base-ref: ${{ github.base_ref }}
 
       - uses: actions/setup-node@v7
         with:
@@ -88,23 +83,27 @@ jobs:
             VERSION_BASE="$VERSION"
           fi
 
-          # versionCode: major*10000 + minor*100 + patch (monotonically increasing)
-          # 0.3.55 -> 3055, 0.4.9 -> 409 — always increasing
+          # versionCode scheme (#2667, #2976, #2990, #3592, #3635):
+          #   base       = major*1_000_000 + minor*1_000 + patch
+          #   prerelease = base*1000 + rc            (rc in 0..998)
+          #   release    = base*1000 + 999
+          # This keeps every rc of X.Y.Z below the X.Y.Z release, the next
+          # patch's rc0 above this release, rc >= 10 collision-free, and
+          # patch >= 100 from overflowing into the minor slot.
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_BASE"
-          BASE_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          BASE_CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
 
           if [ -z "$PRERELEASE" ]; then
-            # Release: use a high offset to leave room for pre-releases below
-            VERSION_CODE=$((BASE_CODE * 10 + 10))
+            VERSION_CODE=$((BASE_CODE * 1000 + 999))
           else
-            # Pre-release: keep versionCode below the release version
             PR_NUM="${PRERELEASE##*[!0-9]}"
             [[ "$PR_NUM" =~ ^[0-9]+$ ]] || PR_NUM=0
-            # Limit PR_NUM to single digits to ensure space for future pre-releases
-            if [ "$PR_NUM" -gt 9 ]; then
-              PR_NUM=9
+            # Reserve 999 for the release code; cap rc at 998 so rc values
+            # never collide with the release or with each other (#3635).
+            if [ "$PR_NUM" -gt 998 ]; then
+              PR_NUM=998
             fi
-            VERSION_CODE=$((BASE_CODE * 10 + PR_NUM))
+            VERSION_CODE=$((BASE_CODE * 1000 + PR_NUM))
           fi
 
           echo "VERSION_NAME=$VERSION VERSION_CODE=$VERSION_CODE"
@@ -187,7 +186,10 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           TAG="$REF_NAME"
-          APK="release-assets/android/app-release.apk"
+          # #2765: upload-artifact preserves the mobile/ prefix, so the
+          # downloaded artifact lands under mobile/android/... — match the
+          # real path instead of expecting a bare app-release.apk.
+          APK="release-assets/android/mobile/android/app/build/outputs/apk/release/app-release.apk"
 
           if [ ! -f "$APK" ]; then
             echo "APK not found at $APK"

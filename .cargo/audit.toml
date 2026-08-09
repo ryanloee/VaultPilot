@@ -1,0 +1,9 @@
+# Accepted advisories for `cargo audit --deny warnings` (added with #3741).
+#
+# RUSTSEC-2026-0192: `ttf-parser` 0.25.1 is marked unmaintained (INFO level).
+#   - Transitive only: pdf-extract -> lopdf -> ttf-parser (font parsing inside
+#     PDF import; no memory-safety advisory, no patched version exists).
+#   - Upstream lopdf 0.44 still depends on ttf-parser ^0.25.1, so there is no
+#     compatible fix to adopt; re-evaluate when lopdf migrates to skrifa.
+[advisories]
+ignore = ["RUSTSEC-2026-0192"]

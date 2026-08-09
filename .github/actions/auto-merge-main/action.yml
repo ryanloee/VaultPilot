@@ -1,0 +1,26 @@
+name: Auto-merge main
+description: Merge the latest main into the PR head so checks run against an up-to-date tree.
+
+inputs:
+  base-repo-clone-url:
+    description: URL of the base repository clone.
+    required: true
+  base-ref:
+    description: Base branch ref to merge (e.g. main).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Auto-merge main (PR only)
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        BASE_REPO_CLONE_URL: ${{ inputs.base-repo-clone-url }}
+        BASE_REF: ${{ inputs.base-ref }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git remote add upstream "$BASE_REPO_CLONE_URL"
+        git fetch upstream "$BASE_REF"
+        git merge --no-edit "upstream/$BASE_REF" || { echo "Merge conflict with main - please rebase your branch"; exit 1; }

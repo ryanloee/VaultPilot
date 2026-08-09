@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ActivityBar, type ViewId } from "./ActivityBar";
+import { MobileTabBar } from "./MobileTabBar";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { ChatView } from "@/components/chat/ChatView";
@@ -12,8 +13,14 @@ export function AppShell() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <div className="flex min-h-0 flex-1">
-        <ActivityBar active={view} onSelect={setView} />
-        {view !== "settings" && <Sidebar view={view} />}
+        <div className="hidden md:flex">
+          <ActivityBar active={view} onSelect={setView} />
+        </div>
+        {view !== "settings" && (
+          <div className="hidden md:block">
+            <Sidebar view={view} />
+          </div>
+        )}
         <main className="flex min-w-0 flex-1 flex-col">
           {view === "chat" && <ChatView />}
           {view === "notes" && <NotesView />}
@@ -28,7 +35,10 @@ export function AppShell() {
           {view === "settings" && <SettingsView />}
         </main>
       </div>
-      <StatusBar />
+      <div className="hidden md:block">
+        <StatusBar />
+      </div>
+      <MobileTabBar active={view} onSelect={setView} />
     </div>
   );
 }

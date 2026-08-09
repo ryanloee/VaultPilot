@@ -1,6 +1,6 @@
 # VaultPilot Desktop (Tauri) 功能表 & 进度
 
-> 迁移 WinUI → Tauri v2 + React。逐项实现、每项独立验证。
+> 三端统一 UI（Windows / Linux / Android）→ Tauri v2 + React。逐项实现、每项独立验证。
 > 状态图例：✅ 完成 | 🔧 进行中 | ⬜ 待做 | ⏸ 阻塞
 
 ## 当前已就绪（阶段 0-4 已完成）
@@ -10,6 +10,10 @@
 | 0 | Tauri 脚手架 + vaultpilot_lib 直集成 | ✅ | cargo check + 窗口启动 |
 | 1 | 三栏布局 (活动栏/侧栏/主区/状态栏) | ✅ | 窗口可见 |
 | 2 | 主题切换 (system/light/dark) | ✅ 待验收 | 点设置按钮 |
+| 3 | 响应式布局（桌面三栏 / 移动端底部导航） | ✅ | pnpm build + 缩窗验收 |
+| 4 | 旧 UI 移除（WinUI + Expo） | ✅ | 仓库已无 native/、mobile/ |
+| 5 | CI：Windows/Linux Tauri 安装包 | ✅ 已接入 | windows-installers.yml |
+| 6 | CI：Android Tauri APK | ✅ 已接入 | android-build.yml（需 Android SDK） |
 
 ## 功能表（按序实现 + 测试）
 

@@ -48,7 +48,8 @@ export function ChatView() {
                 {currentSession?.title || "开始对话"}
               </h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                输入问题，Ctrl+Enter 发送
+                <span className="hidden md:inline">输入问题，Ctrl+Enter 发送</span>
+                <span className="md:hidden">输入问题，点击发送</span>
               </p>
             </div>
           )}

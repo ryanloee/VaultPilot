@@ -46,6 +46,32 @@ pub enum AssistantToolCall {
         draft: Box<StructuredNoteDraft>,
         note_id: String,
     },
+    /// Agent Calendar Tools (#3603): read the local calendar for a day.
+    GetCalendarEvents {
+        date: String,
+    },
+    /// Agent Calendar Tools (#3603): create a local calendar event.
+    CreateCalendarEvent {
+        title: String,
+        start: String,
+        end: String,
+        location: Option<String>,
+    },
+    /// Agent Calendar Tools (#3603): reschedule an event.
+    MoveCalendarEvent {
+        event_id: String,
+        start: String,
+        end: String,
+    },
+    /// Agent Calendar Tools (#3603): cancel an event.
+    CancelCalendarEvent {
+        event_id: String,
+    },
+    /// Agent Calendar Tools (#3603): find free slots for a duration.
+    FindFreeSlot {
+        date: String,
+        duration_minutes: u32,
+    },
     /// A user-defined custom tool (#3384). `name` is the tool name, `args`
     /// is the JSON arguments from the model.
     Custom {
@@ -178,6 +204,20 @@ pub(super) struct ToolCallResponse {
     limit: usize,
     #[serde(default)]
     note_draft: Option<StructuredNoteDraft>,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    start: String,
+    #[serde(default)]
+    end: String,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    event_id: String,
+    #[serde(default)]
+    duration_minutes: u32,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -517,6 +557,27 @@ pub(super) fn parse_tool_call(
                 note_id: uuid::Uuid::new_v4().to_string(),
             })
         }
+        "get_calendar_events" => Ok(AssistantToolCall::GetCalendarEvents {
+            date: parsed.date.trim().to_string(),
+        }),
+        "create_calendar_event" => Ok(AssistantToolCall::CreateCalendarEvent {
+            title: parsed.title.trim().to_string(),
+            start: parsed.start.trim().to_string(),
+            end: parsed.end.trim().to_string(),
+            location: parsed.location.as_deref().map(str::trim).map(str::to_string),
+        }),
+        "move_calendar_event" => Ok(AssistantToolCall::MoveCalendarEvent {
+            event_id: parsed.event_id.trim().to_string(),
+            start: parsed.start.trim().to_string(),
+            end: parsed.end.trim().to_string(),
+        }),
+        "cancel_calendar_event" => Ok(AssistantToolCall::CancelCalendarEvent {
+            event_id: parsed.event_id.trim().to_string(),
+        }),
+        "find_free_slot" => Ok(AssistantToolCall::FindFreeSlot {
+            date: parsed.date.trim().to_string(),
+            duration_minutes: parsed.duration_minutes.max(15),
+        }),
         other => {
             // #3384: Check if the tool name is a registered custom tool.
             if custom_tool_names.contains(&other) {

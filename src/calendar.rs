@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 // ─── Data types ───────────────────────────────────────────────────
 
@@ -441,6 +442,197 @@ pub fn sync_events(
         count += 1;
     }
     Ok(count)
+}
+
+// ── Local agent calendar CRUD (#3603) ──────────────────────────────
+//
+// The Agent Calendar Tools integration operates on the same `calendar_events`
+// cache, using the reserved provider name "agent". Events created here are
+// local (not synced to an external provider) until a Google/Outlook connector
+// lands.
+
+const AGENT_CALENDAR_PROVIDER: &str = "agent";
+
+/// Query events cached in the local store overlapping `[start, end]`.
+pub fn list_cached_events(
+    context: &StorageContext,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<CalendarEvent>> {
+    let conn = db_conn(context)?;
+    ensure_calendar_tables(&conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, provider_event_id, title, start_utc, end_utc,
+                location, description, attendees_json, all_day, source
+         FROM calendar_events
+         WHERE start_utc <= ?1 AND end_utc >= ?2
+         ORDER BY start_utc",
+    )?;
+    let rows = stmt.query_map(params![end.to_rfc3339(), start.to_rfc3339()], |row| {
+        let attendees_json: String = row.get(7)?;
+        let attendees: Vec<String> = serde_json::from_str(&attendees_json).unwrap_or_default();
+        Ok(CalendarEvent {
+            id: row.get(0)?,
+            provider_event_id: row.get(1)?,
+            title: row.get(2)?,
+            start: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
+            end: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
+            location: row.get(5)?,
+            description: row.get(6)?,
+            attendees,
+            all_day: row.get::<_, i64>(8)? != 0,
+            source: row.get(9)?,
+        })
+    })?;
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row?);
+    }
+    Ok(events)
+}
+
+/// Create a new event in the local agent calendar (#3603).
+pub fn create_agent_event(
+    context: &StorageContext,
+    title: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    location: Option<String>,
+    description: Option<String>,
+) -> Result<CalendarEvent> {
+    if title.trim().is_empty() {
+        anyhow::bail!("calendar event title must not be empty");
+    }
+    if end <= start {
+        anyhow::bail!("calendar event end must be after start");
+    }
+    let provider_event_id = Uuid::new_v4().to_string();
+    let event = CalendarEvent {
+        id: format!("{AGENT_CALENDAR_PROVIDER}:{provider_event_id}"),
+        provider_event_id,
+        title: title.trim().to_string(),
+        start,
+        end,
+        location,
+        description,
+        attendees: Vec::new(),
+        source: "agent".to_string(),
+        all_day: false,
+    };
+    let written = sync_events(context, AGENT_CALENDAR_PROVIDER, &[event.clone()])?;
+    if written == 0 {
+        anyhow::bail!("failed to persist calendar event");
+    }
+    Ok(event)
+}
+
+/// Move an event's start/end in the local agent calendar (#3603).
+pub fn move_agent_event(
+    context: &StorageContext,
+    event_id: &str,
+    new_start: DateTime<Utc>,
+    new_end: DateTime<Utc>,
+) -> Result<CalendarEvent> {
+    if new_end <= new_start {
+        anyhow::bail!("calendar event end must be after start");
+    }
+    let conn = db_conn(context)?;
+    ensure_calendar_tables(&conn)?;
+    let existing = conn.query_row(
+        "SELECT id, provider_event_id, title, location, description,
+                attendees_json, all_day, source
+         FROM calendar_events WHERE id = ?1",
+        params![event_id],
+        |row| {
+            let attendees_json: String = row.get(5)?;
+            let attendees: Vec<String> =
+                serde_json::from_str(&attendees_json).unwrap_or_default();
+            Ok(CalendarEvent {
+                id: row.get(0)?,
+                provider_event_id: row.get(1)?,
+                title: row.get(2)?,
+                start: new_start,
+                end: new_end,
+                location: row.get(3)?,
+                description: row.get(4)?,
+                attendees,
+                all_day: row.get::<_, i64>(6)? != 0,
+                source: row.get(7)?,
+            })
+        },
+    )?;
+    let updated = conn.execute(
+        "UPDATE calendar_events
+         SET start_utc = ?1, end_utc = ?2, synced_at = ?3
+         WHERE id = ?4",
+        params![
+            new_start.to_rfc3339(),
+            new_end.to_rfc3339(),
+            Utc::now().to_rfc3339(),
+            event_id
+        ],
+    )?;
+    if updated == 0 {
+        anyhow::bail!("calendar event '{event_id}' not found");
+    }
+    Ok(existing)
+}
+
+/// Cancel (delete) an event from the local agent calendar (#3603).
+pub fn cancel_agent_event(context: &StorageContext, event_id: &str) -> Result<bool> {
+    let conn = db_conn(context)?;
+    ensure_calendar_tables(&conn)?;
+    let deleted = conn.execute(
+        "DELETE FROM calendar_events WHERE id = ?1",
+        params![event_id],
+    )?;
+    Ok(deleted > 0)
+}
+
+/// Find free time slots of at least `duration_minutes` within `window_start`
+/// .. `window_end` (local day boundaries) (#3603).
+pub fn find_free_slots(
+    context: &StorageContext,
+    day: NaiveDate,
+    duration_minutes: i64,
+    window_start: Option<chrono::NaiveTime>,
+    window_end: Option<chrono::NaiveTime>,
+) -> Result<Vec<(DateTime<Utc>, DateTime<Utc>)>> {
+    let start_time = window_start.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+    let end_time = window_end.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap());
+    if end_time <= start_time {
+        anyhow::bail!("free-slot window end must be after start");
+    }
+    let day_start = day.and_time(start_time);
+    let day_end = day.and_time(end_time);
+    let start = Utc.from_utc_datetime(&day_start);
+    let end = Utc.from_utc_datetime(&day_end);
+
+    let existing = list_cached_events(context, start, end)?;
+    let mut busy: Vec<(DateTime<Utc>, DateTime<Utc>)> = existing
+        .into_iter()
+        .map(|e| (e.start, e.end))
+        .collect();
+    busy.sort_by_key(|(s, _)| *s);
+
+    let mut slots = Vec::new();
+    let mut cursor = start;
+    for (busy_start, busy_end) in busy {
+        if busy_start > cursor && busy_start.signed_duration_since(cursor).num_minutes() >= duration_minutes {
+            slots.push((cursor, busy_start));
+        }
+        if busy_end > cursor {
+            cursor = busy_end;
+        }
+    }
+    if end.signed_duration_since(cursor).num_minutes() >= duration_minutes {
+        slots.push((cursor, end));
+    }
+    Ok(slots)
 }
 
 /// Convenience: fetch from a provider and sync to cache in one call.
@@ -1027,6 +1219,81 @@ END:VCALENDAR\r
         assert_eq!(agenda.len(), 1);
         assert_eq!(agenda[0].title, "Today Meeting");
         assert_eq!(agenda[0].attendees, vec!["Alice"]);
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn agent_calendar_crud_round_trip() {
+        // #3603: create → list → move → cancel against the local agent
+        // calendar store.
+        let temp = std::env::temp_dir().join(format!("vp_cal_crud_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let ctx = StorageContext::for_test(&temp);
+        crate::storage::initialize_storage_with_context(&ctx).expect("init storage");
+
+        let day = Utc::now().date_naive();
+        let start = day.and_hms_opt(10, 0, 0).unwrap().and_utc();
+        let end = day.and_hms_opt(11, 0, 0).unwrap().and_utc();
+        let created = create_agent_event(
+            &ctx,
+            "Agent Standup",
+            start,
+            end,
+            Some("Room A".to_string()),
+            Some("Daily sync".to_string()),
+        )
+        .expect("create");
+        assert!(created.id.starts_with("agent:"));
+        assert_eq!(created.title, "Agent Standup");
+
+        // Create must reject invalid ranges.
+        assert!(create_agent_event(&ctx, "Bad", end, start, None, None).is_err());
+        assert!(create_agent_event(&ctx, "  ", start, end, None, None).is_err());
+
+        let listed = list_cached_events(&ctx, start, end).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].title, "Agent Standup");
+
+        let new_start = day.and_hms_opt(14, 0, 0).unwrap().and_utc();
+        let new_end = day.and_hms_opt(15, 0, 0).unwrap().and_utc();
+        let moved = move_agent_event(&ctx, &created.id, new_start, new_end).expect("move");
+        assert_eq!(moved.title, "Agent Standup");
+        assert_eq!(moved.start, new_start);
+
+        assert!(move_agent_event(&ctx, "agent:nope", new_start, new_end).is_err());
+        assert!(cancel_agent_event(&ctx, &created.id).expect("cancel"));
+        assert!(!cancel_agent_event(&ctx, &created.id).expect("cancel again"));
+        assert!(list_cached_events(&ctx, start, end).expect("list empty").is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn find_free_slots_skips_busy_ranges() {
+        // #3603: a 1h meeting at 10:00-11:00 leaves 09:00-10:00 and
+        // 11:00-18:00 free for a 1h duration.
+        let temp = std::env::temp_dir().join(format!("vp_cal_slots_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        let ctx = StorageContext::for_test(&temp);
+        crate::storage::initialize_storage_with_context(&ctx).expect("init storage");
+
+        let day = Utc::now().date_naive();
+        let start = day.and_hms_opt(10, 0, 0).unwrap().and_utc();
+        let end = day.and_hms_opt(11, 0, 0).unwrap().and_utc();
+        create_agent_event(&ctx, "Busy", start, end, None, None).expect("create");
+
+        let slots = find_free_slots(&ctx, day, 60, None, None).expect("slots");
+        assert_eq!(slots.len(), 2, "expected two free slots, got {slots:?}");
+        assert_eq!(slots[0].0.time(), chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+        assert_eq!(slots[0].1.time(), chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap());
+        assert_eq!(slots[1].0.time(), chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap());
+        assert_eq!(slots[1].1.time(), chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap());
+
+        // A 2h request cannot fit the 09:00-10:00 slot.
+        let slots2 = find_free_slots(&ctx, day, 120, None, None).expect("slots 2h");
+        assert_eq!(slots2.len(), 1);
+        assert_eq!(slots2[0].0.time(), chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap());
 
         let _ = std::fs::remove_dir_all(&temp);
     }

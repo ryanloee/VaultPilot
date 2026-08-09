@@ -465,6 +465,11 @@ pub fn tool_call_system_prompt() -> String {
          - list_directory: inspect a local directory on the machine.\n\
          - read_file: read a local file on the machine.\n\
          - save_note: store the user's content as a normalized note draft.\n\
+         - get_calendar_events: list the local calendar for a date (date: YYYY-MM-DD).\n\
+         - create_calendar_event: create a local calendar event (title, start, end; timestamps as ISO 8601 or \"YYYY-MM-DD HH:MM\").\n\
+         - move_calendar_event: reschedule an event (eventId plus new start/end).\n\
+         - cancel_calendar_event: cancel a calendar event by eventId.\n\
+         - find_free_slot: find free time for a duration (date: YYYY-MM-DD, durationMinutes).\n\
          - Notes have CREATED_AT and UPDATED_AT timestamps. Users may refer to notes by relative time (e.g. \"yesterday\", \"last week\", \"刚才写的\"). Use search_notes to help retrieve time-referenced notes.\n\
          You may be called repeatedly after prior tool executions, so use the tool history to decide the next step.\n\
          Return strict JSON only, with no markdown fence.\n\

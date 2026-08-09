@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
+use chrono::TimeZone;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -2089,6 +2090,44 @@ async fn execute_tool(
                 Err(e) => (tool_err(&e), true),
             }
         }
+        ai::AssistantToolCall::GetCalendarEvents { date } => {
+            match get_calendar_events_for_agent(context, date).await {
+                Ok(summary) => (summary, false),
+                Err(e) => (tool_err(&e), true),
+            }
+        }
+        ai::AssistantToolCall::CreateCalendarEvent {
+            title,
+            start,
+            end,
+            location,
+        } => match create_calendar_event_for_agent(context, title, start, end, location.as_deref())
+            .await
+        {
+            Ok(summary) => (summary, false),
+            Err(e) => (tool_err(&e), true),
+        },
+        ai::AssistantToolCall::MoveCalendarEvent {
+            event_id,
+            start,
+            end,
+        } => match move_calendar_event_for_agent(context, event_id, start, end).await {
+            Ok(summary) => (summary, false),
+            Err(e) => (tool_err(&e), true),
+        },
+        ai::AssistantToolCall::CancelCalendarEvent { event_id } => {
+            match cancel_calendar_event_for_agent(context, event_id).await {
+                Ok(summary) => (summary, false),
+                Err(e) => (tool_err(&e), true),
+            }
+        }
+        ai::AssistantToolCall::FindFreeSlot {
+            date,
+            duration_minutes,
+        } => match find_free_slot_for_agent(context, date, *duration_minutes).await {
+            Ok(summary) => (summary, false),
+            Err(e) => (tool_err(&e), true),
+        },
         ai::AssistantToolCall::Custom { name, args } => {
             let tool = settings
                 .custom_tools
@@ -2219,6 +2258,161 @@ fn slugify(title: &str) -> String {
     crate::utils::slugify(title)
 }
 
+// ── Agent Calendar Tools (#3603) ─────────────────────────────────────
+
+fn parse_agent_date(value: &str) -> anyhow::Result<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map_err(|_| anyhow::anyhow!("invalid date '{value}', expected YYYY-MM-DD"))
+}
+
+fn parse_agent_datetime(value: &str) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    let value = value.trim();
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Ok(parsed.with_timezone(&chrono::Utc));
+    }
+    for format in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+    ] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(value, format) {
+            return Ok(chrono::Utc.from_utc_datetime(&naive));
+        }
+    }
+    anyhow::bail!(
+        "invalid datetime '{value}', expected ISO 8601 or YYYY-MM-DD HH:MM"
+    )
+}
+
+pub(crate) async fn get_calendar_events_for_agent(
+    context: &StorageContext,
+    date: &str,
+) -> anyhow::Result<String> {
+    let day = parse_agent_date(date)?;
+    let start = chrono::Utc.from_utc_datetime(&day.and_hms_opt(0, 0, 0).unwrap());
+    let end = chrono::Utc.from_utc_datetime(&day.and_hms_opt(23, 59, 59).unwrap());
+    let events = tokio::task::spawn_blocking({
+        let ctx = context.clone();
+        move || crate::calendar::list_cached_events(&ctx, start, end)
+    })
+    .await??;
+    if events.is_empty() {
+        return Ok(format!("No calendar events on {day}."));
+    }
+    let lines = events
+        .iter()
+        .map(|e| {
+            format!(
+                "- {} ({} → {}): {}{}",
+                e.title,
+                e.start.format("%H:%M"),
+                e.end.format("%H:%M"),
+                e.location.as_deref().unwrap_or(""),
+                if e.location.is_some() { "" } else { "no location" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!("Calendar events on {day}:\n{lines}"))
+}
+
+pub(crate) async fn create_calendar_event_for_agent(
+    context: &StorageContext,
+    title: &str,
+    start: &str,
+    end: &str,
+    location: Option<&str>,
+) -> anyhow::Result<String> {
+    let start = parse_agent_datetime(start)?;
+    let end = parse_agent_datetime(end)?;
+    let ctx = context.clone();
+    let title = title.to_string();
+    let location = location.map(str::to_string);
+    let event = tokio::task::spawn_blocking(move || {
+        crate::calendar::create_agent_event(
+            &ctx,
+            &title,
+            start,
+            end,
+            location,
+            None,
+        )
+    })
+    .await??;
+    Ok(format!(
+        "Created calendar event '{}' ({}) from {} to {}.",
+        event.title,
+        event.id,
+        event.start.format("%Y-%m-%d %H:%M"),
+        event.end.format("%Y-%m-%d %H:%M")
+    ))
+}
+
+pub(crate) async fn move_calendar_event_for_agent(
+    context: &StorageContext,
+    event_id: &str,
+    start: &str,
+    end: &str,
+) -> anyhow::Result<String> {
+    let start = parse_agent_datetime(start)?;
+    let end = parse_agent_datetime(end)?;
+    let ctx = context.clone();
+    let event_id = event_id.to_string();
+    let event = tokio::task::spawn_blocking(move || {
+        crate::calendar::move_agent_event(&ctx, &event_id, start, end)
+    })
+    .await??;
+    Ok(format!(
+        "Moved calendar event '{}' to {} – {}.",
+        event.title,
+        event.start.format("%Y-%m-%d %H:%M"),
+        event.end.format("%Y-%m-%d %H:%M")
+    ))
+}
+
+pub(crate) async fn cancel_calendar_event_for_agent(
+    context: &StorageContext,
+    event_id: &str,
+) -> anyhow::Result<String> {
+    let ctx = context.clone();
+    let event_id = event_id.to_string();
+    let event_id_for_message = event_id.clone();
+    let cancelled = tokio::task::spawn_blocking(move || {
+        crate::calendar::cancel_agent_event(&ctx, &event_id)
+    })
+    .await??;
+    if cancelled {
+        Ok(format!("Cancelled calendar event {event_id_for_message}."))
+    } else {
+        anyhow::bail!("calendar event '{event_id_for_message}' not found")
+    }
+}
+
+pub(crate) async fn find_free_slot_for_agent(
+    context: &StorageContext,
+    date: &str,
+    duration_minutes: u32,
+) -> anyhow::Result<String> {
+    let day = parse_agent_date(date)?;
+    let ctx = context.clone();
+    let slots = tokio::task::spawn_blocking(move || {
+        crate::calendar::find_free_slots(&ctx, day, duration_minutes as i64, None, None)
+    })
+    .await??;
+    if slots.is_empty() {
+        return Ok(format!(
+            "No free {duration_minutes}-minute slot on {day} between 09:00 and 18:00."
+        ));
+    }
+    let lines = slots
+        .iter()
+        .map(|(s, e)| format!("- {} – {}", s.format("%H:%M"), e.format("%H:%M")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!("Free {duration_minutes}-minute slots on {day}:\n{lines}"))
+}
+
 fn tool_display_name(tool: &ai::AssistantToolCall) -> &str {
     match tool {
         ai::AssistantToolCall::None => "none",
@@ -2227,6 +2421,11 @@ fn tool_display_name(tool: &ai::AssistantToolCall) -> &str {
         ai::AssistantToolCall::ListDirectory { .. } => "list_directory",
         ai::AssistantToolCall::ReadFile { .. } => "read_file",
         ai::AssistantToolCall::SaveNote { .. } => "save_note",
+        ai::AssistantToolCall::GetCalendarEvents { .. } => "get_calendar_events",
+        ai::AssistantToolCall::CreateCalendarEvent { .. } => "create_calendar_event",
+        ai::AssistantToolCall::MoveCalendarEvent { .. } => "move_calendar_event",
+        ai::AssistantToolCall::CancelCalendarEvent { .. } => "cancel_calendar_event",
+        ai::AssistantToolCall::FindFreeSlot { .. } => "find_free_slot",
         ai::AssistantToolCall::Custom { name, .. } => name.as_str(),
     }
 }
@@ -2243,6 +2442,20 @@ fn tool_args_summary(tool: &ai::AssistantToolCall) -> String {
         ai::AssistantToolCall::SaveNote { draft, .. } => {
             format!("title={} body_len={}", draft.title, draft.body.len())
         }
+        ai::AssistantToolCall::GetCalendarEvents { date } => format!("date={date}"),
+        ai::AssistantToolCall::CreateCalendarEvent {
+            title, start, end, ..
+        } => format!("title={title} start={start} end={end}"),
+        ai::AssistantToolCall::MoveCalendarEvent {
+            event_id, start, end, ..
+        } => format!("eventId={event_id} start={start} end={end}"),
+        ai::AssistantToolCall::CancelCalendarEvent { event_id } => {
+            format!("eventId={event_id}")
+        }
+        ai::AssistantToolCall::FindFreeSlot {
+            date,
+            duration_minutes,
+        } => format!("date={date} durationMinutes={duration_minutes}"),
         ai::AssistantToolCall::Custom { name, args } => {
             format!("name={} args={}", name, args)
         }
@@ -2271,6 +2484,28 @@ fn tool_args_json(tool: &ai::AssistantToolCall) -> String {
                               "body": truncate_preview(&draft.body, 500)})
             .to_string()
         }
+        ai::AssistantToolCall::GetCalendarEvents { date } => {
+            serde_json::json!({"date": date}).to_string()
+        }
+        ai::AssistantToolCall::CreateCalendarEvent {
+            title,
+            start,
+            end,
+            location,
+        } => serde_json::json!({"title": title, "start": start, "end": end, "location": location})
+            .to_string(),
+        ai::AssistantToolCall::MoveCalendarEvent {
+            event_id,
+            start,
+            end,
+        } => serde_json::json!({"eventId": event_id, "start": start, "end": end}).to_string(),
+        ai::AssistantToolCall::CancelCalendarEvent { event_id } => {
+            serde_json::json!({"eventId": event_id}).to_string()
+        }
+        ai::AssistantToolCall::FindFreeSlot {
+            date,
+            duration_minutes,
+        } => serde_json::json!({"date": date, "durationMinutes": duration_minutes}).to_string(),
         ai::AssistantToolCall::Custom { name: _, args } => args.to_string(),
     }
 }

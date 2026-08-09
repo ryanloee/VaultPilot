@@ -2031,7 +2031,7 @@ async fn execute_tool(
             // Load existing note for backup and to preserve original created_at (#3350)
             let existing_note = crate::storage::load_note_async(context, note_id).await.ok();
             if let Some(ref existing) = existing_note {
-                crate::orchestration::write::WRITE_TRACKER.record_backup(existing);
+                crate::orchestration::write::record_backup_persistent(context, existing);
             }
             // Preserve created_at from existing note; fall back to now() for new notes
             let created_at = existing_note

@@ -3272,7 +3272,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
 
             if *apply {
                 // Record backup for revert (#1652)
-                vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+                vaultpilot_lib::orchestration::write::record_backup_persistent(context, &original);
 
                 let edited_note = NoteDocument {
                     body: edited_body.clone(),

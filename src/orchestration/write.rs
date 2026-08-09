@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -58,6 +59,29 @@ pub struct WriteBackup {
     pub timestamp: i64,
 }
 
+impl WriteBackup {
+    fn from_note(note: &NoteDocument) -> Self {
+        Self {
+            note_id: note.meta.id.clone(),
+            note_path: note.meta.path.clone(),
+            title: note.meta.title.clone(),
+            tags: note.meta.tags.clone(),
+            keywords: note.meta.keywords.clone(),
+            platform: note.meta.platform.clone(),
+            board: note.meta.board.clone(),
+            kernel: note.meta.kernel.clone(),
+            status: note.meta.status.clone(),
+            created_at: note.meta.created_at.clone(),
+            updated_at: note.meta.updated_at.clone(),
+            source: note.meta.source.clone(),
+            summary: note.meta.summary.clone(),
+            collections: note.meta.collections.clone(),
+            body: note.body.clone(),
+            timestamp: chrono::Utc::now().timestamp(),
+        }
+    }
+}
+
 /// Maximum number of entries to track in the undo/redo modification log.
 const MAX_UNDO_LOG: usize = 20;
 
@@ -90,24 +114,7 @@ impl WriteTracker {
     /// Record a backup of a note before it gets modified.
     /// Also pushes the note_id onto the undo stack (#3359).
     pub fn record_backup(&self, note: &NoteDocument) {
-        let entry = WriteBackup {
-            note_id: note.meta.id.clone(),
-            note_path: note.meta.path.clone(),
-            title: note.meta.title.clone(),
-            tags: note.meta.tags.clone(),
-            keywords: note.meta.keywords.clone(),
-            platform: note.meta.platform.clone(),
-            board: note.meta.board.clone(),
-            kernel: note.meta.kernel.clone(),
-            status: note.meta.status.clone(),
-            created_at: note.meta.created_at.clone(),
-            updated_at: note.meta.updated_at.clone(),
-            source: note.meta.source.clone(),
-            summary: note.meta.summary.clone(),
-            collections: note.meta.collections.clone(),
-            body: note.body.clone(),
-            timestamp: chrono::Utc::now().timestamp(),
-        };
+        let entry = WriteBackup::from_note(note);
         let note_id = entry.note_id.clone();
         let mut map = self.backups.lock().unwrap_or_else(|e| e.into_inner());
         let backups = map.entry(entry.note_id.clone()).or_default();
@@ -207,6 +214,92 @@ impl Default for WriteTracker {
 use std::sync::LazyLock;
 pub static WRITE_TRACKER: LazyLock<WriteTracker> = LazyLock::new(WriteTracker::new);
 
+// ── #4003: cross-process persistence ────────────────────────────────────
+//
+// WRITE_TRACKER above is process-local memory. `notes.apply_edit` runs in
+// the MCP server process while `vaultpilot revert-edit` is a separate CLI
+// process, so an in-memory backup could never be found by the revert. Every
+// backup is therefore ALSO persisted to a per-vault JSON store next to the
+// other device-local CLI state (settings.json, chat-state.json), and
+// `revert_write` falls back to that store when this process has no backup.
+
+/// Per-vault, device-local JSON store path for write backups (#4003).
+fn persisted_backups_path(ctx: &StorageContext) -> PathBuf {
+    let vault = ctx
+        .vault_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| ctx.vault_dir().to_path_buf());
+    StorageContext::cli_config_root()
+        .join(StorageContext::vault_namespace(&vault))
+        .join("write-backups.json")
+}
+
+/// Load backups persisted by a previous process (or this one). Corrupt or
+/// missing files degrade to an empty store; the in-memory tracker is
+/// unaffected.
+fn load_persisted_backups(ctx: &StorageContext) -> Vec<WriteBackup> {
+    let path = persisted_backups_path(ctx);
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            tracing::warn!("write-backups.json unreadable ({e}); starting empty");
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_persisted_backups(ctx: &StorageContext, backups: &[WriteBackup]) -> anyhow::Result<()> {
+    let path = persisted_backups_path(ctx);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let bytes = serde_json::to_vec_pretty(backups)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &bytes)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Pop the newest persisted backup for `note_id` (mirrors
+/// [`WriteTracker::pop_backup`]).
+fn remove_persisted_backup(ctx: &StorageContext, note_id: &str) {
+    let mut backups = load_persisted_backups(ctx);
+    if let Some(idx) = backups.iter().rposition(|b| b.note_id == note_id) {
+        backups.remove(idx);
+        if let Err(e) = save_persisted_backups(ctx, &backups) {
+            tracing::warn!("failed to persist write-backup removal: {e}");
+        }
+    }
+}
+
+/// Record a backup in memory AND on disk so `vaultpilot revert-edit` can
+/// restore it from a separate process (#4003).
+pub fn record_backup_persistent(ctx: &StorageContext, note: &NoteDocument) {
+    WRITE_TRACKER.record_backup(note);
+    let mut backups = load_persisted_backups(ctx);
+    backups.push(WriteBackup::from_note(note));
+    // Keep the same per-note cap as the in-memory tracker: retain the newest
+    // MAX_BACKUPS_PER_NOTE entries per note.
+    let note_id = note.meta.id.clone();
+    let mut seen = 0usize;
+    let mut kept: Vec<WriteBackup> = backups
+        .into_iter()
+        .rev()
+        .filter(|b| {
+            if b.note_id == note_id {
+                seen += 1;
+                seen <= MAX_BACKUPS_PER_NOTE
+            } else {
+                true
+            }
+        })
+        .collect();
+    kept.reverse();
+    if let Err(e) = save_persisted_backups(ctx, &kept) {
+        tracing::warn!("failed to persist write backup: {e}");
+    }
+}
+
 /// Revert a note to its pre-AI-write state by restoring the backup.
 /// Returns the restored `NoteDocument` on success, or an error message.
 pub async fn revert_write(
@@ -215,6 +308,14 @@ pub async fn revert_write(
 ) -> Result<NoteDocument, anyhow::Error> {
     let backup = WRITE_TRACKER
         .get_latest_backup(note_id)
+        .or_else(|| {
+            // #4003: the backup may have been recorded by another process
+            // (MCP server / agent) and only exists in the on-disk store.
+            load_persisted_backups(ctx)
+                .into_iter()
+                .rev()
+                .find(|b| b.note_id == note_id)
+        })
         .ok_or_else(|| anyhow::anyhow!("no backup found for note '{}'", note_id))?;
 
     let restored = NoteDocument {
@@ -243,6 +344,7 @@ pub async fn revert_write(
     // Only pop the backup after the save succeeded — if the save fails,
     // the backup is preserved for a retry.
     WRITE_TRACKER.pop_backup(note_id);
+    remove_persisted_backup(ctx, note_id);
 
     tracing::info!(
         "reverted note '{}' to backup from {}",
@@ -351,7 +453,7 @@ pub async fn redo_last_undo(ctx: &StorageContext) -> Result<NoteDocument, anyhow
 
     // Record a backup of the current note before redo, so undo works again
     if let Ok(current_note) = crate::storage::load_note_async(ctx, &redo.note_id).await {
-        WRITE_TRACKER.record_backup(&current_note);
+        record_backup_persistent(ctx, &current_note);
     }
 
     let saved = save_note_with_images_async(ctx, re_applied, &[]).await?;
@@ -625,5 +727,60 @@ mod tests {
         // Verify that the default implementation creates a valid tracker
         let tracker = WriteTracker::default();
         assert!(tracker.get_latest_backup("x").is_none());
+    }
+
+    #[tokio::test]
+    async fn persisted_backup_supports_cross_process_revert() {
+        // #4003: notes.apply_edit runs in the MCP server process while
+        // `vaultpilot revert-edit` runs in a separate CLI process, so the
+        // backup must be readable from the on-disk store — not just from
+        // this process's WRITE_TRACKER memory.
+        let vault = std::env::temp_dir().join(format!("vp-write-backup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let ctx1 = crate::storage::StorageContext::for_cli(Some(vault.clone())).unwrap();
+        let mut candidate = make_note("cross-proc", "Original Title", "Original body content");
+        // Let storage build the vault-absolute path; a relative path would be
+        // resolved against the test process CWD and rejected.
+        candidate.meta.path = String::new();
+        let original = crate::storage::save_note_with_context(&ctx1, candidate.clone()).unwrap();
+        let edited = NoteDocument {
+            body: "EDITED body".to_string(),
+            ..original.clone()
+        };
+        crate::storage::save_note_with_context(&ctx1, edited).unwrap();
+        record_backup_persistent(&ctx1, &original);
+
+        // Simulate the MCP-server process having exited: this process's
+        // in-memory tracker no longer holds the backup, so only the on-disk
+        // store can satisfy the revert (exactly what a separate
+        // `vaultpilot revert-edit` process sees).
+        WRITE_TRACKER.pop_backup("cross-proc");
+        assert!(
+            WRITE_TRACKER.get_latest_backup("cross-proc").is_none(),
+            "precondition: in-memory backup must be gone"
+        );
+
+        let ctx2 = crate::storage::StorageContext::for_cli(Some(vault.clone())).unwrap();
+        let restored = revert_write(&ctx2, "cross-proc").await.unwrap();
+        // Storage wraps bodies in the summary template header, so assert the
+        // pre-edit content round-tripped instead of exact equality.
+        assert!(
+            restored.body.contains("Original body content"),
+            "restored body missing original content: {}",
+            restored.body
+        );
+        assert!(
+            !restored.body.contains("EDITED body"),
+            "restored body must not contain the post-edit content"
+        );
+        assert_eq!(restored.meta.title, "Original Title");
+        // The persisted backup is consumed, mirroring the in-memory pop.
+        assert!(
+            load_persisted_backups(&ctx2).is_empty(),
+            "revert must consume the persisted backup"
+        );
+
+        std::fs::remove_dir_all(&vault).ok();
     }
 }

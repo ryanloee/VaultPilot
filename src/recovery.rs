@@ -239,35 +239,110 @@ pub fn recovery_target_path(vault_dir: &Path, note_path: &str) -> Result<PathBuf
         );
     }
 
-    // Resolve symlinks along the deepest existing ancestor of the target and
-    // confirm it still lies under the (canonicalized) vault dir.
+    // Walk every component from the canonical vault root down to the target,
+    // resolving symlinks — including dangling ones — at each step. The old
+    // approach only canonicalized the deepest *existing* ancestor, so a
+    // dangling symlink at the tail of the path (e.g. `sub -> /outside/x`
+    // where `/outside/x` does not exist yet) was skipped: `canonicalize`
+    // returned NotFound, the check fell back to the vault root, and the
+    // caller's `fs::write` then followed the link and wrote outside the
+    // vault (#4002).
     let vault_canon = vault_dir
         .canonicalize()
-        .unwrap_or_else(|_| vault_dir.to_path_buf());
-    let mut ancestor: &Path = &target;
-    let mut resolved: Option<PathBuf> = None;
-    loop {
-        if let Ok(canon) = ancestor.canonicalize() {
-            resolved = Some(canon);
-            break;
-        }
-        match ancestor.parent() {
-            Some(parent) => ancestor = parent,
-            None => break, // nothing exists yet; the lexical check above stands
-        }
-    }
-    if let Some(canon) = resolved {
-        if !canon.starts_with(&vault_canon) {
-            bail!(
-                "recovery note_path '{note_path}' escapes the vault via symlink \
-                 (resolves to {}, outside {})",
-                canon.display(),
-                vault_canon.display()
-            );
+        .unwrap_or_else(|_| lexical_normalize(vault_dir));
+    let mut current = vault_canon.clone();
+    for component in normalized.split('/') {
+        current.push(component);
+        let meta = match std::fs::symlink_metadata(&current) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Nothing exists at (or below) this component, so there is no
+                // symlink left to resolve; the lexical check above stands.
+                break;
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "failed to inspect recovery target component {}",
+                        current.display()
+                    )
+                });
+            }
+        };
+        if meta.file_type().is_symlink() {
+            let resolved = resolve_symlink_chain(&current)?;
+            let resolved_norm = lexical_normalize(&resolved);
+            if !resolved_norm.starts_with(&vault_canon) {
+                bail!(
+                    "recovery note_path '{note_path}' escapes the vault via symlink \
+                     ({} resolves to {}, outside {})",
+                    current.display(),
+                    resolved_norm.display(),
+                    vault_canon.display()
+                );
+            }
+            current = resolved_norm;
+        } else if let Ok(canon) = current.canonicalize() {
+            current = canon;
         }
     }
 
     Ok(target)
+}
+
+/// Lexically normalize a path: drop `.` and empty components, resolve `..`
+/// against the current prefix without touching the filesystem.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Refuse to pop above the root (e.g. `C:\..` stays `C:\`).
+                if out.file_name().is_some() {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Follow a symlink chain (including dangling links) and return the final
+/// lexical target. Absolute link targets are used as-is; relative targets
+/// are joined against the link's parent directory first.
+fn resolve_symlink_chain(path: &Path) -> Result<PathBuf> {
+    const MAX_DEPTH: usize = 32;
+    let mut current = path.to_path_buf();
+    for _ in 0..MAX_DEPTH {
+        let meta = match std::fs::symlink_metadata(&current) {
+            Ok(meta) => meta,
+            // The chain ends at a path that does not exist yet (dangling
+            // link target); that is fine as long as every symlink we walked
+            // resolved inside the vault.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(current),
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("failed to stat symlink candidate {}", current.display())
+                });
+            }
+        };
+        if !meta.file_type().is_symlink() {
+            return Ok(current);
+        }
+        let link = std::fs::read_link(&current)
+            .with_context(|| format!("failed to read symlink {}", current.display()))?;
+        current = if link.is_absolute() {
+            link
+        } else {
+            let parent = current.parent().unwrap_or_else(|| Path::new(""));
+            parent.join(link)
+        };
+        current = lexical_normalize(&current);
+    }
+    bail!("symlink chain too deep at {}", path.display())
 }
 
 /// Save the current unsaved edit buffer as a recovery snapshot.
@@ -652,6 +727,48 @@ mod tests {
         );
 
         fs::remove_file(vault.join("leak")).ok();
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_target_refuses_dangling_symlink_escape() {
+        // #4002: canonicalize() returns NotFound for a dangling symlink, so
+        // the old deepest-existing-ancestor check skipped it and the restore
+        // write followed the link outside the vault. Every component must be
+        // resolved, including links whose target does not exist yet.
+        use std::os::unix::fs::symlink;
+        let vault = test_vault();
+        let outside =
+            std::env::temp_dir().join(format!("vaultpilot-recovery-dangling-{}", Uuid::new_v4()));
+        fs::create_dir_all(&outside).unwrap();
+
+        // Final component is a dangling link pointing outside the vault.
+        symlink(outside.join("missing-dir"), vault.join("leak")).unwrap();
+        let err = recovery_target_path(&vault, "leak")
+            .expect_err("dangling symlink escape must be refused");
+        assert!(
+            err.to_string().contains("symlink"),
+            "unexpected error: {err}"
+        );
+
+        // Intermediate component is a dangling link pointing outside.
+        symlink(outside.join("also-missing"), vault.join("leak2")).unwrap();
+        let err = recovery_target_path(&vault, "leak2/pwned.md")
+            .expect_err("dangling intermediate symlink escape must be refused");
+        assert!(
+            err.to_string().contains("symlink"),
+            "unexpected error: {err}"
+        );
+
+        // A dangling link whose target stays inside the vault is still valid.
+        symlink(vault.join("future-dir"), vault.join("alias")).unwrap();
+        let target = recovery_target_path(&vault, "alias/note.md").unwrap();
+        assert!(target.starts_with(&vault));
+
+        fs::remove_file(vault.join("leak")).ok();
+        fs::remove_file(vault.join("leak2")).ok();
+        fs::remove_file(vault.join("alias")).ok();
         fs::remove_dir_all(&outside).ok();
     }
 }

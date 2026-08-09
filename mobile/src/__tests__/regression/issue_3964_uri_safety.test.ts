@@ -41,7 +41,7 @@ describe('#3964/#3995 classifyUriActionRisk — mirror of Rust risk classificati
     ['vaultpilot://note/new?overwrite=TRUE', 'high'],
     ['vaultpilot://note/new?overwrite=yes', 'high'],
     ['vaultpilot://note/new?overwrite=on', 'high'],
-    ['vaultpilot://note/new?overwrite', 'high'], // bare flag → "true"
+    ['vaultpilot://note/new?overwrite', 'medium'], // bare flag has no '=' → pair dropped like Rust (#4006)
     // #3995: destructive note routes → HIGH (Rust DeleteNote/EditNote/BulkNoteOp)
     ['vaultpilot://note/delete', 'high'],
     ['vaultpilot://note/delete?id=abc', 'high'],
@@ -65,9 +65,13 @@ describe('#3964/#3995 classifyUriActionRisk — mirror of Rust risk classificati
     // Navigation targets → LOW
     ['vaultpilot://search', 'low'],
     ['vaultpilot://settings', 'low'],
-    ['vaultpilot://chat', 'low'],
-    ['vaultpilot://chat/sessions', 'low'],
-    ['vaultpilot://note', 'low'],
+    // Mobile navigation extensions (App.tsx handles these routes) — Rust has no
+    // such routes → Unknown → Medium, so they are MEDIUM here too (#4007).
+    ['vaultpilot://chat', 'medium'],
+    ['vaultpilot://chat/sessions', 'medium'],
+    ['vaultpilot://note', 'medium'],
+    // Rust has a dedicated Daily route → LOW (#4007).
+    ['vaultpilot://daily', 'low'],
     // Unknown / unparseable → MEDIUM (Rust: Unknown → conservative Medium)
     ['vaultpilot://bogus/route', 'medium'],
     ['vaultpilot://', 'medium'],

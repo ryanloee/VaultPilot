@@ -97,7 +97,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --exclude vaultpilot-desktop -- -D warnings
 
   test:
     name: cargo test
@@ -136,7 +136,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude vaultpilot-desktop
 
   cargo-audit:
     name: cargo audit

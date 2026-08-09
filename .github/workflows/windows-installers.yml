@@ -56,14 +56,19 @@ jobs:
           for ($i = 1; $i -le 5; $i++) {
             cargo install cargo-audit --locked --force
             if ($LASTEXITCODE -eq 0) { break }
-            Write-Host "Attempt $i failed, retrying in 30s..."
-            Start-Sleep -Seconds 30
+            if ($i -lt 5) {
+              Write-Host "Attempt $i failed, retrying in 30s..."
+              Start-Sleep -Seconds 30
+            } else {
+              Write-Host "Attempt $i failed, giving up"
+            }
           }
           if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-audit failed after 5 attempts" }
 
       - name: Run cargo audit
         shell: powershell
-        run: cargo audit
+        # #3741: yanked/unmaintained/unsound crates must fail the gate.
+        run: cargo audit --deny warnings
 
       - name: Build WinUI validation target
         shell: powershell
@@ -325,8 +330,13 @@ jobs:
             $_.Extension -notin @('.sha256')
           } | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            $relative = $_.FullName.Replace($pwd.Path + "\release-assets\", "")
-            "$hash  $relative" | Out-File -Append -Encoding ascii "$checksumDir/SHA256SUMS"
+            # #2744: checksum entries must name the FINAL release asset (the
+            # upload step renames Setup.exe to Setup-<channel>.exe), otherwise
+            # users cannot verify downloaded files against SHA256SUMS.
+            $dirParts = $_.FullName.Substring($pwd.Path.Length + 1).Split('\')
+            $channel = if ($dirParts.Length -ge 1) { $dirParts[0] } else { "" }
+            $finalName = if ($_.Name -eq 'Setup.exe') { "Setup-$channel.exe" } else { $_.Name }
+            "$hash  $finalName" | Out-File -Append -Encoding ascii "$checksumDir/SHA256SUMS"
           }
           Write-Host "=== SHA256SUMS ==="
           Get-Content "$checksumDir/SHA256SUMS"
@@ -368,12 +378,15 @@ jobs:
           }
 
           if (-not $release) {
+            # #2717: rc/beta/alpha tags must be marked as prereleases so they
+            # don't masquerade as stable releases in the UI and release feed.
+            $prerelease = $tag -match '-rc|-beta|-alpha|-preview'
             $releasePayload = @{
               tag_name = $tag
               name = $releaseTitle
               body = ""
               draft = $false
-              prerelease = $false
+              prerelease = $prerelease
             } | ConvertTo-Json
 
             $release = Invoke-RestMethod `
@@ -401,6 +414,7 @@ jobs:
               $_.Name -match 'Setup\.exe$' -or
               $_.Name -match '-full\.nupkg$' -or
               $_.Name -match '\.deb$' -or
+              $_.Name -eq 'vaultpilot-cli' -or
               $_.Name -match '^releases\..+\.json$' -or
               $_.Name -match '^RELEASES-.+$' -or
               $_.Name -match '^SHA256SUMS\.zip$'

@@ -1136,6 +1136,7 @@ mod tests {
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
             session_tabs: Vec::new(),
             active_tab_index: None,
+            default_template: None,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

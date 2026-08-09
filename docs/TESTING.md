@@ -51,13 +51,6 @@ fn regression_xxx_descriptive_name() {
 | Unit tests | `mobile/src/__tests__/` | `<module>.test.ts` |
 | Regression tests | `mobile/src/__tests__/regression/` | `issue_NNN.test.ts` (pure logic) or `issue_NNN.test.tsx` (JSX/component) |
 
-### WinUI (C# / xUnit)
-
-| Test Type | Location | Naming Convention |
-|-----------|----------|-------------------|
-| Unit tests | `native/VaultPilot.WinUI.Tests/` | `<Class>Tests.cs` |
-| Regression tests | `native/VaultPilot.WinUI.Tests/Regression/` | `IssueXxxTests.cs` |
-
 ---
 
 ## Writing a Regression Test (Step-by-Step)
@@ -69,7 +62,6 @@ When fixing a bug, **always** add a regression test. This is a hard requirement 
 - **Rust public API bug** → `src/regression/issue_NNN_short_desc.rs`
 - **Rust internal/private function bug** → Inline `#[cfg(test)]` in the source file, with a `// REGRESSION: #NNN` comment
 - **Mobile bug** → `mobile/src/__tests__/regression/issue_NNN.test.ts` (pure logic) or `issue_NNN.test.tsx` (JSX/component tests); jest's `--testPathPattern` matches both extensions
-- **WinUI bug** → `native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs`
 
 ### 2. Create the regression file
 

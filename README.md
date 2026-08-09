@@ -45,14 +45,14 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 
 ```
 ┌──────────────────────────────┐   ┌──────────────────────────┐
-│  VaultPilot.WinUI.exe (C#)   │   │  mobile/ (React Native)  │
-│  WinUI 3 desktop shell       │   │  Expo / Android APK      │
+│  desktop/ (Tauri v2 + React) │   │  mobile/ (React Native)  │
+│  Windows desktop shell       │   │  Expo / Android APK      │
 │  ┌──────────┐ ┌────────────┐ │   │  ┌──────────┐            │
 │  │ Chat UI  │ │ Settings   │ │   │  │ Chat UI  │            │
 │  └────┬─────┘ └────────────┘ │   │  └────┬─────┘            │
-│       │ JSON-RPC (stdin/out) │   │       │ HTTPS             │
+│       │ JSON-RPC / sidecar   │   │       │ HTTPS             │
 │  ┌────▼──────────────────┐   │   │  ┌────▼──────────────┐   │
-│  │  BackendClient.cs     │   │   │  │  Expo HTTP client │   │
+│  │  Tauri IPC commands   │   │   │  │  Expo HTTP client │   │
 │  └────┬──────────────────┘   │   │  └────┬──────────────┘   │
 └───────┼──────────────────────┘   └───────┼──────────────────┘
         │                                  │
@@ -77,7 +77,7 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 
 ### Linux CLI
 
-The Linux build is CLI-only and does not include the WinUI desktop frontend.
+The Linux build is CLI-only and does not include a desktop frontend.
 
 ```bash
 chmod +x ./scripts/build-linux-cli.sh
@@ -102,10 +102,13 @@ npx expo export --platform android  # production build
 
 ### Install
 
-Download the latest installer from [Releases](https://github.com/ryanloee/VaultPilot/releases):
+Download the latest artifacts from [Releases](https://github.com/ryanloee/VaultPilot/releases):
 
-- `VaultPilot-win-x64-Setup.exe` — installer with auto-update
-- `VaultPilot-win-x64-Portable.zip` — portable, no install needed
+- `vaultpilot-cli_<version>_amd64.deb` — Linux CLI package
+- `vaultpilot-cli` — bare Linux CLI binary
+
+The Windows desktop installer will be published once the new Tauri desktop
+frontend (`desktop/`) lands.
 
 ### First Run
 
@@ -251,21 +254,21 @@ The generated completions include static completions for all subcommands and fla
 
 See [docs/build.md](docs/build.md) for detailed build instructions.
 
-```powershell
-# Quick build (requires Rust + .NET 8 SDK + VS Build Tools)
-dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
+```bash
+# Quick build (Rust backend: CLI + agent)
+cargo build --release --bins
 ```
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop Frontend | WinUI 3 / .NET 8 |
+| Desktop Frontend | Tauri v2 + React (`desktop/`, under development) |
 | Mobile Frontend | React Native (Expo) |
 | Backend | Rust (Tokio, Axum, Reqwest) |
 | Storage | SQLite (FTS5) + Markdown files |
 | AI | Anthropic Messages API with tool use + Agent Mode |
-| Packaging | Velopack (Windows auto-update), APK (Android) |
+| Packaging | APK (Android); desktop bundler TBD with the Tauri frontend |
 
 ## Documentation
 
@@ -306,8 +309,6 @@ VaultPilot uses the following open-source libraries:
 | tokio | MIT |
 | uuid | MIT / Apache-2.0 |
 | walkdir | MIT / Unlicense |
-| Microsoft.WindowsAppSDK | MIT |
-| Velopack | MIT |
 
 ---
 
@@ -340,7 +341,7 @@ VaultPilot 是一个面向工程师的**本地优先 AI 知识助手**。帮助�
 
 ### Linux CLI
 
-Linux 版本只包含 CLI，不包含 WinUI 图形界面。
+Linux 版本只包含 CLI，不包含桌面图形界面。
 
 ```bash
 chmod +x ./scripts/build-linux-cli.sh
@@ -365,10 +366,12 @@ npx expo export --platform android  # 生产构建
 
 ### 安装
 
-从 [Releases](https://github.com/ryanloee/VaultPilot/releases) 下载最新版本：
+从 [Releases](https://github.com/ryanloee/VaultPilot/releases) 下载最新产物：
 
-- `VaultPilot-win-x64-Setup.exe` — 安装版，支持自动更新
-- `VaultPilot-win-x64-Portable.zip` — 便携版，解压即用
+- `vaultpilot-cli_<version>_amd64.deb` — Linux CLI 安装包
+- `vaultpilot-cli` — Linux CLI 裸二进制
+
+Windows 桌面安装包将在新的 Tauri 桌面前端（`desktop/`）发布后提供。
 
 ### 使用流程
 
@@ -419,20 +422,21 @@ vaultpilot agent --auto-approve "创建今天的日记"
 
 详细说明请参考 [构建指南](docs/build.md)。
 
-```powershell
-dotnet build native/VaultPilot.WinUI/VaultPilot.WinUI.csproj -p:Platform=x64
+```bash
+# 快速构建（Rust 后端：CLI + agent）
+cargo build --release --bins
 ```
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 桌面前端 | WinUI 3 / .NET 8 |
+| 桌面前端 | Tauri v2 + React（`desktop/`，开发中） |
 | 移动端前端 | React Native (Expo) |
 | 后端 | Rust (Tokio, Axum, Reqwest) |
 | 存储 | SQLite (FTS5) + Markdown 文件 |
 | AI | Anthropic Messages API (工具调用 + Agent 模式) |
-| 打包 | Velopack (Windows 自动更新), APK (Android) |
+| 打包 | APK (Android)；桌面打包器随 Tauri 前端确定 |
 
 ## 许可证
 

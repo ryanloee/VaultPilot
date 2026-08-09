@@ -9,8 +9,6 @@ You can safely remove them before packaging again or before checking git status.
 
 - `target/`
 - `artifacts/`
-- `native/VaultPilot.WinUI/bin/`
-- `native/VaultPilot.WinUI/obj/`
 - `release-assets/` (only when using `-IncludeReleaseAssets`)
 - temporary folders such as `tmp-icons/`
 
@@ -19,8 +17,6 @@ You can safely remove them before packaging again or before checking git status.
 ```powershell
 Remove-Item -LiteralPath .\target -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\artifacts -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\native\VaultPilot.WinUI\bin -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\native\VaultPilot.WinUI\obj -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\tmp-icons -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
@@ -33,7 +29,6 @@ Run `scripts/clean.ps1` directly to handle all of the above.  Pass `-IncludeRele
 After cleanup, your git status should mainly show only source changes such as:
 
 - `src/...`
-- `native/VaultPilot.WinUI/...`
 - `docs/...`
 - `scripts/...`
 
@@ -51,8 +46,6 @@ For example, `scripts/clean.ps1` is a tracked script, not a build artifact.
 
 - `target/`
 - `artifacts/`
-- `native/VaultPilot.WinUI/bin/`
-- `native/VaultPilot.WinUI/obj/`
 - `release-assets/`（仅在使用 `-IncludeReleaseAssets` 时生成）
 - 临时文件夹如 `tmp-icons/`
 
@@ -61,8 +54,6 @@ For example, `scripts/clean.ps1` is a tracked script, not a build artifact.
 ```powershell
 Remove-Item -LiteralPath .\target -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\artifacts -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\native\VaultPilot.WinUI\bin -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath .\native\VaultPilot.WinUI\obj -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath .\tmp-icons -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
@@ -75,7 +66,6 @@ Remove-Item -LiteralPath .\tmp-icons -Recurse -Force -ErrorAction SilentlyContin
 清理完成后，`git status` 理论上主要只会看到源码改动，例如：
 
 - `src/...`
-- `native/VaultPilot.WinUI/...`
 - `docs/...`
 - `scripts/...`
 

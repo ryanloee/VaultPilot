@@ -1,7 +1,9 @@
 //! Chat-state and AI-action commands.
 
 use crate::state::AppState;
+use tauri::Emitter;
 use vaultpilot_lib::ai::actions::{execute_ai_action, list_ai_actions, AiActionRequest};
+use vaultpilot_lib::ask_with_ai_with_context;
 use vaultpilot_lib::models::{ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{load_chat_state_async, save_chat_state_async};
 
@@ -61,4 +63,41 @@ pub async fn compress_chat_history(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Ask the AI a question with vault context. Emits `agentStatus` events to the
+/// frontend (Tauri event `agent-status`) as the request progresses, then
+/// returns the final grounded answer.
+#[tauri::command]
+pub async fn ask_with_ai(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    question: String,
+    history: Option<Vec<ConversationTurn>>,
+    image_paths: Option<Vec<String>>,
+    model_override: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let storage = state.storage.clone();
+    let result = ask_with_ai_with_context(
+        &storage,
+        question,
+        history,
+        image_paths,
+        model_override,
+        |stage, detail| {
+            // Fan out progress to the frontend via a Tauri event. Best-effort:
+            // a closed window just drops the emission.
+            let _ = app_handle.emit(
+                "agent-status",
+                serde_json::json!({
+                    "stage": stage,
+                    "detail": detail,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                }),
+            );
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
 }

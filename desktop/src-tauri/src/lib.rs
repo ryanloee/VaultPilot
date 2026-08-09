@@ -47,6 +47,7 @@ pub fn run() {
             commands::chat::list_actions,
             commands::chat::execute_ai_action_cmd,
             commands::chat::compress_chat_history,
+            commands::chat::ask_with_ai,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

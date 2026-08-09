@@ -1,6 +1,6 @@
 //! `vaultpilot://` deep-link route parser (#3728).
 //!
-//! VaultPilot's three front-ends (WinUI, Mobile, CLI) all need to interpret
+//! VaultPilot's front-ends (Desktop, Mobile, CLI) all need to interpret
 //! `vaultpilot://` URIs that arrive from external automation sources
 //! (browser widgets, Quick Settings tiles, Alfred / Raycast, iOS Shortcuts,
 //! x-callback-url flows).  Previously the only routing logic lived in the

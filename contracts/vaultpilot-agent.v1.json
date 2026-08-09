@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.vaultpilot/contracts/vaultpilot-agent.v1.json",
   "title": "VaultPilot Agent Protocol",
-  "description": "Line-delimited JSON RPC messages exchanged between the WinUI frontend and the Rust sidecar.",
+  "description": "Line-delimited JSON RPC messages exchanged between the desktop frontend and the Rust sidecar.",
   "oneOf": [
     { "$ref": "#/$defs/request" },
     { "$ref": "#/$defs/response" },

@@ -357,7 +357,7 @@ pub async fn ask_with_ai_with_context(
                 emit_status("saving", "Saving generated note".to_string());
                 // Record backup before saving so revert_write works (#2286)
                 if let Ok(existing) = load_note_async(context, &note_id).await {
-                    crate::orchestration::write::WRITE_TRACKER.record_backup(&existing);
+                    crate::orchestration::write::record_backup_persistent(context, &existing);
                 }
                 match tokio::time::timeout(
                     STORAGE_IO_TIMEOUT,

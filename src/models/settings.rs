@@ -298,6 +298,11 @@ pub struct AppSettings {
     /// `None` when no tabs are open or after a fresh launch.
     #[serde(default)]
     pub active_tab_index: Option<usize>,
+    /// Default note template applied when creating a note without an explicit
+    /// `--template` (#3996). `None`/empty means the built-in blank template.
+    /// The value is a template name from `<vault>/.vaultpilot/templates/`.
+    #[serde(default)]
+    pub default_template: Option<String>,
 }
 
 /// A single persisted tab entry for WinUI multi-tab support (#3700).
@@ -381,6 +386,7 @@ impl Default for AppSettings {
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
             session_tabs: Vec::new(),
             active_tab_index: None,
+            default_template: None,
         }
     }
 }
@@ -733,6 +739,7 @@ mod tests {
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
             session_tabs: Vec::new(),
             active_tab_index: None,
+            default_template: None,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));

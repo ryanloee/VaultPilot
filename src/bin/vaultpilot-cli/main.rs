@@ -1472,8 +1472,14 @@ enum NotesActions {
         dry_run: bool,
     },
 
-    /// List available note templates (#3383)
-    Templates {},
+    /// Manage note templates (#3383, #3996)
+    ///
+    /// With no subcommand, lists the available templates (same as
+    /// `templates list`).
+    Templates {
+        #[command(subcommand)]
+        action: Option<TemplatesAction>,
+    },
 
     /// Delete a note by ID.
     ///
@@ -1785,6 +1791,21 @@ enum NotesActions {
         /// ID or path of the target note (the source content is appended here).
         target: String,
     },
+}
+
+#[derive(Subcommand)]
+enum TemplatesAction {
+    /// List available note templates (#3383)
+    List {},
+    /// Set the default template applied to new notes without --template (#3996)
+    SetDefault {
+        /// Template name (from .vaultpilot/templates/<name>.md)
+        name: String,
+    },
+    /// Show the currently configured default template (#3996)
+    ShowDefault {},
+    /// Clear the default template; new notes fall back to the built-in blank (#3996)
+    ClearDefault {},
 }
 
 #[derive(Subcommand, Debug)]
@@ -3272,7 +3293,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
 
             if *apply {
                 // Record backup for revert (#1652)
-                vaultpilot_lib::orchestration::write::WRITE_TRACKER.record_backup(&original);
+                vaultpilot_lib::orchestration::write::record_backup_persistent(context, &original);
 
                 let edited_note = NoteDocument {
                     body: edited_body.clone(),
@@ -4601,7 +4622,14 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
             vars,
             *dry_run,
         ),
-        NotesActions::Templates {} => handle_note_templates(context),
+        NotesActions::Templates { action } => {
+            match action.as_ref().unwrap_or(&TemplatesAction::List {}) {
+                TemplatesAction::List {} => handle_note_templates(context),
+                TemplatesAction::SetDefault { name } => handle_template_set_default(context, name),
+                TemplatesAction::ShowDefault {} => handle_template_show_default(context),
+                TemplatesAction::ClearDefault {} => handle_template_clear_default(context),
+            }
+        }
         NotesActions::Delete {
             id,
             purge_attachments,
@@ -4936,8 +4964,16 @@ fn handle_note_new(
 ) -> Result<Value> {
     use vaultpilot_lib::template_store;
 
-    // Resolve template name (default: "blank" = just title + body)
-    let tpl_name = template_name.unwrap_or("blank");
+    // #3996: an explicit --template always wins; otherwise fall back to the
+    // configured default template, then to the built-in blank template.
+    let default_template = load_settings_with_context(context)
+        .ok()
+        .and_then(|s| s.default_template)
+        .filter(|s| !s.trim().is_empty());
+    let tpl_name = match template_name {
+        Some(name) => name,
+        None => default_template.as_deref().unwrap_or("blank"),
+    };
 
     // Parse user-supplied variables (--var key=value)
     let mut user_vars = std::collections::HashMap::new();
@@ -5038,11 +5074,71 @@ fn handle_note_templates(context: &StorageContext) -> Result<Value> {
         .collect();
 
     let templates_dir = template_store::templates_dir(context.vault_dir());
+    let default_template = load_settings_with_context(context)
+        .ok()
+        .and_then(|s| s.default_template)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "blank".to_string());
     Ok(serde_json::json!({
         "templates": templates,
         "count": templates.len(),
         "dir": templates_dir.display().to_string(),
         "builtin": ["blank"],
+        "default_template": default_template,
+    }))
+}
+
+/// Handle `notes templates set-default <name>` (#3996).
+fn handle_template_set_default(context: &StorageContext, name: &str) -> Result<Value> {
+    use vaultpilot_lib::template_store;
+
+    let name = name.trim();
+    if name.is_empty() {
+        bail!("template name must not be empty");
+    }
+    if name == "blank" {
+        return handle_template_clear_default(context);
+    }
+    // Validate existence up front so a typo cannot silently poison every
+    // future `notes new`.
+    let entry = template_store::get_template(context.vault_dir(), name)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "template '{name}' not found in {}/.vaultpilot/templates/",
+            context.vault_dir().display()
+        )
+    })?;
+
+    let mut settings = load_settings_with_context(context).unwrap_or_default();
+    settings.default_template = Some(entry.name.clone());
+    vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+    Ok(serde_json::json!({
+        "status": "set",
+        "default_template": entry.name,
+    }))
+}
+
+/// Handle `notes templates show-default` (#3996).
+fn handle_template_show_default(context: &StorageContext) -> Result<Value> {
+    let settings = load_settings_with_context(context).unwrap_or_default();
+    let name = settings
+        .default_template
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("blank");
+    Ok(serde_json::json!({
+        "status": "ok",
+        "default_template": name,
+    }))
+}
+
+/// Handle `notes templates clear-default` (#3996).
+fn handle_template_clear_default(context: &StorageContext) -> Result<Value> {
+    let mut settings = load_settings_with_context(context).unwrap_or_default();
+    settings.default_template = None;
+    vaultpilot_lib::storage::save_settings_with_context(context, settings)?;
+    Ok(serde_json::json!({
+        "status": "cleared",
+        "default_template": "blank",
     }))
 }
 
@@ -11709,6 +11805,80 @@ mod tests {
             err.to_string().contains("not a regular file"),
             "expected 'not a regular file', got: {err}"
         );
+    }
+
+    #[test]
+    fn regression_3996_default_template_applied_when_no_template_flag() {
+        // #3996: `notes new` without an explicit --template must fall back to
+        // the configured default template; explicit flags keep winning; the
+        // default can be shown/cleared.
+        use crate::{
+            handle_note_new, handle_template_clear_default, handle_template_set_default,
+            handle_template_show_default,
+        };
+        use std::env;
+        use std::fs;
+        use vaultpilot_lib::storage::load_note_with_context;
+        use vaultpilot_lib::template_store::{self, TemplateEntry};
+
+        let dir = env::temp_dir().join(format!("vp-test-3996-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create dir");
+        let ctx = vaultpilot_lib::storage::StorageContext::for_cli(Some(dir.clone()))
+            .expect("storage context");
+
+        // Create a template and set it as default.
+        let meeting = TemplateEntry {
+            name: "meeting".to_string(),
+            description: "Meeting notes".to_string(),
+            variables: vec![],
+            content: "# {{title}}\n\nMeeting notes body\n".to_string(),
+        };
+        template_store::save_template(&dir, &meeting).expect("save template");
+        let res = handle_template_set_default(&ctx, "meeting").expect("set default");
+        assert_eq!(res["default_template"], "meeting");
+
+        // Setting a missing template must fail loudly.
+        let err = handle_template_set_default(&ctx, "missing").unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected not-found error, got: {err}"
+        );
+
+        // notes new without --template uses the default.
+        let created = handle_note_new(&ctx, None, "Standup", None, None, &[], false)
+            .expect("create with default template");
+        assert_eq!(created["template"], "meeting");
+        assert_eq!(created["status"], "created");
+        let note_id = created["note_id"].as_str().unwrap();
+        let note = load_note_with_context(&ctx, note_id).expect("load created note");
+        assert!(
+            note.body.contains("Meeting notes body"),
+            "default template body missing: {}",
+            note.body
+        );
+
+        // Explicit --template overrides the default.
+        let sprint = TemplateEntry {
+            name: "sprint".to_string(),
+            description: "Sprint notes".to_string(),
+            variables: vec![],
+            content: "# {{title}}\n\nSprint body\n".to_string(),
+        };
+        template_store::save_template(&dir, &sprint).expect("save sprint template");
+        let override_res = handle_note_new(&ctx, Some("sprint"), "Retro", None, None, &[], true)
+            .expect("dry-run with explicit template");
+        assert_eq!(override_res["template"], "sprint");
+
+        // show / clear
+        let shown = handle_template_show_default(&ctx).expect("show default");
+        assert_eq!(shown["default_template"], "meeting");
+        let cleared = handle_template_clear_default(&ctx).expect("clear default");
+        assert_eq!(cleared["default_template"], "blank");
+        let blank_res =
+            handle_note_new(&ctx, None, "Quick", None, None, &[], true).expect("dry-run blank");
+        assert_eq!(blank_res["template"], "blank");
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     // ── #3332: config search CLI subcommand ─────────────────────────

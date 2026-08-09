@@ -23,8 +23,30 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // system
             commands::system::ping,
+            // settings
             commands::settings::get_settings,
+            commands::settings::save_settings,
+            // notes
+            commands::notes::list_notes,
+            commands::notes::load_note,
+            commands::notes::save_note,
+            commands::notes::delete_note,
+            commands::notes::find_related_notes,
+            commands::notes::import_markdown,
+            commands::notes::rebuild_index,
+            commands::notes::read_image_preview,
+            commands::notes::open_vault_directory,
+            commands::notes::list_snapshots,
+            commands::notes::get_snapshot,
+            commands::notes::restore_snapshot,
+            // chat
+            commands::chat::load_chat_state,
+            commands::chat::save_chat_state,
+            commands::chat::list_actions,
+            commands::chat::execute_ai_action_cmd,
+            commands::chat::compress_chat_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

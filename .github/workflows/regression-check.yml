@@ -59,7 +59,7 @@ jobs:
             | Mobile | \`mobile/src/__tests__/regression/issue_NNN.test.ts\` |
             | WinUI | \`native/VaultPilot.WinUI.Tests/Regression/IssueNNNTests.cs\` |
 
-            See [\`docs/TESTING.md\`](../docs/TESTING.md) for templates and conventions.
+            See [\`docs/TESTING.md\`](docs/TESTING.md) for templates and conventions.
 
             **Why?** Regression tests prevent the same bug from being reintroduced.`
             })

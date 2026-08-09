@@ -449,13 +449,9 @@ pub async fn ask_with_ai_with_context(
                 end,
             } => {
                 let input = format!("eventId={event_id} start={start} end={end}");
-                let result = crate::agent::move_calendar_event_for_agent(
-                    context,
-                    &event_id,
-                    &start,
-                    &end,
-                )
-                .await;
+                let result =
+                    crate::agent::move_calendar_event_for_agent(context, &event_id, &start, &end)
+                        .await;
                 record_calendar_tool_result(
                     "move_calendar_event",
                     input,
@@ -483,13 +479,8 @@ pub async fn ask_with_ai_with_context(
                 let input = format!("date={date} durationMinutes={duration_minutes}");
                 let result =
                     crate::agent::find_free_slot_for_agent(context, &date, duration_minutes).await;
-                record_calendar_tool_result(
-                    "find_free_slot",
-                    input,
-                    &mut tool_results,
-                    result,
-                )
-                .await;
+                record_calendar_tool_result("find_free_slot", input, &mut tool_results, result)
+                    .await;
             }
             AssistantToolCall::Custom { name, args } => {
                 let tool_identity = format!("custom:{}", name);
@@ -682,7 +673,10 @@ fn planned_tool_identity(tool_call: &AssistantToolCall) -> Option<(&'static str,
             format!("title={title} start={start} end={end}"),
         )),
         AssistantToolCall::MoveCalendarEvent {
-            event_id, start, end, ..
+            event_id,
+            start,
+            end,
+            ..
         } => Some((
             "move_calendar_event",
             format!("eventId={event_id} start={start} end={end}"),

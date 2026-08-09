@@ -2280,9 +2280,7 @@ fn parse_agent_datetime(value: &str) -> anyhow::Result<chrono::DateTime<chrono::
             return Ok(chrono::Utc.from_utc_datetime(&naive));
         }
     }
-    anyhow::bail!(
-        "invalid datetime '{value}', expected ISO 8601 or YYYY-MM-DD HH:MM"
-    )
+    anyhow::bail!("invalid datetime '{value}', expected ISO 8601 or YYYY-MM-DD HH:MM")
 }
 
 pub(crate) async fn get_calendar_events_for_agent(
@@ -2309,7 +2307,11 @@ pub(crate) async fn get_calendar_events_for_agent(
                 e.start.format("%H:%M"),
                 e.end.format("%H:%M"),
                 e.location.as_deref().unwrap_or(""),
-                if e.location.is_some() { "" } else { "no location" }
+                if e.location.is_some() {
+                    ""
+                } else {
+                    "no location"
+                }
             )
         })
         .collect::<Vec<_>>()
@@ -2330,14 +2332,7 @@ pub(crate) async fn create_calendar_event_for_agent(
     let title = title.to_string();
     let location = location.map(str::to_string);
     let event = tokio::task::spawn_blocking(move || {
-        crate::calendar::create_agent_event(
-            &ctx,
-            &title,
-            start,
-            end,
-            location,
-            None,
-        )
+        crate::calendar::create_agent_event(&ctx, &title, start, end, location, None)
     })
     .await??;
     Ok(format!(
@@ -2378,10 +2373,9 @@ pub(crate) async fn cancel_calendar_event_for_agent(
     let ctx = context.clone();
     let event_id = event_id.to_string();
     let event_id_for_message = event_id.clone();
-    let cancelled = tokio::task::spawn_blocking(move || {
-        crate::calendar::cancel_agent_event(&ctx, &event_id)
-    })
-    .await??;
+    let cancelled =
+        tokio::task::spawn_blocking(move || crate::calendar::cancel_agent_event(&ctx, &event_id))
+            .await??;
     if cancelled {
         Ok(format!("Cancelled calendar event {event_id_for_message}."))
     } else {
@@ -2410,7 +2404,9 @@ pub(crate) async fn find_free_slot_for_agent(
         .map(|(s, e)| format!("- {} – {}", s.format("%H:%M"), e.format("%H:%M")))
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(format!("Free {duration_minutes}-minute slots on {day}:\n{lines}"))
+    Ok(format!(
+        "Free {duration_minutes}-minute slots on {day}:\n{lines}"
+    ))
 }
 
 fn tool_display_name(tool: &ai::AssistantToolCall) -> &str {
@@ -2447,7 +2443,10 @@ fn tool_args_summary(tool: &ai::AssistantToolCall) -> String {
             title, start, end, ..
         } => format!("title={title} start={start} end={end}"),
         ai::AssistantToolCall::MoveCalendarEvent {
-            event_id, start, end, ..
+            event_id,
+            start,
+            end,
+            ..
         } => format!("eventId={event_id} start={start} end={end}"),
         ai::AssistantToolCall::CancelCalendarEvent { event_id } => {
             format!("eventId={event_id}")

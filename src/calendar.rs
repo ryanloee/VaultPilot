@@ -523,7 +523,11 @@ pub fn create_agent_event(
         source: "agent".to_string(),
         all_day: false,
     };
-    let written = sync_events(context, AGENT_CALENDAR_PROVIDER, &[event.clone()])?;
+    let written = sync_events(
+        context,
+        AGENT_CALENDAR_PROVIDER,
+        std::slice::from_ref(&event),
+    )?;
     if written == 0 {
         anyhow::bail!("failed to persist calendar event");
     }
@@ -549,8 +553,7 @@ pub fn move_agent_event(
         params![event_id],
         |row| {
             let attendees_json: String = row.get(5)?;
-            let attendees: Vec<String> =
-                serde_json::from_str(&attendees_json).unwrap_or_default();
+            let attendees: Vec<String> = serde_json::from_str(&attendees_json).unwrap_or_default();
             Ok(CalendarEvent {
                 id: row.get(0)?,
                 provider_event_id: row.get(1)?,
@@ -602,7 +605,8 @@ pub fn find_free_slots(
     window_start: Option<chrono::NaiveTime>,
     window_end: Option<chrono::NaiveTime>,
 ) -> Result<Vec<(DateTime<Utc>, DateTime<Utc>)>> {
-    let start_time = window_start.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+    let start_time =
+        window_start.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
     let end_time = window_end.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap());
     if end_time <= start_time {
         anyhow::bail!("free-slot window end must be after start");
@@ -613,16 +617,16 @@ pub fn find_free_slots(
     let end = Utc.from_utc_datetime(&day_end);
 
     let existing = list_cached_events(context, start, end)?;
-    let mut busy: Vec<(DateTime<Utc>, DateTime<Utc>)> = existing
-        .into_iter()
-        .map(|e| (e.start, e.end))
-        .collect();
+    let mut busy: Vec<(DateTime<Utc>, DateTime<Utc>)> =
+        existing.into_iter().map(|e| (e.start, e.end)).collect();
     busy.sort_by_key(|(s, _)| *s);
 
     let mut slots = Vec::new();
     let mut cursor = start;
     for (busy_start, busy_end) in busy {
-        if busy_start > cursor && busy_start.signed_duration_since(cursor).num_minutes() >= duration_minutes {
+        if busy_start > cursor
+            && busy_start.signed_duration_since(cursor).num_minutes() >= duration_minutes
+        {
             slots.push((cursor, busy_start));
         }
         if busy_end > cursor {
@@ -1264,7 +1268,9 @@ END:VCALENDAR\r
         assert!(move_agent_event(&ctx, "agent:nope", new_start, new_end).is_err());
         assert!(cancel_agent_event(&ctx, &created.id).expect("cancel"));
         assert!(!cancel_agent_event(&ctx, &created.id).expect("cancel again"));
-        assert!(list_cached_events(&ctx, start, end).expect("list empty").is_empty());
+        assert!(list_cached_events(&ctx, start, end)
+            .expect("list empty")
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -1285,15 +1291,30 @@ END:VCALENDAR\r
 
         let slots = find_free_slots(&ctx, day, 60, None, None).expect("slots");
         assert_eq!(slots.len(), 2, "expected two free slots, got {slots:?}");
-        assert_eq!(slots[0].0.time(), chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
-        assert_eq!(slots[0].1.time(), chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap());
-        assert_eq!(slots[1].0.time(), chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap());
-        assert_eq!(slots[1].1.time(), chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap());
+        assert_eq!(
+            slots[0].0.time(),
+            chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap()
+        );
+        assert_eq!(
+            slots[0].1.time(),
+            chrono::NaiveTime::from_hms_opt(10, 0, 0).unwrap()
+        );
+        assert_eq!(
+            slots[1].0.time(),
+            chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap()
+        );
+        assert_eq!(
+            slots[1].1.time(),
+            chrono::NaiveTime::from_hms_opt(18, 0, 0).unwrap()
+        );
 
         // A 2h request cannot fit the 09:00-10:00 slot.
         let slots2 = find_free_slots(&ctx, day, 120, None, None).expect("slots 2h");
         assert_eq!(slots2.len(), 1);
-        assert_eq!(slots2[0].0.time(), chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap());
+        assert_eq!(
+            slots2[0].0.time(),
+            chrono::NaiveTime::from_hms_opt(11, 0, 0).unwrap()
+        );
 
         let _ = std::fs::remove_dir_all(&temp);
     }

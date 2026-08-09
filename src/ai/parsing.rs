@@ -564,7 +564,11 @@ pub(super) fn parse_tool_call(
             title: parsed.title.trim().to_string(),
             start: parsed.start.trim().to_string(),
             end: parsed.end.trim().to_string(),
-            location: parsed.location.as_deref().map(str::trim).map(str::to_string),
+            location: parsed
+                .location
+                .as_deref()
+                .map(str::trim)
+                .map(str::to_string),
         }),
         "move_calendar_event" => Ok(AssistantToolCall::MoveCalendarEvent {
             event_id: parsed.event_id.trim().to_string(),

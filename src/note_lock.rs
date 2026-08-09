@@ -43,17 +43,15 @@ pub fn lock_note(vault_dir: &Path, note_id: &str, password: &str) -> Result<()> 
     }
     let path = lock_path(vault_dir, note_id);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("create note-lock directory {}", parent.display())
-        })?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create note-lock directory {}", parent.display()))?;
     }
     let entry = NoteLockEntry {
         password_hash: AppSettings::hash_pin(password),
         locked_at: chrono::Utc::now().to_rfc3339(),
     };
     let bytes = serde_json::to_vec_pretty(&entry)?;
-    fs::write(&path, bytes)
-        .with_context(|| format!("write note lock {}", path.display()))?;
+    fs::write(&path, bytes).with_context(|| format!("write note lock {}", path.display()))?;
     Ok(())
 }
 
@@ -64,8 +62,7 @@ pub fn unlock_note(vault_dir: &Path, note_id: &str, password: &str) -> Result<bo
     if !path.exists() {
         return Ok(false);
     }
-    let bytes = fs::read(&path)
-        .with_context(|| format!("read note lock {}", path.display()))?;
+    let bytes = fs::read(&path).with_context(|| format!("read note lock {}", path.display()))?;
     let entry: NoteLockEntry = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse note lock {}", path.display()))?;
     if !AppSettings::verify_password_hash(&entry.password_hash, password) {

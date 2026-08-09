@@ -1,0 +1,31 @@
+[package]
+name = "vaultpilot-desktop"
+version = "0.1.0"
+description = "VaultPilot desktop frontend (Tauri v2 + React)"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "vaultpilot_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ★ Direct dependency on the existing backend library — zero IPC.
+# Every #[tauri::command] calls vaultpilot_lib functions in-process.
+# (The crate is published as package `vaultpilot`; its lib name is
+# `vaultpilot_lib`, which is what `use vaultpilot_lib::...` refers to.)
+vaultpilot = { path = "../.." }
+tokio = { version = "1", features = ["sync"] }
+anyhow = "1"
+
+[features]
+# By default Tauri bundles the frontend assets shipped by `tauri dev/build`.
+# The custom-protocol feature is enabled at build time by tauri-build.
+custom-protocol = ["tauri/custom-protocol"]

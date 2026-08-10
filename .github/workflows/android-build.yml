@@ -152,9 +152,9 @@ jobs:
           if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
             gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
           fi
-          for apk in vaultpilot-android-*/*.apk; do
-            dir=$(basename "$(dirname "$apk")")
-            abi=${dir#vaultpilot-android-}
+          for apk in $(find vaultpilot-android-* -name '*.apk'); do
+            top=${apk%%/*}
+            abi=${top#vaultpilot-android-}
             abi=${abi%%-*}
             gh release upload "$TAG" "$apk#VaultPilot-${abi}-${TAG}.apk" --clobber
           done

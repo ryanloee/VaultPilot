@@ -243,9 +243,8 @@ jobs:
               -F prerelease="$prerelease" >/dev/null
           fi
 
-          gh release upload "$tag" \
-            release-assets/linux-x64/artifacts/linux-cli/bin/linux-x64/vaultpilot-cli \
-            release-assets/linux-x64/artifacts/linux-cli/packages/linux-x64/*.deb \
-            release-assets/checksums/SHA256SUMS.zip \
-            --clobber
+          find release-assets/linux-x64 -type f \( -name vaultpilot-cli -o -name '*.deb' \) | while read -r f; do
+            gh release upload "$tag" "$f" --clobber
+          done
+          gh release upload "$tag" release-assets/checksums/SHA256SUMS.zip --clobber
           echo "Uploaded Linux CLI assets to release $tag"

@@ -142,7 +142,6 @@ jobs:
       - name: Download APK artifacts
         uses: actions/download-artifact@v8
         with:
-          path: release-assets/android
           pattern: vaultpilot-android-*-${{ github.sha }}
 
       - name: Upload APKs to release
@@ -153,7 +152,7 @@ jobs:
           if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
             gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
           fi
-          for apk in release-assets/android/vaultpilot-android-*/*.apk; do
+          for apk in vaultpilot-android-*/*.apk; do
             dir=$(basename "$(dirname "$apk")")
             abi=${dir#vaultpilot-android-}
             abi=${abi%%-*}

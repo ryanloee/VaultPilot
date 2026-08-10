@@ -181,7 +181,14 @@ jobs:
         run: |
           $conf = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
           $conf.version = "${{ steps.version.outputs.value }}"
-          $conf | ConvertTo-Json -Depth 20 | Set-Content desktop/src-tauri/tauri.conf.json -Encoding utf8
+          # Write without BOM — Windows PowerShell's `-Encoding utf8` adds a
+          # BOM which Tauri's JSON parser rejects ("expected value at line 1").
+          $json = $conf | ConvertTo-Json -Depth 20
+          [System.IO.File]::WriteAllText(
+            (Join-Path $PWD 'desktop/src-tauri/tauri.conf.json'),
+            $json,
+            (New-Object System.Text.UTF8Encoding($false))
+          )
 
       - name: Build Tauri Windows installer
         working-directory: desktop
@@ -192,7 +199,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-package-${{ matrix.platform }}
-          path: desktop/src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis/
+          path: target/${{ matrix.rust_target }}/release/bundle/nsis/
           if-no-files-found: error
           retention-days: 7
 
@@ -279,16 +286,16 @@ jobs:
 
       - name: Verify Linux UI outputs
         run: |
-          test -f desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
-          compgen -G "desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage" > /dev/null
+          test -f target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+          compgen -G "target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage" > /dev/null
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
           name: linux-ui-package-x64
           path: |
-            desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
-            desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 7
 

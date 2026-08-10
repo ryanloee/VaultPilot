@@ -712,6 +712,7 @@ enum Commands {
     },
 
     /// Manage Email-to-Vault integration — sync IMAP emails into your vault (#2187)
+    #[cfg(feature = "email")]
     Mail {
         #[command(subcommand)]
         action: MailActions,
@@ -2398,6 +2399,7 @@ enum TriggerActions {
     },
 }
 
+#[cfg(feature = "email")]
 #[derive(Subcommand)]
 enum MailActions {
     /// Add a new mail account (IMAP)
@@ -3458,6 +3460,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 _ => tokio::task::block_in_place(|| handle_trigger(context, action)),
             }
         }
+        #[cfg(feature = "email")]
         Commands::Mail { action } => handle_mail(context, action).await,
         Commands::Feed { action } => handle_feed(context, action).await,
         Commands::Recovery { action } => {
@@ -8159,6 +8162,7 @@ async fn handle_trigger_start(context: &StorageContext, interval_secs: u64) -> R
     }))
 }
 
+#[cfg(feature = "email")]
 async fn handle_mail(context: &StorageContext, action: &MailActions) -> Result<Value> {
     match action {
         MailActions::Add {

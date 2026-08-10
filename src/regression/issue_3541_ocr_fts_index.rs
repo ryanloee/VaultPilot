@@ -41,13 +41,35 @@ mod tests {
         dir
     }
 
+    /// Removes the temp directory on drop so tests don't leave artifacts behind.
+    struct TempDirGuard(std::path::PathBuf);
+
+    impl std::ops::Deref for TempDirGuard {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// Create a temp directory + initialized StorageContext for testing.
-    fn setup() -> (std::path::PathBuf, crate::storage::StorageContext) {
+    ///
+    /// Returns `(guard, ctx)`. When destructured as `let (vault, ctx) = setup()`,
+    /// locals drop in reverse declaration order: `ctx` (the connection pool
+    /// holding open file handles into the dir) is released before the guard
+    /// removes the dir — required on Windows, where deleting a locked file fails.
+    fn setup() -> (TempDirGuard, crate::storage::StorageContext) {
         let dir = temp_dir();
         std::fs::create_dir_all(dir.join("notes")).expect("create notes dir");
         let ctx = crate::storage::StorageContext::for_test(&dir);
         initialize_storage_with_context(&ctx).expect("init storage");
-        (dir, ctx)
+        (TempDirGuard(dir), ctx)
     }
 
     fn note_doc(id: &str, title: &str, body: &str) -> NoteDocument {

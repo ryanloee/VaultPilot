@@ -44,18 +44,6 @@ jobs:
         shell: powershell
         run: New-Item -ItemType Directory -Force -Path artifacts/logs | Out-Null
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: desktop/pnpm-lock.yaml
-
       - name: Install frontend deps
         working-directory: desktop
         run: pnpm install --frozen-lockfile

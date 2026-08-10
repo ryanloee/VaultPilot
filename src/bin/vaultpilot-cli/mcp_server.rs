@@ -801,7 +801,9 @@ async fn handle_mcp_request(
                 "notes.backlinks" => mcp_call_notes_backlinks(context, arguments).await,
                 "notes.import" => mcp_call_notes_import(context, arguments).await,
                 "index.rebuild" => mcp_call_index_rebuild(context).await,
+                #[cfg(feature = "email")]
                 "email.search" => mcp_call_email_search(context, arguments).await,
+                #[cfg(feature = "email")]
                 "email.get" => mcp_call_email_get(context, arguments).await,
                 "calendar.today" => mcp_call_calendar_today(context).await,
                 "tags.list" => mcp_call_tags_list(context).await,
@@ -1721,6 +1723,7 @@ fn mcp_tools() -> Vec<Value> {
                 "openWorldHint": false
             }
         }),
+        #[cfg(feature = "email")]
         serde_json::json!({
             "name": "email.search",
             "title": "Search Imported Emails",
@@ -1756,6 +1759,7 @@ fn mcp_tools() -> Vec<Value> {
                 "openWorldHint": false
             }
         }),
+        #[cfg(feature = "email")]
         serde_json::json!({
             "name": "email.get",
             "title": "Get Imported Email",
@@ -2723,6 +2727,7 @@ async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
     }
 }
 
+#[cfg(feature = "email")]
 async fn mcp_call_email_search(context: &StorageContext, arguments: Value) -> Value {
     let query = match arguments.get("query").and_then(Value::as_str) {
         Some(q) if !q.is_empty() => q.to_string(),
@@ -2754,6 +2759,7 @@ async fn mcp_call_email_search(context: &StorageContext, arguments: Value) -> Va
     .unwrap_or_else(|join_err| mcp_tool_error(format!("internal error: {join_err}")))
 }
 
+#[cfg(feature = "email")]
 async fn mcp_call_email_get(context: &StorageContext, arguments: Value) -> Value {
     let id = match arguments.get("id").and_then(Value::as_str) {
         Some(id) if !id.is_empty() => id.to_string(),

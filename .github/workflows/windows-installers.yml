@@ -290,6 +290,10 @@ jobs:
           path: |
             target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
             target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            # The AppImage .sig (minisign signature for the updater) lives
+            # next to the bundle; it must be uploaded too or latest.json
+            # cannot carry a Linux signature (#4033).
+            target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.sig
           if-no-files-found: error
           retention-days: 7
 
@@ -338,6 +342,17 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
+          # Read the minisign signature produced by `tauri build` (via
+          # createUpdaterArtifacts + TAURI_SIGNING_PRIVATE_KEY) into the
+          # signature field — empty signatures break every client's update
+          # verification (#4033). tr -d '\n' keeps the JSON on one line.
+          WIN_X64_SIG=$(tr -d '\n' < release-assets/win-x64/*.exe.sig)
+          WIN_X86_SIG=$(tr -d '\n' < release-assets/win-x86/*.exe.sig)
+          LINUX_SIG=$(tr -d '\n' < release-assets/linux-x64/*.AppImage.sig)
+          if [ -z "$WIN_X64_SIG" ] || [ -z "$WIN_X86_SIG" ] || [ -z "$LINUX_SIG" ]; then
+            echo "FAILED: one or more .sig files missing/empty" >&2
+            exit 1
+          fi
           cat > release-assets/latest.json <<EOF
           {
             "version": "$VERSION",
@@ -345,16 +360,16 @@ jobs:
             "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
               "windows-x86_64": {
-                "signature": "",
-                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_x64-setup.exe.sig"
+                "signature": "$WIN_X64_SIG",
+                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_x64-setup.exe"
               },
               "windows-i686": {
-                "signature": "",
-                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_x86-setup.exe.sig"
+                "signature": "$WIN_X86_SIG",
+                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_x86-setup.exe"
               },
               "linux-x86_64": {
-                "signature": "",
-                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_amd64.AppImage.sig"
+                "signature": "$LINUX_SIG",
+                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_amd64.AppImage"
               }
             }
           }

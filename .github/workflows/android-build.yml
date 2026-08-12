@@ -145,6 +145,10 @@ jobs:
           rm -f "$UNSIGNED"
           echo "Signed APK: $APK"
 
+          # Verify the signature actually landed — fail the build if not.
+          "$APKSIGNER" verify --print-certs "$APK" | head -5
+          echo "APK signature verified OK"
+
       - name: Validate APK
         run: |
           APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' | head -n 1)

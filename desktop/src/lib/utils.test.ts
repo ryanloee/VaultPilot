@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cn, formatDate, toNumber } from "./utils";
+import { cn, formatDate, toNumber, numberHeadings } from "./utils";
 
 describe("cn (className combiner)", () => {
   it("joins string classes with a space", () => {
@@ -61,5 +61,52 @@ describe("toNumber (safe numeric conversion)", () => {
     expect(toNumber("", 7)).toBe(7);
     expect(toNumber("   ", 7)).toBe(7);
     expect(toNumber("\t\n", 7)).toBe(7);
+  });
+});
+
+describe("numberHeadings (render-layer heading numbering, #4062)", () => {
+  it("numbers headings hierarchically: 1 / 1.1 / 1.1.2", () => {
+    const md = [
+      "# Title",
+      "intro",
+      "## Section A",
+      "### Sub A1",
+      "### Sub A2",
+      "## Section B",
+      "# Second part",
+    ].join("\n");
+    expect(numberHeadings(md)).toBe(
+      [
+        "# 1 Title",
+        "intro",
+        "## 1.1 Section A",
+        "### 1.1.1 Sub A1",
+        "### 1.1.2 Sub A2",
+        "## 1.2 Section B",
+        "# 2 Second part",
+      ].join("\n")
+    );
+  });
+
+  it("leaves non-heading lines untouched", () => {
+    expect(numberHeadings("plain text\nnot # a heading\n")).toBe("plain text\nnot # a heading\n");
+  });
+
+  it("skips headings inside fenced code blocks", () => {
+    const md = [
+      "# Real heading",
+      "```",
+      "# fake heading inside code",
+      "```",
+      "## Next",
+    ].join("\n");
+    expect(numberHeadings(md)).toBe(
+      ["# 1 Real heading", "```", "# fake heading inside code", "```", "## 1.1 Next"].join("\n")
+    );
+  });
+
+  it("handles tilde fences", () => {
+    const md = ["~~~", "## inside", "~~~", "## after"].join("\n");
+    expect(numberHeadings(md)).toBe(["~~~", "## inside", "~~~", "## 1 after"].join("\n"));
   });
 });

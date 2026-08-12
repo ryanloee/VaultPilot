@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNotesStore } from "@/lib/store";
+import { useNotesStore, useSettingsStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,8 @@ import { cn, formatDate } from "@/lib/utils";
 
 export function NotesView() {
   const { notes, current, loading, error, loadList, open, saveCurrent } = useNotesStore();
+  const settings = useSettingsStore((s) => s.settings);
+  const loadSettings = useSettingsStore((s) => s.load);
   const [editing, setEditing] = useState(false);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [draftBody, setDraftBody] = useState("");
@@ -17,6 +19,12 @@ export function NotesView() {
   useEffect(() => {
     loadList();
   }, [loadList]);
+
+  // Ensure the heading-numbering toggle is known even if the user never
+  // opened the settings view (#4062).
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   const handleOpen = async (id: string) => {
     await open(id);
@@ -132,7 +140,7 @@ export function NotesView() {
             <ScrollArea className="flex-1">
               <article className="mx-auto max-w-3xl p-4 md:p-6">
                 {current.body ? (
-                  <Markdown content={current.body} />
+                  <Markdown content={current.body} numberHeadings={settings?.headingNumbering} />
                 ) : (
                   <p className="text-sm text-muted-foreground">（空笔记）</p>
                 )}

@@ -56,4 +56,10 @@ describe("toNumber (safe numeric conversion)", () => {
   it("returns fallback for Infinity", () => {
     expect(toNumber(Infinity, 7)).toBe(7);
   });
+
+  it("returns fallback for empty/whitespace strings (#4038)", () => {
+    expect(toNumber("", 7)).toBe(7);
+    expect(toNumber("   ", 7)).toBe(7);
+    expect(toNumber("\t\n", 7)).toBe(7);
+  });
 });

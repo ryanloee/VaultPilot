@@ -191,19 +191,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   selectSession: (id) => {
-    console.log("[store] selectSession called with:", id);
     const state = get().chatState;
-    console.log("[store] current chatState currentSessionId:", state?.currentSessionId);
     if (!state) return;
     const session = state.sessions.find((s) => s.id === id);
-    console.log("[store] found session:", session?.id);
     if (session) {
       set({
         currentSessionId: id,
         turns: session.turns ?? [],
         chatState: { ...state, currentSessionId: id },
       });
-      console.log("[store] after set, currentSessionId should be:", id);
     }
   },
 }));

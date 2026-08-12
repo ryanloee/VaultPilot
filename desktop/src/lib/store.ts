@@ -188,6 +188,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       currentSessionId: session.id,
       turns: [],
     }));
+    void persistChatState(get);
   },
 
   selectSession: (id) => {
@@ -200,6 +201,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         turns: session.turns ?? [],
         chatState: { ...state, currentSessionId: id },
       });
+      void persistChatState(get);
     }
   },
 }));

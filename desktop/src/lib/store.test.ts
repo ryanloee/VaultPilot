@@ -94,6 +94,21 @@ describe("useChatStore.newSession", () => {
     expect(s.turns).toEqual([]);
     expect(s.chatState?.sessions[0].id).toBe(s.currentSessionId);
   });
+
+  it("persists the new session to the backend", async () => {
+    useChatStore.setState({ chatState: makeChatState() });
+    useChatStore.getState().newSession();
+    const newId = useChatStore.getState().currentSessionId;
+
+    await vi.waitFor(() => expect(mockApi.saveChatState).toHaveBeenCalled());
+
+    expect(mockApi.saveChatState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentSessionId: newId,
+        sessions: expect.arrayContaining([expect.objectContaining({ id: newId })]),
+      })
+    );
+  });
 });
 
 describe("useChatStore.selectSession", () => {
@@ -124,6 +139,37 @@ describe("useChatStore.selectSession", () => {
     expect(s.currentSessionId).toBe("s2");
     expect(s.turns).toEqual([{ id: "t9", role: "user", text: "b" }]);
     expect(s.chatState?.currentSessionId).toBe("s2");
+  });
+
+  it("persists the selected session to the backend", async () => {
+    useChatStore.setState({
+      chatState: makeChatState({
+        currentSessionId: "s1",
+        sessions: [
+          {
+            id: "s1",
+            title: "会话1",
+            turns: [{ id: "t1", role: "user", text: "a" }],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "s2",
+            title: "会话2",
+            turns: [{ id: "t9", role: "user", text: "b" }],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    });
+    useChatStore.getState().selectSession("s2");
+
+    await vi.waitFor(() => expect(mockApi.saveChatState).toHaveBeenCalled());
+
+    expect(mockApi.saveChatState).toHaveBeenCalledWith(
+      expect.objectContaining({ currentSessionId: "s2" })
+    );
   });
 });
 

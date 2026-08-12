@@ -34,6 +34,7 @@ export function formatDate(iso?: string | null): string {
 /** Clamp a numeric-ish value to a safe integer (avoid NaN in inputs). */
 export function toNumber(v: unknown, fallback: number): number {
   if (v === null || v === undefined) return fallback;
+  if (typeof v === "string" && v.trim() === "") return fallback;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : fallback;
 }

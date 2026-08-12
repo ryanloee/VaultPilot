@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettings,
+  BacklinkEntry,
   ChatState,
   ConversationSummary,
   ConversationTurn,
@@ -69,6 +70,7 @@ const tauriApi = {
   deleteNote: (id: string) => invoke<boolean>("delete_note", { id }),
   findRelatedNotes: (id: string, limit?: number) =>
     invoke<RelatedNote[]>("find_related_notes", { id, limit }),
+  findBacklinks: (id: string) => invoke<BacklinkEntry[]>("find_backlinks", { id }),
   importMarkdown: (paths: string[]) => invoke<unknown>("import_markdown", { paths }),
   rebuildIndex: () => invoke<unknown>("rebuild_index"),
   readImagePreview: (path: string) => invoke<string>("read_image_preview", { path }),

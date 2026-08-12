@@ -30,7 +30,7 @@ use vaultpilot_lib::storage::{
     create_subscription_with_context, create_trigger_rule_with_context,
     delete_collection_with_context, delete_note_with_context, delete_project_with_context,
     delete_subscription_with_context, delete_trigger_rule_with_context,
-    export_all_notes_with_context, export_note_markdown_with_context,
+    export_all_notes_with_context, export_note_markdown_with_context, find_backlinks_with_context,
     find_related_notes_with_context, get_collections_for_note_with_context,
     get_project_with_context, get_subscription_with_context, get_trigger_rule_with_context,
     import_markdown_with_context, initialize_storage_with_context, list_all_notes_with_context,
@@ -1645,6 +1645,13 @@ enum NotesActions {
         /// Maximum results
         #[arg(long, default_value = "5")]
         limit: usize,
+    },
+
+    /// List notes that link back to a given note (`[[Title]]` wikilinks,
+    /// case-insensitive) (#4061)
+    Backlinks {
+        /// Note ID whose backlinks to find
+        id: String,
     },
 
     /// Apply an AI quick-action to a note's content inline (#1914)
@@ -4892,6 +4899,10 @@ fn handle_notes(context: &StorageContext, action: &NotesActions) -> Result<Value
         }
         NotesActions::Related { id, limit } => {
             let results = find_related_notes_with_context(context, id, *limit)?;
+            to_json(&results)
+        }
+        NotesActions::Backlinks { id } => {
+            let results = find_backlinks_with_context(context, id)?;
             to_json(&results)
         }
         // NotesActions::Ai is handled by handle_note_ai (async) in handle_command.

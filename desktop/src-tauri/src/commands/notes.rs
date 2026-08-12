@@ -8,9 +8,9 @@ use crate::state::AppState;
 use std::path::Path;
 use vaultpilot_lib::models::NoteDocument;
 use vaultpilot_lib::storage::{
-    delete_note_async, find_related_notes_async, get_snapshot_async, import_markdown_async,
-    list_notes_async, list_snapshots_for_note_async, load_note_async, rebuild_index_async,
-    restore_snapshot_async, save_note_async,
+    delete_note_async, find_backlinks_async, find_related_notes_async, get_snapshot_async,
+    import_markdown_async, list_notes_async, list_snapshots_for_note_async, load_note_async,
+    rebuild_index_async, restore_snapshot_async, save_note_async,
 };
 
 #[tauri::command]
@@ -60,6 +60,17 @@ pub async fn find_related_notes(
     limit: Option<usize>,
 ) -> Result<serde_json::Value, String> {
     let v = find_related_notes_async(&state.storage, &id, limit.unwrap_or(5))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_value(&v).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn find_backlinks(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let v = find_backlinks_async(&state.storage, &id)
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&v).map_err(|e| e.to_string())

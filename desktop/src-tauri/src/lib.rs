@@ -54,6 +54,7 @@ pub fn run() {
             commands::notes::save_note,
             commands::notes::delete_note,
             commands::notes::find_related_notes,
+            commands::notes::find_backlinks,
             commands::notes::import_markdown,
             commands::notes::rebuild_index,
             commands::notes::read_image_preview,

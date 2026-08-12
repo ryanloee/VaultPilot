@@ -14,6 +14,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // On mobile (Android/iOS) the OS does not set the APPDATA /
             // LOCALAPPDATA / HOME environment variables that

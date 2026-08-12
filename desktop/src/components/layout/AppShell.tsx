@@ -6,9 +6,11 @@ import { StatusBar } from "./StatusBar";
 import { ChatView } from "@/components/chat/ChatView";
 import { NotesView } from "@/components/notes/NotesView";
 import { SettingsView } from "@/components/settings/SettingsView";
+import { useAutoUpdater } from "@/hooks/useAutoUpdater";
 
 export function AppShell() {
   const [view, setView] = useState<ViewId>("chat");
+  useAutoUpdater();
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">

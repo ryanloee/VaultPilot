@@ -100,6 +100,51 @@ jobs:
         working-directory: desktop
         run: pnpm tauri android build --target ${{ matrix.abi }} --apk
 
+      # v0.7.16 shipped unsigned APKs — Android refuses to install them.
+      # Sign the release APK with a keystore generated on the fly. The same
+      # keystore is regenerated per-build (self-signed), so sideloaded
+      # installs work; a stable production keystore can be added later.
+      - name: Sign APK
+        run: |
+          set -euo pipefail
+          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "FAILED: APK not found for signing"
+            exit 1
+          fi
+          KEYSTORE="$RUNNER_TEMP/release.keystore"
+          KS_PASS="${ANDROID_KEYSTORE_PASSWORD:-vaultpilot}"
+          ALIAS="${ANDROID_KEY_ALIAS:-vaultpilot}"
+          KEY_PASS="${ANDROID_KEY_PASSWORD:-vaultpilot}"
+
+          keytool -genkeypair -v \
+            -keystore "$KEYSTORE" \
+            -storepass "$KS_PASS" \
+            -alias "$ALIAS" \
+            -keypass "$KEY_PASS" \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=VaultPilot, OU=Mobile, O=VaultPilot, L=City, ST=State, C=CN" \
+            >/dev/null 2>&1
+
+          # Locate apksigner (bundled with Android SDK build-tools).
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "FAILED: apksigner not found"
+            exit 1
+          fi
+
+          UNSIGNED="${APK%.apk}-unsigned.apk"
+          cp "$APK" "$UNSIGNED"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE" \
+            --ks-pass "pass:$KS_PASS" \
+            --key-pass "pass:$KEY_PASS" \
+            --ks-key-alias "$ALIAS" \
+            --out "$APK" \
+            "$UNSIGNED"
+          rm -f "$UNSIGNED"
+          echo "Signed APK: $APK"
+
       - name: Validate APK
         run: |
           APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' | head -n 1)

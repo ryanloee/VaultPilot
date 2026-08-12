@@ -181,6 +181,9 @@ jobs:
       - name: Build Tauri Windows installer
         working-directory: desktop
         shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --bundles nsis --target ${{ matrix.rust_target }}
 
       - name: Upload workflow artifact
@@ -270,6 +273,9 @@ jobs:
 
       - name: Build Tauri Linux package (deb + AppImage)
         working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --bundles deb,appimage --target x86_64-unknown-linux-gnu
 
       - name: Verify Linux UI outputs
@@ -325,6 +331,36 @@ jobs:
           cat release-assets/checksums/SHA256SUMS
           (cd release-assets/checksums && zip -q SHA256SUMS.zip SHA256SUMS)
 
+      # Tauri updater needs latest.json at the endpoint root. The updater
+      # plugin fetches it, compares versions, and verifies the .sig of the
+      # downloaded installer against the embedded public key.
+      - name: Generate updater latest.json
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          cat > release-assets/latest.json <<EOF
+          {
+            "version": "$VERSION",
+            "notes": "VaultPilot $VERSION",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "",
+                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_x64-setup.exe.sig"
+              },
+              "windows-i686": {
+                "signature": "",
+                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_x86-setup.exe.sig"
+              },
+              "linux-x86_64": {
+                "signature": "",
+                "url": "https://github.com/ryanloee/VaultPilot/releases/download/$TAG/VaultPilot_${VERSION}_amd64.AppImage.sig"
+              }
+            }
+          }
+          EOF
+          cat release-assets/latest.json
+
       - name: Publish release assets
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -336,8 +372,10 @@ jobs:
 
           find release-assets -type f \( \
             -name '*-setup.exe' -o \
+            -name '*.sig' -o \
             -name '*.deb' -o \
             -name '*.AppImage' -o \
-            -name 'SHA256SUMS.zip' \) | sort | while read -r f; do
+            -name 'SHA256SUMS.zip' -o \
+            -name 'latest.json' \) | sort | while read -r f; do
             gh release upload "$TAG" "$f" --clobber
           done

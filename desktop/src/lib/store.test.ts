@@ -175,7 +175,7 @@ describe("useChatStore.selectSession", () => {
 
 describe("useChatStore.send", () => {
   it("appends user turn optimistically then the assistant reply", async () => {
-    useChatStore.setState({ chatState: makeChatState(), turns: [] });
+    useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });
     mockApi.askWithAi.mockResolvedValue({ answer: "AI 回复", usedContextCount: 0 });
     await useChatStore.getState().send("问题");
     const s = useChatStore.getState();
@@ -192,7 +192,7 @@ describe("useChatStore.send", () => {
   });
 
   it("records an error and clears sending when the AI call fails", async () => {
-    useChatStore.setState({ chatState: makeChatState(), turns: [] });
+    useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });
     mockApi.askWithAi.mockRejectedValue(new Error("ai timeout"));
     await useChatStore.getState().send("问题");
     const s = useChatStore.getState();
@@ -200,5 +200,103 @@ describe("useChatStore.send", () => {
     expect(s.sending).toBe(false);
     // user turn stays (optimistic), no assistant turn
     expect(s.turns).toHaveLength(1);
+  });
+
+  it("routes the reply to the initiating session when the user switches away mid-flight (#4060)", async () => {
+    let resolveAsk!: (v: { answer: string; usedContextCount: number }) => void;
+    mockApi.askWithAi.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAsk = resolve;
+      })
+    );
+    useChatStore.setState({
+      chatState: makeChatState({
+        sessions: [
+          {
+            id: "s1",
+            title: "会话1",
+            turns: [{ id: "t1", role: "user", text: "a" }],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "s2",
+            title: "会话2",
+            turns: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+      currentSessionId: "s1",
+      turns: [{ id: "t1", role: "user", text: "a" }],
+    });
+
+    const sendPromise = useChatStore.getState().send("问题");
+    // While the AI is still responding, switch to session s2.
+    useChatStore.getState().selectSession("s2");
+    expect(useChatStore.getState().turns).toEqual([]);
+
+    resolveAsk({ answer: "AI 回复", usedContextCount: 0 });
+    await sendPromise;
+
+    const s = useChatStore.getState();
+    // The view is still s2 and must NOT contain the reply.
+    expect(s.currentSessionId).toBe("s2");
+    expect(s.turns).toEqual([]);
+    // The optimistic user turn + reply landed in the initiating session s1.
+    const s1 = s.chatState!.sessions.find((x) => x.id === "s1")!;
+    expect(s1.turns).toMatchObject([
+      { role: "user", text: "a" },
+      { role: "user", text: "问题" },
+      { role: "assistant", text: "AI 回复" },
+    ]);
+    // s2 untouched.
+    const s2 = s.chatState!.sessions.find((x) => x.id === "s2")!;
+    expect(s2.turns).toEqual([]);
+  });
+
+  it("routes the reply to the initiating session when a new session is created mid-flight (#4060)", async () => {
+    let resolveAsk!: (v: { answer: string; usedContextCount: number }) => void;
+    mockApi.askWithAi.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAsk = resolve;
+      })
+    );
+    useChatStore.setState({
+      chatState: makeChatState({
+        sessions: [
+          {
+            id: "s1",
+            title: "会话1",
+            turns: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+      currentSessionId: "s1",
+      turns: [],
+    });
+
+    const sendPromise = useChatStore.getState().send("问题");
+    // While the AI is still responding, create a new session.
+    useChatStore.getState().newSession();
+    const newId = useChatStore.getState().currentSessionId;
+    expect(useChatStore.getState().turns).toEqual([]);
+
+    resolveAsk({ answer: "AI 回复", usedContextCount: 0 });
+    await sendPromise;
+
+    const s = useChatStore.getState();
+    // The new session view must NOT contain the reply.
+    expect(s.currentSessionId).toBe(newId);
+    expect(s.turns).toEqual([]);
+    // The reply + optimistic user turn landed in the initiating session s1.
+    const s1 = s.chatState!.sessions.find((x) => x.id === "s1")!;
+    expect(s1.turns).toMatchObject([
+      { role: "user", text: "问题" },
+      { role: "assistant", text: "AI 回复" },
+    ]);
   });
 });

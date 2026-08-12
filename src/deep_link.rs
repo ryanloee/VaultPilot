@@ -235,19 +235,19 @@ pub fn parse_deep_link(uri: &str) -> DeepLinkAction {
             xcallback,
         },
         ["note", _] => DeepLinkAction::OpenNote {
-            note_id: url_decode(segments[1]),
+            note_id: url_decode_path(segments[1]),
             xcallback,
         },
         ["note", "open", _] => DeepLinkAction::OpenNote {
-            note_id: url_decode(segments[2]),
+            note_id: url_decode_path(segments[2]),
             xcallback,
         },
         ["note", "delete", _] => DeepLinkAction::DeleteNote {
-            note_id: Some(url_decode(segments[2])),
+            note_id: Some(url_decode_path(segments[2])),
             xcallback,
         },
         ["note", "edit", _] => DeepLinkAction::EditNote {
-            note_id: Some(url_decode(segments[2])),
+            note_id: Some(url_decode_path(segments[2])),
             xcallback,
         },
         ["daily"] => DeepLinkAction::Daily { xcallback },
@@ -306,8 +306,29 @@ fn strip_scheme(uri: &str) -> Option<String> {
     }
 }
 
-/// URL-decode a percent-encoded value (the subset used in query strings).
-fn url_decode(input: &str) -> String {
+/// Percent-decode a path segment (RFC 3986): `%XX` → byte, and a literal `+`
+/// stays a literal `+` (it is only a space in form-encoded query strings).
+fn url_decode_path(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Some(b) = hex_pair(bytes[i + 1], bytes[i + 2]) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Form-decode a query-string value: percent-decode plus `+` → space
+/// (`application/x-www-form-urlencoded` semantics).
+fn url_decode_query(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -349,7 +370,7 @@ fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
         .filter(|p| !p.is_empty())
         .filter_map(|pair| {
             let (k, v) = pair.split_once('=')?;
-            Some((url_decode(k), url_decode(v)))
+            Some((url_decode_query(k), url_decode_query(v)))
         })
         .collect()
 }
@@ -1155,13 +1176,70 @@ mod tests {
     }
 
     #[test]
-    fn test_url_decode() {
-        assert_eq!(url_decode("Hello%20World"), "Hello World");
-        assert_eq!(url_decode("a+b"), "a b");
-        assert_eq!(url_decode("100%25"), "100%");
-        assert_eq!(url_decode("plain"), "plain");
+    fn test_url_decode_path() {
+        assert_eq!(url_decode_path("Hello%20World"), "Hello World");
+        // A literal '+' is preserved in path segments (RFC 3986) — not a space.
+        assert_eq!(url_decode_path("My+Note"), "My+Note");
+        assert_eq!(url_decode_path("100%25"), "100%");
+        assert_eq!(url_decode_path("plain"), "plain");
         // Malformed percent-encoding is left as-is.
-        assert_eq!(url_decode("%ZZ"), "%ZZ");
+        assert_eq!(url_decode_path("%ZZ"), "%ZZ");
+    }
+
+    #[test]
+    fn test_url_decode_query() {
+        assert_eq!(url_decode_query("Hello%20World"), "Hello World");
+        // Form-encoded query values: '+' means space.
+        assert_eq!(url_decode_query("a+b"), "a b");
+        assert_eq!(url_decode_query("100%25"), "100%");
+        assert_eq!(url_decode_query("plain"), "plain");
+        // Malformed percent-encoding is left as-is.
+        assert_eq!(url_decode_query("%ZZ"), "%ZZ");
+    }
+
+    #[test]
+    fn test_plus_literal_in_note_id_path_segments() {
+        // Regression (#4047): a literal '+' in a path segment must not be
+        // decoded to a space, otherwise `My+Note` and `My%2BNote` — two
+        // spellings of the same id — resolve to different note ids.
+        for uri in [
+            "vaultpilot://note/My+Note",
+            "vaultpilot://note/My%2BNote",
+            "vaultpilot://note/open/My+Note",
+            "vaultpilot://note/open/My%2BNote",
+        ] {
+            match parse_deep_link(uri) {
+                DeepLinkAction::OpenNote { note_id, .. } => {
+                    assert_eq!(note_id, "My+Note", "uri: {uri}");
+                }
+                other => panic!("expected OpenNote for {uri}, got {other:?}"),
+            }
+        }
+        for uri in [
+            "vaultpilot://note/delete/My+Note",
+            "vaultpilot://note/delete/My%2BNote",
+            "vaultpilot://note/edit/My+Note",
+            "vaultpilot://note/edit/My%2BNote",
+        ] {
+            match parse_deep_link(uri) {
+                DeepLinkAction::DeleteNote { note_id, .. }
+                | DeepLinkAction::EditNote { note_id, .. } => {
+                    assert_eq!(note_id.as_deref(), Some("My+Note"), "uri: {uri}");
+                }
+                other => panic!("expected Delete/EditNote for {uri}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_plus_still_space_in_query_values() {
+        // Query values keep form-decoding: '+' → space (#4047 must not regress this).
+        match parse_deep_link("vaultpilot://note/delete?id=My+Note") {
+            DeepLinkAction::DeleteNote { note_id, .. } => {
+                assert_eq!(note_id.as_deref(), Some("My Note"));
+            }
+            other => panic!("expected DeleteNote, got {other:?}"),
+        }
     }
 
     #[test]

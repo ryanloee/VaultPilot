@@ -14,7 +14,7 @@ When fixing a bug in VaultPilot, follow this exact workflow:
 
 ### Step 1: Understand the Bug
 - Read the issue description and reproduction steps
-- Identify the affected module (CLI/Rust, Mobile/TS, WinUI/C#)
+- Identify the affected module (CLI/Rust, Mobile/TS, Desktop/TS)
 - Find the root cause in the source code
 
 ### Step 2: Write a Failing Regression Test FIRST (TDD)
@@ -44,10 +44,10 @@ cargo test regression_NNN
 **For Desktop UI (Tauri / React):**
 ```bash
 # Create the test file under desktop/src/ (alongside the module under test)
-# desktop/src/__tests__/issue_NNN.test.ts(x)
+# desktop/src/issue_NNN.test.ts
 
 # Run and confirm it FAILS, then passes with the fix
-cd desktop && pnpm vitest issue_NNN   # when vitest is wired up
+cd desktop && pnpm vitest run issue_NNN
 pnpm build                            # type check + build gate
 ```
 

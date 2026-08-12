@@ -1133,6 +1133,7 @@ mod tests {
             custom_tools: Vec::new(),
             is_always_on_top: false,
             smart_paste_enabled: true,
+            heading_numbering: true,
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
             session_tabs: Vec::new(),
             active_tab_index: None,
@@ -1148,6 +1149,8 @@ mod tests {
         // #1928: compression settings persist across save/load.
         assert!(loaded.context_compression);
         assert_eq!(loaded.compression_threshold, 0.9);
+        // #4062: heading-numbering toggle persists across save/load.
+        assert!(loaded.heading_numbering);
     }
 
     #[test]

@@ -1,10 +1,12 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn } from "@/lib/utils";
+import { cn, numberHeadings } from "@/lib/utils";
 
 type MarkdownProps = {
   content: string;
   className?: string;
+  /** Render-layer heading auto-numbering (1 / 1.1 / 1.1.2…) (#4062). */
+  numberHeadings?: boolean;
 };
 
 /**
@@ -12,7 +14,8 @@ type MarkdownProps = {
  * `prose-chat` container — keeps chat bubbles compact while supporting GFM
  * tables, lists, code blocks, etc. Wikilink handling lands in a later stage.
  */
-export function Markdown({ content, className }: MarkdownProps) {
+export function Markdown({ content, className, numberHeadings: numbered }: MarkdownProps) {
+  const rendered = numbered ? numberHeadings(content) : content;
   return (
     <div className={cn("vp-md text-sm leading-relaxed", className)}>
       <ReactMarkdown
@@ -45,7 +48,7 @@ export function Markdown({ content, className }: MarkdownProps) {
           td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
         }}
       >
-        {content}
+        {rendered}
       </ReactMarkdown>
     </div>
   );

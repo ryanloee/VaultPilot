@@ -282,6 +282,11 @@ pub struct AppSettings {
     /// default to match Obsidian/Notion/Slack/Figma behaviour.
     #[serde(default = "default_smart_paste_enabled")]
     pub smart_paste_enabled: bool,
+    /// Auto-number headings in the markdown renderer (1 / 1.1 / 1.1.2…),
+    /// matching SiYuan v3.8.0 #522. Render-layer only — note source files
+    /// are never modified. Off by default (#4062).
+    #[serde(default)]
+    pub heading_numbering: bool,
     /// Behavior when deleting a note that references attachments (images,
     /// audio, PDFs, …) that are exclusive to it (#3718, parity with Obsidian
     /// 1.12.0). Defaults to `Ask` — the platform UI prompts the user; the
@@ -383,6 +388,7 @@ impl Default for AppSettings {
             custom_tools: Vec::new(),
             is_always_on_top: false,
             smart_paste_enabled: default_smart_paste_enabled(),
+            heading_numbering: false,
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
             session_tabs: Vec::new(),
             active_tab_index: None,
@@ -748,6 +754,7 @@ mod tests {
             custom_tools: Vec::new(),
             is_always_on_top: false,
             smart_paste_enabled: true,
+            heading_numbering: true,
             attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
             session_tabs: Vec::new(),
             active_tab_index: None,

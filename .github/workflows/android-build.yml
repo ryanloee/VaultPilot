@@ -146,7 +146,10 @@ jobs:
           echo "Signed APK: $APK"
 
           # Verify the signature actually landed — fail the build if not.
-          "$APKSIGNER" verify --print-certs "$APK" | head -5
+          # Note: no `| head -5` here — under `set -o pipefail`, head closing
+          # the pipe early sends apksigner a SIGPIPE (exit 141) even when the
+          # signature is valid, making successful builds flake (#4034).
+          "$APKSIGNER" verify --print-certs "$APK"
           echo "APK signature verified OK"
 
       - name: Validate APK

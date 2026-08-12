@@ -136,11 +136,11 @@ mod tests {
 
 ---
 
-## Regression Test Template (TypeScript / Jest)
+## Regression Test Template (TypeScript / Vitest)
 
 Copy into a test file next to the module under test under `desktop/src/` (or into `src/regression/` for shared-backend bugs)
-or `issue_NNN.test.tsx` (component/JSX tests). Jest matches both extensions via
-`--testPathPattern`.
+or `issue_NNN.test.tsx` (component/JSX tests). Vitest picks up both extensions
+automatically — run from `desktop/` with `pnpm vitest run issue_NNN`.
 
 ```typescript
 /**
@@ -174,15 +174,14 @@ describe('Regression: Issue #NNN', () => {
 ```yaml
 # .github/workflows/ci.yml
 cargo test --workspace   # runs ALL tests including regression
+pnpm vitest run          # desktop frontend tests (desktop/), incl. regression
 ```
 
-### Mobile CI (when enabled)
+### Mobile CI (not yet configured)
 
-```yaml
-- name: Run mobile regression tests
-  working-directory: mobile
-  run: npx jest --testPathPattern=regression
-```
+> **Note:** `mobile/` has no test runner configured yet (no jest/vitest setup in
+> `mobile/package.json`). Do not wire Jest into CI — add a runner first, then
+> document the command here.
 
 ---
 

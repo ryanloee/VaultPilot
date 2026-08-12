@@ -146,6 +146,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   send: async (text) => {
     if (get().sending || !text.trim()) return;
+    // Snapshot the session that initiates the request: the reply must be
+    // written back to THIS session even if the user switches sessions or
+    // creates a new one while the AI is still responding (#4060).
+    const sessionId = get().currentSessionId;
+    if (!sessionId) return;
     set({ sending: true, status: null, error: null });
 
     // Append the user message immediately (optimistic).
@@ -157,6 +162,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const history: ConversationTurn[] = get().turns.map((t) => ({ role: t.role, text: t.text }));
     set((s) => ({ turns: [...s.turns, userTurn] }));
 
+    // Snapshot the initiating session's turn list right after the optimistic
+    // append — the reply is appended to this snapshot, never to whatever
+    // session happens to be selected when the response arrives.
+    const turnsAtSend = get().turns;
+
     try {
       const result = await api.askWithAi(text, history, null, null);
       const assistantTurn: ChatTurn = {
@@ -164,7 +174,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         role: "assistant",
         text: result.answer,
       };
-      set((s) => ({ turns: [...s.turns, assistantTurn] }));
+      const stillOnInitiatingSession = get().currentSessionId === sessionId;
+      set((s) => {
+        const chatState = s.chatState;
+        if (!chatState) return {};
+        const finalTurns = [...turnsAtSend, assistantTurn];
+        const sessions = chatState.sessions.map((sess) =>
+          sess.id === sessionId
+            ? { ...sess, turns: finalTurns, updatedAt: new Date().toISOString() }
+            : sess
+        );
+        return {
+          chatState: { ...chatState, sessions },
+          // Only touch the active view if the initiating session is still selected.
+          ...(stillOnInitiatingSession ? { turns: finalTurns } : {}),
+        };
+      });
 
       // Persist chat state in the background.
       void persistChatState(get);

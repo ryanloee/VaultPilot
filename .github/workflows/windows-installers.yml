@@ -348,7 +348,7 @@ jobs:
           # verification (#4033). tr -d '\n' keeps the JSON on one line.
           WIN_X64_SIG=$(tr -d '\n' < release-assets/win-x64/*.exe.sig)
           WIN_X86_SIG=$(tr -d '\n' < release-assets/win-x86/*.exe.sig)
-          LINUX_SIG=$(tr -d '\n' < release-assets/linux-x64/*.AppImage.sig)
+          LINUX_SIG=$(tr -d '\n' < release-assets/linux-x64/appimage/*.AppImage.sig)
           if [ -z "$WIN_X64_SIG" ] || [ -z "$WIN_X86_SIG" ] || [ -z "$LINUX_SIG" ]; then
             echo "FAILED: one or more .sig files missing/empty" >&2
             exit 1

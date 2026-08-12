@@ -179,6 +179,14 @@ export function SettingsView() {
               placeholder="附加到每次对话的系统提示词"
             />
           </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={!!draft.headingNumbering}
+              onChange={(e) => setDraft({ ...draft, headingNumbering: e.target.checked })}
+            />
+            笔记标题自动编号（1 / 1.1 / 1.1.2…，仅渲染层，不修改源文件）
+          </label>
         </section>
 
         {error && (

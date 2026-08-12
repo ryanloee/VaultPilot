@@ -47,6 +47,8 @@ export type AppSettings = {
   proxyUrl?: string;
   systemDirective?: string;
   privacyMode?: boolean;
+  /** Auto-number note headings in the renderer (1 / 1.1 / 1.1.2…) (#4062). */
+  headingNumbering?: boolean;
   embeddingProvider?: string;
 };
 

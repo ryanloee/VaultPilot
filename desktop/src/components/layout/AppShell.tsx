@@ -13,7 +13,7 @@ export function AppShell() {
   useAutoUpdater();
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="flex min-h-0 flex-1">
         <div className="hidden md:flex">
           <ActivityBar active={view} onSelect={setView} />

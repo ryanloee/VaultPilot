@@ -80,6 +80,54 @@ pub(crate) fn is_masked_form_of(candidate: &str, real_key: &str) -> bool {
     }
 }
 
+/// Decrypt every stored API key in `parsed` (legacy single provider + the
+/// `providers[]` list) using one shared fallback policy.
+///
+/// 2026-08-13 事故修复：解密失败不再传播错误拖垮整个应用（机器 key 变化/升级
+/// 遗留时）。降级策略在两个加载路径间保持一致（#4072）：
+/// - 解密失败 → **保留加密 blob**，不置空——置空会让下一次保存用 "" 覆盖磁盘上
+///   的加密串，永久丢失存储的 key（#4073, #4080）。
+/// - key 为空**或仍为加密串**（解密失败）→ 尝试 OS keychain（#3159）：机器 key
+///   变化不会使 keychain 条目失效，这是可恢复副本。对主 provider 和 providers[]
+///   应用同一回退，使 `effective_provider()` 在 keychain 可恢复时永远拿不到
+///   不可解密的 blob 作为 live key（#4072）。
+fn decrypt_api_keys_with_fallback(parsed: &mut AppSettings) {
+    if !parsed.provider.api_key.is_empty() {
+        parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "failed to decrypt stored API key: {e:#} — key kept as encrypted blob, re-enter in Settings"
+                );
+                parsed.provider.api_key.clone() // keep encrypted blob on disk
+            });
+    }
+    if parsed.provider.api_key.is_empty() || crate::crypto::is_encrypted(&parsed.provider.api_key) {
+        if let Ok(Some(kc_key)) =
+            crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&parsed.provider.name))
+        {
+            parsed.provider.api_key = kc_key;
+        }
+    }
+    for p in &mut parsed.providers {
+        if !p.api_key.is_empty() {
+            p.api_key = crate::crypto::decrypt_secret(&p.api_key).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "failed to decrypt provider API key '{}': {e:#} — key kept as encrypted blob, re-enter in Settings",
+                    p.name
+                );
+                p.api_key.clone() // keep encrypted blob on disk
+            });
+        }
+        if p.api_key.is_empty() || crate::crypto::is_encrypted(&p.api_key) {
+            if let Ok(Some(kc_key)) =
+                crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&p.name))
+            {
+                p.api_key = kc_key;
+            }
+        }
+    }
+}
+
 /// Load settings directly from the disk file, bypassing the in-memory cache.
 /// Returns `Err` if the file doesn't exist or can't be parsed, which is
 /// perfectly normal on first run — callers should use `Result<Option<..>>`
@@ -100,40 +148,8 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
     // （机器 key 变化/升级遗留时，笔记、设置等全部功能会挂掉）。
     // 降级为保留原加密值 + 警告——UI 会显示"重新输入 key"，
     // 保存时掩码保护（#3566）仍能识别磁盘上的加密串不被覆盖。
-    if !parsed.provider.api_key.is_empty() {
-        parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
-            .unwrap_or_else(|e| {
-                tracing::warn!("failed to decrypt stored API key: {e:#} — re-enter in Settings");
-                parsed.provider.api_key.clone() // keep encrypted blob on disk
-            });
-    }
-    // If the file has an empty key (or decryption produced empty), try the OS
-    // keychain as an alternative store (#3159).
-    if parsed.provider.api_key.is_empty() {
-        if let Ok(Some(kc_key)) =
-            crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&parsed.provider.name))
-        {
-            parsed.provider.api_key = kc_key;
-        }
-    }
-    for p in &mut parsed.providers {
-        if !p.api_key.is_empty() {
-            p.api_key = crate::crypto::decrypt_secret(&p.api_key).unwrap_or_else(|e| {
-                tracing::warn!(
-                    "failed to decrypt provider API key '{}': {e:#} — re-enter in Settings",
-                    p.name
-                );
-                p.api_key.clone() // keep encrypted blob on disk
-            });
-        }
-        if p.api_key.is_empty() {
-            if let Ok(Some(kc_key)) =
-                crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&p.name))
-            {
-                p.api_key = kc_key;
-            }
-        }
-    }
+    // 主 provider 与 providers[] 使用同一回退策略（#4072, #4073, #4080）。
+    decrypt_api_keys_with_fallback(&mut parsed);
     parsed.migrate_providers();
     normalize_settings(&mut parsed, paths);
     Ok(parsed)
@@ -209,42 +225,11 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         // Decrypt API key if it was stored encrypted.
         // #867: Propagate decryption errors so callers can distinguish
         // between "no key" and "key present but undecryptable".
-        if !parsed.provider.api_key.is_empty() {
-            parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
-                .unwrap_or_else(|e| {
-                    // 2026-08-13 事故修复：解密失败降级为 key 置空 + 警告，
-                    // 不拖垮笔记/设置等功能（机器 key 变化或升级遗留时）。
-                    tracing::warn!("failed to decrypt stored API key: {e:#} — key cleared, re-enter in Settings");
-                    String::new()
-                });
-        }
-        // If the file has an empty key, try the OS keychain (#3159).
-        if parsed.provider.api_key.is_empty() {
-            if let Ok(Some(kc_key)) =
-                crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&parsed.provider.name))
-            {
-                parsed.provider.api_key = kc_key;
-            }
-        }
-        // Decrypt keys in multi-provider list.
-        for p in &mut parsed.providers {
-            if !p.api_key.is_empty() {
-                p.api_key = crate::crypto::decrypt_secret(&p.api_key).unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "failed to decrypt provider API key '{}': {e:#} — re-enter in Settings",
-                        p.name
-                    );
-                    p.api_key.clone() // keep encrypted blob on disk
-                });
-            }
-            if p.api_key.is_empty() {
-                if let Ok(Some(kc_key)) =
-                    crate::keychain::KEYCHAIN.get(&crate::keychain::account_key(&p.name))
-                {
-                    p.api_key = kc_key;
-                }
-            }
-        }
+        // 2026-08-13 事故修复：解密失败降级为保留加密 blob + 警告，不拖垮
+        // 笔记/设置等功能（机器 key 变化或升级遗留时），并与 load_settings_raw
+        // 使用同一回退策略（#4072, #4073, #4080）——不再置空，避免下一次保存
+        // 用 "" 覆盖磁盘上的加密串。
+        decrypt_api_keys_with_fallback(&mut parsed);
         // Migrate legacy single provider into providers list.
         parsed.migrate_providers();
 
@@ -331,20 +316,29 @@ pub fn save_settings_with_context(
             // string. Fall back to is_masked_key + is_encrypted: if the
             // incoming value looks like a mask and the existing value is
             // encrypted, preserve the encrypted key.
-            if existing_settings.provider.api_key != settings.provider.api_key
-                && !settings.provider.api_key.is_empty()
-            {
-                if is_masked_form_of(
-                    &settings.provider.api_key,
-                    &existing_settings.provider.api_key,
-                ) {
-                    settings.provider.api_key = existing_settings.provider.api_key.clone();
-                } else if is_masked_key(&settings.provider.api_key)
+            if existing_settings.provider.api_key != settings.provider.api_key {
+                if settings.provider.api_key.is_empty()
                     && crate::crypto::is_encrypted(&existing_settings.provider.api_key)
                 {
-                    // Fallback path: raw JSON has encrypted key, incoming is
-                    // a display mask — preserve the encrypted real key (#3566).
+                    // #4073/#4080: an empty incoming key over an undecryptable
+                    // ENC blob is the decrypt-failure fallback (machine key
+                    // changed), NOT the user clearing the key. Preserve the
+                    // blob so the next save cannot wipe the only stored
+                    // credential.
                     settings.provider.api_key = existing_settings.provider.api_key.clone();
+                } else if !settings.provider.api_key.is_empty() {
+                    if is_masked_form_of(
+                        &settings.provider.api_key,
+                        &existing_settings.provider.api_key,
+                    ) {
+                        settings.provider.api_key = existing_settings.provider.api_key.clone();
+                    } else if is_masked_key(&settings.provider.api_key)
+                        && crate::crypto::is_encrypted(&existing_settings.provider.api_key)
+                    {
+                        // Fallback path: raw JSON has encrypted key, incoming is
+                        // a display mask — preserve the encrypted real key (#3566).
+                        settings.provider.api_key = existing_settings.provider.api_key.clone();
+                    }
                 }
             }
             for p in settings.providers.iter_mut() {
@@ -372,15 +366,22 @@ pub fn save_settings_with_context(
                             .find(|ep| ep.base_url == p.base_url)
                     });
                 if let Some(existing) = existing {
-                    if p.api_key != existing.api_key && !p.api_key.is_empty() {
-                        if is_masked_form_of(&p.api_key, &existing.api_key) {
+                    if p.api_key != existing.api_key {
+                        if p.api_key.is_empty() && crate::crypto::is_encrypted(&existing.api_key) {
+                            // #4073/#4080: preserve the undecryptable blob on
+                            // an empty incoming key (decrypt-failure fallback,
+                            // not an explicit clear).
                             p.api_key = existing.api_key.clone();
-                        } else if is_masked_key(&p.api_key)
-                            && crate::crypto::is_encrypted(&existing.api_key)
-                        {
-                            // #3566: raw-JSON fallback has encrypted key;
-                            // incoming mask won't match via is_masked_form_of.
-                            p.api_key = existing.api_key.clone();
+                        } else if !p.api_key.is_empty() {
+                            if is_masked_form_of(&p.api_key, &existing.api_key) {
+                                p.api_key = existing.api_key.clone();
+                            } else if is_masked_key(&p.api_key)
+                                && crate::crypto::is_encrypted(&existing.api_key)
+                            {
+                                // #3566: raw-JSON fallback has encrypted key;
+                                // incoming mask won't match via is_masked_form_of.
+                                p.api_key = existing.api_key.clone();
+                            }
                         }
                     }
                 }
@@ -454,10 +455,19 @@ pub fn save_settings_with_context(
     // corresponding keychain entry — otherwise the stale secret survives
     // in the OS keychain and is silently resurrected on the next load
     // (#3170).
+    //
+    // #4073: an empty incoming key only means "user cleared it" when the
+    // existing disk key was NOT an undecryptable blob. When the blob was
+    // preserved above, deleting the keychain entry would destroy the only
+    // recoverable plaintext copy. Likewise, never *write* an undecryptable
+    // ENC blob into the keychain — that would clobber the last known
+    // plaintext with an unreadable value.
     if api_key_plaintext.is_empty() {
-        let _ = crate::keychain::KEYCHAIN
-            .delete(&crate::keychain::account_key(&settings.provider.name));
-    } else {
+        if !crate::crypto::is_encrypted(&settings.provider.api_key) {
+            let _ = crate::keychain::KEYCHAIN
+                .delete(&crate::keychain::account_key(&settings.provider.name));
+        }
+    } else if !crate::crypto::is_encrypted(&api_key_plaintext) {
         let _ = crate::keychain::KEYCHAIN.set(
             &crate::keychain::account_key(&settings.provider.name),
             &api_key_plaintext,
@@ -465,8 +475,10 @@ pub fn save_settings_with_context(
     }
     for (p, plain) in settings.providers.iter().zip(&providers_plaintext) {
         if plain.is_empty() {
-            let _ = crate::keychain::KEYCHAIN.delete(&crate::keychain::account_key(&p.name));
-        } else {
+            if !crate::crypto::is_encrypted(&p.api_key) {
+                let _ = crate::keychain::KEYCHAIN.delete(&crate::keychain::account_key(&p.name));
+            }
+        } else if !crate::crypto::is_encrypted(plain) {
             let _ = crate::keychain::KEYCHAIN.set(&crate::keychain::account_key(&p.name), plain);
         }
     }
@@ -930,5 +942,144 @@ mod tests {
             saved_key, bad_encrypted,
             "masked key must not overwrite encrypted key via raw-JSON fallback (#3566)"
         );
+    }
+
+    // ── #4072 / #4073 / #4080: decrypt-failure must never destroy the stored
+    // key — load keeps the blob (consistently for main + providers[]), and an
+    // empty incoming key must not wipe the blob on save. ──
+
+    fn write_bad_encrypted_settings(ctx: &StorageContext, name: &str) -> String {
+        let bad_encrypted = "ENC:v1:not-valid-base64!!!";
+        let fake = serde_json::json!({
+            "vaultDir": ctx.paths.vault_dir_override.clone().unwrap_or_default().to_string_lossy().to_string(),
+            "provider": {
+                "apiKey": bad_encrypted,
+                "baseUrl": "https://api.example.com",
+                "name": name,
+                "providerType": serde_json::Value::Null
+            },
+            "providers": [{
+                "apiKey": bad_encrypted,
+                "baseUrl": "https://api.example.com",
+                "name": name,
+                "providerType": serde_json::Value::Null
+            }],
+            "activeProviderIndex": 0
+        });
+        std::fs::write(
+            &ctx.paths.settings_path,
+            serde_json::to_string(&fake).expect("serialize fake settings"),
+        )
+        .expect("write fake settings");
+        bad_encrypted.to_string()
+    }
+
+    #[test]
+    fn load_with_context_preserves_undecryptable_blob_for_main_and_providers() {
+        // #4080 / #4072: load_settings_with_context must degrade identically
+        // to load_settings_raw — keep the undecryptable blob for BOTH the
+        // legacy single provider and the providers[] list, so a later save
+        // cannot wipe it and effective_provider() sees the same value either
+        // way (previously main was cleared to "" while providers[] kept the
+        // blob — an inconsistent, data-losing fallback).
+        let temp = unique_temp("4072");
+        let ctx = StorageContext::for_test(&temp);
+        let blob = write_bad_encrypted_settings(&ctx, "decrypt4072");
+
+        let loaded = load_settings_with_context(&ctx).expect("load must not fail");
+        assert_eq!(
+            loaded.provider.api_key, blob,
+            "main provider must keep the undecryptable blob, not clear it (#4080)"
+        );
+        assert_eq!(
+            loaded.providers[0].api_key, blob,
+            "providers[] must degrade identically to the main provider (#4072)"
+        );
+        assert_eq!(
+            loaded.effective_provider().api_key,
+            blob,
+            "effective_provider must not diverge from the main provider (#4072)"
+        );
+    }
+
+    #[test]
+    fn save_empty_key_preserves_undecryptable_blob() {
+        // #4073 / #4080 end-to-end (the real user journey after a machine-key
+        // change): load_settings_with_context degrades (blob kept) → the UI
+        // shows an empty key field → user saves ANY unrelated setting with an
+        // empty incoming key. The encrypted blob must survive on disk; before
+        // this fix the empty key bypassed the #3566 guard and permanently
+        // overwrote the blob with "" (and deleted the OS keychain entry).
+        let temp = unique_temp("4073");
+        let ctx = StorageContext::for_test(&temp);
+        let blob = write_bad_encrypted_settings(&ctx, "decrypt4073");
+
+        let incoming = AppSettings {
+            vault_dir: temp.join("vault").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                api_key: String::new(), // decrypt-failure fallback → cleared field
+                name: "decrypt4073".into(),
+                base_url: "https://api.example.com".into(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        let saved =
+            save_settings_with_context(&ctx, incoming).expect("save with empty key must succeed");
+
+        let raw = std::fs::read_to_string(&ctx.paths.settings_path).expect("read settings");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse saved settings");
+        assert_eq!(
+            parsed["provider"]["apiKey"].as_str().unwrap_or(""),
+            blob,
+            "empty incoming key must not wipe the undecryptable blob (#4073/#4080)"
+        );
+        assert_eq!(
+            parsed["providers"][0]["apiKey"].as_str().unwrap_or(""),
+            blob,
+            "migrated providers[] entry must keep the blob too (#4073)"
+        );
+        assert_eq!(
+            saved.provider.api_key, blob,
+            "returned/cached settings must keep the preserved blob"
+        );
+    }
+
+    #[test]
+    fn save_real_key_still_replaces_undecryptable_blob() {
+        // Guard sanity: when the user actually re-enters a real key, the blob
+        // must be replaced (encrypted with the current machine key) — the
+        // empty-key preservation must not block legitimate key entry.
+        let temp = unique_temp("4080ok");
+        let ctx = StorageContext::for_test(&temp);
+        let blob = write_bad_encrypted_settings(&ctx, "decrypt4080ok");
+        let new_key = "sk-real-replacement-key-12345";
+
+        let incoming = AppSettings {
+            vault_dir: temp.join("vault").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                api_key: new_key.to_string(),
+                name: "decrypt4080ok".into(),
+                base_url: "https://api.example.com".into(),
+                ..ProviderConfig::default()
+            },
+            ..AppSettings::default()
+        };
+        save_settings_with_context(&ctx, incoming).expect("save real key must succeed");
+
+        let raw = std::fs::read_to_string(&ctx.paths.settings_path).expect("read settings");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse saved settings");
+        let on_disk = parsed["provider"]["apiKey"].as_str().unwrap_or("");
+        assert_ne!(
+            on_disk, blob,
+            "real key must replace the old undecryptable blob"
+        );
+        assert!(
+            crate::crypto::is_encrypted(on_disk),
+            "new key must be encrypted on disk, got: {on_disk}"
+        );
+        // The new key is decryptable with the current machine key.
+        let reloaded = load_settings_raw(&ctx).expect("reload");
+        assert_eq!(reloaded.provider.api_key, new_key);
     }
 }

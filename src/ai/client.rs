@@ -288,6 +288,16 @@ pub(crate) async fn send_request_with_temperature(
     if provider_type.requires_api_key() && provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
     }
+    // #4072: an undecryptable ENC blob (machine key changed / upgrade
+    // leftover, keychain also empty) must never be sent to the provider as a
+    // live key — it would fail with a confusing 401 and 'Bearer ENC:v1:…'.
+    // Surface a clear "re-enter key" error instead.
+    if provider_type.requires_api_key() && crate::crypto::is_encrypted(&provider.api_key) {
+        return Err(anyhow!(
+            "API key is unavailable: stored key cannot be decrypted (machine key changed?). \
+             Re-enter the key in Settings"
+        ));
+    }
 
     let resolved_addrs =
         validate_base_url(&provider.base_url, provider_type.allows_local_endpoint()).await?;
@@ -536,6 +546,16 @@ pub async fn send_request_streaming<'a>(
 
     if provider_type.requires_api_key() && provider.api_key.trim().is_empty() {
         return Err(anyhow!("API key is empty"));
+    }
+    // #4072: an undecryptable ENC blob (machine key changed / upgrade
+    // leftover, keychain also empty) must never be sent to the provider as a
+    // live key — it would fail with a confusing 401 and 'Bearer ENC:v1:…'.
+    // Surface a clear "re-enter key" error instead.
+    if provider_type.requires_api_key() && crate::crypto::is_encrypted(&provider.api_key) {
+        return Err(anyhow!(
+            "API key is unavailable: stored key cannot be decrypted (machine key changed?). \
+             Re-enter the key in Settings"
+        ));
     }
 
     let resolved_addrs =

@@ -96,11 +96,16 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
         .with_context(|| format!("failed to parse {}", paths.settings_path.display()))?;
 
     // Decrypt API keys so comparison with incoming (plaintext) values works.
-    // Propagate decryption errors so callers can distinguish between "no key"
-    // and "key present but undecryptable" (#2406).
+    // 2026-08-13 事故修复：解密失败不再传播错误拖垮整个应用
+    // （机器 key 变化/升级遗留时，笔记、设置等全部功能会挂掉）。
+    // 降级为保留原加密值 + 警告——UI 会显示"重新输入 key"，
+    // 保存时掩码保护（#3566）仍能识别磁盘上的加密串不被覆盖。
     if !parsed.provider.api_key.is_empty() {
         parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
-            .context("Failed to decrypt stored API key — the machine key may have changed. Please re-enter your API key in Settings")?;
+            .unwrap_or_else(|e| {
+                tracing::warn!("failed to decrypt stored API key: {e:#} — re-enter in Settings");
+                parsed.provider.api_key.clone()  // keep encrypted blob on disk
+            });
     }
     // If the file has an empty key (or decryption produced empty), try the OS
     // keychain as an alternative store (#3159).
@@ -114,7 +119,10 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
     for p in &mut parsed.providers {
         if !p.api_key.is_empty() {
             p.api_key = crate::crypto::decrypt_secret(&p.api_key)
-                .context("Failed to decrypt provider API key")?;
+                .unwrap_or_else(|e| {
+                    tracing::warn!("failed to decrypt provider API key '{}': {e:#} — re-enter in Settings", p.name);
+                    p.api_key.clone()  // keep encrypted blob on disk
+                });
         }
         if p.api_key.is_empty() {
             if let Ok(Some(kc_key)) =
@@ -201,7 +209,12 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         // between "no key" and "key present but undecryptable".
         if !parsed.provider.api_key.is_empty() {
             parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
-                .context("Failed to decrypt stored API key — the machine key may have changed. Please re-enter your API key in Settings")?;
+                .unwrap_or_else(|e| {
+                    // 2026-08-13 事故修复：解密失败降级为 key 置空 + 警告，
+                    // 不拖垮笔记/设置等功能（机器 key 变化或升级遗留时）。
+                    tracing::warn!("failed to decrypt stored API key: {e:#} — key cleared, re-enter in Settings");
+                    String::new()
+                });
         }
         // If the file has an empty key, try the OS keychain (#3159).
         if parsed.provider.api_key.is_empty() {
@@ -215,7 +228,10 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         for p in &mut parsed.providers {
             if !p.api_key.is_empty() {
                 p.api_key = crate::crypto::decrypt_secret(&p.api_key)
-                    .context("Failed to decrypt provider API key")?;
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("failed to decrypt provider API key '{}': {e:#} — re-enter in Settings", p.name);
+                        p.api_key.clone()  // keep encrypted blob on disk
+                    });
             }
             if p.api_key.is_empty() {
                 if let Ok(Some(kc_key)) =
@@ -864,12 +880,19 @@ mod tests {
         )
         .expect("write fake settings");
 
-        // Verify load_settings_raw fails (decrypt of bad payload fails).
+        // Verify load_settings_raw degrades gracefully on bad encrypted
+        // payload: it must NOT fail (that would take down notes/settings
+        // for every user whose machine key changed) — instead it keeps the
+        // encrypted blob so #3566 mask protection still works (2026-08-13).
         let load_result = load_settings_raw(&ctx);
         assert!(
-            load_result.is_err(),
-            "load_settings_raw must fail on bad encrypted payload, got: {:?}",
-            load_result.ok()
+            load_result.is_ok(),
+            "load_settings_raw must NOT fail on bad encrypted payload, got: {:?}",
+            load_result.err()
+        );
+        assert_eq!(
+            load_result.unwrap().provider.api_key, bad_encrypted,
+            "bad encrypted payload must be preserved (not cleared) so mask protection works"
         );
 
         // Now save with a masked key — the raw-JSON fallback should detect the

@@ -79,7 +79,10 @@ export function ChatView() {
     setAttaching(true);
     try {
       const dataUrl = await blobToDataUrl(file);
-      const path = await api.saveTempAttachment(dataUrlToBase64(dataUrl), file.name);
+      // Images are persisted into the vault (attachments/chat/) so history
+      // survives temp-dir wipes and chat_state stays free of base64 blobs
+      // (#4083). The in-memory dataUrl is kept for optimistic rendering.
+      const path = await api.saveTempAttachment(dataUrlToBase64(dataUrl), file.name, true);
       setPendingAttachment({ name: file.name, type: file.type, dataUrl, path });
     } catch (e) {
       setActionError(`图片保存失败：${String(e)}`);

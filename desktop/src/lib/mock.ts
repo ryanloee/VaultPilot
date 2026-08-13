@@ -152,13 +152,22 @@ export const mockApi = {
       usedContextCount: 0,
     };
   },
-  saveTempAttachment: async (_dataBase64: string, filename: string): Promise<string> => {
+  saveTempAttachment: async (
+    _dataBase64: string,
+    filename: string,
+    _persistent = false
+  ): Promise<string> => {
     // Mock mode: no real temp file; return a fake path so the UI flow works.
     return `/tmp/mock-attachments/${filename}`;
   },
   transcribeAudio: async (audioPath: string): Promise<string> => {
     // Mock mode: canned transcript so the voice-input UI is exercisable.
     return `语音转文字（Mock）：${audioPath.split("/").pop() ?? "audio"}`;
+  },
+  readImagePreview: async (_path: string): Promise<string> => {
+    // Mock mode: no filesystem; return a 1×1 transparent PNG so image
+    // attachments render without a real file (path-based history view).
+    return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
   },
 
   listNotes: async (): Promise<NoteMeta[]> => [...notes],

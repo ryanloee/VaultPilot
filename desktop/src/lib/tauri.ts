@@ -32,7 +32,7 @@ export type AgentStatusPayload = {
  * The real Tauri-backed API. All commands go through `invoke`; command names
  * are snake_case (Rust fn names), argument names are camelCase.
  */
-const tauriApi = {
+export const tauriApi = {
   // ── system ──
   ping: () => invoke<boolean>("ping"),
 
@@ -62,9 +62,19 @@ const tauriApi = {
       imagePaths,
       modelOverride,
     }),
-  /** Persist a base64 attachment (image/audio) to a temp file, return its path (#4074). */
-  saveTempAttachment: (dataBase64: string, filename: string) =>
-    invoke<string>("save_temp_attachment", { dataBase64, filename }),
+  /**
+   * Persist a base64 attachment and return its disk path (#4074).
+   * `persistent = true` (image sends) writes into the vault's
+   * `attachments/chat/` dir so history images survive temp-dir wipes; the
+   * chat state then stores only the path, never the base64 blob (#4083).
+   * Audio blobs stay in the (TTL-swept) OS temp dir.
+   */
+  saveTempAttachment: (
+    dataBase64: string,
+    filename: string,
+    persistent = false
+  ) =>
+    invoke<string>("save_temp_attachment", { dataBase64, filename, persistent }),
   /** Transcribe an audio file via the active provider's Whisper endpoint (#4074). */
   transcribeAudio: (audioPath: string, language?: string) =>
     invoke<string>("transcribe_audio", { audioPath, language }),

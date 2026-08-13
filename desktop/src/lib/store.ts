@@ -242,8 +242,13 @@ statusUnlisten ??= onAgentStatus((payload) => {
 async function persistChatState(get: () => ChatStore) {
   const { chatState, currentSessionId, turns } = get();
   if (!chatState || !currentSessionId) return;
+  // Never persist base64 attachment blobs into chat_state.json — history
+  // images are reloaded from their vault path via read_image_preview (#4083).
+  const persistTurns = stripAttachmentDataUrls(turns);
   const sessions = chatState.sessions.map((s) =>
-    s.id === currentSessionId ? { ...s, turns, updatedAt: new Date().toISOString() } : s
+    s.id === currentSessionId
+      ? { ...s, turns: persistTurns, updatedAt: new Date().toISOString() }
+      : s
   );
   const updated: ChatState = { ...chatState, sessions };
   useChatStore.setState({ chatState: updated });
@@ -252,4 +257,16 @@ async function persistChatState(get: () => ChatStore) {
   } catch {
     // best-effort
   }
+}
+
+/** Drop the base64 `dataUrl` from every attachment (kept in memory only for
+ * optimistic rendering; disk stores path/name/type). */
+function stripAttachmentDataUrls(turns: ChatTurn[]): ChatTurn[] {
+  return turns.map((t) => {
+    if (!t.attachments?.length) return t;
+    return {
+      ...t,
+      attachments: t.attachments.map(({ dataUrl: _drop, ...rest }) => rest),
+    };
+  });
 }

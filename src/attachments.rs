@@ -57,6 +57,12 @@ pub fn sanitize_filename(filename: &str) -> String {
 ///
 /// The filename is sanitized and a random UUID prefix guarantees uniqueness, so
 /// concurrent sends from multiple sessions can never collide.
+///
+/// Files written here are short-lived (audio blobs only survive until the
+/// transcription finishes; UI images are persisted into the vault via
+/// [`save_chat_attachment`]) — every write opportunistically sweeps files
+/// older than [`TEMP_ATTACHMENT_MAX_AGE`] so the temp dir cannot grow
+/// unboundedly (#4083).
 pub fn save_temp_attachment(data: &[u8], filename: &str) -> Result<String> {
     let safe_name = sanitize_filename(filename);
     let dir = std::env::temp_dir().join("vaultpilot-attachments");
@@ -65,7 +71,80 @@ pub fn save_temp_attachment(data: &[u8], filename: &str) -> Result<String> {
     let path = dir.join(format!("{}-{}", uuid_like(), safe_name));
     std::fs::write(&path, data)
         .with_context(|| format!("failed to write temp attachment: {}", path.display()))?;
+    let _ = cleanup_stale_temp_attachments(TEMP_ATTACHMENT_MAX_AGE, std::time::SystemTime::now());
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// Maximum age of a temp attachment before the opportunistic sweep removes it.
+/// Audio blobs only live for the duration of a transcription; UI images are
+/// persisted into the vault by [`save_chat_attachment`] — 24h is generous.
+pub const TEMP_ATTACHMENT_MAX_AGE: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Deletes temp attachment files whose last-modified time is older than
+/// `max_age` (relative to the injectable `now`), returning how many files were
+/// removed. Missing/unreadable entries are skipped, never fatal — a sweep is
+/// best-effort by design (#4083).
+pub fn cleanup_stale_temp_attachments(
+    max_age: std::time::Duration,
+    now: std::time::SystemTime,
+) -> Result<usize> {
+    cleanup_stale_temp_attachments_in(
+        std::env::temp_dir().join("vaultpilot-attachments"),
+        max_age,
+        now,
+    )
+}
+
+/// Writes attachment bytes (UI image sends, #4074) into the vault's
+/// `attachments/chat/` directory and returns the absolute path.
+///
+/// Unlike [`save_temp_attachment`] (OS temp dir, swept by
+/// [`cleanup_stale_temp_attachments`]), files written here are persistent:
+/// `chat_state.json` stores only the path/name/type — never the base64 blob
+/// (#4083) — and the renderer loads the bytes back via `read_image_preview`.
+/// This keeps chat state small and history images immune to OS temp-dir wipes
+/// on Android/desktop.
+pub fn save_chat_attachment(data: &[u8], filename: &str, vault_dir: &Path) -> Result<String> {
+    let safe_name = sanitize_filename(filename);
+    let dir = vault_dir.join("attachments").join("chat");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create chat attachment dir: {}", dir.display()))?;
+    let path = dir.join(format!("{}-{}", uuid_like(), safe_name));
+    std::fs::write(&path, data)
+        .with_context(|| format!("failed to write chat attachment: {}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Shared sweep implementation (directory injectable for deterministic tests).
+fn cleanup_stale_temp_attachments_in(
+    dir: std::path::PathBuf,
+    max_age: std::time::Duration,
+    now: std::time::SystemTime,
+) -> Result<usize> {
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(0), // Nothing written yet — nothing to sweep.
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+        if !is_file {
+            continue;
+        }
+        let modified = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let age = now
+            .duration_since(modified)
+            .unwrap_or(std::time::Duration::ZERO);
+        if age > max_age && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// Unique-ish suffix without pulling uuid into the hot path (tests run in
@@ -317,6 +396,11 @@ pub fn list_attachments_exclusive_to_note(
 // ---------------------------------------------------------------------------
 
 /// Recursively collect all regular files under `root`, returning absolute paths.
+///
+/// The top-level `chat/` subdirectory is skipped: it holds UI-sent chat
+/// attachments (see [`save_chat_attachment`]) which are referenced by
+/// `chat_state.json` rather than by notes, so they must never be flagged as
+/// orphans by `scan`/`clean` (#4083).
 fn collect_attachment_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -328,6 +412,9 @@ fn collect_attachment_files(root: &Path) -> Result<Vec<PathBuf>> {
             let path = entry.path();
             let file_type = entry.file_type()?;
             if file_type.is_dir() {
+                if dir.as_path() == root && entry.file_name().to_string_lossy() == "chat" {
+                    continue;
+                }
                 stack.push(path);
             } else if file_type.is_file() {
                 files.push(normalize_abs(&path));
@@ -907,5 +994,103 @@ mod tests {
         let aug2 = 1_767_225_600 + 213 * 86_400;
         let s = format_epoch_rfc3339(aug2, 0);
         assert_eq!(s, "2026-08-02T00:00:00.000Z");
+    }
+
+    // ── Persistent chat attachments + temp TTL cleanup (#4083) ──────────────
+
+    #[test]
+    fn save_chat_attachment_writes_into_vault_chat_dir() {
+        let temp = std::env::temp_dir().join(format!(
+            "vp-chat-att-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
+        fs::create_dir_all(&temp).unwrap();
+        let vault = temp.join("vault");
+
+        let data = b"image-bytes";
+        let p = save_chat_attachment(data, "photo.png", &vault).unwrap();
+        let path = std::path::Path::new(&p);
+        assert!(
+            path.starts_with(vault.join("attachments/chat")),
+            "chat attachment must live under vault attachments/chat: {p}"
+        );
+        assert_eq!(fs::read(&p).unwrap(), data);
+
+        // Sanitized names cannot escape the chat dir (#4083).
+        let p2 = save_chat_attachment(data, "../../evil.png", &vault).unwrap();
+        assert!(std::path::Path::new(&p2).starts_with(vault.join("attachments/chat")));
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn cleanup_stale_temp_attachments_removes_old_files_only() {
+        let temp = std::env::temp_dir().join(format!(
+            "vp-temp-sweep-{}-{}",
+            std::process::id(),
+            uuid_like()
+        ));
+        let dir = temp.join("vaultpilot-attachments");
+        fs::create_dir_all(&dir).unwrap();
+        let (fresh, old) = (dir.join("fresh.webm"), dir.join("old.webm"));
+        fs::write(&fresh, b"fresh").unwrap();
+        fs::write(&old, b"old").unwrap();
+
+        let now = std::time::SystemTime::now();
+        // Fresh files (age ~0) survive a long sweep.
+        let removed = cleanup_stale_temp_attachments_in(
+            dir.clone(),
+            std::time::Duration::from_secs(3600),
+            now,
+        )
+        .unwrap();
+        assert_eq!(removed, 0);
+        assert!(fresh.exists() && old.exists());
+
+        // A `now` in the future makes both look older than a 24h threshold.
+        let future = now + std::time::Duration::from_secs(2 * 24 * 3600);
+        let removed = cleanup_stale_temp_attachments_in(
+            dir.clone(),
+            std::time::Duration::from_secs(24 * 3600),
+            future,
+        )
+        .unwrap();
+        assert_eq!(removed, 2);
+        assert!(!fresh.exists() && !old.exists());
+
+        // Sweeping a non-existent dir is a no-op, not an error.
+        let missing = temp.join("nope");
+        assert_eq!(
+            cleanup_stale_temp_attachments_in(missing, std::time::Duration::from_secs(1), future)
+                .unwrap(),
+            0
+        );
+
+        fs::remove_dir_all(&temp).ok();
+    }
+
+    #[test]
+    fn orphan_scan_skips_chat_attachments() {
+        let (temp, ctx) = make_context();
+        let vault = ctx.vault_dir().to_path_buf();
+        // UI-sent chat image (referenced by chat_state.json, not by notes).
+        write_file(&vault.join("attachments/chat/history.png"), "chat-img");
+        // A genuine note orphan must still be detected.
+        write_file(&vault.join("attachments/real-orphan.png"), "orphan");
+
+        let orphans = scan_orphan_attachments(&ctx).unwrap();
+        assert!(
+            orphans.iter().any(|o| o.path.ends_with("real-orphan.png")),
+            "real orphan must still be flagged: {:?}",
+            orphans.iter().map(|o| &o.path).collect::<Vec<_>>()
+        );
+        assert!(
+            !orphans.iter().any(|o| o.path.ends_with("history.png")),
+            "chat attachments must never be flagged as orphans: {:?}",
+            orphans.iter().map(|o| &o.path).collect::<Vec<_>>()
+        );
+
+        fs::remove_dir_all(&temp).ok();
     }
 }

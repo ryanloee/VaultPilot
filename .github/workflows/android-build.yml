@@ -104,7 +104,12 @@ jobs:
       # 2026-08-13 事故：之前每次构建随机生成 keystore → 每个版本签名不同
       # → Android 禁止不同签名覆盖安装 → 用户所有版本都装不上。
       # 现在所有版本用同一个 keystore 签名，可正常升级安装。
+      # #4077: skip on pull_request runs — fork PRs get no secrets (empty
+      # keystore → decode guard fails the job) and same-repo PRs must not
+      # produce artifacts signed with the production key. Push/tag/dispatch
+      # builds keep signing (releases are tag-driven).
       - name: Sign APK
+        if: github.event_name != 'pull_request'
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

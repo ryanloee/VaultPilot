@@ -1475,10 +1475,21 @@ pub fn find_backlinks_with_context(
         };
         let raw_links = extract_wikilinks(&doc.body);
         for (target, _alias) in &raw_links {
-            if target.to_lowercase() == target_title_lower {
+            let target = target.trim();
+            if target.is_empty() {
+                continue;
+            }
+            // Obsidian path-form `[[folder/Note]]` must backlink a note titled
+            // `Note` — align with cleanup.rs build_backlinked_title_index
+            // (#3719): strip the directory prefix before comparing.
+            let full_match = target.to_lowercase() == target_title_lower;
+            let basename_match = target.rfind('/').is_some_and(|slash| {
+                target[slash + 1..].trim().to_lowercase() == target_title_lower
+            });
+            if full_match || basename_match {
                 results.push(crate::models::BacklinkEntry {
                     meta: meta.clone(),
-                    link_target: target.clone(),
+                    link_target: target.to_string(),
                 });
                 break; // one backlink per note is enough
             }

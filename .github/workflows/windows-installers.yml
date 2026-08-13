@@ -107,6 +107,11 @@ jobs:
       contents: read
     needs: validate
     runs-on: windows-2022
+    # Defensive cap: a hung `pnpm tauri build` must fail fast instead of
+    # hanging for hours and leaving the release without Windows assets
+    # (2026-08-13: v0.7.22 build job stuck 8.5h on "Build Tauri Windows
+    # installer", release shipped Android-only).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -199,6 +204,8 @@ jobs:
       contents: read
     needs: validate
     runs-on: ubuntu-latest
+    # Same defensive cap as build — hung pnpm tauri build must fail fast.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout

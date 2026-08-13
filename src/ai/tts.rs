@@ -180,6 +180,15 @@ impl TtsProvider for OpenAiTtsProvider {
         let endpoint = self.endpoint();
         let api_key = self.provider.api_key.trim();
 
+        // #4072/#4085: an undecryptable ENC blob must never be sent to the
+        // provider — see src/ai/client.rs for the matching guard on the chat path.
+        if crate::crypto::is_encrypted(api_key) {
+            return Err(anyhow::anyhow!(
+                "API key is unavailable: stored key cannot be decrypted (machine key changed?). \
+                 Re-enter the key in Settings"
+            ));
+        }
+
         let body = serde_json::json!({
             "model": config.model,
             "input": text,
@@ -291,5 +300,28 @@ mod tests {
         };
         let tts = OpenAiTtsProvider::new(provider).unwrap();
         assert!(tts.endpoint().contains("/v1/audio/speech"));
+    }
+
+    /// Regression test for #4085: an undecryptable ENC:v1: blob must never be
+    /// sent to the TTS API. `synthesize` must return an error mentioning
+    /// "Re-enter the key in Settings" before making any HTTP request.
+    #[tokio::test]
+    async fn synthesize_rejects_encrypted_api_key() {
+        let provider = ProviderConfig {
+            api_key: "ENC:v1:fake".to_string(),
+            ..ProviderConfig::default()
+        };
+        let tts = OpenAiTtsProvider::new(provider).expect("build provider");
+
+        let result = tts
+            .synthesize("hello", TtsVoice::Alloy, &TtsConfig::default())
+            .await;
+
+        assert!(result.is_err(), "should reject encrypted API key");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Re-enter the key in Settings"),
+            "error should mention re-entering the key, got: {err}"
+        );
     }
 }

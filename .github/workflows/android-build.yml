@@ -114,6 +114,35 @@ jobs:
             echo "WARNING: src-tauri/icons/android missing — keeping template icon"
           fi
 
+      # #4074: voice input (MediaRecorder) needs RECORD_AUDIO in the app
+      # manifest. The generated AndroidManifest.xml (from tauri-cli template)
+      # only declares INTERNET, so inject the permission here.
+      - name: Add RECORD_AUDIO permission for voice input
+        working-directory: desktop
+        run: |
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          if [ ! -f "$MANIFEST" ]; then
+            echo "WARNING: AndroidManifest.xml not found, skipping permission inject"
+            exit 0
+          fi
+          if grep -q 'RECORD_AUDIO' "$MANIFEST"; then
+            echo "RECORD_AUDIO already present"
+          else
+            python3 - "$MANIFEST" <<'EOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          perm = '    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
+          anchor = '    <uses-permission android:name="android.permission.INTERNET" />'
+          if perm not in s and anchor in s:
+              s = s.replace(anchor, anchor + "\n" + perm)
+              open(p, "w", encoding="utf-8").write(s)
+              print("Injected RECORD_AUDIO permission")
+          else:
+              print("WARNING: could not inject RECORD_AUDIO (anchor missing?)")
+          EOF
+          fi
+
       - name: Build APK
         working-directory: desktop
         run: pnpm tauri android build --target ${{ matrix.abi }} --apk

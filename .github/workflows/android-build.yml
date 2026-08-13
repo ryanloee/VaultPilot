@@ -96,6 +96,24 @@ jobs:
             pnpm tauri android init
           fi
 
+      # #4071: `tauri android init` scaffolds gen/android from the tauri-cli
+      # template, which ships the DEFAULT Tauri icon — the repo's
+      # icons/android mipmaps (VaultPilot logo) are never copied in, so every
+      # CI-built APK showed the default launcher icon. Overwrite the generated
+      # res/ with the repo icons before building.
+      - name: Sync Android launcher icons (VaultPilot logo)
+        working-directory: desktop
+        run: |
+          if [ -d src-tauri/icons/android ]; then
+            for d in src-tauri/icons/android/mipmap-*; do
+              [ -d "$d" ] && cp -r "$d"/. "src-tauri/gen/android/app/src/main/res/$(basename "$d")/"
+            done
+            cp src-tauri/icons/android/values/*.xml src-tauri/gen/android/app/src/main/res/values/ 2>/dev/null || true
+            echo "Synced Android launcher icons from src-tauri/icons/android"
+          else
+            echo "WARNING: src-tauri/icons/android missing — keeping template icon"
+          fi
+
       - name: Build APK
         working-directory: desktop
         run: pnpm tauri android build --target ${{ matrix.abi }} --apk

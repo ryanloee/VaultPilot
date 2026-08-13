@@ -92,8 +92,11 @@ cargo test --workspace
 
 ### 5. CI runs automatically
 
-The CI pipeline runs `cargo test --workspace` which includes all regression tests.
-Regression tests are **never** skipped in CI.
+The CI pipeline runs `cargo test --workspace --exclude vaultpilot-desktop`, which
+includes all regression tests in the core workspace. The `vaultpilot-desktop`
+crate is excluded from CI — its tests are NOT run there (desktop frontend tests
+run via `pnpm test` in a separate job; see CI Integration below). Regression
+tests are **never** skipped in CI.
 
 ---
 
@@ -173,8 +176,8 @@ describe('Regression: Issue #NNN', () => {
 
 ```yaml
 # .github/workflows/ci.yml
-cargo test --workspace   # runs ALL tests including regression
-pnpm vitest run          # desktop frontend tests (desktop/), incl. regression
+cargo test --workspace --exclude vaultpilot-desktop   # core workspace tests (incl. regression); desktop crate is NOT run in CI
+pnpm test                                             # desktop frontend tests (desktop/), incl. regression (= `vitest run`)
 ```
 
 ### Mobile CI (not yet configured)

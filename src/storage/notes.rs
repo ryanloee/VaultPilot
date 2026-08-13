@@ -4313,4 +4313,81 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn backlinks_find_notes_linking_to_target() {
+        // Regression for the CLI `vp notes backlinks <id>` command (#4061):
+        // find_backlinks_with_context must return every note whose body
+        // contains a `[[Target Title]]` wikilink (case-insensitive), skip
+        // the target itself, and ignore unrelated notes.
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-4061-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        let ctx = StorageContext::for_test(&temp);
+        crate::storage::initialize_storage_with_context(&ctx).expect("init storage");
+
+        let target = NoteDocument {
+            meta: crate::models::NoteMeta {
+                id: "target-1".to_string(),
+                title: "Target Note".to_string(),
+                ..Default::default()
+            },
+            body: "The target body itself".to_string(),
+            ..Default::default()
+        };
+        save_note_with_context(&ctx, target.clone()).expect("save target");
+
+        // Linked via plain [[Title]].
+        let linked = NoteDocument {
+            meta: crate::models::NoteMeta {
+                id: "linked-1".to_string(),
+                title: "Linked Note".to_string(),
+                ..Default::default()
+            },
+            body: "See [[Target Note]] for details and [[Target Note|alias]] too.".to_string(),
+            ..Default::default()
+        };
+        save_note_with_context(&ctx, linked).expect("save linked");
+
+        // Linked via case-insensitive match + heading form.
+        let linked2 = NoteDocument {
+            meta: crate::models::NoteMeta {
+                id: "linked-2".to_string(),
+                title: "Second Linker".to_string(),
+                ..Default::default()
+            },
+            body: "Mention of [[target note#section]] here".to_string(),
+            ..Default::default()
+        };
+        save_note_with_context(&ctx, linked2).expect("save linked2");
+
+        // Unrelated — no wikilink to the target.
+        let unrelated = NoteDocument {
+            meta: crate::models::NoteMeta {
+                id: "unrelated-1".to_string(),
+                title: "Unrelated".to_string(),
+                ..Default::default()
+            },
+            body: "No links here".to_string(),
+            ..Default::default()
+        };
+        save_note_with_context(&ctx, unrelated).expect("save unrelated");
+
+        let backlinks = find_backlinks_with_context(&ctx, &target.meta.id).expect("find backlinks");
+        let mut ids: Vec<String> = backlinks.iter().map(|b| b.meta.id.clone()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["linked-1".to_string(), "linked-2".to_string()]);
+        // Each entry carries the raw link target text.
+        assert!(backlinks
+            .iter()
+            .any(|b| b.link_target.eq_ignore_ascii_case("Target Note")));
+
+        // Unknown target → error, not empty list.
+        assert!(find_backlinks_with_context(&ctx, "no-such-id").is_err());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }

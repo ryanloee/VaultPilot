@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNotesStore, useSettingsStore } from "@/lib/store";
+import { api } from "@/lib/tauri";
+import type { BacklinkEntry } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -15,6 +17,8 @@ export function NotesView() {
   const [mobileDetail, setMobileDetail] = useState(false);
   const [draftBody, setDraftBody] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
+  const [backlinks, setBacklinks] = useState<BacklinkEntry[]>([]);
+  const [backlinksLoading, setBacklinksLoading] = useState(false);
 
   useEffect(() => {
     loadList();
@@ -25,6 +29,30 @@ export function NotesView() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  // Load backlinks for the opened note (#4061).
+  useEffect(() => {
+    if (!current) {
+      setBacklinks([]);
+      return;
+    }
+    let cancelled = false;
+    setBacklinksLoading(true);
+    api
+      .findBacklinks(current.meta.id)
+      .then((b) => {
+        if (!cancelled) setBacklinks(b);
+      })
+      .catch(() => {
+        if (!cancelled) setBacklinks([]);
+      })
+      .finally(() => {
+        if (!cancelled) setBacklinksLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.meta.id]);
 
   const handleOpen = async (id: string) => {
     await open(id);
@@ -144,6 +172,34 @@ export function NotesView() {
                 ) : (
                   <p className="text-sm text-muted-foreground">（空笔记）</p>
                 )}
+
+                {/* Backlinks panel (#4061) */}
+                <section className="mt-6 border-t border-border pt-4">
+                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    引用本笔记（{backlinks.length}）
+                  </h2>
+                  {backlinksLoading && (
+                    <p className="mt-2 text-xs text-muted-foreground">加载中…</p>
+                  )}
+                  {!backlinksLoading && backlinks.length === 0 && (
+                    <p className="mt-2 text-xs text-muted-foreground">暂无笔记引用本文</p>
+                  )}
+                  <ul className="mt-2 space-y-1">
+                    {backlinks.map((b) => (
+                      <li key={b.meta.id} className="flex items-baseline gap-2">
+                        <button
+                          onClick={() => handleOpen(b.meta.id)}
+                          className="text-sm text-primary hover:underline"
+                        >
+                          {b.meta.title || "无标题"}
+                        </button>
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatDate(b.meta.updatedAt ?? b.meta.createdAt)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               </article>
             </ScrollArea>
           </div>

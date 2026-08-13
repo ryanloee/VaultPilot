@@ -125,6 +125,12 @@ export type RelatedNote = {
   snippet?: string;
 };
 
+/** A note that links **to** a given target note (`[[Title]]` wikilink) (#4061). */
+export type BacklinkEntry = {
+  meta: NoteMeta;
+  linkTarget: string;
+};
+
 // ── Agent status event (streamed during askWithAi / runAgent) ─────────────
 
 export type AgentStatusEvent = {

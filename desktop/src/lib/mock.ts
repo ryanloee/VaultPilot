@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  BacklinkEntry,
   ChatState,
   NoteDocument,
   NoteMeta,
@@ -166,6 +167,22 @@ export const mockApi = {
     notes = notes.filter((n) => n.id !== id);
     delete noteDocs[id];
     return true;
+  },
+
+  findBacklinks: async (id: string): Promise<BacklinkEntry[]> => {
+    const target = noteDocs[id];
+    if (!target) return [];
+    // Simulate: any other note whose body contains [[<target title>]].
+    const title = target.meta.title.toLowerCase();
+    const result: BacklinkEntry[] = [];
+    for (const [nid, doc] of Object.entries(noteDocs)) {
+      if (nid === id) continue;
+      const m = doc.body.match(/\[\[([^\]|#]+)(?:[|\]#][^\]]*)?\]\]/g) ?? [];
+      if (m.some((link) => link.toLowerCase().includes(title))) {
+        result.push({ meta: doc.meta, linkTarget: doc.meta.title });
+      }
+    }
+    return result;
   },
 
   listActions: async (): Promise<unknown[]> => [],

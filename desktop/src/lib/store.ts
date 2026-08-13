@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, onAgentStatus, type AgentStatusPayload } from "./tauri";
 import type {
   AppSettings,
+  ChatAttachment,
   ChatSession,
   ChatState,
   ChatTurn,
@@ -105,7 +106,7 @@ type ChatStore = {
   status: AgentStatusPayload | null;
   error: string | null;
   load: () => Promise<void>;
-  send: (text: string) => Promise<void>;
+  send: (text: string, imagePaths?: string[], attachments?: ChatAttachment[]) => Promise<void>;
   newSession: () => void;
   selectSession: (id: string) => void;
 };
@@ -144,8 +145,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  send: async (text) => {
-    if (get().sending || !text.trim()) return;
+  send: async (text, imagePaths, attachments) => {
+    if (get().sending || (!text.trim() && !imagePaths?.length)) return;
     // Snapshot the session that initiates the request: the reply must be
     // written back to THIS session even if the user switches sessions or
     // creates a new one while the AI is still responding (#4060).
@@ -158,6 +159,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       id: crypto.randomUUID(),
       role: "user",
       text,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
     const history: ConversationTurn[] = get().turns.map((t) => ({ role: t.role, text: t.text }));
     set((s) => ({ turns: [...s.turns, userTurn] }));
@@ -168,7 +170,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const turnsAtSend = get().turns;
 
     try {
-      const result = await api.askWithAi(text, history, null, null);
+      const result = await api.askWithAi(text, history, imagePaths ?? null, null);
       const assistantTurn: ChatTurn = {
         id: crypto.randomUUID(),
         role: "assistant",

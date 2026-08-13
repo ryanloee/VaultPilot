@@ -25,6 +25,60 @@ use tracing::warn;
 use crate::storage::notes::extract_wikilinks;
 use crate::storage::StorageContext;
 
+/// Sanitizes a user-supplied filename so it cannot escape the temp directory
+/// (no path separators, no `..`, no control characters) and keeps a printable
+/// extension when possible.
+pub fn sanitize_filename(filename: &str) -> String {
+    let name = filename.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            // Control chars + Windows-invalid filename chars are replaced.
+            if c.is_control() || matches!(c, ':' | '?' | '*' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.').to_string();
+    if cleaned.is_empty() || cleaned == ".." {
+        "attachment".to_string()
+    } else {
+        cleaned.chars().take(120).collect()
+    }
+}
+
+/// Writes raw attachment bytes (image/audio picked in the UI) to a unique file
+/// under the OS temp dir and returns its absolute path. Used by the desktop
+/// Tauri shell to bridge `<input type="file">`/MediaRecorder payloads — which
+/// the webview only exposes as in-memory bytes — to the disk paths the agent's
+/// image/audio pipeline requires (#4074).
+///
+/// The filename is sanitized and a random UUID prefix guarantees uniqueness, so
+/// concurrent sends from multiple sessions can never collide.
+pub fn save_temp_attachment(data: &[u8], filename: &str) -> Result<String> {
+    let safe_name = sanitize_filename(filename);
+    let dir = std::env::temp_dir().join("vaultpilot-attachments");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create temp attachment dir: {}", dir.display()))?;
+    let path = dir.join(format!("{}-{}", uuid_like(), safe_name));
+    std::fs::write(&path, data)
+        .with_context(|| format!("failed to write temp attachment: {}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Unique-ish suffix without pulling uuid into the hot path (tests run in
+/// parallel and rely on uniqueness across processes).
+fn uuid_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{}", std::process::id(), nanos)
+}
+
 /// A single orphan attachment file found on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -506,6 +560,41 @@ fn prune_empty_dirs(root: &Path) -> usize {
 mod tests {
     use super::*;
     use std::fs;
+
+    // ── save_temp_attachment / sanitize_filename (#4074) ──────────────────
+
+    #[test]
+    fn sanitize_filename_strips_path_traversal_and_controls() {
+        // Path separators are stripped to the basename — traversal is impossible.
+        assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_filename("..\\..\\evil.png"), "evil.png");
+        assert_eq!(sanitize_filename(""), "attachment");
+        assert_eq!(sanitize_filename("..."), "attachment");
+        assert_eq!(sanitize_filename("a b.png"), "a b.png");
+        assert_eq!(sanitize_filename("你好.png"), "你好.png");
+        assert_eq!(sanitize_filename("na:me?.png"), "na_me_.png");
+    }
+
+    #[test]
+    fn save_temp_attachment_writes_unique_file_in_temp_dir() {
+        let data = b"fake-image-bytes";
+        let p1 = save_temp_attachment(data, "photo.png").unwrap();
+        let p2 = save_temp_attachment(data, "photo.png").unwrap();
+        // Unique paths for concurrent sends…
+        assert_ne!(p1, p2);
+        let path = std::path::Path::new(&p1);
+        // …same parent (OS temp dir), same content round-trip.
+        assert!(path.starts_with(std::env::temp_dir()));
+        assert_eq!(fs::read(&p1).unwrap(), data);
+        assert_eq!(fs::read(&p2).unwrap(), data);
+        assert!(p1.ends_with("photo.png"), "got: {p1}");
+        // Sanitized names cannot escape the temp dir.
+        let p3 = save_temp_attachment(data, "../../evil.png").unwrap();
+        assert!(std::path::Path::new(&p3).starts_with(std::env::temp_dir()));
+        fs::remove_file(&p1).ok();
+        fs::remove_file(&p2).ok();
+        fs::remove_file(&p3).ok();
+    }
 
     fn write_file(path: &Path, content: &str) {
         if let Some(parent) = path.parent() {

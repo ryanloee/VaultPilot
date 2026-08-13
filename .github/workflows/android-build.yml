@@ -96,6 +96,53 @@ jobs:
             pnpm tauri android init
           fi
 
+      # #4071: `tauri android init` scaffolds gen/android from the tauri-cli
+      # template, which ships the DEFAULT Tauri icon — the repo's
+      # icons/android mipmaps (VaultPilot logo) are never copied in, so every
+      # CI-built APK showed the default launcher icon. Overwrite the generated
+      # res/ with the repo icons before building.
+      - name: Sync Android launcher icons (VaultPilot logo)
+        working-directory: desktop
+        run: |
+          if [ -d src-tauri/icons/android ]; then
+            for d in src-tauri/icons/android/mipmap-*; do
+              [ -d "$d" ] && cp -r "$d"/. "src-tauri/gen/android/app/src/main/res/$(basename "$d")/"
+            done
+            cp src-tauri/icons/android/values/*.xml src-tauri/gen/android/app/src/main/res/values/ 2>/dev/null || true
+            echo "Synced Android launcher icons from src-tauri/icons/android"
+          else
+            echo "WARNING: src-tauri/icons/android missing — keeping template icon"
+          fi
+
+      # #4074: voice input (MediaRecorder) needs RECORD_AUDIO in the app
+      # manifest. The generated AndroidManifest.xml (from tauri-cli template)
+      # only declares INTERNET, so inject the permission here.
+      - name: Add RECORD_AUDIO permission for voice input
+        working-directory: desktop
+        run: |
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          if [ ! -f "$MANIFEST" ]; then
+            echo "WARNING: AndroidManifest.xml not found, skipping permission inject"
+            exit 0
+          fi
+          if grep -q 'RECORD_AUDIO' "$MANIFEST"; then
+            echo "RECORD_AUDIO already present"
+          else
+            python3 - "$MANIFEST" <<'EOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          perm = '    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
+          anchor = '    <uses-permission android:name="android.permission.INTERNET" />'
+          if perm not in s and anchor in s:
+              s = s.replace(anchor, anchor + "\n" + perm)
+              open(p, "w", encoding="utf-8").write(s)
+              print("Injected RECORD_AUDIO permission")
+          else:
+              print("WARNING: could not inject RECORD_AUDIO (anchor missing?)")
+          EOF
+          fi
+
       - name: Build APK
         working-directory: desktop
         run: pnpm tauri android build --target ${{ matrix.abi }} --apk
@@ -104,7 +151,12 @@ jobs:
       # 2026-08-13 事故：之前每次构建随机生成 keystore → 每个版本签名不同
       # → Android 禁止不同签名覆盖安装 → 用户所有版本都装不上。
       # 现在所有版本用同一个 keystore 签名，可正常升级安装。
+      # #4077: skip on pull_request runs — fork PRs get no secrets (empty
+      # keystore → decode guard fails the job) and same-repo PRs must not
+      # produce artifacts signed with the production key. Push/tag/dispatch
+      # builds keep signing (releases are tag-driven).
       - name: Sign APK
+        if: github.event_name != 'pull_request'
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -112,7 +164,11 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' | head -1)
+          # `find | head -1` sends find a SIGPIPE (exit 141) under set -o
+          # pipefail when the glob matches >1 APK, failing builds spuriously
+          # even when signing succeeded (#4034, #4076). -print -quit exits after
+          # the first match without SIGPIPE.
+          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' -print -quit)
           if [ -z "$APK" ]; then
             echo "FAILED: APK not found for signing"
             exit 1
@@ -157,7 +213,8 @@ jobs:
 
       - name: Validate APK
         run: |
-          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' | head -n 1)
+          # -print -quit instead of `| head -n 1` — same SIGPIPE flake as #4034/#4076.
+          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' -print -quit)
           if [ -z "$APK" ] || [ ! -f "$APK" ]; then
             echo "FAILED: APK not found"
             exit 1
@@ -223,7 +280,7 @@ jobs:
           done
           # Also upload a universal label pointing at the arm64 build so
           # users who grab the first APK asset get a phone-installable file.
-          ARM64_APK=$(find vaultpilot-android-aarch64-* -name '*.apk' | head -1)
+          ARM64_APK=$(find vaultpilot-android-aarch64-* -name '*.apk' -print -quit)
           if [ -n "$ARM64_APK" ]; then
             cp "$ARM64_APK" "/tmp/VaultPilot-${TAG}-universal.apk"
             gh release upload "$TAG" "/tmp/VaultPilot-${TAG}-universal.apk" --clobber

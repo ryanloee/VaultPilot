@@ -157,6 +157,15 @@ pub async fn transcribe_audio(
         ));
     }
 
+    // #4072/#4085: an undecryptable ENC blob must never be sent to the
+    // provider — see src/ai/client.rs for the matching guard on the chat path.
+    if crate::crypto::is_encrypted(api_key) {
+        return Err(anyhow::anyhow!(
+            "API key is unavailable: stored key cannot be decrypted (machine key changed?). \
+             Re-enter the key in Settings"
+        ));
+    }
+
     // Build the endpoint URL following the same pattern as the TTS module
     let base = provider_config.base_url.trim_end_matches('/');
     let endpoint = if base.contains("/v1") {
@@ -1150,6 +1159,38 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// Regression test for #4085: an undecryptable ENC:v1: blob must never be
+    /// sent to the Whisper API. The function must return an error mentioning
+    /// "Re-enter the key in Settings" before making any HTTP request.
+    #[tokio::test]
+    async fn transcribe_audio_rejects_encrypted_api_key() {
+        // Create a small non-empty temp audio file so we get past the
+        // existence/empty-file checks and actually reach the API-key guard.
+        let temp_dir = std::env::temp_dir().join(format!(
+            "vaultpilot-test-enc-key-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+        let audio_path = temp_dir.join("audio.mp3");
+        std::fs::write(&audio_path, b"fake-audio-bytes").expect("write audio");
+
+        let provider = ProviderConfig {
+            api_key: "ENC:v1:fake".to_string(),
+            ..ProviderConfig::default()
+        };
+
+        let result = transcribe_audio(audio_path.to_str().unwrap(), &provider, None).await;
+
+        assert!(result.is_err(), "should reject encrypted API key");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Re-enter the key in Settings"),
+            "error should mention re-entering the key, got: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     // ── Speaker Diarization Tests (#3588) ──────────────────────────────

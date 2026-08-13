@@ -104,7 +104,7 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
         parsed.provider.api_key = crate::crypto::decrypt_secret(&parsed.provider.api_key)
             .unwrap_or_else(|e| {
                 tracing::warn!("failed to decrypt stored API key: {e:#} — re-enter in Settings");
-                parsed.provider.api_key.clone()  // keep encrypted blob on disk
+                parsed.provider.api_key.clone() // keep encrypted blob on disk
             });
     }
     // If the file has an empty key (or decryption produced empty), try the OS
@@ -118,11 +118,13 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
     }
     for p in &mut parsed.providers {
         if !p.api_key.is_empty() {
-            p.api_key = crate::crypto::decrypt_secret(&p.api_key)
-                .unwrap_or_else(|e| {
-                    tracing::warn!("failed to decrypt provider API key '{}': {e:#} — re-enter in Settings", p.name);
-                    p.api_key.clone()  // keep encrypted blob on disk
-                });
+            p.api_key = crate::crypto::decrypt_secret(&p.api_key).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "failed to decrypt provider API key '{}': {e:#} — re-enter in Settings",
+                    p.name
+                );
+                p.api_key.clone() // keep encrypted blob on disk
+            });
         }
         if p.api_key.is_empty() {
             if let Ok(Some(kc_key)) =
@@ -227,11 +229,13 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         // Decrypt keys in multi-provider list.
         for p in &mut parsed.providers {
             if !p.api_key.is_empty() {
-                p.api_key = crate::crypto::decrypt_secret(&p.api_key)
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("failed to decrypt provider API key '{}': {e:#} — re-enter in Settings", p.name);
-                        p.api_key.clone()  // keep encrypted blob on disk
-                    });
+                p.api_key = crate::crypto::decrypt_secret(&p.api_key).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "failed to decrypt provider API key '{}': {e:#} — re-enter in Settings",
+                        p.name
+                    );
+                    p.api_key.clone() // keep encrypted blob on disk
+                });
             }
             if p.api_key.is_empty() {
                 if let Ok(Some(kc_key)) =
@@ -891,7 +895,8 @@ mod tests {
             load_result.err()
         );
         assert_eq!(
-            load_result.unwrap().provider.api_key, bad_encrypted,
+            load_result.unwrap().provider.api_key,
+            bad_encrypted,
             "bad encrypted payload must be preserved (not cleared) so mask protection works"
         );
 

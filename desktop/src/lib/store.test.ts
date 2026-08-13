@@ -343,4 +343,31 @@ describe("useChatStore.send", () => {
     expect(mockApi.askWithAi).not.toHaveBeenCalled();
     expect(useChatStore.getState().turns).toHaveLength(0);
   });
+
+  it("persists attachment path/name/type but never the base64 dataUrl (#4083)", async () => {
+    useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });
+    mockApi.askWithAi.mockResolvedValue({ answer: "AI 回复", usedContextCount: 0 });
+    const attachment = {
+      name: "p.png",
+      type: "image/png",
+      dataUrl: "data:image/png;base64,DDDD",
+      path: "/vault/attachments/chat/p.png",
+    };
+    await useChatStore.getState().send("看图", [attachment.path], [attachment]);
+    await vi.waitFor(() => expect(mockApi.saveChatState).toHaveBeenCalled());
+
+    // What reaches the backend (and chat_state.json) has no dataUrl.
+    const saveCalls = mockApi.saveChatState.mock.calls as unknown as ChatState[][];
+    const saved = saveCalls[saveCalls.length - 1][0];
+    const savedTurn = saved.sessions.find((s) => s.id === "s1")!.turns[0];
+    expect(savedTurn.attachments).toEqual([
+      { name: "p.png", type: "image/png", path: "/vault/attachments/chat/p.png" },
+    ]);
+    expect(JSON.stringify(saved)).not.toContain("dataUrl");
+
+    // The live view keeps the dataUrl for optimistic rendering.
+    expect(useChatStore.getState().turns[0].attachments?.[0].dataUrl).toBe(
+      "data:image/png;base64,DDDD"
+    );
+  });
 });

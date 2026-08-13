@@ -105,23 +105,48 @@ pub async fn ask_with_ai(
 }
 
 /// Persists a base64-encoded attachment (image picked via `<input
-/// type="file">`, audio blob from MediaRecorder) to a unique temp file and
-/// returns its absolute path. The WebView only hands the frontend in-memory
-/// bytes, but the agent's image/audio pipeline needs real disk paths (#4074).
+/// type="file">`, audio blob from MediaRecorder) and returns its absolute
+/// path. The WebView only hands the frontend in-memory bytes, but the agent's
+/// image/audio pipeline needs real disk paths (#4074).
+///
+/// When `persistent` is `true` (image sends) the bytes are written into the
+/// vault's `attachments/chat/` directory so history images survive OS
+/// temp-dir wipes; the frontend persists only the returned path — never the
+/// base64 blob — keeping `chat_state.json` small (#4083). Otherwise (audio
+/// blobs) the file goes to the OS temp dir, which is TTL-swept.
+///
+/// Note: the command name must stay `save_temp_attachment` (no `_cmd` suffix)
+/// — Tauri v2 registers commands by their exact fn identifier, and the
+/// frontend invokes `save_temp_attachment` (#4082).
 #[tauri::command]
 pub async fn save_temp_attachment(
+    state: tauri::State<'_, AppState>,
     data_base64: String,
     filename: String,
+    persistent: Option<bool>,
 ) -> Result<String, String> {
     use base64::Engine as _;
     let data = base64::engine::general_purpose::STANDARD
         .decode(data_base64.trim())
         .map_err(|e| format!("failed to decode base64 attachment: {e}"))?;
-    vaultpilot_lib::attachments::save_temp_attachment(&data, &filename).map_err(|e| e.to_string())
+    if persistent.unwrap_or(false) {
+        let settings = vaultpilot_lib::storage::initialize_storage_async(&state.storage)
+            .await
+            .map_err(|e| e.to_string())?;
+        let vault_dir = std::path::PathBuf::from(&settings.vault_dir);
+        vaultpilot_lib::attachments::save_chat_attachment(&data, &filename, &vault_dir)
+            .map_err(|e| e.to_string())
+    } else {
+        vaultpilot_lib::attachments::save_temp_attachment(&data, &filename)
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Transcribes an audio file (e.g. a voice message recorded in the UI) to text
 /// via the active provider's Whisper-compatible endpoint (#4074).
+///
+/// Command name is the exact fn identifier (no `_cmd` suffix) so the frontend
+/// `invoke("transcribe_audio", …)` resolves (#4082).
 #[tauri::command]
 pub async fn transcribe_audio(
     state: tauri::State<'_, AppState>,

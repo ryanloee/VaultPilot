@@ -100,11 +100,16 @@ jobs:
         working-directory: desktop
         run: pnpm tauri android build --target ${{ matrix.abi }} --apk
 
-      # v0.7.16 shipped unsigned APKs — Android refuses to install them.
-      # Sign the release APK with a keystore generated on the fly. The same
-      # keystore is regenerated per-build (self-signed), so sideloaded
-      # installs work; a stable production keystore can be added later.
+      # Sign the release APK with the FIXED production keystore from Secrets.
+      # 2026-08-13 事故：之前每次构建随机生成 keystore → 每个版本签名不同
+      # → Android 禁止不同签名覆盖安装 → 用户所有版本都装不上。
+      # 现在所有版本用同一个 keystore 签名，可正常升级安装。
       - name: Sign APK
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' | head -1)
@@ -113,18 +118,16 @@ jobs:
             exit 1
           fi
           KEYSTORE="$RUNNER_TEMP/release.keystore"
-          KS_PASS="${ANDROID_KEYSTORE_PASSWORD:-vaultpilot}"
+          KS_PASS="${ANDROID_KEYSTORE_PASSWORD:-vaultpilot2026}"
           ALIAS="${ANDROID_KEY_ALIAS:-vaultpilot}"
-          KEY_PASS="${ANDROID_KEY_PASSWORD:-vaultpilot}"
+          KEY_PASS="${ANDROID_KEY_PASSWORD:-vaultpilot2026}"
 
-          keytool -genkeypair -v \
-            -keystore "$KEYSTORE" \
-            -storepass "$KS_PASS" \
-            -alias "$ALIAS" \
-            -keypass "$KEY_PASS" \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=VaultPilot, OU=Mobile, O=VaultPilot, L=City, ST=State, C=CN" \
-            >/dev/null 2>&1
+          # Decode the fixed production keystore from Secrets.
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$KEYSTORE"
+          if [ ! -s "$KEYSTORE" ]; then
+            echo "FAILED: keystore decode empty"
+            exit 1
+          fi
 
           # Locate apksigner (bundled with Android SDK build-tools).
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)

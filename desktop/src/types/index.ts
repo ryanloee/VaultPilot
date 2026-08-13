@@ -63,6 +63,8 @@ export type ChatTurn = {
   text: string;
   citations?: unknown[];
   savedNote?: unknown;
+  /** Image/attachment payloads attached to this turn (#4074). */
+  attachments?: ChatAttachment[];
   [key: string]: unknown;
 };
 

@@ -62,6 +62,12 @@ const tauriApi = {
       imagePaths,
       modelOverride,
     }),
+  /** Persist a base64 attachment (image/audio) to a temp file, return its path (#4074). */
+  saveTempAttachment: (dataBase64: string, filename: string) =>
+    invoke<string>("save_temp_attachment", { dataBase64, filename }),
+  /** Transcribe an audio file via the active provider's Whisper endpoint (#4074). */
+  transcribeAudio: (audioPath: string, language?: string) =>
+    invoke<string>("transcribe_audio", { audioPath, language }),
 
   // ── notes ──
   listNotes: () => invoke<NoteMeta[]>("list_notes"),

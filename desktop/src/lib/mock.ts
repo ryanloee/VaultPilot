@@ -152,6 +152,14 @@ export const mockApi = {
       usedContextCount: 0,
     };
   },
+  saveTempAttachment: async (_dataBase64: string, filename: string): Promise<string> => {
+    // Mock mode: no real temp file; return a fake path so the UI flow works.
+    return `/tmp/mock-attachments/${filename}`;
+  },
+  transcribeAudio: async (audioPath: string): Promise<string> => {
+    // Mock mode: canned transcript so the voice-input UI is exercisable.
+    return `语音转文字（Mock）：${audioPath.split("/").pop() ?? "audio"}`;
+  },
 
   listNotes: async (): Promise<NoteMeta[]> => [...notes],
   loadNote: async (id: string): Promise<NoteDocument> => {

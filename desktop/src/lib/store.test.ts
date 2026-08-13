@@ -299,4 +299,48 @@ describe("useChatStore.send", () => {
       { role: "assistant", text: "AI 回复" },
     ]);
   });
+
+  it("passes imagePaths to askWithAi (#4074)", async () => {
+    useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });
+    mockApi.askWithAi.mockResolvedValue({ answer: "AI 回复", usedContextCount: 0 });
+    await useChatStore
+      .getState()
+      .send("看图", ["/tmp/vp-attachments/photo.png"], [
+        { name: "photo.png", dataUrl: "data:image/png;base64,AAAA", path: "/tmp/vp-attachments/photo.png" },
+      ]);
+    expect(mockApi.askWithAi).toHaveBeenCalledWith(
+      "看图",
+      expect.any(Array),
+      ["/tmp/vp-attachments/photo.png"],
+      null
+    );
+  });
+
+  it("sends image-only turns when text is empty (#4074)", async () => {
+    useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });
+    mockApi.askWithAi.mockResolvedValue({ answer: "AI 回复", usedContextCount: 0 });
+    await useChatStore.getState().send("", ["/tmp/vp-attachments/p.png"], [
+      { name: "p.png", dataUrl: "data:image/png;base64,BBBB", path: "/tmp/vp-attachments/p.png" },
+    ]);
+    expect(mockApi.askWithAi).toHaveBeenCalledWith("", expect.any(Array), ["/tmp/vp-attachments/p.png"], null);
+  });
+
+  it("stores attachments on the optimistic user turn (#4074)", async () => {
+    useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });
+    mockApi.askWithAi.mockResolvedValue({ answer: "AI 回复", usedContextCount: 0 });
+    const attachment = { name: "p.png", dataUrl: "data:image/png;base64,CCCC", path: "/tmp/vp-attachments/p.png" };
+    await useChatStore.getState().send("看图", [attachment.path!], [attachment]);
+    expect(useChatStore.getState().turns[0]).toMatchObject({
+      role: "user",
+      text: "看图",
+      attachments: [attachment],
+    });
+  });
+
+  it("no-ops on empty text without imagePaths (#4074)", async () => {
+    useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });
+    await useChatStore.getState().send("", undefined, undefined);
+    expect(mockApi.askWithAi).not.toHaveBeenCalled();
+    expect(useChatStore.getState().turns).toHaveLength(0);
+  });
 });

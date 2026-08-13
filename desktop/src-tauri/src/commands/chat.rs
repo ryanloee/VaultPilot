@@ -101,3 +101,36 @@ pub async fn ask_with_ai(
     .map_err(|e| e.to_string())?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
+
+/// Persists a base64-encoded attachment (image picked via `<input
+/// type="file">`, audio blob from MediaRecorder) to a unique temp file and
+/// returns its absolute path. The WebView only hands the frontend in-memory
+/// bytes, but the agent's image/audio pipeline needs real disk paths (#4074).
+#[tauri::command]
+pub async fn save_temp_attachment_cmd(
+    data_base64: String,
+    filename: String,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("failed to decode base64 attachment: {e}"))?;
+    vaultpilot_lib::attachments::save_temp_attachment(&data, &filename).map_err(|e| e.to_string())
+}
+
+/// Transcribes an audio file (e.g. a voice message recorded in the UI) to text
+/// via the active provider's Whisper-compatible endpoint (#4074).
+#[tauri::command]
+pub async fn transcribe_audio_cmd(
+    state: tauri::State<'_, AppState>,
+    audio_path: String,
+    language: Option<String>,
+) -> Result<String, String> {
+    let settings = vaultpilot_lib::storage::initialize_storage_async(&state.storage)
+        .await
+        .map_err(|e| e.to_string())?;
+    let provider = settings.effective_provider().clone();
+    vaultpilot_lib::ai::transcription::transcribe_audio(&audio_path, &provider, language.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}

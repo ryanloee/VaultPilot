@@ -2,7 +2,9 @@
 
 use crate::state::AppState;
 use tauri::Emitter;
-use vaultpilot_lib::ai::actions::{execute_ai_action, list_ai_actions, AiActionRequest};
+use vaultpilot_lib::ai::actions::{
+    execute_ai_action as lib_execute_ai_action, list_ai_actions, AiActionRequest,
+};
 use vaultpilot_lib::ask_with_ai_with_context;
 use vaultpilot_lib::models::{ChatState, ConversationSummary, ConversationTurn};
 use vaultpilot_lib::storage::{load_chat_state_async, save_chat_state_async};
@@ -35,14 +37,14 @@ pub async fn list_actions() -> Result<Vec<serde_json::Value>, String> {
 
 /// Runs a single AI quick action against the active provider.
 #[tauri::command]
-pub async fn execute_ai_action_cmd(
+pub async fn execute_ai_action(
     state: tauri::State<'_, AppState>,
     request: AiActionRequest,
 ) -> Result<serde_json::Value, String> {
     let settings = vaultpilot_lib::storage::initialize_storage_async(&state.storage)
         .await
         .map_err(|e| e.to_string())?;
-    let result = execute_ai_action(&settings, &request).await;
+    let result = lib_execute_ai_action(&settings, &request).await;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -107,7 +109,7 @@ pub async fn ask_with_ai(
 /// returns its absolute path. The WebView only hands the frontend in-memory
 /// bytes, but the agent's image/audio pipeline needs real disk paths (#4074).
 #[tauri::command]
-pub async fn save_temp_attachment_cmd(
+pub async fn save_temp_attachment(
     data_base64: String,
     filename: String,
 ) -> Result<String, String> {
@@ -121,7 +123,7 @@ pub async fn save_temp_attachment_cmd(
 /// Transcribes an audio file (e.g. a voice message recorded in the UI) to text
 /// via the active provider's Whisper-compatible endpoint (#4074).
 #[tauri::command]
-pub async fn transcribe_audio_cmd(
+pub async fn transcribe_audio(
     state: tauri::State<'_, AppState>,
     audio_path: String,
     language: Option<String>,

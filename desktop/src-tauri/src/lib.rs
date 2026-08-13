@@ -66,11 +66,11 @@ pub fn run() {
             commands::chat::load_chat_state,
             commands::chat::save_chat_state,
             commands::chat::list_actions,
-            commands::chat::execute_ai_action_cmd,
+            commands::chat::execute_ai_action,
             commands::chat::compress_chat_history,
             commands::chat::ask_with_ai,
-            commands::chat::save_temp_attachment_cmd,
-            commands::chat::transcribe_audio_cmd,
+            commands::chat::save_temp_attachment,
+            commands::chat::transcribe_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -204,9 +204,25 @@ jobs:
           if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
             gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
           fi
+          # NOTE: gh's `file#name` rename syntax silently fails (asset keeps
+          # its original name `app-universal-release-unsigned.apk`), so 3 ABI
+          # builds uploaded under the SAME name overwrite each other — only
+          # the last (x86_64) survived, and ARM phones reported
+          # "app not compatible with this device" (#4066). Copy to distinct
+          # filenames and upload those instead.
           for apk in $(find vaultpilot-android-* -name '*.apk'); do
             top=${apk%%/*}
             abi=${top#vaultpilot-android-}
             abi=${abi%%-*}
-            gh release upload "$TAG" "$apk#VaultPilot-${abi}-${TAG}.apk" --clobber
+            cp "$apk" "/tmp/VaultPilot-${abi}-${TAG}.apk"
+            gh release upload "$TAG" "/tmp/VaultPilot-${abi}-${TAG}.apk" --clobber
+            echo "Uploaded VaultPilot-${abi}-${TAG}.apk"
           done
+          # Also upload a universal label pointing at the arm64 build so
+          # users who grab the first APK asset get a phone-installable file.
+          ARM64_APK=$(find vaultpilot-android-aarch64-* -name '*.apk' | head -1)
+          if [ -n "$ARM64_APK" ]; then
+            cp "$ARM64_APK" "/tmp/VaultPilot-${TAG}-universal.apk"
+            gh release upload "$TAG" "/tmp/VaultPilot-${TAG}-universal.apk" --clobber
+            echo "Uploaded VaultPilot-${TAG}-universal.apk (arm64)"
+          fi

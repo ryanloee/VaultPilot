@@ -6,6 +6,7 @@ import type {
   NoteMeta,
   ConversationSummary,
   ConversationTurn,
+  ProviderConnectionResult,
 } from "@/types";
 
 /** Local copy of the answer type to avoid importing from tauri.ts (which
@@ -132,6 +133,19 @@ export const mockApi = {
   saveSettings: async (s: AppSettings): Promise<AppSettings> => {
     settings = JSON.parse(JSON.stringify(s));
     return settings;
+  },
+  testProviderConnection: async (
+    apiBase: string,
+    _apiKey: string,
+    _providerType: string
+  ): Promise<ProviderConnectionResult> => {
+    // Mock mode: pretend the endpoint is reachable with a canned model list.
+    return {
+      ok: true,
+      status: 200,
+      probeUrl: `${apiBase.replace(/\/$/, "")}/models`,
+      models: ["mock-model"],
+    };
   },
 
   loadChatState: async (): Promise<ChatState> => JSON.parse(JSON.stringify(chatState)),

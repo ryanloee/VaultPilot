@@ -20,64 +20,16 @@ const MIN_PIN_LEN: usize = 4;
 /// Maximum PIN length accepted by `enable_app_lock_pin` (#3324).
 const MAX_PIN_LEN: usize = 32;
 
-/// Compute HMAC-SHA256(key, message) and return the 32-byte digest.
-///
-/// This is a minimal RFC 2104 implementation built on `sha2::Sha256`,
-/// avoiding the need for a separate `hmac` crate dependency.
-fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; PBKDF2_HASH_LEN] {
-    const BLOCK_SIZE: usize = 64;
-
-    // If key is longer than the block size, hash it first.
-    let mut key_block = [0u8; BLOCK_SIZE];
-    if key.len() > BLOCK_SIZE {
-        let kh = Sha256::digest(key);
-        key_block[..PBKDF2_HASH_LEN].copy_from_slice(&kh);
-    } else {
-        key_block[..key.len()].copy_from_slice(key);
-    }
-
-    // Inner pad (key XOR 0x36) and outer pad (key XOR 0x5c).
-    let mut ipad = [0u8; BLOCK_SIZE];
-    let mut opad = [0u8; BLOCK_SIZE];
-    for i in 0..BLOCK_SIZE {
-        ipad[i] = key_block[i] ^ 0x36;
-        opad[i] = key_block[i] ^ 0x5c;
-    }
-
-    // Inner hash: H(ipad || message)
-    let mut inner = Sha256::new();
-    inner.update(ipad);
-    inner.update(message);
-    let inner_hash = inner.finalize();
-
-    // Outer hash: H(opad || inner_hash)
-    let mut outer = Sha256::new();
-    outer.update(opad);
-    outer.update(inner_hash);
-    outer.finalize().into()
-}
-
 /// Compute PBKDF2-HMAC-SHA256(password, salt, iterations) producing 32 bytes.
 ///
-/// Because the requested output length (32) equals the hash size, only one
-/// block needs to be computed (RFC 8018 §5.2).
+/// Uses the RustCrypto `pbkdf2` crate (audited, heavily optimized) instead of
+/// a hand-rolled loop — the 600k-iteration hash is hot on unlock paths and
+/// the pure-Rust implementation took seconds in unoptimized debug builds.
+/// Because PBKDF2 is a standard algorithm, existing stored hashes and
+/// encrypted blobs remain fully compatible.
 fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; PBKDF2_HASH_LEN] {
-    let block_index = 1u32;
-
-    // U_1 = HMAC(password, salt || INT_32_BE(1))
-    let mut msg = Vec::with_capacity(salt.len() + 4);
-    msg.extend_from_slice(salt);
-    msg.extend_from_slice(&block_index.to_be_bytes());
-    let mut u = hmac_sha256(password, &msg);
-    let mut result = u;
-
-    for _ in 1..iterations {
-        u = hmac_sha256(password, &u);
-        for i in 0..PBKDF2_HASH_LEN {
-            result[i] ^= u[i];
-        }
-    }
-
+    let mut result = [0u8; PBKDF2_HASH_LEN];
+    pbkdf2::pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut result);
     result
 }
 
@@ -1660,16 +1612,6 @@ mod tests {
     }
 
     // ── PBKDF2 + hex helpers unit tests ──────────────────────────────
-
-    #[test]
-    fn hmac_sha256_matches_known_test_vector() {
-        // RFC 4231 Test Case 2:
-        //   key = "Jefe", data = "what do ya want for nothing?"
-        //   HMAC-SHA256 = 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
-        let result = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
-        let expected_hex = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
-        assert_eq!(bytes_to_hex(&result), expected_hex);
-    }
 
     #[test]
     fn pbkdf2_sha256_matches_known_test_vector() {

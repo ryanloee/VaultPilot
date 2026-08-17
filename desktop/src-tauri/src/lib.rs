@@ -48,6 +48,7 @@ pub fn run() {
             // settings
             commands::settings::get_settings,
             commands::settings::save_settings,
+            commands::settings::test_provider_connection,
             // notes
             commands::notes::list_notes,
             commands::notes::load_note,

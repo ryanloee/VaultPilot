@@ -12,7 +12,8 @@ use aes_gcm::{
 };
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use sha2::{Digest, Sha256};
+use pbkdf2::pbkdf2_hmac;
+use sha2::Sha256;
 use std::sync::OnceLock;
 
 /// Prefix that identifies a value as encrypted by this module.
@@ -22,68 +23,11 @@ pub const ENCRYPTED_PREFIX: &str = "ENC:v1:";
 /// OWASP recommends ≥ 600,000 for PBKDF2-SHA256 (2023).
 const PBKDF2_ITERATIONS: u32 = 600_000;
 
-/// HMAC-SHA256 using only sha2 (no external hmac crate dependency).
-fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
-    // Block size for SHA-256 is 64 bytes.
-    const BLOCK_SIZE: usize = 64;
-
-    let mut key_block = [0u8; BLOCK_SIZE];
-    if key.len() > BLOCK_SIZE {
-        let hash = Sha256::digest(key);
-        key_block[..32].copy_from_slice(&hash);
-    } else {
-        key_block[..key.len()].copy_from_slice(key);
-    }
-
-    // ipad and opad
-    let mut ipad = [0x36u8; BLOCK_SIZE];
-    let mut opad = [0x5cu8; BLOCK_SIZE];
-    for i in 0..BLOCK_SIZE {
-        ipad[i] ^= key_block[i];
-        opad[i] ^= key_block[i];
-    }
-
-    let inner_hash = Sha256::new()
-        .chain_update(ipad)
-        .chain_update(message)
-        .finalize();
-
-    Sha256::new()
-        .chain_update(opad)
-        .chain_update(inner_hash)
-        .finalize()
-        .into()
-}
-
-/// PBKDF2-HMAC-SHA256 key derivation.
+/// PBKDF2-HMAC-SHA256 key derivation (RustCrypto `pbkdf2` crate).
 fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
-    let u1 = hmac_sha256(password, &{
-        let mut buf = Vec::with_capacity(salt.len() + 4);
-        buf.extend_from_slice(salt);
-        buf.extend_from_slice(&1u32.to_be_bytes());
-        buf
-    });
-
-    let mut result = u1;
-    let mut u_prev = u1;
-
-    for i in 2..=iterations {
-        let u_next = hmac_sha256(password, &u_prev);
-        for j in 0..32 {
-            result[j] ^= u_next[j];
-        }
-        u_prev = u_next;
-
-        // Progress indicator every 100k iterations (only in debug builds).
-        #[cfg(debug_assertions)]
-        {
-            if i % 100_000 == 0 {
-                eprintln!("PBKDF2: {i}/{iterations} iterations...");
-            }
-        }
-    }
-
-    result
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut key);
+    key
 }
 
 /// Build the salt from machine-specific entropy.
@@ -413,27 +357,18 @@ pub fn is_passphrase_encrypted(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hmac_sha256_known_vector() {
-        // RFC 4231 Test Case 2
-        let key = b"Jefe";
-        let data = b"what do ya want for nothing?";
-        let mac = hmac_sha256(key, data);
-        // Expected: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
-        let expected: [u8; 32] = [
-            0x5b, 0xdc, 0xc1, 0x46, 0xbf, 0x60, 0x75, 0x4e, 0x6a, 0x04, 0x24, 0x26, 0x08, 0x95,
-            0x75, 0xc7, 0x5a, 0x00, 0x3f, 0x08, 0x9d, 0x27, 0x39, 0x83, 0x9d, 0xec, 0x58, 0xb9,
-            0x64, 0xec, 0x38, 0x43,
-        ];
-        assert_eq!(mac, expected);
-    }
-
-    #[test]
+        #[test]
     fn pbkdf2_low_iterations() {
-        // Quick sanity test with low iterations
+        // RFC 6070 known vector for PBKDF2-HMAC-SHA256 with c=1:
+        //   password = "password", salt = "salt"
+        //   output   = 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b
         let dk = pbkdf2_hmac_sha256(b"password", b"salt", 1);
-        // Just verify it produces a deterministic 32-byte output
-        assert_eq!(dk.len(), 32);
+        let expected: [u8; 32] = [
+            0x12, 0x0f, 0xb6, 0xcf, 0xfc, 0xf8, 0xb3, 0x2c, 0x43, 0xe7, 0x22, 0x52, 0x56, 0xc4,
+            0xf8, 0x37, 0xa8, 0x65, 0x48, 0xc9, 0x2c, 0xcc, 0x35, 0x48, 0x08, 0x05, 0x98, 0x7c,
+            0xb7, 0x0b, 0xe1, 0x7b,
+        ];
+        assert_eq!(dk, expected);
         let dk2 = pbkdf2_hmac_sha256(b"password", b"salt", 1);
         assert_eq!(dk, dk2);
         // Different input → different output

@@ -8,6 +8,7 @@ import type {
   ConversationTurn,
   NoteDocument,
   NoteMeta,
+  ProviderConnectionResult,
   RelatedNote,
 } from "@/types";
 import { isTauri, mockApi } from "./mock";
@@ -40,6 +41,18 @@ export const tauriApi = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) =>
     invoke<AppSettings>("save_settings", { settings }),
+  testProviderConnection: (
+    apiBase: string,
+    apiKey: string,
+    providerType: string,
+    timeoutMs?: number
+  ) =>
+    invoke<ProviderConnectionResult>("test_provider_connection", {
+      apiBase,
+      apiKey,
+      providerType,
+      timeoutMs,
+    }),
 
   // ── chat ──
   loadChatState: () => invoke<ChatState>("load_chat_state"),

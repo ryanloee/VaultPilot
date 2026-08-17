@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod audio_overview;
 pub mod client;
+pub mod connectivity;
 pub mod context;
 pub mod html_sanitize;
 pub mod model_routing;

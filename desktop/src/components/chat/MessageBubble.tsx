@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/tauri";
 import { Markdown } from "./Markdown";
+import { FileIcon } from "@/components/layout/icons";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment, ChatTurn } from "@/types";
 
@@ -60,12 +61,22 @@ export function MessageBubble({ turn }: { turn: ChatTurn }) {
             : "bg-card border border-border rounded-bl-md"
         )}
       >
-        {/* Image attachments picked in the composer (#4074). */}
+        {/* Image/file attachments picked in the composer (#4074). */}
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
-            {attachments.map((a, i) => (
-              <AttachmentImage key={i} attachment={a} />
-            ))}
+            {attachments.map((a, i) =>
+              a.type?.startsWith("image/") ? (
+                <AttachmentImage key={i} attachment={a} />
+              ) : (
+                <div
+                  key={i}
+                  className="flex max-w-56 items-center gap-2 rounded-lg border border-border bg-background/60 px-3 py-2 text-xs"
+                >
+                  <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{a.name ?? a.path ?? "附件"}</span>
+                </div>
+              )
+            )}
           </div>
         )}
         {isUser ? (

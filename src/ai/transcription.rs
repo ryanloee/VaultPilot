@@ -235,10 +235,13 @@ pub async fn transcribe_audio(
             .text()
             .await
             .unwrap_or_else(|_| "<no body>".to_string());
+        // Truncate the body: providers sometimes return a full HTML page on
+        // 404/5xx, which must never flood the chat UI (TTS does the same).
+        let snippet: String = err_text.chars().take(300).collect();
         return Err(anyhow::anyhow!(
             "Whisper API returned {}: {}",
             status,
-            crate::sanitize_error(&err_text)
+            crate::sanitize_error(&snippet)
         ));
     }
 

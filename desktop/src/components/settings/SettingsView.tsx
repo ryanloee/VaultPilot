@@ -5,30 +5,21 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import type { AppSettings, ProviderConfig } from "@/types";
-
-type Theme = "system" | "light" | "dark";
+import { api } from "@/lib/tauri";
+import { applyAndPersistTheme, savedTheme, type Theme } from "@/lib/theme";
+import type { AppSettings, ProviderConfig, ProviderConnectionResult } from "@/types";
 
 export function SettingsView() {
   const { settings, loading, error, load, save } = useSettingsStore();
   const [draft, setDraft] = useState<AppSettings | null>(null);
   const [theme, setTheme] = useState<Theme>("system");
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ProviderConnectionResult | null>(null);
 
-  // Apply + persist the theme only when the user actively clicks a theme
-  // button (NOT on mount). Toggling <html>.dark re-renders the whole app with
-  // the Tailwind dark palette.
+  // Apply + persist the theme when the user clicks a theme button.
   const selectTheme = (mode: Theme) => {
-    const root = document.documentElement;
-    const isDark =
-      mode === "dark" ||
-      (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    root.classList.toggle("dark", isDark);
+    applyAndPersistTheme(mode);
     setTheme(mode);
-    try {
-      localStorage.setItem("vaultpilot.theme", mode);
-    } catch {
-      /* ignore */
-    }
   };
 
   useEffect(() => {
@@ -41,18 +32,9 @@ export function SettingsView() {
     }
   }, [settings]);
 
-  // Read persisted theme once on mount; do NOT auto-apply here (mounting the
-  // settings view must not change the app theme). Application happens only when
-  // the user clicks a theme button (see applyTheme in the button handler).
+  // Read persisted theme once on mount for the button highlight state.
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("vaultpilot.theme") as Theme | null;
-      if (saved && (saved === "system" || saved === "light" || saved === "dark")) {
-        setTheme(saved);
-      }
-    } catch {
-      /* ignore */
-    }
+    setTheme(savedTheme() ?? "system");
   }, []);
 
   if (!draft) {
@@ -80,6 +62,25 @@ export function SettingsView() {
   };
 
   const active = draft.providers[draft.activeProviderIndex] ?? draft.provider;
+
+  const handleTestConnection = async () => {
+    if (testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.testProviderConnection(
+        active.baseUrl,
+        active.apiKey,
+        active.providerType ?? "openai",
+        active.requestTimeoutMs
+      );
+      setTestResult(result);
+    } catch (e) {
+      setTestResult({ ok: false, error: String(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <ScrollArea className="h-full">
@@ -118,13 +119,55 @@ export function SettingsView() {
             />
           </Field>
           <Field label="API Key">
-            <Input
-              type="password"
-              value={active.apiKey}
-              onChange={(e) => updateProvider({ apiKey: e.target.value })}
-              placeholder="sk-..."
-            />
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                value={active.apiKey}
+                onChange={(e) => updateProvider({ apiKey: e.target.value })}
+                placeholder="sk-..."
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleTestConnection}
+                disabled={
+                  testing || !active.apiKey || active.apiKey.startsWith("ENC:v1:")
+                }
+                title={
+                  !active.apiKey
+                    ? "请先填写 API Key"
+                    : active.apiKey.startsWith("ENC:v1:")
+                      ? "存储的 Key 无法解密，请重新输入完整 Key"
+                      : "测试能否连接到该提供商"
+                }
+              >
+                {testing ? "测试中…" : "测试连接"}
+              </Button>
+            </div>
           </Field>
+          {testResult && (
+            <p
+              className={cn(
+                "flex items-center gap-2 text-xs",
+                testResult.ok ? "text-green-600" : "text-destructive"
+              )}
+            >
+              {testResult.ok ? (
+                <>
+                  <span>✓ 连接成功</span>
+                  {testResult.status && <span>(HTTP {testResult.status})</span>}
+                  {testResult.models && testResult.models.length > 0 && (
+                    <span>
+                      · 检测到模型: {testResult.models.slice(0, 5).join(", ")}
+                      {testResult.models.length > 5 ? ` 等 ${testResult.models.length} 个` : ""}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span>✗ 连接失败: {testResult.error ?? "未知错误"}</span>
+              )}
+            </p>
+          )}
           <Field label="模型">
             <Input
               value={active.model}

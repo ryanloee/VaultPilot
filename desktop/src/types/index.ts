@@ -52,6 +52,15 @@ export type AppSettings = {
   embeddingProvider?: string;
 };
 
+/** Mirrors vaultpilot_lib::ai::connectivity::ProviderConnectionResult (#3480). */
+export type ProviderConnectionResult = {
+  ok: boolean;
+  status?: number;
+  error?: string;
+  probeUrl?: string;
+  models?: string[];
+};
+
 // ── Chat ──────────────────────────────────────────────────────────────────
 
 export type ChatRole = "user" | "assistant" | "system";

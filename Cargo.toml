@@ -1,6 +1,6 @@
 [package]
 name = "vaultpilot"
-version = "0.7.23"
+version = "0.7.24"
 
 description = "Local-first knowledge-base assistant with Windows UI and cross-platform CLI"
 edition = "2021"
@@ -70,6 +70,7 @@ mailparse = { version = "0.16", optional = true }
 native-tls = { version = "0.2", optional = true }
 pdf-extract = "0.12"
 keyring = "4.1.5"
+pbkdf2 = { version = "0.12", features = ["sha2"] }
 
 [[bin]]
 name = "vaultpilot-cli"
@@ -78,3 +79,21 @@ path = "src/bin/vaultpilot-cli/main.rs"
 [[bin]]
 name = "vaultpilot-agent"
 path = "src/bin/vaultpilot-agent.rs"
+
+# PBKDF2 (600k iterations, machine-key + PIN hashing) is hot on the startup
+# path. Compile the crypto crates with optimizations even in dev builds so
+# debug-mode startup stays snappy (previously a hand-rolled pure-Rust loop
+# took multiple seconds in unoptimized builds). codegen-units must drop from
+# the dev default (256) too: without cross-CGU inlining, sha2's compression
+# loop runs ~40x slower despite opt-level=3.
+[profile.dev.package.pbkdf2]
+opt-level = 3
+codegen-units = 16
+
+[profile.dev.package.hmac]
+opt-level = 3
+codegen-units = 16
+
+[profile.dev.package.sha2]
+opt-level = 3
+codegen-units = 16

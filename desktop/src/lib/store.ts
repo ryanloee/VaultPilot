@@ -55,6 +55,7 @@ type NotesStore = {
   loadList: () => Promise<void>;
   open: (id: string) => Promise<void>;
   saveCurrent: (body: string, title?: string) => Promise<void>;
+  clearCurrent: () => void;
 };
 
 export const useNotesStore = create<NotesStore>((set, get) => ({
@@ -94,6 +95,7 @@ export const useNotesStore = create<NotesStore>((set, get) => ({
       set({ error: String(e) });
     }
   },
+  clearCurrent: () => set({ current: null }),
 }));
 
 // ── Chat store ────────────────────────────────────────────────────────────
@@ -214,6 +216,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         : { currentSessionId: session.id, sessions: [session] },
       currentSessionId: session.id,
       turns: [],
+      error: null,
     }));
     void persistChatState(get);
   },
@@ -226,6 +229,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       set({
         currentSessionId: id,
         turns: session.turns ?? [],
+        error: null,
         chatState: { ...state, currentSessionId: id },
       });
       void persistChatState(get);

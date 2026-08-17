@@ -7,10 +7,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Markdown } from "@/components/chat/Markdown";
+import { TrashIcon } from "@/components/layout/icons";
 import { cn, formatDate } from "@/lib/utils";
 
 export function NotesView() {
-  const { notes, current, loading, error, loadList, open, saveCurrent } = useNotesStore();
+  const { notes, current, loading, error, loadList, open, saveCurrent, clearCurrent } =
+    useNotesStore();
   const settings = useSettingsStore((s) => s.settings);
   const loadSettings = useSettingsStore((s) => s.load);
   const [editing, setEditing] = useState(false);
@@ -71,6 +73,18 @@ export function NotesView() {
     await saveCurrent(draftBody, draftTitle);
     setEditing(false);
     await loadList();
+  };
+
+  const handleDelete = async () => {
+    if (!current) return;
+    if (!window.confirm(`确定删除笔记「${current.meta.title || "无标题"}」吗？`)) return;
+    try {
+      await api.deleteNote(current.meta.id);
+      clearCurrent();
+      await loadList();
+    } catch (e) {
+      alert(`删除失败：${String(e)}`);
+    }
   };
 
   return (
@@ -161,9 +175,20 @@ export function NotesView() {
                   {current.meta.title || "无标题"}
                 </h1>
               </div>
-              <Button variant="ghost" size="sm" onClick={handleEdit}>
-                编辑
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" onClick={handleEdit}>
+                  编辑
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => void handleDelete()}
+                  title="删除笔记"
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <TrashIcon className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
             <ScrollArea className="flex-1">
               <article className="mx-auto max-w-3xl p-4 md:p-6">

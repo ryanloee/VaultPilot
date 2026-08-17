@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./MessageBubble";
+import { FileIcon, ImageIcon, MicIcon, PlusIcon, StopIcon } from "@/components/layout/icons";
+import { cn } from "@/lib/utils";
 
 /** Read a File/Blob as a base64 data URL (works in WebView + browser). */
 export function blobToDataUrl(blob: Blob): Promise<string> {
@@ -32,7 +34,9 @@ export function ChatView() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -42,6 +46,11 @@ export function ChatView() {
   }, [load]);
 
   const currentSession = chatState?.sessions.find((s) => s.id === currentSessionId);
+
+  // Switching sessions must not carry over the previous session's errors.
+  useEffect(() => {
+    setActionError(null);
+  }, [currentSessionId]);
 
   // Auto-scroll to bottom on new messages.
   useEffect(() => {
@@ -57,6 +66,7 @@ export function ChatView() {
     send(input.trim(), paths, attachments);
     setInput("");
     setPendingAttachment(null);
+    if (imageInputRef.current) imageInputRef.current.value = "";
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -68,24 +78,21 @@ export function ChatView() {
     }
   };
 
-  // ── Image attachment (#4074) ─────────────────────────────────────────────
-  const handleFileChosen = async (file: File | undefined) => {
+  // ── Attachments (#4074): image (persisted to vault) or generic file ──────
+  const handleFileChosen = async (file: File | undefined, isImage: boolean) => {
     setActionError(null);
+    setAddOpen(false);
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setActionError("仅支持图片附件");
-      return;
-    }
     setAttaching(true);
     try {
       const dataUrl = await blobToDataUrl(file);
       // Images are persisted into the vault (attachments/chat/) so history
       // survives temp-dir wipes and chat_state stays free of base64 blobs
       // (#4083). The in-memory dataUrl is kept for optimistic rendering.
-      const path = await api.saveTempAttachment(dataUrlToBase64(dataUrl), file.name, true);
+      const path = await api.saveTempAttachment(dataUrlToBase64(dataUrl), file.name, isImage);
       setPendingAttachment({ name: file.name, type: file.type, dataUrl, path });
     } catch (e) {
-      setActionError(`图片保存失败：${String(e)}`);
+      setActionError(`${isImage ? "图片" : "文件"}保存失败：${String(e)}`);
     } finally {
       setAttaching(false);
     }
@@ -222,16 +229,24 @@ export function ChatView() {
         <div className="mx-auto flex max-w-3xl items-end gap-2">
           {pendingAttachment && (
             <div className="relative shrink-0">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={pendingAttachment.dataUrl}
-                alt={pendingAttachment.name ?? "attachment"}
-                className="h-14 w-14 rounded-md border border-border object-cover"
-              />
+              {pendingAttachment.type?.startsWith("image/") ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={pendingAttachment.dataUrl}
+                  alt={pendingAttachment.name ?? "attachment"}
+                  className="h-14 w-14 rounded-md border border-border object-cover"
+                />
+              ) : (
+                <div className="flex h-14 max-w-40 items-center gap-2 rounded-md border border-border bg-card px-3 text-xs">
+                  <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{pendingAttachment.name ?? "文件"}</span>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   setPendingAttachment(null);
+                  if (imageInputRef.current) imageInputRef.current.value = "";
                   if (fileInputRef.current) fileInputRef.current.value = "";
                 }}
                 aria-label="移除附件"
@@ -241,32 +256,63 @@ export function ChatView() {
               </button>
             </div>
           )}
+
           <input
-            ref={fileInputRef}
+            ref={imageInputRef}
             type="file"
             accept="image/*"
             className="hidden"
-            onChange={(e) => void handleFileChosen(e.target.files?.[0])}
+            onChange={(e) => void handleFileChosen(e.target.files?.[0], true)}
           />
-          <Button
-            onClick={() => fileInputRef.current?.click()}
-            variant="ghost"
-            size="icon"
-            title="发送图片"
-            disabled={sending || attaching || recording}
-          >
-            {attaching ? "…" : "🖼"}
-          </Button>
-          <Button
-            onClick={toggleRecording}
-            variant={recording ? "default" : "ghost"}
-            size="icon"
-            title={recording ? "停止录音" : "语音输入（转文字）"}
-            disabled={sending || transcribing || attaching}
-            className={recording ? "bg-destructive text-white" : ""}
-          >
-            {transcribing ? "…" : recording ? "⏹" : "🎤"}
-          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => void handleFileChosen(e.target.files?.[0], false)}
+          />
+
+          {/* "+" → pick image or file (#二级菜单) */}
+          <div className="relative shrink-0">
+            <Button
+              onClick={() => setAddOpen((v) => !v)}
+              variant="ghost"
+              size="icon"
+              title="添加附件"
+              disabled={sending || attaching || recording}
+            >
+              <PlusIcon className="h-5 w-5" />
+            </Button>
+            {addOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setAddOpen(false)} />
+                <div className="absolute bottom-11 left-0 z-20 flex w-36 flex-col overflow-hidden rounded-md border border-border bg-card shadow-lg">
+                  <button
+                    onClick={() => {
+                      setAddOpen(false);
+                      imageInputRef.current?.click();
+                    }}
+                    disabled={sending || attaching || recording}
+                    className="flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    发送图片
+                  </button>
+                  <button
+                    onClick={() => {
+                      setAddOpen(false);
+                      fileInputRef.current?.click();
+                    }}
+                    disabled={sending || attaching || recording}
+                    className="flex items-center gap-2 border-t border-border px-3 py-2 text-left text-sm transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    <FileIcon className="h-4 w-4 text-muted-foreground" />
+                    发送文件
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -282,6 +328,23 @@ export function ChatView() {
             size="default"
           >
             发送
+          </Button>
+          {/* Mic on the right of send */}
+          <Button
+            onClick={toggleRecording}
+            variant={recording ? "default" : "ghost"}
+            size="icon"
+            title={recording ? "停止录音" : "语音输入（转文字）"}
+            disabled={sending || transcribing || attaching}
+            className={cn(recording && "bg-destructive text-white")}
+          >
+            {transcribing ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : recording ? (
+              <StopIcon className="h-4 w-4" />
+            ) : (
+              <MicIcon className="h-5 w-5" />
+            )}
           </Button>
         </div>
       </div>

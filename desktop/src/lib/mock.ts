@@ -77,7 +77,7 @@ let chatState: ChatState = {
         {
           id: uuid(),
           role: "assistant",
-          text: "这是一个本地优先的知识库笔记应用，支持 AI 对话、笔记管理和知识图谱。",
+          text: "这是一个本地优先的知识库笔记应用，支持 AI 对话和笔记管理。",
         },
       ],
       createdAt: now(),
@@ -116,7 +116,7 @@ let notes: NoteMeta[] = [
 let noteDocs: Record<string, NoteDocument> = {
   "note-1": {
     meta: notes[0],
-    body: "# 欢迎使用 VaultPilot\n\n这是一个 **本地优先** 的知识库笔记应用。\n\n- 支持 AI 对话\n- 支持笔记管理\n- 支持知识图谱\n\n```ts\nconsole.log(\"hello\")\n```",
+    body: "# 欢迎使用 VaultPilot\n\n这是一个 **本地优先** 的知识库笔记应用。\n\n- 支持 AI 对话\n- 支持笔记管理\n\n```ts\nconsole.log(\"hello\")\n```",
   },
   "note-2": {
     meta: notes[1],

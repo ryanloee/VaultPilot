@@ -32,14 +32,6 @@ export function AppShell() {
         <main className="flex min-w-0 flex-1 flex-col">
           {view === "chat" && <ChatView />}
           {view === "notes" && <NotesView />}
-          {view === "graph" && (
-            <div className="flex flex-1 items-center justify-center">
-              <div className="text-center">
-                <h2 className="text-2xl font-semibold tracking-tight">知识图谱</h2>
-                <p className="mt-2 text-sm text-muted-foreground">后续阶段实现</p>
-              </div>
-            </div>
-          )}
           {view === "settings" && <SettingsView />}
         </main>
       </div>

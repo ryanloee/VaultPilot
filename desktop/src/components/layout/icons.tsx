@@ -30,17 +30,6 @@ export function SettingsIcon({ className }: IconProps) {
   );
 }
 
-export function GraphIcon({ className }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="5" r="2" />
-      <circle cx="5" cy="19" r="2" />
-      <circle cx="19" cy="19" r="2" />
-      <path d="M12 7v4M12 11l-5 6M12 11l5 6" />
-    </svg>
-  );
-}
-
 export function PlusIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

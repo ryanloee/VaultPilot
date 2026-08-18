@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
-import { ChatIcon, GraphIcon, NotesIcon, SettingsIcon } from "./icons";
+import { ChatIcon, NotesIcon, SettingsIcon } from "./icons";
 
-export type ViewId = "chat" | "notes" | "graph" | "settings";
+export type ViewId = "chat" | "notes" | "settings";
 
 type ActivityBarProps = {
   active: ViewId;
@@ -13,7 +13,6 @@ type ActivityBarProps = {
 const items: { id: ViewId; label: string; Icon: typeof ChatIcon }[] = [
   { id: "chat", label: "聊天", Icon: ChatIcon },
   { id: "notes", label: "笔记", Icon: NotesIcon },
-  { id: "graph", label: "图谱", Icon: GraphIcon },
   { id: "settings", label: "设置", Icon: SettingsIcon },
 ];
 

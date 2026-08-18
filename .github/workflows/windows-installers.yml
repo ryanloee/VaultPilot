@@ -387,10 +387,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG="${{ github.ref_name }}"
+
+          # Create the release if missing. Three workflows (Android, Linux
+          # CLI, this one) race to create it for the same tag, so a 422
+          # "already exists" here is NOT an error — uploads (--clobber) are
+          # idempotent and complete the publish.
           if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
-            gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
+            gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes "" \
+              || echo "note: release already exists (concurrent workflow), continuing"
           fi
+
+          # Upload with retries. Transient API/network failures (rate limit,
+          # connection reset) used to abort the whole publish mid-way,
+          # leaving the release half-assembled — no installers, no
+          # latest.json, updater 404. Retry before giving up.
+          retry_upload() {
+            local f="$1" attempt
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$TAG" "$f" --clobber; then
+                echo "Uploaded: $(basename "$f")"
+                return 0
+              fi
+              echo "Upload attempt $attempt/5 failed: $(basename "$f")"
+              sleep 10
+            done
+            echo "FAILED to upload after 5 attempts: $f" >&2
+            return 1
+          }
 
           find release-assets -type f \( \
             -name '*-setup.exe' -o \
@@ -398,6 +423,22 @@ jobs:
             -name '*.deb' -o \
             -name '*.AppImage' -o \
             -name 'SHA256SUMS.zip' -o \
-            -name 'latest.json' \) | sort | while read -r f; do
-            gh release upload "$TAG" "$f" --clobber
+            -name 'latest.json' \) -print0 | sort -z \
+            | while IFS= read -r -d '' f; do retry_upload "$f"; done
+
+          # Verify the publish actually landed — a silent partial release
+          # (updater 404 on missing latest.json) must fail loudly instead.
+          VERSION="${TAG#v}"
+          echo "=== Verifying release $TAG assets ==="
+          gh release view "$TAG" --json assets -q '.assets[].name' | sort > release-assets-uploaded.txt
+          missing=0
+          for name in "latest.json" "SHA256SUMS.zip" \
+                      "VaultPilot_${VERSION}_x64-setup.exe" \
+                      "VaultPilot_${VERSION}_amd64.AppImage"; do
+            if ! grep -qx "$name" release-assets-uploaded.txt; then
+              echo "MISSING asset on release: $name" >&2
+              missing=1
+            fi
           done
+          [ "$missing" -eq 0 ] || { echo "FAILED: release $TAG incomplete" >&2; exit 1; }
+          echo "Release $TAG complete"

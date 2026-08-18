@@ -260,9 +260,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG="${{ github.ref_name }}"
+          # Same race hardening as windows-installers/release: three
+          # workflows create the same-tag release concurrently, so a 422
+          # "already exists" here is not an error.
           if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
-            gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes ""
+            gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes "" \
+              || echo "note: release already exists (concurrent workflow), continuing"
           fi
           # NOTE: gh's `file#name` rename syntax silently fails (asset keeps
           # its original name `app-universal-release-unsigned.apk`), so 3 ABI
@@ -270,19 +275,30 @@ jobs:
           # the last (x86_64) survived, and ARM phones reported
           # "app not compatible with this device" (#4066). Copy to distinct
           # filenames and upload those instead.
+          retry_upload() {
+            local f="$1" attempt
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$TAG" "$f" --clobber; then
+                echo "Uploaded: $(basename "$f")"
+                return 0
+              fi
+              echo "Upload attempt $attempt/5 failed: $(basename "$f")"
+              sleep 10
+            done
+            echo "FAILED to upload after 5 attempts: $f" >&2
+            return 1
+          }
           for apk in $(find vaultpilot-android-* -name '*.apk'); do
             top=${apk%%/*}
             abi=${top#vaultpilot-android-}
             abi=${abi%%-*}
             cp "$apk" "/tmp/VaultPilot-${abi}-${TAG}.apk"
-            gh release upload "$TAG" "/tmp/VaultPilot-${abi}-${TAG}.apk" --clobber
-            echo "Uploaded VaultPilot-${abi}-${TAG}.apk"
+            retry_upload "/tmp/VaultPilot-${abi}-${TAG}.apk"
           done
           # Also upload a universal label pointing at the arm64 build so
           # users who grab the first APK asset get a phone-installable file.
           ARM64_APK=$(find vaultpilot-android-aarch64-* -name '*.apk' -print -quit)
           if [ -n "$ARM64_APK" ]; then
             cp "$ARM64_APK" "/tmp/VaultPilot-${TAG}-universal.apk"
-            gh release upload "$TAG" "/tmp/VaultPilot-${TAG}-universal.apk" --clobber
-            echo "Uploaded VaultPilot-${TAG}-universal.apk (arm64)"
+            retry_upload "/tmp/VaultPilot-${TAG}-universal.apk"
           fi

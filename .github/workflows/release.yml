@@ -229,6 +229,9 @@ jobs:
           release_title="VaultPilot $version"
           api_base="https://api.github.com/repos/$repo"
 
+          # Three workflows (Android, Linux CLI, Windows/Linux UI) race to
+          # create the same-tag release; a 422 "already exists" here is not
+          # an error — uploads (--clobber) are idempotent.
           release=$(gh api "repos/$repo/releases/tags/$tag" 2>/dev/null || true)
           if [ -z "$release" ]; then
             prerelease=false
@@ -240,11 +243,27 @@ jobs:
               -f name="$release_title" \
               -f body="" \
               -F draft=false \
-              -F prerelease="$prerelease" >/dev/null
+              -F prerelease="$prerelease" >/dev/null \
+              || echo "note: release already exists (concurrent workflow), continuing"
           fi
 
-          find release-assets/linux-x64 -type f \( -name vaultpilot-cli -o -name '*.deb' \) | while read -r f; do
-            gh release upload "$tag" "$f" --clobber
-          done
-          gh release upload "$tag" release-assets/checksums/SHA256SUMS.zip --clobber
+          # Upload with retries — transient API failures must not abort the
+          # publish and leave the release half-assembled.
+          retry_upload() {
+            local f="$1" attempt
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$tag" "$f" --clobber; then
+                echo "Uploaded: $(basename "$f")"
+                return 0
+              fi
+              echo "Upload attempt $attempt/5 failed: $(basename "$f")"
+              sleep 10
+            done
+            echo "FAILED to upload after 5 attempts: $f" >&2
+            return 1
+          }
+
+          find release-assets/linux-x64 -type f \( -name vaultpilot-cli -o -name '*.deb' \) -print0 \
+            | while IFS= read -r -d '' f; do retry_upload "$f"; done
+          retry_upload release-assets/checksums/SHA256SUMS.zip
           echo "Uploaded Linux CLI assets to release $tag"

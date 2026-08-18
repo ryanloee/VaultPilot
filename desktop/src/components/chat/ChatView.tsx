@@ -71,8 +71,8 @@ export function ChatView() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Ctrl/Cmd+Enter to send; plain Enter for newline.
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    // Enter sends; Shift+Enter inserts a newline.
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }

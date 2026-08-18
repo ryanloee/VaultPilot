@@ -136,6 +136,11 @@ pub fn run() {
             commands::chat::ask_with_ai,
             commands::chat::save_temp_attachment,
             commands::chat::transcribe_audio,
+            // triggers
+            commands::triggers::list_trigger_rules,
+            commands::triggers::create_trigger_rule,
+            commands::triggers::toggle_trigger_rule,
+            commands::triggers::delete_trigger_rule,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

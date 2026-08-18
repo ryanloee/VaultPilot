@@ -5,6 +5,7 @@ import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { ChatView } from "@/components/chat/ChatView";
 import { NotesView } from "@/components/notes/NotesView";
+import { TriggerView } from "@/components/triggers/TriggerView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { useAutoUpdater } from "@/hooks/useAutoUpdater";
 
@@ -32,6 +33,7 @@ export function AppShell() {
         <main className="flex min-w-0 flex-1 flex-col">
           {view === "chat" && <ChatView />}
           {view === "notes" && <NotesView />}
+          {view === "triggers" && <TriggerView />}
           {view === "settings" && <SettingsView />}
         </main>
       </div>

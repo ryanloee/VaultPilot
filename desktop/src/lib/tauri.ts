@@ -11,6 +11,7 @@ import type {
   NoteMeta,
   ProviderConnectionResult,
   RelatedNote,
+  TriggerRule,
 } from "@/types";
 import { isTauri, mockApi } from "./mock";
 
@@ -140,6 +141,29 @@ export const tauriApi = {
     }),
   getCollectionsForNote: (noteId: string) =>
     invoke<Collection[]>("get_collections_for_note", { noteId }),
+
+  // ── triggers ──
+  listTriggerRules: () => invoke<TriggerRule[]>("list_trigger_rules"),
+  createTriggerRule: (
+    label: string,
+    triggerType: string,
+    triggerConfig: string,
+    action: string,
+    filter?: string,
+    customPrompt?: string
+  ) =>
+    invoke<TriggerRule>("create_trigger_rule", {
+      label,
+      triggerType,
+      triggerConfig,
+      action,
+      filter,
+      customPrompt,
+    }),
+  toggleTriggerRule: (ruleId: string) =>
+    invoke<boolean>("toggle_trigger_rule", { ruleId }),
+  deleteTriggerRule: (ruleId: string) =>
+    invoke<boolean>("delete_trigger_rule", { ruleId }),
 };
 
 /**

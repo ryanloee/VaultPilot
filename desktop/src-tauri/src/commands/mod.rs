@@ -6,3 +6,4 @@ pub mod collections;
 pub mod notes;
 pub mod settings;
 pub mod system;
+pub mod triggers;

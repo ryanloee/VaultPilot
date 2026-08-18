@@ -159,6 +159,19 @@ export type BacklinkEntry = {
   linkTarget: string;
 };
 
+// ── Trigger Rules (定时唤醒) ──────────────────────────────────────────────
+
+export type TriggerRule = {
+  id: string;
+  label: string;
+  triggerType: "cron" | "event";
+  triggerConfig: string;
+  filter?: string;
+  action: string;
+  enabled: boolean;
+  customPrompt?: string;
+};
+
 // ── Agent status event (streamed during askWithAi / runAgent) ─────────────
 
 export type AgentStatusEvent = {

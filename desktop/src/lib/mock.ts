@@ -8,6 +8,7 @@ import type {
   ConversationSummary,
   ConversationTurn,
   ProviderConnectionResult,
+  TriggerRule,
 } from "@/types";
 
 /** Local copy of the answer type to avoid importing from tauri.ts (which
@@ -309,6 +310,46 @@ export const mockApi = {
     _summary: ConversationSummary | null,
     _history: ConversationTurn[]
   ): Promise<ConversationSummary> => ({ summary: "压缩摘要", createdAt: now() }),
+
+  // ── triggers ──
+  listTriggerRules: async (): Promise<TriggerRule[]> => [
+    {
+      id: "mock-trigger-1",
+      label: "每日早间回顾",
+      triggerType: "cron",
+      triggerConfig: "0 8 * * *",
+      action: "daily_review",
+      enabled: true,
+    },
+    {
+      id: "mock-trigger-2",
+      label: "新笔记自动标签",
+      triggerType: "event",
+      triggerConfig: "note_created",
+      filter: "tags CONTAINS meeting",
+      action: "summarize_and_tag",
+      enabled: false,
+    },
+  ],
+  createTriggerRule: async (
+    label: string,
+    triggerType: string,
+    triggerConfig: string,
+    action: string,
+    filter?: string,
+    customPrompt?: string
+  ): Promise<TriggerRule> => ({
+    id: `mock-trigger-${Date.now()}`,
+    label,
+    triggerType: triggerType as "cron" | "event",
+    triggerConfig,
+    filter,
+    action,
+    enabled: true,
+    customPrompt,
+  }),
+  toggleTriggerRule: async (_ruleId: string): Promise<boolean> => true,
+  deleteTriggerRule: async (_ruleId: string): Promise<boolean> => true,
 } as const;
 
 export function isTauri(): boolean {

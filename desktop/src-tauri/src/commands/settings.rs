@@ -42,13 +42,14 @@ pub async fn test_provider_connection(
     api_base: String,
     api_key: String,
     provider_type: Option<String>,
+    model: Option<String>,
     timeout_ms: Option<u64>,
 ) -> Result<ProviderConnectionResult, String> {
     let params = CheckProviderConnectionParams {
         api_base,
         api_key,
         provider_type: provider_type.unwrap_or_default(),
-        model: None,
+        model,
         timeout_ms,
     };
     Ok(check_provider_connection(&params).await)

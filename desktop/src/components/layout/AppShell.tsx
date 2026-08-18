@@ -10,17 +10,23 @@ import { useAutoUpdater } from "@/hooks/useAutoUpdater";
 
 export function AppShell() {
   const [view, setView] = useState<ViewId>("chat");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   useAutoUpdater();
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="flex min-h-0 flex-1">
         <div className="hidden md:flex">
-          <ActivityBar active={view} onSelect={setView} />
+          <ActivityBar
+            active={view}
+            onSelect={setView}
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
+          />
         </div>
-        {view !== "settings" && (
+        {view === "chat" && (
           <div className="hidden md:block">
-            <Sidebar view={view} />
+            <Sidebar collapsed={sidebarCollapsed} />
           </div>
         )}
         <main className="flex min-w-0 flex-1 flex-col">

@@ -59,6 +59,11 @@ export type ProviderConnectionResult = {
   error?: string;
   probeUrl?: string;
   models?: string[];
+  /** True/False when a real chat message was sent and accepted/rejected. */
+  pingOk?: boolean;
+  /** Error detail from the chat ping (quota/balance errors /models cannot catch). */
+  pingError?: string;
+  pingStatus?: number;
 };
 
 // ── Chat ──────────────────────────────────────────────────────────────────

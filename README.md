@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/platform-Linux-FCC624" alt="Linux" />
   <img src="https://img.shields.io/badge/platform-Android-3DDC84" alt="Android" />
   <img src="https://img.shields.io/badge/rust-2021-orange" alt="Rust" />
-  <img src="https://img.shields.io/badge/React-18-61DAFB" alt="React" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB" alt="React" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License" />
 </p>
 
@@ -48,7 +48,7 @@ Engineering teams accumulate scattered notes — boot logs, pin mux tables, flas
 │  Tauri v2 app shell (desktop/ + desktop/src-tauri/)           │
 │  Windows · Linux · Android 共用同一套 React UI                │
 │  ┌─────────────────────────────────────────────────────────┐  │
-│  │  React 前端 (Tailwind + shadcn/ui + Zustand)            │  │
+│  │  React 前端 (Tailwind + Zustand)                          │  │
 │  │  WebView2 (Win) / WebKitGTK (Linux) / WebView (Android) │  │
 │  └──────────────────────┬──────────────────────────────────┘  │
 │                         │ invoke('command') 零 IPC            │
@@ -270,7 +270,7 @@ pnpm tauri build
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop Frontend (Windows/Linux) | Tauri v2 + React 18 + Tailwind + shadcn/ui |
+| Desktop Frontend (Windows/Linux) | Tauri v2 + React 19 + TypeScript + Tailwind + Zustand |
 | Mobile Frontend (Android) | Tauri v2 + React（同一套代码） |
 | Backend | Rust (Tokio, Axum, Reqwest) |
 | Storage | SQLite (FTS5) + Markdown files |
@@ -450,7 +450,7 @@ pnpm tauri build
 
 | 层级 | 技术 |
 |------|------|
-| 桌面前端（Windows/Linux） | Tauri v2 + React 18 + Tailwind + shadcn/ui |
+| 桌面前端（Windows/Linux） | Tauri v2 + React 19 + TypeScript + Tailwind + Zustand |
 | 移动端前端（Android） | Tauri v2 + React（同一套代码） |
 | 后端 | Rust (Tokio, Axum, Reqwest) |
 | 存储 | SQLite (FTS5) + Markdown 文件 |

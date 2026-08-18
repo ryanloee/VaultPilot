@@ -173,6 +173,68 @@ describe("useChatStore.selectSession", () => {
   });
 });
 
+describe("useChatStore.deleteSession", () => {
+  const twoSessions: ChatState = {
+    currentSessionId: "s1",
+    sessions: [
+      {
+        id: "s1",
+        title: "会话1",
+        turns: [{ id: "t1", role: "user", text: "a" }],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "s2",
+        title: "会话2",
+        turns: [{ id: "t9", role: "user", text: "b" }],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  };
+
+  it("removes a non-active session and keeps the current one", () => {
+    useChatStore.setState({ chatState: twoSessions, currentSessionId: "s1", turns: [] });
+    useChatStore.getState().deleteSession("s2");
+    const s = useChatStore.getState();
+    expect(s.chatState?.sessions.map((x) => x.id)).toEqual(["s1"]);
+    expect(s.currentSessionId).toBe("s1");
+  });
+
+  it("falls back to the first remaining session when the active one is deleted", () => {
+    useChatStore.setState({ chatState: twoSessions, currentSessionId: "s1", turns: [] });
+    useChatStore.getState().deleteSession("s1");
+    const s = useChatStore.getState();
+    expect(s.chatState?.sessions.map((x) => x.id)).toEqual(["s2"]);
+    expect(s.currentSessionId).toBe("s2");
+    expect(s.turns).toEqual([{ id: "t9", role: "user", text: "b" }]);
+  });
+
+  it("clears everything when the last session is deleted and persists", async () => {
+    useChatStore.setState({ chatState: twoSessions, currentSessionId: "s1", turns: [] });
+    useChatStore.getState().deleteSession("s1");
+    useChatStore.getState().deleteSession("s2");
+    const s = useChatStore.getState();
+    expect(s.chatState?.sessions).toEqual([]);
+    expect(s.currentSessionId).toBeNull();
+    expect(s.turns).toEqual([]);
+
+    await vi.waitFor(() => expect(mockApi.saveChatState).toHaveBeenCalled());
+    expect(mockApi.saveChatState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessions: [] })
+    );
+  });
+
+  it("is a no-op for an unknown id", () => {
+    useChatStore.setState({ chatState: twoSessions, currentSessionId: "s1", turns: [] });
+    useChatStore.getState().deleteSession("nope");
+    const s = useChatStore.getState();
+    expect(s.chatState?.sessions).toHaveLength(2);
+    expect(s.currentSessionId).toBe("s1");
+  });
+});
+
 describe("useChatStore.send", () => {
   it("appends user turn optimistically then the assistant reply", async () => {
     useChatStore.setState({ chatState: makeChatState(), currentSessionId: "s1", turns: [] });

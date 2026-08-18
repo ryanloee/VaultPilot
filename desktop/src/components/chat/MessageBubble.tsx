@@ -79,11 +79,10 @@ export function MessageBubble({ turn }: { turn: ChatTurn }) {
             )}
           </div>
         )}
-        {isUser ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed">{turn.text}</p>
-        ) : (
-          <Markdown content={turn.text} />
-        )}
+        {/* Both user and assistant turns render markdown — plain text falls
+            through react-markdown unchanged, so nothing breaks for
+            non-markdown input. */}
+        <Markdown content={turn.text} />
       </div>
     </div>
   );

@@ -111,6 +111,7 @@ type ChatStore = {
   send: (text: string, imagePaths?: string[], attachments?: ChatAttachment[]) => Promise<void>;
   newSession: () => void;
   selectSession: (id: string) => void;
+  deleteSession: (id: string) => void;
 };
 
 function emptySession(): ChatSession {
@@ -235,6 +236,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       void persistChatState(get);
     }
   },
+
+  deleteSession: (id) => {
+    const state = get().chatState;
+    if (!state) return;
+    const sessions = state.sessions.filter((s) => s.id !== id);
+    // If the deleted session was active, fall back to the first remaining
+    // one (or none); otherwise keep the current selection.
+    const nextSessionId =
+      get().currentSessionId === id ? (sessions[0]?.id ?? null) : get().currentSessionId;
+    const next = sessions.find((s) => s.id === nextSessionId);
+    set({
+      chatState: { ...state, sessions, currentSessionId: nextSessionId ?? "" },
+      currentSessionId: nextSessionId,
+      turns: next?.turns ?? [],
+      error: null,
+    });
+    void persistChatState(get);
+  },
 }));
 
 // Wire up status events from the backend (only once).
@@ -245,7 +264,7 @@ statusUnlisten ??= onAgentStatus((payload) => {
 
 async function persistChatState(get: () => ChatStore) {
   const { chatState, currentSessionId, turns } = get();
-  if (!chatState || !currentSessionId) return;
+  if (!chatState) return;
   // Never persist base64 attachment blobs into chat_state.json — history
   // images are reloaded from their vault path via read_image_preview (#4083).
   const persistTurns = stripAttachmentDataUrls(turns);

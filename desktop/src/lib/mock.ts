@@ -137,7 +137,8 @@ export const mockApi = {
   testProviderConnection: async (
     apiBase: string,
     _apiKey: string,
-    _providerType: string
+    _providerType: string,
+    _model?: string
   ): Promise<ProviderConnectionResult> => {
     // Mock mode: pretend the endpoint is reachable with a canned model list.
     return {
@@ -145,6 +146,8 @@ export const mockApi = {
       status: 200,
       probeUrl: `${apiBase.replace(/\/$/, "")}/models`,
       models: ["mock-model"],
+      pingOk: true,
+      pingStatus: 200,
     };
   },
 

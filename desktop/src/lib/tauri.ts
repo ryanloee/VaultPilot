@@ -45,12 +45,14 @@ export const tauriApi = {
     apiBase: string,
     apiKey: string,
     providerType: string,
+    model?: string,
     timeoutMs?: number
   ) =>
     invoke<ProviderConnectionResult>("test_provider_connection", {
       apiBase,
       apiKey,
       providerType,
+      model,
       timeoutMs,
     }),
 

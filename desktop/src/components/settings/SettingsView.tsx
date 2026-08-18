@@ -72,6 +72,7 @@ export function SettingsView() {
         active.baseUrl,
         active.apiKey,
         active.providerType ?? "openai",
+        active.model || undefined,
         active.requestTimeoutMs
       );
       setTestResult(result);
@@ -155,6 +156,13 @@ export function SettingsView() {
               {testResult.ok ? (
                 <>
                   <span>✓ 连接成功</span>
+                  {testResult.pingOk === true ? (
+                    <span>· 消息发送测试通过</span>
+                  ) : (
+                    testResult.pingOk === false && (
+                      <span>· ⚠ 消息发送失败（模型未配置时跳过）</span>
+                    )
+                  )}
                   {testResult.status && <span>(HTTP {testResult.status})</span>}
                   {testResult.models && testResult.models.length > 0 && (
                     <span>
@@ -164,7 +172,10 @@ export function SettingsView() {
                   )}
                 </>
               ) : (
-                <span>✗ 连接失败: {testResult.error ?? "未知错误"}</span>
+                <span>
+                  ✗ 连接失败: {testResult.error ?? "未知错误"}
+                  {testResult.pingStatus ? ` (ping HTTP ${testResult.pingStatus})` : ""}
+                </span>
               )}
             </p>
           )}

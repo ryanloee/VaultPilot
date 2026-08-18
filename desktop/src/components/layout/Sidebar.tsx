@@ -1,54 +1,53 @@
 import { useEffect } from "react";
-import type { ViewId } from "./ActivityBar";
 import { useChatStore } from "@/lib/store";
 import { cn, formatDate } from "@/lib/utils";
+import { TrashIcon } from "./icons";
 
 type SidebarProps = {
-  view: ViewId;
+  collapsed: boolean;
 };
 
-const labels: Record<ViewId, string> = {
-  chat: "会话列表",
-  notes: "笔记列表",
-  graph: "图谱",
-  settings: "设置",
-};
-
-/** Sidebar shows chat sessions in chat view; placeholder elsewhere. */
-export function Sidebar({ view }: SidebarProps) {
-  const { chatState, currentSessionId, load, selectSession, newSession } = useChatStore();
+/** Sidebar shows the chat session list (chat view only). */
+export function Sidebar({ collapsed }: SidebarProps) {
+  const { chatState, currentSessionId, load, selectSession, newSession, deleteSession } =
+    useChatStore();
 
   useEffect(() => {
-    if (view === "chat") load();
-  }, [view, load]);
+    load();
+  }, [load]);
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
+    <aside
+      className={cn(
+        "flex shrink-0 flex-col border-r border-border bg-card transition-[width] duration-200",
+        collapsed ? "w-0 overflow-hidden border-r-0" : "w-60"
+      )}
+    >
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {labels[view]}
+          会话列表
         </span>
-        {view === "chat" && (
-          <button
-            onClick={newSession}
-            title="新会话"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            +
-          </button>
-        )}
+        <button
+          onClick={newSession}
+          title="新会话"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          +
+        </button>
       </div>
 
-      {view === "chat" ? (
-        <div className="flex-1 overflow-auto vp-scroll">
-          {chatState?.sessions.map((s) => (
+      <div className="flex-1 overflow-auto vp-scroll">
+        {chatState?.sessions.map((s) => (
+          <div
+            key={s.id}
+            className={cn(
+              "group flex items-center border-b border-border transition-colors hover:bg-accent",
+              currentSessionId === s.id && "bg-accent"
+            )}
+          >
             <button
-              key={s.id}
               onClick={() => selectSession(s.id)}
-              className={cn(
-                "block w-full border-b border-border px-4 py-2 text-left text-sm transition-colors hover:bg-accent",
-                currentSessionId === s.id && "bg-accent"
-              )}
+              className="min-w-0 flex-1 py-2 pl-4 pr-1 text-left text-sm"
             >
               <div className="truncate">{s.title || "新会话"}</div>
               {formatDate(s.updatedAt) && (
@@ -57,20 +56,20 @@ export function Sidebar({ view }: SidebarProps) {
                 </div>
               )}
             </button>
-          ))}
-          {(!chatState || chatState.sessions.length === 0) && (
-            <p className="px-4 py-6 text-center text-xs text-muted-foreground">暂无会话</p>
-          )}
-        </div>
-      ) : (
-        <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-muted-foreground">
-          <p>
-            {labels[view]}占位
-            <br />
-            <span className="opacity-60">(后续阶段填充)</span>
-          </p>
-        </div>
-      )}
+            <button
+              onClick={() => deleteSession(s.id)}
+              title="删除会话"
+              aria-label={`删除会话 ${s.title || "新会话"}`}
+              className="mr-2 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100"
+            >
+              <TrashIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+        {(!chatState || chatState.sessions.length === 0) && (
+          <p className="px-4 py-6 text-center text-xs text-muted-foreground">暂无会话</p>
+        )}
+      </div>
     </aside>
   );
 }

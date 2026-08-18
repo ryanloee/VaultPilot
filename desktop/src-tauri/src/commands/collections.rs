@@ -5,9 +5,8 @@ use serde_json::{json, Value};
 use vaultpilot_lib::models::Collection;
 use vaultpilot_lib::storage::{
     add_note_to_collection_async, create_collection_async, delete_collection_async,
-    get_collections_for_note_with_context, list_collections_async,
-    list_notes_in_collection_async, move_collection_async, remove_note_from_collection_async,
-    rename_collection_async,
+    get_collections_for_note_with_context, list_collections_async, list_notes_in_collection_async,
+    move_collection_async, remove_note_from_collection_async, rename_collection_async,
 };
 
 #[tauri::command]
@@ -52,9 +51,13 @@ pub async fn move_collection(
     collection_id: String,
     new_parent_id: Option<String>,
 ) -> Result<bool, String> {
-    move_collection_async(&state.storage, collection_id, new_parent_id.unwrap_or_default())
-        .await
-        .map_err(|e| e.to_string())
+    move_collection_async(
+        &state.storage,
+        collection_id,
+        new_parent_id.unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

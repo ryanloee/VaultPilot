@@ -517,11 +517,9 @@ pub async fn rename_collection_async(
     name: String,
 ) -> Result<bool> {
     let ctx = ctx.clone();
-    tokio::task::spawn_blocking(move || {
-        rename_collection_with_context(&ctx, &collection_id, &name)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+    tokio::task::spawn_blocking(move || rename_collection_with_context(&ctx, &collection_id, &name))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
 
 pub async fn move_collection_async(
@@ -753,8 +751,7 @@ mod tests {
 
         let root = create_collection_with_parent(&ctx, "Root", "", "").unwrap();
         let child = create_collection_with_parent(&ctx, "Child", "", &root.id).unwrap();
-        let grandchild =
-            create_collection_with_parent(&ctx, "Grandchild", "", &child.id).unwrap();
+        let grandchild = create_collection_with_parent(&ctx, "Grandchild", "", &child.id).unwrap();
 
         assert_eq!(root.parent_id, "");
         assert_eq!(child.parent_id, root.id);

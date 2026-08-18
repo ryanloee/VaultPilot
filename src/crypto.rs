@@ -357,7 +357,7 @@ pub fn is_passphrase_encrypted(value: &str) -> bool {
 mod tests {
     use super::*;
 
-        #[test]
+    #[test]
     fn pbkdf2_low_iterations() {
         // RFC 6070 known vector for PBKDF2-HMAC-SHA256 with c=1:
         //   password = "password", salt = "salt"

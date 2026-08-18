@@ -325,13 +325,10 @@ fn extract_ping_error(body: &str, status: u16) -> String {
         .ok()
         .and_then(|v| v.get("error").cloned())
         .and_then(|e| {
-            if let Some(m) = e.get("message").and_then(|m| m.as_str()) {
-                Some(m.to_string())
-            } else if let Some(s) = e.as_str() {
-                Some(s.to_string())
-            } else {
-                None
-            }
+            e.get("message")
+                .and_then(|m| m.as_str())
+                .map(|m| m.to_string())
+                .or_else(|| e.as_str().map(|s| s.to_string()))
         })
         .map(|m| m.chars().take(300).collect::<String>())
         .unwrap_or_else(snippet)
@@ -644,6 +641,10 @@ mod tests {
         let long = "x".repeat(500);
         let body = serde_json::json!({ "error": { "message": long } }).to_string();
         let msg = extract_ping_error(&body, 400);
-        assert!(msg.chars().count() <= 300, "message too long: {}", msg.len());
+        assert!(
+            msg.chars().count() <= 300,
+            "message too long: {}",
+            msg.len()
+        );
     }
 }

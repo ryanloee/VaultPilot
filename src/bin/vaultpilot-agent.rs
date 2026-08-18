@@ -18,11 +18,9 @@ use vaultpilot_lib::agent::{
 use vaultpilot_lib::ai::actions::{
     execute_ai_action, list_ai_actions, AiActionRequest, AiActionType,
 };
+use vaultpilot_lib::ai::connectivity::{check_provider_connection, CheckProviderConnectionParams};
 use vaultpilot_lib::ai::transcription::{
     create_meeting_note, generate_meeting_summary, transcribe_audio, MeetingTranscriptionResult,
-};
-use vaultpilot_lib::ai::connectivity::{
-    check_provider_connection, CheckProviderConnectionParams,
 };
 use vaultpilot_lib::ai::RequestUsage;
 use vaultpilot_lib::diff::compute_diff;
@@ -1094,7 +1092,6 @@ async fn handle_request(
         method => Err(format!("unknown method: {method}")),
     }
 }
-
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2335,7 +2332,6 @@ mod tests {
         let params: GetSnapshotParams = serde_json::from_value(request.params).unwrap();
         assert_eq!(params.snapshot_id, "snap-uuid-001");
     }
-
 
     // ── Flashcard IPC params tests (#3763) ──────────────────────
 

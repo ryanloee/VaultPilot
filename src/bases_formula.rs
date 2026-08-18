@@ -1026,10 +1026,8 @@ pub fn extract_formula_refs(
     loop {
         let t = tok.next_token();
         match &t {
-            Token::Ident(name) => {
-                if formulas.contains_key(name) {
-                    refs.insert(name.clone());
-                }
+            Token::Ident(name) if formulas.contains_key(name) => {
+                refs.insert(name.clone());
             }
             Token::Eof => break,
             _ => {}
